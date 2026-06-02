@@ -1,0 +1,19 @@
+[project]
+name = "mister-slint"
+version = "0.1.0"
+description = "A Slint UI front end prototype for the MiSTer FPGA, built with the Slint Python bindings."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "slint==1.16.1b1",
+]
+
+[tool.uv]
+# Every published Slint Python release is a pre-release (the bindings are still
+# in beta), so uv must be told it is allowed to resolve them.
+prerelease = "allow"
+
+[dependency-groups]
+dev = [
+    "slint-compiler==1.16.1b1",
+]

@@ -1,0 +1,77 @@
+import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+// The first-milestone screen: prove that a Slint UI can be drawn on the
+// MiSTer framebuffer. It deliberately mixes text with solid colour blocks so
+// that the screen is obviously "alive" even if font resolution misbehaves on
+// the minimal MiSTer root filesystem.
+export component AppWindow inherits Window {
+    title: "Slint on MiSTer";
+
+    // On the MiSTer the linuxfb backend always renders full screen; these
+    // preferred sizes only matter for the desktop preview window.
+    preferred-width: 1920px;
+    preferred-height: 1080px;
+    background: #0d1b2a;
+
+    in-out property <int> counter: 0;
+    callback request-increase-value();
+
+    VerticalBox {
+        alignment: center;
+        spacing: 28px;
+        padding: 64px;
+
+        Rectangle {
+            height: 14px;
+            background: @linear-gradient(90deg, #e63946 0%, #f1faee 50%, #457b9d 100%);
+        }
+
+        Text {
+            text: "Slint on MiSTer FPGA";
+            font-size: 72px;
+            font-weight: 800;
+            color: #f1faee;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Python bindings  •  software renderer  •  /dev/fb0";
+            font-size: 30px;
+            color: #a8dadc;
+            horizontal-alignment: center;
+        }
+
+        HorizontalBox {
+            alignment: center;
+            spacing: 24px;
+
+            Text {
+                text: "Counter: \{root.counter}";
+                font-size: 44px;
+                color: #f1faee;
+                vertical-alignment: center;
+            }
+
+            Button {
+                text: "Increase";
+                clicked => {
+                    root.request-increase-value();
+                }
+            }
+        }
+
+        // Colour bars: a no-font sanity check that the framebuffer is updating.
+        Rectangle {
+            height: 100px;
+            HorizontalBox {
+                padding: 0px;
+                spacing: 0px;
+                Rectangle { background: #e63946; }
+                Rectangle { background: #f4a261; }
+                Rectangle { background: #e9c46a; }
+                Rectangle { background: #2a9d8f; }
+                Rectangle { background: #457b9d; }
+            }
+        }
+    }
+}

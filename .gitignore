@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+__pypackages__/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# uv — uv.lock is committed for reproducible installs
+
+# Test / lint / type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# MiSTer ARM bundle build artifacts and downloaded toolchains/wheels
+/build/
+/dist/
+/vendor/
+*.whl
+*.tar.gz
+*.tar.zst
+*.deb
+
+# Local secrets and env-specific config
+.env
+.env.*
+!.env.example
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editors / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
