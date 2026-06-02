@@ -101,18 +101,30 @@ def wait_down(host: str, max_seconds: float = 40.0) -> bool:
 
 
 def wait_up(host: str, max_seconds: float = 120.0) -> int:
-    """Block until SSH + userspace are ready, printing progress."""
+    """Block until SSH is ready, printing progress.
+
+    Polls the cheap TCP port first so a still-unreachable device doesn't burn a
+    multi-second SSH connect timeout each cycle (which made elapsed times wildly
+    overshoot). Only once port 22 answers do we open a real session to confirm
+    login works; the MiSTer userspace pid is reported as a bonus, not gated on.
+    """
     start = time.time()
     attempt = 0
     while time.time() - start < max_seconds:
         attempt += 1
-        status = _userspace_ready(timeout=4.0)
         elapsed = time.time() - start
-        if status is not None:
-            print(f"up after {elapsed:.1f}s (attempt {attempt}): MiSTer={status}", flush=True)
-            return 0
-        print(f"  [{elapsed:5.1f}s] not ready yet, retrying...", flush=True)
-        time.sleep(2.0)
+        if _port_open(host, timeout=1.5):
+            status = _userspace_ready(timeout=4.0)
+            if status is not None:
+                mister = "booting" if status == "BOOTING" else f"pid {status}"
+                print(
+                    f"SSH ready after {time.time() - start:.1f}s "
+                    f"(attempt {attempt}); MiSTer {mister}",
+                    flush=True,
+                )
+                return 0
+        print(f"  [{elapsed:5.1f}s] waiting for ssh...", flush=True)
+        time.sleep(1.0)
     print(f"TIMEOUT: device not ready after {max_seconds:.0f}s", flush=True)
     return 1
 
