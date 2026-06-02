@@ -340,6 +340,12 @@ up video and launches Slint. Most control, most work, must track upstream.
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't leave the menu paused.** If you `kill -STOP $(pidof MiSTer)` for an
   experiment, always `kill -CONT` it afterwards (or reboot).
+- **Slow SSH after reboot = DHCP, not sshd.** `sshd` listens ~kernel 9 s, but
+  `eth0` is managed by `dhcpcd` (it's *not* in `/etc/network/interfaces`), and the
+  default path wasted ~17 s: DHCP solicit timeout → IPv4LL (169.254.x) fallback →
+  ARP DAD probing before the real lease. A static IP in `/etc/dhcpcd.conf`
+  (`noarp`, `noipv4ll`) skips all of it. Rootfs is read-only — remount rw to edit.
+  See §10.
 - **FPGA SPI from our own process needs the bus to ourselves.** The stock MiSTer
   (or Zaparoo) process drives GPO/GPI continuously. To inject SPI from a separate
   process, `kill -STOP $(pidof MiSTer)` first, then `kill -CONT` after. HDMI stays
@@ -452,6 +458,45 @@ Scripts: `scripts/fpga_fbenable_probe.py` (route fb0 + test pattern),
 `scripts/fpga_diag.py` (instrumented handshake), `scripts/fpga_read_vmode.py`
 (read GET_VRES/GET_FB_PAR). All require the stock-menu SIGSTOP dance above.
 
+### 9.6 Native Rust port — clean fork-free image (✅ done)
+
+The spike is now reproduced in Rust (`rust/` crate, §12) and renders a **clean,
+full-screen image from our own binary with zero Zaparoo** — the de-forking
+premise is proven end-to-end:
+
+- `rust/src/fpga.rs` ports the SPI layer (`mmap` GPO/GPI, EnableIO/DisableIO,
+  `fpga_spi`) and `video_fb_enable(1,n)` (the SET_FBUF sequence). **Native-speed
+  multi-word reads work** (GET_VRES/GET_FB_PAR return stable data; ACK-high ==
+  ACK-low), unlike the slow Python which read 0s.
+- `rust/src/fb.rs` mmaps `/dev/fb0` (1920x1080 xRGB8888) for direct pixel writes.
+- `mister-slint-fb fb [xoff] [yoff]` paints a 4-quadrant + border + cross-hair
+  test pattern and routes buffer 0. `read` dumps the live mode/fb params.
+- Live values read from the stock menu: `GET_FB_PAR` → `fb_w=1920 fb_h=1080
+  fb_fmt=0x00d6 fb_en=1`; `GET_VRES` → `width=529 height=240 pixrep=2` (the
+  direct_video native scan-out, not the fb size).
+
+**Geometry lesson (why the columns, then the offset):**
+
+- Columns = wrong horizontal *span*. The scaled right coord must be
+  `xoff + v_cur.item[1] - 1`; with `item[1]=1920` that's a 1920-wide span in the
+  direct_video raster (which is ~2147 wide). Sending `right=1919` from `left=0`
+  is still a 1920 span, but earlier Python also mis-sent params; the Rust port
+  with the correct sequence does **not** shear.
+- Offset = wrong `xoff/yoff`. The `direct_video` formula is
+  `xoff=item[4]-FB_DV_LBRD(3)`, `yoff=item[8]-FB_DV_UBRD(2)`. Using the *original*
+  mode-8 porches (`148/36`) put us ~145px too far right. The **running menu mode**
+  already has the tiny border porches (`item[4]=3, item[8]=2`), so the correct
+  values are **`xoff=yoff=0`**. Confirmed clean on HDMI at `0,0`.
+
+**Resolution / CRT generality (answer to "will this cope with lower res / CRT?"):**
+Yes, but not by hardcoding. `MODE_1080P60` and the `0,0` offset are specific to
+this 1080p direct_video menu. The robust path (todo `rust-livemode`) is to read
+the **live** mode each time — `UIO_GET_VRES` for the active resolution, plus the
+mode timing for the porches — and compute `fb_width/height`, `xoff/yoff`, and the
+scaled coords from that. Our own `main=` frontend will set/own its mode, so it
+always knows the correct geometry (including low-res and CRT/`direct_video`
+outputs). The plumbing already reads these registers; only the derivation is TODO.
+
 ---
 
 ## 10. Current device state & recovery
@@ -462,6 +507,15 @@ Scripts: `scripts/fpga_fbenable_probe.py` (route fb0 + test pattern),
   `/media/fat/MiSTer.ini.bak`.
 - `direct_video=1`, `video_mode=8` (1080p) in `MiSTer.ini` — relevant to fb
   positioning (see §9.5).
+- **Static IP `192.168.1.117` (no DHCP).** Appended an `interface eth0` static
+  block to `/etc/dhcpcd.conf` (+ `noarp`/`noipv4ll`) to cut SSH-ready time. The
+  rootfs (`/dev/loop8`, ext4) is **read-only**; edit via
+  `mount -o remount,rw /` … `mount -o remount,ro /`. Original saved to
+  `/media/fat/linux/dhcpcd.conf.orig`. **A MiSTer Linux update replaces
+  `linux.img` and reverts this** → re-apply if SSH gets slow again. Result:
+  network usable at link-up (~kernel 12 s) instead of after the DHCP lease
+  (~kernel 31 s); full reboot→SSH ≈ 22 s, down from 30–40 s. Boot floor is now
+  u-boot + FPGA load + kernel + gigabit autoneg, not networking. See §8.
 - `zaparoo/frontend` is our shim (the real Qt frontend is saved as
   `frontend.real`). It exports `MISTER_SLINT_NO_VMODE=1` and — for now —
   `MISTER_SLINT_PERF=1`, so the FPS overlay/logging is on. Drop the PERF line
@@ -532,6 +586,11 @@ rustup toolchain add 1.88-x86_64-unknown-linux-gnu --profile minimal --force-non
 - **toolchain pin:** `rust/rust-toolchain.toml` pins stable `1.88` + the armv7
   target (the host default is nightly, which tripped cross's provisioning).
 
-**Crate layout:** `rust/src/main.rs` is currently the toolchain hello-world. Next:
-port the proven SPI/fb-enable (§9.5) into a `fpga` module, add the Slint software
-renderer + custom `Platform`, then the vblank page-flip.
+**Crate layout:**
+- `rust/src/fpga.rs` — SPI layer + `video_fb_enable` port (§9.6), UIO/FB constants.
+- `rust/src/fb.rs` — `/dev/fb0` mmap wrapper for direct pixel writes.
+- `rust/src/main.rs` — `read` (dump live mode) and `fb` (test pattern + route)
+  subcommands. Run with the stock-menu SIGSTOP dance (§9.5).
+
+Next: derive geometry from the live mode (`rust-livemode`), then add the Slint
+software renderer + custom `Platform`, then the vblank page-flip.
