@@ -18,6 +18,16 @@ mkdir -p /tmp/mister-slint/cache
 export SLINT_BACKEND="linuxkms-skia-software"
 export SLINT_BACKEND_LINUXFB="1"
 
+# Optional performance instrumentation. Set MISTER_SLINT_PERF=1 to make Slint
+# print the achieved frame rate (and the active backend name) to the log and
+# draw a live FPS counter over the UI. "refresh_lazy" reports the *real* rate
+# driven by our animation; "refresh_full_speed" would busy-render AND disable
+# partial rendering, which measures the worst case rather than what we ship.
+# See AGENTS.md §9 (performance).
+if [ "${MISTER_SLINT_PERF:-0}" = "1" ]; then
+    export SLINT_DEBUG_PERFORMANCE="refresh_lazy,console,overlay"
+fi
+
 # The MiSTer root filesystem ships no fonts and no fontconfig setup, so point
 # fontconfig at the font that travels inside the bundle.
 export FONTCONFIG_FILE="$APP/etc/fonts/fonts.conf"

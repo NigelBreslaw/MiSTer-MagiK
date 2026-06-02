@@ -29,8 +29,10 @@ any Slint UI on the MiSTer's HDMI output*.
   `video_fb_enable(1)` + tty2 handoff. Persists across reboot.
 - ✅ **Stays on screen** via a continuous `animation-tick()` repaint in the UI
   (`ui/app-window.slint`). Without it, fbcon clears `/dev/fb0` to black after
-  the first frame (see §8). Trade-off: continuous full-frame software render =
-  high CPU; the clean fix is to stop fbcon touching the fb (see §10).
+  the first frame (see §8). Trade-off: the continuous software render pegs ~1 CPU
+  core (~96%) at ~62 fps and **tears** (Slint's linuxfb path has no vsync — see
+  §9). The clean fix for the *persistence* half is to stop fbcon touching the fb
+  (see §11).
 
 So: rendering, HDMI routing, and persistence are all working as a milestone.
 Remaining work is input, CPU cost, and a cleaner VT/fbcon story.
@@ -141,6 +143,15 @@ To get Slint on HDMI we need `video_fb_enable(1, 0)` issued (FPGA SPI), the app
 on a real VT, and the right fb mode. Only the MiSTer main binary issues that SPI
 sequence. So we must either (a) ride Zaparoo's binary, or (b) reproduce the SPI
 sequence ourselves, or (c) ship our own `main=` binary. See §7.
+
+**Are we stuck with the Zaparoo _fork_? No.** `video_fb_enable` lives in *stock*
+`Main_MiSTer` (`video.cpp:3284`), `main=` is a *stock* `MiSTer.ini` hook, and the
+*stock* menu core already drives the HPS framebuffer (the wallpaper uses it). We
+borrow Zaparoo's binary only because it's already installed and already calls
+those stock APIs; Options B/C replace it with our own code on a bone-stock
+MiSTer. The deeper constraint is **rendering**, not the launcher: the MiSTer has
+an fbdev with **no DRM/KMS**, so Slint falls back to legacy `linuxfb` and cannot
+vsync — that's a Slint limitation independent of who enables the fb (see §9).
 
 ---
 
@@ -306,12 +317,68 @@ up video and launches Slint. Most control, most work, must track upstream.
 
 ---
 
-## 9. Current device state & recovery
+## 9. Performance (rendering)
 
-- `MiSTer.ini` line 278 is `;main=zaparoo/MiSTer_Zaparoo` → **Zaparoo disabled**,
-  stock menu active. Backup: `/media/fat/MiSTer.ini.bak`.
+Instrumented with Slint's `SLINT_DEBUG_PERFORMANCE`. Set `MISTER_SLINT_PERF=1`
+and `run-mister.sh` exports `refresh_lazy,console,overlay` → FPS printed to the
+log *and* an on-screen FPS overlay (top-left), and it logs the active backend.
+The shim sets it so the overlay is visible on HDMI; drop it once tuned.
+
+Measured on-device (Zaparoo HDMI path, 1920×1080, Skia software renderer):
+
+- **~62 fps**, dead steady (`average frames per second: 61–62`).
+- **~1 CPU core ~96% busy** (`top`: python ≈ 48% of the dual-core A9 = one full
+  core). So frame *count* is not the bottleneck — the renderer keeps up.
+
+**"Not smooth" = tearing, not low fps:**
+
+- The HDMI panel is **60 Hz**, and `MiSTer_fb` *does* support `FBIO_WAITFORVSYNC`
+  — measured a rock-steady **16.6 ms** wait (= 60 Hz).
+- But Slint renders at **~62 fps**, i.e. it does **not** wait for vsync; it runs
+  a ~16 ms software timer and `memcpy`s straight to `/dev/fb0`. 16 ms vs 16.67 ms
+  drift means the tear line slowly sweeps the screen → visible judder.
+- Slint has **no vsync toggle** for software rendering. Its LinuxKMS backend only
+  gets tear-free vsync from **DRM dumb buffers**; with no `/dev/dri` it falls
+  back to legacy `linuxfb`, which blits with no vblank sync. Confirmed against
+  the Slint docs (LinuxKMS backend) — this is a backend limitation, not config.
+
+**Paths to a tear-free / smoother UI** (none are free; pick when it matters):
+
+1. **Patch Slint's `linuxfb` display** to call `FBIO_WAITFORVSYNC` before each
+   present (`internal/backends/linuxkms/display/linuxfb.rs`) and rebuild the
+   `armv7l` wheel. Locks to a clean, tear-free 60 fps. Biggest payoff, but
+   commits us to building Slint from source for ARM.
+2. **Pace frames from Python** at vsync (block on `FBIO_WAITFORVSYNC`, then nudge
+   a property). Improves cadence; not guaranteed tear-free since we don't control
+   when Slint's blit lands. Cheaper, partial win.
+3. **Slow / shrink the motion** so tearing is less noticeable. Cosmetic only.
+4. **Don't animate at all** — only viable once fbcon stops clobbering the fb
+   (§11); a static frontend has no tearing and ~0 idle CPU.
+
+Repro:
+
+```bash
+# With MISTER_SLINT_PERF=1 (shim sets it) → reboot, then:
+... run "tail -n 20 /tmp/mister-slint.log"   # average frames per second: NN
+... run "top -bn1 | grep python3.12"          # %CPU (≈ one core)
+# Prove the fb supports vsync (bundled python, ioctl FBIO_WAITFORVSYNC=0x40044620):
+# steady ~16.6 ms waits == 60 Hz available, just unused by Slint's linuxfb path.
+```
+
+---
+
+## 10. Current device state & recovery
+
+- `MiSTer.ini` line 278 is `main=zaparoo/MiSTer_Zaparoo` (uncommented) →
+  **Zaparoo enabled**: boot → `MiSTer_Zaparoo` → our `zaparoo/frontend` shim →
+  `run-mister.sh` → Slint on HDMI. Backup: `/media/fat/MiSTer.ini.bak`. Revert by
+  re-commenting that line (or restoring the backup), then reboot.
+- `zaparoo/frontend` is our shim (the real Qt frontend is saved as
+  `frontend.real`). It exports `MISTER_SLINT_NO_VMODE=1` and — for now —
+  `MISTER_SLINT_PERF=1`, so the FPS overlay/logging is on. Drop the PERF line
+  when done tuning.
 - The mister-slint bundle is deployed at `/media/fat/mister-slint/` and verified
-  runnable (renders to fb0).
+  runnable on HDMI (~62 fps, see §9).
 - **Black-screen recovery:** paramiko SSH works even with no usable video. To
   recover from a bad `main=`/frontend experiment: SSH in, re-comment `main=`
   (or restore `MiSTer.ini.bak`) and/or restore `zaparoo/frontend`, then
@@ -319,7 +386,7 @@ up video and launches Slint. Most control, most work, must track upstream.
 
 ---
 
-## 10. Open questions / follow-ups
+## 11. Open questions / follow-ups
 
 - **Cleaner fix than the always-on animation** (which pegs a CPU core with
   full-frame 1080p software renders). Options to investigate: get Slint to
