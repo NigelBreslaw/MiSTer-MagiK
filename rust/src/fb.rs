@@ -1,23 +1,20 @@
-//! Display backend: the MiSTer HPS framebuffer as a set of page-flippable
-//! buffers in reserved FPGA DDR (0x22000000+, confirmed not kernel RAM).
+//! Display backend: the MiSTer HPS framebuffer via /dev/fb0.
 //!
-//! We map several full-frame buffers via /dev/mem and let the FPGA scan whichever
-//! one we point it at (`fpga::fb_enable_direct(n)`). Rendering into the *back*
-//! buffer then flipping at vblank means zero per-frame copy and no tearing —
-//! the fix for the ~12ms uncached 8MB blit that the single-buffer path paid.
+//! Key hardware fact (measured): the /dev/fb0 driver mapping is *write-combining*
+//! (~700 MB/s), whereas mapping the same physical buffers through /dev/mem is
+//! uncached device memory (~105 MB/s). Only buffer 0 is exposed by /dev/fb0, so
+//! that is our single fast buffer. We render into cached RAM and copy only the
+//! dirty rows here, right after vsync.
 //!
-//! /dev/fb0 is still opened, but only for its FBIO_WAITFORVSYNC ioctl.
+//! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
-use crate::fpga::{FB_ADDR, FB_SIZE_PX};
+use crate::fpga::FB_SIZE_PX;
 use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
 use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::io::AsRawFd;
 
 const FBIO_WAITFORVSYNC: libc::c_ulong = 0x4004_4620;
-
-const SLOT_BYTES: usize = (FB_SIZE_PX as usize) * 4; // one buffer slot
-const NUM_BUFFERS: usize = 3; // buffers 0,1,2 fit in the reserved region
 
 /// One framebuffer pixel in MiSTer's xRGB-8888 layout, stored as 0x00RRGGBB.
 /// (Colours verified correct on HDMI, so no R/B swap needed despite FB_FMT_RxB.)
@@ -45,7 +42,7 @@ impl TargetPixel for Pixel {
 }
 
 pub struct Display {
-    mem: *mut u8,
+    mem: *mut Pixel,
     map_len: usize,
     w: usize,
     h: usize,
@@ -55,29 +52,24 @@ pub struct Display {
 impl Display {
     pub fn open(w: usize, h: usize) -> io::Result<Self> {
         assert!(w * h <= FB_SIZE_PX as usize);
-        // /dev/fb0 is kept solely for the vsync ioctl.
         let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
-
-        let mem_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/mem")?;
-        let map_len = SLOT_BYTES * NUM_BUFFERS;
+        let map_len = w * h * 4;
+        // mmap the framebuffer itself (offset 0) — this is the write-combining map.
         let mem = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
                 map_len,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
-                mem_file.as_raw_fd(),
-                FB_ADDR as libc::off_t,
+                fb0.as_raw_fd(),
+                0,
             )
         };
         if mem == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
         Ok(Self {
-            mem: mem as *mut u8,
+            mem: mem as *mut Pixel,
             map_len,
             w,
             h,
@@ -85,14 +77,19 @@ impl Display {
         })
     }
 
-    /// Mutable pixel slice for buffer `n`. Uses slots 1..=2 (full slots); slot 0
-    /// has the +4096 params page and is left for fallback, so callers should
-    /// page-flip between 1 and 2.
-    pub fn buffer_mut(&mut self, n: u32) -> &mut [Pixel] {
-        let off = SLOT_BYTES * (n as usize);
-        unsafe {
-            let ptr = self.mem.add(off) as *mut Pixel;
-            std::slice::from_raw_parts_mut(ptr, self.w * self.h)
+    /// The (single) on-screen buffer, as a mutable pixel slice.
+    pub fn buffer_mut(&mut self) -> &mut [Pixel] {
+        unsafe { std::slice::from_raw_parts_mut(self.mem, self.w * self.h) }
+    }
+
+    /// Copy rows [y0,y1) from `src` into the framebuffer (write-combined).
+    pub fn copy_rows(&mut self, src: &[Pixel], y0: usize, y1: usize) {
+        let w = self.w;
+        let dst = self.buffer_mut();
+        let a = y0 * w;
+        let b = (y1 * w).min(dst.len());
+        if b > a {
+            dst[a..b].copy_from_slice(&src[a..b]);
         }
     }
 

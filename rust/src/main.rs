@@ -73,15 +73,18 @@ fn run_ui(f: &mut Fpga) {
     let mut disp = match Display::open(W, H) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("failed to open display (/dev/fb0 + /dev/mem): {e}");
+            eprintln!("failed to open display (/dev/fb0): {e}");
             std::process::exit(1);
         }
     };
-    println!("display open; starting Slint software renderer (page-flip, vsync)");
+    // Route buffer 0 to HDMI once (xoff=yoff=0 for this direct_video menu, §9.6).
+    let flag = f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
+    println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
-    // SwappedBuffers: we render into alternating buffers and flip the FPGA scanout
-    // between them, so Slint redraws the right regions for a 2-buffer swap chain.
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
+    // ReusedBuffer: Slint renders into ONE cached buffer that stays fully current,
+    // redrawing only this frame's dirty region (fast, ~2.3ms — cached RAM). After
+    // vsync we copy just those rows into the write-combined framebuffer.
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     slint::platform::set_platform(Box::new(MisterPlatform {
         window: window.clone(),
         start: Instant::now(),
@@ -92,52 +95,62 @@ fn run_ui(f: &mut Fpga) {
     let ui = AppWindow::new().expect("AppWindow::new");
     ui.show().expect("show");
 
-    // Page-flip between buffers 1 and 2 (full slots in reserved FPGA DDR).
-    let bufs = [1u32, 2u32];
-    let mut idx = 0usize;
+    let mut cached = vec![Pixel(0); W * H];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
     let mut render_us = 0u128;
     let mut vsync_us = 0u128;
-    let mut flip_us = 0u128;
+    let mut copy_us = 0u128;
+    let mut copy_rows_acc = 0u128;
 
-    println!("running UI for {secs}s (vsync-locked page-flip)...");
+    println!("running UI for {secs}s (vsync-locked, dirty-row copy)...");
     while start.elapsed().as_secs() < secs {
         slint::platform::update_timers_and_animations();
-        let n = bufs[idx];
         let t0 = Instant::now();
-        let drawn = window.draw_if_needed(|renderer| {
-            renderer.render(disp.buffer_mut(n), W);
+        let mut this_rows: Option<(usize, usize)> = None;
+        window.draw_if_needed(|renderer| {
+            let region = renderer.render(&mut cached, W);
+            let o = region.bounding_box_origin();
+            let s = region.bounding_box_size();
+            if s.width > 0 && s.height > 0 {
+                let y0 = o.y.max(0) as usize;
+                let y1 = ((o.y + s.height as i32) as usize).min(H);
+                if y1 > y0 {
+                    this_rows = Some((y0, y1));
+                }
+            }
         });
         let t1 = Instant::now();
-        // Sync to vblank, then atomically point the scanout at the freshly drawn
-        // buffer — no copy, no tearing.
         disp.wait_vsync();
         let t2 = Instant::now();
-        if drawn {
-            f.fb_enable_direct(n, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
-            idx ^= 1;
+        let mut copied_rows = 0usize;
+        if let Some((y0, y1)) = this_rows {
+            disp.copy_rows(&cached, y0, y1);
+            copied_rows = y1 - y0;
         }
         let t3 = Instant::now();
         render_us += (t1 - t0).as_micros();
         vsync_us += (t2 - t1).as_micros();
-        flip_us += (t3 - t2).as_micros();
+        copy_us += (t3 - t2).as_micros();
+        copy_rows_acc += copied_rows as u128;
         frames += 1;
         fps_frames += 1;
         if fps_window_start.elapsed().as_millis() >= 1000 {
             let nn = fps_frames.max(1) as u128;
             println!(
-                "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  flip {}us (avg)",
+                "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} rows avg)",
                 render_us / nn,
                 vsync_us / nn,
-                flip_us / nn
+                copy_us / nn,
+                copy_rows_acc / nn
             );
             fps_frames = 0;
             render_us = 0;
             vsync_us = 0;
-            flip_us = 0;
+            copy_us = 0;
+            copy_rows_acc = 0;
             fps_window_start = Instant::now();
         }
     }
@@ -156,7 +169,7 @@ fn fb_test(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
-    const N: u32 = 1; // paint+route buffer 1 (page-flip slot)
+    const N: u32 = 0; // paint + route buffer 0 (the write-combined /dev/fb0 buffer)
 
     // Geometry-revealing pattern: four solid quadrants, a 6px white border that
     // must touch all four screen edges, and a white cross-hair through centre.
@@ -168,7 +181,7 @@ fn fb_test(f: &mut Fpga) {
     const YELLOW: u32 = 0x00FF_FF00;
     const WHITE: u32 = 0x00FF_FFFF;
 
-    let buf = disp.buffer_mut(N);
+    let buf = disp.buffer_mut();
     fill_rect(buf, 0, 0, W / 2, H / 2, RED);
     fill_rect(buf, W / 2, 0, W, H / 2, GREEN);
     fill_rect(buf, 0, H / 2, W / 2, H, BLUE);
