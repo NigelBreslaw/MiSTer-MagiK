@@ -14,4 +14,7 @@
 #
 # Revert: mv /media/fat/zaparoo/frontend.real /media/fat/zaparoo/frontend
 export MISTER_SLINT_NO_VMODE=1
+# Performance debugging: log FPS + draw an on-screen FPS overlay so the
+# animation's smoothness can be inspected directly on HDMI. Remove once tuned.
+export MISTER_SLINT_PERF=1
 exec /media/fat/mister-slint/run-mister.sh
