@@ -169,7 +169,7 @@ scripts/
   deploy-mister.sh      host: OLD expect-based deploy (superseded by deploy_mister.py)
   run-mister.sh         on-device launcher (env for SLINT linuxfb, fontconfig, LD_LIBRARY_PATH, vmode)
   run-desktop.sh        host: run locally via uv
-  mister_ssh.py         host: paramiko helper — run/reboot/put/get (THE reliable SSH path)
+  mister_ssh.py         host: paramiko helper — run/reboot/reboot-wait/wait/put/get (THE reliable SSH path)
   audit-mister.sh       host: expect-based device audit
   capture-fb.sh         host: expect-based framebuffer capture
   raw_to_png.py         host: convert a /dev/fb0 dump (BGRX) to PNG
@@ -198,6 +198,13 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/deploy_mister.py
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run "uname -a"
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py get /tmp/fb0.raw build/fb.raw
+
+# Reboot and BLOCK until it's actually back (don't blind-sleep). It waits for
+# the device to drop off port 22, then polls SSH + `pidof MiSTer` until
+# userspace is ready, printing elapsed time. Measured cycle: down ~3s, ready
+# ~35s (returns the instant it's up; optional arg = max seconds, default 120).
+MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot-wait
+MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py wait   # just poll until ready
 
 # Launch the app over SSH (NOTE: won't show on HDMI — see §3 — but renders to fb0)
 ... run "pkill -f main.py; nohup /media/fat/mister-slint/run-mister.sh >/tmp/boot 2>&1 & sleep 7; cat /tmp/mister-slint.log"
@@ -314,6 +321,11 @@ up video and launches Slint. Most control, most work, must track upstream.
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't leave the menu paused.** If you `kill -STOP $(pidof MiSTer)` for an
   experiment, always `kill -CONT` it afterwards (or reboot).
+- **Don't blind-sleep on reboot.** The device reboots fast (~35s to userspace,
+  drops off the network in ~3s). Use `mister_ssh.py reboot-wait` (or `wait`),
+  which detects the down→up transition and returns the instant `pidof MiSTer`
+  answers, instead of a fixed `sleep`. Polling port 22 alone is not enough —
+  it confirm-runs a command so we don't act before the rootfs is ready.
 
 ---
 
