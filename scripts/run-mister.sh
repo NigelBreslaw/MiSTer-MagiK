@@ -1,0 +1,40 @@
+#!/bin/bash
+# On-device launcher for the MiSTer Slint UI.
+#
+# This ships inside the bundle, so on the MiSTer it lives at
+# /media/fat/mister-slint/run-mister.sh and is invoked by the Scripts-menu
+# entry /media/fat/Scripts/mister-slint.sh.
+set -u
+
+APP="$(cd "$(dirname "$0")" && pwd)"
+PYBIN="$APP/python/bin/python3.12"
+LOG="/tmp/mister-slint.log"
+
+mkdir -p /tmp/mister-slint/cache
+
+# Render with the CPU (Skia software renderer) straight to the framebuffer.
+# The MiSTer exposes a plain /dev/fb0 (no DRM/KMS), so force the legacy
+# framebuffer path instead of letting the LinuxKMS backend probe /dev/dri.
+export SLINT_BACKEND="linuxkms-skia-software"
+export SLINT_BACKEND_LINUXFB="1"
+
+# The MiSTer root filesystem ships no fonts and no fontconfig setup, so point
+# fontconfig at the font that travels inside the bundle.
+export FONTCONFIG_FILE="$APP/etc/fonts/fonts.conf"
+export FONTCONFIG_PATH="$APP/etc/fonts"
+export XDG_CACHE_HOME="/tmp/mister-slint/cache"
+export HOME="/tmp/mister-slint"
+
+# There is no ld.so cache on MiSTer, so spell out where to find the device's
+# system libraries and the bundled Python's own libraries. Slint's vendored
+# libraries (slint.libs) are found automatically via the extension's RPATH.
+export LD_LIBRARY_PATH="$APP/python/lib:/usr/lib:/lib:${LD_LIBRARY_PATH:-}"
+
+# The framebuffer is already 1920x1080x32 on a stock MiSTer, but set it
+# explicitly so the UI is correct even if a core changed the video mode.
+if [ -x /usr/sbin/vmode ]; then
+    /usr/sbin/vmode -r 1920 1080 rgb32 >/dev/null 2>&1 || true
+fi
+
+echo "[mister-slint] $(date) launching $PYBIN" >>"$LOG"
+exec "$PYBIN" "$APP/src/main.py" >>"$LOG" 2>&1

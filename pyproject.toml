@@ -16,4 +16,8 @@ prerelease = "allow"
 [dependency-groups]
 dev = [
     "slint-compiler==1.16.1b1",
+    # Host-side tooling for talking to the MiSTer over SSH/SFTP. paramiko is
+    # the same library mister-companion uses, which connects reliably with
+    # password auth (allow_agent/look_for_keys disabled).
+    "paramiko>=3.4",
 ]
