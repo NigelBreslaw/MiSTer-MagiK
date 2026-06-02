@@ -32,7 +32,10 @@ export LD_LIBRARY_PATH="$APP/python/lib:/usr/lib:/lib:${LD_LIBRARY_PATH:-}"
 
 # The framebuffer is already 1920x1080x32 on a stock MiSTer, but set it
 # explicitly so the UI is correct even if a core changed the video mode.
-if [ -x /usr/sbin/vmode ]; then
+# Skip this when launched under a host that already configured the video
+# pipeline and framebuffer (e.g. the Zaparoo boot path) — re-running vmode
+# there can disturb the mode the menu core just set. Set MISTER_SLINT_NO_VMODE=1.
+if [ "${MISTER_SLINT_NO_VMODE:-0}" != "1" ] && [ -x /usr/sbin/vmode ]; then
     /usr/sbin/vmode -r 1920 1080 rgb32 >/dev/null 2>&1 || true
 fi
 
