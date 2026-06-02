@@ -73,5 +73,33 @@ export component AppWindow inherits Window {
                 Rectangle { background: #457b9d; }
             }
         }
+
+        // Heartbeat: on the MiSTer the kernel framebuffer console (fbcon) stays
+        // bound to /dev/fb0 and clears it to black, so a static frame vanishes
+        // after the first console repaint. Binding to animation-tick() (which
+        // re-evaluates every frame) keeps Slint repainting forever, so we
+        // continuously overwrite fbcon. The moving block is just the visible
+        // proof that rendering is live.
+        Rectangle {
+            height: 40px;
+            background: #14233a;
+            border-radius: 8px;
+            clip: true;
+
+            property <length> block-w: 160px;
+            // 0..1 sawtooth over 5s from the free-running frame clock, folded
+            // into a 0..1..0 ping-pong so the block sweeps back and forth.
+            property <float> phase: Math.mod(animation-tick() / 1ms, 5000) / 5000;
+            property <float> pos: phase < 0.5 ? phase * 2 : 2 - phase * 2;
+
+            Rectangle {
+                width: parent.block-w;
+                height: parent.height - 12px;
+                y: 6px;
+                x: 6px + (parent.width - parent.block-w - 12px) * parent.pos;
+                border-radius: 6px;
+                background: @linear-gradient(90deg, #e63946 0%, #f1faee 100%);
+            }
+        }
     }
 }
