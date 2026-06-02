@@ -1,0 +1,5 @@
+# Override the global ~/.cargo/config.toml sccache wrapper: its macOS Homebrew
+# path (/opt/homebrew/bin/sccache) does not exist inside the cross Linux
+# container, which breaks cross-compilation. Empty string disables the wrapper.
+[build]
+rustc-wrapper = ""
