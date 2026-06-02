@@ -8,8 +8,20 @@ description = "Native MiSTer frontend: owns the FPGA framebuffer and renders Sli
 name = "mister-slint-fb"
 path = "src/main.rs"
 
+[dependencies]
+libc = "0.2"
+# No "std" feature on purpose: that pulls system font loading (fontconfig), which
+# we don't have/want on the MiSTer. Instead we embed a font for the software
+# renderer (see build.rs) and provide time/etc. ourselves via the Platform trait.
+# Our own crate still uses std freely; this only affects Slint internals.
+slint = { version = "1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
+
+[build-dependencies]
+slint-build = "1"
+
 [profile.release]
-opt-level = "z"
+# opt-level 3 (not "z"): the software renderer is hot, we want speed for 60fps.
+opt-level = 3
 lto = true
 strip = true
 panic = "abort"
