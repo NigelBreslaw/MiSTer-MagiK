@@ -8,7 +8,9 @@ and the documented MiSTer pubkey-auth hang, without any interactive prompt.
 
 Usage:
     python scripts/mister_ssh.py run "<command>"     # run a command, print output
-    python scripts/mister_ssh.py reboot              # reboot the device
+    python scripts/mister_ssh.py reboot              # reboot (fire-and-forget)
+    python scripts/mister_ssh.py reboot-wait [secs]  # reboot, then block until back
+    python scripts/mister_ssh.py wait [secs]         # block until SSH+userspace ready
     python scripts/mister_ssh.py put <local> <remote>
     python scripts/mister_ssh.py get <remote> <local>
 
@@ -20,7 +22,9 @@ Environment:
 from __future__ import annotations
 
 import os
+import socket
 import sys
+import time
 
 import paramiko
 
@@ -56,21 +60,87 @@ def run(client: paramiko.SSHClient, command: str, timeout: float = 120.0) -> int
     return rc
 
 
+def _port_open(host: str, port: int = 22, timeout: float = 3.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _userspace_ready(timeout: float = 5.0) -> str | None:
+    """Return MiSTer's status line if SSH + userspace are up, else None.
+
+    Port 22 answering only means the kernel/dropbear is alive; we additionally
+    run a trivial command so we don't return before the rootfs/login works.
+    """
+    try:
+        client = connect(timeout=timeout)
+    except Exception:
+        return None
+    try:
+        _, stdout, _ = client.exec_command("pidof MiSTer || echo BOOTING", timeout=timeout)
+        out = stdout.read().decode("utf-8", "ignore").strip()
+        return out or "ready"
+    except Exception:
+        return None
+    finally:
+        client.close()
+
+
+def wait_down(host: str, max_seconds: float = 40.0) -> bool:
+    """Block until the device stops answering on port 22 (reboot has begun)."""
+    start = time.time()
+    while time.time() - start < max_seconds:
+        if not _port_open(host, timeout=2.0):
+            print(f"  device went down after {time.time() - start:.1f}s", flush=True)
+            return True
+        time.sleep(1.0)
+    print("  (device still answering; proceeding to wait-up anyway)", flush=True)
+    return False
+
+
+def wait_up(host: str, max_seconds: float = 120.0) -> int:
+    """Block until SSH + userspace are ready, printing progress."""
+    start = time.time()
+    attempt = 0
+    while time.time() - start < max_seconds:
+        attempt += 1
+        status = _userspace_ready(timeout=4.0)
+        elapsed = time.time() - start
+        if status is not None:
+            print(f"up after {elapsed:.1f}s (attempt {attempt}): MiSTer={status}", flush=True)
+            return 0
+        print(f"  [{elapsed:5.1f}s] not ready yet, retrying...", flush=True)
+        time.sleep(2.0)
+    print(f"TIMEOUT: device not ready after {max_seconds:.0f}s", flush=True)
+    return 1
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
     action = sys.argv[1]
+    host = os.environ.get("MISTER_IP", "192.168.1.117")
 
-    if action == "reboot":
+    if action in ("reboot", "reboot-wait"):
         client = connect()
         # Fire-and-forget: the connection drops as the device goes down.
         try:
             client.exec_command("nohup /sbin/reboot >/dev/null 2>&1 &", timeout=10)
         finally:
             client.close()
-        print(f"reboot issued to {os.environ.get('MISTER_IP', '192.168.1.117')}")
+        print(f"reboot issued to {host}")
+        if action == "reboot-wait":
+            max_seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 120.0
+            wait_down(host)
+            return wait_up(host, max_seconds)
         return 0
+
+    if action == "wait":
+        max_seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 120.0
+        return wait_up(host, max_seconds)
 
     if action == "run":
         if len(sys.argv) < 3:
