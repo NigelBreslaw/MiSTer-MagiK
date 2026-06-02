@@ -1,0 +1,15 @@
+[package]
+name = "mister-slint-fb"
+version = "0.1.0"
+edition = "2021"
+description = "Native MiSTer frontend: owns the FPGA framebuffer and renders Slint. Spike stage."
+
+[[bin]]
+name = "mister-slint-fb"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

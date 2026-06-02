@@ -173,8 +173,17 @@ scripts/
   audit-mister.sh       host: expect-based device audit
   capture-fb.sh         host: expect-based framebuffer capture
   raw_to_png.py         host: convert a /dev/fb0 dump (BGRX) to PNG
+  fpga_fbenable_probe.py  THROWAWAY device probe: replay video_fb_enable(1,0) via /dev/mem (§9.5)
+  fpga_diag.py            THROWAWAY device probe: instrumented SPI handshake (§9.5)
+  fpga_read_vmode.py      THROWAWAY device probe: read GET_VRES/GET_FB_PAR (§9.5)
 reference/              READ-ONLY clones of Zaparoo/MiSTer source (gitignored) — see §6
 build/                  gitignored build artifacts + framebuffer PNG dumps
+rust/                   native armv7 frontend crate (Option C) — see §12
+  Cargo.toml            crate: mister-slint-fb (release: opt-level=z, lto, strip, panic=abort)
+  rust-toolchain.toml   pins stable 1.88 + armv7-unknown-linux-gnueabihf
+  .cargo/config.toml    disables the global sccache wrapper inside the cross container
+  build-arm.sh          cross build wrapper (sets DOCKER_DEFAULT_PLATFORM=linux/amd64)
+  src/main.rs           toolchain hello-world; next: fpga module + Slint sw renderer
 ```
 
 On the device, the bundle lives at `/media/fat/mister-slint/` and the Scripts
@@ -269,14 +278,24 @@ path; whether the default CRT-persisted state forces `--crt` (our launcher
 should ignore it); that Slint's linuxfb backend is happy on tty2 (it should be —
 a real VT also fixes the `VT_GETSTATE ioctl failed` warning we saw over SSH).
 
-### Option B — Reproduce `video_fb_enable(1,0)` ourselves (medium, clean-ish)
+### Option B — Reproduce `video_fb_enable(1,0)` ourselves (medium, clean-ish) — ✅ MECHANISM PROVEN
 
 Write a tiny ARM helper that issues the same FPGA SPI sequence (port the
 `spi_uio_cmd_cont(UIO_SET_FBUF)` + `spi_w(...)` calls from `fpga_io.cpp` /
 `video.cpp`), plus `video_chvt`, then launch Slint. Frees us from Zaparoo but
 needs the MiSTer ARM toolchain and `/dev/mem` FPGA access, and the *running
-core must support the HPS framebuffer* (the stock menu core does). Hardest part
-is doing this from the right core/VT context.
+core must support the HPS framebuffer* (the stock menu core does).
+
+**We validated this from our own process (see §9.5 FPGA spike).** A throwaway
+Python port of the SPI layer, run on-device with the stock menu SIGSTOPped, DID
+route `/dev/fb0` to HDMI — our test pattern appeared (proof the fork is not
+required). It rendered as misaligned colour columns because of geometry, not
+comms: the device runs `direct_video=1`, so `video_fb_enable` takes the
+`xoff = v_cur.item[4] - FB_DV_LBRD`, `yoff = v_cur.item[8] - FB_DV_UBRD` path
+(plus `set_vga_fb()`), which our `xoff=yoff=0` probe didn't replicate. The Rust
+port must reuse MiSTer's full positioning math (and read the live mode), not
+hardcode 1920×1080. The remaining "hard part" is the VT/graphics-mode context,
+not the SPI.
 
 ### Option C — Ship our own `main=` frontend binary (heaviest)
 
@@ -321,6 +340,12 @@ up video and launches Slint. Most control, most work, must track upstream.
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't leave the menu paused.** If you `kill -STOP $(pidof MiSTer)` for an
   experiment, always `kill -CONT` it afterwards (or reboot).
+- **FPGA SPI from our own process needs the bus to ourselves.** The stock MiSTer
+  (or Zaparoo) process drives GPO/GPI continuously. To inject SPI from a separate
+  process, `kill -STOP $(pidof MiSTer)` first, then `kill -CONT` after. HDMI stays
+  alive while stopped (scan-out is FPGA-driven). GPO is write-only (reads return
+  GPI), so you can't recover its shadow — start from `0x80000000` (BIT31) and only
+  touch SPI bits. See §9.5.
 - **Don't blind-sleep on reboot.** The device reboots fast (~35s to userspace,
   drops off the network in ~3s). Use `mister_ssh.py reboot-wait` (or `wait`),
   which detects the down→up transition and returns the instant `pidof MiSTer`
@@ -377,20 +402,72 @@ Repro:
 # steady ~16.6 ms waits == 60 Hz available, just unused by Slint's linuxfb path.
 ```
 
+### 9.5 FPGA direct-access spike — fork-free `/dev/fb0` → HDMI (✅ proven)
+
+Goal: prove we can route `/dev/fb0` to HDMI **from our own process** (no Zaparoo),
+as the foundation for a Rust `main=` frontend (Option C) and tear-free page-flip.
+We validated the FPGA layer with a throwaway **Python** port of MiSTer's SPI code
+(`scripts/fpga_*` — diagnostic only; the real impl is Rust). Method: boot to the
+stock menu, `kill -STOP $(pidof MiSTer)` to own the SPI bus (HDMI stays live —
+scan-out is FPGA-driven), poke registers, `kill -CONT` after.
+
+**Proven facts (these de-risk the Rust port):**
+
+- **FPGA registers = `mmap(/dev/mem)` + volatile u32.** The HPS↔FPGA "SPI" is the
+  FPGA-manager GPO/GPI pair at `0xFF706000 + 0x10` (out) / `+0x14` (in). Map that
+  page, done. Addresses confirmed live.
+- **The bit-bang handshake works from our process.** `fpga_spi(word)`: set data +
+  strobe (`GPO bit17`), wait `GPI bit17` (ACK) high, drop strobe, wait ACK low.
+  Instrumented: idle `GPI=0x00040000` (io_ver=1); strobe-high → `0x00060001`
+  (ACK + data present); strobe-low → `0x00040000`. Real handshake, not a stale read.
+- **Chip-select framing matters.** If MiSTer is SIGSTOPped mid-transaction, `IO_EN`
+  (`GPO bit20`) may be high; drop then raise it (`DisableIO`→`EnableIO`) so the
+  command word isn't mis-parsed as a parameter.
+- **`video_fb_enable(1,0)` routes `/dev/fb0` to HDMI — confirmed visually.** Our
+  test pattern replaced the wallpaper. So the **Zaparoo fork is not required** to
+  own the screen.
+- **`/dev/fb0` phys addr = `0x22001000`** (`smem_start`) = `FB_ADDR(0x22000000)
+  + 4096` (the `n?0:4096` params page). Matches `video.cpp`.
+- The 10-word SET_FBUF sequence (after `spi_w(UIO_SET_FBUF=0x2F)`): `fmt`
+  (`FB_EN|FB_FMT_RxB|FB_FMT_8888 = 0x8016`), addr-lo, addr-hi, width, height,
+  scaled L, scaled R, scaled T, scaled B, stride.
+
+**Open issues for the Rust port (why the spike showed colour columns):**
+
+- **`direct_video=1` on this device.** `video_fb_enable` then positions the fb via
+  `xoff = v_cur.item[4] - FB_DV_LBRD(3)`, `yoff = v_cur.item[8] - FB_DV_UBRD(2)`,
+  uses tiny border porches (`FB_DV_*`), and calls `set_vga_fb()`. Our probe used
+  `xoff=yoff=0` (non-direct path) → misaligned columns. The Rust port must reuse
+  MiSTer's positioning math (and the live mode `video_mode=8` = 1080p), not
+  hardcode 1920×1080.
+- **Multi-word SPI *reads* were flaky in Python.** Command-word reads work (got the
+  `GET_FB_PAR` CRC `0x6d`, the SET_FBUF "supported" flag `0x1`), but `UIO_GET_VRES`
+  / `UIO_GET_FB_PAR` data words all read 0 — a back-to-back read-timing artifact of
+  slow Python (or the menu core not implementing them). At native Rust speed, port
+  `fpga_spi` faithfully; MiSTer reads these fine.
+- VT/graphics-mode context (so fbcon doesn't clobber, §8/§11) is still required —
+  that's the genuinely fiddly part, not the SPI.
+
+Scripts: `scripts/fpga_fbenable_probe.py` (route fb0 + test pattern),
+`scripts/fpga_diag.py` (instrumented handshake), `scripts/fpga_read_vmode.py`
+(read GET_VRES/GET_FB_PAR). All require the stock-menu SIGSTOP dance above.
+
 ---
 
 ## 10. Current device state & recovery
 
-- `MiSTer.ini` line 278 is `main=zaparoo/MiSTer_Zaparoo` (uncommented) →
-  **Zaparoo enabled**: boot → `MiSTer_Zaparoo` → our `zaparoo/frontend` shim →
-  `run-mister.sh` → Slint on HDMI. Backup: `/media/fat/MiSTer.ini.bak`. Revert by
-  re-commenting that line (or restoring the backup), then reboot.
+- **Currently at the STOCK menu** (Zaparoo disabled for the §9.5 FPGA spike):
+  `MiSTer.ini` line 278 is `;main=zaparoo/MiSTer_Zaparoo` (commented). To go back
+  to the Slint-on-Zaparoo path, uncomment it and reboot. Backup:
+  `/media/fat/MiSTer.ini.bak`.
+- `direct_video=1`, `video_mode=8` (1080p) in `MiSTer.ini` — relevant to fb
+  positioning (see §9.5).
 - `zaparoo/frontend` is our shim (the real Qt frontend is saved as
   `frontend.real`). It exports `MISTER_SLINT_NO_VMODE=1` and — for now —
   `MISTER_SLINT_PERF=1`, so the FPS overlay/logging is on. Drop the PERF line
   when done tuning.
 - The mister-slint bundle is deployed at `/media/fat/mister-slint/` and verified
-  runnable on HDMI (~62 fps, see §9).
+  runnable on HDMI (~62 fps, see §9). The `fpga_*.py` spike probes also live there.
 - **Black-screen recovery:** paramiko SSH works even with no usable video. To
   recover from a bad `main=`/frontend experiment: SSH in, re-comment `main=`
   (or restore `MiSTer.ini.bak`) and/or restore `zaparoo/frontend`, then
@@ -412,3 +489,49 @@ Repro:
   `F1/Backspace/Menu` (`alt_launcher.cpp:49-66`); we'll need our own scheme and
   an "exit" key (our app currently runs forever with no quit path on-device).
 - libinput quirks DB is missing — fine for rendering; revisit when wiring input.
+
+---
+
+## 12. Rust ARM toolchain (for the native frontend / Option C)
+
+We're building a native armv7 frontend in Rust (`rust/` crate, see §9.5 for why:
+fork-free fb routing + tear-free vsync + Slint's Rust software renderer). The
+cross-compile toolchain is **proven end-to-end**: a binary built on the
+Apple-Silicon host runs on the MiSTer (`arch=arm, os=linux, glibc OK`).
+
+**Build & deploy:**
+
+```bash
+rust/build-arm.sh                      # = cross build --target armv7-unknown-linux-gnueabihf --release
+file rust/target/armv7-unknown-linux-gnueabihf/release/mister-slint-fb   # ELF 32-bit ARM, glibc
+MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
+  put rust/target/armv7-unknown-linux-gnueabihf/release/mister-slint-fb /media/fat/mister-slint/mister-slint-fb
+... run "chmod +x /media/fat/mister-slint/mister-slint-fb; /media/fat/mister-slint/mister-slint-fb"
+```
+
+**One-time host setup (done):**
+
+```bash
+cargo install cross --locked
+rustup toolchain add 1.88-x86_64-unknown-linux-gnu --profile minimal --force-non-host
+```
+
+**Apple-Silicon gotchas (all handled by `build-arm.sh` + config, but know them):**
+
+- **glibc match:** `cross` 0.2.5 images are Ubuntu 20.04 = **glibc 2.31**, which is
+  what the MiSTer runs. So the default image Just Works — no musl, no static.
+- **`--force-non-host`:** cross mounts the host's rustup toolchain into the Linux
+  container, so the `*-unknown-linux-gnu` toolchain must be installed on the Mac
+  even though it can't run there. rustup blocks it without `--force-non-host`.
+- **`DOCKER_DEFAULT_PLATFORM=linux/amd64`:** the cross image has no arm64 manifest;
+  on arm64 Docker we must request amd64 (qemu-emulated). Our crate is tiny so the
+  emulation cost is negligible. (`build-arm.sh` sets this.)
+- **sccache wrapper:** the global `~/.cargo/config.toml` sets
+  `rustc-wrapper=/opt/homebrew/bin/sccache` — a macOS path that doesn't exist in
+  the container. `rust/.cargo/config.toml` overrides it to empty.
+- **toolchain pin:** `rust/rust-toolchain.toml` pins stable `1.88` + the armv7
+  target (the host default is nightly, which tripped cross's provisioning).
+
+**Crate layout:** `rust/src/main.rs` is currently the toolchain hello-world. Next:
+port the proven SPI/fb-enable (§9.5) into a `fpga` module, add the Slint software
+renderer + custom `Platform`, then the vblank page-flip.
