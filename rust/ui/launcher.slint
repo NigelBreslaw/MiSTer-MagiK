@@ -1,0 +1,119 @@
+import { MisterBridge } from "mister_bridge.slint";
+import { ControllerPanel } from "controller_test.slint";
+import "fonts/DejaVuSans.ttf";
+export { MisterBridge }
+
+component LauncherTile inherits Rectangle {
+    in property <string> label;
+    in property <string> subtitle;
+    in property <bool> focused;
+
+    border-width: focused ? 6px : 3px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+    border-radius: 16px;
+    background: focused ? #2a2236 : #1e1828;
+
+    VerticalLayout {
+        padding: 32px;
+        spacing: 12px;
+        alignment: center;
+
+        Text {
+            text: label;
+            color: focused ? #06d6a0 : #e8e0f0;
+            font-size: 36px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: subtitle;
+            color: #9080a8;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component HomeGrid inherits Rectangle {
+    VerticalLayout {
+        padding: 48px;
+        spacing: 32px;
+
+        Text {
+            text: "MiSTer Magic";
+            color: #e8e0f0;
+            font-size: 48px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 32px;
+
+            VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 32px;
+
+                LauncherTile {
+                    vertical-stretch: 1;
+                    label: "Controller Test";
+                    subtitle: "Press A";
+                    focused: MisterBridge.selected-index == 0;
+                }
+
+                LauncherTile {
+                    vertical-stretch: 1;
+                    label: "Pac-Man";
+                    subtitle: "Arcade";
+                    focused: MisterBridge.selected-index == 2;
+                }
+            }
+
+            VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 32px;
+
+                LauncherTile {
+                    vertical-stretch: 1;
+                    label: "Donkey Kong";
+                    subtitle: "Arcade";
+                    focused: MisterBridge.selected-index == 1;
+                }
+
+                LauncherTile {
+                    vertical-stretch: 1;
+                    label: "Galaga";
+                    subtitle: "Arcade";
+                    focused: MisterBridge.selected-index == 3;
+                }
+            }
+        }
+
+        Text {
+            text: "D-pad: move  ·  A: select  ·  Home: back";
+            color: #706080;
+            font-size: 18px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+export component Launcher inherits Window {
+    preferred-width: 1920px;
+    preferred-height: 1080px;
+    default-font-family: "DejaVu Sans";
+    title: "MiSTer Magic Launcher";
+    background: #1a1424;
+
+    if MisterBridge.screen-mode == 0 : HomeGrid {
+        width: 100%;
+        height: 100%;
+    }
+
+    if MisterBridge.screen-mode == 1 : ControllerPanel {
+        width: 100%;
+        height: 100%;
+    }
+}

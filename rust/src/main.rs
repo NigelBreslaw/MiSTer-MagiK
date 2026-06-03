@@ -1,17 +1,23 @@
 //! Native MiSTer frontend — spike stage.
 //!
-//! Subcommands (run on-device with the stock menu SIGSTOPped so we own the bus):
+//! Subcommands (run on-device with MiSTer stopped so we own input + SPI):
 //!   read   read & print the live video mode + fb params (UIO_GET_VRES/FB_PAR)
-//!   ui [scene] [secs]  Slint bench scene (default `demo`, 20s); see `scenes`
-//!   scenes list Slint bench names (`rust/ui/bench/*.slint`)
+//!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
+//!   scenes list Slint scene names
 //!   fb     paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
-//!          via the ported video_fb_enable (direct_video positioning)
+//!   input  gamepad log / sniff / calibrate
+//!
+//! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
+//! Core handoff argv (`.rbf` paths) re-execs stock `/media/fat/MiSTer`.
 //!
 //! See AGENTS.md §9.5 (spike) and §12 (toolchain).
+
+use std::ffi::CString;
 
 mod fb;
 mod fpga;
 mod input;
+mod launcher;
 mod ui_runner;
 mod vt;
 
@@ -21,8 +27,23 @@ use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
 const W: usize = 1920;
 const H: usize = 1080;
 
+const MISTER_BIN: &str = "/media/fat/MiSTer";
+
 fn main() {
-    let cmd = std::env::args().nth(1).unwrap_or_else(|| "fb".to_string());
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() >= 2 {
+        if should_handoff_to_mister(&args[1]) {
+            exec_mister(&args);
+        }
+    }
+
+    let cmd = if args.len() == 1 {
+        "ui".to_string()
+    } else {
+        args[1].clone()
+    };
+
     println!("mister-magic-fb [{cmd}] (arch={})", std::env::consts::ARCH);
 
     let mut f = match Fpga::open() {
@@ -44,6 +65,29 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+/// MiSTer re-exec'd us with a core path — hand off to stock Main so gameplay works.
+fn should_handoff_to_mister(arg: &str) -> bool {
+    if matches!(arg, "read" | "fb" | "ui" | "scenes" | "input") {
+        return false;
+    }
+    if arg.ends_with("menu.rbf") {
+        return false;
+    }
+    arg.ends_with(".rbf") || arg.ends_with(".mra") || arg.ends_with(".mgl")
+}
+
+fn exec_mister(args: &[String]) {
+    println!("core handoff → {MISTER_BIN} {}", args[1..].join(" "));
+    let c_path = CString::new(MISTER_BIN).expect("CString");
+    let c_args: Vec<CString> = std::iter::once(c_path.clone())
+        .chain(args[1..].iter().map(|s| CString::new(s.as_str()).expect("CString")))
+        .collect();
+    let ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).chain([std::ptr::null()]).collect();
+    let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
+    eprintln!("execv({MISTER_BIN}) failed: {err}");
+    std::process::exit(1);
 }
 
 fn fb_test(f: &mut Fpga) {

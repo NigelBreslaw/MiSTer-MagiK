@@ -32,5 +32,9 @@ export global MisterBridge {
     in-out property <string> pressed-now;
     in-out property <string> last-event-label;
     in-out property <string> last-raw-event;
+    // Launcher navigation: 0=home grid, 1=controller test panel.
+    in-out property <int> screen-mode;
+    // Home grid focus 0..3 (2x2 layout).
+    in-out property <int> selected-index;
     callback quit-requested();
 }
