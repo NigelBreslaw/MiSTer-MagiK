@@ -113,14 +113,9 @@ export component Launcher inherits Window {
         height: 100%;
     }
 
-    if MisterBridge.screen-mode == 1 : ControllerPanel {
-        width: 100%;
-        height: 100%;
-    }
+    if MisterBridge.screen-mode == 1 : ControllerPanel { }
 
     if MisterBridge.setup-visible : SetupOverlay {
-        width: 100%;
-        height: 100%;
         phase: MisterBridge.setup-phase;
         title: MisterBridge.setup-title;
         subtitle: MisterBridge.setup-subtitle;
@@ -128,11 +123,11 @@ export component Launcher inherits Window {
         list-selected: MisterBridge.setup-selected;
         config-labels: MisterBridge.setup-config-labels;
         config-values: MisterBridge.setup-config-values;
+        setup-name: MisterBridge.setup-name;
+        setup-kind-label: MisterBridge.setup-kind-label;
     }
 
     if MisterBridge.loading-message != "": Rectangle {
-        width: 100%;
-        height: 100%;
         background: #1a1424;
 
         VerticalLayout {

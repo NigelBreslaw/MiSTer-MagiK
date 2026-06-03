@@ -1,7 +1,8 @@
 //! Controller setup flow — detect unknown / moved pads and offer rebinding.
 
-use crate::controller_db::{ControllerDb, PadRegistryStatus};
+use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
 use crate::input::{layout_profile_name, PadInfo, PadState};
+use crate::input::PadPool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupPhase {
@@ -12,8 +13,10 @@ pub enum SetupPhase {
     NewOrExisting = 2,
     /// Scroll list of saved controllers and confirm.
     PickExisting = 3,
-    /// Show everything we know about this pad (design / configure step).
+    /// Show everything we know about this pad.
     Configure = 4,
+    /// Name (from kernel for now) + controller type.
+    NameKind = 5,
 }
 
 pub struct SetupNav {
@@ -23,6 +26,8 @@ pub struct SetupNav {
     /// Which pad in the pool this dialog refers to.
     pub target_pad_idx: usize,
     pub list_index: usize,
+    pub draft_label: String,
+    pub draft_kind: ControllerKind,
     prev: PadState,
     /// Ignore the triggering edge on the same frame we opened from pad activity.
     armed: bool,
@@ -34,6 +39,13 @@ pub enum SetupAction {
     RegisterNew,
     /// User picked an existing registry entry by index in `list_entries()`.
     ClaimExisting { list_index: usize },
+    /// Save label + kind and mark setup complete.
+    SaveFinish {
+        label: String,
+        kind: ControllerKind,
+    },
+    /// Pad already complete — close this flow (e.g. after USB rebind).
+    Done,
 }
 
 impl SetupNav {
@@ -43,6 +55,8 @@ impl SetupNav {
             trigger_status: PadRegistryStatus::Unknown,
             target_pad_idx: 0,
             list_index: 0,
+            draft_label: String::new(),
+            draft_kind: ControllerKind::Unknown,
             prev: PadState::default(),
             armed: false,
         }
@@ -89,7 +103,8 @@ impl SetupNav {
             SetupPhase::Detected => "New input detected".into(),
             SetupPhase::NewOrExisting => "Is this a new controller?".into(),
             SetupPhase::PickExisting => "Select your controller".into(),
-            SetupPhase::Configure => "Controller setup".into(),
+            SetupPhase::Configure => "Controller details".into(),
+            SetupPhase::NameKind => "Name this controller".into(),
         }
     }
 
@@ -118,7 +133,38 @@ impl SetupNav {
                 info.usb_port
             ),
             SetupPhase::Configure => String::new(),
+            SetupPhase::NameKind => {
+                "Default name from the device — keyboard rename coming soon".into()
+            }
         }
+    }
+
+    pub fn draft_kind_label(&self) -> &'static str {
+        self.draft_kind.label()
+    }
+
+    /// After saving or skipping, open the next pad that still needs setup.
+    pub fn advance_to_next_pad(&mut self, pad: &PadPool) {
+        self.phase = SetupPhase::None;
+        if let Some(idx) = pad.index_needing_setup() {
+            let status = pad.db().registry_status(pad.info_at(idx));
+            eprintln!("controller setup: advancing to pad {idx} ({status:?})");
+            self.open_for(status, idx);
+        }
+    }
+
+    fn begin_name_kind(&mut self, info: &PadInfo, db: &ControllerDb) {
+        self.draft_label = db
+            .get(info)
+            .map(|e| e.label.clone())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| default_draft_label(info));
+        self.draft_kind = db
+            .get(info)
+            .map(|e| e.kind)
+            .unwrap_or_else(|| ControllerDb::infer_kind(info));
+        self.list_index = 0;
+        self.phase = SetupPhase::NameKind;
     }
 
     /// Label/value rows for the configure screen.
@@ -247,7 +293,8 @@ impl SetupNav {
             SetupPhase::Detected => self.handle_detected(now, info),
             SetupPhase::NewOrExisting => self.handle_new_or_existing(now, db),
             SetupPhase::PickExisting => self.handle_pick_existing(now, db),
-            SetupPhase::Configure => SetupAction::None,
+            SetupPhase::Configure => self.handle_configure(now, info, db),
+            SetupPhase::NameKind => self.handle_name_kind(now),
             SetupPhase::None => SetupAction::None,
         };
 
@@ -314,6 +361,55 @@ impl SetupNav {
             SetupAction::None
         }
     }
+
+    fn handle_configure(
+        &mut self,
+        now: &PadState,
+        info: &PadInfo,
+        db: &ControllerDb,
+    ) -> SetupAction {
+        if !rising(now.btn_a, self.prev.btn_a) {
+            return SetupAction::None;
+        }
+        if db.is_setup(info) {
+            self.phase = SetupPhase::None;
+            SetupAction::Done
+        } else {
+            self.begin_name_kind(info, db);
+            SetupAction::None
+        }
+    }
+
+    fn handle_name_kind(&mut self, now: &PadState) -> SetupAction {
+        if rising(now.dpad_up, self.prev.dpad_up) {
+            let idx = self.draft_kind.index();
+            self.draft_kind = ControllerKind::from_index(idx.saturating_sub(1));
+        }
+        if rising(now.dpad_down, self.prev.dpad_down) {
+            let idx = self.draft_kind.index();
+            self.draft_kind =
+                ControllerKind::from_index((idx + 1).min(ControllerKind::ALL.len() - 1));
+        }
+        if rising(now.btn_a, self.prev.btn_a) {
+            self.phase = SetupPhase::None;
+            return SetupAction::SaveFinish {
+                label: self.draft_label.clone(),
+                kind: self.draft_kind,
+            };
+        }
+        SetupAction::None
+    }
+}
+
+fn default_draft_label(info: &PadInfo) -> String {
+    if !info.name.is_empty() {
+        return info.name.clone();
+    }
+    format!(
+        "Controller {}:{}",
+        info.vendor_id.trim_start_matches("0x"),
+        info.product_id.trim_start_matches("0x")
+    )
 }
 
 fn rising(now: bool, prev: bool) -> bool {
