@@ -1,23 +1,13 @@
 [project]
-name = "mister-magic"
+name = "mister-slint-tools"
 version = "0.1.0"
-description = "A Slint UI front end prototype for the MiSTer FPGA, built with the Slint Python bindings."
+description = "Host-side tooling for MiSTer deploy (SSH/SFTP)."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "slint==1.16.1b1",
-]
-
-[tool.uv]
-# Every published Slint Python release is a pre-release (the bindings are still
-# in beta), so uv must be told it is allowed to resolve them.
-prerelease = "allow"
+dependencies = []
 
 [dependency-groups]
 dev = [
-    "slint-compiler==1.16.1b1",
-    # Host-side tooling for talking to the MiSTer over SSH/SFTP. paramiko is
-    # the same library mister-companion uses, which connects reliably with
-    # password auth (allow_agent/look_for_keys disabled).
+    # Used by scripts/mister_ssh.py — same approach as mister-companion.
     "paramiko>=3.4",
 ]
