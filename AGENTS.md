@@ -127,7 +127,7 @@ scripts/
   mister_ssh.py         paramiko helper — run/reboot/reboot-wait/wait/put/get
   capture-fb.sh         grab /dev/fb0 → PNG (via mister_ssh + raw_to_png.py)
   raw_to_png.py         stdlib-only BGRX dump → PNG
-  audit-mister.sh       device sanity check
+  audit-mister.sh       device sanity check (+ Cortex-A9 / NEON cpuinfo for A1)
 reference/              READ-ONLY clones (gitignored) — see §6
 build/                  gitignored framebuffer PNG dumps
 history/                experiment notes (framebuffer-experiments.md, screenshots)
