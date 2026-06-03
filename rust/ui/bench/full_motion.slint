@@ -1,0 +1,59 @@
+// Full-width motion + orbit (worst-case dirty rows for toolchain benches).
+import "../fonts/DejaVuSans.ttf";
+
+export component FullMotion inherits Window {
+    width: 1920px;
+    height: 1080px;
+    background: #0b1020;
+    default-font-family: "DejaVu Sans";
+
+    property <duration> tick: animation-tick();
+    property <float> phase: Math.mod(tick / 1ms, 4000) / 4000;
+    property <float> bounce: phase < 0.5 ? phase * 2 : 2 - phase * 2;
+    property <float> angle: Math.mod(tick / 1ms, 3000) / 3000 * 360;
+
+    Text {
+        x: 64px;
+        y: 48px;
+        text: "bench: full_motion";
+        font-size: 44px;
+        color: #e8ecff;
+    }
+
+    Rectangle {
+        x: 64px;
+        y: 200px;
+        width: parent.width - 128px;
+        height: 96px;
+        background: #131c33;
+        border-radius: 14px;
+        clip: true;
+
+        Rectangle {
+            width: 280px;
+            height: parent.height - 24px;
+            y: 12px;
+            x: 12px + (parent.width - 280px - 24px) * root.bounce;
+            border-radius: 10px;
+            background: @linear-gradient(90deg, #ff5d73 0%, #ffd166 50%, #06d6a0 100%);
+        }
+    }
+
+    Rectangle {
+        x: parent.width / 2 - 220px;
+        y: 420px;
+        width: 440px;
+        height: 440px;
+
+        for i in 12: Rectangle {
+            property <angle> a: (root.angle + i * 30) * 1deg;
+            width: 26px;
+            height: 26px;
+            border-radius: 13px;
+            x: parent.width / 2 - 13px + 180px * Math.cos(a);
+            y: parent.height / 2 - 13px + 180px * Math.sin(a);
+            background: #4cc9f0;
+            opacity: 0.4 + 0.6 * (i / 12.0);
+        }
+    }
+}

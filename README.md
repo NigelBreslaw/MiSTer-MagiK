@@ -48,6 +48,10 @@ reference/                    gitignored MiSTer/Zaparoo source clones
 Requires [Docker](https://www.docker.com/) (for `cross`), [Rust](https://rustup.rs/),
 and [uv](https://docs.astral.sh/uv/) (host SSH tooling only).
 
+Toolchain experiments: `scripts/bench-toolchain.sh` logs to
+[`history/toolchain-bench/results.tsv`](history/toolchain-bench/results.tsv) (see
+[`history/toolchain-bench/README.md`](history/toolchain-bench/README.md)).
+
 ```bash
 # One-shot build + deploy (~820 KB binary)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh

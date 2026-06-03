@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Benchmark a toolchain configuration: host compile time + binary size, then each
+# Slint bench scene on the MiSTer (timings, CPU, framebuffer PNG).
+#
+#   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
+#
+# Appends one row per scene to history/toolchain-bench/results.tsv.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUST_DIR="$HERE/rust"
+BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb"
+REMOTE="/media/fat/mister-magic/mister-magic-fb"
+BENCH_DIR="$HERE/history/toolchain-bench"
+TSV="$BENCH_DIR/results.tsv"
+SSH="$HERE/scripts/mister_ssh.py"
+
+# Slint scenes (see rust/ui/bench/README.md)
+BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll)
+
+export MISTER_IP="${MISTER_IP:-192.168.1.117}"
+export MISTER_PASS="${MISTER_PASS:-1}"
+
+LABEL="A0"
+DO_CLEAN=0
+SKIP_BUILD=0
+SKIP_DEVICE=0
+REPLACE_LABEL=0
+SCENE_SECS=15
+
+usage() {
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  echo ""
+  echo "Scenes: ${BENCH_SCENES[*]}"
+  echo ""
+  echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N  -h"
+  echo "  (--ui-secs N is an alias for --scene-secs)"
+  exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --clean) DO_CLEAN=1; shift ;;
+    --skip-build) SKIP_BUILD=1; shift ;;
+    --skip-device) SKIP_DEVICE=1; shift ;;
+    --replace-label) REPLACE_LABEL=1; shift ;;
+    --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
+    -*) echo "Unknown option: $1" >&2; usage 1 ;;
+    *) LABEL="$1"; shift ;;
+  esac
+done
+
+mkdir -p "$BENCH_DIR"
+
+TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	notes"
+if [[ ! -f "$TSV" ]] || ! head -1 "$TSV" | grep -q $'^label\tscene'; then
+  echo "$TSV_HEADER" >"$TSV"
+fi
+
+if [[ "$REPLACE_LABEL" -eq 1 ]]; then
+  echo "==> Removing prior rows for label=$LABEL from $TSV"
+  LABEL="$LABEL" TSV="$TSV" python3 <<'PY'
+import os
+path = os.environ["TSV"]
+label = os.environ["LABEL"]
+with open(path, encoding="utf-8") as f:
+    lines = f.readlines()
+if not lines:
+    raise SystemExit(0)
+header = lines[0]
+rows = [ln for ln in lines[1:] if ln.strip() and not ln.startswith(label + "\t")]
+with open(path, "w", encoding="utf-8") as f:
+    f.write(header)
+    f.writelines(rows)
+PY
+fi
+
+mister() {
+  uv run python "$SSH" "$@"
+}
+
+rustc_version() {
+  (cd "$RUST_DIR" && rustc -V 2>/dev/null | awk '{print $2}')
+}
+
+parse_ui_log() {
+  local ui_log="$1"
+  UI_LOG="$ui_log" python3 <<'PY'
+import os, re, sys
+path = os.environ["UI_LOG"]
+pat = re.compile(
+    r"fps ~ (\d+).*render (\d+)us.*vsync-wait (\d+)us.*copy (\d+)us.*\((\d+) rows avg\)"
+)
+rows = []
+with open(path, encoding="utf-8", errors="ignore") as f:
+    for line in f:
+        m = pat.search(line)
+        if m:
+            rows.append(tuple(int(m.group(i)) for i in range(1, 6)))
+if len(rows) <= 3:
+    sys.exit(0)
+rows = rows[3:]
+n = len(rows)
+print(
+    sum(r[1] for r in rows) // n,
+    sum(r[2] for r in rows) // n,
+    sum(r[3] for r in rows) // n,
+    sum(r[4] for r in rows) // n,
+    sum(r[0] for r in rows) // n,
+    n,
+)
+PY
+}
+
+append_tsv_row() {
+  local scene="$1" date_iso="$2"
+  local render_us="$3" vsync_us="$4" copy_us="$5" rows_avg="$6" fps_val="$7"
+  local cpu_mean="$8" cpu_max="$9" rss_kb="${10}" visual_ok="${11}" notes="${12}"
+  if [[ -n "${HOST_NOTES:-}" ]]; then
+    notes="${HOST_NOTES}${notes:+; }${notes}"
+  fi
+  notes="${notes//	/ }"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$LABEL" "$scene" "$date_iso" "$(rustc_version)" "${HOST_COMPILE_SEC:-}" "${HOST_BYTES:-}" \
+    "${render_us:-}" "${vsync_us:-}" "${copy_us:-}" "${rows_avg:-}" "${fps_val:-}" \
+    "${cpu_mean:-}" "${cpu_max:-}" "${rss_kb:-}" "$visual_ok" "$notes" >>"$TSV"
+}
+
+run_scene_on_device() {
+  local scene="$1" secs="$2"
+  local ui_log ui_full
+  ui_log="$(mktemp)"
+  ui_full="$(mktemp)"
+
+  mister run "
+set -e
+MP=\$(pidof MiSTer 2>/dev/null || true)
+if [ -n \"\$MP\" ]; then kill -STOP \$MP; fi
+$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+UI_PID=\$!
+CPU_SUM=0
+CPU_MAX=0
+CPU_N=0
+RSS=0
+TICK=\$(getconf CLK_TCK 2>/dev/null || echo 100)
+jiffies() { awk '{print \$14+\$15}' /proc/\$1/stat 2>/dev/null || echo 0; }
+rss_pages() { awk '{print \$24}' /proc/\$1/stat 2>/dev/null || echo 0; }
+i=0
+while [ \$i -lt $secs ]; do
+  if kill -0 \$UI_PID 2>/dev/null; then
+    t1=\$(jiffies \$UI_PID)
+    sleep 1
+    t2=\$(jiffies \$UI_PID)
+    p=\$(( (t2 - t1) * 100 / TICK ))
+    [ \"\$p\" -lt 0 ] 2>/dev/null && p=0
+    CPU_SUM=\$((CPU_SUM + p))
+    [ \"\$p\" -gt \"\$CPU_MAX\" ] && CPU_MAX=\$p
+    CPU_N=\$((CPU_N + 1))
+    RSS=\$(rss_pages \$UI_PID)
+  else
+    sleep 1
+  fi
+  i=\$((i + 1))
+done
+wait \$UI_PID
+UI_RC=\$?
+if [ -n \"\$MP\" ]; then kill -CONT \$MP; fi
+echo ___BENCH_SCENE___
+echo $scene
+echo ___BENCH_CPU_MEAN___
+if [ \$CPU_N -gt 0 ]; then echo \$((CPU_SUM / CPU_N)); else echo 0; fi
+echo ___BENCH_CPU_MAX___
+echo \$CPU_MAX
+echo ___BENCH_RSS___
+echo \$RSS
+echo ___BENCH_UI_RC___
+echo \$UI_RC
+echo ___BENCH_UI_LOG___
+cat /tmp/bench-ui.log
+" >"$ui_full" 2>&1 || true
+
+  if grep -q ___BENCH_UI_LOG___ "$ui_full"; then
+    sed -n '/___BENCH_UI_LOG___/,$p' "$ui_full" | tail -n +2 >"$ui_log"
+  else
+    cp "$ui_full" "$ui_log"
+  fi
+  cp "$ui_log" "$BENCH_DIR/${LABEL}-${scene}-ui.log" 2>/dev/null || true
+
+  local cpu_mean cpu_max rss_kb ui_rc parse_stats
+  cpu_mean="$(sed -n '/___BENCH_CPU_MEAN___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
+  cpu_max="$(sed -n '/___BENCH_CPU_MAX___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
+  rss_kb="$(sed -n '/___BENCH_RSS___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
+  ui_rc="$(sed -n '/___BENCH_UI_RC___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
+  if [[ -n "$rss_kb" && "$rss_kb" =~ ^[0-9]+$ && "$rss_kb" -lt 100000 ]]; then
+    rss_kb=$((rss_kb * 4))
+  fi
+
+  local render_us="" vsync_us="" copy_us="" rows_avg="" fps_val="" visual_ok="no" notes=""
+  parse_stats="$(parse_ui_log "$ui_log")" || true
+  if [[ -n "$parse_stats" ]]; then
+    read -r render_us vsync_us copy_us rows_avg fps_val _cnt <<<"$parse_stats"
+  else
+    notes="no-fps-lines"
+  fi
+
+  if [[ "${ui_rc:-1}" == "0" ]] || grep -q '^done:' "$ui_log"; then
+    visual_ok="yes"
+  else
+    visual_ok="no"
+    notes="${notes:+$notes; }ui-rc=${ui_rc:-?}"
+  fi
+
+  echo "    [$scene] render=${render_us:-?}us copy=${copy_us:-?}us rows=${rows_avg:-?} cpu_mean=${cpu_mean:-?}%"
+
+  echo "==> Capture $BENCH_DIR/${LABEL}-${scene}-fb.png"
+  if ! FB_W=1920 FB_H=1080 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
+    "$HERE/scripts/capture-fb.sh" "$BENCH_DIR/${LABEL}-${scene}-fb.png" >/dev/null; then
+    visual_ok="no"
+    notes="${notes:+$notes; }capture-fail"
+  fi
+
+  append_tsv_row "$scene" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$render_us" "$vsync_us" "$copy_us" "$rows_avg" "$fps_val" \
+    "$cpu_mean" "$cpu_max" "$rss_kb" "$visual_ok" "$notes"
+
+  rm -f "$ui_log" "$ui_full"
+}
+
+echo "==> Toolchain bench label=$LABEL scenes=${BENCH_SCENES[*]} (${SCENE_SECS}s each)"
+
+HOST_COMPILE_SEC=""
+HOST_BYTES=""
+HOST_NOTES=""
+rustc_ver="$(rustc_version)"
+
+if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  if [[ "$DO_CLEAN" -eq 1 ]]; then
+    echo "==> cargo clean"
+    (cd "$RUST_DIR" && cargo clean)
+  fi
+  echo "==> Cross-build (timed)"
+  build_log="$(mktemp)"
+  HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
+  rm -f "$build_log"
+  [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
+else
+  HOST_NOTES="skip-build"
+  [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
+fi
+
+if stat -f%z "$BIN" >/dev/null 2>&1; then
+  HOST_BYTES="$(stat -f%z "$BIN")"
+else
+  HOST_BYTES="$(stat -c%s "$BIN")"
+fi
+echo "    rustc=$rustc_ver  compile_sec=${HOST_COMPILE_SEC:-n/a}  bytes=$HOST_BYTES"
+
+if [[ "$SKIP_DEVICE" -eq 0 ]]; then
+  echo "==> Deploy $BIN"
+  mister run "mkdir -p /media/fat/mister-magic"
+  mister put "$BIN" "$REMOTE"
+  mister run "chmod +x $REMOTE"
+  mister run "file $REMOTE && ldd $REMOTE 2>&1 | head -3" || HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ldd-fail"
+
+  for scene in "${BENCH_SCENES[@]}"; do
+    echo "==> Scene $scene (${SCENE_SECS}s)"
+    run_scene_on_device "$scene" "$SCENE_SECS"
+  done
+else
+  date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for scene in "${BENCH_SCENES[@]}"; do
+    append_tsv_row "$scene" "$date_iso" "" "" "" "" "" "" "" "" "n/a" "${HOST_NOTES:+$HOST_NOTES; }skip-device"
+  done
+fi
+
+echo "==> Results: $TSV"
+echo ""
+column -t -s $'\t' "$TSV" 2>/dev/null || cat "$TSV"

@@ -1,0 +1,25 @@
+# Slint visual bench scenes
+
+Each `.slint` file is a **1920×1080** scene compiled into `mister-magic-fb` for toolchain
+A/B testing. Run on-device (menu SIGSTOPped):
+
+```bash
+/media/fat/mister-magic/mister-magic-fb ui <scene> <seconds>
+/media/fat/mister-magic/mister-magic-fb scenes   # list names
+```
+
+| Scene | File | What it stresses |
+|-------|------|------------------|
+| `demo` | [`../app.slint`](../app.slint) | Original demo (full-width bar + orbit) |
+| `full_motion` | `full_motion.slint` | Same motion workload, `bench:` label |
+| `static_ui` | `static_ui.slint` | No `animation-tick` — tiny dirty region after frame 1 |
+| `local_motion` | `local_motion.slint` | Small orb only — localized dirty rows |
+| `text_heavy` | `text_heavy.slint` | 32 text lines + scroll — glyph/layout cost |
+| `solid_fill` | `solid_fill.slint` | Large quadrant fills — rectangle rasterization |
+| `list_scroll` | `list_scroll.slint` | `std-widgets` **ScrollView** + `for` rows, auto scroll (ListView ignores driven `viewport-y` on-device) |
+
+Edit `.slint` files with the **Slint LSP** enabled in the IDE (Cursor `ReadLints` /
+Problems panel) and fix all diagnostics before building.
+
+`scripts/bench-toolchain.sh` runs **all** scenes, captures
+`history/toolchain-bench/<label>-<scene>-fb.png`, and appends one TSV row per scene.

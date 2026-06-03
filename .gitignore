@@ -34,6 +34,10 @@ htmlcov/
 /dist/
 /vendor/
 
+# Toolchain bench framebuffer captures (results.tsv is tracked)
+/history/toolchain-bench/*.png
+/history/toolchain-bench/*-ui.log
+
 # Rust build output (the native frontend crate)
 /rust/target/
 *.whl

@@ -133,6 +133,7 @@ build/                  gitignored framebuffer PNG dumps
 history/                experiment notes (framebuffer-experiments.md, screenshots)
 rust/                   native armv7 frontend — see §12
   ui/app.slint          demo UI
+  ui/bench/*.slint      toolchain/visual bench scenes (incl. list_scroll)
   ui/fonts/DejaVuSans.ttf
   src/main.rs           subcommands: read | fb | ui
   src/fpga.rs           SPI + fb_enable_direct
@@ -168,7 +169,13 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py wait
 
 # Capture framebuffer → PNG
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/fb.png
+
+# Toolchain A/B (host build + all ui/bench scenes on device) → history/toolchain-bench/results.tsv
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean --replace-label
 ```
+
+Bench scenes: `mister-magic-fb scenes` or `ui <scene> 20` — see `rust/ui/bench/README.md`.
+Log: [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md).
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG. This is how we verified rendering. The buffer holds the last frame Slint
