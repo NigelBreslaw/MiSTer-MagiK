@@ -1,11 +1,11 @@
 [package]
-name = "mister-slint-fb"
+name = "mister-magic-fb"
 version = "0.1.0"
 edition = "2021"
 description = "Native MiSTer frontend: owns the FPGA framebuffer and renders Slint. Spike stage."
 
 [[bin]]
-name = "mister-slint-fb"
+name = "mister-magic-fb"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,5 +1,5 @@
 [project]
-name = "mister-slint"
+name = "mister-magic"
 version = "0.1.0"
 description = "A Slint UI front end prototype for the MiSTer FPGA, built with the Slint Python bindings."
 readme = "README.md"

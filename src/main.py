@@ -7,11 +7,11 @@ by the launcher script.
 
 Modes (selected by environment variable):
 
-* ``MISTER_SLINT_CHECK=1`` - headless self-test: load the component, exercise
+* ``MISTER_MAGIC_CHECK=1`` - headless self-test: load the component, exercise
   the property and callback bindings, then exit. Needs no display, so it is
   used for CI and for validating the install on a headless machine.
-* ``MISTER_SLINT_SMOKE=1`` - start the real event loop, then quit after
-  ``MISTER_SLINT_SMOKE_DELAY`` seconds (default 3). Used to confirm a frame can
+* ``MISTER_MAGIC_SMOKE=1`` - start the real event loop, then quit after
+  ``MISTER_MAGIC_SMOKE_DELAY`` seconds (default 3). Used to confirm a frame can
   actually be rendered on a machine that has a display/framebuffer.
 * default - run the UI normally until the process is told to quit.
 """
@@ -47,13 +47,13 @@ def _run_check() -> int:
     app.request_increase_value()
     if app.counter != 42:
         raise AssertionError(f"callback binding failed: {app.counter}")
-    print("[mister-slint] check OK: component loads, property + callback bindings work")
+    print("[mister-magic] check OK: component loads, property + callback bindings work")
     return 0
 
 
 def _arm_smoke_timer() -> None:
-    delay = float(os.environ.get("MISTER_SLINT_SMOKE_DELAY", "3.0"))
-    print(f"[mister-slint] smoke test: quitting event loop after {delay:.1f}s", flush=True)
+    delay = float(os.environ.get("MISTER_MAGIC_SMOKE_DELAY", "3.0"))
+    print(f"[mister-magic] smoke test: quitting event loop after {delay:.1f}s", flush=True)
 
     def stop() -> None:
         try:
@@ -68,11 +68,11 @@ def _arm_smoke_timer() -> None:
 
 
 def main() -> int:
-    if os.environ.get("MISTER_SLINT_CHECK") == "1":
+    if os.environ.get("MISTER_MAGIC_CHECK") == "1":
         return _run_check()
 
     app = App()
-    if os.environ.get("MISTER_SLINT_SMOKE") == "1":
+    if os.environ.get("MISTER_MAGIC_SMOKE") == "1":
         _arm_smoke_timer()
     app.run()
     return 0

@@ -1,4 +1,4 @@
-# AGENTS.md — mister-slint
+# AGENTS.md — mister-magic
 
 Operational guide for AI agents (and humans) working on this project. Read this
 first. It captures the goal, the hard-won knowledge about how the MiSTer
@@ -19,7 +19,7 @@ any Slint UI on the MiSTer's HDMI output*.
 **Status (2026-06-03):**
 
 - ✅ **Native Rust frontend renders Slint at a locked 60fps, smooth + tear-free,
-  fully fork-free** (no Zaparoo) — `mister-slint-fb ui`. This is the headline
+  fully fork-free** (no Zaparoo) — `mister-magic-fb ui`. This is the headline
   result; see §9.7 for the architecture and the write-combining finding that
   ruled out FPGA page-flipping. The work below (Python bundle, Zaparoo shim) was
   the path that got us here and is kept for reference.
@@ -166,10 +166,10 @@ vsync — that's a Slint limitation independent of who enables the fb (see §9).
 pyproject.toml          slint==1.16.1b1; requires-python>=3.12; uv prerelease=allow; dev: paramiko, slint-compiler
 .python-version         3.12
 ui/app-window.slint     the Hello-World UI (title, counter+button, colour bars)
-src/main.py             entry point; MISTER_SLINT_CHECK=1 headless self-test; MISTER_SLINT_SMOKE=1 timed GUI
-deploy/mister-slint.sh  MiSTer Scripts-menu entry (execs the bundle's run-mister.sh)
+src/main.py             entry point; MISTER_MAGIC_CHECK=1 headless self-test; MISTER_MAGIC_SMOKE=1 timed GUI
+deploy/mister-magic.sh  MiSTer Scripts-menu entry (execs the bundle's run-mister.sh)
 scripts/
-  build-arm-bundle.sh   host: assemble build/mister-slint/ (CPython + wheel + fonts)
+  build-arm-bundle.sh   host: assemble build/mister-magic/ (CPython + wheel + fonts)
   deploy_mister.py      host: paramiko deploy WITH live feedback (upload %, extract %, MiSTer load) + prune
   deploy-mister.sh      host: OLD expect-based deploy (superseded by deploy_mister.py)
   run-mister.sh         on-device launcher (env for SLINT linuxfb, fontconfig, LD_LIBRARY_PATH, vmode)
@@ -184,15 +184,15 @@ scripts/
 reference/              READ-ONLY clones of Zaparoo/MiSTer source (gitignored) — see §6
 build/                  gitignored build artifacts + framebuffer PNG dumps
 rust/                   native armv7 frontend crate (Option C) — see §12
-  Cargo.toml            crate: mister-slint-fb (release: opt-level=z, lto, strip, panic=abort)
+  Cargo.toml            crate: mister-magic-fb (release: opt-level=z, lto, strip, panic=abort)
   rust-toolchain.toml   pins stable 1.88 + armv7-unknown-linux-gnueabihf
   .cargo/config.toml    disables the global sccache wrapper inside the cross container
   build-arm.sh          cross build wrapper (sets DOCKER_DEFAULT_PLATFORM=linux/amd64)
   src/main.rs           toolchain hello-world; next: fpga module + Slint sw renderer
 ```
 
-On the device, the bundle lives at `/media/fat/mister-slint/` and the Scripts
-entry at `/media/fat/Scripts/mister-slint.sh`. Logs: `/tmp/mister-slint.log`.
+On the device, the bundle lives at `/media/fat/mister-magic/` and the Scripts
+entry at `/media/fat/Scripts/mister-magic.sh`. Logs: `/tmp/mister-magic.log`.
 
 ---
 
@@ -221,7 +221,7 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py wait   # just poll until ready
 
 # Launch the app over SSH (NOTE: won't show on HDMI — see §3 — but renders to fb0)
-... run "pkill -f main.py; nohup /media/fat/mister-slint/run-mister.sh >/tmp/boot 2>&1 & sleep 7; cat /tmp/mister-slint.log"
+... run "pkill -f main.py; nohup /media/fat/mister-magic/run-mister.sh >/tmp/boot 2>&1 & sleep 7; cat /tmp/mister-magic.log"
 
 # Capture what Slint drew (works even when not routed to HDMI):
 ... run "dd if=/dev/fb0 of=/tmp/fb0.raw bs=1M 2>/dev/null"
@@ -230,7 +230,7 @@ uv run python scripts/raw_to_png.py build/fb.raw 1920 1080 build/fb.png
 
 # Local desktop run / self-tests
 scripts/run-desktop.sh
-MISTER_SLINT_CHECK=1 scripts/run-desktop.sh   # headless property+callback test
+MISTER_MAGIC_CHECK=1 scripts/run-desktop.sh   # headless property+callback test
 ```
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
@@ -272,7 +272,7 @@ video plumbing and spawns whatever file is at `zaparoo/frontend` on tty2 with
 1. Back up the real frontend: `mv zaparoo/frontend zaparoo/frontend.real`.
 2. Put a small launcher at `zaparoo/frontend` (must remain a regular file so
    `alt_launcher_configured()` stays true) that ignores any `--crt` arg and
-   `exec`s our `/media/fat/mister-slint/run-mister.sh`.
+   `exec`s our `/media/fat/mister-magic/run-mister.sh`.
 3. Re-enable `main=zaparoo/MiSTer_Zaparoo` in `MiSTer.ini` (uncomment line 278).
 4. Reboot. `MiSTer_Zaparoo` loads `menu_zaparoo.rbf`, enables the fb, switches
    to tty2, and runs our launcher → Slint should appear on HDMI.
@@ -304,7 +304,7 @@ not the SPI.
 
 ### Option C — Ship our own `main=` frontend binary (heaviest)
 
-Fork `Main_MiSTer` minimally so `main=mister-slint/...` boots a stub that sets
+Fork `Main_MiSTer` minimally so `main=mister-magic/...` boots a stub that sets
 up video and launches Slint. Most control, most work, must track upstream.
 
 ---
@@ -367,7 +367,7 @@ up video and launches Slint. Most control, most work, must track upstream.
 
 ## 9. Performance (rendering)
 
-Instrumented with Slint's `SLINT_DEBUG_PERFORMANCE`. Set `MISTER_SLINT_PERF=1`
+Instrumented with Slint's `SLINT_DEBUG_PERFORMANCE`. Set `MISTER_MAGIC_PERF=1`
 and `run-mister.sh` exports `refresh_lazy,console,overlay` → FPS printed to the
 log *and* an on-screen FPS overlay (top-left), and it logs the active backend.
 The shim sets it so the overlay is visible on HDMI; drop it once tuned.
@@ -406,8 +406,8 @@ Measured on-device (Zaparoo HDMI path, 1920×1080, Skia software renderer):
 Repro:
 
 ```bash
-# With MISTER_SLINT_PERF=1 (shim sets it) → reboot, then:
-... run "tail -n 20 /tmp/mister-slint.log"   # average frames per second: NN
+# With MISTER_MAGIC_PERF=1 (shim sets it) → reboot, then:
+... run "tail -n 20 /tmp/mister-magic.log"   # average frames per second: NN
 ... run "top -bn1 | grep python3.12"          # %CPU (≈ one core)
 # Prove the fb supports vsync (bundled python, ioctl FBIO_WAITFORVSYNC=0x40044620):
 # steady ~16.6 ms waits == 60 Hz available, just unused by Slint's linuxfb path.
@@ -474,7 +474,7 @@ premise is proven end-to-end:
   multi-word reads work** (GET_VRES/GET_FB_PAR return stable data; ACK-high ==
   ACK-low), unlike the slow Python which read 0s.
 - `rust/src/fb.rs` mmaps `/dev/fb0` (1920x1080 xRGB8888) for direct pixel writes.
-- `mister-slint-fb fb [xoff] [yoff]` paints a 4-quadrant + border + cross-hair
+- `mister-magic-fb fb [xoff] [yoff]` paints a 4-quadrant + border + cross-hair
   test pattern and routes buffer 0. `read` dumps the live mode/fb params.
 - Live values read from the stock menu: `GET_FB_PAR` → `fb_w=1920 fb_h=1080
   fb_fmt=0x00d6 fb_en=1`; `GET_VRES` → `width=529 height=240 pixrep=2` (the
@@ -504,7 +504,7 @@ outputs). The plumbing already reads these registers; only the derivation is TOD
 
 ### 9.7 Slint software renderer @ locked 60fps — smooth + tear-free (✅ done)
 
-`mister-slint-fb ui [secs]` runs Slint's **software renderer** directly on the
+`mister-magic-fb ui [secs]` runs Slint's **software renderer** directly on the
 framebuffer (no X/Wayland, no Zaparoo) at a **rock-steady 60fps, smooth and
 tear-free** (confirmed on HDMI). Per-frame budget (1080p, animated demo UI):
 
@@ -582,10 +582,10 @@ UI with localised motion will copy far less. Could also copy only the dirty
   (~kernel 31 s); full reboot→SSH ≈ 22 s, down from 30–40 s. Boot floor is now
   u-boot + FPGA load + kernel + gigabit autoneg, not networking. See §8.
 - `zaparoo/frontend` is our shim (the real Qt frontend is saved as
-  `frontend.real`). It exports `MISTER_SLINT_NO_VMODE=1` and — for now —
-  `MISTER_SLINT_PERF=1`, so the FPS overlay/logging is on. Drop the PERF line
+  `frontend.real`). It exports `MISTER_MAGIC_NO_VMODE=1` and — for now —
+  `MISTER_MAGIC_PERF=1`, so the FPS overlay/logging is on. Drop the PERF line
   when done tuning.
-- The mister-slint bundle is deployed at `/media/fat/mister-slint/` and verified
+- The mister-magic bundle is deployed at `/media/fat/mister-magic/` and verified
   runnable on HDMI (~62 fps, see §9). The `fpga_*.py` spike probes also live there.
 - **Black-screen recovery:** paramiko SSH works even with no usable video. To
   recover from a bad `main=`/frontend experiment: SSH in, re-comment `main=`
@@ -622,10 +622,10 @@ Apple-Silicon host runs on the MiSTer (`arch=arm, os=linux, glibc OK`).
 
 ```bash
 rust/build-arm.sh                      # = cross build --target armv7-unknown-linux-gnueabihf --release
-file rust/target/armv7-unknown-linux-gnueabihf/release/mister-slint-fb   # ELF 32-bit ARM, glibc
+file rust/target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb   # ELF 32-bit ARM, glibc
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
-  put rust/target/armv7-unknown-linux-gnueabihf/release/mister-slint-fb /media/fat/mister-slint/mister-slint-fb
-... run "chmod +x /media/fat/mister-slint/mister-slint-fb; /media/fat/mister-slint/mister-slint-fb"
+  put rust/target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb /media/fat/mister-magic/mister-magic-fb
+... run "chmod +x /media/fat/mister-magic/mister-magic-fb; /media/fat/mister-magic/mister-magic-fb"
 ```
 
 **One-time host setup (done):**

@@ -2378,7 +2378,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mister-slint-fb"
+name = "mister-magic-fb"
 version = "0.1.0"
 dependencies = [
  "libc",
