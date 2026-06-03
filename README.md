@@ -7,14 +7,6 @@ framebuffer routing — no X11, Wayland, Zaparoo, or Python on device.
 The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
 `history/2026-5-2/framebuffer-experiments.md` for how we got there.
 
-```
-+-------------------+   deploy binary    +---------------------------+
-|  Dev machine      |  --------------->  |  MiSTer (armv7, glibc     |
-|  cross + Docker   |                    |  2.31, /dev/fb0 1080p)   |
-|  rust/build-arm   |  <--- capture fb --|  mister-magic-fb ui       |
-+-------------------+                    +---------------------------+
-```
-
 ## MiSTer device facts
 
 | Property | Value |
@@ -22,94 +14,81 @@ The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
 | CPU / ABI | ARM Cortex-A9, `armv7l` hard-float (`gnueabihf`) |
 | glibc | **2.31** (matches the cross container) |
 | Display | `/dev/fb0`, 1920×1080, 32bpp (B,G,R,X); **no `/dev/dri`** |
-| Framebuffer routing | FPGA SPI `video_fb_enable(1,0)` — ported in `rust/src/fpga.rs` |
+| Framebuffer routing | FPGA SPI `SET_FBUF` + `set_vga_fb` — see `rust/src/fpga.rs` |
 
 ## Project layout
 
 ```
-rust/                         native frontend crate (mister-magic-fb)
-  ui/app.slint                demo UI (animated bar + orbiting dots)
-  src/main.rs                 subcommands: read | fb | ui
-  src/fpga.rs                 FPGA SPI + fb_enable_direct
-  src/fb.rs                   /dev/fb0 mmap, vsync, dirty-row copy
-  build-arm.sh                cross build (--fast | --device)
-  BUILD.md                    release vs release-device profiles
+rust/                         native frontend (mister-magic-fb)
+  ui/launcher.slint           2×2 home grid + game launch
+  ui/controller_test.slint    pad test scene
+  src/launcher.rs             nav + MiSTer_cmd game launch
+  src/fpga.rs                 SPI, fb_enable_direct, set_vga_fb
 scripts/
-  deploy-rust.sh              build + deploy (default: full release)
-  mister_ssh.py               reliable paramiko SSH helper
-  capture-fb.sh               grab /dev/fb0 → PNG
-  raw_to_png.py               framebuffer dump → PNG (stdlib only)
-  audit-mister.sh             device sanity check
-history/                      experiment notes + screenshots
-reference/                    gitignored MiSTer/Zaparoo source clones
+  deploy-rust.sh              build + deploy binary + boot.sh
+  install-slint-boot.sh       one-time: inittab → Slint launcher at boot
+  restore-stock-boot.sh       revert to stock MiSTer menu
+  mister-magic/boot.sh        on-device boot handoff script
+  mister_ssh.py               paramiko SSH helper
+history/                      experiment notes
+AGENTS.md                     operational guide (read this for MiSTer quirks)
 ```
 
 ## Build & deploy
 
-Requires [Docker](https://www.docker.com/) (for `cross`), [Rust](https://rustup.rs/),
-and [uv](https://docs.astral.sh/uv/) (host SSH tooling only).
-
-Toolchain experiments: `scripts/bench-toolchain.sh` logs to
-[`history/toolchain-bench/results.tsv`](history/toolchain-bench/results.tsv) (see
-[`history/toolchain-bench/README.md`](history/toolchain-bench/README.md)).
+Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
+[uv](https://docs.astral.sh/uv/) (host SSH only).
 
 ```bash
-# Full MiSTer release (~1.6 MB, fat LTO + NEON) — default
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
-
-# Fast daily build (~1.65 MB, ~3 min clean cross-compile)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
-
-# See rust/BUILD.md for profiles and paths.
 ```
 
-## Run on device
+See [`rust/BUILD.md`](rust/BUILD.md) for release profiles.
 
-The stock menu owns the FPGA SPI bus, so pause it first (HDMI stays live):
+## Boot into Slint (production)
+
+**Do not** set `main=mister-magic-fb` in `MiSTer.ini` — MiSTer execs away before
+`video_init()` and the TV gets no HDMI signal.
+
+Instead, install the boot handoff once (MiSTer brings up HDMI, then Slint takes over):
 
 ```bash
-MP=$(pidof MiSTer); kill -STOP $MP
-/media/fat/mister-magic/mister-magic-fb ui 20   # animated demo, 20 seconds
-kill -CONT $MP
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 ```
 
-Subcommands:
+Restore stock menu:
 
-| Command | Purpose |
-|---|---|
-| `read` | dump live video mode / fb params (SPI diagnostics) |
-| `fb [xoff] [yoff]` | paint geometry test pattern + route buffer 0 |
-| `ui [secs]` | Slint demo UI, vsync-locked |
+```bash
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
+```
 
-Remote via SSH helper:
+## Dev / manual run
+
+Kill stock MiSTer so it releases the gamepad (evdev grab), then run the launcher:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
-  'MP=$(pidof MiSTer); kill -STOP $MP; /media/fat/mister-magic/mister-magic-fb ui 20; kill -CONT $MP'
+  'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magic/mister-magic-fb ui launcher 60'
 ```
 
-## Verify what's on screen
+## Subcommands
+
+| Command | Purpose |
+|---|---|
+| `ui [scene] [secs]` | Slint UI — default `launcher`; `secs=0` runs forever |
+| `ui controller_test` | pad diagram test |
+| `read` | SPI video mode / fb diagnostics |
+| `fb` | geometry test pattern on HDMI |
+| `input log\|sniff\|calibrate` | gamepad debugging |
+| `scenes` | list bench scene names |
+
+## Verify framebuffer (SSH)
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/shot.png
 ```
 
-## Host tooling (Python)
-
-Only **deploy/debug scripts** use Python on the dev machine — not the MiSTer app:
-
-```bash
-uv sync   # installs paramiko for mister_ssh.py
-```
-
-## Next steps
-
-- Derive `xoff/yoff` from the live video mode (other resolutions / CRT)
-- Wire controller/keyboard input
-- Ship as a `main=` boot binary (Option C in AGENTS.md)
-
 ## References
 
-- [Slint](https://slint.dev) — UI toolkit
-- [AGENTS.md](AGENTS.md) — operational guide for agents/humans
-- [Zaparoo](https://github.com/ZaparooProject) — prior art for MiSTer front ends
+- [AGENTS.md](AGENTS.md) — MiSTer display model, gotchas, roadmap
+- [Slint](https://slint.dev)

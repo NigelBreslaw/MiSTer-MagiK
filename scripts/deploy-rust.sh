@@ -36,10 +36,12 @@ MISTER_PASS="${MISTER_PASS:-1}" \
   uv run python "$HERE/scripts/mister_ssh.py" put "$BIN" "$REMOTE"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "chmod +x $REMOTE"
+  uv run python "$HERE/scripts/mister_ssh.py" put "$HERE/scripts/mister-magic/boot.sh" "/media/fat/mister-magic/boot.sh"
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  uv run python "$HERE/scripts/mister_ssh.py" run "chmod +x $REMOTE /media/fat/mister-magic/boot.sh"
 
-echo "==> Deployed ($PROFILE). Run on device (with menu SIGSTOPped so we own the SPI bus):"
-echo "    MP=\$(pidof MiSTer); kill -STOP \$MP"
-echo "    $REMOTE ui demo 20"
-echo "    $REMOTE scenes   # … list_scroll (std-widgets ListView)"
-echo "    kill -CONT \$MP"
+echo "==> Deployed ($PROFILE)."
+echo "    Production boot: scripts/install-slint-boot.sh  (once — inittab handoff)"
+echo "    Dev / bench:     killall MiSTer; $REMOTE ui launcher 60"
+echo "    Restore stock:   scripts/restore-stock-boot.sh"
