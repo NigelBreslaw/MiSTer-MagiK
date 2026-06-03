@@ -1,6 +1,7 @@
 //! Launcher navigation and arcade game launch via `/dev/MiSTer_cmd`.
 
 use crate::input::PadState;
+use std::io::Write;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -148,10 +149,7 @@ pub fn launch_mra(mra_path: &str) -> ! {
     if let Err(e) = std::fs::OpenOptions::new()
         .write(true)
         .open(CMD_FIFO)
-        .and_then(|mut f| {
-            use std::io::Write;
-            f.write_all(cmd.as_bytes())
-        })
+        .and_then(|mut f| f.write_all(cmd.as_bytes()))
     {
         eprintln!("failed to write {CMD_FIFO}: {e}");
         std::process::exit(1);

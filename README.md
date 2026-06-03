@@ -64,7 +64,7 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
 
 ## Dev / manual run
 
-Kill stock MiSTer so it releases the gamepad (evdev grab), then run the launcher:
+Kill stock MiSTer so it releases the gamepad, then run the launcher:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
