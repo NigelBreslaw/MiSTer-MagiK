@@ -42,4 +42,4 @@ Full TSV: [`results.tsv`](results.tsv). Framebuffer PNGs: `A0-<scene>-fb.png`, `
 
 **PNG caveat (2026-06-03):** Runs before `bench-toolchain.sh` mid-run capture stored fbcon `login:` — not the bench UI. Re-run A0 after that fix for valid scene PNGs.
 
-**Next:** A1 (+neon only), then A2 (fat LTO only), then A3 if both help — one change per label.
+**Next:** ~~A1~~ done → [`A1-neon.md`](A1-neon.md). Then A2 (fat LTO only, **remove** A1 rustflags first), then A3 if both help.
