@@ -225,7 +225,7 @@ control, most work, must track upstream MiSTer.
 
 - Derive `xoff/yoff`/geometry from the **live** video mode (`rust-livemode`).
 - Controller/keyboard input.
-- fbcon / `KD_GRAPHICS` so a static UI persists without always-on animation.
+- ~~fbcon / `KD_GRAPHICS`~~ — `vt.rs` on `ui`/`fb` (static UI may still need more if fbcon clears the buffer).
 
 ---
 
@@ -242,6 +242,9 @@ control, most work, must track upstream MiSTer.
 - **fbcon clobbers `/dev/fb0` → black screen.** The kernel framebuffer console
   (`vtcon1`) can clear the buffer. The demo UI uses `animation-tick()` for
   continuous repaints; a static UI may need `KD_GRAPHICS` / unbind fbcon (§11).
+- **`ui` / `fb` call `KD_GRAPHICS` on `/dev/tty0`** (`rust/src/vt.rs`) so fbcon
+  stops drawing the blinking block cursor over the title (confirmed in framebuffer
+  PNGs). Restores `KD_TEXT` on exit. If the ioctl fails, we log and continue.
 - **busybox has no `pkill`.** Use `kill -9 $(pidof mister-magic-fb)` to stop the app.
 - **libinput quirks DB missing** → `libinput error: ... device quirks` warnings.
   Rendering is fine; if/when we add input, bundle the quirks DB or point
