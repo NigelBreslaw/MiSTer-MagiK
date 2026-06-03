@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assemble the self-contained ARM bundle that gets copied to the MiSTer at
-# /media/fat/mister-slint/.
+# /media/fat/mister-magic/.
 #
 # The bundle contains:
 #   - python/           a portable CPython 3.12 for armv7 (python-build-standalone)
@@ -10,13 +10,13 @@
 #   - run-mister.sh     the on-device launcher
 #
 # Everything is downloaded once and cached under build/cache/. Re-running the
-# script rebuilds build/mister-slint/ from those cached artifacts.
+# script rebuilds build/mister-magic/ from those cached artifacts.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$HERE/build"
 CACHE="$BUILD/cache"
-BUNDLE="$BUILD/mister-slint"
+BUNDLE="$BUILD/mister-magic"
 
 PY_VER="3.12.12"
 PY_TAG="20260127"
@@ -77,8 +77,8 @@ cat > "$BUNDLE/etc/fonts/fonts.conf" <<'CONF'
 <!-- Minimal fontconfig used on the MiSTer, which has no system fonts.
      FONTCONFIG_FILE points here; everything resolves to the bundled DejaVu. -->
 <fontconfig>
-  <dir>/media/fat/mister-slint/fonts</dir>
-  <cachedir>/tmp/mister-slint/cache/fontconfig</cachedir>
+  <dir>/media/fat/mister-magic/fonts</dir>
+  <cachedir>/tmp/mister-magic/cache/fontconfig</cachedir>
 
   <!-- Map the generic families Slint asks for to the bundled font. -->
   <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>

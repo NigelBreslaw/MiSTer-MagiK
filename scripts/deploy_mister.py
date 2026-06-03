@@ -24,12 +24,12 @@ from pathlib import Path
 import paramiko
 
 HERE = Path(__file__).resolve().parent.parent
-BUNDLE = HERE / "build" / "mister-slint"
-TARBALL = HERE / "build" / "mister-slint.tar.gz"
-ENTRY = HERE / "deploy" / "mister-slint.sh"
-REMOTE_TAR = "/media/fat/mister-slint.tar.gz"
-REMOTE_APP = "/media/fat/mister-slint"
-REMOTE_ENTRY = "/media/fat/Scripts/mister-slint.sh"
+BUNDLE = HERE / "build" / "mister-magic"
+TARBALL = HERE / "build" / "mister-magic.tar.gz"
+ENTRY = HERE / "deploy" / "mister-magic.sh"
+REMOTE_TAR = "/media/fat/mister-magic.tar.gz"
+REMOTE_APP = "/media/fat/mister-magic"
+REMOTE_ENTRY = "/media/fat/Scripts/mister-magic.sh"
 
 IP = os.environ.get("MISTER_IP", "192.168.1.117")
 USER = os.environ.get("MISTER_USER", "root")
@@ -191,7 +191,7 @@ def main() -> int:
     upload()
     extract(total)
     finalize()
-    print("==> Done. On the MiSTer OSD: Scripts -> mister-slint")
+    print("==> Done. On the MiSTer OSD: Scripts -> mister-magic")
     return 0
 
 

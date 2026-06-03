@@ -191,7 +191,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mister-slint"
+name = "mister-magic"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

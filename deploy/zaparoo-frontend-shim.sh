@@ -9,12 +9,12 @@
 # off to our Slint app.
 #
 # It may be invoked with "--crt" if CRT mode is persisted; we ignore args and
-# always take the HDMI path. MISTER_SLINT_NO_VMODE=1 stops run-mister.sh from
+# always take the HDMI path. MISTER_MAGIC_NO_VMODE=1 stops run-mister.sh from
 # re-running vmode (Zaparoo already configured the video pipeline).
 #
 # Revert: mv /media/fat/zaparoo/frontend.real /media/fat/zaparoo/frontend
-export MISTER_SLINT_NO_VMODE=1
+export MISTER_MAGIC_NO_VMODE=1
 # Performance debugging: log FPS + draw an on-screen FPS overlay so the
 # animation's smoothness can be inspected directly on HDMI. Remove once tuned.
-export MISTER_SLINT_PERF=1
-exec /media/fat/mister-slint/run-mister.sh
+export MISTER_MAGIC_PERF=1
+exec /media/fat/mister-magic/run-mister.sh

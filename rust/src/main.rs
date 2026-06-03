@@ -42,7 +42,7 @@ impl Platform for MisterPlatform {
 
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_else(|| "fb".to_string());
-    println!("mister-slint-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+    println!("mister-magic-fb [{cmd}] (arch={})", std::env::consts::ARCH);
 
     let mut f = match Fpga::open() {
         Ok(f) => f,

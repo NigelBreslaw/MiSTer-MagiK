@@ -1,4 +1,4 @@
-# mister-slint
+# mister-magic
 
 A proof-of-concept [Slint](https://slint.dev) UI, written with the **Python
 bindings**, that runs on a **MiSTer FPGA** as a simple front end.
@@ -12,7 +12,7 @@ involved.
 +-------------------+        scp bundle        +--------------------------+
 |  Dev machine      |  ----------------------> |  MiSTer (armv7, glibc    |
 |  uv + Slint(py)   |                          |  2.31, /dev/fb0 1080p)   |
-|  build bundle     |  <----- capture fb ----- |  Scripts -> mister-slint |
+|  build bundle     |  <----- capture fb ----- |  Scripts -> mister-magic |
 +-------------------+                          +--------------------------+
 ```
 
@@ -60,19 +60,19 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/audit-mister.sh
 ## Project layout
 
 ```
-mister-slint/
+mister-magic/
 |-- ui/app-window.slint     # the UI (title, counter+button, colour bars)
 |-- src/main.py             # entry point (loads the .slint, wires callbacks)
 |-- pyproject.toml          # slint==1.16.1b1, requires-python >=3.12
 |-- scripts/
 |   |-- run-desktop.sh        # run on this machine via uv
 |   |-- run-mister.sh         # on-device launcher (ships inside the bundle)
-|   |-- build-arm-bundle.sh   # assemble build/mister-slint/ for the device
+|   |-- build-arm-bundle.sh   # assemble build/mister-magic/ for the device
 |   |-- deploy-mister.sh      # pack + scp + unpack on the MiSTer
 |   |-- audit-mister.sh       # inspect the device over SSH
 |   |-- capture-fb.sh         # grab /dev/fb0 -> PNG (see what's on screen)
 |   `-- raw_to_png.py         # framebuffer-dump -> PNG converter
-|-- deploy/mister-slint.sh  # MiSTer Scripts-menu entry -> /media/fat/Scripts/
+|-- deploy/mister-magic.sh  # MiSTer Scripts-menu entry -> /media/fat/Scripts/
 `-- build/                  # generated bundle + downloads (gitignored)
 ```
 
@@ -84,8 +84,8 @@ pre-releases, so `pyproject.toml` opts in via `[tool.uv] prerelease = "allow"`.
 ```bash
 uv sync                         # creates .venv with Python 3.12 + slint
 scripts/run-desktop.sh          # opens the window
-MISTER_SLINT_CHECK=1 scripts/run-desktop.sh   # headless self-test (no display)
-MISTER_SLINT_SMOKE=1 scripts/run-desktop.sh   # open, render, auto-quit
+MISTER_MAGIC_CHECK=1 scripts/run-desktop.sh   # headless self-test (no display)
+MISTER_MAGIC_SMOKE=1 scripts/run-desktop.sh   # open, render, auto-quit
 ```
 
 ## Build & deploy to the MiSTer
@@ -98,15 +98,15 @@ scripts/build-arm-bundle.sh
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-mister.sh
 ```
 
-Then on the MiSTer: **OSD -> Scripts -> mister-slint**.
+Then on the MiSTer: **OSD -> Scripts -> mister-magic**.
 
 Installed on the device:
 
 | Path | Purpose |
 |---|---|
-| `/media/fat/mister-slint/` | the self-contained bundle |
-| `/media/fat/Scripts/mister-slint.sh` | the OSD Scripts entry |
-| `/tmp/mister-slint.log` | runtime log (`/tmp` is wiped on power-off) |
+| `/media/fat/mister-magic/` | the self-contained bundle |
+| `/media/fat/Scripts/mister-magic.sh` | the OSD Scripts entry |
+| `/tmp/mister-magic.log` | runtime log (`/tmp` is wiped on power-off) |
 
 The on-device launcher sets the framebuffer backend and font config:
 
