@@ -16,8 +16,13 @@ displays a Linux UI, the tooling we built, and the concrete next steps.
 real frontend (own the screen, controller input). Short-term milestone: *show
 any Slint UI on the MiSTer's HDMI output*.
 
-**Status (2026-06-02):**
+**Status (2026-06-03):**
 
+- ✅ **Native Rust frontend renders Slint at a locked 60fps, smooth + tear-free,
+  fully fork-free** (no Zaparoo) — `mister-slint-fb ui`. This is the headline
+  result; see §9.7 for the architecture and the write-combining finding that
+  ruled out FPGA page-flipping. The work below (Python bundle, Zaparoo shim) was
+  the path that got us here and is kept for reference.
 - ✅ Slint Python app builds and runs on desktop (macOS) via `uv`.
 - ✅ Self-contained ARM bundle (portable CPython 3.12 + Slint `armv7l` wheel +
   fonts) builds and deploys to the MiSTer.
@@ -496,6 +501,66 @@ mode timing for the porches — and compute `fb_width/height`, `xoff/yoff`, and 
 scaled coords from that. Our own `main=` frontend will set/own its mode, so it
 always knows the correct geometry (including low-res and CRT/`direct_video`
 outputs). The plumbing already reads these registers; only the derivation is TODO.
+
+### 9.7 Slint software renderer @ locked 60fps — smooth + tear-free (✅ done)
+
+`mister-slint-fb ui [secs]` runs Slint's **software renderer** directly on the
+framebuffer (no X/Wayland, no Zaparoo) at a **rock-steady 60fps, smooth and
+tear-free** (confirmed on HDMI). Per-frame budget (1080p, animated demo UI):
+
+```
+render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 16.6ms
+```
+
+**Architecture (the bits that matter):**
+
+- `MisterPlatform` implements Slint's `Platform` trait: one `MinimalSoftwareWindow`
+  (`RepaintBufferType::ReusedBuffer`), time from a monotonic `Instant`. We drive
+  the loop ourselves (no `run_event_loop`), pacing each frame on
+  `FBIO_WAITFORVSYNC`.
+- Render into a **cached** `Vec<Pixel>` (fast, ~2.3ms — Slint only redraws the
+  dirty region). `render()` returns a `PhysicalRegion`; we take its bounding-box
+  rows.
+- After `wait_vsync`, copy **only the dirty rows** into `/dev/fb0`. Single
+  buffer, routed once via `fb_enable_direct(0, …, 0, 0)`.
+
+**THE key hardware finding — write-combining vs uncached:**
+
+- `/dev/fb0`'s driver mmap is **write-combining (~700 MB/s)**.
+- mmapping the *same* physical buffers via `/dev/mem` (as MiSTer's `shmem_map`
+  does, `O_RDWR|O_SYNC`) is **uncached device memory (~105 MB/s)** — ~7× slower.
+- Consequence: **true FPGA page-flipping is a dead end here.** It's genuinely
+  tear-free and the flip itself is ~12µs, BUT the back buffers (1/2) are only
+  reachable via `/dev/mem`, so writing them is too slow — a 620-row update took
+  **45ms** (→ 20fps). Rendering *directly* into a `/dev/mem` buffer
+  (`SwappedBuffers`) was ~15–17ms and unstable (dropped to 30fps under load).
+  `/dev/fb0` only ever exposes **one** buffer (`virtual_size` = 1920×1080), so we
+  can't get a second *write-combining* buffer to flip between.
+- The winning compromise: single write-combined buffer + dirty-row copy started
+  right after vblank. The copy (~8.7ms for 619 rows) stays just ahead of the scan
+  beam (which needs ~9.5ms for those rows), so it reads as tear-free in practice.
+
+**Slint build notes (cross-compile, no system fonts):**
+
+- Build Slint with `default-features=false`, features
+  `["compat-1-2","renderer-software","unsafe-single-threaded","libm"]` — **no
+  `std`** (the `std` feature pulls system font loading → `fontconfig`, which the
+  bare cross container and the MiSTer don't have). Our own crate still uses `std`.
+- `build.rs` uses `EmbedResourcesKind::EmbedForSoftwareRenderer` so glyphs/images
+  are baked into the binary. With no system fonts, the embedder needs a font:
+  we bundle `rust/ui/fonts/DejaVuSans.ttf` (Bitstream Vera license) and set
+  `default-font-family: "DejaVu Sans"` on the Window.
+- Slint's deps need **rustc ≥ 1.90**; the toolchain is pinned to `stable`
+  (1.96 at time of writing) in `rust/rust-toolchain.toml`, with a matching
+  `stable-x86_64-unknown-linux-gnu` installed (`--force-non-host`) for the
+  emulated cross container.
+- `profile.release` uses `opt-level = 3` (not `"z"`): the software renderer is
+  hot. Binary is ~820KB incl. embedded font.
+
+**Known follow-ups for the real frontend:** the copy is still ~half the screen
+because the demo's gradient bar spans full width (full-width dirty rows). A real
+UI with localised motion will copy far less. Could also copy only the dirty
+*sub-rectangle* (x-range) instead of full-width rows for further savings.
 
 ---
 

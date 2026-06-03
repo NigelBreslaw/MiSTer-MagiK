@@ -172,6 +172,7 @@ impl Fpga {
 
     /// `spi_uio_cmd_cont`: EnableIO then send the command, leaving IO enabled so
     /// the caller can stream response/parameter words before `disable_io`.
+    #[allow(dead_code)] // kept as a diagnostic primitive
     pub fn cmd_cont(&mut self, cmd: u16) -> u16 {
         self.enable_io();
         self.spi(cmd)
