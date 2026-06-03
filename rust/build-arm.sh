@@ -30,6 +30,11 @@ done
 
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  echo "ERROR: Docker is not running — cross needs it for armv7 builds." >&2
+  exit 1
+fi
+
 if [ "$PROFILE" = release-device ]; then
   export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9 -C target-feature=+neon,+vfp3"
   echo "==> cross build profile=release-device (fat LTO + NEON)"
@@ -38,4 +43,13 @@ else
   echo "==> cross build profile=release (thin LTO, fast)"
 fi
 
-exec cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE"
+BUILD_LOG="$(mktemp)"
+trap 'rm -f "$BUILD_LOG"' EXIT
+if ! cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE" 2>&1 | tee "$BUILD_LOG"; then
+  exit 1
+fi
+if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
+  echo "ERROR: cross fell back to host cargo (Docker not used). Check Docker and run from rust/." >&2
+  exit 1
+fi
+echo "==> cross build OK"
