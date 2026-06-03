@@ -36,3 +36,14 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 - **`build-arm.sh`** — sets `RUSTFLAGS` for `release-device` only.
 
 Prerequisite for NEON: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
+
+## cross-rs version
+
+Use **crates.io 0.2.5** (default):
+
+```bash
+cargo install cross --locked
+# Docker: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5
+```
+
+Git `main` (`cargo install cross --git https://github.com/cross-rs/cross.git`) still reports `0.2.5` but pulls the **`:main`** image (glibc 2.31). Benchmarked in [`history/toolchain-bench/cross-main.md`](../history/toolchain-bench/cross-main.md): ~2× slower clean builds, no meaningful on-device speedup vs A3.

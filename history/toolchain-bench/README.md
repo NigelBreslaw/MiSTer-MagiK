@@ -53,3 +53,5 @@ Run **A0** before editing toolchain files.
 **Results (2026-06-03):** see [`A0-baseline.md`](A0-baseline.md), [`A1-neon.md`](A1-neon.md), [`A2-fat-lto.md`](A2-fat-lto.md), [`A3-combined.md`](A3-combined.md).
 
 **Profiles (post-bench):** daily = `rust/build-arm.sh` → Cargo `release` (A0). Ship to MiSTer = `build-arm.sh --device` / `deploy-rust.sh` → `release-device` (A3). See [`rust/BUILD.md`](../../rust/BUILD.md). Bench: add `--device` to `bench-toolchain.sh` for A3-class builds.
+
+**cross-rs:** prefer crates.io **0.2.5** (`:0.2.5` image). Git **main** uses `:main` image (glibc 2.31) — see [`cross-main.md`](cross-main.md); ~2× slower clean build, no runtime gain in our benches.
