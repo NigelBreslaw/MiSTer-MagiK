@@ -18,10 +18,14 @@ mod slint_ui {
     include!(concat!(env!("OUT_DIR"), "/text_heavy.rs"));
     include!(concat!(env!("OUT_DIR"), "/solid_fill.rs"));
     include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
+    include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
 }
+
+use crate::input::{PadInfo, PadReader};
 
 pub const UI_SCENES: &[&str] = &[
     "demo",
+    "controller_test",
     "full_motion",
     "static_ui",
     "local_motion",
@@ -150,8 +154,71 @@ pub fn run_ui(f: &mut Fpga) {
                 .expect("show");
             run_frame_loop(secs, &mut disp, &window);
         }
+        "controller_test" => {
+            let pad = match PadReader::open() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("failed to open gamepad (kill MiSTer or use main= boot): {e}");
+                    std::process::exit(1);
+                }
+            };
+            let app = slint_ui::ControllerTest::new().expect("ControllerTest::new");
+            sync_bridge(&app, &pad);
+            app.show().expect("show");
+            window.request_redraw();
+            run_controller_loop(secs, &mut disp, &window, pad, app);
+        }
         _ => unreachable!(),
     }
+}
+
+fn sync_bridge(app: &slint_ui::ControllerTest, pad: &PadReader) {
+    let bridge = app.global::<slint_ui::MisterBridge>();
+    let state = pad.state();
+    let info = pad.info();
+    bridge.set_dpad_up(state.dpad_up);
+    bridge.set_dpad_down(state.dpad_down);
+    bridge.set_dpad_left(state.dpad_left);
+    bridge.set_dpad_right(state.dpad_right);
+    bridge.set_btn_a(state.btn_a);
+    bridge.set_btn_b(state.btn_b);
+    bridge.set_btn_x(state.btn_x);
+    bridge.set_btn_y(state.btn_y);
+    bridge.set_btn_l(state.btn_l);
+    bridge.set_btn_r(state.btn_r);
+    bridge.set_btn_zl(state.btn_zl);
+    bridge.set_btn_zr(state.btn_zr);
+    bridge.set_btn_select(state.btn_select);
+    bridge.set_btn_start(state.btn_start);
+    bridge.set_btn_l3(state.btn_l3);
+    bridge.set_btn_r3(state.btn_r3);
+    bridge.set_btn_home(state.btn_home);
+    bridge.set_btn_capture(state.btn_capture);
+    bridge.set_capture_available(info.capture_available);
+    bridge.set_left_x(state.left_x);
+    bridge.set_left_y(state.left_y);
+    bridge.set_right_x(state.right_x);
+    bridge.set_right_y(state.right_y);
+    sync_device_info(&bridge, info, &pad.path);
+    bridge.set_pressed_now(state.pressed_now.clone().into());
+    bridge.set_last_event_label(state.last_event_label.clone().into());
+    bridge.set_last_raw_event(state.last_raw.clone().into());
+}
+
+fn sync_device_info(bridge: &slint_ui::MisterBridge, info: &PadInfo, js_path: &str) {
+    bridge.set_device_label(js_path.into());
+    bridge.set_device_name(info.name.clone().into());
+    bridge.set_usb_port(info.usb_port.clone().into());
+    bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
+    bridge.set_serial_id(if info.serial.is_empty() {
+        "(no serial)".into()
+    } else {
+        info.serial.clone().into()
+    });
+    bridge.set_js_counts(format!(
+        "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
+        info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count
+    ).into());
 }
 
 fn run_frame_loop(secs: u64, disp: &mut Display, window: &Rc<MinimalSoftwareWindow>) {
@@ -211,6 +278,49 @@ fn run_frame_loop(secs: u64, disp: &mut Display, window: &Rc<MinimalSoftwareWind
             copy_rows_acc = 0;
             fps_window_start = Instant::now();
         }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
+        frames as f64 / elapsed
+    );
+}
+
+fn run_controller_loop(
+    secs: u64,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    mut pad: PadReader,
+    app: slint_ui::ControllerTest,
+) {
+    let mut cached = vec![Pixel(0); W * H];
+    let start = Instant::now();
+    let mut frames = 0u64;
+    println!("controller_test running {secs}s — press buttons on the pad...");
+    while start.elapsed().as_secs() < secs {
+        if pad.poll() {
+            sync_bridge(&app, &pad);
+            window.request_redraw();
+        }
+        slint::platform::update_timers_and_animations();
+        let mut this_rows: Option<(usize, usize)> = None;
+        window.draw_if_needed(|renderer| {
+            let region = renderer.render(&mut cached, W);
+            let o = region.bounding_box_origin();
+            let s = region.bounding_box_size();
+            if s.width > 0 && s.height > 0 {
+                let y0 = o.y.max(0) as usize;
+                let y1 = ((o.y + s.height as i32) as usize).min(H);
+                if y1 > y0 {
+                    this_rows = Some((y0, y1));
+                }
+            }
+        });
+        disp.wait_vsync();
+        if let Some((y0, y1)) = this_rows {
+            disp.copy_rows(&cached, y0, y1);
+        }
+        frames += 1;
     }
     let elapsed = start.elapsed().as_secs_f64();
     println!(

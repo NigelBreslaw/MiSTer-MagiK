@@ -11,6 +11,7 @@
 
 mod fb;
 mod fpga;
+mod input;
 mod ui_runner;
 mod vt;
 
@@ -37,8 +38,9 @@ fn main() {
         "fb" => fb_test(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
+        "input" => run_input(),
         other => {
-            eprintln!("unknown command '{other}' (use: read | fb | ui | scenes)");
+            eprintln!("unknown command '{other}' (use: read | fb | ui | scenes | input)");
             std::process::exit(2);
         }
     }
@@ -163,4 +165,59 @@ fn read_mode(f: &mut Fpga) {
 
 fn print_word(label: &str, w: (u16, u16)) {
     println!("{label} hi=0x{:04x} ({:5})   lo=0x{:04x} ({:5})", w.0, w.0, w.1, w.1);
+}
+
+fn run_input() {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("log");
+    match sub {
+        "calibrate" => {
+            let path = args.get(1).map(|s| s.as_str());
+            if let Err(e) = input::calibrate(path) {
+                eprintln!("input calibrate failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        "log" => {
+            let (path, secs) = parse_input_log_args(&args[1..]);
+            if let Err(e) = input::log_js_events(path, secs) {
+                eprintln!("input log failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        "sniff" => {
+            let (path, secs) = parse_input_log_args(&args[1..]);
+            if let Err(e) = input::sniff(path, secs) {
+                eprintln!("input sniff failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        other => {
+            eprintln!(
+                "unknown input subcommand '{other}' \
+                 (use: input log [path] [secs] | input sniff [path] [secs] | input calibrate [path])"
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+fn parse_input_log_args(args: &[String]) -> (Option<&str>, u64) {
+    match args.len() {
+        0 => (None, 120),
+        1 => {
+            if let Ok(secs) = args[0].parse::<u64>() {
+                (None, secs)
+            } else {
+                (Some(args[0].as_str()), 30)
+            }
+        }
+        _ => {
+            if args[1].parse::<u64>().is_ok() {
+                (Some(args[0].as_str()), args[1].parse().unwrap())
+            } else {
+                (None, args[0].parse().unwrap_or(30))
+            }
+        }
+    }
 }

@@ -1,0 +1,36 @@
+// Rust ↔ Slint bridge for MiSTer input and app state.
+export global MisterBridge {
+    in-out property <bool> dpad-up;
+    in-out property <bool> dpad-down;
+    in-out property <bool> dpad-left;
+    in-out property <bool> dpad-right;
+    in-out property <bool> btn-a;
+    in-out property <bool> btn-b;
+    in-out property <bool> btn-x;
+    in-out property <bool> btn-y;
+    in-out property <bool> btn-l;
+    in-out property <bool> btn-r;
+    in-out property <bool> btn-zl;
+    in-out property <bool> btn-zr;
+    in-out property <bool> btn-select;
+    in-out property <bool> btn-start;
+    in-out property <bool> btn-l3;
+    in-out property <bool> btn-r3;
+    in-out property <bool> btn-home;
+    in-out property <bool> btn-capture;
+    in-out property <bool> capture-available;
+    in-out property <float> left-x;
+    in-out property <float> left-y;
+    in-out property <float> right-x;
+    in-out property <float> right-y;
+    in-out property <string> device-label;
+    in-out property <string> device-name;
+    in-out property <string> usb-port;
+    in-out property <string> usb-id;
+    in-out property <string> serial-id;
+    in-out property <string> js-counts;
+    in-out property <string> pressed-now;
+    in-out property <string> last-event-label;
+    in-out property <string> last-raw-event;
+    callback quit-requested();
+}
