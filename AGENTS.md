@@ -213,7 +213,10 @@ Cloned under `reference/` (shallow). For study only; do not edit/commit.
 
 | Dir | Repo | Why it matters |
 |-----|------|----------------|
-| `reference/Main_MiSTer` | `ZaparooProject/Main_MiSTer` (fork) | **`video.cpp`** (`video_fb_enable` :3284), **`fpga_io.cpp`/`spi.cpp`** (SPI bit-bang), **`cfg.cpp`** (`main=` hook). Read these, not the Zaparoo patches. |
+| `reference/MiSTer-devel_Main_MiSTer` | `MiSTer-devel/Main_MiSTer` | **Upstream baseline** for fork diffs. Compare against `Main_MiSTer` to see the minimum alt-launcher patch surface. |
+| `reference/Main_MiSTer` | `ZaparooProject/Main_MiSTer` (fork) | **`video.cpp`** (`video_fb_enable` :3284), **`fpga_io.cpp`/`spi.cpp`** (SPI bit-bang), **`cfg.cpp`** (`main=` hook). **`support/zaparoo/alt_launcher*.cpp`** — external frontend spawn/coexistence. **`ZAPAROO_FORK.md`** change map. |
+| `reference/cybermobile_Main_MiSTer` | `cybermobile/Main_MiSTer` | In-process **`gfx_menu.cpp`** (~3k lines, Imlib2) reskins the stock menu; toggled via `gfx_menu_enable` in INI. No separate process. |
+| `reference/zaparoo-launcher` | `ZaparooProject/zaparoo-launcher` | Qt/QML **`zaparoo/frontend`** binary that `alt_launcher.cpp` execs on **tty2**. Rust Core client via cxx-qt. |
 | `reference/mister-companion` | `Anime0t4ku/mister-companion` | Reliable MiSTer SSH — modelled `mister_ssh.py` on this. See §8. |
 
 Optional clones (historical — explored other front ends, **not used by this project**):
@@ -270,7 +273,8 @@ still owns recovery when running; if wedged, reboot always works).
 ### TODO
 
 - Derive `xoff/yoff`/geometry from the **live** video mode (`rust-livemode`).
-- In-game settings: keep stock OSD vs fork Main_MiSTer (see §11).
+- In-game settings: keep stock OSD vs fork Main_MiSTer (see §11). Fork surface
+  checklist: [`history/2026-6-3/zaparoo-fork-surface.md`](history/2026-6-3/zaparoo-fork-surface.md).
 - ~~Controller input~~ — basic js API wired; polish mapping / hot-plug.
 
 ---
