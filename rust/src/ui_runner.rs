@@ -96,7 +96,7 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    let mut disp = match Display::open(W, H) {
+    let mut disp = match Display::open_boot(W, H) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
@@ -175,20 +175,31 @@ pub fn run_ui(f: &mut Fpga) {
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
-            run_launcher_loop(secs, &mut disp, &window, pad, app);
+            run_launcher_loop(secs, &mut disp, f, &window, pad, app);
         }
         _ => unreachable!(),
     }
 }
 
 fn open_pad() -> PadReader {
-    match PadReader::open() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("failed to open gamepad (kill MiSTer or use main= boot): {e}");
-            std::process::exit(1);
+    for attempt in 0..60 {
+        match PadReader::open() {
+            Ok(p) => {
+                if attempt > 0 {
+                    println!("gamepad open ok after {attempt} retries");
+                }
+                return p;
+            }
+            Err(e) => {
+                if attempt == 0 || attempt % 10 == 0 {
+                    eprintln!("gamepad open attempt {attempt}: {e}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
         }
     }
+    eprintln!("failed to open gamepad after 30s");
+    std::process::exit(1);
 }
 
 fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadReader) {
@@ -431,6 +442,7 @@ fn run_controller_loop(
 fn run_launcher_loop(
     secs: u64,
     disp: &mut Display,
+    f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadReader,
     app: slint_ui::launcher::Launcher,
@@ -445,6 +457,8 @@ fn run_launcher_loop(
         format!("{secs}s")
     };
     println!("launcher running {label} — D-pad to move, A to select, Home to go back...");
+    sync_bridge_launcher(&app, &pad, &nav);
+    window.request_redraw();
     while secs == 0 || start.elapsed().as_secs() < secs {
         let mut changed = pad.poll();
         if changed {
@@ -473,6 +487,9 @@ fn run_launcher_loop(
             }
         });
         disp.wait_vsync();
+        if frames % 60 == 0 {
+            f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
+        }
         if let Some((y0, y1)) = this_rows {
             disp.copy_rows(&cached, y0, y1);
         }

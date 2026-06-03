@@ -27,6 +27,12 @@ const BIT31: u32 = 0x8000_0000;
 pub const UIO_GET_VRES: u16 = 0x23;
 pub const UIO_GET_FB_PAR: u16 = 0x40;
 pub const UIO_SET_FBUF: u16 = 0x2F;
+pub const UIO_BUT_SW: u16 = 0x01;
+
+// user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
+pub const CONF_VGA_SCALER: u16 = 0x0004;
+pub const CONF_DIRECT_VIDEO: u16 = 0x0400;
+pub const CONF_VGA_FB: u16 = 0x1000;
 
 // HPS framebuffer constants (video.cpp).
 pub const FB_ADDR: u32 = 0x2000_0000 + (32 * 1024 * 1024); // 0x22000000
@@ -184,6 +190,25 @@ impl Fpga {
         self.spi_capture(cmd)
     }
 
+    /// `spi_uio_cmd16`: one command word + one parameter word.
+    pub fn uio_cmd16(&mut self, cmd: u16, parm: u16) -> u16 {
+        self.enable_io();
+        self.spi_w(cmd);
+        let res = self.spi_w(parm);
+        self.disable_io();
+        res
+    }
+
+    /// Tail of `video_fb_enable` when `direct_video=1` — muxes HDMI to the HPS fb.
+    /// Without this, SET_FBUF writes pixels but HDMI stays on the (blank) core path.
+    pub fn set_vga_fb(&mut self, enable: bool) {
+        let mut map = CONF_VGA_SCALER | CONF_DIRECT_VIDEO;
+        if enable {
+            map |= CONF_VGA_FB;
+        }
+        self.uio_cmd16(UIO_BUT_SW, map);
+    }
+
     /// Port of `video_fb_enable(1, n)` for a `direct_video` system, replicating
     /// the exact SET_FBUF sequence in video.cpp:3290-3321. Routes HPS buffer `n`
     /// to the scan-out. `mode` is the active video mode (for positioning); the
@@ -221,6 +246,9 @@ impl Fpga {
         self.spi_w((yoff + mode.vact as i32 - 1) as u16); // scaled bottom
         self.spi_w(fb_width * 4); // stride (bytes)
         self.disable_io();
+        // MiSTer calls set_vga_fb(enable) here when cfg.direct_video; main= boot
+        // skips the rest of Main_MiSTer so we must do it ourselves.
+        self.set_vga_fb(true);
         flag
     }
 }
