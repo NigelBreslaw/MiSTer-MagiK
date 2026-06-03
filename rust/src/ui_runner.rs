@@ -2,6 +2,7 @@
 
 use crate::fb::{Display, Pixel};
 use crate::fpga::{Fpga, MODE_1080P60};
+use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, PhysicalSize};
@@ -81,6 +82,8 @@ pub fn print_scenes() {
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     println!("ui scene={scene} secs={secs}");
+
+    let _vt = VtGraphicsGuard::enter_or_warn();
 
     let mut disp = match Display::open(W, H) {
         Ok(d) => d,

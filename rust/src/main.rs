@@ -12,6 +12,7 @@
 mod fb;
 mod fpga;
 mod ui_runner;
+mod vt;
 
 use fb::{Display, Pixel};
 use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
@@ -44,6 +45,7 @@ fn main() {
 }
 
 fn fb_test(f: &mut Fpga) {
+    let _vt = vt::VtGraphicsGuard::enter_or_warn();
     let mut disp = match Display::open(W, H) {
         Ok(d) => d,
         Err(e) => {
