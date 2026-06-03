@@ -8,6 +8,7 @@ fn main() {
         "ui/bench/solid_fill.slint",
         "ui/bench/list_scroll.slint",
         "ui/controller_test.slint",
+        "ui/launcher.slint",
     ];
     for path in sources {
         let config = slint_build::CompilerConfiguration::new()

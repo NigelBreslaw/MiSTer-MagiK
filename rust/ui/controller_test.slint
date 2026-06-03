@@ -428,13 +428,7 @@ component ControllerBody inherits Rectangle {
     }
 }
 
-export component ControllerTest inherits Window {
-    preferred-width: 1920px;
-    preferred-height: 1080px;
-    default-font-family: "DejaVu Sans";
-    title: "MiSTer Controller Test";
-    background: #1a1424;
-
+export component ControllerPanel inherits Rectangle {
     VerticalLayout {
         padding: 32px;
         spacing: 20px;
@@ -556,4 +550,14 @@ export component ControllerTest inherits Window {
             }
         }
     }
+}
+
+export component ControllerTest inherits Window {
+    preferred-width: 1920px;
+    preferred-height: 1080px;
+    default-font-family: "DejaVu Sans";
+    title: "MiSTer Controller Test";
+    background: #1a1424;
+
+    ControllerPanel {}
 }
