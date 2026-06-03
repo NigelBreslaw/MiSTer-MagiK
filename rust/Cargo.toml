@@ -19,6 +19,11 @@ slint = { version = "1", default-features = false, features = ["compat-1-2", "re
 [build-dependencies]
 slint-build = "1"
 
+# Slint from git master (1.17.x); bench vs 1.16 in history/toolchain-bench/slint-master.md.
+[patch.crates-io]
+slint = { git = "https://github.com/slint-ui/slint", branch = "master" }
+slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
+
 [profile.release]
 # Daily dev / quick deploy: thin LTO, parallel codegen (~3 min clean cross-build; A0-class).
 # See rust/BUILD.md and `build-arm.sh --fast`.

@@ -37,13 +37,18 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 
 Prerequisite for NEON: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
 
-## cross-rs version
+## Slint version
 
-Use **crates.io 0.2.5** (default):
+**Default:** git `master` via `[patch.crates-io]` in `Cargo.toml` (currently 1.17.0 @ `9f5e4a49`). Comparison to crates.io 1.16: [`history/toolchain-bench/slint-master.md`](../history/toolchain-bench/slint-master.md).
+
+After `cargo update`, confirm `Cargo.lock` still points at the intended git rev before shipping.
+
+## cross-rs
+
+Pin **0.2.5** from crates.io (matches MiSTer glibc 2.31 via our link setup):
 
 ```bash
-cargo install cross --locked
-# Docker: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5
+cargo install cross --version 0.2.5 --locked
 ```
 
-Git `main` (`cargo install cross --git https://github.com/cross-rs/cross.git`) still reports `0.2.5` but pulls the **`:main`** image (glibc 2.31). Benchmarked in [`history/toolchain-bench/cross-main.md`](../history/toolchain-bench/cross-main.md): ~2× slower clean builds, no meaningful on-device speedup vs A3.
+Docker image: `ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5`. Do not use `cargo install cross --git …` (that pulls the `:main` image).
