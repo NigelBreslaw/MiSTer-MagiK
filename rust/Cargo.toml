@@ -22,6 +22,8 @@ slint-build = "1"
 [profile.release]
 # opt-level 3 (not "z"): the software renderer is hot, we want speed for 60fps.
 opt-level = 3
-lto = true
+# A2 toolchain experiment: fat LTO + single CGU (see history/toolchain-bench/README.md).
+lto = "fat"
+codegen-units = 1
 strip = true
 panic = "abort"

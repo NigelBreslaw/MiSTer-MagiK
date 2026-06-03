@@ -29,4 +29,4 @@ Run-to-run noise is a few percent; **no clear win** on hot paths (`demo`/`full_m
 
 **PNGs:** `A1-<scene>-fb.png` (mid-run capture). **TSV:** `results.tsv` rows labeled `A1`.
 
-**Next:** A2 — revert these rustflags, set `lto = "fat"` + `codegen-units = 1` in `Cargo.toml` only.
+**Next:** ~~A2~~ done → [`A2-fat-lto.md`](A2-fat-lto.md). Then A3 (A2 + A1 rustflags).
