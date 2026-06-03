@@ -9,7 +9,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/rust"
-BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb"
+BUILD_PROFILE=release
+BUILD_FLAG=()
 REMOTE="/media/fat/mister-magic/mister-magic-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
@@ -33,7 +34,8 @@ usage() {
   echo ""
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
-  echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N  -h"
+  echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
+  echo "         --device (build profile release-device / A3)  -h"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -45,11 +47,14 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-device) SKIP_DEVICE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
+    --device) BUILD_PROFILE=release-device; BUILD_FLAG=(--device); shift ;;
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
 done
+
+BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magic-fb"
 
 mkdir -p "$BENCH_DIR"
 
@@ -257,11 +262,12 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   fi
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
-  HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
+  HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
+  HOST_NOTES="profile=$BUILD_PROFILE"
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
-  HOST_NOTES="skip-build"
+  HOST_NOTES="skip-build; profile=$BUILD_PROFILE"
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
 

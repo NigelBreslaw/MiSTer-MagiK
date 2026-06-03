@@ -20,10 +20,16 @@ slint = { version = "1", default-features = false, features = ["compat-1-2", "re
 slint-build = "1"
 
 [profile.release]
-# opt-level 3 (not "z"): the software renderer is hot, we want speed for 60fps.
+# Daily dev / quick deploy: thin LTO, parallel codegen (~3 min clean cross-build; A0-class).
+# See rust/BUILD.md and `build-arm.sh --fast`.
 opt-level = 3
-# A2 toolchain experiment: fat LTO + single CGU (see history/toolchain-bench/README.md).
-lto = "fat"
-codegen-units = 1
+lto = true
 strip = true
 panic = "abort"
+
+[profile.release-device]
+# Full MiSTer release: fat LTO + single CGU (A3 bench winner on size; ~5 min clean).
+# NEON/VFP rustflags are applied by build-arm.sh for this profile only.
+inherits = "release"
+lto = "fat"
+codegen-units = 1

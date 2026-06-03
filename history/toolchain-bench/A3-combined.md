@@ -34,6 +34,9 @@
 - **60 fps motion scenes** (`demo`, `full_motion`) are unchanged across all labels — the bottleneck is copy/vsync, not a few µs of render on those benches.
 - **Heavy scenes** (`text_heavy`, `list_scroll`) remain CPU-bound; toolchain tweaks won’t fix without UI/renderer changes.
 
-Current repo defaults match **A3** (fat LTO + NEON rustflags). Revert to A0 in `Cargo.toml` / `.cargo/config.toml` if you prefer faster incremental builds during dev.
+Repo uses two Cargo profiles (see [`rust/BUILD.md`](../../rust/BUILD.md)):
+
+- **`release`** — A0-class, `deploy-rust.sh --fast` / `build-arm.sh`
+- **`release-device`** — A3-class, default `deploy-rust.sh` / `build-arm.sh --device`
 
 **PNGs:** `A3-<scene>-fb.png`. **TSV:** rows `A3`.

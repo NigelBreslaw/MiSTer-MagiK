@@ -4,6 +4,6 @@
 [build]
 rustc-wrapper = ""
 
-# A3: A1 NEON flags + A2 fat LTO (see history/toolchain-bench/README.md).
-[target.armv7-unknown-linux-gnueabihf]
-rustflags = ["-C", "target-cpu=cortex-a9", "-C", "target-feature=+neon,+vfp3"]
+# Cortex-A9 + NEON for MiSTer are set via RUSTFLAGS in build-arm.sh when building
+# `--profile release-device` only (see rust/BUILD.md). Daily `release` builds stay
+# on generic armv7 defaults for faster compiles.
