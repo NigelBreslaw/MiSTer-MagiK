@@ -167,7 +167,7 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot-wait
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py wait
 
-# Capture framebuffer → PNG
+# Capture framebuffer → PNG (only valid while `ui` is still running)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/fb.png
 
 # Toolchain A/B (host build + all ui/bench scenes on device) → history/toolchain-bench/results.tsv
@@ -178,8 +178,8 @@ Bench scenes: `mister-magic-fb scenes` or `ui <scene> 20` — see `rust/ui/bench
 Log: [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md).
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
-PNG. This is how we verified rendering. The buffer holds the last frame Slint
-drew (Slint only repaints on change, so a static UI is stable).
+PNG **while `mister-magic-fb ui` is running**. After exit, fbcon shows `login:` and
+the dump is useless. `bench-toolchain.sh` snapshots at ~`scene_secs - 2` s mid-run.
 
 ---
 

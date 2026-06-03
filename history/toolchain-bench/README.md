@@ -22,7 +22,7 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
 
 For label `A0` and scene `static_ui`:
 
-- `A0-static_ui-fb.png` — framebuffer capture after that scene
+- `A0-static_ui-fb.png` — framebuffer snapshot **while the UI is still running** (~`scene_secs - 2` s into each scene, menu SIGSTOPped). Post-exit capture only shows fbcon `login:`.
 - `A0-static_ui-ui.log` — stdout from `mister-magic-fb ui static_ui N`
 
 ## TSV columns

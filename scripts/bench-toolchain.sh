@@ -132,6 +132,9 @@ run_scene_on_device() {
   local ui_log ui_full
   ui_log="$(mktemp)"
   ui_full="$(mktemp)"
+  # Snapshot /dev/fb0 while the UI process is still running (menu still SIGSTOPped).
+  # Post-exit capture only sees fbcon "Welcome / login:" — not the bench scene.
+  local capture_at=$((secs > 4 ? secs - 2 : 2))
 
   mister run "
 set -e
@@ -143,12 +146,16 @@ CPU_SUM=0
 CPU_MAX=0
 CPU_N=0
 RSS=0
+FB_CAPTURED=0
 TICK=\$(getconf CLK_TCK 2>/dev/null || echo 100)
 jiffies() { awk '{print \$14+\$15}' /proc/\$1/stat 2>/dev/null || echo 0; }
 rss_pages() { awk '{print \$24}' /proc/\$1/stat 2>/dev/null || echo 0; }
 i=0
 while [ \$i -lt $secs ]; do
   if kill -0 \$UI_PID 2>/dev/null; then
+    if [ \$FB_CAPTURED -eq 0 ] && [ \$i -ge $capture_at ]; then
+      dd if=/dev/fb0 of=/tmp/bench-fb.raw bs=1M count=8 2>/dev/null && FB_CAPTURED=1
+    fi
     t1=\$(jiffies \$UI_PID)
     sleep 1
     t2=\$(jiffies \$UI_PID)
@@ -166,6 +173,8 @@ done
 wait \$UI_PID
 UI_RC=\$?
 if [ -n \"\$MP\" ]; then kill -CONT \$MP; fi
+echo ___BENCH_FB_CAPTURED___
+echo \$FB_CAPTURED
 echo ___BENCH_SCENE___
 echo $scene
 echo ___BENCH_CPU_MEAN___
@@ -213,11 +222,18 @@ cat /tmp/bench-ui.log
 
   echo "    [$scene] render=${render_us:-?}us copy=${copy_us:-?}us rows=${rows_avg:-?} cpu_mean=${cpu_mean:-?}%"
 
-  echo "==> Capture $BENCH_DIR/${LABEL}-${scene}-fb.png"
-  if ! FB_W=1920 FB_H=1080 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
-    "$HERE/scripts/capture-fb.sh" "$BENCH_DIR/${LABEL}-${scene}-fb.png" >/dev/null; then
+  local fb_captured png_out="$BENCH_DIR/${LABEL}-${scene}-fb.png"
+  fb_captured="$(sed -n '/___BENCH_FB_CAPTURED___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
+  echo "==> Capture $png_out (mid-run snapshot at ~${capture_at}s)"
+  mkdir -p "$HERE/build"
+  local raw="$HERE/build/bench-fb.raw"
+  if [[ "$fb_captured" == "1" ]] && mister get /tmp/bench-fb.raw "$raw" >/dev/null 2>&1 \
+    && python3 "$HERE/scripts/raw_to_png.py" "$raw" 1920 1080 "$png_out" >/dev/null 2>&1; then
+    :
+  else
     visual_ok="no"
     notes="${notes:+$notes; }capture-fail"
+    echo "    capture failed (fb_captured=${fb_captured:-?})" >&2
   fi
 
   append_tsv_row "$scene" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
