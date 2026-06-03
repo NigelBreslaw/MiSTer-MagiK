@@ -1,4 +1,4 @@
-//! Linux joystick API (`/dev/input/js*`) for Retro-bit wireless receivers.
+//! Linux joystick API (`/dev/input/js*`) — multi-pad poll + per-device layouts.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
@@ -46,11 +46,37 @@ pub struct PadState {
     pub last_event_label: String,
 }
 
+/// How raw js button/axis indices map onto [`PadState`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PadLayout {
+    /// Retro-bit 2563:0575 (A2) — D-pad on axes 4/5, SNES face order.
+    RetroBitA2,
+    /// Unknown pads: hat 6/7, d-pad 4/5, stick-as-dpad, common btn order.
+    Generic,
+}
+
+impl PadLayout {
+    fn for_device(vendor_id: &str, product_id: &str) -> Self {
+        match (vendor_id, product_id) {
+            ("0x2563", "0x0575") | ("0x0079", "0x0011") => Self::RetroBitA2,
+            _ => Self::Generic,
+        }
+    }
+}
+
 pub struct PadReader {
     file: File,
     pub path: String,
     pub info: PadInfo,
+    layout: PadLayout,
     state: PadState,
+}
+
+/// Poll every connected `/dev/input/js*` and merge into one navigation [`PadState`].
+pub struct PadPool {
+    pads: Vec<PadReader>,
+    merged: PadState,
+    active_idx: usize,
 }
 
 /// Static metadata read from sysfs / ioctl when the pad is opened.
@@ -71,20 +97,74 @@ pub struct PadInfo {
     pub capture_available: bool,
 }
 
+impl PadPool {
+    /// Open all joystick nodes under `/dev/input/js*`.
+    pub fn open_all() -> io::Result<Self> {
+        let paths = discover_js_devices();
+        let mut pads = Vec::new();
+        for path in paths {
+            match PadReader::open_path(&path) {
+                Ok(r) => pads.push(r),
+                Err(e) => eprintln!("pad: skip {path}: {e}"),
+            }
+        }
+        if pads.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no joystick device found",
+            ));
+        }
+        eprintln!("pad: listening on {} device(s)", pads.len());
+        Ok(Self {
+            pads,
+            merged: PadState::default(),
+            active_idx: 0,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.pads.len()
+    }
+
+    pub fn state(&self) -> &PadState {
+        &self.merged
+    }
+
+    /// Info for the pad that most recently sent input.
+    pub fn info(&self) -> &PadInfo {
+        &self.pads[self.active_idx].info
+    }
+
+    pub fn path(&self) -> &str {
+        &self.pads[self.active_idx].path
+    }
+
+    /// Drain all pads; returns true if merged state changed.
+    pub fn poll(&mut self) -> bool {
+        let mut changed = false;
+        for (i, pad) in self.pads.iter_mut().enumerate() {
+            if pad.poll() {
+                self.active_idx = i;
+                changed = true;
+            }
+        }
+        if changed {
+            let states: Vec<&PadState> = self.pads.iter().map(|p| p.state()).collect();
+            self.merged = merge_pad_states(&states);
+            let active = &self.pads[self.active_idx].state;
+            self.merged.last_raw = active.last_raw.clone();
+            self.merged.last_event_label = active.last_event_label.clone();
+        }
+        changed
+    }
+}
+
 impl PadReader {
-    /// Open the A2 Retro-bit receiver, or fall back to js2 / first js node.
+    /// Open the first available js device (for debug subcommands).
     pub fn open() -> io::Result<Self> {
-        const CANDIDATES: &[&str] = &[
-            "/dev/input/by-id/usb-SWITCH_CO._LTD._Retro-bit_Controller_GH-SP-5027-1_A2-joystick",
-            "/dev/input/js2",
-            "/dev/input/js1",
-            "/dev/input/js0",
-        ];
-        for path in CANDIDATES {
-            if Path::new(path).exists() {
-                if let Ok(reader) = Self::open_path(path) {
-                    return Ok(reader);
-                }
+        for path in discover_js_devices() {
+            if let Ok(reader) = Self::open_path(&path) {
+                return Ok(reader);
             }
         }
         Err(io::Error::new(
@@ -97,8 +177,9 @@ impl PadReader {
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
         let info = read_pad_info(path, &file)?;
+        let layout = PadLayout::for_device(&info.vendor_id, &info.product_id);
         eprintln!(
-            "pad: opened {path} ({info})",
+            "pad: opened {path} ({info}) layout={layout:?}",
             info = format!(
                 "{} usb={} {} btn={} axes={}",
                 info.name, info.usb_port, info.vendor_id, info.js_buttons, info.js_axes
@@ -108,6 +189,7 @@ impl PadReader {
             path: path.to_string(),
             file,
             info,
+            layout,
             state: PadState::default(),
         })
     }
@@ -132,7 +214,10 @@ impl PadReader {
                     let event_type = buf[6] & !JS_EVENT_INIT;
                     let number = buf[7];
                     let value = i16::from_le_bytes([buf[4], buf[5]]);
-                    if self.state.apply_event(event_type, number, value) {
+                    if self
+                        .state
+                        .apply_event(self.layout, event_type, number, value)
+                    {
                         changed = true;
                     }
                 }
@@ -148,15 +233,19 @@ impl PadReader {
 }
 
 impl PadState {
-    fn apply_event(&mut self, event_type: u8, number: u8, value: i16) -> bool {
+    fn apply_event(&mut self, layout: PadLayout, event_type: u8, number: u8, value: i16) -> bool {
+        match layout {
+            PadLayout::RetroBitA2 => self.apply_event_retrobit_a2(event_type, number, value),
+            PadLayout::Generic => self.apply_event_generic(event_type, number, value),
+        }
+    }
+
+    fn apply_event_retrobit_a2(&mut self, event_type: u8, number: u8, value: i16) -> bool {
         self.last_raw = format!("type={event_type} num={number} val={value}");
         let changed = match event_type {
             JS_EVENT_BUTTON => {
                 let pressed = value != 0;
                 let label = match number {
-                    // Retro-bit A2 SNES: js indices don't match textbook D-input
-                    // (0=B,1=A,2=X,3=Y). Physical SNES labels map as:
-                    //   js0=Y  js1=B  js2=A  js3=X
                     0 => {
                         self.btn_y = pressed;
                         "Y"
@@ -247,31 +336,119 @@ impl PadState {
                         self.right_y = normalize_stick(v);
                         "Right Y"
                     }
+                    4 => self.apply_dpad_x(v, "D-pad X"),
+                    5 => self.apply_dpad_y(v, "D-pad Y"),
+                    _ => {
+                        self.last_event_label =
+                            format!("unknown axis {number} val={value}");
+                        self.rebuild_pressed_now();
+                        return false;
+                    }
+                };
+                if number <= 3 {
+                    self.last_event_label = format!("{label} axis {number} = {value}");
+                }
+                true
+            }
+            _ => return false,
+        };
+        self.rebuild_pressed_now();
+        changed
+    }
+
+    fn apply_event_generic(&mut self, event_type: u8, number: u8, value: i16) -> bool {
+        self.last_raw = format!("type={event_type} num={number} val={value}");
+        let changed = match event_type {
+            JS_EVENT_BUTTON => {
+                let pressed = value != 0;
+                let label = match number {
+                    0 => {
+                        self.btn_a = pressed;
+                        "A"
+                    }
+                    1 => {
+                        self.btn_b = pressed;
+                        "B"
+                    }
+                    2 => {
+                        self.btn_x = pressed;
+                        "X"
+                    }
+                    3 => {
+                        self.btn_y = pressed;
+                        "Y"
+                    }
                     4 => {
-                        if v < -STICK_DEADZONE {
-                            self.dpad_left = true;
-                            self.dpad_right = false;
-                        } else if v > STICK_DEADZONE {
-                            self.dpad_right = true;
-                            self.dpad_left = false;
-                        } else {
-                            self.dpad_left = false;
-                            self.dpad_right = false;
-                        }
-                        "D-pad X"
+                        self.btn_l = pressed;
+                        "L"
                     }
                     5 => {
-                        if v < -STICK_DEADZONE {
-                            self.dpad_up = true;
-                            self.dpad_down = false;
-                        } else if v > STICK_DEADZONE {
-                            self.dpad_down = true;
-                            self.dpad_up = false;
-                        } else {
-                            self.dpad_up = false;
-                            self.dpad_down = false;
-                        }
-                        "D-pad Y"
+                        self.btn_r = pressed;
+                        "R"
+                    }
+                    6 => {
+                        self.btn_select = pressed;
+                        "Select"
+                    }
+                    7 => {
+                        self.btn_start = pressed;
+                        "Start"
+                    }
+                    8 => {
+                        self.btn_l3 = pressed;
+                        "L3"
+                    }
+                    9 => {
+                        self.btn_r3 = pressed;
+                        "R3"
+                    }
+                    10 | 11 => {
+                        self.btn_home = pressed;
+                        "Home"
+                    }
+                    _ => {
+                        self.last_event_label = format!(
+                            "unknown btn {number} {}",
+                            if pressed { "down" } else { "up" }
+                        );
+                        self.rebuild_pressed_now();
+                        return false;
+                    }
+                };
+                self.last_event_label = format!(
+                    "{label} {} (js btn {number})",
+                    if pressed { "down" } else { "up" }
+                );
+                true
+            }
+            JS_EVENT_AXIS => {
+                let v = value as f32;
+                match number {
+                    0 => {
+                        self.left_x = normalize_stick(v);
+                        self.apply_dpad_x(v, "Stick X");
+                    }
+                    1 => {
+                        self.left_y = normalize_stick(v);
+                        self.apply_dpad_y(v, "Stick Y");
+                    }
+                    2 => {
+                        self.right_x = normalize_stick(v);
+                    }
+                    3 => {
+                        self.right_y = normalize_stick(v);
+                    }
+                    4 => {
+                        self.apply_dpad_x(v, "D-pad X");
+                    }
+                    5 => {
+                        self.apply_dpad_y(v, "D-pad Y");
+                    }
+                    6 => {
+                        self.apply_hat_x(v);
+                    }
+                    7 => {
+                        self.apply_hat_y(v);
                     }
                     _ => {
                         self.last_event_label =
@@ -280,13 +457,67 @@ impl PadState {
                         return false;
                     }
                 };
-                self.last_event_label = format!("{label} axis {number} = {value}");
+                self.last_event_label = format!("axis {number} = {value}");
                 true
             }
             _ => return false,
         };
         self.rebuild_pressed_now();
         changed
+    }
+
+    fn apply_dpad_x(&mut self, v: f32, label: &'static str) -> &'static str {
+        if v < -STICK_DEADZONE {
+            self.dpad_left = true;
+            self.dpad_right = false;
+        } else if v > STICK_DEADZONE {
+            self.dpad_right = true;
+            self.dpad_left = false;
+        } else {
+            self.dpad_left = false;
+            self.dpad_right = false;
+        }
+        label
+    }
+
+    fn apply_dpad_y(&mut self, v: f32, label: &'static str) -> &'static str {
+        if v < -STICK_DEADZONE {
+            self.dpad_up = true;
+            self.dpad_down = false;
+        } else if v > STICK_DEADZONE {
+            self.dpad_down = true;
+            self.dpad_up = false;
+        } else {
+            self.dpad_up = false;
+            self.dpad_down = false;
+        }
+        label
+    }
+
+    fn apply_hat_x(&mut self, v: f32) {
+        if v < 0.0 {
+            self.dpad_left = true;
+            self.dpad_right = false;
+        } else if v > 0.0 {
+            self.dpad_right = true;
+            self.dpad_left = false;
+        } else {
+            self.dpad_left = false;
+            self.dpad_right = false;
+        }
+    }
+
+    fn apply_hat_y(&mut self, v: f32) {
+        if v < 0.0 {
+            self.dpad_up = true;
+            self.dpad_down = false;
+        } else if v > 0.0 {
+            self.dpad_down = true;
+            self.dpad_up = false;
+        } else {
+            self.dpad_up = false;
+            self.dpad_down = false;
+        }
     }
 
     fn rebuild_pressed_now(&mut self) {
@@ -343,6 +574,70 @@ fn normalize_stick(v: f32) -> f32 {
         return 0.0;
     }
     (v / AXIS_MAX).clamp(-1.0, 1.0)
+}
+
+fn discover_js_devices() -> Vec<String> {
+    let mut paths = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/dev/input") else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.len() > 2
+            && name.starts_with("js")
+            && name[2..].chars().all(|c| c.is_ascii_digit())
+        {
+            paths.push(format!("/dev/input/{name}"));
+        }
+    }
+    paths.sort_by_key(|p| {
+        p.strip_prefix("/dev/input/js")
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(0)
+    });
+    paths
+}
+
+fn merge_pad_states(states: &[&PadState]) -> PadState {
+    let mut out = PadState::default();
+    for s in states {
+        out.dpad_up |= s.dpad_up;
+        out.dpad_down |= s.dpad_down;
+        out.dpad_left |= s.dpad_left;
+        out.dpad_right |= s.dpad_right;
+        out.btn_a |= s.btn_a;
+        out.btn_b |= s.btn_b;
+        out.btn_x |= s.btn_x;
+        out.btn_y |= s.btn_y;
+        out.btn_l |= s.btn_l;
+        out.btn_r |= s.btn_r;
+        out.btn_zl |= s.btn_zl;
+        out.btn_zr |= s.btn_zr;
+        out.btn_select |= s.btn_select;
+        out.btn_start |= s.btn_start;
+        out.btn_l3 |= s.btn_l3;
+        out.btn_r3 |= s.btn_r3;
+        out.btn_home |= s.btn_home;
+        out.btn_capture |= s.btn_capture;
+        if s.left_x.abs() > out.left_x.abs() {
+            out.left_x = s.left_x;
+        }
+        if s.left_y.abs() > out.left_y.abs() {
+            out.left_y = s.left_y;
+        }
+        if s.right_x.abs() > out.right_x.abs() {
+            out.right_x = s.right_x;
+        }
+        if s.right_y.abs() > out.right_y.abs() {
+            out.right_y = s.right_y;
+        }
+        if !s.last_event_label.is_empty() {
+            out.last_raw = s.last_raw.clone();
+            out.last_event_label = s.last_event_label.clone();
+        }
+    }
+    out.rebuild_pressed_now();
+    out
 }
 
 fn read_pad_info(js_path: &str, file: &File) -> io::Result<PadInfo> {
@@ -779,13 +1074,14 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         ("D-pad Right", |s| s.dpad_right),
     ];
     let mut file = reader.file;
+    let layout = reader.layout;
     let mut buf = [0u8; JS_EVENT_SIZE];
     let mut state = PadState::default();
     for (label, _) in prompts {
         println!("\n>>> Press [{label}] ...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
-            if read_one_event(&mut file, &mut buf, &mut state) {
+            if read_one_event(&mut file, &mut buf, layout, &mut state) {
                 println!("    raw: {}", state.last_raw);
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -796,7 +1092,7 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         println!("\n>>> Move [{label}] ...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if read_one_event(&mut file, &mut buf, &mut state) {
+            if read_one_event(&mut file, &mut buf, layout, &mut state) {
                 println!(
                     "    raw: {}  L=({:.2},{:.2}) R=({:.2},{:.2})",
                     state.last_raw, state.left_x, state.left_y, state.right_x, state.right_y
@@ -808,13 +1104,18 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
-fn read_one_event(file: &mut File, buf: &mut [u8; JS_EVENT_SIZE], state: &mut PadState) -> bool {
+fn read_one_event(
+    file: &mut File,
+    buf: &mut [u8; JS_EVENT_SIZE],
+    layout: PadLayout,
+    state: &mut PadState,
+) -> bool {
     match file.read(buf) {
         Ok(n) if n >= JS_EVENT_SIZE => {
             let event_type = buf[6] & !JS_EVENT_INIT;
             let number = buf[7];
             let value = i16::from_le_bytes([buf[4], buf[5]]);
-            state.apply_event(event_type, number, value)
+            state.apply_event(layout, event_type, number, value)
         }
         _ => false,
     }

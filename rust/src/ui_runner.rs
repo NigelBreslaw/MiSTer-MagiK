@@ -26,7 +26,7 @@ mod slint_ui {
     }
 }
 
-use crate::input::{PadInfo, PadReader};
+use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
 
 pub const UI_SCENES: &[&str] = &[
@@ -162,7 +162,7 @@ pub fn run_ui(f: &mut Fpga) {
             run_frame_loop(secs, &mut disp, &window);
         }
         "controller_test" => {
-            let pad = open_pad();
+            let pad = open_pads();
             let app = slint_ui::controller::ControllerTest::new().expect("ControllerTest::new");
             sync_bridge(&app, &pad);
             app.show().expect("show");
@@ -170,7 +170,7 @@ pub fn run_ui(f: &mut Fpga) {
             run_controller_loop(secs, &mut disp, &window, pad, app);
         }
         "launcher" => {
-            let pad = open_pad();
+            let pad = open_pads();
             let app = slint_ui::launcher::Launcher::new().expect("Launcher::new");
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
@@ -181,9 +181,9 @@ pub fn run_ui(f: &mut Fpga) {
     }
 }
 
-fn open_pad() -> PadReader {
+fn open_pads() -> PadPool {
     for attempt in 0..60 {
-        match PadReader::open() {
+        match PadPool::open_all() {
             Ok(p) => {
                 if attempt > 0 {
                     println!("gamepad open ok after {attempt} retries");
@@ -202,20 +202,20 @@ fn open_pad() -> PadReader {
     std::process::exit(1);
 }
 
-fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadReader) {
+fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(0);
     bridge.set_selected_index(0);
     sync_bridge_pad_launcher(&bridge, pad);
 }
 
-fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadReader) {
+fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
     sync_bridge_pad_controller(&app.global::<slint_ui::controller::MisterBridge>(), pad);
 }
 
 fn sync_bridge_launcher(
     app: &slint_ui::launcher::Launcher,
-    pad: &PadReader,
+    pad: &PadPool,
     nav: &LauncherNav,
     loading_message: &str,
 ) {
@@ -231,7 +231,7 @@ fn sync_bridge_launcher(
 
 fn sync_bridge_pad_controller(
     bridge: &slint_ui::controller::MisterBridge,
-    pad: &PadReader,
+    pad: &PadPool,
 ) {
     let state = pad.state();
     let info = pad.info();
@@ -258,13 +258,13 @@ fn sync_bridge_pad_controller(
     bridge.set_left_y(state.left_y);
     bridge.set_right_x(state.right_x);
     bridge.set_right_y(state.right_y);
-    sync_device_info_controller(bridge, info, &pad.path);
+    sync_device_info_controller(bridge, info, pad.path(), pad.len());
     bridge.set_pressed_now(state.pressed_now.clone().into());
     bridge.set_last_event_label(state.last_event_label.clone().into());
     bridge.set_last_raw_event(state.last_raw.clone().into());
 }
 
-fn sync_bridge_pad_launcher(bridge: &slint_ui::launcher::MisterBridge, pad: &PadReader) {
+fn sync_bridge_pad_launcher(bridge: &slint_ui::launcher::MisterBridge, pad: &PadPool) {
     let state = pad.state();
     let info = pad.info();
     bridge.set_dpad_up(state.dpad_up);
@@ -290,7 +290,7 @@ fn sync_bridge_pad_launcher(bridge: &slint_ui::launcher::MisterBridge, pad: &Pad
     bridge.set_left_y(state.left_y);
     bridge.set_right_x(state.right_x);
     bridge.set_right_y(state.right_y);
-    sync_device_info_launcher(bridge, info, &pad.path);
+    sync_device_info_launcher(bridge, info, pad.path(), pad.len());
     bridge.set_pressed_now(state.pressed_now.clone().into());
     bridge.set_last_event_label(state.last_event_label.clone().into());
     bridge.set_last_raw_event(state.last_raw.clone().into());
@@ -300,8 +300,14 @@ fn sync_device_info_controller(
     bridge: &slint_ui::controller::MisterBridge,
     info: &PadInfo,
     js_path: &str,
+    pad_count: usize,
 ) {
-    bridge.set_device_label(js_path.into());
+    let label = if pad_count > 1 {
+        format!("{js_path} ({pad_count} pads)")
+    } else {
+        js_path.to_string()
+    };
+    bridge.set_device_label(label.into());
     bridge.set_device_name(info.name.clone().into());
     bridge.set_usb_port(info.usb_port.clone().into());
     bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
@@ -320,8 +326,14 @@ fn sync_device_info_launcher(
     bridge: &slint_ui::launcher::MisterBridge,
     info: &PadInfo,
     js_path: &str,
+    pad_count: usize,
 ) {
-    bridge.set_device_label(js_path.into());
+    let label = if pad_count > 1 {
+        format!("{js_path} ({pad_count} pads)")
+    } else {
+        js_path.to_string()
+    };
+    bridge.set_device_label(label.into());
     bridge.set_device_name(info.name.clone().into());
     bridge.set_usb_port(info.usb_port.clone().into());
     bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
@@ -405,14 +417,17 @@ fn run_controller_loop(
     secs: u64,
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
-    mut pad: PadReader,
+    mut pad: PadPool,
     app: slint_ui::controller::ControllerTest,
 ) {
     let mut cached = vec![Pixel(0); W * H];
     let start = Instant::now();
     let mut frames = 0u64;
     let label = if secs == 0 { "forever".to_string() } else { format!("{secs}s") };
-    println!("controller_test running {label} — press buttons on the pad...");
+    println!(
+        "controller_test running {label} — {} pad(s) connected",
+        pad.len()
+    );
     while secs == 0 || start.elapsed().as_secs() < secs {
         if pad.poll() {
             sync_bridge(&app, &pad);
@@ -458,7 +473,7 @@ fn run_launcher_loop(
     disp: &mut Display,
     f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
-    mut pad: PadReader,
+    mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
 ) {
     let mut cached = vec![Pixel(0); W * H];
@@ -473,7 +488,10 @@ fn run_launcher_loop(
     } else {
         format!("{secs}s")
     };
-    println!("launcher running {label} — D-pad to move, A to select, Home to go back...");
+    println!(
+        "launcher running {label} — {} pad(s), D-pad to move, A to select, Home to go back...",
+        pad.len()
+    );
     sync_bridge_launcher(&app, &pad, &nav, "");
     window.request_redraw();
     while secs == 0 || start.elapsed().as_secs() < secs {
