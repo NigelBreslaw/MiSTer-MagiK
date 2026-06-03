@@ -26,6 +26,14 @@ pub enum ControllerKind {
 }
 
 impl ControllerKind {
+    pub const ALL: [Self; 5] = [
+        Self::Gamepad,
+        Self::FightStick,
+        Self::Arcade,
+        Self::Simple,
+        Self::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gamepad => "gamepad",
@@ -34,6 +42,24 @@ impl ControllerKind {
             Self::Simple => "simple",
             Self::Unknown => "unknown",
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gamepad => "Gamepad",
+            Self::FightStick => "Fight stick",
+            Self::Arcade => "Arcade",
+            Self::Simple => "Simple",
+            Self::Unknown => "Unknown",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&k| k == self).unwrap_or(4)
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        Self::ALL[i.min(Self::ALL.len() - 1)]
     }
 }
 
@@ -261,6 +287,19 @@ impl ControllerDb {
     pub fn upsert(&mut self, info: &PadInfo, mut entry: ControllerEntry) {
         entry.last_usb_port = info.usb_port.clone();
         self.entries.insert(Self::logical_id(info), entry);
+    }
+
+    /// Save label + kind and mark setup finished for this pad.
+    pub fn finish_setup(&mut self, info: &PadInfo, label: String, kind: ControllerKind) {
+        let mut entry = self
+            .get(info)
+            .cloned()
+            .unwrap_or_else(|| Self::default_entry(info));
+        entry.label = label;
+        entry.kind = kind;
+        entry.kernel_name = info.name.clone();
+        entry.setup_complete = true;
+        self.upsert(info, entry);
     }
 
     pub fn upsert_id(&mut self, logical_id: &str, mut entry: ControllerEntry, usb_port: &str) {
@@ -528,6 +567,17 @@ mod tests {
         let list = db.list_entries();
         assert_eq!(list[0].label, "Alpha");
         assert_eq!(list[1].label, "Zebra");
+    }
+
+    #[test]
+    fn finish_setup_marks_complete() {
+        let mut db = ControllerDb::empty("/tmp/t.json");
+        let info = sample_info("0x2563", "0x0575", "1-1.3", "SN");
+        db.finish_setup(&info, "My A2".into(), ControllerKind::Gamepad);
+        assert!(db.is_setup(&info));
+        let e = db.get(&info).unwrap();
+        assert_eq!(e.label, "My A2");
+        assert_eq!(e.kind, ControllerKind::Gamepad);
     }
 
     #[test]

@@ -240,6 +240,19 @@ impl PadPool {
         Ok(())
     }
 
+    /// Save name + type and mark this pad's setup complete.
+    pub fn finish_setup_at(
+        &mut self,
+        idx: usize,
+        label: String,
+        kind: crate::controller_db::ControllerKind,
+    ) -> io::Result<()> {
+        let info = self.pads[idx].info.clone();
+        self.db.finish_setup(&info, label, kind);
+        self.db.save()?;
+        Ok(())
+    }
+
     /// Drain all pads; returns true if merged state changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;

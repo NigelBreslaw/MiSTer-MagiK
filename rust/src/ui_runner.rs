@@ -270,6 +270,19 @@ fn sync_setup_bridge(
             bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
             let live = SetupNav::configure_live_hint(pad.state_at(idx));
             bridge.set_setup_subtitle(live.into());
+            bridge.set_setup_name(String::new().into());
+            bridge.set_setup_kind_label(String::new().into());
+        } else if setup.phase == SetupPhase::NameKind {
+            bridge.set_setup_subtitle(setup.subtitle(info, db).into());
+            bridge.set_setup_name(setup.draft_label.clone().into());
+            bridge.set_setup_kind_label(setup.draft_kind_label().into());
+            bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
+                Vec::<SharedString>::new(),
+            )));
+            bridge.set_setup_config_values(ModelRc::new(VecModel::from(
+                Vec::<SharedString>::new(),
+            )));
         } else if setup.phase == SetupPhase::PickExisting {
             bridge.set_setup_subtitle(setup.subtitle(info, db).into());
             bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
@@ -300,6 +313,8 @@ fn sync_setup_bridge(
             bridge.set_setup_config_values(ModelRc::new(VecModel::from(
                 Vec::<SharedString>::new(),
             )));
+            bridge.set_setup_name(String::new().into());
+            bridge.set_setup_kind_label(String::new().into());
         }
     }
 }
@@ -605,6 +620,22 @@ fn run_launcher_loop(
                                 if let Err(e) = pad.claim_existing_at(idx, list_index) {
                                     eprintln!("controller setup: claim existing: {e}");
                                 }
+                            }
+                            SetupAction::SaveFinish { label, kind } => {
+                                let idx = setup.target_pad_idx;
+                                if let Err(e) = pad.finish_setup_at(idx, label, kind) {
+                                    eprintln!("controller setup: save: {e}");
+                                } else {
+                                    eprintln!(
+                                        "controller setup: saved \"{}\" ({})",
+                                        pad.db().display_label(pad.info_at(idx)),
+                                        kind.as_str()
+                                    );
+                                }
+                                setup.advance_to_next_pad(&pad);
+                            }
+                            SetupAction::Done => {
+                                setup.advance_to_next_pad(&pad);
                             }
                         }
                     } else {

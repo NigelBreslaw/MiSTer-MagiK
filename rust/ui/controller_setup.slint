@@ -24,13 +24,15 @@ component ConfigRow inherits HorizontalLayout {
 
 export component SetupOverlay inherits Rectangle {
     in property <int> phase;
-    // 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure
+    // 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure, 5=name-kind
     in property <string> title;
     in property <string> subtitle;
     in property <[string]> list-items;
     in property <int> list-selected;
     in property <[string]> config-labels;
     in property <[string]> config-values;
+    in property <string> setup-name;
+    in property <string> setup-kind-label;
 
     background: #1a1424e0;
 
@@ -47,7 +49,7 @@ export component SetupOverlay inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        if phase != 4 : Text {
+        if phase != 4 && phase != 5 : Text {
             text: subtitle;
             color: #9080a8;
             font-size: 26px;
@@ -155,11 +157,85 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
+        if phase == 5 : VerticalLayout {
+            spacing: 24px;
+            alignment: center;
+
+            Text {
+                text: subtitle;
+                color: #9080a8;
+                font-size: 22px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: "Name";
+                    color: #9080a8;
+                    font-size: 20px;
+                    horizontal-alignment: left;
+                }
+
+                Rectangle {
+                    width: 900px;
+                    height: 72px;
+                    border-radius: 12px;
+                    border-width: 2px;
+                    border-color: #5c4a72;
+                    background: #1e1828;
+
+                    Text {
+                        text: setup-name;
+                        color: #e8e0f0;
+                        font-size: 26px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: "Type";
+                    color: #9080a8;
+                    font-size: 20px;
+                    horizontal-alignment: left;
+                }
+
+                Rectangle {
+                    width: 900px;
+                    height: 72px;
+                    border-radius: 12px;
+                    border-width: 4px;
+                    border-color: #06d6a0;
+                    background: #2a2236;
+
+                    Text {
+                        text: setup-kind-label;
+                        color: #06d6a0;
+                        font-size: 28px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
         Text {
             text: phase == 1 ? "Press any button to continue"
                 : phase == 2 ? "D-pad: choose  ·  A: confirm"
                 : phase == 3 ? "D-pad: choose  ·  A: confirm"
-                : phase == 4 ? "Mapping wizard coming next"
+                : phase == 4 ? "A: continue to naming"
+                : phase == 5 ? "D-pad: change type  ·  A: save"
                 : "";
             color: #706080;
             font-size: 20px;
