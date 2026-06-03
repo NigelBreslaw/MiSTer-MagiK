@@ -38,11 +38,7 @@ fn main() {
         }
     }
 
-    let cmd = if args.len() == 1 {
-        "ui".to_string()
-    } else {
-        args[1].clone()
-    };
+    let cmd = resolve_command(&args);
 
     println!("mister-magic-fb [{cmd}] (arch={})", std::env::consts::ARCH);
 
@@ -65,6 +61,20 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+/// Boot via `main=` in MiSTer.ini, or reset back to menu — run the Slint launcher.
+fn resolve_command(args: &[String]) -> String {
+    match args.get(1).map(|s| s.as_str()) {
+        None => "ui".into(),
+        Some("") => "ui".into(),
+        Some(arg1) if is_launcher_boot(arg1) => "ui".into(),
+        Some(arg1) => arg1.to_string(),
+    }
+}
+
+fn is_launcher_boot(arg: &str) -> bool {
+    arg.ends_with("menu.rbf") || arg.ends_with("/menu.rbf")
 }
 
 /// MiSTer re-exec'd us with a core path — hand off to stock Main so gameplay works.
