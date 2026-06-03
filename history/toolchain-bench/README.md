@@ -54,4 +54,6 @@ Run **A0** before editing toolchain files.
 
 **Profiles (post-bench):** daily = `rust/build-arm.sh` → Cargo `release` (A0). Ship to MiSTer = `build-arm.sh --device` / `deploy-rust.sh` → `release-device` (A3). See [`rust/BUILD.md`](../../rust/BUILD.md). Bench: add `--device` to `bench-toolchain.sh` for A3-class builds.
 
-**cross-rs:** prefer crates.io **0.2.5** (`:0.2.5` image). Git **main** uses `:main` image (glibc 2.31) — see [`cross-main.md`](cross-main.md); ~2× slower clean build, no runtime gain in our benches.
+**cross-rs:** crates.io **0.2.5** only (`cargo install cross --locked` → `ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5`).
+
+**Slint:** **`master` via `[patch.crates-io]`** (project default). Bench notes: [`slint-master.md`](slint-master.md).

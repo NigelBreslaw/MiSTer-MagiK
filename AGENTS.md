@@ -474,7 +474,7 @@ See **`rust/BUILD.md`** for profile table and bench mapping (A0 ≈ `release`, A
 **One-time host setup (done):**
 
 ```bash
-cargo install cross --locked
+cargo install cross --version 0.2.5 --locked
 rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-non-host
 ```
 
