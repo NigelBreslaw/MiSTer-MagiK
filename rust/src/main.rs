@@ -14,10 +14,12 @@
 
 use std::ffi::CString;
 
+mod controller_db;
 mod fb;
 mod fpga;
 mod input;
 mod launcher;
+mod setup_nav;
 mod ui_runner;
 mod vt;
 

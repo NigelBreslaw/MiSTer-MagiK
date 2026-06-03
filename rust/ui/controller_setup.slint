@@ -1,0 +1,106 @@
+// Controller setup overlay — new pad detection and USB port change rebinding.
+export component SetupOverlay inherits Rectangle {
+    in property <int> phase;
+    // 1=detected, 2=new-or-existing, 3=pick-existing
+    in property <string> title;
+    in property <string> subtitle;
+    in property <[string]> list-items;
+    in property <int> list-selected;
+
+    background: #1a1424e0;
+
+    VerticalLayout {
+        padding: 64px;
+        spacing: 32px;
+        alignment: center;
+
+        Text {
+            text: title;
+            color: #e8e0f0;
+            font-size: 44px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: subtitle;
+            color: #9080a8;
+            font-size: 26px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        if phase == 2 : HorizontalLayout {
+            spacing: 48px;
+            alignment: center;
+
+            Rectangle {
+                width: 360px;
+                height: 120px;
+                border-radius: 16px;
+                border-width: 4px;
+                border-color: list-selected == 0 ? #06d6a0 : #5c4a72;
+                background: list-selected == 0 ? #2a2236 : #1e1828;
+
+                Text {
+                    text: "New controller";
+                    color: list-selected == 0 ? #06d6a0 : #e8e0f0;
+                    font-size: 28px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                width: 360px;
+                height: 120px;
+                border-radius: 16px;
+                border-width: 4px;
+                border-color: list-selected == 1 ? #06d6a0 : #5c4a72;
+                background: list-selected == 1 ? #2a2236 : #1e1828;
+
+                Text {
+                    text: "Existing controller";
+                    color: list-selected == 1 ? #06d6a0 : #e8e0f0;
+                    font-size: 28px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if phase == 3 : VerticalLayout {
+            spacing: 12px;
+            alignment: center;
+
+            for item[i] in list-items : Rectangle {
+                width: 900px;
+                height: 72px;
+                border-radius: 12px;
+                border-width: list-selected == i ? 4px : 2px;
+                border-color: list-selected == i ? #06d6a0 : #5c4a72;
+                background: list-selected == i ? #2a2236 : #1e1828;
+
+                Text {
+                    text: item;
+                    color: list-selected == i ? #06d6a0 : #e8e0f0;
+                    font-size: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Text {
+            text: phase == 1 ? "Press any button to continue"
+                : phase == 2 ? "D-pad: choose  ·  A: confirm"
+                : phase == 3 ? "D-pad: choose  ·  A: confirm"
+                : "";
+            color: #706080;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+    }
+}

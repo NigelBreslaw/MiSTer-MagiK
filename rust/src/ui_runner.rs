@@ -5,7 +5,7 @@ use crate::fpga::{Fpga, MODE_1080P60};
 use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, PhysicalSize};
+use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -26,8 +26,10 @@ mod slint_ui {
     }
 }
 
+use crate::controller_db::ControllerDb;
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
+use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
@@ -206,6 +208,8 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(0);
     bridge.set_selected_index(0);
+    bridge.set_setup_visible(false);
+    bridge.set_setup_phase(0);
     sync_bridge_pad_launcher(&bridge, pad);
 }
 
@@ -217,6 +221,7 @@ fn sync_bridge_launcher(
     app: &slint_ui::launcher::Launcher,
     pad: &PadPool,
     nav: &LauncherNav,
+    setup: &SetupNav,
     loading_message: &str,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -227,6 +232,49 @@ fn sync_bridge_launcher(
     });
     bridge.set_selected_index(nav.selected as i32);
     bridge.set_loading_message(loading_message.into());
+    sync_setup_bridge(&bridge, pad, setup);
+}
+
+fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
+    if setup.is_active() {
+        pad.info_at(setup.target_pad_idx)
+    } else {
+        pad.info()
+    }
+}
+
+fn sync_setup_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    pad: &PadPool,
+    setup: &SetupNav,
+) {
+    let info = setup_pad_info(pad, setup);
+    let db = pad.db();
+    let active = setup.phase != SetupPhase::None;
+    bridge.set_setup_visible(active);
+    bridge.set_setup_phase(setup.phase as i32);
+    if active {
+        bridge.set_setup_title(setup.title().into());
+        bridge.set_setup_subtitle(setup.subtitle(info, db).into());
+        bridge.set_setup_selected(setup.list_index as i32);
+        if setup.phase == SetupPhase::PickExisting {
+            let rows: Vec<SharedString> = db
+                .list_entries()
+                .iter()
+                .map(|item| {
+                    let port = if item.last_usb_port.is_empty() {
+                        "unknown port".to_string()
+                    } else {
+                        format!("was {}", item.last_usb_port)
+                    };
+                    format!("{} — {}", item.label, port).into()
+                })
+                .collect();
+            bridge.set_setup_list(ModelRc::new(VecModel::from(rows)));
+        } else {
+            bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+        }
+    }
 }
 
 fn sync_bridge_pad_controller(
@@ -258,7 +306,7 @@ fn sync_bridge_pad_controller(
     bridge.set_left_y(state.left_y);
     bridge.set_right_x(state.right_x);
     bridge.set_right_y(state.right_y);
-    sync_device_info_controller(bridge, info, pad.path(), pad.len());
+    sync_device_info_controller(bridge, info, pad.db(), pad.path(), pad.len());
     bridge.set_pressed_now(state.pressed_now.clone().into());
     bridge.set_last_event_label(state.last_event_label.clone().into());
     bridge.set_last_raw_event(state.last_raw.clone().into());
@@ -290,7 +338,7 @@ fn sync_bridge_pad_launcher(bridge: &slint_ui::launcher::MisterBridge, pad: &Pad
     bridge.set_left_y(state.left_y);
     bridge.set_right_x(state.right_x);
     bridge.set_right_y(state.right_y);
-    sync_device_info_launcher(bridge, info, pad.path(), pad.len());
+    sync_device_info_launcher(bridge, info, pad.db(), pad.path(), pad.len());
     bridge.set_pressed_now(state.pressed_now.clone().into());
     bridge.set_last_event_label(state.last_event_label.clone().into());
     bridge.set_last_raw_event(state.last_raw.clone().into());
@@ -299,6 +347,7 @@ fn sync_bridge_pad_launcher(bridge: &slint_ui::launcher::MisterBridge, pad: &Pad
 fn sync_device_info_controller(
     bridge: &slint_ui::controller::MisterBridge,
     info: &PadInfo,
+    db: &ControllerDb,
     js_path: &str,
     pad_count: usize,
 ) {
@@ -308,7 +357,7 @@ fn sync_device_info_controller(
         js_path.to_string()
     };
     bridge.set_device_label(label.into());
-    bridge.set_device_name(info.name.clone().into());
+    bridge.set_device_name(db.display_label(info).into());
     bridge.set_usb_port(info.usb_port.clone().into());
     bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
     bridge.set_serial_id(if info.serial.is_empty() {
@@ -325,6 +374,7 @@ fn sync_device_info_controller(
 fn sync_device_info_launcher(
     bridge: &slint_ui::launcher::MisterBridge,
     info: &PadInfo,
+    db: &ControllerDb,
     js_path: &str,
     pad_count: usize,
 ) {
@@ -334,7 +384,7 @@ fn sync_device_info_launcher(
         js_path.to_string()
     };
     bridge.set_device_label(label.into());
-    bridge.set_device_name(info.name.clone().into());
+    bridge.set_device_name(db.display_label(info).into());
     bridge.set_usb_port(info.usb_port.clone().into());
     bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
     bridge.set_serial_id(if info.serial.is_empty() {
@@ -480,6 +530,7 @@ fn run_launcher_loop(
     let start = Instant::now();
     let mut frames = 0u64;
     let mut nav = LauncherNav::new();
+    let mut setup = SetupNav::new();
     let mut loading_title = String::new();
     let mut launch_started = Instant::now();
     let mut launch_spawned_mister = false;
@@ -492,46 +543,81 @@ fn run_launcher_loop(
         "launcher running {label} — {} pad(s), D-pad to move, A to select, Home to go back...",
         pad.len()
     );
-    sync_bridge_launcher(&app, &pad, &nav, "");
+    if let Some(idx) = pad.index_needing_setup() {
+        let status = pad.db().registry_status(pad.info_at(idx));
+        eprintln!(
+            "controller setup: pad {idx} needs setup ({status:?}) — showing prompt"
+        );
+        setup.open_for(status, idx);
+    }
+    sync_bridge_launcher(&app, &pad, &nav, &setup, "");
     window.request_redraw();
     while secs == 0 || start.elapsed().as_secs() < secs {
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
+        let setup_active = setup.is_active();
 
         if !launching {
             let changed = pad.poll();
             if changed {
                 let state = pad.state();
-                if let Some(mra) = nav.handle_input(&state) {
-                    loading_title = format!("Loading {}…", launcher::game_title(mra));
-                    sync_bridge_launcher(&app, &pad, &nav, &loading_title);
-                    window.request_redraw();
-                    slint::platform::update_timers_and_animations();
-                    window.draw_if_needed(|renderer| {
-                        let region = renderer.render(&mut cached, W);
-                        let _ = region;
-                    });
-                    disp.wait_vsync();
-                    disp.copy_rows(&cached, 0, H);
-
-                    match launcher::execute_game_launch(mra) {
-                        Ok(spawned) => {
-                            launch_started = Instant::now();
-                            launch_spawned_mister = spawned;
+                let active_idx = pad.active_idx();
+                let info = pad.info();
+                if setup_active {
+                    let setup_info = pad.info_at(setup.target_pad_idx);
+                    match setup.handle_input(&state, setup_info, pad.db()) {
+                        SetupAction::None => {}
+                        SetupAction::RegisterNew => {
+                            let idx = setup.target_pad_idx;
+                            if let Err(e) = pad.register_new_at(idx) {
+                                eprintln!("controller setup: register new: {e}");
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("game launch failed: {e}");
-                            loading_title.clear();
-                            launcher::reset_launch();
-                            sync_bridge_launcher(&app, &pad, &nav, "");
-                            recover_launcher_ui(f, &mut launch_spawned_mister);
+                        SetupAction::ClaimExisting { list_index } => {
+                            let idx = setup.target_pad_idx;
+                            if let Err(e) = pad.claim_existing_at(idx, list_index) {
+                                eprintln!("controller setup: claim existing: {e}");
+                            }
                         }
                     }
-                    window.request_redraw();
+                } else {
+                    setup.maybe_open(info, active_idx, pad.db(), true);
+                    if !setup.is_active() {
+                        if let Some(mra) = nav.handle_input(&state) {
+                            loading_title =
+                                format!("Loading {}…", launcher::game_title(mra));
+                            sync_bridge_launcher(
+                                &app, &pad, &nav, &setup, &loading_title,
+                            );
+                            window.request_redraw();
+                            slint::platform::update_timers_and_animations();
+                            window.draw_if_needed(|renderer| {
+                                let region = renderer.render(&mut cached, W);
+                                let _ = region;
+                            });
+                            disp.wait_vsync();
+                            disp.copy_rows(&cached, 0, H);
+
+                            match launcher::execute_game_launch(mra) {
+                                Ok(spawned) => {
+                                    launch_started = Instant::now();
+                                    launch_spawned_mister = spawned;
+                                }
+                                Err(e) => {
+                                    eprintln!("game launch failed: {e}");
+                                    loading_title.clear();
+                                    launcher::reset_launch();
+                                    sync_bridge_launcher(
+                                        &app, &pad, &nav, &setup, "",
+                                    );
+                                    recover_launcher_ui(f, &mut launch_spawned_mister);
+                                }
+                            }
+                            window.request_redraw();
+                        }
+                    }
                 }
-                if changed {
-                    sync_bridge_launcher(&app, &pad, &nav, &loading_title);
-                    window.request_redraw();
-                }
+                sync_bridge_launcher(&app, &pad, &nav, &setup, &loading_title);
+                window.request_redraw();
             }
         } else {
             let _ = pad.poll();
@@ -566,8 +652,8 @@ fn run_launcher_loop(
             }
         });
         disp.wait_vsync();
-        if launching {
-            // Full-screen loading overlay — copy every row.
+        if launching || setup.is_active() {
+            // Full-screen overlay — copy every row.
             disp.copy_rows(&cached, 0, H);
         } else if let Some((y0, y1)) = this_rows {
             disp.copy_rows(&cached, y0, y1);

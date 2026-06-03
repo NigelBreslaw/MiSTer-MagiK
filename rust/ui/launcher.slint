@@ -1,5 +1,6 @@
 import { MisterBridge } from "mister_bridge.slint";
 import { ControllerPanel } from "controller_test.slint";
+import { SetupOverlay } from "controller_setup.slint";
 import "fonts/DejaVuSans.ttf";
 export { MisterBridge }
 
@@ -115,6 +116,16 @@ export component Launcher inherits Window {
     if MisterBridge.screen-mode == 1 : ControllerPanel {
         width: 100%;
         height: 100%;
+    }
+
+    if MisterBridge.setup-visible : SetupOverlay {
+        width: 100%;
+        height: 100%;
+        phase: MisterBridge.setup-phase;
+        title: MisterBridge.setup-title;
+        subtitle: MisterBridge.setup-subtitle;
+        list-items: MisterBridge.setup-list;
+        list-selected: MisterBridge.setup-selected;
     }
 
     if MisterBridge.loading-message != "": Rectangle {

@@ -55,11 +55,11 @@ enum PadLayout {
     Generic,
 }
 
-impl PadLayout {
-    fn for_device(vendor_id: &str, product_id: &str) -> Self {
-        match (vendor_id, product_id) {
-            ("0x2563", "0x0575") | ("0x0079", "0x0011") => Self::RetroBitA2,
-            _ => Self::Generic,
+impl From<crate::controller_db::ControllerLayout> for PadLayout {
+    fn from(layout: crate::controller_db::ControllerLayout) -> Self {
+        match layout {
+            crate::controller_db::ControllerLayout::RetrobitA2 => Self::RetroBitA2,
+            crate::controller_db::ControllerLayout::Generic => Self::Generic,
         }
     }
 }
@@ -77,6 +77,7 @@ pub struct PadPool {
     pads: Vec<PadReader>,
     merged: PadState,
     active_idx: usize,
+    db: crate::controller_db::ControllerDb,
 }
 
 /// Static metadata read from sysfs / ioctl when the pad is opened.
@@ -98,13 +99,22 @@ pub struct PadInfo {
 }
 
 impl PadPool {
-    /// Open all joystick nodes under `/dev/input/js*`.
+    /// Open all joystick nodes under `/dev/input/js*` and load the controller registry.
     pub fn open_all() -> io::Result<Self> {
+        let mut db = crate::controller_db::ControllerDb::load();
+        eprintln!(
+            "controller db: {} entries from {}",
+            db.len(),
+            db.path()
+        );
         let paths = discover_js_devices();
         let mut pads = Vec::new();
         for path in paths {
-            match PadReader::open_path(&path) {
-                Ok(r) => pads.push(r),
+            match PadReader::open_path_with_db(&path, &db) {
+                Ok(r) => {
+                    db.note_sighting(r.info());
+                    pads.push(r);
+                }
                 Err(e) => eprintln!("pad: skip {path}: {e}"),
             }
         }
@@ -119,7 +129,16 @@ impl PadPool {
             pads,
             merged: PadState::default(),
             active_idx: 0,
+            db,
         })
+    }
+
+    pub fn db(&self) -> &crate::controller_db::ControllerDb {
+        &self.db
+    }
+
+    pub fn db_mut(&mut self) -> &mut crate::controller_db::ControllerDb {
+        &mut self.db
     }
 
     pub fn len(&self) -> usize {
@@ -137,6 +156,56 @@ impl PadPool {
 
     pub fn path(&self) -> &str {
         &self.pads[self.active_idx].path
+    }
+
+    /// Index of the pad that most recently sent input.
+    pub fn active_idx(&self) -> usize {
+        self.active_idx
+    }
+
+    pub fn info_at(&self, idx: usize) -> &PadInfo {
+        &self.pads[idx].info
+    }
+
+    /// First connected pad that has not completed setup (`setup_complete`).
+    pub fn index_needing_setup(&self) -> Option<usize> {
+        self.pads.iter().position(|p| self.db.needs_setup(&p.info))
+    }
+
+    pub fn set_active_idx(&mut self, idx: usize) {
+        if idx < self.pads.len() {
+            self.active_idx = idx;
+        }
+    }
+
+    /// Re-read button layout from the registry after setup changes.
+    pub fn refresh_layouts(&mut self) {
+        for pad in &mut self.pads {
+            pad.refresh_layout(&self.db);
+        }
+    }
+
+    /// Save a new default registry entry for a pad (does not mark setup complete).
+    pub fn register_new_at(&mut self, idx: usize) -> io::Result<()> {
+        let info = self.pads[idx].info.clone();
+        let entry = crate::controller_db::ControllerDb::default_entry(&info);
+        self.db.upsert(&info, entry);
+        self.db.save()?;
+        self.pads[idx].refresh_layout(&self.db);
+        Ok(())
+    }
+
+    /// Bind a pad to an existing registry entry (USB port change).
+    pub fn claim_existing_at(&mut self, idx: usize, list_index: usize) -> io::Result<()> {
+        let info = self.pads[idx].info.clone();
+        let items = self.db.list_entries();
+        let item = items.get(list_index).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "list index out of range")
+        })?;
+        self.db.claim_existing(&info, &item.id)?;
+        self.db.save()?;
+        self.pads[idx].refresh_layout(&self.db);
+        Ok(())
     }
 
     /// Drain all pads; returns true if merged state changed.
@@ -174,10 +243,19 @@ impl PadReader {
     }
 
     pub fn open_path(path: &str) -> io::Result<Self> {
+        let db = crate::controller_db::ControllerDb::load();
+        Self::open_path_with_db(path, &db)
+    }
+
+    fn open_path_with_db(
+        path: &str,
+        db: &crate::controller_db::ControllerDb,
+    ) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
         let info = read_pad_info(path, &file)?;
-        let layout = PadLayout::for_device(&info.vendor_id, &info.product_id);
+        let layout = PadLayout::from(db.layout_for(&info));
+        db.log_pad_status(&info, path);
         eprintln!(
             "pad: opened {path} ({info}) layout={layout:?}",
             info = format!(
@@ -196,6 +274,10 @@ impl PadReader {
 
     pub fn info(&self) -> &PadInfo {
         &self.info
+    }
+
+    fn refresh_layout(&mut self, db: &crate::controller_db::ControllerDb) {
+        self.layout = PadLayout::from(db.layout_for(&self.info));
     }
 
     pub fn state(&self) -> &PadState {
