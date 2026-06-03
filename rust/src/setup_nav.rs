@@ -1,7 +1,7 @@
 //! Controller setup flow — detect unknown / moved pads and offer rebinding.
 
 use crate::controller_db::{ControllerDb, PadRegistryStatus};
-use crate::input::{PadInfo, PadState};
+use crate::input::{layout_profile_name, PadInfo, PadState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupPhase {
@@ -12,6 +12,8 @@ pub enum SetupPhase {
     NewOrExisting = 2,
     /// Scroll list of saved controllers and confirm.
     PickExisting = 3,
+    /// Show everything we know about this pad (design / configure step).
+    Configure = 4,
 }
 
 pub struct SetupNav {
@@ -87,6 +89,7 @@ impl SetupNav {
             SetupPhase::Detected => "New input detected".into(),
             SetupPhase::NewOrExisting => "Is this a new controller?".into(),
             SetupPhase::PickExisting => "Select your controller".into(),
+            SetupPhase::Configure => "Controller setup".into(),
         }
     }
 
@@ -114,6 +117,111 @@ impl SetupNav {
                 "Choose which saved controller is plugged in at {}",
                 info.usb_port
             ),
+            SetupPhase::Configure => String::new(),
+        }
+    }
+
+    /// Label/value rows for the configure screen.
+    pub fn configure_fields(
+        info: &PadInfo,
+        js_path: &str,
+        db: &ControllerDb,
+    ) -> Vec<(String, String)> {
+        let status = db.registry_status(info);
+        let logical_id = ControllerDb::logical_id(info);
+        let inferred_kind = ControllerDb::infer_kind(info);
+        let input_profile = layout_profile_name(info);
+
+        let mut rows = vec![
+            ("Device".into(), js_path.to_string()),
+            ("USB port".into(), info.usb_port.clone()),
+            ("Kernel name".into(), info.name.clone()),
+            (
+                "Vendor ID".into(),
+                if info.vendor_id.is_empty() {
+                    "(unknown)".into()
+                } else {
+                    info.vendor_id.clone()
+                },
+            ),
+            (
+                "Product ID".into(),
+                if info.product_id.is_empty() {
+                    "(unknown)".into()
+                } else {
+                    info.product_id.clone()
+                },
+            ),
+            (
+                "Serial".into(),
+                if info.serial.is_empty() {
+                    "(none)".into()
+                } else {
+                    info.serial.clone()
+                },
+            ),
+            (
+                "phys".into(),
+                if info.phys.is_empty() {
+                    "(none)".into()
+                } else {
+                    info.phys.clone()
+                },
+            ),
+            ("Logical ID".into(), logical_id),
+            ("Registry status".into(), status.as_str().into()),
+            (
+                "Inferred type".into(),
+                inferred_kind.as_str().into(),
+            ),
+            ("Input profile".into(), input_profile.into()),
+            ("js buttons".into(), info.js_buttons.to_string()),
+            ("js axes".into(), info.js_axes.to_string()),
+            ("evdev keys".into(), info.evdev_key_count.to_string()),
+            ("evdev abs axes".into(), info.evdev_abs_count.to_string()),
+            (
+                "Capture button".into(),
+                if info.capture_available {
+                    "yes".into()
+                } else {
+                    "no".into()
+                },
+            ),
+        ];
+
+        if let Some(entry) = db.get(info) {
+            rows.push(("Saved label".into(), entry.label.clone()));
+            rows.push((
+                "Saved type".into(),
+                entry.kind.as_str().into(),
+            ));
+            rows.push((
+                "Setup complete".into(),
+                if entry.setup_complete { "yes" } else { "no" }.into(),
+            ));
+            rows.push((
+                "Last USB port".into(),
+                if entry.last_usb_port.is_empty() {
+                    "(none)".into()
+                } else {
+                    entry.last_usb_port.clone()
+                },
+            ));
+        }
+
+        rows
+    }
+
+    pub fn configure_live_hint(state: &PadState) -> String {
+        if state.last_event_label.is_empty() {
+            "Press any button on this controller to test input".into()
+        } else if state.pressed_now.is_empty() {
+            format!("Last input: {}", state.last_event_label)
+        } else {
+            format!(
+                "Held: {}  ·  Last: {}",
+                state.pressed_now, state.last_event_label
+            )
         }
     }
 
@@ -139,6 +247,7 @@ impl SetupNav {
             SetupPhase::Detected => self.handle_detected(now, info),
             SetupPhase::NewOrExisting => self.handle_new_or_existing(now, db),
             SetupPhase::PickExisting => self.handle_pick_existing(now, db),
+            SetupPhase::Configure => SetupAction::None,
             SetupPhase::None => SetupAction::None,
         };
 
@@ -153,8 +262,9 @@ impl SetupNav {
         if self.trigger_status == PadRegistryStatus::MovedPort {
             self.phase = SetupPhase::NewOrExisting;
             self.list_index = 0;
+        } else {
+            self.phase = SetupPhase::Configure;
         }
-        // Unknown / PendingSetup — stay in setup; wizard TBD. Do not write DB yet.
         SetupAction::None
     }
 
@@ -169,7 +279,7 @@ impl SetupNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             if self.list_index == 0 {
-                self.phase = SetupPhase::None;
+                self.phase = SetupPhase::Configure;
                 SetupAction::RegisterNew
             } else if db.is_empty() {
                 SetupAction::None
@@ -198,7 +308,7 @@ impl SetupNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             let idx = self.list_index;
-            self.phase = SetupPhase::None;
+            self.phase = SetupPhase::Configure;
             SetupAction::ClaimExisting { list_index: idx }
         } else {
             SetupAction::None

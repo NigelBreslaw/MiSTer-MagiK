@@ -49,19 +49,43 @@ pub struct PadState {
 /// How raw js button/axis indices map onto [`PadState`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PadLayout {
-    /// Retro-bit 2563:0575 (A2) — D-pad on axes 4/5, SNES face order.
-    RetroBitA2,
-    /// Unknown pads: hat 6/7, d-pad 4/5, stick-as-dpad, common btn order.
+    /// D-pad reported on axes 4/5 (common on some 2.4 GHz dongles).
+    DpadAxes45,
+    /// Fallback: hat 6/7, d-pad 4/5, stick-as-dpad, common btn order.
     Generic,
 }
 
-impl From<crate::controller_db::ControllerLayout> for PadLayout {
-    fn from(layout: crate::controller_db::ControllerLayout) -> Self {
-        match layout {
-            crate::controller_db::ControllerLayout::RetrobitA2 => Self::RetroBitA2,
-            crate::controller_db::ControllerLayout::Generic => Self::Generic,
+impl PadLayout {
+    /// Best-effort profile until the setup wizard saves a per-controller map.
+    fn guess(info: &PadInfo) -> Self {
+        match (
+            strip_hex_prefix(&info.vendor_id).as_str(),
+            strip_hex_prefix(&info.product_id).as_str(),
+        ) {
+            ("2563", "0575") | ("0079", "0011") => Self::DpadAxes45,
+            _ => Self::Generic,
         }
     }
+
+    pub fn profile_name(self) -> &'static str {
+        match self {
+            Self::DpadAxes45 => "dpad_axes_4_5",
+            Self::Generic => "generic",
+        }
+    }
+}
+
+/// Name of the input profile used to decode js events for this pad.
+pub fn layout_profile_name(info: &PadInfo) -> &'static str {
+    PadLayout::guess(info).profile_name()
+}
+
+fn strip_hex_prefix(raw: &str) -> String {
+    raw.trim()
+        .strip_prefix("0x")
+        .or_else(|| raw.trim().strip_prefix("0X"))
+        .unwrap_or(raw.trim())
+        .to_ascii_lowercase()
 }
 
 pub struct PadReader {
@@ -178,10 +202,18 @@ impl PadPool {
         }
     }
 
+    pub fn path_at(&self, idx: usize) -> &str {
+        &self.pads[idx].path
+    }
+
+    pub fn state_at(&self, idx: usize) -> &PadState {
+        &self.pads[idx].state
+    }
+
     /// Re-read button layout from the registry after setup changes.
     pub fn refresh_layouts(&mut self) {
         for pad in &mut self.pads {
-            pad.refresh_layout(&self.db);
+            pad.refresh_layout();
         }
     }
 
@@ -191,7 +223,7 @@ impl PadPool {
         let entry = crate::controller_db::ControllerDb::default_entry(&info);
         self.db.upsert(&info, entry);
         self.db.save()?;
-        self.pads[idx].refresh_layout(&self.db);
+        self.pads[idx].refresh_layout();
         Ok(())
     }
 
@@ -204,7 +236,7 @@ impl PadPool {
         })?;
         self.db.claim_existing(&info, &item.id)?;
         self.db.save()?;
-        self.pads[idx].refresh_layout(&self.db);
+        self.pads[idx].refresh_layout();
         Ok(())
     }
 
@@ -254,7 +286,7 @@ impl PadReader {
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
         let info = read_pad_info(path, &file)?;
-        let layout = PadLayout::from(db.layout_for(&info));
+        let layout = PadLayout::guess(&info);
         db.log_pad_status(&info, path);
         eprintln!(
             "pad: opened {path} ({info}) layout={layout:?}",
@@ -276,8 +308,8 @@ impl PadReader {
         &self.info
     }
 
-    fn refresh_layout(&mut self, db: &crate::controller_db::ControllerDb) {
-        self.layout = PadLayout::from(db.layout_for(&self.info));
+    fn refresh_layout(&mut self) {
+        self.layout = PadLayout::guess(&self.info);
     }
 
     pub fn state(&self) -> &PadState {
@@ -317,12 +349,12 @@ impl PadReader {
 impl PadState {
     fn apply_event(&mut self, layout: PadLayout, event_type: u8, number: u8, value: i16) -> bool {
         match layout {
-            PadLayout::RetroBitA2 => self.apply_event_retrobit_a2(event_type, number, value),
+            PadLayout::DpadAxes45 => self.apply_event_dpad_axes_45(event_type, number, value),
             PadLayout::Generic => self.apply_event_generic(event_type, number, value),
         }
     }
 
-    fn apply_event_retrobit_a2(&mut self, event_type: u8, number: u8, value: i16) -> bool {
+    fn apply_event_dpad_axes_45(&mut self, event_type: u8, number: u8, value: i16) -> bool {
         self.last_raw = format!("type={event_type} num={number} val={value}");
         let changed = match event_type {
             JS_EVENT_BUTTON => {

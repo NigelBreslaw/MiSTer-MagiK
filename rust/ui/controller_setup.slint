@@ -1,17 +1,42 @@
 // Controller setup overlay — new pad detection and USB port change rebinding.
+component ConfigRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 24px;
+    padding: 6px;
+
+    Text {
+        text: label;
+        color: #9080a8;
+        font-size: 22px;
+        min-width: 260px;
+        horizontal-alignment: left;
+    }
+
+    Text {
+        text: value;
+        color: #e8e0f0;
+        font-size: 22px;
+        horizontal-alignment: left;
+        wrap: word-wrap;
+    }
+}
+
 export component SetupOverlay inherits Rectangle {
     in property <int> phase;
-    // 1=detected, 2=new-or-existing, 3=pick-existing
+    // 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure
     in property <string> title;
     in property <string> subtitle;
     in property <[string]> list-items;
     in property <int> list-selected;
+    in property <[string]> config-labels;
+    in property <[string]> config-values;
 
     background: #1a1424e0;
 
     VerticalLayout {
-        padding: 64px;
-        spacing: 32px;
+        padding: 48px;
+        spacing: 24px;
         alignment: center;
 
         Text {
@@ -22,7 +47,7 @@ export component SetupOverlay inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        Text {
+        if phase != 4 : Text {
             text: subtitle;
             color: #9080a8;
             font-size: 26px;
@@ -93,10 +118,48 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
+        if phase == 4 : VerticalLayout {
+            spacing: 16px;
+            vertical-stretch: 1;
+
+            Text {
+                text: subtitle;
+                color: #06d6a0;
+                font-size: 22px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                width: 1100px;
+                vertical-stretch: 1;
+                border-radius: 12px;
+                border-width: 2px;
+                border-color: #5c4a72;
+                background: #1e1828;
+
+                Flickable {
+                    width: 100%;
+                    height: 100%;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 2px;
+
+                        for label[i] in config-labels : ConfigRow {
+                            label: label;
+                            value: config-values[i];
+                        }
+                    }
+                }
+            }
+        }
+
         Text {
             text: phase == 1 ? "Press any button to continue"
                 : phase == 2 ? "D-pad: choose  ·  A: confirm"
                 : phase == 3 ? "D-pad: choose  ·  A: confirm"
+                : phase == 4 ? "Mapping wizard coming next"
                 : "";
             color: #706080;
             font-size: 20px;

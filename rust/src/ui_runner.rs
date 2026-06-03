@@ -255,9 +255,29 @@ fn sync_setup_bridge(
     bridge.set_setup_phase(setup.phase as i32);
     if active {
         bridge.set_setup_title(setup.title().into());
-        bridge.set_setup_subtitle(setup.subtitle(info, db).into());
         bridge.set_setup_selected(setup.list_index as i32);
-        if setup.phase == SetupPhase::PickExisting {
+        let idx = setup.target_pad_idx;
+        let js_path = pad.path_at(idx);
+
+        if setup.phase == SetupPhase::Configure {
+            let fields = SetupNav::configure_fields(info, js_path, db);
+            let labels: Vec<SharedString> =
+                fields.iter().map(|(k, _)| k.clone().into()).collect();
+            let values: Vec<SharedString> =
+                fields.iter().map(|(_, v)| v.clone().into()).collect();
+            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(labels)));
+            bridge.set_setup_config_values(ModelRc::new(VecModel::from(values)));
+            bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            let live = SetupNav::configure_live_hint(pad.state_at(idx));
+            bridge.set_setup_subtitle(live.into());
+        } else if setup.phase == SetupPhase::PickExisting {
+            bridge.set_setup_subtitle(setup.subtitle(info, db).into());
+            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
+                Vec::<SharedString>::new(),
+            )));
+            bridge.set_setup_config_values(ModelRc::new(VecModel::from(
+                Vec::<SharedString>::new(),
+            )));
             let rows: Vec<SharedString> = db
                 .list_entries()
                 .iter()
@@ -272,7 +292,14 @@ fn sync_setup_bridge(
                 .collect();
             bridge.set_setup_list(ModelRc::new(VecModel::from(rows)));
         } else {
+            bridge.set_setup_subtitle(setup.subtitle(info, db).into());
             bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
+                Vec::<SharedString>::new(),
+            )));
+            bridge.set_setup_config_values(ModelRc::new(VecModel::from(
+                Vec::<SharedString>::new(),
+            )));
         }
     }
 }
@@ -558,66 +585,73 @@ fn run_launcher_loop(
 
         if !launching {
             let changed = pad.poll();
-            if changed {
-                let state = pad.state();
-                let active_idx = pad.active_idx();
-                let info = pad.info();
-                if setup_active {
-                    let setup_info = pad.info_at(setup.target_pad_idx);
-                    match setup.handle_input(&state, setup_info, pad.db()) {
-                        SetupAction::None => {}
-                        SetupAction::RegisterNew => {
-                            let idx = setup.target_pad_idx;
-                            if let Err(e) = pad.register_new_at(idx) {
-                                eprintln!("controller setup: register new: {e}");
+            if setup_active || changed {
+                if changed {
+                    let state = pad.state();
+                    let active_idx = pad.active_idx();
+                    let info = pad.info();
+                    if setup_active {
+                        let setup_info = pad.info_at(setup.target_pad_idx);
+                        match setup.handle_input(&state, setup_info, pad.db()) {
+                            SetupAction::None => {}
+                            SetupAction::RegisterNew => {
+                                let idx = setup.target_pad_idx;
+                                if let Err(e) = pad.register_new_at(idx) {
+                                    eprintln!("controller setup: register new: {e}");
+                                }
+                            }
+                            SetupAction::ClaimExisting { list_index } => {
+                                let idx = setup.target_pad_idx;
+                                if let Err(e) = pad.claim_existing_at(idx, list_index) {
+                                    eprintln!("controller setup: claim existing: {e}");
+                                }
                             }
                         }
-                        SetupAction::ClaimExisting { list_index } => {
-                            let idx = setup.target_pad_idx;
-                            if let Err(e) = pad.claim_existing_at(idx, list_index) {
-                                eprintln!("controller setup: claim existing: {e}");
-                            }
-                        }
-                    }
-                } else {
-                    setup.maybe_open(info, active_idx, pad.db(), true);
-                    if !setup.is_active() {
-                        if let Some(mra) = nav.handle_input(&state) {
-                            loading_title =
-                                format!("Loading {}…", launcher::game_title(mra));
-                            sync_bridge_launcher(
-                                &app, &pad, &nav, &setup, &loading_title,
-                            );
-                            window.request_redraw();
-                            slint::platform::update_timers_and_animations();
-                            window.draw_if_needed(|renderer| {
-                                let region = renderer.render(&mut cached, W);
-                                let _ = region;
-                            });
-                            disp.wait_vsync();
-                            disp.copy_rows(&cached, 0, H);
+                    } else {
+                        setup.maybe_open(info, active_idx, pad.db(), true);
+                        if !setup.is_active() {
+                            if let Some(mra) = nav.handle_input(&state) {
+                                loading_title =
+                                    format!("Loading {}…", launcher::game_title(mra));
+                                sync_bridge_launcher(
+                                    &app, &pad, &nav, &setup, &loading_title,
+                                );
+                                window.request_redraw();
+                                slint::platform::update_timers_and_animations();
+                                window.draw_if_needed(|renderer| {
+                                    let region = renderer.render(&mut cached, W);
+                                    let _ = region;
+                                });
+                                disp.wait_vsync();
+                                disp.copy_rows(&cached, 0, H);
 
-                            match launcher::execute_game_launch(mra) {
-                                Ok(spawned) => {
-                                    launch_started = Instant::now();
-                                    launch_spawned_mister = spawned;
+                                match launcher::execute_game_launch(mra) {
+                                    Ok(spawned) => {
+                                        launch_started = Instant::now();
+                                        launch_spawned_mister = spawned;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("game launch failed: {e}");
+                                        loading_title.clear();
+                                        launcher::reset_launch();
+                                        sync_bridge_launcher(
+                                            &app, &pad, &nav, &setup, "",
+                                        );
+                                        recover_launcher_ui(f, &mut launch_spawned_mister);
+                                    }
                                 }
-                                Err(e) => {
-                                    eprintln!("game launch failed: {e}");
-                                    loading_title.clear();
-                                    launcher::reset_launch();
-                                    sync_bridge_launcher(
-                                        &app, &pad, &nav, &setup, "",
-                                    );
-                                    recover_launcher_ui(f, &mut launch_spawned_mister);
-                                }
+                                window.request_redraw();
                             }
-                            window.request_redraw();
                         }
                     }
                 }
-                sync_bridge_launcher(&app, &pad, &nav, &setup, &loading_title);
-                window.request_redraw();
+                if setup_active {
+                    sync_bridge_launcher(&app, &pad, &nav, &setup, &loading_title);
+                    window.request_redraw();
+                } else if changed {
+                    sync_bridge_launcher(&app, &pad, &nav, &setup, &loading_title);
+                    window.request_redraw();
+                }
             }
         } else {
             let _ = pad.poll();
