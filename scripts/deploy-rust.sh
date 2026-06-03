@@ -25,5 +25,6 @@ MISTER_PASS="${MISTER_PASS:-1}" \
 
 echo "==> Deployed. Run on device (with menu SIGSTOPped so we own the SPI bus):"
 echo "    MP=\$(pidof MiSTer); kill -STOP \$MP"
-echo "    $REMOTE ui 20"
+echo "    $REMOTE ui demo 20"
+echo "    $REMOTE scenes   # … list_scroll (std-widgets ListView)"
 echo "    kill -CONT \$MP"

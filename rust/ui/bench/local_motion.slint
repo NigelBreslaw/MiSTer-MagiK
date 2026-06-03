@@ -1,0 +1,40 @@
+// Small moving region only — localized dirty rows (typical game HUD).
+import "../fonts/DejaVuSans.ttf";
+
+export component LocalMotion inherits Window {
+    width: 1920px;
+    height: 1080px;
+    background: #0b1020;
+    default-font-family: "DejaVu Sans";
+
+    property <duration> tick: animation-tick();
+    property <float> phase: Math.mod(tick / 1ms, 2000) / 2000;
+
+    Text {
+        x: 64px;
+        y: 48px;
+        text: "bench: local_motion";
+        font-size: 44px;
+        color: #e8ecff;
+    }
+
+    // Static chrome (most of the screen never repaints).
+    Rectangle {
+        x: 64px;
+        y: 160px;
+        width: parent.width - 128px;
+        height: parent.height - 220px;
+        background: #131c33;
+        border-radius: 12px;
+    }
+
+    // Small orb travels along the top edge of the panel.
+    Rectangle {
+        width: 96px;
+        height: 96px;
+        y: 180px;
+        x: 80px + (parent.width - 256px) * root.phase;
+        border-radius: 48px;
+        background: #ff5d73;
+    }
+}
