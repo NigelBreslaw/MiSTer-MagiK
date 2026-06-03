@@ -49,3 +49,5 @@ One row **per scene**. Compare the same `scene` across toolchain labels (A0 vs A
 | A3 | A2 | A1 rustflags |
 
 Run **A0** before editing toolchain files.
+
+**Results (2026-06-03):** see [`A0-baseline.md`](A0-baseline.md), [`A1-neon.md`](A1-neon.md), [`A2-fat-lto.md`](A2-fat-lto.md), [`A3-combined.md`](A3-combined.md). Repo ships **A3** settings unless reverted for faster dev builds.

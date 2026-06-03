@@ -27,4 +27,4 @@ codegen-units = 1
 
 **PNGs:** `A2-<scene>-fb.png`. **TSV:** `results.tsv` rows `A2`.
 
-**Next:** A3 — re-add A1 rustflags **and** keep A2 `Cargo.toml` settings; bench as `A3`.
+**Next:** ~~A3~~ done → [`A3-combined.md`](A3-combined.md).
