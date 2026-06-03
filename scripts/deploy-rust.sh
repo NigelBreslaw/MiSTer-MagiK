@@ -43,5 +43,5 @@ MISTER_PASS="${MISTER_PASS:-1}" \
 
 echo "==> Deployed ($PROFILE)."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — inittab handoff)"
-echo "    Dev / bench:     killall MiSTer; $REMOTE ui launcher 60  (cold-spawn games)"
+echo "    Dev / bench:     kill -9 \$(pidof MiSTer); $REMOTE ui launcher 60"
 echo "    Restore stock:   scripts/restore-stock-boot.sh"
