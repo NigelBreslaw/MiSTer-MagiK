@@ -38,5 +38,13 @@ export global MisterBridge {
     in-out property <int> selected-index;
     // Non-empty while launching a game — full-screen loading overlay.
     in-out property <string> loading-message;
+    // Controller setup overlay (see controller_setup.slint).
+    in-out property <bool> setup-visible;
+    // 0=hidden, 1=detected, 2=new-or-existing, 3=pick-existing
+    in-out property <int> setup-phase;
+    in-out property <string> setup-title;
+    in-out property <string> setup-subtitle;
+    in-out property <[string]> setup-list;
+    in-out property <int> setup-selected;
     callback quit-requested();
 }
