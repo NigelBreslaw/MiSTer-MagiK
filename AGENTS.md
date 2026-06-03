@@ -138,7 +138,8 @@ rust/                   native armv7 frontend — see §12
   src/main.rs           subcommands: read | fb | ui
   src/fpga.rs           SPI + fb_enable_direct
   src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy
-  build-arm.sh          cross build wrapper
+  build-arm.sh          cross build (--fast | --device); see rust/BUILD.md
+  BUILD.md              release vs release-device profiles
 ```
 
 On the device the binary lives at `/media/fat/mister-magic/mister-magic-fb`.
@@ -151,11 +152,14 @@ Always go through `uv` on the host; always use **paramiko** (`mister_ssh.py`)
 for device comms — see §8 for why `expect`/raw `ssh` was unreliable.
 
 ```bash
-# Build + deploy the Rust binary (~820 KB)
+# Build + deploy (default = release-device / A3, ~1.6 MB)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
-# Or build only:
-rust/build-arm.sh
+# Fast daily build + deploy (thin LTO, ~3 min clean)
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
+
+# Build only: rust/build-arm.sh  |  rust/build-arm.sh --device
+# Profiles: rust/BUILD.md
 
 # Run on device (pause menu so we own the SPI bus — see §3):
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
@@ -413,8 +417,8 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
   (1.96 at time of writing) in `rust/rust-toolchain.toml`, with a matching
   `stable-x86_64-unknown-linux-gnu` installed (`--force-non-host`) for the
   emulated cross container.
-- `profile.release` uses `opt-level = 3` (not `"z"`): the software renderer is
-  hot. Binary is ~820KB incl. embedded font.
+- **Two release profiles** (`rust/BUILD.md`): `release` (fast daily, thin LTO)
+  and `release-device` (fat LTO + NEON, ship to MiSTer). `opt-level = 3` on both.
 
 **Known follow-ups for the real frontend:** the copy is still ~half the screen
 because the demo's gradient bar spans full width (full-width dirty rows). A real
@@ -456,12 +460,16 @@ Apple-Silicon host runs on the MiSTer (`arch=arm, os=linux, glibc 2.31`).
 **Build & deploy:**
 
 ```bash
-scripts/deploy-rust.sh                   # build + deploy in one step
+scripts/deploy-rust.sh                   # release-device (full MiSTer build)
+scripts/deploy-rust.sh --fast            # release (faster compile)
 # or manually:
-rust/build-arm.sh
+rust/build-arm.sh --device
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
-  put rust/target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb /media/fat/mister-magic/mister-magic-fb
+  put rust/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb \
+  /media/fat/mister-magic/mister-magic-fb
 ```
+
+See **`rust/BUILD.md`** for profile table and bench mapping (A0 ≈ `release`, A3 ≈ `release-device`).
 
 **One-time host setup (done):**
 

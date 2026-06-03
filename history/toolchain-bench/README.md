@@ -50,4 +50,6 @@ One row **per scene**. Compare the same `scene` across toolchain labels (A0 vs A
 
 Run **A0** before editing toolchain files.
 
-**Results (2026-06-03):** see [`A0-baseline.md`](A0-baseline.md), [`A1-neon.md`](A1-neon.md), [`A2-fat-lto.md`](A2-fat-lto.md), [`A3-combined.md`](A3-combined.md). Repo ships **A3** settings unless reverted for faster dev builds.
+**Results (2026-06-03):** see [`A0-baseline.md`](A0-baseline.md), [`A1-neon.md`](A1-neon.md), [`A2-fat-lto.md`](A2-fat-lto.md), [`A3-combined.md`](A3-combined.md).
+
+**Profiles (post-bench):** daily = `rust/build-arm.sh` → Cargo `release` (A0). Ship to MiSTer = `build-arm.sh --device` / `deploy-rust.sh` → `release-device` (A3). See [`rust/BUILD.md`](../../rust/BUILD.md). Bench: add `--device` to `bench-toolchain.sh` for A3-class builds.

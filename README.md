@@ -32,9 +32,10 @@ rust/                         native frontend crate (mister-magic-fb)
   src/main.rs                 subcommands: read | fb | ui
   src/fpga.rs                 FPGA SPI + fb_enable_direct
   src/fb.rs                   /dev/fb0 mmap, vsync, dirty-row copy
-  build-arm.sh                cross build wrapper
+  build-arm.sh                cross build (--fast | --device)
+  BUILD.md                    release vs release-device profiles
 scripts/
-  deploy-rust.sh              build + scp binary to MiSTer
+  deploy-rust.sh              build + deploy (default: full release)
   mister_ssh.py               reliable paramiko SSH helper
   capture-fb.sh               grab /dev/fb0 → PNG
   raw_to_png.py               framebuffer dump → PNG (stdlib only)
@@ -53,14 +54,13 @@ Toolchain experiments: `scripts/bench-toolchain.sh` logs to
 [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md)).
 
 ```bash
-# One-shot build + deploy (~820 KB binary)
+# Full MiSTer release (~1.6 MB, fat LTO + NEON) — default
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
-# Or manually:
-rust/build-arm.sh
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
-  put rust/target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb \
-  /media/fat/mister-magic/mister-magic-fb
+# Fast daily build (~1.65 MB, ~3 min clean cross-compile)
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
+
+# See rust/BUILD.md for profiles and paths.
 ```
 
 ## Run on device
