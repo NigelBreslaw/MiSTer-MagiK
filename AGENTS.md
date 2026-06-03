@@ -19,12 +19,16 @@ screen, controller input).
 
 - ✅ **Native Rust frontend** — `mister-magic-fb ui` at locked 60fps, smooth +
   tear-free. See §9.7.
-- ✅ FPGA SPI + `video_fb_enable(1,0)` in `rust/src/fpga.rs`.
-- ✅ Custom Slint `Platform` + dirty-row copy in `rust/src/fb.rs` / `main.rs`.
+- ✅ **Slint launcher** — 2×2 home grid, controller test, arcade launch via
+  `/dev/MiSTer_cmd` (`rust/ui/launcher.slint`, `rust/src/launcher.rs`).
+- ✅ **Production boot** — `scripts/mister-magic/boot.sh` via inittab handoff
+  (MiSTer runs `video_init` first; see §7). Install: `scripts/install-slint-boot.sh`.
+- ✅ FPGA SPI + `fb_enable_direct` + `set_vga_fb` in `rust/src/fpga.rs`.
+- ✅ Gamepad input via Linux js API (`rust/src/input.rs`).
 
 See `history/2026-5-2/framebuffer-experiments.md` for the exploration path.
 
-Remaining work: input, live-mode geometry, shipping as a `main=` boot binary (§7).
+Remaining work: live-mode geometry, in-game settings strategy (§7).
 
 ---
 
@@ -94,8 +98,9 @@ did not. Only `video_fb_enable(1, 0)` (FPGA SPI, main-binary only) makes buffer
 - Stock `reference/Main_MiSTer/MiSTer.ini:381` documents `;main=some_binary_file`.
 
 Setting `main=some/path/to/binary` makes `/media/fat/MiSTer` re-exec that binary
-at boot instead of the stock menu. **Future production path** for this project
-(§7); we don't use it yet — dev runs use the SIGSTOP dance (§5).
+at boot instead of the stock menu. **We do not use `main=` for our binary** — it
+runs before `video_init()` and the TV gets no HDMI signal (§7). Production boot
+uses `boot.sh` via inittab: stock MiSTer first, then hand off to Slint.
 
 ### 3.3 Engineering takeaway
 
@@ -107,10 +112,10 @@ To show Slint on HDMI we need:
 3. **A render loop** — custom Slint `Platform`, vsync pacing, dirty-row copy into
    write-combined `/dev/fb0` (§9.7).
 
-We issue the SPI sequence ourselves from Rust (`rust/src/fpga.rs`). The stock
-`MiSTer` process normally owns the SPI bus; for dev we `kill -STOP $(pidof MiSTer)`
-first (§8). A `main=` boot binary would own the bus from the start — no pause
-dance, plus proper VT/fbcon setup (still TODO).
+We issue the SPI sequence ourselves from Rust (`rust/src/fpga.rs`). Stock
+`MiSTer` must not run alongside Slint (menu wallpaper flash, gamepad grab).
+Production: `boot.sh` kills MiSTer after `video_init`. Dev: `killall MiSTer`
+before manual runs (§5).
 
 **Zaparoo is not used and not required.** It was an early launch path (forked
 `Main_MiSTer` that calls `video_fb_enable` + spawns a frontend). We proved the
@@ -123,8 +128,11 @@ fork is unnecessary by issuing the same SPI from our own process (§9.5).
 ```
 pyproject.toml          host tooling only (uv + paramiko for mister_ssh.py)
 scripts/
-  deploy-rust.sh        build + deploy mister-magic-fb to /media/fat/mister-magic/
-  mister_ssh.py         paramiko helper — run/reboot/reboot-wait/wait/put/get
+  deploy-rust.sh            build + deploy binary + boot.sh
+  install-slint-boot.sh     one-time Slint boot via inittab handoff
+  restore-stock-boot.sh     revert to stock MiSTer menu
+  mister-magic/boot.sh      on-device: MiSTer video_init → Slint launcher
+  mister_ssh.py             paramiko helper — run/reboot/reboot-wait/wait/put/get
   capture-fb.sh         grab /dev/fb0 → PNG (via mister_ssh + raw_to_png.py)
   raw_to_png.py         stdlib-only BGRX dump → PNG
   audit-mister.sh       device sanity check (+ Cortex-A9 / NEON cpuinfo for A1)
@@ -132,12 +140,14 @@ reference/              READ-ONLY clones (gitignored) — see §6
 build/                  gitignored framebuffer PNG dumps
 history/                experiment notes (framebuffer-experiments.md, screenshots)
 rust/                   native armv7 frontend — see §12
-  ui/app.slint          demo UI
-  ui/bench/*.slint      toolchain/visual bench scenes (incl. list_scroll)
+  ui/launcher.slint     home grid + embedded controller test
+  ui/controller_test.slint
+  ui/bench/*.slint      perf bench scenes
   ui/fonts/DejaVuSans.ttf
-  src/main.rs           subcommands: read | fb | ui
-  src/fpga.rs           SPI + fb_enable_direct
-  src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy
+  src/main.rs           read | fb | ui | input | scenes
+  src/launcher.rs       nav state machine + launch_mra
+  src/fpga.rs           SPI + fb_enable_direct + set_vga_fb
+  src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy, boot retry
   build-arm.sh          cross build (--fast | --device); see rust/BUILD.md
   BUILD.md              release vs release-device profiles
 ```
@@ -161,9 +171,18 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 # Build only: rust/build-arm.sh  |  rust/build-arm.sh --device
 # Profiles: rust/BUILD.md
 
-# Run on device (pause menu so we own the SPI bus — see §3):
+# One-time: boot straight into Slint launcher (see §7 — not via main=)
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
+
+# Re-deploy binary + boot.sh after code changes
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
+
+# Dev run (kill MiSTer for gamepad — see §8)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
-  'MP=$(pidof MiSTer); kill -STOP $MP; /media/fat/mister-magic/mister-magic-fb ui 20; kill -CONT $MP'
+  'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magic/mister-magic-fb ui launcher 60'
+
+# Restore stock MiSTer menu boot
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
 
 # Device comms
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run "uname -a"
@@ -208,28 +227,33 @@ To refresh: `git -C reference/<repo> pull` (or re-clone `--depth 1`).
 
 ## 7. Architecture & roadmap
 
-### Current — dev binary (`mister-magic-fb`)
+### Current — production boot + dev binary
 
-Cross-built Rust binary deployed to `/media/fat/mister-magic/mister-magic-fb`.
-Subcommands: `read` (SPI diagnostics), `fb` (geometry test pattern), `ui`
-(Slint demo, locked 60fps).
+**Production:** `/etc/inittab` runs `scripts/mister-magic/boot.sh` (installed by
+`install-slint-boot.sh`). Flow:
 
-Dev workflow pauses the stock menu to own the SPI bus (§5). The binary calls
-`fb_enable_direct(0, …)` then runs the Slint render loop (§9.7). This is proven
-end-to-end on HDMI.
+1. Start stock `/media/fat/MiSTer` (must **not** have `main=mister-magic-fb` in INI).
+2. Wait for `video_init()` — 1080p fb in sysfs.
+3. `killall MiSTer`, exec `mister-magic-fb ui launcher 0`.
 
-### Next — `main=` boot binary
+**Why not `main=` on our binary?** `user_io_init` calls `app_restart(main=…)`
+*before* `video_init()` (HDMI timing, I2C). Result: Slint renders to `/dev/fb0`
+but the TV reports no signal. `set_vga_fb` alone is not enough.
 
-Ship a minimal binary (fork `Main_MiSTer` or standalone stub) as
-`main=mister-magic/...` in `MiSTer.ini` so it boots directly into our frontend:
-owns SPI from the start, sets up VT/fbcon properly, no SIGSTOP dance. Most
-control, most work, must track upstream MiSTer.
+**Dev:** `killall MiSTer` then run `mister-magic-fb ui …` manually (§5).
+
+Cross-built binary at `/media/fat/mister-magic/mister-magic-fb`. Subcommands:
+`read`, `fb`, `ui` (default scene `launcher`), `input`, `scenes`.
+
+Launcher: D-pad nav, A to open controller test or launch arcade games via
+`/dev/MiSTer_cmd`. Core handoff: when MiSTer re-execs us with a `.rbf` argv,
+`main.rs` immediately `execv`s stock MiSTer for gameplay.
 
 ### TODO
 
 - Derive `xoff/yoff`/geometry from the **live** video mode (`rust-livemode`).
-- Controller/keyboard input.
-- ~~fbcon / `KD_GRAPHICS`~~ — `vt.rs` on `ui`/`fb` (static UI may still need more if fbcon clears the buffer).
+- In-game settings: keep stock OSD vs fork Main_MiSTer (see §11).
+- ~~Controller input~~ — basic js API wired; polish mapping / hot-plug.
 
 ---
 
@@ -256,6 +280,8 @@ control, most work, must track upstream MiSTer.
 - **Fonts:** MiSTer has none. The Rust build embeds DejaVu (`rust/ui/fonts/`).
 - **Framebuffer byte order is BGRX** (`rgba 8/16,8/8,8/0`). `raw_to_png.py`
   swaps B/R; keep that in mind for any direct fb work.
+- **Don't use `main=mister-magic-fb`.** Skips `video_init()` → no HDMI signal
+  (§7). Use `boot.sh` inittab handoff instead.
 - **Don't leave the menu paused.** If you `kill -STOP $(pidof MiSTer)` for an
   experiment, always `kill -CONT` it afterwards (or reboot).
 - **Slow SSH after reboot = DHCP, not sshd.** `sshd` listens ~kernel 9 s, but
@@ -429,15 +455,14 @@ UI with localised motion will copy far less. Could also copy only the dirty
 
 ## 10. Current device state & recovery
 
-- **Stock menu** — `MiSTer.ini` has `main=MiSTer` (default). Backup:
-  `/media/fat/MiSTer.ini.bak`.
-- `direct_video=1`, `video_mode=8` (1080p) in `MiSTer.ini` — relevant to fb
-  positioning (see §9.5).
+- **Boot:** `/etc/inittab` → `/media/fat/mister-magic/boot.sh` → Slint launcher.
+  `MiSTer.ini` must **not** set `main=mister-magic/…` (backup:
+  `/media/fat/MiSTer.ini.bak`).
+- `direct_video=1`, `video_mode=8` (1080p) in `MiSTer.ini`.
 - **Static IP `192.168.1.117` (no DHCP).** See §8 for dhcpcd.conf details.
-- Rust binary deployed at `/media/fat/mister-magic/mister-magic-fb` (~820 KB).
-- **Black-screen recovery:** paramiko SSH works even with no usable video. To
-  recover from a bad `main=` experiment: SSH in, re-comment `main=` (or restore
-  `MiSTer.ini.bak`), then `mister_ssh.py reboot`.
+- Binary + boot.sh at `/media/fat/mister-magic/`.
+- **Recovery to stock menu:** `scripts/restore-stock-boot.sh` (or SSH: restore
+  inittab + `MiSTer.ini.bak`, reboot). Works even with no HDMI.
 
 ---
 
@@ -446,9 +471,8 @@ UI with localised motion will copy far less. Could also copy only the dirty
 - **Cleaner fix than the always-on animation** in the demo UI (full-width dirty
   rows). A real UI with localised motion copies less. fbcon may still clobber a
   static frame — investigate `KD_GRAPHICS` / unbind fbcon (see §8).
-- Input: map controller/keyboard to Slint; design an exit key (app runs until
-  killed today).
-- libinput quirks DB is missing — fine for rendering; revisit when wiring input.
+- Return-to-launcher after game reset (without full reboot).
+- libinput quirks DB is missing — js API works; revisit for hot-plug polish.
 
 ---
 
