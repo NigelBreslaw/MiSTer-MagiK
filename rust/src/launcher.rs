@@ -1,13 +1,15 @@
-//! Launcher navigation and arcade game launch via `/dev/MiSTer_cmd`.
+//! Launcher navigation and arcade game launch.
 
 use crate::input::PadState;
 use std::io::Write;
 use std::path::Path;
+use std::process::Command;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::Duration;
 
-const MISTER_BIN: &str = "/media/fat/MiSTer";
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
+const MISTER_BIN: &str = "/media/fat/MiSTer";
 
 pub const GAMES: &[(&str, &str)] = &[
     (
@@ -23,6 +25,11 @@ pub const GAMES: &[(&str, &str)] = &[
         "/media/fat/_Arcade/Galaga (Midway, Set 1).mra",
     ),
 ];
+
+const LAUNCH_IDLE: u8 = 0;
+const LAUNCH_SENT: u8 = 1;
+
+static LAUNCH_STATE: AtomicU8 = AtomicU8::new(LAUNCH_IDLE);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -98,9 +105,9 @@ impl LauncherNav {
                 }
                 1..=3 => {
                     let game_idx = match self.selected {
-                        1 => 0, // Donkey Kong (top-right)
-                        2 => 1, // Pac-Man (bottom-left)
-                        3 => 2, // Galaga (bottom-right)
+                        1 => 0,
+                        2 => 1,
+                        3 => 2,
                         _ => unreachable!(),
                     };
                     Some(GAMES[game_idx].1)
@@ -117,44 +124,117 @@ fn rising(now: bool, prev: bool) -> bool {
     now && !prev
 }
 
-/// Spawn stock MiSTer, send `load_core`, and exit so MiSTer owns the display.
-pub fn launch_mra(mra_path: &str) -> ! {
-    println!("launch_mra: {mra_path}");
+pub fn game_title(mra_path: &str) -> &str {
+    GAMES
+        .iter()
+        .find(|(_, path)| *path == mra_path)
+        .map(|(title, _)| *title)
+        .unwrap_or("Game")
+}
 
-    if !Path::new(mra_path).exists() {
-        eprintln!("MRA not found: {mra_path}");
-        std::process::exit(1);
-    }
-
-    std::process::Command::new(MISTER_BIN)
-        .spawn()
-        .unwrap_or_else(|e| {
-            eprintln!("failed to spawn {MISTER_BIN}: {e}");
-            std::process::exit(1);
-        });
-
-    let fifo = Path::new(CMD_FIFO);
-    for attempt in 0..50 {
-        if fifo.exists() {
-            break;
-        }
-        if attempt == 49 {
-            eprintln!("timed out waiting for {CMD_FIFO}");
-            std::process::exit(1);
+fn wait_for_fifo() -> bool {
+    for _ in 0..50 {
+        if Path::new(CMD_FIFO).exists() {
+            return true;
         }
         thread::sleep(Duration::from_millis(100));
     }
+    false
+}
 
+fn write_load_core(mra_path: &str) -> Result<(), String> {
     let cmd = format!("load_core {mra_path}\n");
-    if let Err(e) = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .write(true)
         .open(CMD_FIFO)
         .and_then(|mut f| f.write_all(cmd.as_bytes()))
-    {
-        eprintln!("failed to write {CMD_FIFO}: {e}");
-        std::process::exit(1);
+        .map_err(|e| format!("failed to write {CMD_FIFO}: {e}"))
+}
+
+fn mister_running() -> bool {
+    Command::new("pidof")
+        .arg("MiSTer")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Stop stock MiSTer so Slint owns SPI, HDMI routing, and evdev (no grab).
+pub fn stop_mister() {
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg("kill -9 $(pidof MiSTer) 2>/dev/null")
+        .status();
+    for _ in 0..30 {
+        if !mister_running() {
+            thread::sleep(Duration::from_millis(50));
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn spawn_mister() -> Result<(), String> {
+    Command::new(MISTER_BIN)
+        .spawn()
+        .map_err(|e| format!("failed to spawn {MISTER_BIN}: {e}"))?;
+    for _ in 0..150 {
+        if Path::new(CMD_FIFO).exists() && mister_running() {
+            thread::sleep(Duration::from_millis(200));
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("timed out waiting for {MISTER_BIN} + {CMD_FIFO}"))
+}
+
+/// True while Slint should keep the loading screen up.
+pub fn launch_in_progress() -> bool {
+    LAUNCH_STATE.load(Ordering::Acquire) == LAUNCH_SENT
+}
+
+/// MiSTer is running an arcade core (argv contains `.rbf`, not `menu.rbf`).
+pub fn mister_running_arcade_core() -> bool {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("pid=$(pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline")
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let cmdline = String::from_utf8_lossy(&output.stdout);
+    cmdline.contains(".rbf") && !cmdline.contains("menu.rbf")
+}
+
+/// Launch via fifo `load_core`. Spawns MiSTer if Slint owns the device (normal boot).
+/// Returns `true` if MiSTer was spawned for this launch (caller should stop it on failure).
+pub fn execute_game_launch(mra_path: &str) -> Result<bool, String> {
+    if !Path::new(mra_path).exists() {
+        return Err(format!("MRA not found: {mra_path}"));
     }
 
-    println!("load_core sent; handing off to MiSTer");
-    std::process::exit(0);
+    let spawned = if mister_running() {
+        false
+    } else {
+        println!("launch: starting {MISTER_BIN} for load_core");
+        spawn_mister()?;
+        true
+    };
+
+    if !wait_for_fifo() {
+        return Err(format!("timed out waiting for {CMD_FIFO}"));
+    }
+
+    println!("launch: load_core {mra_path}");
+    write_load_core(mra_path)?;
+
+    LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
+    Ok(spawned)
+}
+
+pub fn reset_launch() {
+    LAUNCH_STATE.store(LAUNCH_IDLE, Ordering::Release);
 }

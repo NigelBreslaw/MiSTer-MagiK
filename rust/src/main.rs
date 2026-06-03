@@ -1,11 +1,11 @@
 //! Native MiSTer frontend — spike stage.
 //!
-//! Subcommands (run on-device with MiSTer stopped so we own input + SPI):
-//!   read   read & print the live video mode + fb params (UIO_GET_VRES/FB_PAR)
+//! Subcommands:
+//!   read      read & print the live video mode + fb params (UIO_GET_VRES/FB_PAR)
 //!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
-//!   scenes list Slint scene names
-//!   fb     paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
-//!   input  gamepad log / sniff / calibrate
+//!   scenes    list Slint scene names
+//!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
+//!   input     gamepad log / sniff / calibrate
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
 //! Core handoff argv (`.rbf` paths) re-execs stock `/media/fat/MiSTer`.

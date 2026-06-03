@@ -116,4 +116,30 @@ export component Launcher inherits Window {
         width: 100%;
         height: 100%;
     }
+
+    if MisterBridge.loading-message != "": Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #1a1424;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 24px;
+
+            Text {
+                text: MisterBridge.loading-message;
+                color: #e8e0f0;
+                font-size: 42px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Please wait…";
+                color: #9080a8;
+                font-size: 24px;
+                horizontal-alignment: center;
+            }
+        }
+    }
 }

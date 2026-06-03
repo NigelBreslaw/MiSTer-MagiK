@@ -22,7 +22,7 @@ The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
 rust/                         native frontend (mister-magic-fb)
   ui/launcher.slint           2×2 home grid + game launch
   ui/controller_test.slint    pad test scene
-  src/launcher.rs             nav + MiSTer_cmd game launch
+  src/launcher.rs             nav + fifo load_core game launch
   src/fpga.rs                 SPI, fb_enable_direct, set_vga_fb
 scripts/
   deploy-rust.sh              build + deploy binary + boot.sh

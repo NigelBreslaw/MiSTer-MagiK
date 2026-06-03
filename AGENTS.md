@@ -19,10 +19,10 @@ screen, controller input).
 
 - ✅ **Native Rust frontend** — `mister-magic-fb ui` at locked 60fps, smooth +
   tear-free. See §9.7.
-- ✅ **Slint launcher** — 2×2 home grid, controller test, arcade launch via
-  `/dev/MiSTer_cmd` (`rust/ui/launcher.slint`, `rust/src/launcher.rs`).
-- ✅ **Production boot** — `scripts/mister-magic/boot.sh` via inittab handoff
-  (MiSTer runs `video_init` first; see §7). Install: `scripts/install-slint-boot.sh`.
+- ✅ **Slint launcher** — 2×2 home grid, controller test; gamepad owned by Slint
+  while UI runs. Games launch via fifo `load_core` (MiSTer spawned briefly).
+- ✅ **Production boot** — `scripts/mister-magic/boot.sh`: MiSTer runs `video_init`,
+  then **stopped** so Slint owns SPI + input. Install: `scripts/install-slint-boot.sh`.
 - ✅ FPGA SPI + `fb_enable_direct` + `set_vga_fb` in `rust/src/fpga.rs`.
 - ✅ Gamepad input via Linux js API (`rust/src/input.rs`).
 
@@ -112,14 +112,15 @@ To show Slint on HDMI we need:
 3. **A render loop** — custom Slint `Platform`, vsync pacing, dirty-row copy into
    write-combined `/dev/fb0` (§9.7).
 
-We issue the SPI sequence ourselves from Rust (`rust/src/fpga.rs`). Stock
-`MiSTer` must not run alongside Slint (menu wallpaper flash, gamepad grab).
-Production: `boot.sh` kills MiSTer after `video_init`. Dev: `killall MiSTer`
-before manual runs (§5).
+We issue the SPI sequence ourselves from Rust (`rust/src/fpga.rs`) to route
+`/dev/fb0` to HDMI during Slint UI. **Production stops MiSTer after
+`video_init()`** so Slint owns SPI and evdev (no menu grab). Games launch by
+spawning MiSTer briefly and writing fifo `load_core` (§7). Do **not** use external
+`rbf_load` from Slint — bricks HDMI.
 
-**Zaparoo is not used and not required.** It was an early launch path (forked
-`Main_MiSTer` that calls `video_fb_enable` + spawns a frontend). We proved the
-fork is unnecessary by issuing the same SPI from our own process (§9.5).
+**F9 / keep-MiSTer-running was tried and rejected:** MiSTer keeps `EVIOCGRAB`
+and the FPGA menu OSD unless it processes F9 internally. Injected F9 from uinput
+is unreliable; coexistence gave stock menu on HDMI with no Slint input.
 
 ---
 
@@ -177,9 +178,9 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 # Re-deploy binary + boot.sh after code changes
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 
-# Dev run (kill MiSTer for gamepad — see §8)
+# Dev run (stop MiSTer so Slint owns gamepad — see §7)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
-  'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magic/mister-magic-fb ui launcher 60'
+  'kill -9 $(pidof MiSTer) 2>/dev/null; /media/fat/mister-magic/mister-magic-fb ui launcher 60'
 
 # Restore stock MiSTer menu boot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
@@ -234,25 +235,37 @@ To refresh: `git -C reference/<repo> pull` (or re-clone `--depth 1`).
 
 1. Start stock `/media/fat/MiSTer` (must **not** have `main=mister-magic-fb` in INI).
 2. Wait for `video_init()` — 1080p fb in sysfs.
-3. `killall MiSTer`, exec `mister-magic-fb ui launcher 0`.
+3. **Stop MiSTer** — Slint owns SPI routing, HDMI scan-out, and gamepad evdev.
+4. Exec `mister-magic-fb ui launcher 0`.
+
+**Game launch:** Slint spawns MiSTer if needed, writes `load_core <path.mra>` to
+`/dev/MiSTer_cmd`, then exits when the arcade core is detected. On launch failure,
+MiSTer is stopped again so Slint regains display + input. Still **no external
+`rbf_load`** from Slint.
+
+**Why not keep MiSTer running (F9 / Zaparoo coexist)?** Stock MiSTer holds
+`EVIOCGRAB` on physical pads and composites the FPGA menu OSD unless it processes
+F9 internally (`video_fb_enable` → `input_switch(0)`). Injected F9 from uinput is
+unreliable; coexistence gave stock menu on HDMI with no Slint input.
 
 **Do not SIGSTOP MiSTer for the launcher.** A stopped MiSTer keeps **evdev grabs**
-(joystick dead) and the **FPGA menu OSD** composited on HDMI (menu appears over
-Slint even though `/dev/fb0` is clean). Game launch cold-spawns MiSTer — brief
-menu wallpaper flash is unavoidable without a custom loader.
+(joystick dead) and the **FPGA menu OSD** composited on HDMI.
 
 **Why not `main=` on our binary?** `user_io_init` calls `app_restart(main=…)`
 *before* `video_init()` (HDMI timing, I2C). Result: Slint renders to `/dev/fb0`
 but the TV reports no signal. `set_vga_fb` alone is not enough.
 
-**Dev:** `killall MiSTer` then run `mister-magic-fb ui …` manually (§5).
+**Dev:** `kill -9 $(pidof MiSTer)` then `mister-magic-fb ui launcher …` for a
+manual run matching production boot.
 
 Cross-built binary at `/media/fat/mister-magic/mister-magic-fb`. Subcommands:
 `read`, `fb`, `ui` (default scene `launcher`), `input`, `scenes`.
 
-Launcher: D-pad nav, A to open controller test or launch arcade games via
-`/dev/MiSTer_cmd` (spawns MiSTer, then exits). Core handoff: when MiSTer re-execs
-us with a `.rbf` argv, `main.rs` immediately `execv`s stock MiSTer for gameplay.
+Launcher: D-pad nav, A to open controller test or launch arcade games. Launch spawns
+MiSTer briefly, sends `load_core` via fifo, shows loading overlay until core runs.
+
+**HDMI recovery:** If launch leaves a black screen, `mister_ssh.py reboot` (MiSTer
+still owns recovery when running; if wedged, reboot always works).
 
 ### TODO
 
@@ -287,7 +300,10 @@ us with a `.rbf` argv, `main.rs` immediately `execv`s stock MiSTer for gameplay.
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't use `main=mister-magic-fb`.** Skips `video_init()` → no HDMI signal
   (§7). Use `boot.sh` inittab handoff instead.
-- **Don't SIGSTOP MiSTer for Slint coexistence.** Stopped MiSTer keeps evdev
+- **Don't external `rbf_load` from Slint.** `core_reset` + failed `socfpga_load`
+  leaves the FPGA without valid scan-out → TV "no signal". Use fifo `load_core`
+  on the running MiSTer process (§7).
+- **Don't SIGSTOP MiSTer for the launcher.** Stopped MiSTer keeps evdev
   grabs (no joystick) and FPGA menu OSD over Slint on HDMI.
 - **Don't leave the menu paused.** If you `kill -STOP $(pidof MiSTer)` for an
   experiment, always `kill -CONT` it afterwards (or reboot).
@@ -297,12 +313,9 @@ us with a `.rbf` argv, `main.rs` immediately `execv`s stock MiSTer for gameplay.
   ARP DAD probing before the real lease. A static IP in `/etc/dhcpcd.conf`
   (`noarp`, `noipv4ll`) skips all of it. Rootfs is read-only — remount rw to edit.
   See §10.
-- **FPGA SPI from our own process needs the bus to ourselves.** The stock
-  `MiSTer` process drives GPO/GPI continuously. To inject SPI from a separate
-  process, `kill -STOP $(pidof MiSTer)` first, then `kill -CONT` after. HDMI
-  stays alive while stopped (scan-out is FPGA-driven). GPO is write-only (reads
-  return GPI), so you can't recover its shadow — start from `0x80000000` (BIT31)
-  and only touch SPI bits. See §9.5. A `main=` boot binary avoids this.
+- **FPGA SPI from our process** routes `/dev/fb0` scan-out during Slint UI
+  (`rust/src/fpga.rs`). Production stops MiSTer first so we own the bus; no
+  SIGSTOP dance needed. Historical dev spike (§9.5) used SIGSTOP for standalone tests.
 - **Don't blind-sleep on reboot.** The device reboots fast (~35s to userspace,
   drops off the network in ~3s). Use `mister_ssh.py reboot-wait` (or `wait`),
   which detects the down→up transition and returns the instant `pidof MiSTer`

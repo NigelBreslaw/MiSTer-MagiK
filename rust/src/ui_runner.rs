@@ -7,7 +7,7 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, PhysicalSize};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod slint_ui {
     #![allow(clippy::all, unused_imports)]
@@ -213,7 +213,12 @@ fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadReader) {
     sync_bridge_pad_controller(&app.global::<slint_ui::controller::MisterBridge>(), pad);
 }
 
-fn sync_bridge_launcher(app: &slint_ui::launcher::Launcher, pad: &PadReader, nav: &LauncherNav) {
+fn sync_bridge_launcher(
+    app: &slint_ui::launcher::Launcher,
+    pad: &PadReader,
+    nav: &LauncherNav,
+    loading_message: &str,
+) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
@@ -221,6 +226,7 @@ fn sync_bridge_launcher(app: &slint_ui::launcher::Launcher, pad: &PadReader, nav
         Screen::Controller => 1,
     });
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_loading_message(loading_message.into());
 }
 
 fn sync_bridge_pad_controller(
@@ -439,6 +445,14 @@ fn run_controller_loop(
     );
 }
 
+fn recover_launcher_ui(f: &mut Fpga, spawned_mister: &mut bool) {
+    if *spawned_mister {
+        launcher::stop_mister();
+        f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
+        *spawned_mister = false;
+    }
+}
+
 fn run_launcher_loop(
     secs: u64,
     disp: &mut Display,
@@ -451,27 +465,74 @@ fn run_launcher_loop(
     let start = Instant::now();
     let mut frames = 0u64;
     let mut nav = LauncherNav::new();
+    let mut loading_title = String::new();
+    let mut launch_started = Instant::now();
+    let mut launch_spawned_mister = false;
     let label = if secs == 0 {
         "forever".to_string()
     } else {
         format!("{secs}s")
     };
     println!("launcher running {label} — D-pad to move, A to select, Home to go back...");
-    sync_bridge_launcher(&app, &pad, &nav);
+    sync_bridge_launcher(&app, &pad, &nav, "");
     window.request_redraw();
     while secs == 0 || start.elapsed().as_secs() < secs {
-        let mut changed = pad.poll();
-        if changed {
-            let state = pad.state();
-            if let Some(mra) = nav.handle_input(&state) {
-                launcher::launch_mra(mra);
+        let launching = launcher::launch_in_progress() || !loading_title.is_empty();
+
+        if !launching {
+            let changed = pad.poll();
+            if changed {
+                let state = pad.state();
+                if let Some(mra) = nav.handle_input(&state) {
+                    loading_title = format!("Loading {}…", launcher::game_title(mra));
+                    sync_bridge_launcher(&app, &pad, &nav, &loading_title);
+                    window.request_redraw();
+                    slint::platform::update_timers_and_animations();
+                    window.draw_if_needed(|renderer| {
+                        let region = renderer.render(&mut cached, W);
+                        let _ = region;
+                    });
+                    disp.wait_vsync();
+                    disp.copy_rows(&cached, 0, H);
+
+                    match launcher::execute_game_launch(mra) {
+                        Ok(spawned) => {
+                            launch_started = Instant::now();
+                            launch_spawned_mister = spawned;
+                        }
+                        Err(e) => {
+                            eprintln!("game launch failed: {e}");
+                            loading_title.clear();
+                            launcher::reset_launch();
+                            sync_bridge_launcher(&app, &pad, &nav, "");
+                            recover_launcher_ui(f, &mut launch_spawned_mister);
+                        }
+                    }
+                    window.request_redraw();
+                }
+                if changed {
+                    sync_bridge_launcher(&app, &pad, &nav, &loading_title);
+                    window.request_redraw();
+                }
             }
-            changed = true;
+        } else {
+            let _ = pad.poll();
+            if launcher::mister_running_arcade_core()
+                && launch_started.elapsed() > Duration::from_millis(500)
+            {
+                println!("arcade core running — handing off to MiSTer");
+                std::process::exit(0);
+            } else if launch_started.elapsed() > Duration::from_secs(90) {
+                eprintln!("game launch timed out");
+                recover_launcher_ui(f, &mut launch_spawned_mister);
+                std::process::exit(1);
+            }
         }
-        if changed {
-            sync_bridge_launcher(&app, &pad, &nav);
+
+        if launching {
             window.request_redraw();
         }
+
         slint::platform::update_timers_and_animations();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
@@ -487,10 +548,10 @@ fn run_launcher_loop(
             }
         });
         disp.wait_vsync();
-        if frames % 60 == 0 {
-            f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
-        }
-        if let Some((y0, y1)) = this_rows {
+        if launching {
+            // Full-screen loading overlay — copy every row.
+            disp.copy_rows(&cached, 0, H);
+        } else if let Some((y0, y1)) = this_rows {
             disp.copy_rows(&cached, y0, y1);
         }
         frames += 1;
