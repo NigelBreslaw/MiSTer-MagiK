@@ -40,11 +40,13 @@ export global MisterBridge {
     in-out property <string> loading-message;
     // Controller setup overlay (see controller_setup.slint).
     in-out property <bool> setup-visible;
-    // 0=hidden, 1=detected, 2=new-or-existing, 3=pick-existing
+    // 0=hidden, 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure
     in-out property <int> setup-phase;
     in-out property <string> setup-title;
     in-out property <string> setup-subtitle;
     in-out property <[string]> setup-list;
     in-out property <int> setup-selected;
+    in-out property <[string]> setup-config-labels;
+    in-out property <[string]> setup-config-values;
     callback quit-requested();
 }

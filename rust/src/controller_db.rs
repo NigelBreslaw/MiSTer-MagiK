@@ -25,11 +25,16 @@ pub enum ControllerKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ControllerLayout {
-    RetrobitA2,
-    Generic,
+impl ControllerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gamepad => "gamepad",
+            Self::FightStick => "fight_stick",
+            Self::Arcade => "arcade",
+            Self::Simple => "simple",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// How a plugged-in pad relates to the registry (for setup UI routing).
@@ -45,12 +50,22 @@ pub enum PadRegistryStatus {
     MovedPort,
 }
 
+impl PadRegistryStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown (not in database)",
+            Self::PendingSetup => "pending setup",
+            Self::Known => "known",
+            Self::MovedPort => "moved USB port",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ControllerEntry {
     pub label: String,
     pub kernel_name: String,
     pub kind: ControllerKind,
-    pub layout: ControllerLayout,
     pub setup_complete: bool,
     /// Last USB hub port this device was confirmed on (e.g. `1-1.3`).
     #[serde(default)]
@@ -227,16 +242,6 @@ impl ControllerDb {
         Ok(())
     }
 
-    /// Layout from DB when setup is complete, otherwise hardware defaults.
-    pub fn layout_for(&self, info: &PadInfo) -> ControllerLayout {
-        if let Some(entry) = self.get(info) {
-            if entry.setup_complete {
-                return entry.layout;
-            }
-        }
-        Self::default_layout(info)
-    }
-
     pub fn display_label(&self, info: &PadInfo) -> String {
         if let Some(entry) = self.get(info) {
             if !entry.label.is_empty() {
@@ -302,7 +307,6 @@ impl ControllerDb {
             label: default_label(info),
             kernel_name: info.name.clone(),
             kind: Self::infer_kind(info),
-            layout: Self::default_layout(info),
             setup_complete: false,
             last_usb_port: info.usb_port.clone(),
         }
@@ -319,16 +323,6 @@ impl ControllerDb {
             ControllerKind::Arcade
         } else {
             ControllerKind::Unknown
-        }
-    }
-
-    pub fn default_layout(info: &PadInfo) -> ControllerLayout {
-        match (
-            strip_hex_prefix(&info.vendor_id).as_str(),
-            strip_hex_prefix(&info.product_id).as_str(),
-        ) {
-            ("2563", "0575") | ("0079", "0011") => ControllerLayout::RetrobitA2,
-            _ => ControllerLayout::Generic,
         }
     }
 
@@ -494,7 +488,6 @@ mod tests {
                 label: "My Pad".into(),
                 kernel_name: "Pad".into(),
                 kind: ControllerKind::Gamepad,
-                layout: ControllerLayout::RetrobitA2,
                 setup_complete: true,
                 last_usb_port: "1-1.3".into(),
             },
@@ -516,7 +509,6 @@ mod tests {
                 label: "Zebra".into(),
                 kernel_name: String::new(),
                 kind: ControllerKind::Gamepad,
-                layout: ControllerLayout::Generic,
                 setup_complete: true,
                 last_usb_port: "1-1.1".into(),
             },
@@ -528,7 +520,6 @@ mod tests {
                 label: "Alpha".into(),
                 kernel_name: String::new(),
                 kind: ControllerKind::FightStick,
-                layout: ControllerLayout::Generic,
                 setup_complete: true,
                 last_usb_port: "1-1.2".into(),
             },
