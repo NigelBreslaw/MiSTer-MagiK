@@ -236,6 +236,11 @@ To refresh: `git -C reference/<repo> pull` (or re-clone `--depth 1`).
 2. Wait for `video_init()` — 1080p fb in sysfs.
 3. `killall MiSTer`, exec `mister-magic-fb ui launcher 0`.
 
+**Do not SIGSTOP MiSTer for the launcher.** A stopped MiSTer keeps **evdev grabs**
+(joystick dead) and the **FPGA menu OSD** composited on HDMI (menu appears over
+Slint even though `/dev/fb0` is clean). Game launch cold-spawns MiSTer — brief
+menu wallpaper flash is unavoidable without a custom loader.
+
 **Why not `main=` on our binary?** `user_io_init` calls `app_restart(main=…)`
 *before* `video_init()` (HDMI timing, I2C). Result: Slint renders to `/dev/fb0`
 but the TV reports no signal. `set_vga_fb` alone is not enough.
@@ -246,8 +251,8 @@ Cross-built binary at `/media/fat/mister-magic/mister-magic-fb`. Subcommands:
 `read`, `fb`, `ui` (default scene `launcher`), `input`, `scenes`.
 
 Launcher: D-pad nav, A to open controller test or launch arcade games via
-`/dev/MiSTer_cmd`. Core handoff: when MiSTer re-execs us with a `.rbf` argv,
-`main.rs` immediately `execv`s stock MiSTer for gameplay.
+`/dev/MiSTer_cmd` (spawns MiSTer, then exits). Core handoff: when MiSTer re-execs
+us with a `.rbf` argv, `main.rs` immediately `execv`s stock MiSTer for gameplay.
 
 ### TODO
 
@@ -282,6 +287,8 @@ Launcher: D-pad nav, A to open controller test or launch arcade games via
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't use `main=mister-magic-fb`.** Skips `video_init()` → no HDMI signal
   (§7). Use `boot.sh` inittab handoff instead.
+- **Don't SIGSTOP MiSTer for Slint coexistence.** Stopped MiSTer keeps evdev
+  grabs (no joystick) and FPGA menu OSD over Slint on HDMI.
 - **Don't leave the menu paused.** If you `kill -STOP $(pidof MiSTer)` for an
   experiment, always `kill -CONT` it afterwards (or reboot).
 - **Slow SSH after reboot = DHCP, not sshd.** `sshd` listens ~kernel 9 s, but

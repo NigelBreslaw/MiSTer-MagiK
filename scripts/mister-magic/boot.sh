@@ -1,5 +1,6 @@
 #!/bin/sh
 # Boot into Slint after stock MiSTer brings up HDMI (video_init).
+# MiSTer must exit so Slint owns evdev (MiSTer keeps grabs while SIGSTOPped).
 # Do NOT set main= to mister-magic-fb — MiSTer skips video_init before that exec.
 set -e
 MISTER=/media/fat/MiSTer
@@ -10,7 +11,7 @@ exec >>"$LOG" 2>&1
 echo "=== boot.sh $(date) ==="
 
 # MiSTer must own main= so user_io_init runs video_init() before we take over.
-/media/fat/MiSTer &
+"$MISTER" &
 mpid=$!
 echo "started MiSTer pid=$mpid"
 
@@ -34,6 +35,7 @@ if [ "$ready" != 1 ]; then
 fi
 
 killall MiSTer 2>/dev/null || true
+rm -f /tmp/mister-magic-mister.pid
 sleep 1
 echo "handoff to Slint launcher"
 exec "$LAUNCHER" ui launcher 0
