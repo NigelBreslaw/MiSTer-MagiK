@@ -5,6 +5,14 @@ Each run exercises **seven** Slint bench scenes (see [`rust/ui/bench/README.md`]
 
 ## Run
 
+Before **A1** (NEON rustflags), confirm the device CPU:
+
+```bash
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/audit-mister.sh
+```
+
+Expect `CPU part: 0xc09`, `NEON: yes`, `A1 prerequisite: OK`.
+
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
 ```
