@@ -1,7 +1,7 @@
 import { MisterBridge } from "mister_bridge.slint";
 import { ControllerPanel } from "controller_test.slint";
 import { SetupOverlay } from "controller_setup.slint";
-import "fonts/DejaVuSans.ttf";
+import "fonts/PressStart2P-Regular.ttf";
 export { MisterBridge }
 
 component LauncherTile inherits Rectangle {
@@ -9,20 +9,20 @@ component LauncherTile inherits Rectangle {
     in property <string> subtitle;
     in property <bool> focused;
 
-    border-width: focused ? 6px : 3px;
+    border-width: focused ? 3px : 2px;
     border-color: focused ? #06d6a0 : #5c4a72;
-    border-radius: 16px;
+    border-radius: 0px;
     background: focused ? #2a2236 : #1e1828;
 
     VerticalLayout {
-        padding: 32px;
-        spacing: 12px;
+        padding: 16px;
+        spacing: 6px;
         alignment: center;
 
         Text {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
-            font-size: 36px;
+            font-size: 18px;
             font-weight: 700;
             horizontal-alignment: center;
         }
@@ -30,7 +30,7 @@ component LauncherTile inherits Rectangle {
         Text {
             text: subtitle;
             color: #9080a8;
-            font-size: 20px;
+            font-size: 10px;
             horizontal-alignment: center;
         }
     }
@@ -38,24 +38,24 @@ component LauncherTile inherits Rectangle {
 
 component HomeGrid inherits Rectangle {
     VerticalLayout {
-        padding: 48px;
-        spacing: 32px;
+        padding: 24px;
+        spacing: 16px;
 
         Text {
             text: "MiSTer Magic";
             color: #e8e0f0;
-            font-size: 48px;
+            font-size: 24px;
             font-weight: 700;
             horizontal-alignment: center;
         }
 
         HorizontalLayout {
             vertical-stretch: 1;
-            spacing: 32px;
+            spacing: 16px;
 
             VerticalLayout {
                 vertical-stretch: 1;
-                spacing: 32px;
+                spacing: 16px;
 
                 LauncherTile {
                     vertical-stretch: 1;
@@ -74,7 +74,7 @@ component HomeGrid inherits Rectangle {
 
             VerticalLayout {
                 vertical-stretch: 1;
-                spacing: 32px;
+                spacing: 16px;
 
                 LauncherTile {
                     vertical-stretch: 1;
@@ -95,16 +95,16 @@ component HomeGrid inherits Rectangle {
         Text {
             text: "D-pad: move  ·  A: select  ·  Home: back";
             color: #706080;
-            font-size: 18px;
+            font-size: 9px;
             horizontal-alignment: center;
         }
     }
 }
 
 export component Launcher inherits Window {
-    preferred-width: 1920px;
-    preferred-height: 1080px;
-    default-font-family: "DejaVu Sans";
+    preferred-width: 960px;
+    preferred-height: 540px;
+    default-font-family: "Press Start 2P";
     title: "MiSTer Magic Launcher";
     background: #1a1424;
 
@@ -132,12 +132,12 @@ export component Launcher inherits Window {
 
         VerticalLayout {
             alignment: center;
-            spacing: 24px;
+            spacing: 12px;
 
             Text {
                 text: MisterBridge.loading-message;
                 color: #e8e0f0;
-                font-size: 42px;
+                font-size: 21px;
                 font-weight: 700;
                 horizontal-alignment: center;
             }
@@ -145,7 +145,7 @@ export component Launcher inherits Window {
             Text {
                 text: "Please wait…";
                 color: #9080a8;
-                font-size: 24px;
+                font-size: 12px;
                 horizontal-alignment: center;
             }
         }

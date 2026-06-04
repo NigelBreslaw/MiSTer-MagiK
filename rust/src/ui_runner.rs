@@ -30,6 +30,8 @@ use crate::controller_db::ControllerDb;
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
+use crate::ui_display::{UiDisplay, FB_H, FB_W};
+use slint::platform::software_renderer::PhysicalRegion;
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
@@ -42,9 +44,6 @@ pub const UI_SCENES: &[&str] = &[
     "solid_fill",
     "list_scroll",
 ];
-
-const W: usize = 1920;
-const H: usize = 1080;
 
 struct MisterPlatform {
     window: Rc<MinimalSoftwareWindow>,
@@ -86,26 +85,51 @@ fn normalize_scene(s: &str) -> String {
 }
 
 pub fn print_scenes() {
-    println!("Slint UI scenes (1920x1080):");
+    let ui = UiDisplay::from_env();
+    println!(
+        "Slint UI scenes (render {}x{}, fb {}x{}, scale {}):",
+        ui.render_w, ui.render_h, FB_W, FB_H, ui.pixel_scale
+    );
     for s in UI_SCENES {
         println!("  {s}");
     }
 }
 
+fn dirty_rows(region: &PhysicalRegion, render_h: usize) -> Option<(usize, usize)> {
+    let o = region.bounding_box_origin();
+    let s = region.bounding_box_size();
+    if s.width == 0 || s.height == 0 {
+        return None;
+    }
+    let y0 = o.y.max(0) as usize;
+    let y1 = ((o.y + s.height as i32) as usize).min(render_h);
+    if y1 > y0 {
+        Some((y0, y1))
+    } else {
+        None
+    }
+}
+
+fn copy_cached_rows(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], y0: usize, y1: usize) {
+    disp.copy_rows_scaled(ui.pixel_scale, cached, ui.render_w, y0, y1);
+}
+
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
+    let ui = UiDisplay::from_env();
     println!("ui scene={scene} secs={secs}");
+    println!("{}", ui.log_line());
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    let mut disp = match Display::open_boot(W, H) {
+    let mut disp = match Display::open_boot(FB_W, FB_H) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
             std::process::exit(1);
         }
     };
-    let flag = f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
+    let flag = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
@@ -114,54 +138,54 @@ pub fn run_ui(f: &mut Fpga) {
         start: Instant::now(),
     }))
     .expect("set_platform");
-    window.set_size(PhysicalSize::new(W as u32, H as u32));
+    window.set_size(PhysicalSize::new(ui.render_w as u32, ui.render_h as u32));
 
     match scene.as_str() {
         "demo" => {
             slint_ui::AppWindow::new().expect("AppWindow::new").show().expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "full_motion" => {
             slint_ui::FullMotion::new()
                 .expect("FullMotion::new")
                 .show()
                 .expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "static_ui" => {
             slint_ui::StaticUi::new()
                 .expect("StaticUi::new")
                 .show()
                 .expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "local_motion" => {
             slint_ui::LocalMotion::new()
                 .expect("LocalMotion::new")
                 .show()
                 .expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "text_heavy" => {
             slint_ui::TextHeavy::new()
                 .expect("TextHeavy::new")
                 .show()
                 .expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "solid_fill" => {
             slint_ui::SolidFill::new()
                 .expect("SolidFill::new")
                 .show()
                 .expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "list_scroll" => {
             slint_ui::ListScroll::new()
                 .expect("ListScroll::new")
                 .show()
                 .expect("show");
-            run_frame_loop(secs, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "controller_test" => {
             let pad = open_pads();
@@ -169,7 +193,7 @@ pub fn run_ui(f: &mut Fpga) {
             sync_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
-            run_controller_loop(secs, &mut disp, &window, pad, app);
+            run_controller_loop(secs, &ui, &mut disp, &window, pad, app);
         }
         "launcher" => {
             let pad = open_pads();
@@ -177,7 +201,7 @@ pub fn run_ui(f: &mut Fpga) {
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
-            run_launcher_loop(secs, &mut disp, f, &window, pad, app);
+            run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app);
         }
         _ => unreachable!(),
     }
@@ -440,8 +464,13 @@ fn sync_device_info_launcher(
     ).into());
 }
 
-fn run_frame_loop(secs: u64, disp: &mut Display, window: &Rc<MinimalSoftwareWindow>) {
-    let mut cached = vec![Pixel(0); W * H];
+fn run_frame_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+) {
+    let mut cached = vec![Pixel(0); ui.render_w * ui.render_h];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut fps_window_start = Instant::now();
@@ -457,22 +486,14 @@ fn run_frame_loop(secs: u64, disp: &mut Display, window: &Rc<MinimalSoftwareWind
         let t0 = Instant::now();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, W);
-            let o = region.bounding_box_origin();
-            let s = region.bounding_box_size();
-            if s.width > 0 && s.height > 0 {
-                let y0 = o.y.max(0) as usize;
-                let y1 = ((o.y + s.height as i32) as usize).min(H);
-                if y1 > y0 {
-                    this_rows = Some((y0, y1));
-                }
-            }
+            let region = renderer.render(&mut cached, ui.render_w);
+            this_rows = dirty_rows(&region, ui.render_h);
         });
         let t1 = Instant::now();
         disp.wait_vsync();
         let t2 = Instant::now();
         if let Some((y0, y1)) = this_rows {
-            disp.copy_rows(&cached, y0, y1);
+            copy_cached_rows(disp, ui, &cached, y0, y1);
             copy_rows_acc += (y1 - y0) as u128;
         }
         let t3 = Instant::now();
@@ -484,7 +505,7 @@ fn run_frame_loop(secs: u64, disp: &mut Display, window: &Rc<MinimalSoftwareWind
         if fps_window_start.elapsed().as_millis() >= 1000 {
             let nn = fps_frames.max(1) as u128;
             println!(
-                "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} rows avg)",
+                "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
                 render_us / nn,
                 vsync_us / nn,
                 copy_us / nn,
@@ -507,12 +528,13 @@ fn run_frame_loop(secs: u64, disp: &mut Display, window: &Rc<MinimalSoftwareWind
 
 fn run_controller_loop(
     secs: u64,
+    ui: &UiDisplay,
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadPool,
     app: slint_ui::controller::ControllerTest,
 ) {
-    let mut cached = vec![Pixel(0); W * H];
+    let mut cached = vec![Pixel(0); ui.render_w * ui.render_h];
     let start = Instant::now();
     let mut frames = 0u64;
     let label = if secs == 0 { "forever".to_string() } else { format!("{secs}s") };
@@ -528,20 +550,12 @@ fn run_controller_loop(
         slint::platform::update_timers_and_animations();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, W);
-            let o = region.bounding_box_origin();
-            let s = region.bounding_box_size();
-            if s.width > 0 && s.height > 0 {
-                let y0 = o.y.max(0) as usize;
-                let y1 = ((o.y + s.height as i32) as usize).min(H);
-                if y1 > y0 {
-                    this_rows = Some((y0, y1));
-                }
-            }
+            let region = renderer.render(&mut cached, ui.render_w);
+            this_rows = dirty_rows(&region, ui.render_h);
         });
         disp.wait_vsync();
         if let Some((y0, y1)) = this_rows {
-            disp.copy_rows(&cached, y0, y1);
+            copy_cached_rows(disp, ui, &cached, y0, y1);
         }
         frames += 1;
     }
@@ -555,20 +569,21 @@ fn run_controller_loop(
 fn recover_launcher_ui(f: &mut Fpga, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
-        f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
+        f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
         *spawned_mister = false;
     }
 }
 
 fn run_launcher_loop(
     secs: u64,
+    ui: &UiDisplay,
     disp: &mut Display,
     f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
 ) {
-    let mut cached = vec![Pixel(0); W * H];
+    let mut cached = vec![Pixel(0); ui.render_w * ui.render_h];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut nav = LauncherNav::new();
@@ -650,11 +665,11 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 slint::platform::update_timers_and_animations();
                                 window.draw_if_needed(|renderer| {
-                                    let region = renderer.render(&mut cached, W);
+                                    let region = renderer.render(&mut cached, ui.render_w);
                                     let _ = region;
                                 });
                                 disp.wait_vsync();
-                                disp.copy_rows(&cached, 0, H);
+                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h);
 
                                 match launcher::execute_game_launch(mra) {
                                     Ok(spawned) => {
@@ -705,23 +720,14 @@ fn run_launcher_loop(
         slint::platform::update_timers_and_animations();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, W);
-            let o = region.bounding_box_origin();
-            let s = region.bounding_box_size();
-            if s.width > 0 && s.height > 0 {
-                let y0 = o.y.max(0) as usize;
-                let y1 = ((o.y + s.height as i32) as usize).min(H);
-                if y1 > y0 {
-                    this_rows = Some((y0, y1));
-                }
-            }
+            let region = renderer.render(&mut cached, ui.render_w);
+            this_rows = dirty_rows(&region, ui.render_h);
         });
         disp.wait_vsync();
         if launching || setup.is_active() {
-            // Full-screen overlay — copy every row.
-            disp.copy_rows(&cached, 0, H);
+            copy_cached_rows(disp, ui, &cached, 0, ui.render_h);
         } else if let Some((y0, y1)) = this_rows {
-            disp.copy_rows(&cached, y0, y1);
+            copy_cached_rows(disp, ui, &cached, y0, y1);
         }
         frames += 1;
     }

@@ -20,6 +20,7 @@ mod fpga;
 mod input;
 mod launcher;
 mod setup_nav;
+mod ui_display;
 mod ui_runner;
 mod vt;
 

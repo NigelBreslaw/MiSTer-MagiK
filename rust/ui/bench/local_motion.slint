@@ -1,40 +1,37 @@
-// Small moving region only — localized dirty rows (typical game HUD).
-import "../fonts/DejaVuSans.ttf";
+import "../fonts/PressStart2P-Regular.ttf";
 
 export component LocalMotion inherits Window {
-    width: 1920px;
-    height: 1080px;
+    width: 960px;
+    height: 540px;
     background: #0b1020;
-    default-font-family: "DejaVu Sans";
+    default-font-family: "Press Start 2P";
 
     property <duration> tick: animation-tick();
     property <float> phase: Math.mod(tick / 1ms, 2000) / 2000;
 
     Text {
-        x: 64px;
-        y: 48px;
+        x: 32px;
+        y: 24px;
         text: "bench: local_motion";
-        font-size: 44px;
+        font-size: 22px;
         color: #e8ecff;
     }
 
-    // Static chrome (most of the screen never repaints).
     Rectangle {
-        x: 64px;
-        y: 160px;
-        width: parent.width - 128px;
-        height: parent.height - 220px;
+        x: 32px;
+        y: 80px;
+        width: parent.width - 64px;
+        height: parent.height - 110px;
         background: #131c33;
-        border-radius: 12px;
+        border-radius: 0px;
     }
 
-    // Small orb travels along the top edge of the panel.
     Rectangle {
-        width: 96px;
-        height: 96px;
-        y: 180px;
-        x: 80px + (parent.width - 256px) * root.phase;
-        border-radius: 48px;
+        width: 48px;
+        height: 48px;
+        y: 90px;
+        x: 40px + (parent.width - 128px) * root.phase;
+        border-radius: 0px;
         background: #ff5d73;
     }
 }

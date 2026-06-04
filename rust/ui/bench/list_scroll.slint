@@ -1,56 +1,54 @@
-// List-style bench: std-widgets ScrollView + `for` rows (auto scroll).
 import { ScrollView } from "std-widgets.slint";
-import "../fonts/DejaVuSans.ttf";
+import "../fonts/PressStart2P-Regular.ttf";
 
 export component ListScroll inherits Window {
-    width: 1920px;
-    height: 1080px;
+    width: 960px;
+    height: 540px;
     background: #0b1020;
-    default-font-family: "DejaVu Sans";
+    default-font-family: "Press Start 2P";
 
     property <int> row-count: 56;
-    property <length> row-height: 48px;
-    property <length> list-height: 880px;
-    property <length> panel-width: 1792px;
+    property <length> row-height: 24px;
+    property <length> list-height: 440px;
+    property <length> panel-width: 896px;
     property <length> content-height: row-count * row-height;
     property <length> scroll-max: max(0px, content-height - list-height);
 
     property <duration> tick: animation-tick();
     property <int> tick-ms: Math.floor(tick / 1ms);
-    // Full down-and-back cycle length (ms); larger = slower scroll.
     property <float> phase: Math.mod(tick / 1ms, 12000) / 12000;
     property <float> tri: phase < 0.5 ? phase * 2 : 2 - phase * 2;
     property <length> scroll-pos: scroll-max * tri;
     property <int> top-row: Math.floor(scroll-pos / row-height);
 
     Text {
-        x: 64px;
-        y: 48px;
+        x: 32px;
+        y: 24px;
         text: "bench: list_scroll (ScrollView + for)";
-        font-size: 40px;
+        font-size: 20px;
         color: #e8ecff;
     }
 
     Text {
-        x: 64px;
-        y: 100px;
+        x: 32px;
+        y: 50px;
         text: "scroll " + (scroll-pos / 1px) + " / " + (scroll-max / 1px) + " px · top row " + top-row + " · tick " + tick-ms;
-        font-size: 24px;
+        font-size: 12px;
         color: #8b93b8;
     }
 
     Rectangle {
-        x: parent.width - 48px;
-        y: 160px + list-height * tri;
-        width: 24px;
-        height: 24px;
-        border-radius: 12px;
+        x: parent.width - 24px;
+        y: 80px + list-height * tri;
+        width: 12px;
+        height: 12px;
+        border-radius: 0px;
         background: #ff5d73;
     }
 
     scroll-panel := ScrollView {
-        x: 64px;
-        y: 160px;
+        x: 32px;
+        y: 80px;
         width: panel-width;
         height: list-height;
         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
@@ -68,10 +66,10 @@ export component ListScroll inherits Window {
                 background: i == top-row ? #ff5d73 : (mod(i, 2) == 0 ? #151f38 : #1c2a4a);
 
                 Text {
-                    x: 20px;
+                    x: 10px;
                     y: (root.row-height - self.height) / 2;
                     text: "Row " + i + " — MiSTer list item " + (i * 7 + 13);
-                    font-size: 26px;
+                    font-size: 13px;
                     color: i == top-row ? #0b1020 : #d8e0ff;
                 }
             }

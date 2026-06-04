@@ -1,5 +1,5 @@
 import { MisterBridge } from "mister_bridge.slint";
-import "fonts/DejaVuSans.ttf";
+import "fonts/PressStart2P-Regular.ttf";
 export { MisterBridge }
 
 // Palette — flat fills only (software renderer friendly).
@@ -18,21 +18,21 @@ global ControllerColors {
 component CircleBtn inherits Rectangle {
     in property <bool> pressed;
     in property <string> caption;
-    in property <length> btn-size: 56px;
+    in property <length> btn-size: 28px;
     width: btn-size;
     height: btn-size;
     border-radius: btn-size / 2;
     background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
-    border-width: 3px;
+    border-width: 1px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
     Text {
-        y: parent.height + 6px;
-        width: parent.width + 40px;
-        x: -20px;
+        y: parent.height + 3px;
+        width: parent.width + 20px;
+        x: -10px;
         text: caption;
         color: ControllerColors.label-light;
-        font-size: 15px;
+        font-size: 7px;
         font-weight: 700;
         horizontal-alignment: center;
     }
@@ -40,11 +40,11 @@ component CircleBtn inherits Rectangle {
 
 component DpadArm inherits Rectangle {
     in property <bool> pressed;
-    width: 36px;
-    height: 36px;
-    border-radius: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 2px;
     background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
-    border-width: 2px;
+    border-width: 1px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 }
 
@@ -53,49 +53,49 @@ component Dpad inherits Rectangle {
     in property <bool> down;
     in property <bool> left;
     in property <bool> right;
-    width: 148px;
-    height: 148px;
+    width: 74px;
+    height: 74px;
 
     // Circular well
     Rectangle {
-        width: 148px;
-        height: 148px;
-        border-radius: 74px;
+        width: 74px;
+        height: 74px;
+        border-radius: 37px;
         background: ControllerColors.well;
-        border-width: 3px;
+        border-width: 1px;
         border-color: ControllerColors.shell-line;
     }
 
     DpadArm {
-        x: 56px;
-        y: 8px;
+        x: 28px;
+        y: 4px;
         pressed: up;
     }
     DpadArm {
-        x: 56px;
-        y: 104px;
+        x: 28px;
+        y: 52px;
         pressed: down;
     }
     DpadArm {
-        x: 8px;
-        y: 56px;
+        x: 4px;
+        y: 28px;
         pressed: left;
     }
     DpadArm {
-        x: 104px;
-        y: 56px;
+        x: 52px;
+        y: 28px;
         pressed: right;
     }
 
     // Center hub
     Rectangle {
-        x: 52px;
-        y: 52px;
-        width: 44px;
-        height: 44px;
-        border-radius: 4px;
+        x: 26px;
+        y: 26px;
+        width: 22px;
+        height: 22px;
+        border-radius: 2px;
         background: ControllerColors.well;
-        border-width: 2px;
+        border-width: 1px;
         border-color: ControllerColors.shell-line;
     }
 }
@@ -103,55 +103,55 @@ component Dpad inherits Rectangle {
 component StickWell inherits Rectangle {
     in property <float> stick-x;
     in property <float> stick-y;
-    width: 130px;
-    height: 130px;
-    border-radius: 65px;
+    width: 65px;
+    height: 65px;
+    border-radius: 32px;
     background: ControllerColors.well;
-    border-width: 3px;
+    border-width: 1px;
     border-color: ControllerColors.shell-line;
 
     // Crosshair ring
     Rectangle {
-        x: 64px;
-        y: 20px;
-        width: 2px;
-        height: 90px;
+        x: 32px;
+        y: 10px;
+        width: 1px;
+        height: 45px;
         background: ControllerColors.shell-line;
     }
     Rectangle {
-        x: 20px;
-        y: 64px;
-        width: 90px;
-        height: 2px;
+        x: 10px;
+        y: 32px;
+        width: 45px;
+        height: 1px;
         background: ControllerColors.shell-line;
     }
 
     Rectangle {
-        width: 44px;
-        height: 44px;
-        border-radius: 22px;
+        width: 22px;
+        height: 22px;
+        border-radius: 11px;
         background: ControllerColors.btn-pressed;
-        border-width: 2px;
+        border-width: 1px;
         border-color: #048a68;
-        x: (parent.width - self.width) / 2 + stick-x * 36px;
-        y: (parent.height - self.height) / 2 + stick-y * 36px;
+        x: (parent.width - self.width) / 2 + stick-x * 18px;
+        y: (parent.height - self.height) / 2 + stick-y * 18px;
     }
 }
 
 component ShoulderBtn inherits Rectangle {
     in property <bool> pressed;
     in property <string> caption;
-    width: 140px;
-    height: 28px;
-    border-radius: 10px;
+    width: 70px;
+    height: 14px;
+    border-radius: 5px;
     background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
-    border-width: 2px;
+    border-width: 1px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
     Text {
         text: caption;
         color: ControllerColors.label;
-        font-size: 13px;
+        font-size: 6px;
         font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -161,19 +161,19 @@ component ShoulderBtn inherits Rectangle {
 component PillBtn inherits Rectangle {
     in property <bool> pressed;
     in property <string> caption;
-    width: 88px;
-    height: 26px;
-    border-radius: 13px;
+    width: 44px;
+    height: 13px;
+    border-radius: 6px;
     background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
-    border-width: 2px;
+    border-width: 1px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
     Text {
-        y: parent.height + 8px;
+        y: parent.height + 4px;
         width: parent.width;
         text: caption;
         color: ControllerColors.label-light;
-        font-size: 13px;
+        font-size: 6px;
         font-weight: 700;
         horizontal-alignment: center;
     }
@@ -183,21 +183,21 @@ component SysBtn inherits Rectangle {
     in property <bool> pressed;
     in property <bool> available: true;
     in property <string> caption;
-    width: 36px;
-    height: 36px;
-    border-radius: 18px;
+    width: 18px;
+    height: 18px;
+    border-radius: 9px;
     background: !available ? #5a5068 : (pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle);
-    border-width: 2px;
+    border-width: 1px;
     border-color: !available ? #4a4058 : (pressed ? #048a68 : ControllerColors.btn-border);
     opacity: available ? 1.0 : 0.55;
 
     Text {
-        y: parent.height + 6px;
-        width: parent.width + 40px;
-        x: -20px;
+        y: parent.height + 3px;
+        width: parent.width + 20px;
+        x: -10px;
         text: available ? caption : caption + " (n/a)";
         color: ControllerColors.label-light;
-        font-size: 11px;
+        font-size: 5px;
         font-weight: 700;
         horizontal-alignment: center;
     }
@@ -208,53 +208,53 @@ component FaceCluster inherits Rectangle {
     in property <bool> btn-y;
     in property <bool> btn-a;
     in property <bool> btn-b;
-    width: 200px;
-    height: 200px;
+    width: 100px;
+    height: 100px;
 
     // Diagonal pairing accents (X–Y and A–B), like the reference drawing.
     Rectangle {
-        x: 18px;
-        y: 38px;
-        width: 72px;
-        height: 124px;
-        border-radius: 36px;
+        x: 9px;
+        y: 19px;
+        width: 36px;
+        height: 62px;
+        border-radius: 18px;
         background: #88789820;
-        border-width: 2px;
+        border-width: 1px;
         border-color: ControllerColors.shell-line;
     }
     Rectangle {
-        x: 110px;
-        y: 38px;
-        width: 72px;
-        height: 124px;
-        border-radius: 36px;
+        x: 55px;
+        y: 19px;
+        width: 36px;
+        height: 62px;
+        border-radius: 18px;
         background: #88789820;
-        border-width: 2px;
+        border-width: 1px;
         border-color: ControllerColors.shell-line;
     }
 
     // SNES diamond: X top, Y left, A right, B bottom.
     CircleBtn {
-        x: 72px;
-        y: 8px;
+        x: 36px;
+        y: 4px;
         caption: "X";
         pressed: btn-x;
     }
     CircleBtn {
-        x: 8px;
-        y: 72px;
+        x: 4px;
+        y: 36px;
         caption: "Y";
         pressed: btn-y;
     }
     CircleBtn {
-        x: 136px;
-        y: 72px;
+        x: 68px;
+        y: 36px;
         caption: "A";
         pressed: btn-a;
     }
     CircleBtn {
-        x: 72px;
-        y: 136px;
+        x: 36px;
+        y: 68px;
         caption: "B";
         pressed: btn-b;
     }
@@ -284,90 +284,90 @@ component ControllerBody inherits Rectangle {
     in property <float> right-x;
     in property <float> right-y;
 
-    width: 1180px;
-    height: 540px;
+    width: 590px;
+    height: 270px;
 
     // Main torso
     Rectangle {
-        y: 0px;
-        width: 1180px;
-        height: 360px;
-        border-radius: 80px;
+        y: 1px;
+        width: 590px;
+        height: 180px;
+        border-radius: 40px;
         background: ControllerColors.shell;
-        border-width: 4px;
+        border-width: 2px;
         border-color: ControllerColors.shell-line;
     }
 
     // Bottom lobes (stick wells extend the dog-bone silhouette)
     Rectangle {
-        x: 130px;
-        y: 280px;
-        width: 180px;
-        height: 180px;
-        border-radius: 90px;
+        x: 65px;
+        y: 140px;
+        width: 90px;
+        height: 90px;
+        border-radius: 45px;
         background: ControllerColors.shell;
-        border-width: 4px;
+        border-width: 2px;
         border-color: ControllerColors.shell-line;
     }
     Rectangle {
-        x: 870px;
-        y: 280px;
-        width: 180px;
-        height: 180px;
-        border-radius: 90px;
+        x: 435px;
+        y: 140px;
+        width: 90px;
+        height: 90px;
+        border-radius: 45px;
         background: ControllerColors.shell;
-        border-width: 4px;
+        border-width: 2px;
         border-color: ControllerColors.shell-line;
     }
 
     // Top-center grip recess
     Rectangle {
-        x: 490px;
-        y: 12px;
-        width: 200px;
-        height: 36px;
-        border-radius: 18px;
+        x: 245px;
+        y: 6px;
+        width: 100px;
+        height: 18px;
+        border-radius: 9px;
         background: ControllerColors.shell-dark;
-        border-width: 2px;
+        border-width: 1px;
         border-color: ControllerColors.shell-line;
     }
 
     // Shoulder buttons along top edge
     ShoulderBtn {
-        x: 80px;
-        y: 52px;
+        x: 40px;
+        y: 26px;
         caption: "L";
         pressed: btn-l;
     }
     ShoulderBtn {
-        x: 960px;
-        y: 52px;
+        x: 480px;
+        y: 26px;
         caption: "R";
         pressed: btn-r;
     }
 
     // ZL / ZR (smaller, inset — not on classic SNES diagram but on the pad)
     ShoulderBtn {
-        x: 80px;
-        y: 88px;
-        width: 100px;
-        height: 22px;
+        x: 40px;
+        y: 44px;
+        width: 50px;
+        height: 11px;
         caption: "ZL";
         pressed: btn-zl;
     }
     ShoulderBtn {
-        x: 1000px;
-        y: 88px;
-        width: 100px;
-        height: 22px;
+        x: 500px;
+        y: 44px;
+        width: 50px;
+        height: 11px;
         caption: "ZR";
         pressed: btn-zr;
     }
 
     // D-pad (left)
     Dpad {
-        x: 170px;
-        y: 120px;
+        x: 85px;
+        y: 60px;
         up: dpad-up;
         down: dpad-down;
         left: dpad-left;
@@ -376,8 +376,8 @@ component ControllerBody inherits Rectangle {
 
     // Face buttons (right) — SNES diamond
     FaceCluster {
-        x: 780px;
-        y: 100px;
+        x: 390px;
+        y: 50px;
         btn-x: btn-x;
         btn-y: btn-y;
         btn-a: btn-a;
@@ -386,14 +386,14 @@ component ControllerBody inherits Rectangle {
 
     // Center: home / capture (above select / start)
     SysBtn {
-        x: 520px;
-        y: 155px;
+        x: 260px;
+        y: 77px;
         caption: "Home";
         pressed: btn-home;
     }
     SysBtn {
-        x: 620px;
-        y: 155px;
+        x: 310px;
+        y: 77px;
         caption: "Capture";
         pressed: btn-capture;
         available: capture-available;
@@ -401,28 +401,28 @@ component ControllerBody inherits Rectangle {
 
     // Center: select / start
     PillBtn {
-        x: 470px;
-        y: 210px;
+        x: 235px;
+        y: 105px;
         caption: "SELECT";
         pressed: btn-select;
     }
     PillBtn {
-        x: 620px;
-        y: 210px;
+        x: 310px;
+        y: 105px;
         caption: "START";
         pressed: btn-start;
     }
 
     // Analog sticks in bottom lobes
     StickWell {
-        x: 155px;
-        y: 305px;
+        x: 77px;
+        y: 152px;
         stick-x: left-x;
         stick-y: left-y;
     }
     StickWell {
-        x: 895px;
-        y: 305px;
+        x: 447px;
+        y: 152px;
         stick-x: right-x;
         stick-y: right-y;
     }
@@ -430,50 +430,50 @@ component ControllerBody inherits Rectangle {
 
 export component ControllerPanel inherits Rectangle {
     VerticalLayout {
-        padding: 32px;
-        spacing: 20px;
+        padding: 16px;
+        spacing: 10px;
 
         HorizontalLayout {
-            spacing: 24px;
+            spacing: 12px;
             vertical-stretch: 1;
 
             VerticalLayout {
-                spacing: 4px;
+                spacing: 2px;
                 Text {
                     text: MisterBridge.device-name;
                     color: #e8e0f0;
-                    font-size: 26px;
+                    font-size: 13px;
                     font-weight: 700;
                 }
                 Text {
                     text: "input test";
                     color: #9080a8;
-                    font-size: 18px;
+                    font-size: 9px;
                 }
             }
 
             Rectangle { horizontal-stretch: 1; }
 
             VerticalLayout {
-                spacing: 6px;
+                spacing: 3px;
                 alignment: end;
                 Text {
                     text: "USB " + MisterBridge.usb-port;
                     color: #06d6a0;
-                    font-size: 18px;
+                    font-size: 9px;
                     font-weight: 700;
                     horizontal-alignment: right;
                 }
                 Text {
                     text: MisterBridge.usb-id + "  ·  " + MisterBridge.serial-id;
                     color: #9080a8;
-                    font-size: 14px;
+                    font-size: 7px;
                     horizontal-alignment: right;
                 }
                 Text {
                     text: MisterBridge.js-counts;
                     color: #706080;
-                    font-size: 13px;
+                    font-size: 6px;
                     horizontal-alignment: right;
                 }
             }
@@ -509,36 +509,36 @@ export component ControllerPanel inherits Rectangle {
         }
 
         VerticalLayout {
-            spacing: 8px;
+            spacing: 4px;
 
             HorizontalLayout {
-                spacing: 12px;
+                spacing: 6px;
                 Text {
                     text: "Pressed now:";
                     color: #9080a8;
-                    font-size: 16px;
+                    font-size: 8px;
                     font-weight: 600;
                 }
                 Text {
                     text: MisterBridge.pressed-now;
                     color: #06d6a0;
-                    font-size: 16px;
+                    font-size: 8px;
                     font-weight: 700;
                     horizontal-stretch: 1;
                 }
             }
 
             HorizontalLayout {
-                spacing: 12px;
+                spacing: 6px;
                 Text {
                     text: "Last event:";
                     color: #9080a8;
-                    font-size: 14px;
+                    font-size: 7px;
                 }
                 Text {
                     text: MisterBridge.last-event-label;
                     color: #c8b8d8;
-                    font-size: 14px;
+                    font-size: 7px;
                     horizontal-stretch: 1;
                 }
             }
@@ -546,16 +546,16 @@ export component ControllerPanel inherits Rectangle {
             Text {
                 text: MisterBridge.last-raw-event;
                 color: #605068;
-                font-size: 12px;
+                font-size: 6px;
             }
         }
     }
 }
 
 export component ControllerTest inherits Window {
-    preferred-width: 1920px;
-    preferred-height: 1080px;
-    default-font-family: "DejaVu Sans";
+    preferred-width: 480px;
+    preferred-height: 270px;
+    default-font-family: "Press Start 2P";
     title: "MiSTer Controller Test";
     background: #1a1424;
 

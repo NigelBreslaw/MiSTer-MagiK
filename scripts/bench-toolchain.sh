@@ -23,6 +23,7 @@ export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
 
 LABEL="A0"
+PIXEL_SCALE="${MISTER_PIXEL_SCALE:-}"
 DO_CLEAN=0
 SKIP_BUILD=0
 SKIP_DEVICE=0
@@ -53,6 +54,11 @@ while [[ $# -gt 0 ]]; do
     *) LABEL="$1"; shift ;;
   esac
 done
+
+# P2 pixel-scale experiment: default scale 2 on device unless overridden.
+if [[ -z "$PIXEL_SCALE" && "$LABEL" == P2* ]]; then
+  PIXEL_SCALE=2
+fi
 
 BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magic-fb"
 
@@ -95,7 +101,7 @@ parse_ui_log() {
 import os, re, sys
 path = os.environ["UI_LOG"]
 pat = re.compile(
-    r"fps ~ (\d+).*render (\d+)us.*vsync-wait (\d+)us.*copy (\d+)us.*\((\d+) rows avg\)"
+    r"fps ~ (\d+).*render (\d+)us.*vsync-wait (\d+)us.*copy (\d+)us.*\((\d+) (?:logical )?rows avg\)"
 )
 rows = []
 with open(path, encoding="utf-8", errors="ignore") as f:
@@ -141,11 +147,15 @@ run_scene_on_device() {
   # Post-exit capture only sees fbcon "Welcome / login:" — not the bench scene.
   local capture_at=$((secs > 4 ? secs - 2 : 2))
 
+  local pixel_env=""
+  if [[ -n "$PIXEL_SCALE" ]]; then
+    pixel_env="MISTER_PIXEL_SCALE=$PIXEL_SCALE "
+  fi
   mister run "
 set -e
 MP=\$(pidof MiSTer 2>/dev/null || true)
 if [ -n \"\$MP\" ]; then kill -STOP \$MP; fi
-$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+${pixel_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0
@@ -248,7 +258,7 @@ cat /tmp/bench-ui.log
   rm -f "$ui_log" "$ui_full"
 }
 
-echo "==> Toolchain bench label=$LABEL scenes=${BENCH_SCENES[*]} (${SCENE_SECS}s each)"
+echo "==> Toolchain bench label=$LABEL${PIXEL_SCALE:+ pixel_scale=$PIXEL_SCALE} scenes=${BENCH_SCENES[*]} (${SCENE_SECS}s each)"
 
 HOST_COMPILE_SEC=""
 HOST_BYTES=""
@@ -264,10 +274,16 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   build_log="$(mktemp)"
   HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
   HOST_NOTES="profile=$BUILD_PROFILE"
+  if [[ -n "$PIXEL_SCALE" ]]; then
+    HOST_NOTES="${HOST_NOTES}; pixel_scale=$PIXEL_SCALE; render=960x540; font=PressStart2P"
+  fi
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
   HOST_NOTES="skip-build; profile=$BUILD_PROFILE"
+  if [[ -n "$PIXEL_SCALE" ]]; then
+    HOST_NOTES="${HOST_NOTES}; pixel_scale=$PIXEL_SCALE; render=960x540; font=PressStart2P"
+  fi
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
 
