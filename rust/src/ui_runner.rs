@@ -44,7 +44,7 @@ use crate::controller_db::ControllerDb;
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{UiDisplay, FB_H, FB_W};
+use crate::ui_display::{UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
 
 pub const UI_SCENES: &[&str] = &[
@@ -102,7 +102,7 @@ pub fn print_scenes() {
     let ui = UiDisplay::from_env();
     println!(
         "Slint UI scenes (render {}x{}, fb {}x{}, ui-scale {}):",
-        ui.render_w(), ui.render_h(), FB_W, FB_H, ui.scale
+        ui.render_w(), ui.render_h(), FB_W, FB_H, SLINT_UI_SCALE
     );
     for s in UI_SCENES {
         println!("  {s}");
@@ -163,49 +163,49 @@ pub fn run_ui(f: &mut Fpga) {
     match scene.as_str() {
         "demo" => {
             let app = slint_ui::app::AppWindow::new().expect("AppWindow::new");
-            app.global::<slint_ui::app::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::app::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "full_motion" => {
             let app = slint_ui::full_motion::FullMotion::new().expect("FullMotion::new");
-            app.global::<slint_ui::full_motion::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::full_motion::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "static_ui" => {
             let app = slint_ui::static_ui::StaticUi::new().expect("StaticUi::new");
-            app.global::<slint_ui::static_ui::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::static_ui::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "local_motion" => {
             let app = slint_ui::local_motion::LocalMotion::new().expect("LocalMotion::new");
-            app.global::<slint_ui::local_motion::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::local_motion::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "text_heavy" => {
             let app = slint_ui::text_heavy::TextHeavy::new().expect("TextHeavy::new");
-            app.global::<slint_ui::text_heavy::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::text_heavy::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "solid_fill" => {
             let app = slint_ui::solid_fill::SolidFill::new().expect("SolidFill::new");
-            app.global::<slint_ui::solid_fill::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::solid_fill::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "list_scroll" => {
             let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
-            app.global::<slint_ui::list_scroll::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::list_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
@@ -213,7 +213,7 @@ pub fn run_ui(f: &mut Fpga) {
         "controller_test" => {
             let pad = open_pads();
             let app = slint_ui::controller::ControllerTest::new().expect("ControllerTest::new");
-            app.global::<slint_ui::controller::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::controller::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             sync_bridge(&app, &pad);
             app.show().expect("show");
@@ -223,7 +223,7 @@ pub fn run_ui(f: &mut Fpga) {
         "launcher" => {
             let pad = open_pads();
             let app = slint_ui::launcher::Launcher::new().expect("Launcher::new");
-            app.global::<slint_ui::launcher::MisterUi>().set_scale(ui.scale);
+            app.global::<slint_ui::launcher::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
