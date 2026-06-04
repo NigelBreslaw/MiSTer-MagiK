@@ -57,3 +57,5 @@ Run **A0** before editing toolchain files.
 **cross-rs:** crates.io **0.2.5** only (`cargo install cross --locked` → `ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5`).
 
 **Slint:** **`master` via `[patch.crates-io]`** (project default). Bench notes: [`slint-master.md`](slint-master.md).
+
+**P2 pixel-scale (half-res render + 2× upscale):** [`P2-pixel-scale.md`](P2-pixel-scale.md).

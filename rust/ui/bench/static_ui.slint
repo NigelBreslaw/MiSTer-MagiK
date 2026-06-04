@@ -1,52 +1,51 @@
-// Static layout — no animation-tick (minimal dirty region after first frame).
-import "../fonts/DejaVuSans.ttf";
+import "../fonts/PressStart2P-Regular.ttf";
 
 export component StaticUi inherits Window {
-    width: 1920px;
-    height: 1080px;
+    width: 960px;
+    height: 540px;
     background: #0b1020;
-    default-font-family: "DejaVu Sans";
+    default-font-family: "Press Start 2P";
 
     Text {
-        x: 64px;
-        y: 48px;
+        x: 32px;
+        y: 24px;
         text: "bench: static_ui";
-        font-size: 44px;
+        font-size: 22px;
         color: #e8ecff;
     }
 
     Rectangle {
-        x: 64px;
-        y: 200px;
-        width: parent.width - 128px;
-        height: 96px;
+        x: 32px;
+        y: 100px;
+        width: parent.width - 64px;
+        height: 48px;
         background: #1a2744;
-        border-radius: 14px;
+        border-radius: 0px;
 
         Text {
-            x: 24px;
-            y: 24px;
+            x: 12px;
+            y: 12px;
             text: "No animation — measures idle repaint / fbcon persistence";
-            font-size: 26px;
+            font-size: 13px;
             color: #8b93b8;
         }
     }
 
     Rectangle {
-        x: 64px;
-        y: 360px;
-        width: 400px;
-        height: 400px;
+        x: 32px;
+        y: 180px;
+        width: 200px;
+        height: 200px;
         background: #2d6a4f;
-        border-radius: 8px;
+        border-radius: 0px;
     }
 
     Rectangle {
-        x: 520px;
-        y: 360px;
-        width: 400px;
-        height: 400px;
+        x: 260px;
+        y: 180px;
+        width: 200px;
+        height: 200px;
         background: #9d4edd;
-        border-radius: 8px;
+        border-radius: 0px;
     }
 }

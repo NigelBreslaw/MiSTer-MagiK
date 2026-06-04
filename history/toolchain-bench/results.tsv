@@ -41,3 +41,10 @@ slint-master	local_motion	2026-06-03T11:05:19Z	1.96.0		1580228	363	15215	1062	96
 slint-master	text_heavy	2026-06-03T11:05:39Z	1.96.0		1580228	53534	10967	14058	1040	13	82	91	0	yes	skip-build; profile=release-device
 slint-master	solid_fill	2026-06-03T11:06:00Z	1.96.0		1580228	19821	6220	13728	980	25	79	92	0	yes	skip-build; profile=release-device
 slint-master	list_scroll	2026-06-03T11:06:20Z	1.96.0		1580228	35423	8044	12625	940	18	81	100	0	yes	skip-build; profile=release-device
+P2	demo	2026-06-04T16:19:32Z	1.96.0		2407632	676	5581	10375	310	60	63	70	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	full_motion	2026-06-04T16:19:50Z	1.96.0		2407632	666	5628	10339	310	60	62	69	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	static_ui	2026-06-04T16:20:08Z	1.96.0		2407632	1	16654	1	0	61	0	3	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	local_motion	2026-06-04T16:20:26Z	1.96.0		2407632	79	14993	1577	48	60	9	14	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	text_heavy	2026-06-04T16:20:44Z	1.96.0		2407632	23412	9356	17298	520	20	77	86	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	solid_fill	2026-06-04T16:21:02Z	1.96.0		2407632	4879	11850	16577	490	30	60	67	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	list_scroll	2026-06-04T16:21:20Z	1.96.0		2407632	13903	4513	15605	470	29	82	93	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P

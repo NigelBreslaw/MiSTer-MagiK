@@ -42,8 +42,8 @@ Remaining work: live-mode geometry, in-game settings strategy (§7).
   (little-endian). No `/dev/dri` (no DRM/KMS).
 - FB mode is set by writing `/sys/module/MiSTer_fb/parameters/mode` as
   `"<fmt> <rb> <width> <height> <stride>"`, e.g. `8888 1 1920 1080 7680`.
-- No system fonts on MiSTer — the Rust build embeds DejaVu in the binary
-  (`rust/ui/fonts/DejaVuSans.ttf`).
+- No system fonts on MiSTer — the Rust build embeds fonts in the binary
+  (`rust/ui/fonts/` — P2 experiment: Press Start 2P SIL OFL; DejaVu retained for revert).
 - Relevant `MiSTer.ini` keys observed: `direct_video=1`, `vga_scaler=1`,
   `fb_terminal=1`, `fb_size=0`.
 - `MiSTer.ini` has a backup at `/media/fat/MiSTer.ini.bak`.

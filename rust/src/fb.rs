@@ -201,6 +201,7 @@ impl Display {
     }
 
     /// Copy rows [y0,y1) from `src` into the framebuffer (write-combined).
+    /// `src` stride is `self.w`; used when render size equals fb size.
     pub fn copy_rows(&mut self, src: &[Pixel], y0: usize, y1: usize) {
         let w = self.w;
         let dst = self.buffer_mut();
@@ -208,6 +209,47 @@ impl Display {
         let b = (y1 * w).min(dst.len());
         if b > a {
             dst[a..b].copy_from_slice(&src[a..b]);
+        }
+    }
+
+    /// Copy logical rows [src_y0, src_y1) from `src` (stride `src_w`) into the fb.
+    /// When `scale == 1`, `src_w` must equal `self.w` and rows map 1:1.
+    /// When `scale > 1`, each source pixel becomes a `scale`×`scale` block (nearest).
+    pub fn copy_rows_scaled(
+        &mut self,
+        scale: usize,
+        src: &[Pixel],
+        src_w: usize,
+        src_y0: usize,
+        src_y1: usize,
+    ) {
+        if scale <= 1 {
+            debug_assert_eq!(src_w, self.w);
+            self.copy_rows(src, src_y0, src_y1);
+            return;
+        }
+        let dst_w = self.w;
+        let dst_h = self.h;
+        let dst = self.buffer_mut();
+        for sy in src_y0..src_y1 {
+            let src_row = &src[sy * src_w..(sy + 1) * src_w];
+            let py0 = sy * scale;
+            for dy in 0..scale {
+                let py = py0 + dy;
+                if py >= dst_h {
+                    break;
+                }
+                let dst_row = &mut dst[py * dst_w..(py + 1) * dst_w];
+                for (sx, &color) in src_row.iter().enumerate() {
+                    let px0 = sx * scale;
+                    for dx in 0..scale {
+                        let dst_x = px0 + dx;
+                        if dst_x < dst_w {
+                            dst_row[dst_x] = color;
+                        }
+                    }
+                }
+            }
         }
     }
 

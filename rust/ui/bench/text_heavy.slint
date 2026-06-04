@@ -1,32 +1,31 @@
-// Many text primitives — glyph embedding / layout stress.
-import "../fonts/DejaVuSans.ttf";
+import "../fonts/PressStart2P-Regular.ttf";
 
 export component TextHeavy inherits Window {
-    width: 1920px;
-    height: 1080px;
+    width: 960px;
+    height: 540px;
     background: #0b1020;
-    default-font-family: "DejaVu Sans";
+    default-font-family: "Press Start 2P";
 
     property <duration> tick: animation-tick();
     property <int> scroll: Math.floor(Math.mod(tick / 1ms, 8000) / 8000 * 8);
 
     Text {
-        x: 64px;
-        y: 40px;
+        x: 32px;
+        y: 20px;
         text: "bench: text_heavy (scroll " + scroll + ")";
-        font-size: 40px;
+        font-size: 20px;
         color: #e8ecff;
     }
 
     VerticalLayout {
-        x: 64px;
-        y: 120px;
-        width: parent.width - 128px;
-        spacing: 6px;
+        x: 32px;
+        y: 60px;
+        width: parent.width - 64px;
+        spacing: 3px;
 
-        for i in 32: Text {
+        for i in 28: Text {
             text: "Line " + (i + scroll) + ": The quick brown fox jumps over the lazy dog — 0123456789";
-            font-size: 22px;
+            font-size: 11px;
             color: #c8d0f0;
         }
     }
