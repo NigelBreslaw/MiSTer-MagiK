@@ -70,3 +70,10 @@ LS-rs1	list_scroll	2026-06-04T18:33:16Z	1.96.0		4218064	26581	12154	11207	338	20
 LS-rs2	list_scroll	2026-06-04T18:33:33Z	1.96.0		4218064	105295	8344	8028	693	8	88			yes	render_scale=2; design=960x540; render=1920x1080
 LS-rs1	list_scroll	2026-06-04T18:51:56Z	1.96.0		2727120	27087	8490	7163	336	24	77			yes	render_scale=1; design=960x540; render=960x540; fb_scale=2
 LS-rs2	list_scroll	2026-06-04T18:52:13Z	1.96.0		2727120	26541	7835	7044	335	25	77			yes	render_scale=2; design=960x540; render=1920x1080
+main-jun4	demo	2026-06-04T19:45:30Z	1.96.0		2768080	2011	8048	6560	310	60	49	54	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
+main-jun4	full_motion	2026-06-04T19:45:48Z	1.96.0		2768080	2019	8005	6595	310	60	49	55	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
+main-jun4	static_ui	2026-06-04T19:46:07Z	1.96.0		2768080	1	16650	1	0	61	0	3	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
+main-jun4	local_motion	2026-06-04T19:46:25Z	1.96.0		2768080	272	15399	975	48	60	7	10	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
+main-jun4	text_heavy	2026-06-04T19:46:44Z	1.96.0		2768080	118771	6106	10628	520	8	90	98	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
+main-jun4	solid_fill	2026-06-04T19:47:03Z	1.96.0		2768080	4677	2344	10319	490	58	84	95	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
+main-jun4	list_scroll	2026-06-04T19:47:21Z	1.96.0		2768080	28075	11036	7140	337	22	72	94	0	yes	skip-build; profile=release-device; prep=kill-mister-ui; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P
