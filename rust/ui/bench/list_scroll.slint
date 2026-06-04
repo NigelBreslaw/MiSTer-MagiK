@@ -1,6 +1,6 @@
 // List-style bench: ListView + `for` rows (auto scroll via viewport-y).
 // All lengths are base units × ui-scale (1 = 960×540, 2 = 1920×1080).
-import { ListView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
 import "../fonts/PressStart2P-Regular.ttf";
@@ -29,7 +29,7 @@ export component ListScroll inherits MisterWindow {
         color: #e8ecff;
     }
 
-    scroll-panel := ListView {
+    scroll-panel := ScrollView {
         x: 32px * s;
         y: 80px * s;
         width: panel-width;
@@ -40,6 +40,8 @@ export component ListScroll inherits MisterWindow {
         viewport-width: self.width;
         mouse-drag-pan-enabled: true;
 
+        VerticalLayout {
+            alignment: start;
         for row[i] in row-count: Rectangle {
             height: row-height;
             width: panel-width;
@@ -52,5 +54,6 @@ export component ListScroll inherits MisterWindow {
                 color: (mod(i, 2) == 0 ? white : #6b6b6b);
             }
         }
+    }
     }
 }
