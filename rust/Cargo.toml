@@ -17,6 +17,11 @@ libc = "0.2"
 slint = { version = "1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+pprof = { version = "0.14", optional = true, default-features = false, features = ["flamegraph"] }
+
+[features]
+default = []
+profile = ["dep:pprof"]
 
 [build-dependencies]
 slint-build = "1"
@@ -40,3 +45,9 @@ panic = "abort"
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+[profile.release-device-profile]
+# Profiling build: symbols + frame pointers for pprof flamegraphs on device.
+inherits = "release-device"
+strip = false
+debug = 1

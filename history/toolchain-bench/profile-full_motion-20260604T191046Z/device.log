@@ -1,0 +1,55 @@
+___PROFILE_RC___
+0
+___PROFILE_UI_LOG___
+mister-magic-fb [ui] (arch=arm)
+ui scene=full_motion secs=20
+slint-scale=1 render=960x540 fb=1920x1080 fb_scale=2 bench_render_scale=1
+vt: KD_GRAPHICS (fbcon cursor hidden)
+fb routed (support_flag=1); Slint software renderer (vsync, dirty-row copy)
+frame_profile: mode=Summary slow_threshold_us=16667 file=/tmp/mister-frame-full_motion-20260604T191046Z.tsv
+cpu_profile: sampling at 99 Hz → /tmp/mister-pprof-full_motion-20260604T191046Z.svg
+bench scene running 20s (vsync-locked, dirty-row copy)...
+  fps ~ 18  | anim 40us  render 3069us  vsync-wait 23715us  copy 6836us (323 logical rows avg)
+  fps ~ 30  | anim 37us  render 2617us  vsync-wait 24800us  copy 6413us (310 logical rows avg)
+  fps ~ 30  | anim 48us  render 2729us  vsync-wait 23829us  copy 6740us (310 logical rows avg)
+  fps ~ 31  | anim 39us  render 3061us  vsync-wait 22974us  copy 7239us (310 logical rows avg)
+  fps ~ 30  | anim 40us  render 3082us  vsync-wait 22931us  copy 7263us (310 logical rows avg)
+  fps ~ 31  | anim 38us  render 3091us  vsync-wait 22900us  copy 7283us (310 logical rows avg)
+  fps ~ 31  | anim 38us  render 3061us  vsync-wait 22998us  copy 7216us (310 logical rows avg)
+  fps ~ 30  | anim 39us  render 3017us  vsync-wait 23709us  copy 7077us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2619us  vsync-wait 24232us  copy 6429us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2624us  vsync-wait 24233us  copy 6423us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2626us  vsync-wait 24233us  copy 6424us (310 logical rows avg)
+  fps ~ 30  | anim 35us  render 2629us  vsync-wait 24233us  copy 6422us (310 logical rows avg)
+  fps ~ 31  | anim 36us  render 2660us  vsync-wait 24179us  copy 6439us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2619us  vsync-wait 24246us  copy 6415us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2622us  vsync-wait 24242us  copy 6418us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2626us  vsync-wait 24227us  copy 6428us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2622us  vsync-wait 24237us  copy 6421us (310 logical rows avg)
+  fps ~ 31  | anim 36us  render 2652us  vsync-wait 24152us  copy 6476us (310 logical rows avg)
+  fps ~ 31  | anim 36us  render 2618us  vsync-wait 24246us  copy 6418us (310 logical rows avg)
+done: 587 frames in 20.0s = 29.3 fps avg
+  fps ~ 16  | anim 38us  render 2613us  vsync-wait 24248us  copy 6414us (310 logical rows avg)
+frame_profile: wrote 587 frames to /tmp/mister-frame-full_motion-20260604T191046Z.tsv
+=== frame profile summary (587 frames) ===
+  total: min=25795 p50=33318 p95=33393 p99=33797 max=49986 avg=33384
+  anim: min=17 p50=35 p95=50 p99=77 max=308 avg=37
+  render: min=2568 p50=2632 p95=3100 p99=3234 max=10865 avg=2759
+  vsync: min=16674 p50=24228 p95=24287 p99=24313 max=40908 avg=23925
+  copy: min=6371 p50=6428 p95=7305 p99=7394 max=13967 avg=6661
+frames >= 16667us (59 Hz budget): 587 (100.00%)
+slow-frame dominant phase: anim=0 render=0 vsync=587 copy=0
+  total_ms histogram: [20, 30ms)=1 [30ms,   )=586
+  copy_us histogram: [ 5ms, 8ms)=583 [ 8ms,10ms)=2 [10ms,12ms)=1 [12ms,16ms)=1
+worst 10 frames (by total_us):
+  #26 total=49986us anim=34 render=2610 vsync=40908 copy=6434 rows=311 dominant=vsync
+  #222 total=47258us anim=44 render=4991 vsync=35785 copy=6438 rows=311 dominant=vsync
+  #0 total=47032us anim=17 render=10865 vsync=22183 copy=13967 rows=540 dominant=vsync
+  #70 total=37129us anim=36 render=2623 vsync=24289 copy=10181 rows=311 dominant=vsync
+  #221 total=35321us anim=55 render=3076 vsync=23041 copy=9149 rows=311 dominant=vsync
+  #522 total=35268us anim=34 render=2620 vsync=24298 copy=8316 rows=311 dominant=vsync
+  #371 total=33797us anim=35 render=2636 vsync=24222 copy=6904 rows=311 dominant=vsync
+  #190 total=33521us anim=34 render=3075 vsync=23018 copy=7394 rows=311 dominant=vsync
+  #251 total=33512us anim=35 render=2637 vsync=24229 copy=6611 rows=311 dominant=vsync
+  #466 total=33486us anim=35 render=2628 vsync=24233 copy=6590 rows=311 dominant=vsync
+cpu_profile: wrote flamegraph to /tmp/mister-pprof-full_motion-20260604T191046Z.svg (99 Hz samples)

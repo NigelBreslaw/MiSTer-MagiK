@@ -17,9 +17,14 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PROFILE=release
+CARGO_FEATURES=()
 for arg in "$@"; do
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
+    --profile)
+      PROFILE=release-device-profile
+      CARGO_FEATURES=(--features profile)
+      ;;
     --fast|--release) PROFILE=release ;;
     -h|--help)
       sed -n '4,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -36,9 +41,14 @@ if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ "$PROFILE" = release-device ]; then
+if [ "$PROFILE" = release-device ] || [ "$PROFILE" = release-device-profile ]; then
   export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9 -C target-feature=+neon,+vfp3"
-  echo "==> cross build profile=release-device (fat LTO + NEON)"
+  if [ "$PROFILE" = release-device-profile ]; then
+    export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
+    echo "==> cross build profile=release-device-profile (symbols + pprof + NEON)"
+  else
+    echo "==> cross build profile=release-device (fat LTO + NEON)"
+  fi
 else
   unset RUSTFLAGS
   echo "==> cross build profile=release (thin LTO, fast)"
@@ -46,7 +56,7 @@ fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
-if ! cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE" 2>&1 | tee "$BUILD_LOG"; then
+if ! cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE" "${CARGO_FEATURES[@]}" 2>&1 | tee "$BUILD_LOG"; then
   exit 1
 fi
 if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then

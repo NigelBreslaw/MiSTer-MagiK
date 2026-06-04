@@ -1,0 +1,47 @@
+___PROFILE_RC___
+0
+___PROFILE_UI_LOG___
+mister-magic-fb [ui] (arch=arm)
+ui scene=full_motion secs=10
+slint-scale=1 render=960x540 fb=1920x1080 fb_scale=2 bench_render_scale=1
+vt: KD_GRAPHICS (fbcon cursor hidden)
+fb routed (support_flag=1); Slint software renderer (vsync, dirty-row copy)
+frame_profile: mode=Summary slow_threshold_us=16667 file=/tmp/mister-frame-full_motion-20260604T191823Z.tsv
+cpu_profile: sampling at 99 Hz → /tmp/mister-pprof-full_motion-20260604T191823Z.svg
+bench scene running 10s (vsync-locked, dirty-row copy)...
+  fps ~ 17  | anim 37us  render 3538us  vsync-wait 23736us  copy 7678us (324 logical rows avg)
+  fps ~ 30  | anim 36us  render 3042us  vsync-wait 23004us  copy 7234us (310 logical rows avg)
+  fps ~ 31  | anim 36us  render 2991us  vsync-wait 23078us  copy 7209us (310 logical rows avg)
+  fps ~ 31  | anim 36us  render 2985us  vsync-wait 23141us  copy 7155us (310 logical rows avg)
+  fps ~ 31  | anim 35us  render 2986us  vsync-wait 23099us  copy 7195us (310 logical rows avg)
+  fps ~ 31  | anim 38us  render 2986us  vsync-wait 23112us  copy 7177us (310 logical rows avg)
+  fps ~ 30  | anim 41us  render 3025us  vsync-wait 23636us  copy 7169us (310 logical rows avg)
+  fps ~ 31  | anim 39us  render 2954us  vsync-wait 23155us  copy 7163us (310 logical rows avg)
+  fps ~ 31  | anim 36us  render 2993us  vsync-wait 23085us  copy 7202us (310 logical rows avg)
+done: 286 frames in 10.0s = 28.6 fps avg
+  fps ~ 23  | anim 38us  render 2989us  vsync-wait 23089us  copy 7200us (310 logical rows avg)
+frame_profile: wrote 286 frames to /tmp/mister-frame-full_motion-20260604T191823Z.tsv
+=== frame profile summary (286 frames) ===
+  wall: min=31747 p50=33325 p95=33413 p99=35080 max=53801 avg=33481
+  phases_sum: min=31741 p50=33319 p95=33406 p99=35071 max=53794 avg=33474
+  anim: min=32 p50=35 p95=49 p99=54 max=119 avg=37
+  render: min=2913 p50=2993 p95=3034 p99=3086 max=12326 avg=3027
+  vsync: min=20114 p50=23116 p95=23195 p99=23220 max=37949 avg=23191
+  copy: min=7049 p50=7190 p95=7247 p99=7343 max=15867 avg=7218
+frames >= 16667us (59 Hz budget): 286 (100.00%)
+slow-frame dominant phase: anim=0 render=0 vsync=286 copy=0
+  wall_ms histogram: [30ms,   )=286
+  copy_us histogram: [ 5ms, 8ms)=284 [ 8ms,10ms)=1 [12ms,16ms)=1
+worst 10 frames (by total_us):
+  #0 wall=53801us phases=53794 anim=47 render=12326 vsync=25554 copy=15867 rows=540 dominant=vsync
+  #181 wall=49720us phases=49713 anim=50 render=4492 vsync=37949 copy=7222 rows=311 dominant=vsync
+  #1 wall=41336us phases=41328 anim=36 render=3060 vsync=31019 copy=7213 rows=311 dominant=vsync
+  #29 wall=35080us phases=35071 anim=54 render=3007 vsync=23219 copy=8791 rows=310 dominant=vsync
+  #180 wall=33662us phases=33657 anim=34 render=3013 vsync=23183 copy=7427 rows=311 dominant=vsync
+  #159 wall=33488us phases=33481 anim=42 render=2997 vsync=23099 copy=7343 rows=311 dominant=vsync
+  #188 wall=33460us phases=33453 anim=43 render=2989 vsync=23188 copy=7233 rows=311 dominant=vsync
+  #38 wall=33451us phases=33444 anim=35 render=3035 vsync=23142 copy=7232 rows=311 dominant=vsync
+  #74 wall=33449us phases=33444 anim=34 render=3044 vsync=23134 copy=7232 rows=310 dominant=vsync
+  #14 wall=33448us phases=33442 anim=51 render=3026 vsync=23208 copy=7157 rows=310 dominant=vsync
+cpu_profile: 0 unique stacks, 0 sample hits, 9.6s at 99 Hz
+cpu_profile: no CPU samples collected — check perf_event_paranoid (try: echo -1 > /proc/sys/kernel/perf_event_paranoid)

@@ -6,6 +6,7 @@ Two **release** profiles separate fast host compiles from the binary we ship to 
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
 | **`release`** | `build-arm.sh` or `--fast` | thin (`lto = true`) | 16 (default) | generic armv7 | ~3 min | ~1.65 MB | Daily Slint/UI iteration, quick deploy |
 | **`release-device`** | `build-arm.sh --device` | fat | 1 | cortex-a9 + NEON | ~5 min | ~1.61 MB | SD card / bench / production |
+| **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
 Benchmark labels: **A0** ≈ `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
 
@@ -19,6 +20,11 @@ rust/build-arm.sh
 # Full MiSTer release (fat LTO + NEON via RUSTFLAGS)
 rust/build-arm.sh --device
 # → target/.../release-device/mister-magic-fb
+
+# Profiling build (symbols, pprof feature — do not ship)
+rust/build-arm.sh --profile
+# → target/.../release-device-profile/mister-magic-fb
+# Run on device: scripts/profile-scene.sh full_motion 30
 
 # Deploy (default = release-device)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
