@@ -1,69 +1,67 @@
-// Demo UI for the native MiSTer frontend (software renderer + vsync).
-// P2: 960×540 logical, 2× nearest upscale to 1080p HDMI.
-
+import { MisterWindow, MisterUi } from "mister_window.slint";
+export { MisterUi }
 import "fonts/PressStart2P-Regular.ttf";
 
-export component AppWindow inherits Window {
-    width: 960px;
-    height: 540px;
+export component AppWindow inherits MisterWindow {
     background: #0b1020;
     default-font-family: "Press Start 2P";
 
+    property <int> s: MisterUi.scale;
     property <duration> tick: animation-tick();
     property <float> phase: Math.mod(tick / 1ms, 4000) / 4000;
     property <float> bounce: phase < 0.5 ? phase * 2 : 2 - phase * 2;
     property <float> angle: Math.mod(tick / 1ms, 3000) / 3000 * 360;
 
     Text {
-        x: 32px;
-        y: 24px;
+        x: 32px * s;
+        y: 24px * s;
         text: "MiSTer · Slint · software renderer";
-        font-size: 22px;
+        font-size: 24px * s;
         color: #e8ecff;
     }
 
     Rectangle {
-        x: 32px;
-        y: 100px;
-        width: parent.width - 64px;
-        height: 48px;
+        x: 32px * s;
+        y: 100px * s;
+        width: parent.width - 64px * s;
+        height: 48px * s;
         background: #131c33;
-        border-radius: 0px;
+        border-radius: 7px * s;
         clip: true;
 
         Rectangle {
-            width: 140px;
-            height: parent.height - 12px;
-            y: 6px;
-            x: 6px + (parent.width - 140px - 12px) * root.bounce;
-            border-radius: 0px;
+            width: 140px * s;
+            height: parent.height - 12px * s;
+            y: 6px * s;
+            x: 6px * s + (parent.width - 140px * s - 12px * s) * root.bounce;
+            border-radius: 5px * s;
             background: @linear-gradient(90deg, #ff5d73 0%, #ffd166 50%, #06d6a0 100%);
         }
     }
 
     Rectangle {
-        x: parent.width / 2 - 110px;
-        y: 210px;
-        width: 220px;
-        height: 220px;
+        x: parent.width / 2 - 110px * s;
+        y: 210px * s;
+        width: 220px * s;
+        height: 220px * s;
 
         for i in 12: Rectangle {
             property <angle> a: (root.angle + i * 30) * 1deg;
-            width: 13px;
-            height: 13px;
-            border-radius: 0px;
-            x: parent.width / 2 - 6px + 90px * Math.cos(a);
-            y: parent.height / 2 - 6px + 90px * Math.sin(a);
+            width: 13px * s;
+            height: 13px * s;
+            border-radius: 6px * s;
+            x: parent.width / 2 - 6px * s + 90px * s * Math.cos(a);
+            y: parent.height / 2 - 6px * s + 90px * s * Math.sin(a);
             background: #4cc9f0;
             opacity: 0.4 + 0.6 * (i / 12.0);
         }
     }
 
     Text {
-        x: 32px;
-        y: parent.height - 48px;
+        x: 32px * s;
+        y: parent.height - 48px * s;
         text: "vsync-locked 60fps · fork-free framebuffer";
-        font-size: 14px;
+        font-size: 16px * s;
         color: #8b93b8;
     }
 }

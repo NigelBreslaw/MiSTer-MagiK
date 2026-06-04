@@ -41,10 +41,30 @@ slint-master	local_motion	2026-06-03T11:05:19Z	1.96.0		1580228	363	15215	1062	96
 slint-master	text_heavy	2026-06-03T11:05:39Z	1.96.0		1580228	53534	10967	14058	1040	13	82	91	0	yes	skip-build; profile=release-device
 slint-master	solid_fill	2026-06-03T11:06:00Z	1.96.0		1580228	19821	6220	13728	980	25	79	92	0	yes	skip-build; profile=release-device
 slint-master	list_scroll	2026-06-03T11:06:20Z	1.96.0		1580228	35423	8044	12625	940	18	81	100	0	yes	skip-build; profile=release-device
-P2	demo	2026-06-04T16:19:32Z	1.96.0		2407632	676	5581	10375	310	60	63	70	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
-P2	full_motion	2026-06-04T16:19:50Z	1.96.0		2407632	666	5628	10339	310	60	62	69	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
-P2	static_ui	2026-06-04T16:20:08Z	1.96.0		2407632	1	16654	1	0	61	0	3	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
-P2	local_motion	2026-06-04T16:20:26Z	1.96.0		2407632	79	14993	1577	48	60	9	14	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
-P2	text_heavy	2026-06-04T16:20:44Z	1.96.0		2407632	23412	9356	17298	520	20	77	86	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
-P2	solid_fill	2026-06-04T16:21:02Z	1.96.0		2407632	4879	11850	16577	490	30	60	67	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
-P2	list_scroll	2026-06-04T16:21:20Z	1.96.0		2407632	13903	4513	15605	470	29	82	93	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	demo	2026-06-04T16:34:48Z	1.96.0		2440400	1798	4393	10442	310	60	69	76	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	full_motion	2026-06-04T16:35:06Z	1.96.0		2440400	1763	4561	10308	310	60	69	76	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	static_ui	2026-06-04T16:35:24Z	1.96.0		2440400	1	16654	1	0	61	0	4	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	local_motion	2026-06-04T16:35:43Z	1.96.0		2440400	84	14975	1590	48	60	9	13	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	text_heavy	2026-06-04T16:36:01Z	1.96.0		2440400	45856	4481	17241	520	15	88	99	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	solid_fill	2026-06-04T16:36:19Z	1.96.0		2440400	4867	11884	16554	490	30	60	67	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+P2	list_scroll	2026-06-04T16:36:37Z	1.96.0		2440400	19890	14255	15722	470	21	67	75	0	yes	skip-build; profile=release-device; pixel_scale=2; render=960x540; font=PressStart2P
+PS	demo	2026-06-04T16:43:35Z	1.96.0		3865816	4984	4875	7183	619	59	68	76	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+PS	full_motion	2026-06-04T16:43:53Z	1.96.0		3865816	4854	4759	7196	619	60	69	77	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+PS	static_ui	2026-06-04T16:44:11Z	1.96.0		3865816	1	16653	1	0	61	0	6	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+PS	local_motion	2026-06-04T16:44:29Z	1.96.0		3865816	509	15223	912	96	60	8	15	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+PS	text_heavy	2026-06-04T16:44:47Z	1.96.0		3865816	341272	4584	12600	1040	3	93	103	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+PS	solid_fill	2026-06-04T16:45:05Z	1.96.0		3865816	16015	7129	11295	980	29	77	87	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+PS	list_scroll	2026-06-04T16:45:23Z	1.96.0		3865816	154977	6049	10795	940	6	91	101	0	yes	skip-build; profile=release; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	demo	2026-06-04T18:05:22Z	1.96.0		3804368	5109	4766	7118	619	59	69	77	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	full_motion	2026-06-04T18:05:40Z	1.96.0		3804368	5229	4437	7380	617	59	71	79	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	static_ui	2026-06-04T18:05:58Z	1.96.0		3804368	1	16653	1	0	61	0	6	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	local_motion	2026-06-04T18:06:17Z	1.96.0		3804368	512	15243	888	96	60	8	13	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	text_heavy	2026-06-04T18:06:34Z	1.96.0		3804368	379781	9540	11791	1040	3	93	102	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	solid_fill	2026-06-04T18:06:53Z	1.96.0		3804368	15169	8245	10768	980	29	73	84	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS	list_scroll	2026-06-04T18:07:10Z	1.96.0		3804368	176838	9571	10433	905	5	90	100	0	yes	skip-build; profile=release-device; render=1920x1080; font=PressStart2P; sizes=16,32,48
+LS-rs1	list_scroll	2026-06-04T18:20:14Z	1.96.0		2686160	17464	6189	10396	336	29	77			yes	render_scale=1; design=960x540; render=960x540; fb_scale=2
+LS-rs2	list_scroll	2026-06-04T18:20:32Z	1.96.0		2686160	17285	12026	3963	344	30	60			yes	render_scale=2; design=960x540; render=1920x1080
+LS-rs1	list_scroll	2026-06-04T18:25:03Z	1.96.0		2686160	17753	5776	10508	336	29	79			yes	render_scale=1; design=960x540; render=960x540; fb_scale=2
+LS-rs2	list_scroll	2026-06-04T18:25:20Z	1.96.0		2686160	17316	12153	3902	344	30	60			yes	render_scale=2; design=960x540; render=1920x1080
+LS-rs1	list_scroll	2026-06-04T18:33:16Z	1.96.0		4218064	26581	12154	11207	338	20	72			yes	render_scale=1; design=960x540; render=960x540; fb_scale=2
+LS-rs2	list_scroll	2026-06-04T18:33:33Z	1.96.0		4218064	105295	8344	8028	693	8	88			yes	render_scale=2; design=960x540; render=1920x1080

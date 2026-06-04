@@ -16,6 +16,15 @@ use std::os::unix::io::AsRawFd;
 
 const FBIO_WAITFORVSYNC: libc::c_ulong = 0x4004_4620;
 
+/// Cutoff for glyph/text edges: coverage below this is transparent, at/above is
+/// fully opaque (crisp pixel font after 2× upscale). Tune via `MISTER_GLYPH_ALPHA_THRESHOLD`.
+fn glyph_alpha_threshold() -> u8 {
+    std::env::var("MISTER_GLYPH_ALPHA_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(128)
+}
+
 /// One framebuffer pixel in MiSTer's xRGB-8888 layout, stored as 0x00RRGGBB.
 /// (Colours verified correct on HDMI, so no R/B swap needed despite FB_FMT_RxB.)
 #[derive(Clone, Copy)]
@@ -25,14 +34,10 @@ pub struct Pixel(pub u32);
 impl TargetPixel for Pixel {
     #[inline]
     fn blend(&mut self, c: PremultipliedRgbaColor) {
-        let inv = (255 - c.alpha) as u32;
-        let r = (self.0 >> 16) & 0xff;
-        let g = (self.0 >> 8) & 0xff;
-        let b = self.0 & 0xff;
-        let r = c.red as u32 + (r * inv) / 255;
-        let g = c.green as u32 + (g * inv) / 255;
-        let b = c.blue as u32 + (b * inv) / 255;
-        self.0 = (r << 16) | (g << 8) | b;
+        if c.alpha < glyph_alpha_threshold() {
+            return;
+        }
+        self.0 = ((c.red as u32) << 16) | ((c.green as u32) << 8) | (c.blue as u32);
     }
 
     #[inline]

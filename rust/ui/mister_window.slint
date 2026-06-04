@@ -1,0 +1,9 @@
+// Runtime scale: 1 = 960×540, 2 = 1920×1080. Rust sets `MisterUi.scale` before show.
+export global MisterUi {
+    in-out property <int> scale: 1;
+}
+
+export component MisterWindow inherits Window {
+    width: 960px * MisterUi.scale;
+    height: 540px * MisterUi.scale;
+}

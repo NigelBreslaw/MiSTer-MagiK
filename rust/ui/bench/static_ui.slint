@@ -1,51 +1,53 @@
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
 import "../fonts/PressStart2P-Regular.ttf";
 
-export component StaticUi inherits Window {
-    width: 960px;
-    height: 540px;
+export component StaticUi inherits MisterWindow {
     background: #0b1020;
     default-font-family: "Press Start 2P";
 
+    property <int> s: MisterUi.scale;
+
     Text {
-        x: 32px;
-        y: 24px;
+        x: 32px * s;
+        y: 24px * s;
         text: "bench: static_ui";
-        font-size: 22px;
+        font-size: 24px * s;
         color: #e8ecff;
     }
 
     Rectangle {
-        x: 32px;
-        y: 100px;
-        width: parent.width - 64px;
-        height: 48px;
+        x: 32px * s;
+        y: 100px * s;
+        width: parent.width - 64px * s;
+        height: 48px * s;
         background: #1a2744;
-        border-radius: 0px;
+        border-radius: 7px * s;
 
         Text {
-            x: 12px;
-            y: 12px;
+            x: 12px * s;
+            y: 12px * s;
             text: "No animation — measures idle repaint / fbcon persistence";
-            font-size: 13px;
+            font-size: 16px * s;
             color: #8b93b8;
         }
     }
 
     Rectangle {
-        x: 32px;
-        y: 180px;
-        width: 200px;
-        height: 200px;
+        x: 32px * s;
+        y: 180px * s;
+        width: 200px * s;
+        height: 200px * s;
         background: #2d6a4f;
-        border-radius: 0px;
+        border-radius: 4px * s;
     }
 
     Rectangle {
-        x: 260px;
-        y: 180px;
-        width: 200px;
-        height: 200px;
+        x: 260px * s;
+        y: 180px * s;
+        width: 200px * s;
+        height: 200px * s;
         background: #9d4edd;
-        border-radius: 0px;
+        border-radius: 4px * s;
     }
 }

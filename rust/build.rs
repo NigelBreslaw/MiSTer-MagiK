@@ -1,4 +1,9 @@
 fn main() {
+    // Press Start 2P at 960×540 design sizes (×2 when MISTER_RENDER_SCALE=2).
+    if std::env::var("SLINT_FONT_SIZES").is_err() {
+        std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32,48");
+    }
+
     let sources = [
         "ui/app.slint",
         "ui/bench/full_motion.slint",
