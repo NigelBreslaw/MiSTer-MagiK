@@ -1,3 +1,5 @@
+import { MisterWindow, MisterUi } from "mister_window.slint";
+export { MisterUi }
 import { MisterBridge } from "mister_bridge.slint";
 import { ControllerPanel } from "controller_test.slint";
 import { SetupOverlay } from "controller_setup.slint";
@@ -9,7 +11,7 @@ component LauncherTile inherits Rectangle {
     in property <string> subtitle;
     in property <bool> focused;
 
-    border-width: focused ? 3px : 2px;
+    border-width: focused ? 2px : 1px;
     border-color: focused ? #06d6a0 : #5c4a72;
     border-radius: 0px;
     background: focused ? #2a2236 : #1e1828;
@@ -22,15 +24,14 @@ component LauncherTile inherits Rectangle {
         Text {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
-            font-size: 18px;
-            font-weight: 700;
+            font-size: 16px;
             horizontal-alignment: center;
         }
 
         Text {
             text: subtitle;
             color: #9080a8;
-            font-size: 10px;
+            font-size: 8px;
             horizontal-alignment: center;
         }
     }
@@ -45,7 +46,6 @@ component HomeGrid inherits Rectangle {
             text: "MiSTer Magic";
             color: #e8e0f0;
             font-size: 24px;
-            font-weight: 700;
             horizontal-alignment: center;
         }
 
@@ -95,15 +95,13 @@ component HomeGrid inherits Rectangle {
         Text {
             text: "D-pad: move  ·  A: select  ·  Home: back";
             color: #706080;
-            font-size: 9px;
+            font-size: 8px;
             horizontal-alignment: center;
         }
     }
 }
 
-export component Launcher inherits Window {
-    preferred-width: 960px;
-    preferred-height: 540px;
+export component Launcher inherits MisterWindow {
     default-font-family: "Press Start 2P";
     title: "MiSTer Magic Launcher";
     background: #1a1424;
@@ -137,15 +135,14 @@ export component Launcher inherits Window {
             Text {
                 text: MisterBridge.loading-message;
                 color: #e8e0f0;
-                font-size: 21px;
-                font-weight: 700;
+                font-size: 16px;
                 horizontal-alignment: center;
             }
 
             Text {
                 text: "Please wait…";
                 color: #9080a8;
-                font-size: 12px;
+                font-size: 8px;
                 horizontal-alignment: center;
             }
         }

@@ -1,42 +1,51 @@
-//! Slint render vs HDMI framebuffer sizing (P2 pixel-scale experiment).
+//! HDMI framebuffer size and Slint `ui-scale` from the environment.
+//!
+//! Layout math lives in `.slint` (`960 * ui-scale`, etc.). Rust only reads
+//! `MISTER_RENDER_SCALE` and applies fb upscale when scale=1 (960→1920).
 
 pub const FB_W: usize = 1920;
 pub const FB_H: usize = 1080;
 
-/// Integer upscale from logical render buffer to `/dev/fb0` (nearest-neighbor).
-/// Set via `MISTER_PIXEL_SCALE` (default **2** for 960×540 → 1080p).
-pub fn pixel_scale() -> usize {
-    std::env::var("MISTER_PIXEL_SCALE")
+/// Slint `ui-scale` (1 = 960×540, 2 = 1920×1080). Env: `MISTER_RENDER_SCALE`.
+pub fn ui_scale_from_env() -> i32 {
+    std::env::var("MISTER_RENDER_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .filter(|&n| (1..=4).contains(&n) && FB_W.is_multiple_of(n) && FB_H.is_multiple_of(n))
-        .unwrap_or(2)
+        .filter(|&n| n == 1 || n == 2)
+        .unwrap_or(1)
 }
 
 pub struct UiDisplay {
-    pub pixel_scale: usize,
-    pub render_w: usize,
-    pub render_h: usize,
+    pub scale: i32,
 }
 
 impl UiDisplay {
     pub fn from_env() -> Self {
-        let pixel_scale = pixel_scale();
         Self {
-            render_w: FB_W / pixel_scale,
-            render_h: FB_H / pixel_scale,
-            pixel_scale,
+            scale: ui_scale_from_env(),
         }
     }
 
+    pub fn render_w(&self) -> usize {
+        960 * self.scale as usize
+    }
+
+    pub fn render_h(&self) -> usize {
+        540 * self.scale as usize
+    }
+
+    /// Nearest upscale to `/dev/fb0` when render buffer is smaller than HDMI.
+    pub fn fb_scale(&self) -> usize {
+        FB_W / self.render_w()
+    }
+
     pub fn log_line(&self) -> String {
-        if self.pixel_scale > 1 {
-            format!(
-                "pixel_scale={} render={}x{} fb={}x{} font=PressStart2P",
-                self.pixel_scale, self.render_w, self.render_h, FB_W, FB_H
-            )
-        } else {
-            format!("pixel_scale=1 render={}x{} fb={}x{}", self.render_w, self.render_h, FB_W, FB_H)
-        }
+        format!(
+            "ui-scale={} render={}x{} fb={FB_W}x{FB_H} fb_scale={}",
+            self.scale,
+            self.render_w(),
+            self.render_h(),
+            self.fb_scale()
+        )
     }
 }

@@ -7,6 +7,7 @@
 - Slint scenes: **960×540** logical layout, [`PressStart2P-Regular.ttf`](../../rust/ui/fonts/PressStart2P-Regular.ttf) (SIL OFL).
 - Render into `cached` at 960×540; after vsync, **`copy_rows_scaled`** replicates each pixel 2×2 into `/dev/fb0`.
 - HDMI / FPGA routing unchanged: **1920×1080**, `xoff=yoff=0`.
+- **Crisp glyphs:** `Pixel::blend` alpha threshold (default **128**, `MISTER_GLYPH_ALPHA_THRESHOLD`); UI text only at **8 / 16 / 24px**; build embeds `SLINT_FONT_SIZES=8,16,24` (no faux bold).
 
 ## Run automated bench (TSV + PNG)
 

@@ -11,13 +11,27 @@ use std::time::{Duration, Instant};
 
 mod slint_ui {
     #![allow(clippy::all, unused_imports)]
-    include!(concat!(env!("OUT_DIR"), "/app.rs"));
-    include!(concat!(env!("OUT_DIR"), "/full_motion.rs"));
-    include!(concat!(env!("OUT_DIR"), "/static_ui.rs"));
-    include!(concat!(env!("OUT_DIR"), "/local_motion.rs"));
-    include!(concat!(env!("OUT_DIR"), "/text_heavy.rs"));
-    include!(concat!(env!("OUT_DIR"), "/solid_fill.rs"));
-    include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
+    pub mod app {
+        include!(concat!(env!("OUT_DIR"), "/app.rs"));
+    }
+    pub mod full_motion {
+        include!(concat!(env!("OUT_DIR"), "/full_motion.rs"));
+    }
+    pub mod static_ui {
+        include!(concat!(env!("OUT_DIR"), "/static_ui.rs"));
+    }
+    pub mod local_motion {
+        include!(concat!(env!("OUT_DIR"), "/local_motion.rs"));
+    }
+    pub mod text_heavy {
+        include!(concat!(env!("OUT_DIR"), "/text_heavy.rs"));
+    }
+    pub mod solid_fill {
+        include!(concat!(env!("OUT_DIR"), "/solid_fill.rs"));
+    }
+    pub mod list_scroll {
+        include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
+    }
     pub mod controller {
         include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
     }
@@ -87,8 +101,8 @@ fn normalize_scene(s: &str) -> String {
 pub fn print_scenes() {
     let ui = UiDisplay::from_env();
     println!(
-        "Slint UI scenes (render {}x{}, fb {}x{}, scale {}):",
-        ui.render_w, ui.render_h, FB_W, FB_H, ui.pixel_scale
+        "Slint UI scenes (render {}x{}, fb {}x{}, ui-scale {}):",
+        ui.render_w(), ui.render_h(), FB_W, FB_H, ui.scale
     );
     for s in UI_SCENES {
         println!("  {s}");
@@ -111,7 +125,14 @@ fn dirty_rows(region: &PhysicalRegion, render_h: usize) -> Option<(usize, usize)
 }
 
 fn copy_cached_rows(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], y0: usize, y1: usize) {
-    disp.copy_rows_scaled(ui.pixel_scale, cached, ui.render_w, y0, y1);
+    disp.copy_rows_scaled(ui.fb_scale(), cached, ui.render_w(), y0, y1);
+}
+
+fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
+    window.set_size(PhysicalSize::new(
+        ui.render_w() as u32,
+        ui.render_h() as u32,
+    ));
 }
 
 pub fn run_ui(f: &mut Fpga) {
@@ -138,58 +159,62 @@ pub fn run_ui(f: &mut Fpga) {
         start: Instant::now(),
     }))
     .expect("set_platform");
-    window.set_size(PhysicalSize::new(ui.render_w as u32, ui.render_h as u32));
 
     match scene.as_str() {
         "demo" => {
-            slint_ui::AppWindow::new().expect("AppWindow::new").show().expect("show");
+            let app = slint_ui::app::AppWindow::new().expect("AppWindow::new");
+            app.global::<slint_ui::app::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "full_motion" => {
-            slint_ui::FullMotion::new()
-                .expect("FullMotion::new")
-                .show()
-                .expect("show");
+            let app = slint_ui::full_motion::FullMotion::new().expect("FullMotion::new");
+            app.global::<slint_ui::full_motion::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "static_ui" => {
-            slint_ui::StaticUi::new()
-                .expect("StaticUi::new")
-                .show()
-                .expect("show");
+            let app = slint_ui::static_ui::StaticUi::new().expect("StaticUi::new");
+            app.global::<slint_ui::static_ui::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "local_motion" => {
-            slint_ui::LocalMotion::new()
-                .expect("LocalMotion::new")
-                .show()
-                .expect("show");
+            let app = slint_ui::local_motion::LocalMotion::new().expect("LocalMotion::new");
+            app.global::<slint_ui::local_motion::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "text_heavy" => {
-            slint_ui::TextHeavy::new()
-                .expect("TextHeavy::new")
-                .show()
-                .expect("show");
+            let app = slint_ui::text_heavy::TextHeavy::new().expect("TextHeavy::new");
+            app.global::<slint_ui::text_heavy::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "solid_fill" => {
-            slint_ui::SolidFill::new()
-                .expect("SolidFill::new")
-                .show()
-                .expect("show");
+            let app = slint_ui::solid_fill::SolidFill::new().expect("SolidFill::new");
+            app.global::<slint_ui::solid_fill::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "list_scroll" => {
-            slint_ui::ListScroll::new()
-                .expect("ListScroll::new")
-                .show()
-                .expect("show");
+            let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
+            app.global::<slint_ui::list_scroll::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
+            app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
         }
         "controller_test" => {
             let pad = open_pads();
             let app = slint_ui::controller::ControllerTest::new().expect("ControllerTest::new");
+            app.global::<slint_ui::controller::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
             sync_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
@@ -198,6 +223,8 @@ pub fn run_ui(f: &mut Fpga) {
         "launcher" => {
             let pad = open_pads();
             let app = slint_ui::launcher::Launcher::new().expect("Launcher::new");
+            app.global::<slint_ui::launcher::MisterUi>().set_scale(ui.scale);
+            configure_window(&ui, &window);
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
@@ -470,7 +497,7 @@ fn run_frame_loop(
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
 ) {
-    let mut cached = vec![Pixel(0); ui.render_w * ui.render_h];
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut fps_window_start = Instant::now();
@@ -486,8 +513,8 @@ fn run_frame_loop(
         let t0 = Instant::now();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, ui.render_w);
-            this_rows = dirty_rows(&region, ui.render_h);
+            let region = renderer.render(&mut cached, ui.render_w());
+            this_rows = dirty_rows(&region, ui.render_h());
         });
         let t1 = Instant::now();
         disp.wait_vsync();
@@ -534,7 +561,7 @@ fn run_controller_loop(
     mut pad: PadPool,
     app: slint_ui::controller::ControllerTest,
 ) {
-    let mut cached = vec![Pixel(0); ui.render_w * ui.render_h];
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
     let label = if secs == 0 { "forever".to_string() } else { format!("{secs}s") };
@@ -550,8 +577,8 @@ fn run_controller_loop(
         slint::platform::update_timers_and_animations();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, ui.render_w);
-            this_rows = dirty_rows(&region, ui.render_h);
+            let region = renderer.render(&mut cached, ui.render_w());
+            this_rows = dirty_rows(&region, ui.render_h());
         });
         disp.wait_vsync();
         if let Some((y0, y1)) = this_rows {
@@ -583,7 +610,7 @@ fn run_launcher_loop(
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
 ) {
-    let mut cached = vec![Pixel(0); ui.render_w * ui.render_h];
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut nav = LauncherNav::new();
@@ -665,11 +692,11 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 slint::platform::update_timers_and_animations();
                                 window.draw_if_needed(|renderer| {
-                                    let region = renderer.render(&mut cached, ui.render_w);
+                                    let region = renderer.render(&mut cached, ui.render_w());
                                     let _ = region;
                                 });
                                 disp.wait_vsync();
-                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h);
+                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
 
                                 match launcher::execute_game_launch(mra) {
                                     Ok(spawned) => {
@@ -720,12 +747,12 @@ fn run_launcher_loop(
         slint::platform::update_timers_and_animations();
         let mut this_rows: Option<(usize, usize)> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, ui.render_w);
-            this_rows = dirty_rows(&region, ui.render_h);
+            let region = renderer.render(&mut cached, ui.render_w());
+            this_rows = dirty_rows(&region, ui.render_h());
         });
         disp.wait_vsync();
         if launching || setup.is_active() {
-            copy_cached_rows(disp, ui, &cached, 0, ui.render_h);
+            copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
         } else if let Some((y0, y1)) = this_rows {
             copy_cached_rows(disp, ui, &cached, y0, y1);
         }

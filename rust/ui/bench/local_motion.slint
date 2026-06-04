@@ -1,37 +1,38 @@
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
 import "../fonts/PressStart2P-Regular.ttf";
 
-export component LocalMotion inherits Window {
-    width: 960px;
-    height: 540px;
+export component LocalMotion inherits MisterWindow {
     background: #0b1020;
     default-font-family: "Press Start 2P";
 
+    property <int> s: MisterUi.scale;
     property <duration> tick: animation-tick();
     property <float> phase: Math.mod(tick / 1ms, 2000) / 2000;
 
     Text {
-        x: 32px;
-        y: 24px;
+        x: 32px * s;
+        y: 24px * s;
         text: "bench: local_motion";
-        font-size: 22px;
+        font-size: 24px * s;
         color: #e8ecff;
     }
 
     Rectangle {
-        x: 32px;
-        y: 80px;
-        width: parent.width - 64px;
-        height: parent.height - 110px;
+        x: 32px * s;
+        y: 80px * s;
+        width: parent.width - 64px * s;
+        height: parent.height - 110px * s;
         background: #131c33;
-        border-radius: 0px;
+        border-radius: 6px * s;
     }
 
     Rectangle {
-        width: 48px;
-        height: 48px;
-        y: 90px;
-        x: 40px + (parent.width - 128px) * root.phase;
-        border-radius: 0px;
+        width: 48px * s;
+        height: 48px * s;
+        y: 90px * s;
+        x: 40px * s + (parent.width - 128px * s) * root.phase;
+        border-radius: 24px * s;
         background: #ff5d73;
     }
 }
