@@ -1,5 +1,6 @@
 //! Launcher navigation and arcade game launch.
 
+use crate::arcade_catalog::{ArcadeCatalog, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT};
 use crate::input::PadState;
 use std::io::Write;
 use std::path::Path;
@@ -11,21 +12,6 @@ use std::time::Duration;
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer";
 
-pub const GAMES: &[(&str, &str)] = &[
-    (
-        "Donkey Kong",
-        "/media/fat/_Arcade/Donkey Kong (US, Set 1).mra",
-    ),
-    (
-        "Pac-Man",
-        "/media/fat/_Arcade/Pac-Man - Puck Man (JP, Set 1).mra",
-    ),
-    (
-        "Galaga",
-        "/media/fat/_Arcade/Galaga (Midway, Set 1).mra",
-    ),
-];
-
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
 
@@ -35,11 +21,32 @@ static LAUNCH_STATE: AtomicU8 = AtomicU8::new(LAUNCH_IDLE);
 pub enum Screen {
     Home,
     Controller,
+    Arcade,
+}
+
+pub struct ArcadeNav {
+    pub selected: usize,
+    pub scroll_y: i32,
+}
+
+impl ArcadeNav {
+    pub fn new() -> Self {
+        Self {
+            selected: 0,
+            scroll_y: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.selected = 0;
+        self.scroll_y = 0;
+    }
 }
 
 pub struct LauncherNav {
     pub screen: Screen,
     pub selected: usize,
+    pub arcade: ArcadeNav,
     prev: PadState,
 }
 
@@ -48,53 +55,41 @@ impl LauncherNav {
         Self {
             screen: Screen::Home,
             selected: 0,
+            arcade: ArcadeNav::new(),
             prev: PadState::default(),
         }
     }
 
     /// Returns `Some(mra_path)` when a game launch was requested.
-    pub fn handle_input(&mut self, now: &PadState) -> Option<&'static str> {
+    pub fn handle_input(&mut self, now: &PadState, catalog: &ArcadeCatalog) -> Option<String> {
         let result = match self.screen {
             Screen::Home => self.handle_home(now),
             Screen::Controller => {
-                if rising(now.btn_home, self.prev.btn_home) {
+                if rising(now.btn_home, self.prev.btn_home)
+                    || rising(now.btn_b, self.prev.btn_b)
+                {
                     self.screen = Screen::Home;
                 }
                 None
             }
+            Screen::Arcade => self.handle_arcade(now, catalog),
         };
         self.prev = now.clone();
         result
     }
 
-    fn handle_home(&mut self, now: &PadState) -> Option<&'static str> {
-        if rising(now.dpad_up, self.prev.dpad_up) {
-            self.selected = if self.selected >= 2 {
-                self.selected - 2
-            } else {
-                self.selected + 2
-            };
+    fn handle_home(&mut self, now: &PadState) -> Option<String> {
+        if rising(now.dpad_left, self.prev.dpad_left) && self.selected > 0 {
+            self.selected -= 1;
         }
-        if rising(now.dpad_down, self.prev.dpad_down) {
-            self.selected = if self.selected < 2 {
-                self.selected + 2
-            } else {
-                self.selected - 2
-            };
+        if rising(now.dpad_right, self.prev.dpad_right) && self.selected < 1 {
+            self.selected += 1;
         }
-        if rising(now.dpad_left, self.prev.dpad_left) {
-            self.selected = if self.selected % 2 == 1 {
-                self.selected - 1
-            } else {
-                self.selected + 1
-            };
+        if rising(now.dpad_up, self.prev.dpad_up) && self.selected > 0 {
+            self.selected -= 1;
         }
-        if rising(now.dpad_right, self.prev.dpad_right) {
-            self.selected = if self.selected % 2 == 0 {
-                self.selected + 1
-            } else {
-                self.selected - 1
-            };
+        if rising(now.dpad_down, self.prev.dpad_down) && self.selected < 1 {
+            self.selected += 1;
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
@@ -103,14 +98,10 @@ impl LauncherNav {
                     self.screen = Screen::Controller;
                     None
                 }
-                1..=3 => {
-                    let game_idx = match self.selected {
-                        1 => 0,
-                        2 => 1,
-                        3 => 2,
-                        _ => unreachable!(),
-                    };
-                    Some(GAMES[game_idx].1)
+                1 => {
+                    self.arcade.reset();
+                    self.screen = Screen::Arcade;
+                    None
                 }
                 _ => None,
             };
@@ -118,18 +109,66 @@ impl LauncherNav {
 
         None
     }
+
+    fn handle_arcade(&mut self, now: &PadState, catalog: &ArcadeCatalog) -> Option<String> {
+        let count = catalog.len();
+
+        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+            self.screen = Screen::Home;
+            self.arcade.reset();
+            return None;
+        }
+
+        if count == 0 {
+            return None;
+        }
+
+        if rising(now.dpad_down, self.prev.dpad_down) && self.arcade.selected + 1 < count {
+            self.arcade.selected += 1;
+            self.arcade.scroll_y = (self.arcade.scroll_y + ARCADE_ROW_HEIGHT)
+                .clamp(0, arcade_max_scroll(count));
+            keep_arcade_visible(&mut self.arcade, count);
+        }
+        if rising(now.dpad_up, self.prev.dpad_up) && self.arcade.selected > 0 {
+            self.arcade.selected -= 1;
+            self.arcade.scroll_y = (self.arcade.scroll_y - ARCADE_ROW_HEIGHT)
+                .clamp(0, arcade_max_scroll(count));
+            keep_arcade_visible(&mut self.arcade, count);
+        }
+
+        if rising(now.btn_a, self.prev.btn_a) {
+            return catalog
+                .path_at(self.arcade.selected)
+                .map(|p| p.to_string());
+        }
+
+        None
+    }
+}
+
+fn arcade_max_scroll(count: usize) -> i32 {
+    let content = count as i32 * ARCADE_ROW_HEIGHT;
+    (content - ARCADE_LIST_VISIBLE_H).max(0)
+}
+
+fn keep_arcade_visible(arcade: &mut ArcadeNav, count: usize) {
+    let row_top = arcade.selected as i32 * ARCADE_ROW_HEIGHT;
+    let row_bottom = (arcade.selected as i32 + 1) * ARCADE_ROW_HEIGHT;
+    if row_top < arcade.scroll_y {
+        arcade.scroll_y = row_top;
+    }
+    if row_bottom > arcade.scroll_y + ARCADE_LIST_VISIBLE_H {
+        arcade.scroll_y = row_bottom - ARCADE_LIST_VISIBLE_H;
+    }
+    arcade.scroll_y = arcade.scroll_y.clamp(0, arcade_max_scroll(count));
 }
 
 fn rising(now: bool, prev: bool) -> bool {
     now && !prev
 }
 
-pub fn game_title(mra_path: &str) -> &str {
-    GAMES
-        .iter()
-        .find(|(_, path)| *path == mra_path)
-        .map(|(title, _)| *title)
-        .unwrap_or("Game")
+pub fn game_title(catalog: &ArcadeCatalog, mra_path: &str) -> String {
+    catalog.title_for_path(mra_path).to_string()
 }
 
 fn wait_for_fifo() -> bool {

@@ -17,6 +17,9 @@ libc = "0.2"
 slint = { version = "1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+walkdir = "2"
+quick-xml = "0.37"
+png = "0.17"
 pprof = { version = "0.14", optional = true, default-features = false, features = ["flamegraph"] }
 
 [features]

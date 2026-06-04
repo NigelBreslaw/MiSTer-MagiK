@@ -5,7 +5,7 @@ use crate::fpga::{Fpga, MODE_1080P60};
 use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
+use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -44,6 +44,7 @@ mod slint_ui {
 }
 
 use crate::controller_db::ControllerDb;
+use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use crate::cpu_profile;
 use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
@@ -275,6 +276,11 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(0);
     bridge.set_selected_index(0);
+    bridge.set_arcade_selected(0);
+    bridge.set_arcade_scroll_y(0);
+    bridge.set_arcade_preview_has_image(false);
+    bridge.set_arcade_preview_title("".into());
+    bridge.set_arcade_preview_image(Image::default());
     bridge.set_setup_visible(false);
     bridge.set_setup_phase(0);
     sync_bridge_pad_launcher(&bridge, pad);
@@ -290,16 +296,148 @@ fn sync_bridge_launcher(
     nav: &LauncherNav,
     setup: &SetupNav,
     loading_message: &str,
+    loading_detail: &str,
+    catalog: Option<&ArcadeCatalog>,
+    last_preview_idx: &mut Option<usize>,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
         Screen::Home => 0,
         Screen::Controller => 1,
+        Screen::Arcade => 2,
     });
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_arcade_selected(nav.arcade.selected as i32);
+    bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     bridge.set_loading_message(loading_message.into());
+    bridge.set_loading_detail(loading_detail.into());
+    if nav.screen == Screen::Arcade {
+        sync_arcade_preview(&bridge, catalog, nav.arcade.selected, last_preview_idx);
+    } else {
+        *last_preview_idx = None;
+    }
     sync_setup_bridge(&bridge, pad, setup);
+}
+
+fn png_to_slint_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
+    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, width, height);
+    Image::from_rgba8(buffer)
+}
+
+fn sync_arcade_preview(
+    bridge: &slint_ui::launcher::MisterBridge,
+    catalog: Option<&ArcadeCatalog>,
+    selected: usize,
+    last_preview_idx: &mut Option<usize>,
+) {
+    if *last_preview_idx == Some(selected) {
+        return;
+    }
+    *last_preview_idx = Some(selected);
+
+    let Some(catalog) = catalog else {
+        bridge.set_arcade_preview_has_image(false);
+        bridge.set_arcade_preview_title("".into());
+        bridge.set_arcade_preview_image(Image::default());
+        return;
+    };
+
+    let Some(game) = catalog.games.get(selected) else {
+        bridge.set_arcade_preview_has_image(false);
+        bridge.set_arcade_preview_title("".into());
+        bridge.set_arcade_preview_image(Image::default());
+        return;
+    };
+
+    bridge.set_arcade_preview_title(game.title.clone().into());
+    if game.has_image {
+        if let Some((w, h, rgba)) = arcade_catalog::decode_png_rgba8(&game.image_path) {
+            bridge.set_arcade_preview_image(png_to_slint_image(w, h, rgba));
+            bridge.set_arcade_preview_has_image(true);
+            return;
+        }
+    }
+    bridge.set_arcade_preview_image(Image::default());
+    bridge.set_arcade_preview_has_image(false);
+}
+
+fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::ArcadeGame> {
+    let rows: Vec<slint_ui::launcher::ArcadeGame> = games
+        .iter()
+        .map(|g| slint_ui::launcher::ArcadeGame {
+            title: g.title.clone().into(),
+            mra_path: g.mra_path.clone().into(),
+            image_path: g.image_path.clone().into(),
+            has_image: g.has_image,
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+fn paint_loading_overlay(
+    app: &slint_ui::launcher::Launcher,
+    pad: &PadPool,
+    nav: &LauncherNav,
+    setup: &SetupNav,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    cached: &mut [Pixel],
+    last_preview_idx: &mut Option<usize>,
+    message: &str,
+    detail: &str,
+) {
+    sync_bridge_launcher(
+        app, pad, nav, setup, message, detail, None, last_preview_idx,
+    );
+    window.request_redraw();
+    slint::platform::update_timers_and_animations();
+    window.draw_if_needed(|renderer| {
+        let region = renderer.render(cached, ui.render_w());
+        let _ = region;
+    });
+    disp.wait_vsync();
+    copy_cached_rows(disp, ui, cached, 0, ui.render_h());
+}
+
+fn index_arcade_catalog(
+    app: &slint_ui::launcher::Launcher,
+    pad: &PadPool,
+    nav: &LauncherNav,
+    setup: &SetupNav,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    cached: &mut [Pixel],
+    last_preview_idx: &mut Option<usize>,
+) -> ArcadeCatalog {
+    paint_loading_overlay(
+        app, pad, nav, setup, ui, disp, window, cached, last_preview_idx,
+        "Indexing arcade…", "Starting…",
+    );
+
+    let root = std::env::var("MISTER_ARCADE_ROOT")
+        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    println!("indexing arcade catalog at {root}…");
+
+    let mut progress = |title: &str, detail: &str| {
+        paint_loading_overlay(
+            app, pad, nav, setup, ui, disp, window, cached, last_preview_idx,
+            title, detail,
+        );
+    };
+
+    let (catalog, timings) =
+        arcade_catalog::build_with_options(&root, arcade_catalog::BuildOptions::default(), Some(&mut progress));
+    timings.print_summary();
+    println!("arcade catalog: {} games", catalog.len());
+
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    bridge.set_arcade_games(slint_arcade_games(&catalog.games));
+    sync_bridge_launcher(app, pad, nav, setup, "", "", Some(&catalog), last_preview_idx);
+    window.request_redraw();
+    catalog
 }
 
 fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
@@ -662,7 +800,6 @@ fn run_launcher_loop(
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
 ) {
-    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut nav = LauncherNav::new();
@@ -686,7 +823,14 @@ fn run_launcher_loop(
         );
         setup.open_for(status, idx);
     }
-    sync_bridge_launcher(&app, &pad, &nav, &setup, "");
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let mut last_preview_idx = None;
+    let catalog = index_arcade_catalog(
+        &app, &pad, &nav, &setup, ui, disp, window, &mut cached, &mut last_preview_idx,
+    );
+    sync_bridge_launcher(
+        &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut last_preview_idx,
+    );
     window.request_redraw();
     while secs == 0 || start.elapsed().as_secs() < secs {
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
@@ -735,11 +879,12 @@ fn run_launcher_loop(
                     } else {
                         setup.maybe_open(info, active_idx, pad.db(), true);
                         if !setup.is_active() {
-                            if let Some(mra) = nav.handle_input(&state) {
+                            if let Some(mra) = nav.handle_input(&state, &catalog) {
                                 loading_title =
-                                    format!("Loading {}…", launcher::game_title(mra));
+                                    format!("Loading {}…", launcher::game_title(&catalog, &mra));
                                 sync_bridge_launcher(
-                                    &app, &pad, &nav, &setup, &loading_title,
+                                    &app, &pad, &nav, &setup, &loading_title, "",
+                                    Some(&catalog), &mut last_preview_idx,
                                 );
                                 window.request_redraw();
                                 slint::platform::update_timers_and_animations();
@@ -750,7 +895,7 @@ fn run_launcher_loop(
                                 disp.wait_vsync();
                                 copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
 
-                                match launcher::execute_game_launch(mra) {
+                                match launcher::execute_game_launch(&mra) {
                                     Ok(spawned) => {
                                         launch_started = Instant::now();
                                         launch_spawned_mister = spawned;
@@ -760,7 +905,8 @@ fn run_launcher_loop(
                                         loading_title.clear();
                                         launcher::reset_launch();
                                         sync_bridge_launcher(
-                                            &app, &pad, &nav, &setup, "",
+                                            &app, &pad, &nav, &setup, "", "",
+                                            Some(&catalog), &mut last_preview_idx,
                                         );
                                         recover_launcher_ui(f, &mut launch_spawned_mister);
                                     }
@@ -771,10 +917,16 @@ fn run_launcher_loop(
                     }
                 }
                 if setup_active {
-                    sync_bridge_launcher(&app, &pad, &nav, &setup, &loading_title);
+                    sync_bridge_launcher(
+                        &app, &pad, &nav, &setup, &loading_title,
+                        Some(&catalog), &mut last_preview_idx,
+                    );
                     window.request_redraw();
                 } else if changed {
-                    sync_bridge_launcher(&app, &pad, &nav, &setup, &loading_title);
+                    sync_bridge_launcher(
+                        &app, &pad, &nav, &setup, &loading_title,
+                        Some(&catalog), &mut last_preview_idx,
+                    );
                     window.request_redraw();
                 }
             }
