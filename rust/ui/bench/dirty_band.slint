@@ -1,0 +1,65 @@
+// Copy-budget bench: solid-color band scrolling vertically.
+// `band-pct` = fraction of 540 logical rows that change each frame (set via MISTER_DIRTY_BAND_PCT).
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
+import "../fonts/PressStart2P-Regular.ttf";
+
+export component DirtyBand inherits MisterWindow {
+    background: #0b1020;
+    default-font-family: "Press Start 2P";
+
+    in-out property <int> band-pct: 50;
+    property <int> s: MisterUi.scale;
+    property <int> pct: Math.clamp(root.band-pct, 1, 100);
+
+    // Must bind animation-tick() to a property (see solid_fill) or phase won't advance.
+    property <duration> tick: animation-tick();
+    property <int> phase-count: 16;
+    property <int> step-ms: 5;
+    property <int> phase: Math.mod(tick / 1ms, root.step-ms * root.phase-count) / root.step-ms;
+
+    property <length> band-h: (540 * root.pct / 100) * 1px * s;
+    property <length> scroll-y: (540px * s * tick / 4s).mod(540px * s);
+    property <color> band-color: palette-color(Math.mod(root.phase, root.phase-count));
+
+    function palette-color(i: int) -> color {
+        if (i == 0) { return #ff0000; }
+        if (i == 1) { return #00ff00; }
+        if (i == 2) { return #0000ff; }
+        if (i == 3) { return #ffff00; }
+        if (i == 4) { return #00ffff; }
+        if (i == 5) { return #ff00ff; }
+        if (i == 6) { return #ffffff; }
+        if (i == 7) { return #000000; }
+        if (i == 8) { return #ff8000; }
+        if (i == 9) { return #0080ff; }
+        if (i == 10) { return #80ff00; }
+        if (i == 11) { return #ff0080; }
+        if (i == 12) { return #00ff80; }
+        if (i == 13) { return #8000ff; }
+        if (i == 14) { return #ff8080; }
+        return #8080ff;
+    }
+
+    Text {
+        x: 16px * s;
+        y: 12px * s;
+        text: "dirty_band " + root.pct + "%";
+        font-size: 16px * s;
+        color: #8899bb;
+    }
+
+    if root.pct >= 100: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: root.band-color;
+    }
+
+    if root.pct < 100: Rectangle {
+        x: 0;
+        y: scroll-y;
+        width: parent.width;
+        height: band-h;
+        background: root.band-color;
+    }
+}

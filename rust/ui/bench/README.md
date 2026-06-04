@@ -12,7 +12,21 @@ kill -9 $(pidof MiSTer) 2>/dev/null
 
 Or use **`scripts/bench-diagnose.sh visible …`** (streams progress, no timeout).
 
-Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`.
+Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`, `dirty_band`.
+
+### dirty_band — copy budget sweep
+
+Solid-color band scrolling vertically. Set band height (% of 540 logical rows) via env:
+
+```bash
+MISTER_DIRTY_BAND_PCT=50 /media/fat/mister-magic/mister-magic-fb ui dirty_band 15
+```
+
+Sweep 10–100% and print the ~60 fps cutoff:
+
+```bash
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench_dirty_band.sh
+```
 
 Shared window: [`../mister_window.slint`](../mister_window.slint).
 
