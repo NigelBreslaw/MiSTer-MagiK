@@ -2,10 +2,15 @@
 
 All scenes render at **960×540**; Rust upscales 2× to 1920×1080 HDMI.
 
+**Before a manual run**, stop anything else that owns SPI/HDMI (required for 60 fps):
+
 ```bash
+kill -9 $(pidof mister-magic-fb) 2>/dev/null
 kill -9 $(pidof MiSTer) 2>/dev/null
 /media/fat/mister-magic/mister-magic-fb ui full_motion 20
 ```
+
+Or use **`scripts/bench-diagnose.sh visible …`** (streams progress, no timeout).
 
 Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`.
 
@@ -40,7 +45,7 @@ Phase breakdown each frame: **anim** (Slint timers) · **render** (software rend
 
 Host-side TSV rollup: `python3 scripts/analyze-frame-profile.py history/toolchain-bench/profile-*/mister-frame-*.tsv`
 
-Toolchain bench (aggregates only, no profile):
+Toolchain bench (automated TSV + PNG — kills `mister-magic-fb` + MiSTer before each scene):
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device

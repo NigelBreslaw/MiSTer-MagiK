@@ -56,7 +56,7 @@ fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
-if ! cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE" "${CARGO_FEATURES[@]}" 2>&1 | tee "$BUILD_LOG"; then
+if ! cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE" ${CARGO_FEATURES+"${CARGO_FEATURES[@]}"} 2>&1 | tee "$BUILD_LOG"; then
   exit 1
 fi
 if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
