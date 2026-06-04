@@ -6,6 +6,7 @@
 //!   scenes    list Slint scene names
 //!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
 //!   input     gamepad log / sniff / calibrate
+//!   catalog-bench  benchmark arcade catalog pipeline phases
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
 //! Core handoff argv (`.rbf` paths) re-execs stock `/media/fat/MiSTer`.
@@ -14,6 +15,7 @@
 
 use std::ffi::CString;
 
+mod arcade_catalog;
 mod controller_db;
 mod cpu_profile;
 mod fb;
@@ -61,8 +63,12 @@ fn main() {
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "input" => run_input(),
+        "catalog-bench" => run_catalog_bench(),
         other => {
-            eprintln!("unknown command '{other}' (use: read | fb | ui | scenes | input)");
+            eprintln!(
+                "unknown command '{other}' \
+                 (use: read | fb | ui | scenes | input | catalog-bench)"
+            );
             std::process::exit(2);
         }
     }
@@ -84,7 +90,7 @@ fn is_launcher_boot(arg: &str) -> bool {
 
 /// MiSTer re-exec'd us with a core path — hand off to stock Main so gameplay works.
 fn should_handoff_to_mister(arg: &str) -> bool {
-    if matches!(arg, "read" | "fb" | "ui" | "scenes" | "input") {
+    if matches!(arg, "read" | "fb" | "ui" | "scenes" | "input" | "catalog-bench") {
         return false;
     }
     if arg.ends_with("menu.rbf") {
@@ -259,6 +265,28 @@ fn run_input() {
             std::process::exit(2);
         }
     }
+}
+
+fn run_catalog_bench() {
+    let args: Vec<String> = std::env::args().collect();
+    let mut sample = 10usize;
+    if let Some(i) = args.iter().position(|a| a == "--sample-images") {
+        if let Some(n) = args.get(i + 1).and_then(|s| s.parse().ok()) {
+            sample = n;
+        }
+    }
+
+    let root = std::env::var("MISTER_ARCADE_ROOT")
+        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    println!("catalog-bench root={root} sample_images={sample}");
+    let (catalog, timings) = arcade_catalog::build_with_options(
+        &root,
+        arcade_catalog::BuildOptions {
+            sample_image_decodes: sample,
+        },
+    );
+    timings.print_summary();
+    println!("games={}", catalog.len());
 }
 
 fn parse_input_log_args(args: &[String]) -> (Option<&str>, u64) {

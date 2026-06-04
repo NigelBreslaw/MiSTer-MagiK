@@ -2100,7 +2100,7 @@ dependencies = [
  "log",
  "num-format",
  "once_cell",
- "quick-xml",
+ "quick-xml 0.26.0",
  "rgb",
  "str_stack",
 ]
@@ -2554,11 +2554,14 @@ name = "mister-magic-fb"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "png 0.17.16",
  "pprof",
+ "quick-xml 0.37.5",
  "serde",
  "serde_json",
  "slint",
  "slint-build",
+ "walkdir",
 ]
 
 [[package]]
@@ -3508,6 +3511,15 @@ name = "quick-xml"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f50b1c63b38611e7d4d7f68b82d3ad0cc71a2ad2e7f61fc10f1328d917c93cd"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.37.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
 dependencies = [
  "memchr",
 ]

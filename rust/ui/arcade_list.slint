@@ -1,0 +1,121 @@
+import { ListView } from "std-widgets.slint";
+import { MisterUi } from "mister_window.slint";
+import { MisterBridge } from "mister_bridge.slint";
+
+export component ArcadeListScreen inherits Rectangle {
+    property <int> s: MisterUi.scale;
+    property <length> row-height: 48px * s;
+    property <int> count: MisterBridge.arcade-games.length;
+    property <length> scroll-y: MisterBridge.arcade-scroll-y * 1px;
+
+    background: #1a1424;
+
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        spacing: 0;
+
+        // Left half — scrollable game list
+        Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: #1a1424;
+
+            Text {
+                x: 16px * s;
+                y: 16px * s;
+                text: "Arcade";
+                color: #e8e0f0;
+                font-size: 24px * s;
+            }
+
+            Text {
+                x: 16px * s;
+                y: 44px * s;
+                text: count + " games";
+                color: #706080;
+                font-size: 8px * s;
+            }
+
+            arcade-list := ListView {
+                x: 8px * s;
+                y: 64px * s;
+                width: parent.width - 16px * s;
+                height: parent.height - 72px * s;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                viewport-height: count * row-height;
+                viewport-width: self.width;
+                viewport-y: -scroll-y;
+
+                for game[i] in MisterBridge.arcade-games: Rectangle {
+                    height: row-height;
+                    width: parent.width;
+                    background: i == MisterBridge.arcade-selected ? #2a2236 : transparent;
+                    border-width: i == MisterBridge.arcade-selected ? 2px : 0px;
+                    border-color: #06d6a0;
+
+                    Text {
+                        x: 8px * s;
+                        y: (root.row-height - self.height) / 2;
+                        text: game.title;
+                        font-size: 16px * s;
+                        color: i == MisterBridge.arcade-selected ? #06d6a0 : #e8e0f0;
+                    }
+                }
+            }
+        }
+
+        // Right half — screenshot for highlighted game
+        Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: #131018;
+
+            Rectangle {
+                x: 12px * s;
+                y: 16px * s;
+                width: parent.width - 24px * s;
+                height: parent.height - 96px * s;
+                background: #0e0c14;
+                border-width: 1px;
+                border-color: #5c4a72;
+
+                if MisterBridge.arcade-preview-has-image : Image {
+                    width: 100%;
+                    height: 100%;
+                    source: MisterBridge.arcade-preview-image;
+                    image-fit: contain;
+                }
+
+                if !MisterBridge.arcade-preview-has-image : Text {
+                    width: 100%;
+                    height: 100%;
+                    text: "No screenshot";
+                    color: #706080;
+                    font-size: 8px * s;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                x: 12px * s;
+                y: parent.height - 72px * s;
+                width: parent.width - 24px * s;
+                text: MisterBridge.arcade-preview-title;
+                color: #e8e0f0;
+                font-size: 16px * s;
+                wrap: word-wrap;
+            }
+
+            Text {
+                x: 12px * s;
+                y: parent.height - 28px * s;
+                text: "D-pad: move  ·  A: launch  ·  B: back";
+                color: #706080;
+                font-size: 8px * s;
+            }
+        }
+    }
+}

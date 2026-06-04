@@ -3,8 +3,10 @@ export { MisterUi }
 import { MisterBridge } from "mister_bridge.slint";
 import { ControllerPanel } from "controller_test.slint";
 import { SetupOverlay } from "controller_setup.slint";
-import "fonts/PressStart2P-Regular.ttf";
+import { ArcadeListScreen } from "arcade_list.slint";
 export { MisterBridge }
+export { ArcadeGame } from "arcade_game.slint";
+import "fonts/PressStart2P-Regular.ttf";
 
 component LauncherTile inherits Rectangle {
     in property <string> label;
@@ -53,42 +55,18 @@ component HomeGrid inherits Rectangle {
             vertical-stretch: 1;
             spacing: 16px;
 
-            VerticalLayout {
+            LauncherTile {
                 vertical-stretch: 1;
-                spacing: 16px;
-
-                LauncherTile {
-                    vertical-stretch: 1;
-                    label: "Controller Test";
-                    subtitle: "Press A";
-                    focused: MisterBridge.selected-index == 0;
-                }
-
-                LauncherTile {
-                    vertical-stretch: 1;
-                    label: "Pac-Man";
-                    subtitle: "Arcade";
-                    focused: MisterBridge.selected-index == 2;
-                }
+                label: "Controller Test";
+                subtitle: "Press A";
+                focused: MisterBridge.selected-index == 0;
             }
 
-            VerticalLayout {
+            LauncherTile {
                 vertical-stretch: 1;
-                spacing: 16px;
-
-                LauncherTile {
-                    vertical-stretch: 1;
-                    label: "Donkey Kong";
-                    subtitle: "Arcade";
-                    focused: MisterBridge.selected-index == 1;
-                }
-
-                LauncherTile {
-                    vertical-stretch: 1;
-                    label: "Galaga";
-                    subtitle: "Arcade";
-                    focused: MisterBridge.selected-index == 3;
-                }
+                label: "Arcade";
+                subtitle: MisterBridge.arcade-games.length + " games";
+                focused: MisterBridge.selected-index == 1;
             }
         }
 
@@ -112,6 +90,11 @@ export component Launcher inherits MisterWindow {
     }
 
     if MisterBridge.screen-mode == 1 : ControllerPanel { }
+
+    if MisterBridge.screen-mode == 2 : ArcadeListScreen {
+        width: 100%;
+        height: 100%;
+    }
 
     if MisterBridge.setup-visible : SetupOverlay {
         phase: MisterBridge.setup-phase;
@@ -140,7 +123,7 @@ export component Launcher inherits MisterWindow {
             }
 
             Text {
-                text: "Please wait…";
+                text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait…";
                 color: #9080a8;
                 font-size: 8px;
                 horizontal-alignment: center;

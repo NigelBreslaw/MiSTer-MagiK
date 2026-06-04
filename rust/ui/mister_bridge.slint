@@ -1,4 +1,6 @@
 // Rust ↔ Slint bridge for MiSTer input and app state.
+import { ArcadeGame } from "arcade_game.slint";
+
 export global MisterBridge {
     in-out property <bool> dpad-up;
     in-out property <bool> dpad-down;
@@ -32,12 +34,20 @@ export global MisterBridge {
     in-out property <string> pressed-now;
     in-out property <string> last-event-label;
     in-out property <string> last-raw-event;
-    // Launcher navigation: 0=home grid, 1=controller test panel.
+    // Launcher navigation: 0=home, 1=controller test, 2=arcade list.
     in-out property <int> screen-mode;
-    // Home grid focus 0..3 (2x2 layout).
+    // Home grid focus 0=controller test, 1=arcade.
     in-out property <int> selected-index;
+    in-out property <[ArcadeGame]> arcade-games;
+    in-out property <int> arcade-selected;
+    // Scroll offset in logical pixels (0 = top); drives ListView viewport-y.
+    in-out property <int> arcade-scroll-y;
+    in-out property <image> arcade-preview-image;
+    in-out property <string> arcade-preview-title;
+    in-out property <bool> arcade-preview-has-image;
     // Non-empty while launching a game — full-screen loading overlay.
     in-out property <string> loading-message;
+    in-out property <string> loading-detail;
     // Controller setup overlay (see controller_setup.slint).
     in-out property <bool> setup-visible;
     // 0=hidden, 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure
