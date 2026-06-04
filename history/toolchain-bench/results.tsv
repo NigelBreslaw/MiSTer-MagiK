@@ -68,3 +68,5 @@ LS-rs1	list_scroll	2026-06-04T18:25:03Z	1.96.0		2686160	17753	5776	10508	336	29	
 LS-rs2	list_scroll	2026-06-04T18:25:20Z	1.96.0		2686160	17316	12153	3902	344	30	60			yes	render_scale=2; design=960x540; render=1920x1080
 LS-rs1	list_scroll	2026-06-04T18:33:16Z	1.96.0		4218064	26581	12154	11207	338	20	72			yes	render_scale=1; design=960x540; render=960x540; fb_scale=2
 LS-rs2	list_scroll	2026-06-04T18:33:33Z	1.96.0		4218064	105295	8344	8028	693	8	88			yes	render_scale=2; design=960x540; render=1920x1080
+LS-rs1	list_scroll	2026-06-04T18:51:56Z	1.96.0		2727120	27087	8490	7163	336	24	77			yes	render_scale=1; design=960x540; render=960x540; fb_scale=2
+LS-rs2	list_scroll	2026-06-04T18:52:13Z	1.96.0		2727120	26541	7835	7044	335	25	77			yes	render_scale=2; design=960x540; render=1920x1080
