@@ -1,0 +1,13 @@
+=== mister-frame-full_motion-20260604T191823Z.tsv (286 frames) ===
+  wall_us    min= 31747 p50= 33325 p95= 33413 p99= 35080 max= 53801 avg= 33481
+  phases_us  min= 31741 p50= 33319 p95= 33406 p99= 35071 max= 53794 avg= 33474
+  anim_us    min=    32 p50=    35 p95=    49 p99=    54 max=   119 avg=    37
+  render_us  min=  2913 p50=  2992 p95=  3034 p99=  3086 max= 12326 avg=  3027
+  vsync_us   min= 20114 p50= 23116 p95= 23195 p99= 23220 max= 37949 avg= 23191
+  copy_us    min=  7049 p50=  7190 p95=  7247 p99=  7343 max= 15867 avg=  7218
+  frames >= 16667us: 286 (100.00%)
+  avg fps (wall): 29.9
+  slow-frame max phase = anim: 0/286
+  slow-frame max phase = render: 0/286
+  slow-frame max phase = vsync: 286/286
+  slow-frame max phase = copy: 0/286

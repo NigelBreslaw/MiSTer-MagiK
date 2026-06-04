@@ -41,6 +41,8 @@ mod slint_ui {
 }
 
 use crate::controller_db::ControllerDb;
+use crate::cpu_profile;
+use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
@@ -491,6 +493,41 @@ fn sync_device_info_launcher(
     ).into());
 }
 
+fn run_bench_frame(
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    mut cached: &mut [Pixel],
+) -> FrameSample {
+    let frame_start = Instant::now();
+    let t0 = Instant::now();
+    slint::platform::update_timers_and_animations();
+    let t1 = Instant::now();
+    let mut this_rows: Option<(usize, usize)> = None;
+    window.draw_if_needed(|renderer| {
+        let region = renderer.render(&mut cached, ui.render_w());
+        this_rows = dirty_rows(&region, ui.render_h());
+    });
+    let t2 = Instant::now();
+    disp.wait_vsync();
+    let t3 = Instant::now();
+    let rows = if let Some((y0, y1)) = this_rows {
+        copy_cached_rows(disp, ui, cached, y0, y1);
+        (y1 - y0) as u32
+    } else {
+        0
+    };
+    let t4 = Instant::now();
+    FrameSample {
+        anim_us: (t1 - t0).as_micros() as u64,
+        render_us: (t2 - t1).as_micros() as u64,
+        vsync_us: (t3 - t2).as_micros() as u64,
+        copy_us: (t4 - t3).as_micros() as u64,
+        rows,
+        wall_us: frame_start.elapsed().as_micros() as u64,
+    }
+}
+
 fn run_frame_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -500,6 +537,11 @@ fn run_frame_loop(
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
+    let mut profiler = FrameProfiler::from_env();
+    let cpu = cpu_profile::start();
+    let profile_on = profiler.enabled();
+
+    // Legacy 1 Hz line (no anim column) when frame profiler is off — keeps bench-toolchain.sh parsing stable.
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
     let mut render_us = 0u128;
@@ -509,41 +551,33 @@ fn run_frame_loop(
 
     println!("bench scene running {secs}s (vsync-locked, dirty-row copy)...");
     while start.elapsed().as_secs() < secs {
-        slint::platform::update_timers_and_animations();
-        let t0 = Instant::now();
-        let mut this_rows: Option<(usize, usize)> = None;
-        window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, ui.render_w());
-            this_rows = dirty_rows(&region, ui.render_h());
-        });
-        let t1 = Instant::now();
-        disp.wait_vsync();
-        let t2 = Instant::now();
-        if let Some((y0, y1)) = this_rows {
-            copy_cached_rows(disp, ui, &cached, y0, y1);
-            copy_rows_acc += (y1 - y0) as u128;
-        }
-        let t3 = Instant::now();
-        render_us += (t1 - t0).as_micros();
-        vsync_us += (t2 - t1).as_micros();
-        copy_us += (t3 - t2).as_micros();
+        let sample = run_bench_frame(ui, disp, window, &mut cached);
         frames += 1;
-        fps_frames += 1;
-        if fps_window_start.elapsed().as_millis() >= 1000 {
-            let nn = fps_frames.max(1) as u128;
-            println!(
-                "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
-                render_us / nn,
-                vsync_us / nn,
-                copy_us / nn,
-                copy_rows_acc / nn
-            );
-            fps_frames = 0;
-            render_us = 0;
-            vsync_us = 0;
-            copy_us = 0;
-            copy_rows_acc = 0;
-            fps_window_start = Instant::now();
+
+        if profiler.enabled() {
+            profiler.record(sample);
+        } else {
+            fps_frames += 1;
+            render_us += sample.render_us as u128;
+            vsync_us += sample.vsync_us as u128;
+            copy_us += sample.copy_us as u128;
+            copy_rows_acc += sample.rows as u128;
+            if fps_window_start.elapsed().as_millis() >= 1000 {
+                let nn = fps_frames.max(1) as u128;
+                println!(
+                    "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
+                    render_us / nn,
+                    vsync_us / nn,
+                    copy_us / nn,
+                    copy_rows_acc / nn
+                );
+                fps_frames = 0;
+                render_us = 0;
+                vsync_us = 0;
+                copy_us = 0;
+                copy_rows_acc = 0;
+                fps_window_start = Instant::now();
+            }
         }
     }
     let elapsed = start.elapsed().as_secs_f64();
@@ -551,6 +585,10 @@ fn run_frame_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+    if profile_on {
+        profiler.finish();
+    }
+    cpu_profile::finish(cpu);
 }
 
 fn run_controller_loop(

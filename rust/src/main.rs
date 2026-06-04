@@ -15,8 +15,10 @@
 use std::ffi::CString;
 
 mod controller_db;
+mod cpu_profile;
 mod fb;
 mod fpga;
+mod frame_profile;
 mod input;
 mod launcher;
 mod setup_nav;
