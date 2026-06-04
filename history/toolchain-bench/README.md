@@ -26,6 +26,8 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
 | `--replace-label` | Drop existing TSV rows for this label before appending (re-run A0) |
 | `--scene-secs N` | Seconds per scene (default **15**, ~105s device for 7 scenes) |
 
+Each on-device scene run **kills any running `mister-magic-fb` and MiSTer** before starting the bench UI (same as `scripts/bench-diagnose.sh visible`). Without this, vsync can sit at ~30 Hz and fps reads ~30 instead of ~60.
+
 ## Visual artifacts (gitignored)
 
 For label `A0` and scene `static_ui`:

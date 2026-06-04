@@ -156,7 +156,7 @@ run_scene_on_device() {
   local ui_log ui_full
   ui_log="$(mktemp)"
   ui_full="$(mktemp)"
-  # Snapshot /dev/fb0 while the UI process is still running (menu still SIGSTOPped).
+  # Snapshot /dev/fb0 while the UI process is still running.
   # Post-exit capture only sees fbcon "Welcome / login:" — not the bench scene.
   local capture_at=$((secs > 4 ? secs - 2 : 2))
 
@@ -166,8 +166,10 @@ run_scene_on_device() {
   fi
   mister run "
 set -e
-MP=\$(pidof MiSTer 2>/dev/null || true)
-if [ -n \"\$MP\" ]; then kill -STOP \$MP; fi
+# Visible bench path: Slint owns SPI + HDMI at 60 Hz (see scripts/bench-diagnose.sh).
+kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true
+kill -9 \$(pidof MiSTer) 2>/dev/null || true
+sleep 0.5
 ${render_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
@@ -200,7 +202,6 @@ while [ \$i -lt $secs ]; do
 done
 wait \$UI_PID
 UI_RC=\$?
-if [ -n \"\$MP\" ]; then kill -CONT \$MP; fi
 echo ___BENCH_FB_CAPTURED___
 echo \$FB_CAPTURED
 echo ___BENCH_SCENE___
@@ -286,7 +287,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
   HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
-  HOST_NOTES="profile=$BUILD_PROFILE"
+  HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui"
   if [[ "$RENDER_SCALE" == "2" ]]; then
     HOST_NOTES="${HOST_NOTES}; render_scale=2; design=960x540; render=1920x1080; font=PressStart2P"
   else
@@ -295,7 +296,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
-  HOST_NOTES="skip-build; profile=$BUILD_PROFILE"
+  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; prep=kill-mister-ui"
   if [[ "$RENDER_SCALE" == "2" ]]; then
     HOST_NOTES="${HOST_NOTES}; render_scale=2; design=960x540; render=1920x1080; font=PressStart2P"
   else

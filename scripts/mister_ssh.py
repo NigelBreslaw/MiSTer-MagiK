@@ -8,6 +8,7 @@ and the documented MiSTer pubkey-auth hang, without any interactive prompt.
 
 Usage:
     python scripts/mister_ssh.py run "<command>"     # run a command, print output
+    python scripts/mister_ssh.py run --stream "<command>"  # stream stdout live
     python scripts/mister_ssh.py reboot              # reboot (fire-and-forget)
     python scripts/mister_ssh.py reboot-wait [secs]  # reboot, then block until back
     python scripts/mister_ssh.py wait [secs]         # block until SSH+userspace ready
@@ -18,15 +19,28 @@ Environment:
     MISTER_IP    (default 192.168.1.117)
     MISTER_USER  (default root)
     MISTER_PASS  (default 1)
+    MISTER_CMD_TIMEOUT  seconds for run/run --stream (default 120; 0 = no limit)
 """
 from __future__ import annotations
 
 import os
+import select
 import socket
 import sys
 import time
 
 import paramiko
+
+
+def _cmd_timeout() -> float | None:
+    raw = os.environ.get("MISTER_CMD_TIMEOUT", "120")
+    try:
+        val = float(raw)
+    except ValueError:
+        return 120.0
+    if val <= 0:
+        return None
+    return val
 
 
 def connect(timeout: float = 10.0) -> paramiko.SSHClient:
@@ -48,7 +62,7 @@ def connect(timeout: float = 10.0) -> paramiko.SSHClient:
     return client
 
 
-def run(client: paramiko.SSHClient, command: str, timeout: float = 120.0) -> int:
+def run(client: paramiko.SSHClient, command: str, timeout: float | None = 120.0) -> int:
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout, get_pty=False)
     out = stdout.read().decode("utf-8", "ignore")
     err = stderr.read().decode("utf-8", "ignore")
@@ -57,6 +71,37 @@ def run(client: paramiko.SSHClient, command: str, timeout: float = 120.0) -> int
         sys.stdout.write(out if out.endswith("\n") else out + "\n")
     if err.strip():
         sys.stderr.write("[stderr] " + err)
+    return rc
+
+
+def run_stream(client: paramiko.SSHClient, command: str, timeout: float | None = 120.0) -> int:
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout, get_pty=False)
+    channel = stdout.channel
+    err_chunks: list[str] = []
+
+    while True:
+        if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+            break
+        r, _, _ = select.select([channel], [], [], 0.2)
+        if r:
+            if channel.recv_ready():
+                data = channel.recv(4096)
+                if data:
+                    sys.stdout.write(data.decode("utf-8", "ignore"))
+                    sys.stdout.flush()
+            if channel.recv_stderr_ready():
+                data = channel.recv_stderr(4096)
+                if data:
+                    chunk = data.decode("utf-8", "ignore")
+                    err_chunks.append(chunk)
+                    sys.stderr.write(chunk)
+                    sys.stderr.flush()
+        elif channel.exit_status_ready():
+            break
+
+    rc = channel.recv_exit_status()
+    if err_chunks and not err_chunks[-1].endswith("\n"):
+        sys.stderr.write("\n")
     return rc
 
 
@@ -158,9 +203,21 @@ def main() -> int:
         if len(sys.argv) < 3:
             print("run needs a command")
             return 2
+        stream = False
+        args = sys.argv[2:]
+        if args and args[0] == "--stream":
+            stream = True
+            args = args[1:]
+        if not args:
+            print("run needs a command")
+            return 2
+        command = args[0]
+        timeout = _cmd_timeout()
         client = connect()
         try:
-            return run(client, sys.argv[2], timeout=float(os.environ.get("MISTER_CMD_TIMEOUT", "120")))
+            if stream:
+                return run_stream(client, command, timeout=timeout)
+            return run(client, command, timeout=timeout)
         finally:
             client.close()
 

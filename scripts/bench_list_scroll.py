@@ -46,8 +46,9 @@ def parse_log(text: str) -> tuple[int, int, int, int, int] | None:
 def bench_scale(client, label: str, scale: int, bin_bytes: int) -> None:
     capture_at = SECS - 2 if SECS > 4 else 2
     cmd = f"""
-MP=$(pidof MiSTer 2>/dev/null || true)
-[ -n "$MP" ] && kill -STOP $MP
+kill -9 $(pidof mister-magic-fb) 2>/dev/null || true
+kill -9 $(pidof MiSTer) 2>/dev/null || true
+sleep 0.5
 MISTER_RENDER_SCALE={scale} {REMOTE} ui list_scroll {SECS} > /tmp/bench-ui.log 2>&1 &
 UI_PID=$!
 CPU_SUM=0; CPU_N=0
@@ -69,7 +70,6 @@ while [ $i -lt {SECS} ]; do
   i=$((i + 1))
 done
 wait $UI_PID
-[ -n "$MP" ] && kill -CONT $MP
 echo ___CPU___ $((CPU_N > 0 ? CPU_SUM / CPU_N : 0))
 echo ___LOG___
 cat /tmp/bench-ui.log
