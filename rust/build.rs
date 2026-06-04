@@ -12,6 +12,7 @@ fn main() {
         "ui/bench/text_heavy.slint",
         "ui/bench/solid_fill.slint",
         "ui/bench/list_scroll.slint",
+        "ui/bench/dirty_band.slint",
         "ui/controller_test.slint",
         "ui/launcher.slint",
     ];

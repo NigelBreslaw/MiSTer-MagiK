@@ -69,3 +69,12 @@ impl UiDisplay {
         )
     }
 }
+
+/// `dirty_band` scene: 1–100 (% of logical height dirtied per frame).
+pub fn dirty_band_pct_from_env() -> i32 {
+    std::env::var("MISTER_DIRTY_BAND_PCT")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .map(|n| n.clamp(1, 100))
+        .unwrap_or(50)
+}

@@ -32,6 +32,9 @@ mod slint_ui {
     pub mod list_scroll {
         include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
     }
+    pub mod dirty_band {
+        include!(concat!(env!("OUT_DIR"), "/dirty_band.rs"));
+    }
     pub mod controller {
         include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
     }
@@ -46,7 +49,7 @@ use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
+use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
 
 pub const UI_SCENES: &[&str] = &[
@@ -59,6 +62,7 @@ pub const UI_SCENES: &[&str] = &[
     "text_heavy",
     "solid_fill",
     "list_scroll",
+    "dirty_band",
 ];
 
 struct MisterPlatform {
@@ -208,6 +212,16 @@ pub fn run_ui(f: &mut Fpga) {
         "list_scroll" => {
             let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
             app.global::<slint_ui::list_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
+            configure_window(&ui, &window);
+            app.show().expect("show");
+            run_frame_loop(secs, &ui, &mut disp, &window);
+        }
+        "dirty_band" => {
+            let pct = dirty_band_pct_from_env();
+            let app = slint_ui::dirty_band::DirtyBand::new().expect("DirtyBand::new");
+            app.global::<slint_ui::dirty_band::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.set_band_pct(pct);
+            println!("dirty_band band-pct={pct}% (MISTER_DIRTY_BAND_PCT)");
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
