@@ -284,6 +284,7 @@ fn run_catalog_bench() {
         arcade_catalog::BuildOptions {
             sample_image_decodes: sample,
         },
+        None,
     );
     timings.print_summary();
     println!("games={}", catalog.len());

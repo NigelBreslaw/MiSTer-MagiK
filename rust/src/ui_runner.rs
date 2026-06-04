@@ -918,13 +918,13 @@ fn run_launcher_loop(
                 }
                 if setup_active {
                     sync_bridge_launcher(
-                        &app, &pad, &nav, &setup, &loading_title,
+                        &app, &pad, &nav, &setup, &loading_title, "",
                         Some(&catalog), &mut last_preview_idx,
                     );
                     window.request_redraw();
                 } else if changed {
                     sync_bridge_launcher(
-                        &app, &pad, &nav, &setup, &loading_title,
+                        &app, &pad, &nav, &setup, &loading_title, "",
                         Some(&catalog), &mut last_preview_idx,
                     );
                     window.request_redraw();

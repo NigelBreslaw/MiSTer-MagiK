@@ -108,7 +108,7 @@ pub fn build_with_options(
     opts: BuildOptions,
     mut progress: Option<&mut dyn FnMut(&str, &str)>,
 ) -> (ArcadeCatalog, CatalogTimings) {
-    let report = |title: &str, detail: &str| {
+    let mut report = |title: &str, detail: &str| {
         if let Some(f) = progress.as_mut() {
             f(title, detail);
         }
@@ -150,7 +150,6 @@ pub fn build_with_options(
 
     let mut games = {
         let t = Instant::now();
-        let total = mra_paths.len();
         let (rows, matched) = merge_entries(&root, &mra_paths, &gamelist, |done, total| {
             if done == total || done % 400 == 0 {
                 report(
