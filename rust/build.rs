@@ -1,7 +1,7 @@
 fn main() {
-    // Press Start 2P at 960×540 design sizes (×2 when MISTER_RENDER_SCALE=2).
+    // Press Start 2P at all app design sizes used by the 960×540 UI.
     if std::env::var("SLINT_FONT_SIZES").is_err() {
-        std::env::set_var("SLINT_FONT_SIZES", "8,16,24");
+        std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32,48");
     }
 
     let sources = [
