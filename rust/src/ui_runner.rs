@@ -49,6 +49,7 @@ use crate::cpu_profile;
 use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherNav, Screen};
+use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
@@ -298,7 +299,7 @@ fn sync_bridge_launcher(
     loading_message: &str,
     loading_detail: &str,
     catalog: Option<&ArcadeCatalog>,
-    last_preview_idx: &mut Option<usize>,
+    preview: &mut PreviewState,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     sync_bridge_pad_launcher(&bridge, pad);
@@ -313,9 +314,9 @@ fn sync_bridge_launcher(
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
-        sync_arcade_preview(&bridge, catalog, nav.arcade.selected, last_preview_idx);
+        request_arcade_preview(&bridge, catalog, nav.arcade.selected, preview);
     } else {
-        *last_preview_idx = None;
+        preview.clear(&bridge);
     }
     sync_setup_bridge(&bridge, pad, setup);
 }
@@ -325,16 +326,42 @@ fn png_to_slint_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
     Image::from_rgba8(buffer)
 }
 
-fn sync_arcade_preview(
+struct PreviewState {
+    worker: PreviewWorker,
+    last_preview_idx: Option<usize>,
+    current_generation: u64,
+}
+
+impl PreviewState {
+    fn new() -> Self {
+        Self {
+            worker: PreviewWorker::new(),
+            last_preview_idx: None,
+            current_generation: 0,
+        }
+    }
+
+    fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
+        if self.last_preview_idx.is_some() || self.current_generation != 0 {
+            self.last_preview_idx = None;
+            self.current_generation = 0;
+            bridge.set_arcade_preview_has_image(false);
+            bridge.set_arcade_preview_title("".into());
+            bridge.set_arcade_preview_image(Image::default());
+        }
+    }
+}
+
+fn request_arcade_preview(
     bridge: &slint_ui::launcher::MisterBridge,
     catalog: Option<&ArcadeCatalog>,
     selected: usize,
-    last_preview_idx: &mut Option<usize>,
+    preview: &mut PreviewState,
 ) {
-    if *last_preview_idx == Some(selected) {
+    if preview.last_preview_idx == Some(selected) {
         return;
     }
-    *last_preview_idx = Some(selected);
+    preview.last_preview_idx = Some(selected);
 
     let Some(catalog) = catalog else {
         bridge.set_arcade_preview_has_image(false);
@@ -352,14 +379,41 @@ fn sync_arcade_preview(
 
     bridge.set_arcade_preview_title(game.title.clone().into());
     if game.has_image {
-        if let Some((w, h, rgba)) = arcade_catalog::decode_png_rgba8(&game.image_path) {
-            bridge.set_arcade_preview_image(png_to_slint_image(w, h, rgba));
-            bridge.set_arcade_preview_has_image(true);
-            return;
-        }
+        preview.current_generation =
+            preview
+                .worker
+                .request(selected, game.title.clone(), game.image_path.clone());
+        bridge.set_arcade_preview_image(Image::default());
+        bridge.set_arcade_preview_has_image(false);
+        return;
     }
+    preview.current_generation = 0;
     bridge.set_arcade_preview_image(Image::default());
     bridge.set_arcade_preview_has_image(false);
+}
+
+fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let mut dirty = false;
+    for result in preview.worker.drain() {
+        if result.generation != preview.current_generation {
+            continue;
+        }
+        bridge.set_arcade_preview_title(result.title.into());
+        if let Some(image) = result.image {
+            bridge.set_arcade_preview_image(png_to_slint_image(
+                image.width,
+                image.height,
+                image.rgba,
+            ));
+            bridge.set_arcade_preview_has_image(true);
+        } else {
+            bridge.set_arcade_preview_image(Image::default());
+            bridge.set_arcade_preview_has_image(false);
+        }
+        dirty = true;
+    }
+    dirty
 }
 
 fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::ArcadeGame> {
@@ -384,12 +438,12 @@ fn paint_loading_overlay(
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
     cached: &mut [Pixel],
-    last_preview_idx: &mut Option<usize>,
+    preview: &mut PreviewState,
     message: &str,
     detail: &str,
 ) {
     sync_bridge_launcher(
-        app, pad, nav, setup, message, detail, None, last_preview_idx,
+        app, pad, nav, setup, message, detail, None, preview,
     );
     window.request_redraw();
     slint::platform::update_timers_and_animations();
@@ -410,10 +464,10 @@ fn index_arcade_catalog(
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
     cached: &mut [Pixel],
-    last_preview_idx: &mut Option<usize>,
+    preview: &mut PreviewState,
 ) -> ArcadeCatalog {
     paint_loading_overlay(
-        app, pad, nav, setup, ui, disp, window, cached, last_preview_idx,
+        app, pad, nav, setup, ui, disp, window, cached, preview,
         "Indexing arcade…", "Starting…",
     );
 
@@ -423,7 +477,7 @@ fn index_arcade_catalog(
 
     let mut progress = |title: &str, detail: &str| {
         paint_loading_overlay(
-            app, pad, nav, setup, ui, disp, window, cached, last_preview_idx,
+            app, pad, nav, setup, ui, disp, window, cached, preview,
             title, detail,
         );
     };
@@ -435,7 +489,7 @@ fn index_arcade_catalog(
 
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_arcade_games(slint_arcade_games(&catalog.games));
-    sync_bridge_launcher(app, pad, nav, setup, "", "", Some(&catalog), last_preview_idx);
+    sync_bridge_launcher(app, pad, nav, setup, "", "", Some(&catalog), preview);
     window.request_redraw();
     catalog
 }
@@ -824,12 +878,12 @@ fn run_launcher_loop(
         setup.open_for(status, idx);
     }
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
-    let mut last_preview_idx = None;
+    let mut preview = PreviewState::new();
     let catalog = index_arcade_catalog(
-        &app, &pad, &nav, &setup, ui, disp, window, &mut cached, &mut last_preview_idx,
+        &app, &pad, &nav, &setup, ui, disp, window, &mut cached, &mut preview,
     );
     sync_bridge_launcher(
-        &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut last_preview_idx,
+        &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut preview,
     );
     window.request_redraw();
     while secs == 0 || start.elapsed().as_secs() < secs {
@@ -888,7 +942,7 @@ fn run_launcher_loop(
                             format!("Loading {}…", launcher::game_title(&catalog, &mra));
                         sync_bridge_launcher(
                             &app, &pad, &nav, &setup, &loading_title, "",
-                            Some(&catalog), &mut last_preview_idx,
+                            Some(&catalog), &mut preview,
                         );
                         window.request_redraw();
                         slint::platform::update_timers_and_animations();
@@ -910,7 +964,7 @@ fn run_launcher_loop(
                                 launcher::reset_launch();
                                 sync_bridge_launcher(
                                     &app, &pad, &nav, &setup, "", "",
-                                    Some(&catalog), &mut last_preview_idx,
+                                    Some(&catalog), &mut preview,
                                 );
                                 recover_launcher_ui(f, &mut launch_spawned_mister);
                             }
@@ -924,7 +978,7 @@ fn run_launcher_loop(
             if bridge_dirty {
                 sync_bridge_launcher(
                     &app, &pad, &nav, &setup, &loading_title, "",
-                    Some(&catalog), &mut last_preview_idx,
+                    Some(&catalog), &mut preview,
                 );
                 window.request_redraw();
             }
@@ -943,6 +997,9 @@ fn run_launcher_loop(
         }
 
         if launching {
+            window.request_redraw();
+        }
+        if !launching && apply_ready_preview(&app, &mut preview) {
             window.request_redraw();
         }
 
