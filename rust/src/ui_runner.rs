@@ -675,9 +675,24 @@ fn start_arcade_catalog_worker(
                 arcade_catalog::BuildOptions::default(),
                 Some(&mut progress),
             );
+            let _ = tx.send(CatalogWorkerMessage::Progress {
+                title: "Indexing arcade".to_string(),
+                detail: "Writing catalog cache...".to_string(),
+            });
+            let cache_save = match arcade_catalog::save_catalog_cache(
+                arcade_catalog::DEFAULT_CATALOG_CACHE_PATH,
+                &result.0,
+            ) {
+                Ok(saved) => Some(saved),
+                Err(e) => {
+                    eprintln!("catalog cache save failed: {e}");
+                    None
+                }
+            };
             let _ = tx.send(CatalogWorkerMessage::Ready {
                 catalog: result.0,
                 timings: result.1,
+                cache_save,
             });
         })
         .expect("spawn arcade-catalog");
@@ -692,6 +707,7 @@ enum CatalogWorkerMessage {
     Ready {
         catalog: ArcadeCatalog,
         timings: arcade_catalog::CatalogTimings,
+        cache_save: Option<arcade_catalog::CatalogCacheSave>,
     },
 }
 
@@ -1457,14 +1473,44 @@ fn run_launcher_loop(
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let catalog_rx = start_arcade_catalog_worker(arcade_root.clone());
-    let mut catalog = empty_arcade_catalog(&arcade_root);
-    let mut catalog_ready = false;
+    let mut catalog = match arcade_catalog::load_catalog_cache(
+        arcade_catalog::DEFAULT_CATALOG_CACHE_PATH,
+        &arcade_root,
+    ) {
+        Ok(loaded) => {
+            print_startup_event(
+                start,
+                "catalog_cache_loaded",
+                format!(
+                    "games={} bytes={} load_ms={}",
+                    loaded.catalog.len(),
+                    loaded.bytes,
+                    loaded.ms
+                ),
+            );
+            loaded.catalog
+        }
+        Err(e) => {
+            print_startup_event(start, "catalog_cache_miss", e);
+            empty_arcade_catalog(&arcade_root)
+        }
+    };
+    let mut catalog_ready = !catalog.games.is_empty();
+    let mut catalog_refresh_done = false;
     print_startup_event(start, "catalog_worker_started", &arcade_root);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_arcade_games(slint_arcade_games(&catalog.games));
     bridge.set_catalog_scan_visible(true);
-    bridge.set_catalog_scan_title("Indexing arcade".into());
-    bridge.set_catalog_scan_detail("Starting scan...".into());
+    bridge.set_catalog_scan_title(if catalog_ready {
+        "Refreshing arcade".into()
+    } else {
+        "Indexing arcade".into()
+    });
+    bridge.set_catalog_scan_detail(if catalog_ready {
+        format!("Using cached {} games", catalog.len()).into()
+    } else {
+        "Starting scan...".into()
+    });
     sync_bridge_launcher(
         &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut preview,
     );
@@ -1475,7 +1521,7 @@ fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut bridge_dirty = false;
 
-        if !catalog_ready {
+        if !catalog_refresh_done {
             while let Ok(message) = catalog_rx.try_recv() {
                 match message {
                     CatalogWorkerMessage::Progress { title, detail } => {
@@ -1487,14 +1533,23 @@ fn run_launcher_loop(
                     CatalogWorkerMessage::Ready {
                         catalog: ready_catalog,
                         timings,
+                        cache_save,
                     } => {
                         catalog = ready_catalog;
                         catalog_ready = true;
+                        catalog_refresh_done = true;
                         print_startup_event(
                             start,
                             "catalog_ready",
                             format!("games={}", catalog.len()),
                         );
+                        if let Some(saved) = cache_save {
+                            print_startup_event(
+                                start,
+                                "catalog_cache_saved",
+                                format!("bytes={} save_ms={}", saved.bytes, saved.ms),
+                            );
+                        }
                         timings.print_summary();
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_arcade_games(slint_arcade_games(&catalog.games));
