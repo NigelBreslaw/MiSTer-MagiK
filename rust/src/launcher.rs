@@ -3,6 +3,7 @@
 use crate::arcade_catalog::{ArcadeCatalog, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT};
 use crate::input::PadState;
 use crate::input_repeat::RepeatNav;
+use crate::library_bench;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
@@ -23,6 +24,25 @@ pub enum Screen {
     Home,
     Controller,
     Arcade,
+    Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfirmAction {
+    ResetDatabase,
+    Restart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LauncherAction {
+    LaunchGame,
+    ResetDatabase,
+    Restart,
+}
+
+pub struct LauncherEvent {
+    pub action: LauncherAction,
+    pub path: Option<String>,
 }
 
 pub struct ArcadeNav {
@@ -47,6 +67,9 @@ impl ArcadeNav {
 pub struct LauncherNav {
     pub screen: Screen,
     pub selected: usize,
+    pub settings_selected: usize,
+    pub confirm_action: Option<ConfirmAction>,
+    pub confirm_selected: usize,
     pub arcade: ArcadeNav,
     repeat: RepeatNav,
     prev: PadState,
@@ -57,44 +80,54 @@ impl LauncherNav {
         Self {
             screen: Screen::Home,
             selected: 0,
+            settings_selected: 0,
+            confirm_action: None,
+            confirm_selected: 0,
             arcade: ArcadeNav::new(),
             repeat: RepeatNav::default(),
             prev: PadState::default(),
         }
     }
 
-    /// Returns `Some(mra_path)` when a game launch was requested.
+    /// Returns an event when a launch or system action was requested.
     pub fn handle_input(
         &mut self,
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
-    ) -> Option<String> {
-        let result = match self.screen {
-            Screen::Home => self.handle_home(now, frame_now),
-            Screen::Controller => {
-                if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
-                    self.screen = Screen::Home;
+    ) -> Option<LauncherEvent> {
+        let result = if self.confirm_action.is_some() {
+            self.handle_confirm(now, frame_now)
+        } else {
+            match self.screen {
+                Screen::Home => self.handle_home(now, frame_now),
+                Screen::Controller => {
+                    if rising(now.btn_home, self.prev.btn_home)
+                        || rising(now.btn_b, self.prev.btn_b)
+                    {
+                        self.screen = Screen::Home;
+                    }
+                    None
                 }
-                None
+                Screen::Arcade => self.handle_arcade(now, frame_now, catalog),
+                Screen::Settings => self.handle_settings(now, frame_now),
             }
-            Screen::Arcade => self.handle_arcade(now, frame_now, catalog),
         };
         self.prev = now.clone();
         result
     }
 
-    fn handle_home(&mut self, now: &PadState, frame_now: Instant) -> Option<String> {
+    fn handle_home(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
         if self.repeat.tick_left(now.dpad_left, frame_now) && self.selected > 0 {
             self.selected -= 1;
         }
-        if self.repeat.tick_right(now.dpad_right, frame_now) && self.selected < 1 {
+        if self.repeat.tick_right(now.dpad_right, frame_now) && self.selected < 2 {
             self.selected += 1;
         }
         if self.repeat.tick_up(now.dpad_up, frame_now) && self.selected > 0 {
             self.selected -= 1;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now) && self.selected < 1 {
+        if self.repeat.tick_down(now.dpad_down, frame_now) && self.selected < 2 {
             self.selected += 1;
         }
 
@@ -109,6 +142,11 @@ impl LauncherNav {
                     self.screen = Screen::Arcade;
                     None
                 }
+                2 => {
+                    self.settings_selected = 0;
+                    self.screen = Screen::Settings;
+                    None
+                }
                 _ => None,
             };
         }
@@ -121,7 +159,7 @@ impl LauncherNav {
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
-    ) -> Option<String> {
+    ) -> Option<LauncherEvent> {
         let count = catalog.len();
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
@@ -148,9 +186,69 @@ impl LauncherNav {
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            return catalog.path_at(self.arcade.selected).map(|p| p.to_string());
+            return catalog
+                .path_at(self.arcade.selected)
+                .map(|p| LauncherEvent {
+                    action: LauncherAction::LaunchGame,
+                    path: Some(p.to_string()),
+                });
         }
 
+        None
+    }
+
+    fn handle_settings(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+            self.screen = Screen::Home;
+            return None;
+        }
+        if self.repeat.tick_down(now.dpad_down, frame_now) && self.settings_selected < 1 {
+            self.settings_selected += 1;
+        }
+        if self.repeat.tick_up(now.dpad_up, frame_now) && self.settings_selected > 0 {
+            self.settings_selected -= 1;
+        }
+        if rising(now.btn_a, self.prev.btn_a) {
+            self.confirm_selected = 0;
+            self.confirm_action = Some(match self.settings_selected {
+                0 => ConfirmAction::ResetDatabase,
+                _ => ConfirmAction::Restart,
+            });
+        }
+        None
+    }
+
+    fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+        if rising(now.btn_b, self.prev.btn_b) || rising(now.btn_home, self.prev.btn_home) {
+            self.confirm_action = None;
+            self.confirm_selected = 0;
+            return None;
+        }
+        if self.repeat.tick_left(now.dpad_left, frame_now) && self.confirm_selected > 0 {
+            self.confirm_selected -= 1;
+        }
+        if self.repeat.tick_right(now.dpad_right, frame_now) && self.confirm_selected < 1 {
+            self.confirm_selected += 1;
+        }
+        if rising(now.btn_a, self.prev.btn_a) {
+            let action = self.confirm_action;
+            let confirmed = self.confirm_selected == 1;
+            self.confirm_action = None;
+            self.confirm_selected = 0;
+            if confirmed {
+                return match action {
+                    Some(ConfirmAction::ResetDatabase) => Some(LauncherEvent {
+                        action: LauncherAction::ResetDatabase,
+                        path: None,
+                    }),
+                    Some(ConfirmAction::Restart) => Some(LauncherEvent {
+                        action: LauncherAction::Restart,
+                        path: None,
+                    }),
+                    None => None,
+                };
+            }
+        }
         None
     }
 }
@@ -287,4 +385,23 @@ pub fn execute_game_launch(mra_path: &str) -> Result<bool, String> {
 
 pub fn reset_launch() {
     LAUNCH_STATE.store(LAUNCH_IDLE, Ordering::Release);
+}
+
+pub fn reset_database_and_reboot() -> Result<(), String> {
+    library_bench::remove_default_sqlite_database()?;
+    reboot_mister()
+}
+
+pub fn reboot_mister() -> Result<(), String> {
+    Command::new("reboot")
+        .spawn()
+        .map(|_| ())
+        .or_else(|_| {
+            Command::new("sh")
+                .arg("-c")
+                .arg("reboot -f")
+                .spawn()
+                .map(|_| ())
+        })
+        .map_err(|e| format!("failed to reboot MiSTer: {e}"))
 }

@@ -8,7 +8,7 @@
 //!   input     gamepad log / sniff / calibrate
 //!   catalog-bench  benchmark arcade catalog pipeline phases
 //!   library-bench  benchmark whole MiSTer library indexing + archive TOCs
-//!   library-db-bench  benchmark cached library database open/query only
+//!   library-db-bench  benchmark cached SQLite library database open/query only
 //!   preview-bench  benchmark arcade preview image read/decode
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.

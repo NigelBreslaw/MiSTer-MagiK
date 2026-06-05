@@ -3,7 +3,8 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -26,7 +27,8 @@ const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_Utility",
 ];
 
-const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magic/library-bench.sqlite3";
+pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magic/library.sqlite3";
+const LEGACY_BENCH_SQLITE_PATH: &str = "/media/fat/mister-magic/library-bench.sqlite3";
 
 const NORMAL_LAUNCH_EXTS: &[&str] = &[
     "mra", "mgl", "rbf", "rom", "bin", "cue", "iso", "img", "dsk", "vhd", "hdf", "adf", "ipf",
@@ -119,6 +121,22 @@ struct LibraryScan {
     slowest_archives: Vec<(u64, String)>,
 }
 
+pub struct LibraryCatalogLoad {
+    pub catalog: ArcadeCatalog,
+    pub us: u64,
+    pub rows: usize,
+}
+
+pub struct LibraryRefreshSummary {
+    pub scan_us: u64,
+    pub import_us: u64,
+    pub bytes: u64,
+    pub normal_files: usize,
+    pub containers: usize,
+    pub entries: usize,
+    pub discoveries: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct DbFingerprint {
     normal_files: usize,
@@ -143,6 +161,8 @@ struct GameDiscovery {
     year: Option<u16>,
     setname: Option<String>,
     parent: Option<String>,
+    image_path: Option<String>,
+    has_image: bool,
     confidence: DiscoveryConfidence,
 }
 
@@ -272,6 +292,108 @@ pub fn run_db_bench() {
     benchmark_sqlite_queries(&cfg.sqlite_path);
 }
 
+pub fn default_sqlite_path() -> PathBuf {
+    std::env::var("MISTER_LIBRARY_SQLITE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH))
+}
+
+pub fn remove_default_sqlite_database() -> Result<(), String> {
+    let path = default_sqlite_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("failed to delete {}: {e}", path.display())),
+    }
+    let legacy = Path::new(LEGACY_BENCH_SQLITE_PATH);
+    if legacy != path {
+        match std::fs::remove_file(legacy) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("failed to delete {}: {e}", legacy.display())),
+        }
+    }
+    Ok(())
+}
+
+pub fn load_arcade_catalog_from_sqlite(
+    root: impl AsRef<Path>,
+) -> Result<LibraryCatalogLoad, String> {
+    let path = default_sqlite_path();
+    let root = root.as_ref().to_path_buf();
+    let t = Instant::now();
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open library db: {e}"))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn
+        .prepare(
+            "SELECT title, launch_ref, COALESCE(image_path,''), has_image
+             FROM discoveries
+             WHERE category='Arcade' AND source_kind='mra'
+             ORDER BY lower(title)
+             LIMIT 5000",
+        )
+        .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ArcadeGameEntry {
+                title: row.get::<_, String>(0)?,
+                mra_path: row.get::<_, String>(1)?,
+                image_path: row.get::<_, String>(2)?,
+                has_image: row.get::<_, i64>(3)? != 0,
+            })
+        })
+        .map_err(|e| format!("query arcade catalog: {e}"))?;
+    let mut games = Vec::new();
+    for row in rows {
+        games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
+    }
+    let rows = games.len();
+    Ok(LibraryCatalogLoad {
+        catalog: ArcadeCatalog { root, games },
+        us: t.elapsed().as_micros() as u64,
+        rows,
+    })
+}
+
+pub fn refresh_default_sqlite_database(
+    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+) -> Result<LibraryRefreshSummary, String> {
+    let cfg = BenchConfig::production();
+    if let Some(report) = progress.as_mut() {
+        report("Indexing library", "Scanning MiSTer roots...");
+    }
+    let scan_t = Instant::now();
+    let scan = match progress.as_mut() {
+        Some(report) => scan_library_with_progress(&cfg, Some(&mut **report)),
+        None => scan_library(&cfg),
+    };
+    let scan_us = scan_t.elapsed().as_micros() as u64;
+
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Indexing library",
+            &format!(
+                "Writing {} games, {} archives...",
+                unique_discovery_count(&scan.discoveries),
+                scan.containers.len()
+            ),
+        );
+    }
+    let import_t = Instant::now();
+    let bytes = save_sqlite_scan(&cfg.sqlite_path, &scan)?;
+    let import_us = import_t.elapsed().as_micros() as u64;
+    Ok(LibraryRefreshSummary {
+        scan_us,
+        import_us,
+        bytes,
+        normal_files: scan.normal_files.len(),
+        containers: scan.containers.len(),
+        entries: scan.entries.len(),
+        discoveries: unique_discovery_count(&scan.discoveries),
+    })
+}
+
 struct BenchConfig {
     roots: Vec<String>,
     sqlite_path: PathBuf,
@@ -300,6 +422,13 @@ impl BenchConfig {
             optional_catalogs,
         }
     }
+
+    fn production() -> Self {
+        let mut cfg = Self::from_env();
+        cfg.sqlite_path = default_sqlite_path();
+        cfg.optional_catalogs = true;
+        cfg
+    }
 }
 
 fn env_bool(name: &str) -> bool {
@@ -319,9 +448,25 @@ struct ArchiveScan {
 }
 
 fn scan_library(cfg: &BenchConfig) -> LibraryScan {
+    scan_library_with_progress(cfg, None)
+}
+
+fn scan_library_with_progress(
+    cfg: &BenchConfig,
+    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+) -> LibraryScan {
     let discover_t = Instant::now();
-    let (files, mut root_stats) = discover_files(&cfg.roots);
+    let (files, mut root_stats) = match progress.as_mut() {
+        Some(report) => discover_files(&cfg.roots, Some(&mut **report)),
+        None => discover_files(&cfg.roots, None),
+    };
     let discover_us = discover_t.elapsed().as_micros() as u64;
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Classifying library",
+            &format!("Discovered {} files across MiSTer roots", files.len()),
+        );
+    }
 
     let mut normal_files = Vec::new();
     let mut containers = Vec::new();
@@ -333,7 +478,21 @@ fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     let mut slowest_archives = Vec::<(u64, String)>::new();
 
     let classify_t = Instant::now();
-    for f in files {
+    let total_files = files.len();
+    for (idx, f) in files.into_iter().enumerate() {
+        if idx % 250 == 0 {
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Classifying library",
+                    &format!(
+                        "{idx}/{total_files} files; {} games, {} archives, {} archive entries",
+                        discoveries.len(),
+                        containers.len(),
+                        entries.len()
+                    ),
+                );
+            }
+        }
         if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
             if let Some(r) = root_stats.get_mut(&f.root) {
                 r.archives += 1;
@@ -341,6 +500,19 @@ fn scan_library(cfg: &BenchConfig) -> LibraryScan {
             largest_archives.push((f.size, f.path.display().to_string()));
             let archive_phase_t = Instant::now();
             let scan = scan_archive_toc(&f, format);
+            if containers.len() % 10 == 0 {
+                if let Some(report) = progress.as_mut() {
+                    report(
+                        "Scanning archive TOCs",
+                        &format!(
+                            "{} archives; {} entries; {}",
+                            containers.len() + 1,
+                            entries.len() + scan.entries.len(),
+                            f.path.display()
+                        ),
+                    );
+                }
+            }
             phase_stats
                 .archive_toc
                 .add(archive_phase_t.elapsed().as_micros() as u64);
@@ -398,6 +570,30 @@ fn scan_library(cfg: &BenchConfig) -> LibraryScan {
             discoveries.push(discovery);
         }
     }
+    if cfg.optional_catalogs {
+        if let Some(report) = progress.as_mut() {
+            report("Importing metadata", "Looking for gamelist.xml screenshots...");
+        }
+        let catalog_t = Instant::now();
+        let imported = match progress.as_mut() {
+            Some(report) => enrich_discoveries_from_gamelists(
+                &mut discoveries,
+                &cfg.roots,
+                Some(&mut **report),
+            ),
+            None => enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, None),
+        };
+        phase_stats
+            .optional_catalog
+            .add(catalog_t.elapsed().as_micros() as u64);
+        phase_stats.optional_catalog_entries += imported as u64;
+        if let Some(report) = progress.as_mut() {
+            report(
+                "Importing metadata",
+                &format!("Matched screenshot metadata for {imported} games"),
+            );
+        }
+    }
 
     LibraryScan {
         version: 3,
@@ -416,10 +612,16 @@ fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     }
 }
 
-fn discover_files(roots: &[String]) -> (Vec<FoundFile>, HashMap<String, RootStats>) {
+fn discover_files(
+    roots: &[String],
+    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+) -> (Vec<FoundFile>, HashMap<String, RootStats>) {
     let mut out = Vec::new();
     let mut stats = HashMap::new();
     for root in roots {
+        if let Some(report) = progress.as_mut() {
+            report("Scanning roots", &format!("Walking {root}"));
+        }
         let t = Instant::now();
         let mut rs = RootStats::default();
         let path = Path::new(root);
@@ -452,9 +654,23 @@ fn discover_files(roots: &[String]) -> (Vec<FoundFile>, HashMap<String, RootStat
                     size: meta.len(),
                     mtime_secs: mtime_secs(&meta),
                 });
+                if rs.files % 500 == 0 {
+                    if let Some(report) = progress.as_mut() {
+                        report(
+                            "Scanning roots",
+                            &format!("{root}: {} files found", rs.files),
+                        );
+                    }
+                }
             }
         }
         rs.scan_us = t.elapsed().as_micros() as u64;
+        if let Some(report) = progress.as_mut() {
+            report(
+                "Scanning roots",
+                &format!("{root}: {} files found", rs.files),
+            );
+        }
         stats.insert(root.clone(), rs);
     }
     (out, stats)
@@ -575,9 +791,168 @@ fn amigavision_listing_discoveries(
             year: None,
             setname: None,
             parent: None,
+            image_path: None,
+            has_image: false,
             confidence: DiscoveryConfidence::CatalogMetadata,
         })
         .collect()
+}
+
+#[derive(Clone, Debug)]
+struct GamelistMetadata {
+    title: Option<String>,
+    image_path: Option<String>,
+    has_image: bool,
+}
+
+fn enrich_discoveries_from_gamelists(
+    discoveries: &mut [GameDiscovery],
+    roots: &[String],
+    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+) -> usize {
+    let mut by_path = HashMap::<String, GamelistMetadata>::new();
+    let mut by_stem = HashMap::<String, GamelistMetadata>::new();
+    let mut xml_files = 0usize;
+    let mut xml_games = 0usize;
+    for root in roots {
+        let path = Path::new(root);
+        if !path.is_dir() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if !entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("gamelist.xml")
+            {
+                continue;
+            }
+            let parent = entry.path().parent().unwrap_or(path);
+            xml_files += 1;
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Importing metadata",
+                    &format!("Reading {}", entry.path().display()),
+                );
+            }
+            let rows = parse_gamelist_metadata(entry.path(), parent);
+            xml_games += rows.len();
+            for (game_path, meta) in rows {
+                by_stem
+                    .entry(match_stem(&game_path))
+                    .or_insert_with(|| meta.clone());
+                by_path.insert(normalize_match_path(&game_path), meta);
+            }
+        }
+    }
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Importing metadata",
+            &format!("{xml_files} XML files, {xml_games} metadata rows"),
+        );
+    }
+
+    let mut matched = 0usize;
+    let total = discoveries.len();
+    for (idx, discovery) in discoveries.iter_mut().enumerate() {
+        if idx % 500 == 0 {
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Matching screenshots",
+                    &format!("{idx}/{total} discoveries; {matched} matched"),
+                );
+            }
+        }
+        let meta = by_path
+            .get(&normalize_match_path(&discovery.source_path))
+            .or_else(|| by_path.get(&normalize_match_path(&discovery.launch_ref)))
+            .or_else(|| by_stem.get(&match_stem(&discovery.source_path)))
+            .or_else(|| by_stem.get(&match_stem(&discovery.launch_ref)));
+        let Some(meta) = meta else {
+            continue;
+        };
+        if let Some(title) = meta.title.as_deref().filter(|s| !s.trim().is_empty()) {
+            discovery.title = title.to_string();
+        }
+        if let Some(image_path) = meta.image_path.as_deref().filter(|s| !s.trim().is_empty()) {
+            discovery.image_path = Some(image_path.to_string());
+            discovery.has_image = meta.has_image;
+        }
+        matched += 1;
+    }
+    matched
+}
+
+fn parse_gamelist_metadata(path: &Path, base: &Path) -> Vec<(String, GamelistMetadata)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("<game") {
+        rest = &rest[start..];
+        let Some(tag_end) = rest.find('>') else {
+            break;
+        };
+        let after_open = &rest[tag_end + 1..];
+        let Some(end) = after_open.find("</game>") else {
+            break;
+        };
+        let block = &after_open[..end];
+        rest = &after_open[end + "</game>".len()..];
+        let Some(raw_path) = tag_text(block, "path") else {
+            continue;
+        };
+        let game_path = resolve_gamelist_path(base, &raw_path);
+        let image_path = tag_text(block, "image").map(|image| resolve_gamelist_path(base, &image));
+        let has_image = image_path
+            .as_deref()
+            .map(|p| Path::new(p).is_file())
+            .unwrap_or(false);
+        out.push((
+            game_path,
+            GamelistMetadata {
+                title: tag_text(block, "name"),
+                image_path,
+                has_image,
+            },
+        ));
+    }
+    out
+}
+
+fn resolve_gamelist_path(base: &Path, raw: &str) -> String {
+    let clean = raw.trim().trim_start_matches("./");
+    if clean.starts_with('/') {
+        clean.to_string()
+    } else {
+        base.join(clean).display().to_string()
+    }
+}
+
+fn normalize_match_path(path: &str) -> String {
+    path.split("::")
+        .next()
+        .unwrap_or(path)
+        .trim()
+        .trim_start_matches("./")
+        .to_ascii_lowercase()
+}
+
+fn match_stem(path: &str) -> String {
+    normalize_id(
+        Path::new(path.split("::").next().unwrap_or(path))
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path),
+    )
 }
 
 fn discovery_from_archive_entry(entry: &LibraryContainerEntry) -> GameDiscovery {
@@ -597,6 +972,8 @@ fn discovery_from_archive_entry(entry: &LibraryContainerEntry) -> GameDiscovery 
         year: None,
         setname: None,
         parent: None,
+        image_path: None,
+        has_image: false,
         confidence: taxonomy.confidence,
     }
 }
@@ -621,6 +998,8 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
                 year: mra.year.and_then(|s| s.parse::<u16>().ok()),
                 setname: mra.setname,
                 parent: mra.parent,
+                image_path: None,
+                has_image: false,
                 confidence: taxonomy.confidence,
             };
         }
@@ -645,6 +1024,8 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
                 year: None,
                 setname: None,
                 parent: None,
+                image_path: None,
+                has_image: false,
                 confidence: taxonomy.confidence,
             };
         }
@@ -665,6 +1046,8 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
         year: None,
         setname: None,
         parent: None,
+        image_path: None,
+        has_image: false,
         confidence: taxonomy.confidence,
     }
 }
@@ -1302,13 +1685,21 @@ fn db_fingerprint(scan: &LibraryScan) -> DbFingerprint {
         normal_files: scan.normal_files.len(),
         containers: scan.containers.len(),
         entries: scan.entries.len(),
-        discoveries: scan.discoveries.len(),
+        discoveries: unique_discovery_count(&scan.discoveries),
         container_fingerprints: scan
             .containers
             .iter()
             .map(|c| (c.file_path.clone(), (c.size, c.mtime_secs)))
             .collect(),
     }
+}
+
+fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
+    discoveries
+        .iter()
+        .map(discovery_unique_key)
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 fn archive_status_str(status: &ArchiveScanStatus) -> &'static str {
@@ -1385,6 +1776,8 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
             year INTEGER,
             setname TEXT,
             parent TEXT,
+            image_path TEXT,
+            has_image INTEGER NOT NULL,
             confidence TEXT NOT NULL
         ) WITHOUT ROWID;
         CREATE VIRTUAL TABLE discoveries_fts USING fts5(
@@ -1464,8 +1857,8 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
     {
         let mut row_stmt = tx
             .prepare(
-                "INSERT INTO discoveries(key,source_path,launch_ref,source_kind,title,category,platform_id,core_id,hardware_id,manufacturer,genre,year,setname,parent,confidence)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                "INSERT INTO discoveries(key,source_path,launch_ref,source_kind,title,category,platform_id,core_id,hardware_id,manufacturer,genre,year,setname,parent,image_path,has_image,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             )
             .map_err(|e| format!("prepare discovery insert: {e}"))?;
         let mut fts_stmt = tx
@@ -1496,6 +1889,8 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
                     discovery.year.map(|n| n as i64),
                     discovery.setname.as_deref(),
                     discovery.parent.as_deref(),
+                    discovery.image_path.as_deref(),
+                    if discovery.has_image { 1 } else { 0 },
                     confidence_str(discovery.confidence)
                 ])
                 .map_err(|e| format!("insert discovery: {e}"))?;
@@ -1525,8 +1920,11 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
             .map_err(|e| format!("insert container count: {e}"))?;
         stmt.execute(params!["entries", scan.entries.len() as i64])
             .map_err(|e| format!("insert entry count: {e}"))?;
-        stmt.execute(params!["discoveries", scan.discoveries.len() as i64])
-            .map_err(|e| format!("insert discovery count: {e}"))?;
+        stmt.execute(params![
+            "discoveries",
+            unique_discovery_count(&scan.discoveries) as i64
+        ])
+        .map_err(|e| format!("insert discovery count: {e}"))?;
     }
     {
         let mut stmt = tx
