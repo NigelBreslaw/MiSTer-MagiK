@@ -34,6 +34,8 @@ mod preview_worker;
 mod setup_nav;
 mod ui_display;
 mod ui_runner;
+#[cfg(feature = "video")]
+mod video_player;
 mod vt;
 
 use fb::{Display, Pixel};

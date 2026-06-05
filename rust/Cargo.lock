@@ -611,6 +611,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "clang"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84c044c781163c001b913cd018fc95a628c50d0d2dfea8bca77dad71edb16e37"
+dependencies = [
+ "clang-sys",
+ "libc",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1112,6 +1122,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ffmpeg-sys-the-third"
+version = "5.0.0+ffmpeg-8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b00c204bb97c2b6c0329104c3e8bcf58d4d13cc88a04233326570672e0c2c5c9"
+dependencies = [
+ "bindgen",
+ "cc",
+ "clang",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
+name = "ffmpeg-the-third"
+version = "5.0.0+ffmpeg-8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "791f0d9315e4f0a0861fa5c8ca8d70a1bd099cce72bff111b4f7ed8d6ebe8ba3"
+dependencies = [
+ "bitflags 2.12.1",
+ "ffmpeg-sys-the-third",
+ "libc",
 ]
 
 [[package]]
@@ -2576,6 +2611,7 @@ dependencies = [
 name = "mister-magic-fb"
 version = "0.1.0"
 dependencies = [
+ "ffmpeg-the-third",
  "libc",
  "pprof",
  "quick-xml 0.37.5",

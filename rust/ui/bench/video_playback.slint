@@ -1,0 +1,64 @@
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
+import "../fonts/PressStart2P-Regular.ttf";
+
+export component VideoPlayback inherits MisterWindow {
+    background: #090b10;
+    default-font-family: "Press Start 2P";
+
+    in-out property <image> frame;
+
+    property <int> s: MisterUi.scale;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 480px * s;
+        height: parent.height;
+        background: #05070a;
+    }
+
+    Image {
+        x: 40px * s;
+        y: 158px * s;
+        width: 320px * s;
+        height: 224px * s;
+        source: root.frame;
+        image-fit: contain;
+    }
+
+    Rectangle {
+        x: 504px * s;
+        y: 90px * s;
+        width: 408px * s;
+        height: 360px * s;
+        background: #121722;
+        border-radius: 6px * s;
+    }
+
+    Text {
+        x: 528px * s;
+        y: 122px * s;
+        text: "bench:";
+        font-size: 16px * s;
+        color: #8fb6ff;
+    }
+
+    Text {
+        x: 528px * s;
+        y: 160px * s;
+        text: "video_playback";
+        font-size: 24px * s;
+        color: #f2f6ff;
+    }
+
+    Text {
+        x: 528px * s;
+        y: 224px * s;
+        width: 340px * s;
+        text: "H.264 -> RGB24 -> Slint image";
+        font-size: 16px * s;
+        color: #b7c1d6;
+        wrap: word-wrap;
+    }
+}

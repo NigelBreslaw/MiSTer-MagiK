@@ -12,7 +12,8 @@ kill -9 $(pidof MiSTer) 2>/dev/null
 
 Or use **`scripts/bench-diagnose.sh visible …`** (streams progress, no timeout).
 
-Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`, `dirty_band`.
+Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`, `console_scroll`, `dirty_band`.
+With a `--video` build, `video_playback` is also available.
 
 ### dirty_band — copy budget sweep
 
@@ -55,7 +56,7 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PROFILE_FILE=…` | Write per-frame TSV |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
 
-Phase breakdown each frame: **anim** (Slint timers) · **render** (software renderer) · **vsync** (`FBIO_WAITFORVSYNC`) · **copy** (dirty rows → fb0, includes 2× upscale). **wall** = whole iteration.
+Phase breakdown each frame: **anim** (Slint timers) · **render** (software renderer) · **vsync** (`FBIO_WAITFORVSYNC`) · **copy** (dirty rect/rows → fb0, includes 2× upscale). **wall** = whole iteration.
 
 Host-side TSV rollup: `python3 scripts/analyze-frame-profile.py history/toolchain-bench/profile-*/mister-frame-*.tsv`
 
@@ -63,4 +64,10 @@ Toolchain bench (automated TSV + PNG — kills `mister-magic-fb` + MiSTer before
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device
+```
+
+Include the video scene and upload the local 320×224 H.264 benchmark clip:
+
+```bash
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO --video --replace-label
 ```

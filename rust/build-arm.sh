@@ -17,17 +17,19 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PROFILE=release
-CARGO_FEATURES=()
+FEATURES=()
 for arg in "$@"; do
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
     --profile)
       PROFILE=release-device-profile
-      CARGO_FEATURES=(--features profile)
+      FEATURES+=(profile)
       ;;
+    --video) FEATURES+=(video) ;;
     --fast|--release) PROFILE=release ;;
     -h|--help)
       sed -n '4,7p' "$0" | sed 's/^# \{0,1\}//'
+      echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
       exit 0
       ;;
   esac
@@ -56,7 +58,12 @@ fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
-if ! cross build --target armv7-unknown-linux-gnueabihf --profile "$PROFILE" ${CARGO_FEATURES+"${CARGO_FEATURES[@]}"} 2>&1 | tee "$BUILD_LOG"; then
+BUILD_ARGS=(--target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+if [ "${#FEATURES[@]}" -gt 0 ]; then
+  FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
+  BUILD_ARGS+=(--features "$FEATURE_LIST")
+fi
+if ! cross build "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG"; then
   exit 1
 fi
 if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
