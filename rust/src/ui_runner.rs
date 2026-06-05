@@ -119,16 +119,36 @@ pub fn print_scenes() {
     }
 }
 
-fn dirty_rows(region: &PhysicalRegion, render_h: usize) -> Option<(usize, usize)> {
+#[derive(Clone, Copy, Debug)]
+struct DirtyRect {
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+}
+
+impl DirtyRect {
+    fn rows(self) -> u32 {
+        (self.y1 - self.y0) as u32
+    }
+
+    fn is_broad(self, render_w: usize) -> bool {
+        (self.x1 - self.x0) >= render_w * 3 / 4
+    }
+}
+
+fn dirty_rect(region: &PhysicalRegion, render_w: usize, render_h: usize) -> Option<DirtyRect> {
     let o = region.bounding_box_origin();
     let s = region.bounding_box_size();
     if s.width == 0 || s.height == 0 {
         return None;
     }
+    let x0 = o.x.max(0) as usize;
+    let x1 = ((o.x + s.width as i32) as usize).min(render_w);
     let y0 = o.y.max(0) as usize;
     let y1 = ((o.y + s.height as i32) as usize).min(render_h);
-    if y1 > y0 {
-        Some((y0, y1))
+    if x1 > x0 && y1 > y0 {
+        Some(DirtyRect { x0, y0, x1, y1 })
     } else {
         None
     }
@@ -136,6 +156,22 @@ fn dirty_rows(region: &PhysicalRegion, render_h: usize) -> Option<(usize, usize)
 
 fn copy_cached_rows(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], y0: usize, y1: usize) {
     disp.copy_rows_scaled(ui.fb_scale(), cached, ui.render_w(), y0, y1);
+}
+
+fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: DirtyRect) {
+    if rect.is_broad(ui.render_w()) {
+        copy_cached_rows(disp, ui, cached, rect.y0, rect.y1);
+        return;
+    }
+    disp.copy_rect_scaled(
+        ui.fb_scale(),
+        cached,
+        ui.render_w(),
+        rect.x0,
+        rect.y0,
+        rect.x1,
+        rect.y1,
+    );
 }
 
 fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
@@ -776,17 +812,17 @@ fn run_bench_frame(
     let t0 = Instant::now();
     slint::platform::update_timers_and_animations();
     let t1 = Instant::now();
-    let mut this_rows: Option<(usize, usize)> = None;
+    let mut this_rect: Option<DirtyRect> = None;
     window.draw_if_needed(|renderer| {
         let region = renderer.render(&mut cached, ui.render_w());
-        this_rows = dirty_rows(&region, ui.render_h());
+        this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
     });
     let t2 = Instant::now();
     disp.wait_vsync();
     let t3 = Instant::now();
-    let rows = if let Some((y0, y1)) = this_rows {
-        copy_cached_rows(disp, ui, cached, y0, y1);
-        (y1 - y0) as u32
+    let rows = if let Some(rect) = this_rect {
+        copy_cached_rect(disp, ui, cached, rect);
+        rect.rows()
     } else {
         0
     };
@@ -886,14 +922,14 @@ fn run_controller_loop(
             window.request_redraw();
         }
         slint::platform::update_timers_and_animations();
-        let mut this_rows: Option<(usize, usize)> = None;
+        let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut cached, ui.render_w());
-            this_rows = dirty_rows(&region, ui.render_h());
+            this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         disp.wait_vsync();
-        if let Some((y0, y1)) = this_rows {
-            copy_cached_rows(disp, ui, &cached, y0, y1);
+        if let Some(rect) = this_rect {
+            copy_cached_rect(disp, ui, &cached, rect);
         }
         frames += 1;
     }
@@ -1071,16 +1107,16 @@ fn run_launcher_loop(
         }
 
         slint::platform::update_timers_and_animations();
-        let mut this_rows: Option<(usize, usize)> = None;
+        let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut cached, ui.render_w());
-            this_rows = dirty_rows(&region, ui.render_h());
+            this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         disp.wait_vsync();
         if launching || setup.is_active() {
             copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
-        } else if let Some((y0, y1)) = this_rows {
-            copy_cached_rows(disp, ui, &cached, y0, y1);
+        } else if let Some(rect) = this_rect {
+            copy_cached_rect(disp, ui, &cached, rect);
         }
         frames += 1;
     }

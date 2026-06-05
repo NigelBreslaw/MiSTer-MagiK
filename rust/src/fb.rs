@@ -258,6 +258,64 @@ impl Display {
         }
     }
 
+    /// Copy logical rect [src_x0,src_x1) × [src_y0,src_y1) from `src` into the fb.
+    /// This avoids copying full-width dirty rows when Slint reports a narrow
+    /// bounding box.
+    pub fn copy_rect_scaled(
+        &mut self,
+        scale: usize,
+        src: &[Pixel],
+        src_w: usize,
+        src_x0: usize,
+        src_y0: usize,
+        src_x1: usize,
+        src_y1: usize,
+    ) {
+        if src_x1 <= src_x0 || src_y1 <= src_y0 {
+            return;
+        }
+        let rect_w = src_x1 - src_x0;
+        if rect_w * scale >= self.w * 3 / 4 {
+            self.copy_rows_scaled(scale, src, src_w, src_y0, src_y1);
+            return;
+        }
+        if scale <= 1 {
+            debug_assert_eq!(src_w, self.w);
+            let dst_w = self.w;
+            let dst = self.buffer_mut();
+            for sy in src_y0..src_y1 {
+                let a = sy * dst_w + src_x0;
+                let b = sy * dst_w + src_x1;
+                dst[a..b].copy_from_slice(&src[a..b]);
+            }
+            return;
+        }
+
+        let dst_w = self.w;
+        let dst_h = self.h;
+        let dst = self.buffer_mut();
+        for sy in src_y0..src_y1 {
+            let src_row = &src[sy * src_w..(sy + 1) * src_w];
+            let py0 = sy * scale;
+            for dy in 0..scale {
+                let py = py0 + dy;
+                if py >= dst_h {
+                    break;
+                }
+                let dst_row = &mut dst[py * dst_w..(py + 1) * dst_w];
+                for (sx, &color) in src_row[src_x0..src_x1].iter().enumerate() {
+                    let px0 = (src_x0 + sx) * scale;
+                    for dx in 0..scale {
+                        let dst_x = px0 + dx;
+                        if dst_x < dst_w {
+                            dst_row[dst_x] = color;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn wait_vsync(&self) {
         let arg: u32 = 0;
         unsafe {
