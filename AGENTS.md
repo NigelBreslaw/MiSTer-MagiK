@@ -325,6 +325,14 @@ still owns recovery when running; if wedged, reboot always works).
   which detects the down→up transition and returns the instant `pidof MiSTer`
   answers, instead of a fixed `sleep`. Polling port 22 alone is not enough —
   it confirm-runs a command so we don't act before the rootfs is ready.
+- **Perf runs can be contaminated by a 30fps cadence.** We observed benchmark
+  scenes sometimes starting in a bad 30fps/vsync phase after repeated Slint
+  restarts or immediately after deploy/reboot, then recovering later. For
+  performance comparisons, put the MiSTer in a clean state, kill any existing
+  `mister-magic-fb`, wait/settle before starting the scene (5s worked in tests),
+  and distrust short runs whose first seconds show `fps ~ 30` unless that is the
+  thing being measured. Reboot and rerun before concluding a copy/render change
+  regressed performance.
 
 ---
 
