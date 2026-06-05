@@ -2,6 +2,7 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ImageLoadTiming};
 use crate::preview_worker::PreviewWorker;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug)]
@@ -68,6 +69,11 @@ pub fn run() {
         "preview-bench mode={mode} root={root} count={} interval_ms={}",
         cfg.count, cfg.interval_ms
     );
+    if mode == "fixtures" {
+        run_fixtures();
+        return;
+    }
+
     let (catalog, timings) =
         arcade_catalog::build_with_options(&root, arcade_catalog::BuildOptions::default(), None);
     timings.print_summary();
@@ -75,10 +81,100 @@ pub fn run() {
         "sync" => run_sync(&catalog, cfg),
         "async" => run_async(&catalog, cfg),
         other => {
-            eprintln!("unknown preview-bench mode '{other}' (use: sync | async)");
+            eprintln!("unknown preview-bench mode '{other}' (use: sync | async | fixtures)");
             std::process::exit(2);
         }
     }
+}
+
+fn run_fixtures() {
+    let dir = std::env::var("MISTER_PREVIEW_FIXTURE_DIR")
+        .unwrap_or_else(|_| "/media/fat/mister-magic/png-fixtures".to_string());
+    let repeats = std::env::var("MISTER_PREVIEW_FIXTURE_REPEATS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20usize);
+    let paths = fixture_paths(Path::new(&dir));
+    if paths.is_empty() {
+        eprintln!("no png fixtures found in {dir}");
+        std::process::exit(2);
+    }
+
+    println!(
+        "preview_fixture_bench dir={dir} files={} repeats={repeats}",
+        paths.len()
+    );
+    println!(
+        "preview_fixture_tsv\tfile\tencoded_bytes\trgba_bytes\twidth\theight\trepeats\tread_avg_us\tdecode_avg_us\ttotal_avg_us\tdecode_p90_us\ttotal_p90_us\tdecode_max_us\ttotal_max_us"
+    );
+
+    let start = Instant::now();
+    let mut summary = Summary::default();
+    for path in paths {
+        let mut samples = Vec::with_capacity(repeats);
+        let mut last_shape = (0u32, 0u32, 0usize, 0usize);
+        for _ in 0..repeats {
+            match arcade_catalog::load_png_rgba8_timed(path.to_string_lossy().as_ref()) {
+                Ok(loaded) => {
+                    let t = loaded.timing;
+                    last_shape = (
+                        loaded.image.width,
+                        loaded.image.height,
+                        t.encoded_bytes,
+                        t.rgba_bytes,
+                    );
+                    samples.push(t);
+                    summary.record(t);
+                }
+                Err(e) => {
+                    summary.fail();
+                    eprintln!("fixture decode failed {}: {e}", path.display());
+                    break;
+                }
+            }
+        }
+        let read = stat_values(samples.iter().map(|s| s.read_us).collect());
+        let decode = stat_values(samples.iter().map(|s| s.decode_us).collect());
+        let total = stat_values(samples.iter().map(|s| s.total_us).collect());
+        let file = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<unknown>");
+        println!(
+            "preview_fixture_tsv\t{file}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            last_shape.2,
+            last_shape.3,
+            last_shape.0,
+            last_shape.1,
+            samples.len(),
+            read.avg,
+            decode.avg,
+            total.avg,
+            decode.p90,
+            total.p90,
+            decode.max,
+            total.max,
+        );
+    }
+
+    summary.print(start.elapsed().as_micros() as u64);
+}
+
+fn fixture_paths(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        })
+        .collect();
+    paths.sort();
+    paths
 }
 
 fn run_sync(catalog: &ArcadeCatalog, cfg: BenchConfig) {
@@ -246,6 +342,26 @@ fn print_stats(name: &str, mut values: Vec<u64>) {
     println!("{name}_p50={}", percentile(&values, 50));
     println!("{name}_p90={}", percentile(&values, 90));
     println!("{name}_max={}", values[values.len() - 1]);
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StatValues {
+    avg: u64,
+    p90: u64,
+    max: u64,
+}
+
+fn stat_values(mut values: Vec<u64>) -> StatValues {
+    values.sort_unstable();
+    if values.is_empty() {
+        return StatValues::default();
+    }
+    let sum: u128 = values.iter().map(|&v| v as u128).sum();
+    StatValues {
+        avg: (sum / values.len() as u128) as u64,
+        p90: percentile(&values, 90),
+        max: values[values.len() - 1],
+    }
 }
 
 fn percentile(values: &[u64], pct: usize) -> u64 {
