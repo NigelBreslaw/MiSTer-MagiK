@@ -125,3 +125,40 @@ Aggregate over 200 samples:
 
 Compared with `png 0.18.1`, `zune-png 0.5.2` is about 56.0% faster on average
 decode time for this fixture set.
+
+### ZUNEPNG-RGB8-20260605
+
+Decoder/display path: direct `zune-png 0.5.2` without adding alpha, then
+`Image::from_rgb8()` / `Rgb8Pixel`.
+
+| File | Read avg ms | Decode avg ms | Total avg ms | Decode p90 ms | Total p90 ms | Decoded bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `01-sbrkoutct.png` | 0.136 | 1.274 | 1.417 | 1.334 | 1.431 | 172,032 |
+| `02-breakout.png` | 0.208 | 4.213 | 4.432 | 4.220 | 4.385 | 474,720 |
+| `03-btime.png` | 0.191 | 1.005 | 1.203 | 1.045 | 1.194 | 172,800 |
+| `04-tapperg.png` | 0.251 | 6.862 | 7.125 | 7.051 | 7.272 | 737,280 |
+| `05-1943kai.png` | 0.187 | 1.830 | 2.025 | 1.874 | 2.020 | 172,032 |
+| `06-akumajoun.png` | 0.244 | 1.602 | 1.855 | 1.641 | 1.962 | 172,032 |
+| `07-mmatrixj.png` | 0.242 | 2.826 | 3.077 | 2.957 | 3.147 | 258,048 |
+| `08-gigawing.png` | 0.292 | 3.515 | 3.815 | 3.540 | 3.736 | 258,048 |
+| `09-rtypeleo.png` | 0.283 | 3.353 | 3.645 | 3.382 | 3.565 | 230,400 |
+| `10-vsav.png` | 0.296 | 3.695 | 4.000 | 3.730 | 3.932 | 258,048 |
+
+Aggregate over 200 samples:
+
+| Metric | Value |
+|---|---:|
+| Read avg | 0.233 ms |
+| Read p90 | 0.220 ms |
+| Decode avg | 3.017 ms |
+| Decode p90 | 4.564 ms |
+| Decode max | 7.381 ms |
+| Total avg | 3.259 ms |
+| Total p90 | 6.120 ms |
+| Total max | 8.847 ms |
+| Decoded bytes avg | 290,544 |
+| Decoded bytes max | 737,280 |
+
+Compared with the `zune-png` RGBA8 path, RGB8 saves exactly 25% decoded image
+storage, but decode time is about 7.2% slower on this fixture set. This may
+still help the UI cache footprint, but it is not a PNG decode speed win.

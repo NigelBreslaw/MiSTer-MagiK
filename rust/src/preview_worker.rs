@@ -86,7 +86,7 @@ fn preview_thread(rx: mpsc::Receiver<PreviewRequest>, tx: mpsc::Sender<PreviewRe
 }
 
 fn load_preview(req: PreviewRequest) -> PreviewResult {
-    match arcade_catalog::load_png_rgba8_timed(&req.image_path) {
+    match arcade_catalog::load_png_rgb8_timed(&req.image_path) {
         Ok(loaded) => PreviewResult {
             generation: req.generation,
             selected: req.selected,

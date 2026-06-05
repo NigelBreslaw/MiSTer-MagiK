@@ -5,7 +5,7 @@ use crate::fpga::{Fpga, MODE_1080P60};
 use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, Rgb8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -324,9 +324,9 @@ fn sync_bridge_launcher(
     sync_setup_bridge(&bridge, pad, setup);
 }
 
-fn png_to_slint_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
-    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, width, height);
-    Image::from_rgba8(buffer)
+fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
+    let buffer = SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, width, height);
+    Image::from_rgb8(buffer)
 }
 
 const PREVIEW_IMAGE_CACHE_CAP: usize = 16;
@@ -462,7 +462,7 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
             let image = png_to_slint_image(
                 image.width,
                 image.height,
-                image.rgba,
+                image.rgb,
             );
             let image_path = result.image_path;
             preview.cache.insert(image_path.clone(), image.clone());

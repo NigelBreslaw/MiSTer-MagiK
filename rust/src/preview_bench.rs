@@ -54,8 +54,8 @@ impl Summary {
             self.samples.iter().map(|s| s.encoded_bytes as u64).collect(),
         );
         print_stats(
-            "rgba_bytes",
-            self.samples.iter().map(|s| s.rgba_bytes as u64).collect(),
+            "decoded_bytes",
+            self.samples.iter().map(|s| s.decoded_bytes as u64).collect(),
         );
     }
 }
@@ -105,7 +105,7 @@ fn run_fixtures() {
         paths.len()
     );
     println!(
-        "preview_fixture_tsv\tfile\tencoded_bytes\trgba_bytes\twidth\theight\trepeats\tread_avg_us\tdecode_avg_us\ttotal_avg_us\tdecode_p90_us\ttotal_p90_us\tdecode_max_us\ttotal_max_us"
+        "preview_fixture_tsv\tfile\tencoded_bytes\tdecoded_bytes\twidth\theight\trepeats\tread_avg_us\tdecode_avg_us\ttotal_avg_us\tdecode_p90_us\ttotal_p90_us\tdecode_max_us\ttotal_max_us"
     );
 
     let start = Instant::now();
@@ -114,14 +114,14 @@ fn run_fixtures() {
         let mut samples = Vec::with_capacity(repeats);
         let mut last_shape = (0u32, 0u32, 0usize, 0usize);
         for _ in 0..repeats {
-            match arcade_catalog::load_png_rgba8_timed(path.to_string_lossy().as_ref()) {
+            match arcade_catalog::load_png_rgb8_timed(path.to_string_lossy().as_ref()) {
                 Ok(loaded) => {
                     let t = loaded.timing;
                     last_shape = (
                         loaded.image.width,
                         loaded.image.height,
                         t.encoded_bytes,
-                        t.rgba_bytes,
+                        t.decoded_bytes,
                     );
                     samples.push(t);
                     summary.record(t);
@@ -181,13 +181,13 @@ fn run_sync(catalog: &ArcadeCatalog, cfg: BenchConfig) {
     let games = preview_games(catalog, cfg.count);
     println!("preview_bench_images={}", games.len());
     println!(
-        "preview_bench_tsv\tidx\ttitle\tencoded_bytes\trgba_bytes\twidth\theight\tread_us\tdecode_us\ttotal_us\tok"
+        "preview_bench_tsv\tidx\ttitle\tencoded_bytes\tdecoded_bytes\twidth\theight\tread_us\tdecode_us\ttotal_us\tok"
     );
 
     let start = Instant::now();
     let mut summary = Summary::default();
     for (idx, game) in games.iter().enumerate() {
-        match arcade_catalog::load_png_rgba8_timed(&game.image_path) {
+        match arcade_catalog::load_png_rgb8_timed(&game.image_path) {
             Ok(loaded) => {
                 let t = loaded.timing;
                 summary.record(t);
@@ -195,7 +195,7 @@ fn run_sync(catalog: &ArcadeCatalog, cfg: BenchConfig) {
                     "preview_bench_tsv\t{idx}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tyes",
                     sanitize(&game.title),
                     t.encoded_bytes,
-                    t.rgba_bytes,
+                    t.decoded_bytes,
                     loaded.image.width,
                     loaded.image.height,
                     t.read_us,
@@ -219,7 +219,7 @@ fn run_async(catalog: &ArcadeCatalog, cfg: BenchConfig) {
     let games = preview_games(catalog, cfg.count);
     println!("preview_bench_images={}", games.len());
     println!(
-        "preview_bench_tsv\tidx\ttitle\tencoded_bytes\trgba_bytes\twidth\theight\tread_us\tdecode_us\ttotal_us\tlatency_us\tsubmit_us\tapplied\tok"
+        "preview_bench_tsv\tidx\ttitle\tencoded_bytes\tdecoded_bytes\twidth\theight\tread_us\tdecode_us\ttotal_us\tlatency_us\tsubmit_us\tapplied\tok"
     );
 
     let mut worker = PreviewWorker::new();
@@ -291,7 +291,7 @@ fn print_async_result(
             result.selected,
             sanitize(&result.title),
             t.encoded_bytes,
-            t.rgba_bytes,
+            t.decoded_bytes,
             image.width,
             image.height,
             t.read_us,
