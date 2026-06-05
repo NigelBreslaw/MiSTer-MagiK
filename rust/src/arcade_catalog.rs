@@ -686,17 +686,73 @@ fn bench_decode_sample_pngs(games: &[ArcadeGameEntry], limit: usize) -> DecodeSt
 }
 
 pub fn decode_png_rgba8(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+    load_png_rgba8_timed(path).ok().map(|loaded| {
+        (
+            loaded.image.width,
+            loaded.image.height,
+            loaded.image.rgba,
+        )
+    })
+}
+
+#[derive(Clone, Debug)]
+pub struct DecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ImageLoadTiming {
+    pub read_us: u64,
+    pub decode_us: u64,
+    pub total_us: u64,
+    pub encoded_bytes: usize,
+    pub rgba_bytes: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoadedImage {
+    pub image: DecodedImage,
+    pub timing: ImageLoadTiming,
+}
+
+pub fn load_png_rgba8_timed(path: &str) -> Result<LoadedImage, String> {
+    let total_t = Instant::now();
+    let read_t = Instant::now();
+    let data = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+    let read_us = read_t.elapsed().as_micros() as u64;
+
+    let decode_t = Instant::now();
+    let image = decode_png_rgba8_bytes(&data)?;
+    let decode_us = decode_t.elapsed().as_micros() as u64;
+    let total_us = total_t.elapsed().as_micros() as u64;
+
+    Ok(LoadedImage {
+        timing: ImageLoadTiming {
+            read_us,
+            decode_us,
+            total_us,
+            encoded_bytes: data.len(),
+            rgba_bytes: image.rgba.len(),
+        },
+        image,
+    })
+}
+
+fn decode_png_rgba8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
     use png::{ColorType, Transformations};
-    let file = std::fs::File::open(path).ok()?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::Cursor::new(data);
     let mut decoder = png::Decoder::new(reader);
     decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
-    let mut reader = decoder.read_info().ok()?;
+    let mut reader = decoder.read_info().map_err(|e| format!("png read_info: {e}"))?;
     let width = reader.info().width;
     let height = reader.info().height;
     let mut buf = vec![0u8; reader.output_buffer_size()];
-    reader.next_frame(&mut buf).ok()?;
-    let rgba = match reader.info().color_type {
+    let out = reader.next_frame(&mut buf).map_err(|e| format!("png next_frame: {e}"))?;
+    let used = out.buffer_size();
+    buf.truncate(used);
+    let rgba = match out.color_type {
         ColorType::Rgba => buf,
         ColorType::Rgb => {
             let mut out = Vec::with_capacity(buf.len() / 3 * 4);
@@ -706,9 +762,9 @@ pub fn decode_png_rgba8(path: &str) -> Option<(u32, u32, Vec<u8>)> {
             }
             out
         }
-        _ => return None,
+        other => return Err(format!("unsupported png color type: {other:?}")),
     };
-    Some((width, height, rgba))
+    Ok(DecodedImage { width, height, rgba })
 }
 
 #[cfg(test)]

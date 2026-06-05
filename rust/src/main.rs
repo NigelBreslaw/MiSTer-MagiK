@@ -7,6 +7,7 @@
 //!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
 //!   input     gamepad log / sniff / calibrate
 //!   catalog-bench  benchmark arcade catalog pipeline phases
+//!   preview-bench  benchmark arcade preview image read/decode
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
 //! Core handoff argv (`.rbf` paths) re-execs stock `/media/fat/MiSTer`.
@@ -24,6 +25,8 @@ mod frame_profile;
 mod input;
 mod input_repeat;
 mod launcher;
+mod preview_bench;
+mod preview_worker;
 mod setup_nav;
 mod ui_display;
 mod ui_runner;
@@ -65,10 +68,11 @@ fn main() {
         "scenes" => ui_runner::print_scenes(),
         "input" => run_input(),
         "catalog-bench" => run_catalog_bench(),
+        "preview-bench" => preview_bench::run(),
         other => {
             eprintln!(
                 "unknown command '{other}' \
-                 (use: read | fb | ui | scenes | input | catalog-bench)"
+                 (use: read | fb | ui | scenes | input | catalog-bench | preview-bench)"
             );
             std::process::exit(2);
         }
@@ -91,7 +95,10 @@ fn is_launcher_boot(arg: &str) -> bool {
 
 /// MiSTer re-exec'd us with a core path — hand off to stock Main so gameplay works.
 fn should_handoff_to_mister(arg: &str) -> bool {
-    if matches!(arg, "read" | "fb" | "ui" | "scenes" | "input" | "catalog-bench") {
+    if matches!(
+        arg,
+        "read" | "fb" | "ui" | "scenes" | "input" | "catalog-bench" | "preview-bench"
+    ) {
         return false;
     }
     if arg.ends_with("menu.rbf") {
