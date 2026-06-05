@@ -39,16 +39,63 @@ component LauncherTile inherits Rectangle {
     }
 }
 
+component CogIcon inherits Rectangle {
+    in property <bool> focused;
+
+    background: transparent;
+
+    Rectangle { x: 14px; y: 0px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 14px; y: 28px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 0px; y: 14px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 28px; y: 14px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 6px; y: 6px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 22px; y: 6px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 6px; y: 22px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 22px; y: 22px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
+    Rectangle { x: 10px; y: 10px; width: 16px; height: 16px; background: #1e1828; border-width: 4px; border-color: focused ? #06d6a0 : #e8e0f0; }
+}
+
+component SettingsButton inherits Rectangle {
+    in property <bool> focused;
+
+    width: 72px;
+    height: 56px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+
+    CogIcon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 36px;
+        height: 36px;
+        focused: parent.focused;
+    }
+}
+
 component HomeGrid inherits Rectangle {
     VerticalLayout {
         padding: 24px;
         spacing: 16px;
 
-        Text {
-            text: "MiSTer Magic";
-            color: #e8e0f0;
-            font-size: 24px;
-            horizontal-alignment: center;
+        HorizontalLayout {
+            height: 56px;
+            spacing: 16px;
+
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+
+            Text {
+                text: "MiSTer Magic";
+                color: #e8e0f0;
+                font-size: 24px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                horizontal-stretch: 4;
+            }
+
+            SettingsButton {
+                focused: MisterBridge.selected-index == 2;
+            }
         }
 
         HorizontalLayout {
@@ -131,6 +178,123 @@ component CatalogScanPopup inherits Rectangle {
     }
 }
 
+component SettingsRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+
+    height: 64px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+
+        Text {
+            text: label;
+            color: focused ? #06d6a0 : #e8e0f0;
+            font-size: 14px;
+        }
+
+        Text {
+            text: detail;
+            color: #9080a8;
+            font-size: 8px;
+        }
+    }
+}
+
+component SettingsScreen inherits Rectangle {
+    background: #1a1424;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+
+        Text {
+            text: "Settings";
+            color: #e8e0f0;
+            font-size: 22px;
+            horizontal-alignment: center;
+        }
+
+        SettingsRow {
+            label: "Reset Database";
+            detail: "Delete library database and reboot";
+            focused: MisterBridge.settings-selected == 0;
+        }
+
+        SettingsRow {
+            label: "Restart";
+            detail: "Reboot the MiSTer";
+            focused: MisterBridge.settings-selected == 1;
+        }
+
+        Rectangle { vertical-stretch: 1; background: transparent; }
+
+        Text {
+            text: "D-pad: move  ·  A: select  ·  B/Home: back";
+            color: #706080;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component ConfirmDialog inherits Rectangle {
+    background: #000000b0;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 680px;
+        height: 260px;
+        background: #0e0c14;
+        border-width: 4px;
+        border-color: #06d6a0;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 18px;
+
+            Text {
+                text: MisterBridge.confirm-title;
+                color: #06d6a0;
+                font-size: 18px;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: MisterBridge.confirm-message;
+                color: #e8e0f0;
+                font-size: 10px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+
+            HorizontalLayout {
+                spacing: 16px;
+
+                LauncherTile {
+                    label: "Cancel";
+                    subtitle: "B";
+                    focused: MisterBridge.confirm-selected == 0;
+                }
+
+                LauncherTile {
+                    label: "Confirm";
+                    subtitle: "A";
+                    focused: MisterBridge.confirm-selected == 1;
+                }
+            }
+        }
+    }
+}
+
 export component Launcher inherits MisterWindow {
     default-font-family: "Press Start 2P";
     title: "MiSTer Magic Launcher";
@@ -144,6 +308,11 @@ export component Launcher inherits MisterWindow {
     if MisterBridge.screen-mode == 1 : ControllerPanel { }
 
     if MisterBridge.screen-mode == 2 : ArcadeListScreen {
+        width: 100%;
+        height: 100%;
+    }
+
+    if MisterBridge.screen-mode == 3 : SettingsScreen {
         width: 100%;
         height: 100%;
     }
@@ -164,6 +333,11 @@ export component Launcher inherits MisterWindow {
         width: 100%;
         height: 100%;
         s: MisterUi.scale;
+    }
+
+    if MisterBridge.confirm-visible : ConfirmDialog {
+        width: 100%;
+        height: 100%;
     }
 
     if MisterBridge.loading-message != "": Rectangle {

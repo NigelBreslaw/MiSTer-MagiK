@@ -54,7 +54,8 @@ use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
-use crate::launcher::{self, LauncherNav, Screen};
+use crate::library_bench;
+use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
@@ -440,6 +441,11 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(0);
     bridge.set_selected_index(0);
+    bridge.set_settings_selected(0);
+    bridge.set_confirm_visible(false);
+    bridge.set_confirm_title("".into());
+    bridge.set_confirm_message("".into());
+    bridge.set_confirm_selected(0);
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
     bridge.set_arcade_preview_has_image(false);
@@ -474,10 +480,28 @@ fn sync_bridge_launcher(
         Screen::Home => 0,
         Screen::Controller => 1,
         Screen::Arcade => 2,
+        Screen::Settings => 3,
     });
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_arcade_selected(nav.arcade.selected as i32);
     bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    bridge.set_confirm_visible(nav.confirm_action.is_some());
+    bridge.set_confirm_selected(nav.confirm_selected as i32);
+    match nav.confirm_action {
+        Some(launcher::ConfirmAction::ResetDatabase) => {
+            bridge.set_confirm_title("Reset Database?".into());
+            bridge.set_confirm_message("Delete the library database and reboot the MiSTer?".into());
+        }
+        Some(launcher::ConfirmAction::Restart) => {
+            bridge.set_confirm_title("Restart MiSTer?".into());
+            bridge.set_confirm_message("Reboot the MiSTer now?".into());
+        }
+        None => {
+            bridge.set_confirm_title("".into());
+            bridge.set_confirm_message("".into());
+        }
+    }
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
@@ -663,10 +687,10 @@ fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     }
 }
 
-fn start_arcade_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
+fn start_library_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
-        .name("arcade-catalog".to_string())
+        .name("library-catalog".to_string())
         .spawn(move || {
             lower_background_priority();
             let progress_tx = tx.clone();
@@ -676,32 +700,42 @@ fn start_arcade_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMess
                     detail: detail.to_string(),
                 });
             };
-            let result = arcade_catalog::build_with_options(
-                &root,
-                arcade_catalog::BuildOptions::default(),
-                Some(&mut progress),
-            );
-            let _ = tx.send(CatalogWorkerMessage::Progress {
-                title: "Indexing arcade".to_string(),
-                detail: "Writing catalog cache...".to_string(),
-            });
-            let cache_save = match arcade_catalog::save_catalog_cache(
-                arcade_catalog::DEFAULT_CATALOG_CACHE_PATH,
-                &result.0,
-            ) {
-                Ok(saved) => Some(saved),
+            let summary = match library_bench::refresh_default_sqlite_database(Some(&mut progress))
+            {
+                Ok(summary) => Some(summary),
                 Err(e) => {
-                    eprintln!("catalog cache save failed: {e}");
+                    eprintln!("library refresh failed: {e}");
+                    let _ = tx.send(CatalogWorkerMessage::Progress {
+                        title: "Library scan failed".to_string(),
+                        detail: e,
+                    });
                     None
                 }
             };
-            let _ = tx.send(CatalogWorkerMessage::Ready {
-                catalog: result.0,
-                timings: result.1,
-                cache_save,
-            });
+            if summary.is_some() {
+                let _ = tx.send(CatalogWorkerMessage::Progress {
+                    title: "Loading library".to_string(),
+                    detail: "Opening SQLite catalog...".to_string(),
+                });
+            }
+            match library_bench::load_arcade_catalog_from_sqlite(&root) {
+                Ok(loaded) => {
+                    let _ = tx.send(CatalogWorkerMessage::Ready {
+                        catalog: loaded.catalog,
+                        summary,
+                        load_us: loaded.us,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("library catalog load failed: {e}");
+                    let _ = tx.send(CatalogWorkerMessage::Progress {
+                        title: "Library load failed".to_string(),
+                        detail: e,
+                    });
+                }
+            }
         })
-        .expect("spawn arcade-catalog");
+        .expect("spawn library-catalog");
     rx
 }
 
@@ -712,8 +746,8 @@ enum CatalogWorkerMessage {
     },
     Ready {
         catalog: ArcadeCatalog,
-        timings: arcade_catalog::CatalogTimings,
-        cache_save: Option<arcade_catalog::CatalogCacheSave>,
+        summary: Option<library_bench::LibraryRefreshSummary>,
+        load_us: u64,
     },
 }
 
@@ -1480,39 +1514,36 @@ fn run_launcher_loop(
     let mut preview = PreviewState::new();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    let catalog_rx = start_arcade_catalog_worker(arcade_root.clone());
-    let mut catalog = match arcade_catalog::load_catalog_cache(
-        arcade_catalog::DEFAULT_CATALOG_CACHE_PATH,
-        &arcade_root,
-    ) {
+    let catalog_rx = start_library_catalog_worker(arcade_root.clone());
+    let mut catalog = match library_bench::load_arcade_catalog_from_sqlite(&arcade_root) {
         Ok(loaded) => {
             print_startup_event(
                 start,
-                "catalog_cache_loaded",
+                "library_db_loaded",
                 format!(
-                    "games={} bytes={} load_ms={}",
+                    "games={} rows={} load_us={}",
                     loaded.catalog.len(),
-                    loaded.bytes,
-                    loaded.ms
+                    loaded.rows,
+                    loaded.us
                 ),
             );
             loaded.catalog
         }
         Err(e) => {
-            print_startup_event(start, "catalog_cache_miss", e);
+            print_startup_event(start, "library_db_miss", e);
             empty_arcade_catalog(&arcade_root)
         }
     };
     let mut catalog_ready = !catalog.games.is_empty();
     let mut catalog_refresh_done = false;
-    print_startup_event(start, "catalog_worker_started", &arcade_root);
+    print_startup_event(start, "library_worker_started", &arcade_root);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_arcade_games(slint_arcade_games(&catalog.games));
     bridge.set_catalog_scan_visible(true);
     bridge.set_catalog_scan_title(if catalog_ready {
-        "Refreshing arcade".into()
+        "Refreshing library".into()
     } else {
-        "Indexing arcade".into()
+        "Indexing library".into()
     });
     bridge.set_catalog_scan_detail(if catalog_ready {
         format!("Using cached {} games", catalog.len()).into()
@@ -1547,25 +1578,33 @@ fn run_launcher_loop(
                     }
                     CatalogWorkerMessage::Ready {
                         catalog: ready_catalog,
-                        timings,
-                        cache_save,
+                        summary,
+                        load_us,
                     } => {
                         catalog = ready_catalog;
                         catalog_ready = true;
                         catalog_refresh_done = true;
                         print_startup_event(
                             start,
-                            "catalog_ready",
-                            format!("games={}", catalog.len()),
+                            "library_ready",
+                            format!("games={} load_us={load_us}", catalog.len()),
                         );
-                        if let Some(saved) = cache_save {
+                        if let Some(summary) = summary {
                             print_startup_event(
                                 start,
-                                "catalog_cache_saved",
-                                format!("bytes={} save_ms={}", saved.bytes, saved.ms),
+                                "library_db_saved",
+                                format!(
+                                    "bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                                    summary.bytes,
+                                    summary.scan_us,
+                                    summary.import_us,
+                                    summary.discoveries,
+                                    summary.normal_files,
+                                    summary.containers,
+                                    summary.entries
+                                ),
                             );
                         }
-                        timings.print_summary();
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_arcade_games(slint_arcade_games(&catalog.games));
                         bridge.set_catalog_scan_visible(false);
@@ -1633,7 +1672,69 @@ fn run_launcher_loop(
                     setup.maybe_open(info, active_idx, pad.db(), true);
                 }
                 if !setup.is_active() {
-                    if let Some(mra) = nav.handle_input(&state, frame_now, &catalog) {
+                    if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
+                        match event.action {
+                            LauncherAction::ResetDatabase => {
+                                loading_title = "Resetting database…".to_string();
+                                sync_bridge_launcher(
+                                    &app,
+                                    &pad,
+                                    &nav,
+                                    &setup,
+                                    &loading_title,
+                                    "Rebooting MiSTer",
+                                    Some(&catalog),
+                                    &mut preview,
+                                );
+                                window.request_redraw();
+                                update_slint_animations(animation_clock);
+                                window.draw_if_needed(|renderer| {
+                                    let region = renderer.render(&mut cached, ui.render_w());
+                                    let _ = region;
+                                });
+                                disp.wait_vsync();
+                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                                match launcher::reset_database_and_reboot() {
+                                    Ok(()) => continue,
+                                    Err(e) => {
+                                        eprintln!("reset database failed: {e}");
+                                        loading_title.clear();
+                                    }
+                                }
+                            }
+                            LauncherAction::Restart => {
+                                loading_title = "Restarting MiSTer…".to_string();
+                                sync_bridge_launcher(
+                                    &app,
+                                    &pad,
+                                    &nav,
+                                    &setup,
+                                    &loading_title,
+                                    "Please wait",
+                                    Some(&catalog),
+                                    &mut preview,
+                                );
+                                window.request_redraw();
+                                update_slint_animations(animation_clock);
+                                window.draw_if_needed(|renderer| {
+                                    let region = renderer.render(&mut cached, ui.render_w());
+                                    let _ = region;
+                                });
+                                disp.wait_vsync();
+                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                                match launcher::reboot_mister() {
+                                    Ok(()) => continue,
+                                    Err(e) => {
+                                        eprintln!("restart failed: {e}");
+                                        loading_title.clear();
+                                    }
+                                }
+                            }
+                            LauncherAction::LaunchGame => {}
+                        }
+                        let Some(mra) = event.path else {
+                            continue;
+                        };
                         loading_title =
                             format!("Loading {}…", launcher::game_title(&catalog, &mra));
                         sync_bridge_launcher(

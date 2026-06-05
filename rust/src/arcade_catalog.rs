@@ -1,12 +1,10 @@
-//! Arcade catalog: recursive `.mra` scan + optional `gamelist.xml` metadata.
+//! Arcade catalog helpers: recursive `.mra` scan + optional `gamelist.xml` metadata.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
-pub const DEFAULT_CATALOG_CACHE_PATH: &str = "/media/fat/mister-magic/arcade-catalog.json";
 
 /// Logical row height for arcade ListView (matches `arcade_list.slint`).
 pub const ARCADE_ROW_HEIGHT: i32 = 48;
@@ -50,7 +48,7 @@ fn print_phase(name: &str, p: &PhaseTiming) {
     println!("{name:<22}{:5}   {:5}   {}", p.ms, p.count, p.notes);
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ArcadeGameEntry {
     pub title: String,
     pub mra_path: String,
@@ -63,26 +61,6 @@ pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Vec<ArcadeGameEntry>,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CatalogCacheFile {
-    version: u32,
-    root: String,
-    games: Vec<ArcadeGameEntry>,
-}
-
-pub struct CatalogCacheLoad {
-    pub catalog: ArcadeCatalog,
-    pub ms: u64,
-    pub bytes: u64,
-}
-
-pub struct CatalogCacheSave {
-    pub ms: u64,
-    pub bytes: u64,
-}
-
-const CATALOG_CACHE_VERSION: u32 = 1;
 
 impl ArcadeCatalog {
     pub fn len(&self) -> usize {
@@ -100,65 +78,6 @@ impl ArcadeCatalog {
     pub fn path_at(&self, index: usize) -> Option<&str> {
         self.games.get(index).map(|g| g.mra_path.as_str())
     }
-}
-
-pub fn load_catalog_cache(
-    path: impl AsRef<Path>,
-    expected_root: impl AsRef<Path>,
-) -> Result<CatalogCacheLoad, String> {
-    let path = path.as_ref();
-    let expected_root = expected_root.as_ref();
-    let t = Instant::now();
-    let data = std::fs::read(path).map_err(|e| format!("read catalog cache: {e}"))?;
-    let bytes = data.len() as u64;
-    let file: CatalogCacheFile =
-        serde_json::from_slice(&data).map_err(|e| format!("parse catalog cache: {e}"))?;
-    if file.version != CATALOG_CACHE_VERSION {
-        return Err(format!(
-            "catalog cache version {} != {}",
-            file.version, CATALOG_CACHE_VERSION
-        ));
-    }
-    let root = PathBuf::from(&file.root);
-    if root != expected_root {
-        return Err(format!(
-            "catalog cache root {} != {}",
-            root.display(),
-            expected_root.display()
-        ));
-    }
-    Ok(CatalogCacheLoad {
-        catalog: ArcadeCatalog {
-            root,
-            games: file.games,
-        },
-        ms: t.elapsed().as_millis() as u64,
-        bytes,
-    })
-}
-
-pub fn save_catalog_cache(
-    path: impl AsRef<Path>,
-    catalog: &ArcadeCatalog,
-) -> Result<CatalogCacheSave, String> {
-    let path = path.as_ref();
-    let t = Instant::now();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create cache dir: {e}"))?;
-    }
-    let file = CatalogCacheFile {
-        version: CATALOG_CACHE_VERSION,
-        root: catalog.root.display().to_string(),
-        games: catalog.games.clone(),
-    };
-    let data = serde_json::to_vec(&file).map_err(|e| format!("encode catalog cache: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &data).map_err(|e| format!("write catalog cache tmp: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename catalog cache: {e}"))?;
-    Ok(CatalogCacheSave {
-        ms: t.elapsed().as_millis() as u64,
-        bytes: data.len() as u64,
-    })
 }
 
 #[derive(Clone, Debug, Default)]

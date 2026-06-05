@@ -40,10 +40,18 @@ export global MisterBridge {
     in-out property <string> pressed-now;
     in-out property <string> last-event-label;
     in-out property <string> last-raw-event;
-    // Launcher navigation: 0=home, 1=controller test, 2=arcade list.
+    // Launcher navigation: 0=home, 1=controller test, 2=arcade list, 3=settings.
     in-out property <int> screen-mode;
-    // Home grid focus 0=controller test, 1=arcade.
+    // Home focus: 0=controller test, 1=arcade, 2=settings.
     in-out property <int> selected-index;
+    // Settings focus: 0=reset database, 1=restart.
+    in-out property <int> settings-selected;
+    // Confirmation dialog.
+    in-out property <bool> confirm-visible;
+    in-out property <string> confirm-title;
+    in-out property <string> confirm-message;
+    // Dialog focus: 0=cancel, 1=confirm.
+    in-out property <int> confirm-selected;
     in-out property <[ArcadeGame]> arcade-games;
     in-out property <int> arcade-selected;
     // Scroll offset in logical pixels (0 = top); drives ListView viewport-y.
