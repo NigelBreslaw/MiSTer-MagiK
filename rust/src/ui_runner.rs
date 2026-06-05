@@ -929,8 +929,7 @@ fn run_bench_frame(
 
     match frame_order {
         FrameOrder::RenderThenVsync => {
-            animation_clock.advance();
-            slint::platform::update_timers_and_animations();
+            update_slint_animations(animation_clock);
             let t1 = Instant::now();
             window.draw_if_needed(|renderer| {
                 let region = renderer.render(&mut cached, ui.render_w());
@@ -958,8 +957,7 @@ fn run_bench_frame(
         FrameOrder::VsyncThenRender => {
             disp.wait_vsync();
             let t1 = Instant::now();
-            animation_clock.advance();
-            slint::platform::update_timers_and_animations();
+            update_slint_animations(animation_clock);
             let t2 = Instant::now();
             window.draw_if_needed(|renderer| {
                 let region = renderer.render(&mut cached, ui.render_w());
@@ -1380,6 +1378,7 @@ fn run_controller_loop(
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadPool,
     app: slint_ui::controller::ControllerTest,
+    animation_clock: &AnimationClock,
 ) {
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
@@ -1394,7 +1393,7 @@ fn run_controller_loop(
             sync_bridge(&app, &pad);
             window.request_redraw();
         }
-        slint::platform::update_timers_and_animations();
+        update_slint_animations(animation_clock);
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut cached, ui.render_w());
@@ -1429,6 +1428,7 @@ fn run_launcher_loop(
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
+    animation_clock: &AnimationClock,
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
@@ -1456,7 +1456,16 @@ fn run_launcher_loop(
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let mut preview = PreviewState::new();
     let catalog = index_arcade_catalog(
-        &app, &pad, &nav, &setup, ui, disp, window, &mut cached, &mut preview,
+        &app,
+        &pad,
+        &nav,
+        &setup,
+        ui,
+        disp,
+        window,
+        &mut cached,
+        &mut preview,
+        animation_clock,
     );
     sync_bridge_launcher(
         &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut preview,
@@ -1521,7 +1530,7 @@ fn run_launcher_loop(
                             Some(&catalog), &mut preview,
                         );
                         window.request_redraw();
-                        slint::platform::update_timers_and_animations();
+                        update_slint_animations(animation_clock);
                         window.draw_if_needed(|renderer| {
                             let region = renderer.render(&mut cached, ui.render_w());
                             let _ = region;
@@ -1579,7 +1588,7 @@ fn run_launcher_loop(
             window.request_redraw();
         }
 
-        slint::platform::update_timers_and_animations();
+        update_slint_animations(animation_clock);
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut cached, ui.render_w());
