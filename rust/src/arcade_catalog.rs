@@ -741,23 +741,32 @@ pub fn load_png_rgba8_timed(path: &str) -> Result<LoadedImage, String> {
 }
 
 fn decode_png_rgba8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
-    use png::{ColorType, Transformations};
-    let reader = std::io::Cursor::new(data);
-    let mut decoder = png::Decoder::new(reader);
-    decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
-    let mut reader = decoder.read_info().map_err(|e| format!("png read_info: {e}"))?;
-    let width = reader.info().width;
-    let height = reader.info().height;
-    let out_size = reader
-        .output_buffer_size()
-        .ok_or_else(|| "png output buffer too large".to_string())?;
-    let mut buf = vec![0u8; out_size];
-    let out = reader.next_frame(&mut buf).map_err(|e| format!("png next_frame: {e}"))?;
-    let used = out.buffer_size();
-    buf.truncate(used);
-    let rgba = match out.color_type {
-        ColorType::Rgba => buf,
-        ColorType::Rgb => {
+    use zune_png::zune_core::bytestream::ZCursor;
+    use zune_png::zune_core::colorspace::ColorSpace;
+    use zune_png::zune_core::options::DecoderOptions;
+    use zune_png::PngDecoder;
+
+    let options = DecoderOptions::default()
+        .png_set_strip_to_8bit(true)
+        .png_set_add_alpha_channel(true);
+    let mut decoder = PngDecoder::new_with_options(ZCursor::new(data), options);
+    decoder
+        .decode_headers()
+        .map_err(|e| format!("zune png headers: {e}"))?;
+    let (width, height) = decoder
+        .dimensions()
+        .ok_or_else(|| "zune png missing dimensions".to_string())?;
+    let width = u32::try_from(width).map_err(|_| "zune png width too large".to_string())?;
+    let height = u32::try_from(height).map_err(|_| "zune png height too large".to_string())?;
+    let colorspace = decoder
+        .colorspace()
+        .ok_or_else(|| "zune png missing colorspace".to_string())?;
+    let buf = decoder
+        .decode_raw()
+        .map_err(|e| format!("zune png decode: {e}"))?;
+    let rgba = match colorspace {
+        ColorSpace::RGBA => buf,
+        ColorSpace::RGB => {
             let mut out = Vec::with_capacity(buf.len() / 3 * 4);
             for px in buf.chunks_exact(3) {
                 out.extend_from_slice(px);
@@ -765,7 +774,7 @@ fn decode_png_rgba8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
             }
             out
         }
-        other => return Err(format!("unsupported png color type: {other:?}")),
+        other => return Err(format!("unsupported zune png colorspace: {other:?}")),
     };
     Ok(DecodedImage { width, height, rgba })
 }
