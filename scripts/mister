@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Stable MiSTer SSH wrapper for agents/humans.
+#
+# Keeps environment details out of command lines so sandbox approval can be
+# granted once for this narrow repo-local command prefix.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/private/tmp/uv-cache}"
+export MISTER_IP="${MISTER_IP:-192.168.1.117}"
+export MISTER_PASS="${MISTER_PASS:-1}"
+
+cd "$HERE"
+exec uv run python scripts/mister_ssh.py "$@"
