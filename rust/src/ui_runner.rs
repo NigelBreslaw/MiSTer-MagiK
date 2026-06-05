@@ -680,6 +680,17 @@ fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::
     ModelRc::new(VecModel::from(rows))
 }
 
+fn env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     ArcadeCatalog {
         root: PathBuf::from(root),
@@ -1514,7 +1525,6 @@ fn run_launcher_loop(
     let mut preview = PreviewState::new();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    let catalog_rx = start_library_catalog_worker(arcade_root.clone());
     let mut catalog = match library_bench::load_arcade_catalog_from_sqlite(&arcade_root) {
         Ok(loaded) => {
             print_startup_event(
@@ -1535,11 +1545,18 @@ fn run_launcher_loop(
         }
     };
     let mut catalog_ready = !catalog.games.is_empty();
-    let mut catalog_refresh_done = false;
-    print_startup_event(start, "library_worker_started", &arcade_root);
+    let refresh_on_boot = env_flag("MISTER_LIBRARY_REFRESH_ON_BOOT");
+    let catalog_rx = if catalog_ready && !refresh_on_boot {
+        print_startup_event(start, "library_refresh_skipped", "cached database available");
+        None
+    } else {
+        print_startup_event(start, "library_worker_started", &arcade_root);
+        Some(start_library_catalog_worker(arcade_root.clone()))
+    };
+    let mut catalog_refresh_done = catalog_rx.is_none();
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_arcade_games(slint_arcade_games(&catalog.games));
-    bridge.set_catalog_scan_visible(true);
+    bridge.set_catalog_scan_visible(catalog_rx.is_some());
     bridge.set_catalog_scan_title(if catalog_ready {
         "Refreshing library".into()
     } else {
@@ -1568,6 +1585,10 @@ fn run_launcher_loop(
         let mut bridge_dirty = false;
 
         if !catalog_refresh_done {
+            let Some(catalog_rx) = catalog_rx.as_ref() else {
+                catalog_refresh_done = true;
+                continue;
+            };
             while let Ok(message) = catalog_rx.try_recv() {
                 match message {
                     CatalogWorkerMessage::Progress { title, detail } => {
@@ -1590,9 +1611,14 @@ fn run_launcher_loop(
                             format!("games={} load_us={load_us}", catalog.len()),
                         );
                         if let Some(summary) = summary {
+                            let event = if summary.skipped {
+                                "library_db_unchanged"
+                            } else {
+                                "library_db_saved"
+                            };
                             print_startup_event(
                                 start,
-                                "library_db_saved",
+                                event,
                                 format!(
                                     "bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                                     summary.bytes,

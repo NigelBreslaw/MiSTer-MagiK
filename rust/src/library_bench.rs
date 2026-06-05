@@ -37,6 +37,7 @@ const NORMAL_LAUNCH_EXTS: &[&str] = &[
 ];
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
+type FileFingerprint = BTreeMap<String, (u64, i64)>;
 
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
@@ -108,6 +109,7 @@ pub enum ArchiveScanStatus {
 struct LibraryScan {
     version: u32,
     scanned_at_unix: i64,
+    file_fingerprints: FileFingerprint,
     normal_files: Vec<String>,
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
@@ -128,6 +130,7 @@ pub struct LibraryCatalogLoad {
 }
 
 pub struct LibraryRefreshSummary {
+    pub skipped: bool,
     pub scan_us: u64,
     pub import_us: u64,
     pub bytes: u64,
@@ -143,6 +146,7 @@ struct DbFingerprint {
     containers: usize,
     entries: usize,
     discoveries: usize,
+    file_fingerprints: FileFingerprint,
     container_fingerprints: BTreeMap<String, (u64, i64)>,
 }
 
@@ -360,10 +364,51 @@ pub fn refresh_default_sqlite_database(
     mut progress: Option<&mut dyn FnMut(&str, &str)>,
 ) -> Result<LibraryRefreshSummary, String> {
     let cfg = BenchConfig::production();
-    if let Some(report) = progress.as_mut() {
-        report("Indexing library", "Scanning MiSTer roots...");
-    }
     let scan_t = Instant::now();
+    if let Some(existing) = read_sqlite_fingerprint(&cfg.sqlite_path) {
+        if let Some(report) = progress.as_mut() {
+            report("Checking library", "Looking for changed files...");
+        }
+        let (files, _) = match progress.as_mut() {
+            Some(report) => discover_files(&cfg.roots, Some(&mut **report)),
+            None => discover_files(&cfg.roots, None),
+        };
+        let current = file_fingerprint_from_files(&files);
+        let scan_us = scan_t.elapsed().as_micros() as u64;
+        if current == existing.file_fingerprints {
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Library unchanged",
+                    &format!(
+                        "{} files checked; using cached database",
+                        current.len()
+                    ),
+                );
+            }
+            let bytes = std::fs::metadata(&cfg.sqlite_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            return Ok(LibraryRefreshSummary {
+                skipped: true,
+                scan_us,
+                import_us: 0,
+                bytes,
+                normal_files: existing.normal_files,
+                containers: existing.containers,
+                entries: existing.entries,
+                discoveries: existing.discoveries,
+            });
+        }
+        if let Some(report) = progress.as_mut() {
+            report(
+                "Library changed",
+                &format!("{} files checked; rebuilding database...", current.len()),
+            );
+        }
+    } else if let Some(report) = progress.as_mut() {
+        report("Indexing library", "No usable database fingerprint; full scan...");
+    }
+
     let scan = match progress.as_mut() {
         Some(report) => scan_library_with_progress(&cfg, Some(&mut **report)),
         None => scan_library(&cfg),
@@ -384,6 +429,7 @@ pub fn refresh_default_sqlite_database(
     let bytes = save_sqlite_scan(&cfg.sqlite_path, &scan)?;
     let import_us = import_t.elapsed().as_micros() as u64;
     Ok(LibraryRefreshSummary {
+        skipped: false,
         scan_us,
         import_us,
         bytes,
@@ -461,6 +507,7 @@ fn scan_library_with_progress(
         None => discover_files(&cfg.roots, None),
     };
     let discover_us = discover_t.elapsed().as_micros() as u64;
+    let file_fingerprints = file_fingerprint_from_files(&files);
     if let Some(report) = progress.as_mut() {
         report(
             "Classifying library",
@@ -596,8 +643,9 @@ fn scan_library_with_progress(
     }
 
     LibraryScan {
-        version: 3,
+        version: 4,
         scanned_at_unix: unix_now_secs(),
+        file_fingerprints,
         normal_files,
         containers,
         entries,
@@ -610,6 +658,13 @@ fn scan_library_with_progress(
         largest_archives,
         slowest_archives,
     }
+}
+
+fn file_fingerprint_from_files(files: &[FoundFile]) -> FileFingerprint {
+    files
+        .iter()
+        .map(|f| (f.path.display().to_string(), (f.size, f.mtime_secs)))
+        .collect()
 }
 
 fn discover_files(
@@ -1686,6 +1741,7 @@ fn db_fingerprint(scan: &LibraryScan) -> DbFingerprint {
         containers: scan.containers.len(),
         entries: scan.entries.len(),
         discoveries: unique_discovery_count(&scan.discoveries),
+        file_fingerprints: scan.file_fingerprints.clone(),
         container_fingerprints: scan
             .containers
             .iter()
@@ -1791,6 +1847,11 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
         CREATE TABLE meta (
             key TEXT PRIMARY KEY,
             value INTEGER NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE file_fingerprints (
+            file_path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime_secs INTEGER NOT NULL
         ) WITHOUT ROWID;
         CREATE TABLE container_fingerprints (
             file_path TEXT PRIMARY KEY,
@@ -1928,6 +1989,15 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
     }
     {
         let mut stmt = tx
+            .prepare("INSERT INTO file_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)")
+            .map_err(|e| format!("prepare file fingerprint insert: {e}"))?;
+        for (path, (size, mtime_secs)) in &scan.file_fingerprints {
+            stmt.execute(params![path.as_str(), *size as i64, *mtime_secs])
+                .map_err(|e| format!("insert file fingerprint: {e}"))?;
+        }
+    }
+    {
+        let mut stmt = tx
             .prepare(
                 "INSERT INTO container_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
             )
@@ -1981,6 +2051,24 @@ fn sqlite_count(conn: &Connection, table: &str) -> Result<u64, String> {
 
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
     let conn = Connection::open(path).ok()?;
+    let mut file_fingerprints = BTreeMap::new();
+    let mut file_stmt = conn
+        .prepare("SELECT file_path,size,mtime_secs FROM file_fingerprints")
+        .ok()?;
+    let file_rows = file_stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .ok()?;
+    for row in file_rows {
+        let (path, size, mtime) = row.ok()?;
+        file_fingerprints.insert(path, (size.max(0) as u64, mtime));
+    }
+
     let mut container_fingerprints = BTreeMap::new();
     let mut stmt = conn
         .prepare("SELECT file_path,size,mtime_secs FROM container_fingerprints")
@@ -2003,6 +2091,7 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
         containers: sqlite_meta_usize(&conn, "containers")?,
         entries: sqlite_meta_usize(&conn, "entries")?,
         discoveries: sqlite_meta_usize(&conn, "discoveries")?,
+        file_fingerprints,
         container_fingerprints,
     })
 }
