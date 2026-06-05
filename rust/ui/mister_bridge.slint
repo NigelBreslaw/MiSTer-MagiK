@@ -52,6 +52,10 @@ export global MisterBridge {
     in-out property <string> arcade-preview-title;
     in-out property <bool> arcade-preview-has-image;
     in-out property <PreviewStatus> arcade-preview-status: PreviewStatus.empty;
+    // Background startup catalog scan.
+    in-out property <bool> catalog-scan-visible;
+    in-out property <string> catalog-scan-title;
+    in-out property <string> catalog-scan-detail;
     // Non-empty while launching a game — full-screen loading overlay.
     in-out property <string> loading-message;
     in-out property <string> loading-detail;

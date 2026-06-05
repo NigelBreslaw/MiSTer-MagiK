@@ -23,6 +23,7 @@ pub struct CatalogTimings {
     pub walk_mra: PhaseTiming,
     pub parse_gamelist: PhaseTiming,
     pub merge_entries: PhaseTiming,
+    pub resolve_setname_images: PhaseTiming,
     pub resolve_images: PhaseTiming,
     pub sort_catalog: PhaseTiming,
     pub decode_sample_pngs: PhaseTiming,
@@ -35,6 +36,7 @@ impl CatalogTimings {
         print_phase("walk_mra", &self.walk_mra);
         print_phase("parse_gamelist", &self.parse_gamelist);
         print_phase("merge_entries", &self.merge_entries);
+        print_phase("resolve_setname_images", &self.resolve_setname_images);
         print_phase("resolve_images", &self.resolve_images);
         print_phase("sort_catalog", &self.sort_catalog);
         print_phase("decode_sample_pngs", &self.decode_sample_pngs);
@@ -182,6 +184,7 @@ pub fn build_with_options(
 
     report("Indexing arcade…", "Resolving screenshots…");
     let setname_resolved = {
+        let t = Instant::now();
         let n = resolve_setname_images(&root, &mut games, |done, total| {
             if done == total || done % 400 == 0 {
                 report(
@@ -191,6 +194,11 @@ pub fn build_with_options(
             }
         });
         eprintln!("catalog: setname_resolved={n}");
+        timings.resolve_setname_images = PhaseTiming {
+            ms: t.elapsed().as_millis() as u64,
+            count: games.len() as u64,
+            notes: format!("setname_resolved={n}"),
+        };
         n
     };
 
