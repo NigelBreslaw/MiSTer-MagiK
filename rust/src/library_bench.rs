@@ -3,9 +3,7 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -28,15 +26,7 @@ const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_Utility",
 ];
 
-const DEFAULT_INDEX_PATH: &str = "/media/fat/mister-magic/library-bench-index.json";
-const DEFAULT_REDB_PATH: &str = "/media/fat/mister-magic/library-bench.redb";
 const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magic/library-bench.sqlite3";
-
-const REDB_NORMAL_FILES: TableDefinition<&str, &str> = TableDefinition::new("normal_files");
-const REDB_CONTAINERS: TableDefinition<&str, &[u8]> = TableDefinition::new("containers");
-const REDB_ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
-const REDB_DISCOVERIES: TableDefinition<&str, &[u8]> = TableDefinition::new("discoveries");
-const REDB_META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 
 const NORMAL_LAUNCH_EXTS: &[&str] = &[
     "mra", "mgl", "rbf", "rom", "bin", "cue", "iso", "img", "dsk", "vhd", "hdf", "adf", "ipf",
@@ -46,7 +36,7 @@ const NORMAL_LAUNCH_EXTS: &[&str] = &[
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct LibraryContainer {
     pub file_path: String,
     pub format: ArchiveFormat,
@@ -57,7 +47,7 @@ pub struct LibraryContainer {
     pub scan_us: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct LibraryContainerEntry {
     pub file_path: String,
     pub entry_path: String,
@@ -69,7 +59,7 @@ pub struct LibraryContainerEntry {
     pub launch_ref: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ArchiveFormat {
     Zip,
     SevenZip,
@@ -104,7 +94,7 @@ impl ArchiveFormat {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum ArchiveScanStatus {
     Ok,
     HeaderOnly,
@@ -112,17 +102,24 @@ pub enum ArchiveScanStatus {
     Error(String),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct LibraryBenchIndex {
+#[derive(Clone, Debug)]
+struct LibraryScan {
     version: u32,
     scanned_at_unix: i64,
     normal_files: Vec<String>,
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
     discoveries: Vec<GameDiscovery>,
+    root_stats: HashMap<String, RootStats>,
+    format_stats: BTreeMap<ArchiveFormat, FormatStats>,
+    phase_stats: PhaseStats,
+    discover_us: u64,
+    classify_us: u64,
+    largest_archives: Vec<(u64, String)>,
+    slowest_archives: Vec<(u64, String)>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 struct DbFingerprint {
     normal_files: usize,
     containers: usize,
@@ -131,7 +128,7 @@ struct DbFingerprint {
     container_fingerprints: BTreeMap<String, (u64, i64)>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 struct GameDiscovery {
     source_path: String,
     launch_ref: String,
@@ -149,7 +146,7 @@ struct GameDiscovery {
     confidence: DiscoveryConfidence,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 enum DiscoverySourceKind {
     Mra,
     Mgl,
@@ -159,7 +156,7 @@ enum DiscoverySourceKind {
     CatalogEntry,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 enum DiscoveryConfidence {
     MraHardware,
     MraCore,
@@ -169,7 +166,7 @@ enum DiscoveryConfidence {
     CatalogMetadata,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct RootStats {
     files: u64,
     normal_launchables: u64,
@@ -177,7 +174,7 @@ struct RootStats {
     scan_us: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct FormatStats {
     containers: u64,
     entries: u64,
@@ -187,7 +184,7 @@ struct FormatStats {
     errors: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct PhaseStats {
     mra: TimedCount,
     mgl: TimedCount,
@@ -197,7 +194,7 @@ struct PhaseStats {
     optional_catalog_entries: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct TimedCount {
     count: u64,
     us: u64,
@@ -223,8 +220,6 @@ pub fn run() {
     let cfg = BenchConfig::from_env();
     let bench_start = Instant::now();
     println!("library-bench roots={}", cfg.roots.join("|"));
-    println!("library-bench index_path={}", cfg.index_path.display());
-    println!("library-bench redb_path={}", cfg.redb_path.display());
     println!("library-bench sqlite_path={}", cfg.sqlite_path.display());
     println!("library-bench archive_toc=header-only no-decompress");
     println!(
@@ -232,24 +227,101 @@ pub fn run() {
         if cfg.optional_catalogs { "on" } else { "off" }
     );
 
-    let open_t = Instant::now();
-    let previous = load_index(&cfg.index_path);
-    println!(
-        "library_bench_tsv\tcached_open\t{}\tbytes={}\tcontainers={}\tentries={}",
-        open_t.elapsed().as_micros(),
-        previous.as_ref().map(|p| p.0).unwrap_or(0),
-        previous.as_ref().map(|p| p.1.containers.len()).unwrap_or(0),
-        previous.as_ref().map(|p| p.1.entries.len()).unwrap_or(0)
-    );
-    let previous = previous.map(|(_, idx)| idx);
+    benchmark_sqlite_cached_open(&cfg.sqlite_path);
 
+    let scan = scan_library(&cfg);
+    println!(
+        "library_bench_initial_scan_tsv\troot_discovery\t{}\tfiles={}",
+        scan.discover_us,
+        scan.root_stats.values().map(|s| s.files).sum::<u64>()
+    );
+    println!(
+        "library_bench_initial_scan_tsv\tclassify_and_archive_toc\t{}\tnormal_files={}\tcontainers={}\tcontainer_entries={}",
+        scan.classify_us,
+        scan.normal_files.len(),
+        scan.containers.len(),
+        scan.entries.len()
+    );
+
+    print_root_stats("library_bench_initial_root_tsv", &scan.root_stats);
+    print_format_stats("library_bench_initial_archive_tsv", &scan.format_stats);
+    print_phase_stats("library_bench_initial_phase_tsv", &scan.phase_stats);
+    print_taxonomy_stats(&scan.discoveries);
+    print_unknown_stats(&scan.discoveries);
+    print_top("largest_archive", &mut scan.largest_archives.clone(), 10);
+    print_top(
+        "slowest_archive_toc",
+        &mut scan.slowest_archives.clone(),
+        10,
+    );
+
+    benchmark_memory_queries(&scan);
+    benchmark_sqlite_backend(&cfg.sqlite_path, &scan);
+    benchmark_second_scan(&cfg, &scan);
+
+    println!(
+        "library_bench_total_tsv\ttotal\t{}\tbackend=sqlite",
+        bench_start.elapsed().as_micros()
+    );
+}
+
+pub fn run_db_bench() {
+    let cfg = BenchConfig::from_env();
+    println!("library-db-bench sqlite_path={}", cfg.sqlite_path.display());
+    benchmark_sqlite_cached_open(&cfg.sqlite_path);
+    benchmark_sqlite_queries(&cfg.sqlite_path);
+}
+
+struct BenchConfig {
+    roots: Vec<String>,
+    sqlite_path: PathBuf,
+    optional_catalogs: bool,
+}
+
+impl BenchConfig {
+    fn from_env() -> Self {
+        let roots = std::env::var("MISTER_LIBRARY_ROOTS")
+            .ok()
+            .map(|s| {
+                s.split('|')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_else(|| DEFAULT_ROOTS.iter().map(|s| s.to_string()).collect());
+        let sqlite_path = std::env::var("MISTER_LIBRARY_BENCH_SQLITE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH));
+        let optional_catalogs = env_bool("MISTER_LIBRARY_OPTIONAL_CATALOGS");
+        Self {
+            roots,
+            sqlite_path,
+            optional_catalogs,
+        }
+    }
+}
+
+fn env_bool(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+struct ArchiveScan {
+    container: LibraryContainer,
+    entries: Vec<LibraryContainerEntry>,
+}
+
+fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     let discover_t = Instant::now();
     let (files, mut root_stats) = discover_files(&cfg.roots);
     let discover_us = discover_t.elapsed().as_micros() as u64;
-    println!(
-        "library_bench_tsv\troot_discovery\t{discover_us}\tfiles={}",
-        files.len()
-    );
 
     let mut normal_files = Vec::new();
     let mut containers = Vec::new();
@@ -257,8 +329,8 @@ pub fn run() {
     let mut discoveries = Vec::new();
     let mut format_stats = BTreeMap::<ArchiveFormat, FormatStats>::new();
     let mut phase_stats = PhaseStats::default();
-    let mut largest = Vec::<(u64, String)>::new();
-    let mut slowest = Vec::<(u64, String)>::new();
+    let mut largest_archives = Vec::<(u64, String)>::new();
+    let mut slowest_archives = Vec::<(u64, String)>::new();
 
     let classify_t = Instant::now();
     for f in files {
@@ -266,13 +338,13 @@ pub fn run() {
             if let Some(r) = root_stats.get_mut(&f.root) {
                 r.archives += 1;
             }
-            largest.push((f.size, f.path.display().to_string()));
+            largest_archives.push((f.size, f.path.display().to_string()));
             let archive_phase_t = Instant::now();
             let scan = scan_archive_toc(&f, format);
             phase_stats
                 .archive_toc
                 .add(archive_phase_t.elapsed().as_micros() as u64);
-            slowest.push((scan.container.scan_us, f.path.display().to_string()));
+            slowest_archives.push((scan.container.scan_us, f.path.display().to_string()));
             let stats = format_stats.entry(format).or_default();
             stats.containers += 1;
             stats.entries += scan.entries.len() as u64;
@@ -326,119 +398,22 @@ pub fn run() {
             discoveries.push(discovery);
         }
     }
-    let classify_us = classify_t.elapsed().as_micros() as u64;
-    println!(
-        "library_bench_tsv\tclassify_and_archive_toc\t{classify_us}\tnormal_files={}\tcontainers={}\tcontainer_entries={}",
-        normal_files.len(),
-        containers.len(),
-        entries.len()
-    );
 
-    print_root_stats(&root_stats);
-    print_format_stats(&format_stats);
-    print_phase_stats(&phase_stats);
-    print_taxonomy_stats(&discoveries);
-    print_unknown_stats(&discoveries);
-    print_top("largest_archive", &mut largest, 10);
-    print_top("slowest_archive_toc", &mut slowest, 10);
-
-    let index = LibraryBenchIndex {
-        version: 2,
+    LibraryScan {
+        version: 3,
         scanned_at_unix: unix_now_secs(),
         normal_files,
         containers,
         entries,
         discoveries,
-    };
-
-    benchmark_queries(&index);
-    benchmark_no_change(previous.as_ref(), &index);
-    benchmark_redb_backend(&cfg.redb_path, &index);
-    benchmark_sqlite_backend(&cfg.sqlite_path, &index);
-
-    let save_t = Instant::now();
-    match save_index(&cfg.index_path, &index) {
-        Ok(bytes) => println!(
-            "library_bench_tsv\tjson_index_save\t{}\tbytes={bytes}",
-            save_t.elapsed().as_micros()
-        ),
-        Err(e) => println!(
-            "library_bench_tsv\tjson_index_save_error\t{}\t{}",
-            save_t.elapsed().as_micros(),
-            e
-        ),
+        root_stats,
+        format_stats,
+        phase_stats,
+        discover_us,
+        classify_us: classify_t.elapsed().as_micros() as u64,
+        largest_archives,
+        slowest_archives,
     }
-
-    println!(
-        "library_bench_tsv\ttotal\t{}\tbackend=json-index baseline + redb/sqlite probes",
-        bench_start.elapsed().as_micros()
-    );
-}
-
-pub fn run_db_bench() {
-    let cfg = BenchConfig::from_env();
-    println!("library-db-bench redb_path={}", cfg.redb_path.display());
-    benchmark_redb_cached_open(&cfg.redb_path);
-    benchmark_redb_queries(&cfg.redb_path);
-    println!("library-db-bench sqlite_path={}", cfg.sqlite_path.display());
-    benchmark_sqlite_cached_open(&cfg.sqlite_path);
-    benchmark_sqlite_queries(&cfg.sqlite_path);
-}
-
-struct BenchConfig {
-    roots: Vec<String>,
-    index_path: PathBuf,
-    redb_path: PathBuf,
-    sqlite_path: PathBuf,
-    optional_catalogs: bool,
-}
-
-impl BenchConfig {
-    fn from_env() -> Self {
-        let roots = std::env::var("MISTER_LIBRARY_ROOTS")
-            .ok()
-            .map(|s| {
-                s.split('|')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_else(|| DEFAULT_ROOTS.iter().map(|s| s.to_string()).collect());
-        let index_path = std::env::var("MISTER_LIBRARY_BENCH_INDEX")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_INDEX_PATH));
-        let redb_path = std::env::var("MISTER_LIBRARY_BENCH_REDB")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_REDB_PATH));
-        let sqlite_path = std::env::var("MISTER_LIBRARY_BENCH_SQLITE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH));
-        let optional_catalogs = env_bool("MISTER_LIBRARY_OPTIONAL_CATALOGS");
-        Self {
-            roots,
-            index_path,
-            redb_path,
-            sqlite_path,
-            optional_catalogs,
-        }
-    }
-}
-
-fn env_bool(name: &str) -> bool {
-    matches!(
-        std::env::var(name)
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
-struct ArchiveScan {
-    container: LibraryContainer,
-    entries: Vec<LibraryContainerEntry>,
 }
 
 fn discover_files(roots: &[String]) -> (Vec<FoundFile>, HashMap<String, RootStats>) {
@@ -1118,40 +1093,40 @@ fn scan_zip_central_directory(file: &FoundFile) -> Result<Vec<LibraryContainerEn
     Ok(entries)
 }
 
-fn benchmark_queries(index: &LibraryBenchIndex) {
+fn benchmark_memory_queries(scan: &LibraryScan) {
     let query_t = Instant::now();
-    let first_page = index.normal_files.iter().take(40).count()
-        + index
+    let first_page = scan.normal_files.iter().take(40).count()
+        + scan
             .entries
             .iter()
             .filter(|e| e.launchable)
             .take(40)
             .count();
     println!(
-        "library_bench_tsv\tquery_first_page\t{}\trows={first_page}",
+        "library_bench_memory_query_tsv\tquery_first_page\t{}\trows={first_page}",
         query_t.elapsed().as_micros()
     );
 
     let search_t = Instant::now();
     let needle = "mario";
-    let normal_matches = index
+    let normal_matches = scan
         .normal_files
         .iter()
         .filter(|p| p.to_ascii_lowercase().contains(needle))
         .count();
-    let archive_matches = index
+    let archive_matches = scan
         .entries
         .iter()
         .filter(|e| e.normalized_title.contains(needle))
         .count();
     println!(
-        "library_bench_tsv\ttext_search_scan\t{}\tneedle={needle}\tmatches={}",
+        "library_bench_memory_query_tsv\ttext_search_scan\t{}\tneedle={needle}\tmatches={}",
         search_t.elapsed().as_micros(),
         normal_matches + archive_matches
     );
 
     let taxonomy_t = Instant::now();
-    let unique: HashMap<String, &GameDiscovery> = index
+    let unique: HashMap<String, &GameDiscovery> = scan
         .discoveries
         .iter()
         .map(|d| (discovery_unique_key(d), d))
@@ -1171,171 +1146,29 @@ fn benchmark_queries(index: &LibraryBenchIndex) {
         .copied()
         .filter(|d| d.platform_id == "unknown" || d.hardware_id == "unknown")
         .count();
-    let raw_cps2_matches = index
+    let raw_cps2_matches = scan
         .discoveries
         .iter()
         .filter(|d| d.hardware_id == "capcom-cps2")
         .count();
     println!(
-        "library_bench_tsv\ttaxonomy_query_scan\t{}\tcps2={cps2_matches}\traw_cps2={raw_cps2_matches}\tsaturn={saturn_matches}\tunknown={unknown_matches}",
+        "library_bench_memory_query_tsv\ttaxonomy_query_scan\t{}\tcps2={cps2_matches}\traw_cps2={raw_cps2_matches}\tsaturn={saturn_matches}\tunknown={unknown_matches}",
         taxonomy_t.elapsed().as_micros()
     );
 }
 
-fn benchmark_no_change(previous: Option<&LibraryBenchIndex>, current: &LibraryBenchIndex) {
-    let t = Instant::now();
-    let changed = previous
-        .map(|p| {
-            p.normal_files.len() != current.normal_files.len()
-                || p.containers.len() != current.containers.len()
-                || p.discoveries.len() != current.discoveries.len()
-                || fingerprint_map(&p.containers) != fingerprint_map(&current.containers)
-        })
-        .unwrap_or(true);
-    println!(
-        "library_bench_tsv\tno_change_fingerprint\t{}\tchanged={changed}",
-        t.elapsed().as_micros()
-    );
-}
-
-fn benchmark_redb_backend(path: &Path, index: &LibraryBenchIndex) {
-    benchmark_redb_cached_open(path);
-
-    let import_t = Instant::now();
-    match save_redb_index(path, index) {
-        Ok(bytes) => {
-            let stored_discoveries = open_redb_counts(path)
-                .map(|(_, _, _, _, discoveries)| discoveries)
-                .unwrap_or(0);
-            println!(
-                "library_bench_redb_tsv\tfull_import\t{}\tbytes={bytes}\tnormal_files={}\tcontainers={}\tentries={}\traw_discoveries={}\tstored_discoveries={stored_discoveries}",
-                import_t.elapsed().as_micros(),
-                index.normal_files.len(),
-                index.containers.len(),
-                index.entries.len(),
-                index.discoveries.len()
-            );
-        }
-        Err(e) => {
-            println!(
-                "library_bench_redb_tsv\tfull_import_error\t{}\t{}",
-                import_t.elapsed().as_micros(),
-                e
-            );
-            return;
-        }
-    }
-
-    benchmark_redb_cached_open(path);
-    benchmark_redb_queries(path);
-    benchmark_redb_no_change(path, index);
-}
-
-fn benchmark_redb_cached_open(path: &Path) {
-    let t = Instant::now();
-    match open_redb_counts(path) {
-        Ok((bytes, normal_files, containers, entries, discoveries)) => println!(
-            "library_bench_redb_tsv\tcached_open\t{}\tbytes={bytes}\tnormal_files={normal_files}\tcontainers={containers}\tentries={entries}\tdiscoveries={discoveries}",
-            t.elapsed().as_micros()
-        ),
-        Err(e) => println!(
-            "library_bench_redb_tsv\tcached_open_error\t{}\t{}",
-            t.elapsed().as_micros(),
-            e
-        ),
-    }
-}
-
-fn benchmark_redb_queries(path: &Path) {
-    let Ok(db) = Database::open(path) else {
-        println!("library_bench_redb_tsv\tquery_error\t0\topen failed");
-        return;
-    };
-    let Ok(read_txn) = db.begin_read() else {
-        println!("library_bench_redb_tsv\tquery_error\t0\tbegin_read failed");
-        return;
-    };
-    let Ok(discoveries) = read_txn.open_table(REDB_DISCOVERIES) else {
-        println!("library_bench_redb_tsv\tquery_error\t0\topen discoveries failed");
-        return;
-    };
-
-    let first_page_t = Instant::now();
-    let first_page = discoveries
-        .iter()
-        .ok()
-        .map(|iter| iter.take(80).filter_map(Result::ok).count())
-        .unwrap_or(0);
-    println!(
-        "library_bench_redb_tsv\tquery_first_page\t{}\trows={first_page}",
-        first_page_t.elapsed().as_micros()
-    );
-
-    let search_t = Instant::now();
-    let needle = "mario";
-    let matches = discoveries
-        .iter()
-        .ok()
-        .map(|iter| {
-            iter.filter_map(Result::ok)
-                .filter(|(_, value)| {
-                    String::from_utf8_lossy(value.value())
-                        .to_ascii_lowercase()
-                        .contains(needle)
-                })
-                .count()
-        })
-        .unwrap_or(0);
-    println!(
-        "library_bench_redb_tsv\ttext_search_scan\t{}\tneedle={needle}\tmatches={matches}",
-        search_t.elapsed().as_micros()
-    );
-
-    let get_t = Instant::now();
-    let sample_key = discoveries
-        .first()
-        .ok()
-        .flatten()
-        .map(|(key, _)| key.value().to_string())
-        .unwrap_or_default();
-    let found = if sample_key.is_empty() {
-        false
-    } else {
-        discoveries
-            .get(sample_key.as_str())
-            .ok()
-            .flatten()
-            .is_some()
-    };
-    println!(
-        "library_bench_redb_tsv\tpoint_lookup\t{}\tfound={found}",
-        get_t.elapsed().as_micros()
-    );
-}
-
-fn benchmark_redb_no_change(path: &Path, index: &LibraryBenchIndex) {
-    let t = Instant::now();
-    let changed = read_redb_fingerprint(path)
-        .map(|fingerprint| fingerprint != db_fingerprint(index))
-        .unwrap_or(true);
-    println!(
-        "library_bench_redb_tsv\tno_change_fingerprint\t{}\tchanged={changed}",
-        t.elapsed().as_micros()
-    );
-}
-
-fn benchmark_sqlite_backend(path: &Path, index: &LibraryBenchIndex) {
+fn benchmark_sqlite_backend(path: &Path, scan: &LibraryScan) {
     benchmark_sqlite_cached_open(path);
 
     let import_t = Instant::now();
-    match save_sqlite_index(path, index) {
+    match save_sqlite_scan(path, scan) {
         Ok(bytes) => println!(
             "library_bench_sqlite_tsv\tfull_import\t{}\tbytes={bytes}\tnormal_files={}\tcontainers={}\tentries={}\traw_discoveries={}\tstored_discoveries={}",
             import_t.elapsed().as_micros(),
-            index.normal_files.len(),
-            index.containers.len(),
-            index.entries.len(),
-            index.discoveries.len(),
+            scan.normal_files.len(),
+            scan.containers.len(),
+            scan.entries.len(),
+            scan.discoveries.len(),
             count_sqlite_table(path, "discoveries").unwrap_or(0)
         ),
         Err(e) => {
@@ -1350,7 +1183,7 @@ fn benchmark_sqlite_backend(path: &Path, index: &LibraryBenchIndex) {
 
     benchmark_sqlite_cached_open(path);
     benchmark_sqlite_queries(path);
-    benchmark_sqlite_no_change(path, index);
+    benchmark_sqlite_no_change(path, scan);
 }
 
 fn benchmark_sqlite_cached_open(path: &Path) {
@@ -1427,10 +1260,10 @@ fn benchmark_sqlite_queries(path: &Path) {
     );
 }
 
-fn benchmark_sqlite_no_change(path: &Path, index: &LibraryBenchIndex) {
+fn benchmark_sqlite_no_change(path: &Path, scan: &LibraryScan) {
     let t = Instant::now();
     let changed = read_sqlite_fingerprint(path)
-        .map(|fingerprint| fingerprint != db_fingerprint(index))
+        .map(|fingerprint| fingerprint != db_fingerprint(scan))
         .unwrap_or(true);
     println!(
         "library_bench_sqlite_tsv\tno_change_fingerprint\t{}\tchanged={changed}",
@@ -1438,20 +1271,39 @@ fn benchmark_sqlite_no_change(path: &Path, index: &LibraryBenchIndex) {
     );
 }
 
-fn fingerprint_map(containers: &[LibraryContainer]) -> HashMap<&str, (u64, i64)> {
-    containers
-        .iter()
-        .map(|c| (c.file_path.as_str(), (c.size, c.mtime_secs)))
-        .collect()
+fn benchmark_second_scan(cfg: &BenchConfig, initial_scan: &LibraryScan) {
+    let scan = scan_library(cfg);
+    let fingerprint_t = Instant::now();
+    let changed = db_fingerprint(&scan) != db_fingerprint(initial_scan)
+        || read_sqlite_fingerprint(&cfg.sqlite_path)
+            .map(|fingerprint| fingerprint != db_fingerprint(&scan))
+            .unwrap_or(true);
+    println!(
+        "library_bench_second_scan_tsv\troot_discovery\t{}\tfiles={}",
+        scan.discover_us,
+        scan.root_stats.values().map(|s| s.files).sum::<u64>()
+    );
+    println!(
+        "library_bench_second_scan_tsv\tclassify_and_archive_toc\t{}\tnormal_files={}\tcontainers={}\tcontainer_entries={}",
+        scan.classify_us,
+        scan.normal_files.len(),
+        scan.containers.len(),
+        scan.entries.len()
+    );
+    println!(
+        "library_bench_second_scan_tsv\tno_change_fingerprint\t{}\tchanged={changed}",
+        fingerprint_t.elapsed().as_micros()
+    );
+    print_phase_stats("library_bench_second_phase_tsv", &scan.phase_stats);
 }
 
-fn db_fingerprint(index: &LibraryBenchIndex) -> DbFingerprint {
+fn db_fingerprint(scan: &LibraryScan) -> DbFingerprint {
     DbFingerprint {
-        normal_files: index.normal_files.len(),
-        containers: index.containers.len(),
-        entries: index.entries.len(),
-        discoveries: index.discoveries.len(),
-        container_fingerprints: index
+        normal_files: scan.normal_files.len(),
+        containers: scan.containers.len(),
+        entries: scan.entries.len(),
+        discoveries: scan.discoveries.len(),
+        container_fingerprints: scan
             .containers
             .iter()
             .map(|c| (c.file_path.clone(), (c.size, c.mtime_secs)))
@@ -1459,123 +1311,27 @@ fn db_fingerprint(index: &LibraryBenchIndex) -> DbFingerprint {
     }
 }
 
-fn save_redb_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create redb dir: {e}"))?;
+fn archive_status_str(status: &ArchiveScanStatus) -> &'static str {
+    match status {
+        ArchiveScanStatus::Ok => "ok",
+        ArchiveScanStatus::HeaderOnly => "header-only",
+        ArchiveScanStatus::Unsupported => "unsupported",
+        ArchiveScanStatus::Error(_) => "error",
     }
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("remove old redb: {e}")),
-    }
-
-    let db = Database::create(path).map_err(|e| format!("create redb: {e}"))?;
-    let write_txn = db
-        .begin_write()
-        .map_err(|e| format!("begin redb write: {e}"))?;
-    {
-        let mut normal_files = write_txn
-            .open_table(REDB_NORMAL_FILES)
-            .map_err(|e| format!("open normal table: {e}"))?;
-        for path in &index.normal_files {
-            normal_files
-                .insert(path.as_str(), "")
-                .map_err(|e| format!("insert normal file: {e}"))?;
-        }
-    }
-    {
-        let mut containers = write_txn
-            .open_table(REDB_CONTAINERS)
-            .map_err(|e| format!("open containers table: {e}"))?;
-        for container in &index.containers {
-            let value =
-                serde_json::to_vec(container).map_err(|e| format!("encode container: {e}"))?;
-            containers
-                .insert(container.file_path.as_str(), value.as_slice())
-                .map_err(|e| format!("insert container: {e}"))?;
-        }
-    }
-    {
-        let mut entries = write_txn
-            .open_table(REDB_ENTRIES)
-            .map_err(|e| format!("open entries table: {e}"))?;
-        for entry in &index.entries {
-            let value = serde_json::to_vec(entry).map_err(|e| format!("encode entry: {e}"))?;
-            entries
-                .insert(entry.launch_ref.as_str(), value.as_slice())
-                .map_err(|e| format!("insert entry: {e}"))?;
-        }
-    }
-    {
-        let mut discoveries = write_txn
-            .open_table(REDB_DISCOVERIES)
-            .map_err(|e| format!("open discoveries table: {e}"))?;
-        for discovery in &index.discoveries {
-            let key = discovery_unique_key(discovery);
-            let value =
-                serde_json::to_vec(discovery).map_err(|e| format!("encode discovery: {e}"))?;
-            discoveries
-                .insert(key.as_str(), value.as_slice())
-                .map_err(|e| format!("insert discovery: {e}"))?;
-        }
-    }
-    {
-        let mut meta = write_txn
-            .open_table(REDB_META)
-            .map_err(|e| format!("open meta table: {e}"))?;
-        let fingerprint = serde_json::to_vec(&db_fingerprint(index))
-            .map_err(|e| format!("encode fingerprint: {e}"))?;
-        meta.insert("fingerprint", fingerprint.as_slice())
-            .map_err(|e| format!("insert fingerprint: {e}"))?;
-    }
-    write_txn
-        .commit()
-        .map_err(|e| format!("commit redb write: {e}"))?;
-    std::fs::metadata(path)
-        .map(|m| m.len())
-        .map_err(|e| format!("stat redb: {e}"))
 }
 
-fn open_redb_counts(path: &Path) -> Result<(u64, u64, u64, u64, u64), String> {
-    let bytes = std::fs::metadata(path)
-        .map_err(|e| format!("stat redb: {e}"))?
-        .len();
-    let db = Database::open(path).map_err(|e| format!("open redb: {e}"))?;
-    let read_txn = db
-        .begin_read()
-        .map_err(|e| format!("begin redb read: {e}"))?;
-    let normal_files = read_txn
-        .open_table(REDB_NORMAL_FILES)
-        .map_err(|e| format!("open normal table: {e}"))?
-        .len()
-        .map_err(|e| format!("count normal table: {e}"))?;
-    let containers = read_txn
-        .open_table(REDB_CONTAINERS)
-        .map_err(|e| format!("open containers table: {e}"))?
-        .len()
-        .map_err(|e| format!("count containers table: {e}"))?;
-    let entries = read_txn
-        .open_table(REDB_ENTRIES)
-        .map_err(|e| format!("open entries table: {e}"))?
-        .len()
-        .map_err(|e| format!("count entries table: {e}"))?;
-    let discoveries = read_txn
-        .open_table(REDB_DISCOVERIES)
-        .map_err(|e| format!("open discoveries table: {e}"))?
-        .len()
-        .map_err(|e| format!("count discoveries table: {e}"))?;
-    Ok((bytes, normal_files, containers, entries, discoveries))
+fn confidence_str(confidence: DiscoveryConfidence) -> &'static str {
+    match confidence {
+        DiscoveryConfidence::MraHardware => "mra-hardware",
+        DiscoveryConfidence::MraCore => "mra-core",
+        DiscoveryConfidence::PayloadPath => "payload-path",
+        DiscoveryConfidence::Extension => "extension",
+        DiscoveryConfidence::ArchiveToc => "archive-toc",
+        DiscoveryConfidence::CatalogMetadata => "catalog-metadata",
+    }
 }
 
-fn read_redb_fingerprint(path: &Path) -> Option<DbFingerprint> {
-    let db = Database::open(path).ok()?;
-    let read_txn = db.begin_read().ok()?;
-    let meta = read_txn.open_table(REDB_META).ok()?;
-    let value = meta.get("fingerprint").ok()??;
-    serde_json::from_slice(value.value()).ok()
-}
-
-fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, String> {
+fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
@@ -1601,7 +1357,8 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
             mtime_secs INTEGER NOT NULL,
             format TEXT NOT NULL,
             entry_count INTEGER NOT NULL,
-            json BLOB NOT NULL
+            scan_status TEXT NOT NULL,
+            scan_us INTEGER NOT NULL
         ) WITHOUT ROWID;
         CREATE TABLE entries (
             launch_ref TEXT PRIMARY KEY,
@@ -1609,17 +1366,26 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
             entry_path TEXT NOT NULL,
             title TEXT NOT NULL,
             launchable INTEGER NOT NULL,
-            json BLOB NOT NULL
+            compressed_size INTEGER,
+            uncompressed_size INTEGER,
+            crc32 INTEGER
         ) WITHOUT ROWID;
         CREATE TABLE discoveries (
             key TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
             title TEXT NOT NULL,
             category TEXT NOT NULL,
             platform_id TEXT NOT NULL,
             core_id TEXT NOT NULL,
             hardware_id TEXT NOT NULL,
-            json BLOB NOT NULL
+            manufacturer TEXT,
+            genre TEXT,
+            year INTEGER,
+            setname TEXT,
+            parent TEXT,
+            confidence TEXT NOT NULL
         ) WITHOUT ROWID;
         CREATE VIRTUAL TABLE discoveries_fts USING fts5(
             key UNINDEXED,
@@ -1631,7 +1397,12 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
         );
         CREATE TABLE meta (
             key TEXT PRIMARY KEY,
-            value BLOB NOT NULL
+            value INTEGER NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE container_fingerprints (
+            file_path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime_secs INTEGER NOT NULL
         ) WITHOUT ROWID;
         "#,
     )
@@ -1644,7 +1415,7 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
         let mut stmt = tx
             .prepare("INSERT INTO normal_files(path) VALUES (?1)")
             .map_err(|e| format!("prepare normal insert: {e}"))?;
-        for path in &index.normal_files {
+        for path in &scan.normal_files {
             stmt.execute([path.as_str()])
                 .map_err(|e| format!("insert normal file: {e}"))?;
         }
@@ -1652,20 +1423,19 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO containers(file_path,size,mtime_secs,format,entry_count,json)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO containers(file_path,size,mtime_secs,format,entry_count,scan_status,scan_us)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )
             .map_err(|e| format!("prepare container insert: {e}"))?;
-        for container in &index.containers {
-            let json =
-                serde_json::to_vec(container).map_err(|e| format!("encode container: {e}"))?;
+        for container in &scan.containers {
             stmt.execute(params![
-                container.file_path,
+                container.file_path.as_str(),
                 container.size as i64,
                 container.mtime_secs,
                 container.format.as_str(),
                 container.entry_count as i64,
-                json
+                archive_status_str(&container.scan_status),
+                container.scan_us as i64
             ])
             .map_err(|e| format!("insert container: {e}"))?;
         }
@@ -1673,19 +1443,20 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO entries(launch_ref,file_path,entry_path,title,launchable,json)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO entries(launch_ref,file_path,entry_path,title,launchable,compressed_size,uncompressed_size,crc32)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare entry insert: {e}"))?;
-        for entry in &index.entries {
-            let json = serde_json::to_vec(entry).map_err(|e| format!("encode entry: {e}"))?;
+        for entry in &scan.entries {
             stmt.execute(params![
-                entry.launch_ref,
-                entry.file_path,
-                entry.entry_path,
-                entry.normalized_title,
+                entry.launch_ref.as_str(),
+                entry.file_path.as_str(),
+                entry.entry_path.as_str(),
+                entry.normalized_title.as_str(),
                 if entry.launchable { 1 } else { 0 },
-                json
+                entry.compressed_size.map(|n| n as i64),
+                entry.uncompressed_size.map(|n| n as i64),
+                entry.crc32.map(|n| n as i64)
             ])
             .map_err(|e| format!("insert entry: {e}"))?;
         }
@@ -1693,8 +1464,8 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
     {
         let mut row_stmt = tx
             .prepare(
-                "INSERT INTO discoveries(key,launch_ref,title,category,platform_id,core_id,hardware_id,json)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO discoveries(key,source_path,launch_ref,source_kind,title,category,platform_id,core_id,hardware_id,manufacturer,genre,year,setname,parent,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             )
             .map_err(|e| format!("prepare discovery insert: {e}"))?;
         let mut fts_stmt = tx
@@ -1704,33 +1475,38 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
             )
             .map_err(|e| format!("prepare discovery fts insert: {e}"))?;
         let mut seen = HashSet::<String>::new();
-        for discovery in &index.discoveries {
+        for discovery in &scan.discoveries {
             let key = discovery_unique_key(discovery);
             if !seen.insert(key.clone()) {
                 continue;
             }
-            let json =
-                serde_json::to_vec(discovery).map_err(|e| format!("encode discovery: {e}"))?;
             row_stmt
                 .execute(params![
-                    key,
-                    discovery.launch_ref,
-                    discovery.title,
-                    discovery.category,
-                    discovery.platform_id,
-                    discovery.core_id,
-                    discovery.hardware_id,
-                    json
+                    key.as_str(),
+                    discovery.source_path.as_str(),
+                    discovery.launch_ref.as_str(),
+                    source_kind_str(discovery.source_kind),
+                    discovery.title.as_str(),
+                    discovery.category.as_str(),
+                    discovery.platform_id.as_str(),
+                    discovery.core_id.as_str(),
+                    discovery.hardware_id.as_str(),
+                    discovery.manufacturer.as_deref(),
+                    discovery.genre.as_deref(),
+                    discovery.year.map(|n| n as i64),
+                    discovery.setname.as_deref(),
+                    discovery.parent.as_deref(),
+                    confidence_str(discovery.confidence)
                 ])
                 .map_err(|e| format!("insert discovery: {e}"))?;
             fts_stmt
                 .execute(params![
-                    key,
-                    discovery.title,
-                    discovery.launch_ref,
-                    discovery.platform_id,
-                    discovery.core_id,
-                    discovery.hardware_id
+                    key.as_str(),
+                    discovery.title.as_str(),
+                    discovery.launch_ref.as_str(),
+                    discovery.platform_id.as_str(),
+                    discovery.core_id.as_str(),
+                    discovery.hardware_id.as_str()
                 ])
                 .map_err(|e| format!("insert discovery fts: {e}"))?;
         }
@@ -1739,10 +1515,33 @@ fn save_sqlite_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, Stri
         let mut stmt = tx
             .prepare("INSERT INTO meta(key,value) VALUES (?1,?2)")
             .map_err(|e| format!("prepare meta insert: {e}"))?;
-        let fingerprint = serde_json::to_vec(&db_fingerprint(index))
-            .map_err(|e| format!("encode fingerprint: {e}"))?;
-        stmt.execute(params!["fingerprint", fingerprint])
+        stmt.execute(params!["version", scan.version as i64])
+            .map_err(|e| format!("insert version: {e}"))?;
+        stmt.execute(params!["scanned_at_unix", scan.scanned_at_unix])
+            .map_err(|e| format!("insert scanned_at_unix: {e}"))?;
+        stmt.execute(params!["normal_files", scan.normal_files.len() as i64])
+            .map_err(|e| format!("insert normal count: {e}"))?;
+        stmt.execute(params!["containers", scan.containers.len() as i64])
+            .map_err(|e| format!("insert container count: {e}"))?;
+        stmt.execute(params!["entries", scan.entries.len() as i64])
+            .map_err(|e| format!("insert entry count: {e}"))?;
+        stmt.execute(params!["discoveries", scan.discoveries.len() as i64])
+            .map_err(|e| format!("insert discovery count: {e}"))?;
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO container_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
+            )
+            .map_err(|e| format!("prepare container fingerprint insert: {e}"))?;
+        for container in &scan.containers {
+            stmt.execute(params![
+                container.file_path.as_str(),
+                container.size as i64,
+                container.mtime_secs
+            ])
             .map_err(|e| format!("insert fingerprint: {e}"))?;
+        }
     }
     tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))?;
     std::fs::metadata(path)
@@ -1784,47 +1583,55 @@ fn sqlite_count(conn: &Connection, table: &str) -> Result<u64, String> {
 
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
     let conn = Connection::open(path).ok()?;
-    let value: Vec<u8> = conn
-        .query_row("SELECT value FROM meta WHERE key='fingerprint'", [], |r| {
-            r.get(0)
+    let mut container_fingerprints = BTreeMap::new();
+    let mut stmt = conn
+        .prepare("SELECT file_path,size,mtime_secs FROM container_fingerprints")
+        .ok()?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })
         .ok()?;
-    serde_json::from_slice(&value).ok()
-}
-
-fn load_index(path: &Path) -> Option<(u64, LibraryBenchIndex)> {
-    let data = std::fs::read(path).ok()?;
-    let bytes = data.len() as u64;
-    let idx = serde_json::from_slice(&data).ok()?;
-    Some((bytes, idx))
-}
-
-fn save_index(path: &Path, index: &LibraryBenchIndex) -> Result<u64, String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create index dir: {e}"))?;
+    for row in rows {
+        let (path, size, mtime) = row.ok()?;
+        container_fingerprints.insert(path, (size.max(0) as u64, mtime));
     }
-    let data = serde_json::to_vec(index).map_err(|e| format!("encode index: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &data).map_err(|e| format!("write index tmp: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename index: {e}"))?;
-    Ok(data.len() as u64)
+    Some(DbFingerprint {
+        normal_files: sqlite_meta_usize(&conn, "normal_files")?,
+        containers: sqlite_meta_usize(&conn, "containers")?,
+        entries: sqlite_meta_usize(&conn, "entries")?,
+        discoveries: sqlite_meta_usize(&conn, "discoveries")?,
+        container_fingerprints,
+    })
 }
 
-fn print_root_stats(stats: &HashMap<String, RootStats>) {
+fn sqlite_meta_usize(conn: &Connection, key: &str) -> Option<usize> {
+    conn.query_row("SELECT value FROM meta WHERE key=?1", [key], |r| {
+        r.get::<_, i64>(0)
+    })
+    .ok()
+    .map(|n| n.max(0) as usize)
+}
+
+fn print_root_stats(label: &str, stats: &HashMap<String, RootStats>) {
     let mut rows: Vec<_> = stats.iter().collect();
     rows.sort_by(|a, b| a.0.cmp(b.0));
     for (root, s) in rows {
         println!(
-            "library_bench_root_tsv\t{root}\tfiles={}\tnormal_launchables={}\tarchives={}\tscan_us={}",
+            "{label}\t{root}\tfiles={}\tnormal_launchables={}\tarchives={}\tscan_us={}",
             s.files, s.normal_launchables, s.archives, s.scan_us
         );
     }
 }
 
-fn print_format_stats(stats: &BTreeMap<ArchiveFormat, FormatStats>) {
+fn print_format_stats(label: &str, stats: &BTreeMap<ArchiveFormat, FormatStats>) {
     for (format, s) in stats {
         println!(
-            "library_bench_archive_tsv\t{}\tcontainers={}\tentries={}\tlaunchable_entries={}\tscan_us={}\tskipped={}\terrors={}",
+            "{label}\t{}\tcontainers={}\tentries={}\tlaunchable_entries={}\tscan_us={}\tskipped={}\terrors={}",
             format.as_str(),
             s.containers,
             s.entries,
@@ -1836,19 +1643,20 @@ fn print_format_stats(stats: &BTreeMap<ArchiveFormat, FormatStats>) {
     }
 }
 
-fn print_phase_stats(stats: &PhaseStats) {
-    print_phase("mra_parse", &stats.mra, "");
-    print_phase("mgl_parse", &stats.mgl, "");
-    print_phase("payload_classify", &stats.payload, "");
-    print_phase("archive_toc", &stats.archive_toc, "");
+fn print_phase_stats(label: &str, stats: &PhaseStats) {
+    print_phase(label, "mra_parse", &stats.mra, "");
+    print_phase(label, "mgl_parse", &stats.mgl, "");
+    print_phase(label, "payload_classify", &stats.payload, "");
+    print_phase(label, "archive_toc", &stats.archive_toc, "");
     print_phase(
+        label,
         "optional_catalog_extract",
         &stats.optional_catalog,
         &format!("entries={}", stats.optional_catalog_entries),
     );
 }
 
-fn print_phase(name: &str, count: &TimedCount, extra: &str) {
+fn print_phase(label: &str, name: &str, count: &TimedCount, extra: &str) {
     let avg_us = if count.count == 0 {
         0
     } else {
@@ -1856,12 +1664,12 @@ fn print_phase(name: &str, count: &TimedCount, extra: &str) {
     };
     if extra.is_empty() {
         println!(
-            "library_bench_phase_tsv\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}",
+            "{label}\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}",
             count.count, count.us
         );
     } else {
         println!(
-            "library_bench_phase_tsv\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}\t{extra}",
+            "{label}\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}\t{extra}",
             count.count, count.us
         );
     }
