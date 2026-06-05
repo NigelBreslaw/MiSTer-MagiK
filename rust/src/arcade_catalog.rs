@@ -47,10 +47,7 @@ impl CatalogTimings {
 }
 
 fn print_phase(name: &str, p: &PhaseTiming) {
-    println!(
-        "{name:<22}{:5}   {:5}   {}",
-        p.ms, p.count, p.notes
-    );
+    println!("{name:<22}{:5}   {:5}   {}", p.ms, p.count, p.notes);
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -290,7 +287,9 @@ pub fn build_with_options(
         timings.resolve_images = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
             count: (found + missing) as u64,
-            notes: format!("png_found={found} png_missing={missing} setname_resolved={setname_resolved}"),
+            notes: format!(
+                "png_found={found} png_missing={missing} setname_resolved={setname_resolved}"
+            ),
         };
     }
 
@@ -323,23 +322,17 @@ pub fn build_with_options(
         timings.decode_sample_pngs = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
             count: stats.decoded as u64,
-            notes: format!(
-                "avg={}us max={}us",
-                stats.avg_us, stats.max_us
-            ),
+            notes: format!("avg={}us max={}us", stats.avg_us, stats.max_us),
         };
     }
 
-    report("Indexing arcade…", &format!("Ready — {} games", games.len()));
+    report(
+        "Indexing arcade…",
+        &format!("Ready — {} games", games.len()),
+    );
     timings.total_ms = t0.elapsed().as_millis() as u64;
 
-    (
-        ArcadeCatalog {
-            root,
-            games,
-        },
-        timings,
-    )
+    (ArcadeCatalog { root, games }, timings)
 }
 
 fn walk_mra(root: &Path) -> Vec<PathBuf> {
@@ -394,7 +387,11 @@ fn prefer_mra_path(a: &Path, b: &Path) -> PathBuf {
     let a_org = is_organized_mirror(a);
     let b_org = is_organized_mirror(b);
     if a_org != b_org {
-        return if a_org { b.to_path_buf() } else { a.to_path_buf() };
+        return if a_org {
+            b.to_path_buf()
+        } else {
+            a.to_path_buf()
+        };
     }
     let a_depth = path_depth(a);
     let b_depth = path_depth(b);
@@ -413,9 +410,7 @@ fn prefer_mra_path(a: &Path, b: &Path) -> PathBuf {
 }
 
 fn is_organized_mirror(path: &Path) -> bool {
-    path.to_string_lossy()
-        .split('/')
-        .any(|c| c == "_Organized")
+    path.to_string_lossy().split('/').any(|c| c == "_Organized")
 }
 
 fn path_depth(path: &Path) -> usize {
@@ -530,10 +525,8 @@ fn parse_gamelist(root: &Path) -> GamelistIndex {
                                         &entry,
                                         &rel,
                                     ) {
-                                        by_basename.insert(
-                                            key,
-                                            IndexedGamelistEntry { rel, entry },
-                                        );
+                                        by_basename
+                                            .insert(key, IndexedGamelistEntry { rel, entry });
                                     }
                                 }
                             }
@@ -583,7 +576,11 @@ fn prefer_gamelist_entry(
     false
 }
 
-fn lookup_gamelist<'a>(index: &'a GamelistIndex, rel: &Path, basename: &str) -> Option<&'a GamelistEntry> {
+fn lookup_gamelist<'a>(
+    index: &'a GamelistIndex,
+    rel: &Path,
+    basename: &str,
+) -> Option<&'a GamelistEntry> {
     if let Some(entry) = index.by_rel.get(rel) {
         return Some(entry);
     }
@@ -617,10 +614,7 @@ fn merge_entries(
 
     for (i, path) in mra_paths.iter().enumerate() {
         let rel = mra_relative_key(root, path);
-        let basename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let meta = lookup_gamelist(gamelist, &rel, basename);
         if meta.is_some() {
             matched += 1;
@@ -769,19 +763,19 @@ fn bench_decode_sample_pngs(games: &[ArcadeGameEntry], limit: usize) -> DecodeSt
 
     DecodeStats {
         decoded,
-        avg_us: if decoded > 0 { total_us / decoded as u64 } else { 0 },
+        avg_us: if decoded > 0 {
+            total_us / decoded as u64
+        } else {
+            0
+        },
         max_us,
     }
 }
 
 pub fn decode_png_rgb8(path: &str) -> Option<(u32, u32, Vec<u8>)> {
-    load_png_rgb8_timed(path).ok().map(|loaded| {
-        (
-            loaded.image.width,
-            loaded.image.height,
-            loaded.image.rgb,
-        )
-    })
+    load_png_rgb8_timed(path)
+        .ok()
+        .map(|loaded| (loaded.image.width, loaded.image.height, loaded.image.rgb))
 }
 
 #[derive(Clone, Debug)]
@@ -890,8 +884,7 @@ mod tests {
         let games = vec![
             ArcadeGameEntry {
                 title: "1943- Kai Midway Kaisen (JP)".into(),
-                mra_path: "/media/fat/_Arcade/_Organized/a/1943- Kai Midway Kaisen (JP).mra"
-                    .into(),
+                mra_path: "/media/fat/_Arcade/_Organized/a/1943- Kai Midway Kaisen (JP).mra".into(),
                 image_path: String::new(),
                 has_image: false,
             },

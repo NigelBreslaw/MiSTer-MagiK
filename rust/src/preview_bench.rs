@@ -47,22 +47,36 @@ impl Summary {
         println!("failures={}", self.failures);
         println!("elapsed_us={elapsed_us}");
         print_stats("read_us", self.samples.iter().map(|s| s.read_us).collect());
-        print_stats("decode_us", self.samples.iter().map(|s| s.decode_us).collect());
-        print_stats("total_us", self.samples.iter().map(|s| s.total_us).collect());
+        print_stats(
+            "decode_us",
+            self.samples.iter().map(|s| s.decode_us).collect(),
+        );
+        print_stats(
+            "total_us",
+            self.samples.iter().map(|s| s.total_us).collect(),
+        );
         print_stats(
             "encoded_bytes",
-            self.samples.iter().map(|s| s.encoded_bytes as u64).collect(),
+            self.samples
+                .iter()
+                .map(|s| s.encoded_bytes as u64)
+                .collect(),
         );
         print_stats(
             "decoded_bytes",
-            self.samples.iter().map(|s| s.decoded_bytes as u64).collect(),
+            self.samples
+                .iter()
+                .map(|s| s.decoded_bytes as u64)
+                .collect(),
         );
     }
 }
 
 pub fn run() {
     let cfg = BenchConfig::from_env();
-    let mode = std::env::args().nth(2).unwrap_or_else(|| "sync".to_string());
+    let mode = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "sync".to_string());
     let root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     println!(

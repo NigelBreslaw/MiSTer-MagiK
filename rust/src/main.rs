@@ -8,6 +8,7 @@
 //!   input     gamepad log / sniff / calibrate
 //!   catalog-bench  benchmark arcade catalog pipeline phases
 //!   library-bench  benchmark whole MiSTer library indexing + archive TOCs
+//!   library-db-bench  benchmark cached library database open/query only
 //!   preview-bench  benchmark arcade preview image read/decode
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
@@ -25,8 +26,8 @@ mod fpga;
 mod frame_profile;
 mod input;
 mod input_repeat;
-mod library_bench;
 mod launcher;
+mod library_bench;
 mod preview_bench;
 mod preview_worker;
 mod setup_nav;
@@ -71,11 +72,12 @@ fn main() {
         "input" => run_input(),
         "catalog-bench" => run_catalog_bench(),
         "library-bench" => library_bench::run(),
+        "library-db-bench" => library_bench::run_db_bench(),
         "preview-bench" => preview_bench::run(),
         other => {
             eprintln!(
                 "unknown command '{other}' \
-                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | preview-bench)"
+                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | library-db-bench | preview-bench)"
             );
             std::process::exit(2);
         }
@@ -100,7 +102,14 @@ fn is_launcher_boot(arg: &str) -> bool {
 fn should_handoff_to_mister(arg: &str) -> bool {
     if matches!(
         arg,
-        "read" | "fb" | "ui" | "scenes" | "input" | "catalog-bench" | "library-bench"
+        "read"
+            | "fb"
+            | "ui"
+            | "scenes"
+            | "input"
+            | "catalog-bench"
+            | "library-bench"
+            | "library-db-bench"
             | "preview-bench"
     ) {
         return false;
@@ -122,9 +131,17 @@ fn exec_mister(args: &[String]) {
     println!("core handoff → {MISTER_BIN} {}", args[1..].join(" "));
     let c_path = CString::new(MISTER_BIN).expect("CString");
     let c_args: Vec<CString> = std::iter::once(c_path.clone())
-        .chain(args[1..].iter().map(|s| CString::new(s.as_str()).expect("CString")))
+        .chain(
+            args[1..]
+                .iter()
+                .map(|s| CString::new(s.as_str()).expect("CString")),
+        )
         .collect();
-    let ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).chain([std::ptr::null()]).collect();
+    let ptrs: Vec<*const libc::c_char> = c_args
+        .iter()
+        .map(|s| s.as_ptr())
+        .chain([std::ptr::null()])
+        .collect();
     let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
     eprintln!("execv({MISTER_BIN}) failed: {err}");
     std::process::exit(1);
@@ -175,8 +192,18 @@ fn fb_test(f: &mut Fpga) {
     // right. The real frontend must derive xoff/yoff from the LIVE mode (read via
     // UIO_GET_VRES + the mode table) so it adapts to other resolutions / CRT.
     // Override on the CLI for tuning: `fb <xoff> <yoff>`.
-    let xo = Some(std::env::args().nth(2).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0));
-    let yo = Some(std::env::args().nth(3).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0));
+    let xo = Some(
+        std::env::args()
+            .nth(2)
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0),
+    );
+    let yo = Some(
+        std::env::args()
+            .nth(3)
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0),
+    );
 
     let mode: Mode = MODE_1080P60;
     let flag = f.fb_enable_direct(N, W as u16, H as u16, mode, xo, yo);
@@ -248,7 +275,10 @@ fn read_mode(f: &mut Fpga) {
 }
 
 fn print_word(label: &str, w: (u16, u16)) {
-    println!("{label} hi=0x{:04x} ({:5})   lo=0x{:04x} ({:5})", w.0, w.0, w.1, w.1);
+    println!(
+        "{label} hi=0x{:04x} ({:5})   lo=0x{:04x} ({:5})",
+        w.0, w.0, w.1, w.1
+    );
 }
 
 fn run_input() {

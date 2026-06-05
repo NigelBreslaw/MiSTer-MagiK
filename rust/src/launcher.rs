@@ -73,9 +73,7 @@ impl LauncherNav {
         let result = match self.screen {
             Screen::Home => self.handle_home(now, frame_now),
             Screen::Controller => {
-                if rising(now.btn_home, self.prev.btn_home)
-                    || rising(now.btn_b, self.prev.btn_b)
-                {
+                if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
                     self.screen = Screen::Home;
                 }
                 None
@@ -138,21 +136,19 @@ impl LauncherNav {
 
         if self.repeat.tick_down(now.dpad_down, frame_now) && self.arcade.selected + 1 < count {
             self.arcade.selected += 1;
-            self.arcade.scroll_y = (self.arcade.scroll_y + ARCADE_ROW_HEIGHT)
-                .clamp(0, arcade_max_scroll(count));
+            self.arcade.scroll_y =
+                (self.arcade.scroll_y + ARCADE_ROW_HEIGHT).clamp(0, arcade_max_scroll(count));
             keep_arcade_visible(&mut self.arcade, count);
         }
         if self.repeat.tick_up(now.dpad_up, frame_now) && self.arcade.selected > 0 {
             self.arcade.selected -= 1;
-            self.arcade.scroll_y = (self.arcade.scroll_y - ARCADE_ROW_HEIGHT)
-                .clamp(0, arcade_max_scroll(count));
+            self.arcade.scroll_y =
+                (self.arcade.scroll_y - ARCADE_ROW_HEIGHT).clamp(0, arcade_max_scroll(count));
             keep_arcade_visible(&mut self.arcade, count);
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            return catalog
-                .path_at(self.arcade.selected)
-                .map(|p| p.to_string());
+            return catalog.path_at(self.arcade.selected).map(|p| p.to_string());
         }
 
         None
@@ -249,7 +245,9 @@ pub fn launch_in_progress() -> bool {
 pub fn mister_running_arcade_core() -> bool {
     let output = Command::new("sh")
         .arg("-c")
-        .arg("pid=$(pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline")
+        .arg(
+            "pid=$(pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
+        )
         .output();
     let Ok(output) = output else {
         return false;

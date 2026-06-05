@@ -1,8 +1,8 @@
 //! Controller setup flow — detect unknown / moved pads and offer rebinding.
 
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
-use crate::input::{layout_profile_name, PadInfo, PadState};
 use crate::input::PadPool;
+use crate::input::{layout_profile_name, PadInfo, PadState};
 use crate::input_repeat::RepeatNav;
 use std::time::Instant;
 
@@ -41,7 +41,9 @@ pub enum SetupAction {
     /// User confirmed this is a new controller identity (MovedPort → "New controller").
     RegisterNew,
     /// User picked an existing registry entry by index in `list_entries()`.
-    ClaimExisting { list_index: usize },
+    ClaimExisting {
+        list_index: usize,
+    },
     /// Save label + kind and mark setup complete.
     SaveFinish {
         label: String,
@@ -220,10 +222,7 @@ impl SetupNav {
             ),
             ("Logical ID".into(), logical_id),
             ("Registry status".into(), status.as_str().into()),
-            (
-                "Inferred type".into(),
-                inferred_kind.as_str().into(),
-            ),
+            ("Inferred type".into(), inferred_kind.as_str().into()),
             ("Input profile".into(), input_profile.into()),
             ("js buttons".into(), info.js_buttons.to_string()),
             ("js axes".into(), info.js_axes.to_string()),
@@ -241,10 +240,7 @@ impl SetupNav {
 
         if let Some(entry) = db.get(info) {
             rows.push(("Saved label".into(), entry.label.clone()));
-            rows.push((
-                "Saved type".into(),
-                entry.kind.as_str().into(),
-            ));
+            rows.push(("Saved type".into(), entry.kind.as_str().into()));
             rows.push((
                 "Setup complete".into(),
                 if entry.setup_complete { "yes" } else { "no" }.into(),

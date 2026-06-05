@@ -139,7 +139,11 @@ impl Display {
         let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
         for attempt in 0..RETRIES {
             Self::set_mode_1080p();
-            std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 { 0 } else { 200 }));
+            std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
+                0
+            } else {
+                200
+            }));
             match Self::open(w, h) {
                 Ok(d) => {
                     if attempt > 0 {
@@ -170,10 +174,26 @@ impl Display {
             yoffset: 0,
             bits_per_pixel: 0,
             grayscale: 0,
-            red: FbBitfield { offset: 0, length: 0, msb_right: 0 },
-            green: FbBitfield { offset: 0, length: 0, msb_right: 0 },
-            blue: FbBitfield { offset: 0, length: 0, msb_right: 0 },
-            transp: FbBitfield { offset: 0, length: 0, msb_right: 0 },
+            red: FbBitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            green: FbBitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            blue: FbBitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            transp: FbBitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
             nonstd: 0,
             activate: 0,
             height: 0,
@@ -231,8 +251,7 @@ impl Display {
                 ));
             }
             if var.red.length != 0
-                && (var.red.offset, var.green.offset, var.blue.offset)
-                    != (16, 8, 0)
+                && (var.red.offset, var.green.offset, var.blue.offset) != (16, 8, 0)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -414,7 +433,10 @@ impl Display {
         if unsafe { libc::ioctl(self.fb0.as_raw_fd(), FBIO_WAITFORVSYNC, &arg as *const u32) } < 0 {
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!("warning: FBIO_WAITFORVSYNC failed: {}", io::Error::last_os_error());
+                eprintln!(
+                    "warning: FBIO_WAITFORVSYNC failed: {}",
+                    io::Error::last_os_error()
+                );
             }
         }
     }
