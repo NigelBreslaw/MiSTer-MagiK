@@ -57,6 +57,7 @@ use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint_ui::launcher::PreviewStatus;
 use slint::platform::software_renderer::PhysicalRegion;
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 
 pub const UI_SCENES: &[&str] = &[
@@ -76,6 +77,93 @@ pub const UI_SCENES: &[&str] = &[
 struct MisterPlatform {
     window: Rc<MinimalSoftwareWindow>,
     start: Instant,
+    fixed_time: Option<Rc<Cell<Duration>>>,
+}
+
+#[derive(Clone)]
+struct AnimationClock {
+    fixed_time: Option<Rc<Cell<Duration>>>,
+    fixed_step: Duration,
+}
+
+impl AnimationClock {
+    fn from_env() -> Self {
+        match std::env::var("MISTER_ANIMATION_CLOCK")
+            .ok()
+            .map(|s| s.to_ascii_lowercase().replace('_', "-"))
+            .as_deref()
+        {
+            None | Some("") | Some("wall") | Some("wall-clock") => Self {
+                fixed_time: None,
+                fixed_step: Duration::from_nanos(16_666_667),
+            },
+            Some("fixed60") | Some("fixed-60") | Some("frame") | Some("frame-clock") => Self {
+                fixed_time: Some(Rc::new(Cell::new(Duration::ZERO))),
+                fixed_step: Duration::from_nanos(16_666_667),
+            },
+            other => {
+                eprintln!("ui: unknown MISTER_ANIMATION_CLOCK={other:?}; use wall|fixed60");
+                Self {
+                    fixed_time: None,
+                    fixed_step: Duration::from_nanos(16_666_667),
+                }
+            }
+        }
+    }
+
+    fn platform_time(&self) -> Option<Rc<Cell<Duration>>> {
+        self.fixed_time.clone()
+    }
+
+    fn label(&self) -> &'static str {
+        if self.fixed_time.is_some() {
+            "fixed60"
+        } else {
+            "wall"
+        }
+    }
+
+    fn advance(&self) {
+        if let Some(t) = &self.fixed_time {
+            t.set(t.get() + self.fixed_step);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameOrder {
+    RenderThenVsync,
+    VsyncThenRender,
+}
+
+impl FrameOrder {
+    fn from_env() -> Self {
+        match std::env::var("MISTER_FRAME_ORDER")
+            .ok()
+            .map(|s| s.to_ascii_lowercase().replace('_', "-"))
+            .as_deref()
+        {
+            None | Some("") | Some("render-then-vsync") | Some("render") => {
+                Self::RenderThenVsync
+            }
+            Some("vsync-then-render") | Some("vsync-first") | Some("vsync") => {
+                Self::VsyncThenRender
+            }
+            other => {
+                eprintln!(
+                    "ui: unknown MISTER_FRAME_ORDER={other:?}; use render-then-vsync|vsync-first"
+                );
+                Self::RenderThenVsync
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::RenderThenVsync => "render-then-vsync",
+            Self::VsyncThenRender => "vsync-first",
+        }
+    }
 }
 
 impl Platform for MisterPlatform {
@@ -83,7 +171,10 @@ impl Platform for MisterPlatform {
         Ok(self.window.clone())
     }
     fn duration_since_start(&self) -> core::time::Duration {
-        self.start.elapsed()
+        self.fixed_time
+            .as_ref()
+            .map(|t| t.get())
+            .unwrap_or_else(|| self.start.elapsed())
     }
 }
 
@@ -204,9 +295,11 @@ pub fn run_ui(f: &mut Fpga) {
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    let animation_clock = AnimationClock::from_env();
     slint::platform::set_platform(Box::new(MisterPlatform {
         window: window.clone(),
         start: Instant::now(),
+        fixed_time: animation_clock.platform_time(),
     }))
     .expect("set_platform");
 
@@ -216,49 +309,49 @@ pub fn run_ui(f: &mut Fpga) {
             app.global::<slint_ui::app::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "full_motion" => {
             let app = slint_ui::full_motion::FullMotion::new().expect("FullMotion::new");
             app.global::<slint_ui::full_motion::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "static_ui" => {
             let app = slint_ui::static_ui::StaticUi::new().expect("StaticUi::new");
             app.global::<slint_ui::static_ui::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "local_motion" => {
             let app = slint_ui::local_motion::LocalMotion::new().expect("LocalMotion::new");
             app.global::<slint_ui::local_motion::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "text_heavy" => {
             let app = slint_ui::text_heavy::TextHeavy::new().expect("TextHeavy::new");
             app.global::<slint_ui::text_heavy::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "solid_fill" => {
             let app = slint_ui::solid_fill::SolidFill::new().expect("SolidFill::new");
             app.global::<slint_ui::solid_fill::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "list_scroll" => {
             let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
             app.global::<slint_ui::list_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "console_scroll" => {
             let app =
@@ -276,7 +369,7 @@ pub fn run_ui(f: &mut Fpga) {
             println!("dirty_band band-pct={pct}% (MISTER_DIRTY_BAND_PCT)");
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window);
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "controller_test" => {
             let pad = open_pads();
@@ -819,33 +912,68 @@ fn run_bench_frame(
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
     mut cached: &mut [Pixel],
+    frame_order: FrameOrder,
+    animation_clock: &AnimationClock,
 ) -> FrameSample {
     let frame_start = Instant::now();
     let t0 = Instant::now();
-    slint::platform::update_timers_and_animations();
-    let t1 = Instant::now();
     let mut this_rect: Option<DirtyRect> = None;
-    window.draw_if_needed(|renderer| {
-        let region = renderer.render(&mut cached, ui.render_w());
-        this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-    });
-    let t2 = Instant::now();
-    disp.wait_vsync();
-    let t3 = Instant::now();
-    let rows = if let Some(rect) = this_rect {
-        copy_cached_rect(disp, ui, cached, rect);
-        rect.rows()
-    } else {
-        0
-    };
-    let t4 = Instant::now();
-    FrameSample {
-        anim_us: (t1 - t0).as_micros() as u64,
-        render_us: (t2 - t1).as_micros() as u64,
-        vsync_us: (t3 - t2).as_micros() as u64,
-        copy_us: (t4 - t3).as_micros() as u64,
-        rows,
-        wall_us: frame_start.elapsed().as_micros() as u64,
+
+    match frame_order {
+        FrameOrder::RenderThenVsync => {
+            animation_clock.advance();
+            slint::platform::update_timers_and_animations();
+            let t1 = Instant::now();
+            window.draw_if_needed(|renderer| {
+                let region = renderer.render(&mut cached, ui.render_w());
+                this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+            });
+            let t2 = Instant::now();
+            disp.wait_vsync();
+            let t3 = Instant::now();
+            let rows = if let Some(rect) = this_rect {
+                copy_cached_rect(disp, ui, cached, rect);
+                rect.rows()
+            } else {
+                0
+            };
+            let t4 = Instant::now();
+            FrameSample {
+                anim_us: (t1 - t0).as_micros() as u64,
+                render_us: (t2 - t1).as_micros() as u64,
+                vsync_us: (t3 - t2).as_micros() as u64,
+                copy_us: (t4 - t3).as_micros() as u64,
+                rows,
+                wall_us: frame_start.elapsed().as_micros() as u64,
+            }
+        }
+        FrameOrder::VsyncThenRender => {
+            disp.wait_vsync();
+            let t1 = Instant::now();
+            animation_clock.advance();
+            slint::platform::update_timers_and_animations();
+            let t2 = Instant::now();
+            window.draw_if_needed(|renderer| {
+                let region = renderer.render(&mut cached, ui.render_w());
+                this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+            });
+            let t3 = Instant::now();
+            let rows = if let Some(rect) = this_rect {
+                copy_cached_rect(disp, ui, cached, rect);
+                rect.rows()
+            } else {
+                0
+            };
+            let t4 = Instant::now();
+            FrameSample {
+                anim_us: (t2 - t1).as_micros() as u64,
+                render_us: (t3 - t2).as_micros() as u64,
+                vsync_us: (t1 - t0).as_micros() as u64,
+                copy_us: (t4 - t3).as_micros() as u64,
+                rows,
+                wall_us: frame_start.elapsed().as_micros() as u64,
+            }
+        }
     }
 }
 
@@ -854,6 +982,7 @@ fn run_frame_loop(
     ui: &UiDisplay,
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
+    animation_clock: &AnimationClock,
 ) {
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
@@ -869,10 +998,15 @@ fn run_frame_loop(
     let mut vsync_us = 0u128;
     let mut copy_us = 0u128;
     let mut copy_rows_acc = 0u128;
+    let frame_order = FrameOrder::from_env();
 
-    println!("bench scene running {secs}s (vsync-locked, dirty-row copy)...");
+    println!(
+        "bench scene running {secs}s (vsync-locked, dirty-row copy, frame-order={}, animation-clock={})...",
+        frame_order.label(),
+        animation_clock.label()
+    );
     while start.elapsed().as_secs() < secs {
-        let sample = run_bench_frame(ui, disp, window, &mut cached);
+        let sample = run_bench_frame(ui, disp, window, &mut cached, frame_order, animation_clock);
         frames += 1;
 
         if profiler.enabled() {
