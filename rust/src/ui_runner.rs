@@ -57,7 +57,7 @@ use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint_ui::launcher::PreviewStatus;
 use slint::platform::software_renderer::PhysicalRegion;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
@@ -931,6 +931,7 @@ fn run_console_scroll_loop(
     let fb_y = CONSOLE_LIST_Y * scale;
     let scroll_px = 2usize;
     let mut surface = vec![Pixel(0); CONSOLE_LIST_W * CONSOLE_LIST_H];
+    let mut font = ConsoleFont::new(12.0);
 
     window.request_redraw();
     slint::platform::update_timers_and_animations();
@@ -939,7 +940,15 @@ fn run_console_scroll_loop(
     });
     disp.wait_vsync();
     copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
-    draw_console_virtual_strip(&mut surface, CONSOLE_LIST_W, CONSOLE_LIST_W, CONSOLE_LIST_H, 0, 0);
+    draw_console_virtual_strip(
+        &mut surface,
+        CONSOLE_LIST_W,
+        CONSOLE_LIST_W,
+        CONSOLE_LIST_H,
+        0,
+        0,
+        &mut font,
+    );
     disp.copy_rect_scaled_at(
         fb_x,
         fb_y,
@@ -1006,6 +1015,7 @@ fn run_console_scroll_loop(
             scroll_px,
             CONSOLE_LIST_H - scroll_px,
             virtual_y + CONSOLE_LIST_H - scroll_px,
+            &mut font,
         );
         let t2 = Instant::now();
         disp.copy_rect_scaled_at(
@@ -1039,6 +1049,7 @@ fn draw_console_virtual_strip(
     height: usize,
     dst_y: usize,
     virtual_y_start: usize,
+    font: &mut ConsoleFont,
 ) {
     let row_h = CONSOLE_ROW_H;
     for dy in 0..height {
@@ -1056,6 +1067,35 @@ fn draw_console_virtual_strip(
             }
             dst[pos] = console_pixel(row, dx, row_y);
         }
+    }
+
+    let first_row = virtual_y_start / row_h;
+    let last_row = (virtual_y_start + height.saturating_sub(1)) / row_h;
+    for row in first_row..=last_row {
+        let virtual_row_y = row * row_h;
+        let row_screen_y = dst_y as isize + virtual_row_y as isize - virtual_y_start as isize;
+        font.draw_text_clipped(
+            dst,
+            stride,
+            width,
+            dst_y,
+            height,
+            12,
+            row_screen_y + 27,
+            &format!("ROW {row:03}  MISTER GAME"),
+            if row % 11 == 5 { Pixel(0x00fff2a8) } else { Pixel(0x00dbe7ff) },
+        );
+        font.draw_text_clipped(
+            dst,
+            stride,
+            width,
+            dst_y,
+            height,
+            CONSOLE_LIST_W as isize - 120,
+            row_screen_y + 27,
+            "COPY",
+            Pixel(0x007dd3fc),
+        );
     }
 }
 
@@ -1086,70 +1126,107 @@ fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
     if x < 1 || x >= CONSOLE_LIST_W - 1 {
         return Pixel(0x00263752);
     }
-
-    let text = format!("ROW {row:03}  MISTER GAME");
-    let text_color = if selected { Pixel(0x00fff2a8) } else { Pixel(0x00dbe7ff) };
-    if console_text_pixel(&text, x, y, 12, 14, 2) {
-        return text_color;
-    }
-    if console_text_pixel("COPY", x, y, CONSOLE_LIST_W - 110, 15, 1) {
-        return Pixel(0x007dd3fc);
-    }
     bg
 }
 
-fn console_text_pixel(text: &str, x: usize, y: usize, tx: usize, ty: usize, scale: usize) -> bool {
-    if x < tx || y < ty {
-        return false;
-    }
-    let lx = x - tx;
-    let ly = y - ty;
-    let cell_w = 6 * scale;
-    let glyph_y = ly / scale;
-    if glyph_y >= 7 {
-        return false;
-    }
-    let ch_index = lx / cell_w;
-    let glyph_x = (lx % cell_w) / scale;
-    if glyph_x >= 5 {
-        return false;
-    }
-    let Some(ch) = text.chars().nth(ch_index) else {
-        return false;
-    };
-    let rows = console_glyph(ch);
-    (rows[glyph_y] & (1 << (4 - glyph_x))) != 0
+struct ConsoleGlyph {
+    left: i32,
+    top: i32,
+    width: usize,
+    height: usize,
+    advance: i32,
+    data: Vec<u8>,
 }
 
-fn console_glyph(ch: char) -> [u8; 7] {
-    match ch {
-        '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
-        '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
-        '2' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
-        '3' => [0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e],
-        '4' => [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
-        '5' => [0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e],
-        '6' => [0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e],
-        '7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-        '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
-        '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e],
-        'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        'C' => [0x0f, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0f],
-        'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
-        'G' => [0x0f, 0x10, 0x10, 0x13, 0x11, 0x11, 0x0f],
-        'I' => [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
-        'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
-        'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
-        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
-        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
-        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
-        'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
-        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
-        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
-        ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
-        ' ' => [0; 7],
-        _ => [0x1f, 0x01, 0x02, 0x04, 0x04, 0x00, 0x04],
+struct ConsoleFont {
+    font: swash::FontRef<'static>,
+    scale_context: swash::scale::ScaleContext,
+    glyphs: HashMap<char, ConsoleGlyph>,
+    pixel_size: f32,
+    units_per_em: f32,
+}
+
+impl ConsoleFont {
+    fn new(pixel_size: f32) -> Self {
+        let data = include_bytes!("../ui/fonts/PressStart2P-Regular.ttf");
+        let font = swash::FontRef::from_index(data, 0).expect("PressStart2P-Regular.ttf");
+        let units_per_em = font.metrics(&[]).units_per_em as f32;
+        Self {
+            font,
+            scale_context: swash::scale::ScaleContext::new(),
+            glyphs: HashMap::new(),
+            pixel_size,
+            units_per_em,
+        }
+    }
+
+    fn glyph(&mut self, ch: char) -> Option<&ConsoleGlyph> {
+        if !self.glyphs.contains_key(&ch) {
+            let glyph_id = self.font.charmap().map(ch);
+            let advance = if glyph_id == 0 {
+                (self.pixel_size * 0.75) as i32
+            } else {
+                let scale = self.pixel_size / self.units_per_em;
+                (self.font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
+            };
+            let glyph = if glyph_id == 0 || ch == ' ' {
+                ConsoleGlyph { left: 0, top: 0, width: 0, height: 0, advance, data: Vec::new() }
+            } else {
+                let mut scaler = self.scale_context.builder(self.font).size(self.pixel_size).build();
+                let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
+                    .format(swash::zeno::Format::Alpha)
+                    .render(&mut scaler, glyph_id)?;
+                ConsoleGlyph {
+                    left: image.placement.left,
+                    top: image.placement.top,
+                    width: image.placement.width as usize,
+                    height: image.placement.height as usize,
+                    advance,
+                    data: image.data,
+                }
+            };
+            self.glyphs.insert(ch, glyph);
+        }
+        self.glyphs.get(&ch)
+    }
+
+    fn draw_text_clipped(
+        &mut self,
+        dst: &mut [Pixel],
+        stride: usize,
+        clip_w: usize,
+        clip_y: usize,
+        clip_h: usize,
+        x: isize,
+        baseline_y: isize,
+        text: &str,
+        color: Pixel,
+    ) {
+        let mut pen_x = x;
+        for ch in text.chars() {
+            let Some(glyph) = self.glyph(ch) else {
+                continue;
+            };
+            let gx0 = pen_x + glyph.left as isize;
+            let gy0 = baseline_y - glyph.top as isize;
+            for gy in 0..glyph.height {
+                let dy = gy0 + gy as isize;
+                if dy < clip_y as isize || dy >= (clip_y + clip_h) as isize {
+                    continue;
+                }
+                for gx in 0..glyph.width {
+                    let dx = gx0 + gx as isize;
+                    if dx < 0 || dx >= clip_w as isize {
+                        continue;
+                    }
+                    let alpha = glyph.data[gy * glyph.width + gx];
+                    if alpha >= 128 {
+                        dst[dy as usize * stride + dx as usize] = color;
+                    }
+                }
+            }
+            pen_x += glyph.advance as isize;
+        }
     }
 }
 
