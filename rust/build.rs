@@ -14,6 +14,7 @@ fn main() {
         "ui/bench/list_scroll.slint",
         "ui/bench/console_scroll.slint",
         "ui/bench/dirty_band.slint",
+        "ui/bench/video_playback.slint",
         "ui/controller_test.slint",
         "ui/launcher.slint",
     ];

@@ -41,6 +41,10 @@ mod slint_ui {
     pub mod dirty_band {
         include!(concat!(env!("OUT_DIR"), "/dirty_band.rs"));
     }
+    #[cfg(feature = "video")]
+    pub mod video_playback {
+        include!(concat!(env!("OUT_DIR"), "/video_playback.rs"));
+    }
     pub mod controller {
         include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
     }
@@ -78,6 +82,8 @@ pub const UI_SCENES: &[&str] = &[
     "list_scroll",
     "console_scroll",
     "dirty_band",
+    #[cfg(feature = "video")]
+    "video_playback",
 ];
 
 struct MisterPlatform {
@@ -389,6 +395,17 @@ pub fn run_ui(f: &mut Fpga) {
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+        }
+        #[cfg(feature = "video")]
+        "video_playback" => {
+            let app =
+                slint_ui::video_playback::VideoPlayback::new().expect("VideoPlayback::new");
+            app.global::<slint_ui::video_playback::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
+            configure_window(&ui, &window);
+            app.show().expect("show");
+            window.request_redraw();
+            run_video_playback_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
         }
         "controller_test" => {
             let pad = open_pads();
@@ -1112,6 +1129,230 @@ fn run_frame_loop(
     cpu_profile::finish(cpu);
 }
 
+#[cfg(feature = "video")]
+fn run_video_playback_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    app: slint_ui::video_playback::VideoPlayback,
+    animation_clock: &AnimationClock,
+) {
+    let path = std::env::var("MISTER_VIDEO_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::video_player::DEFAULT_VIDEO_PATH.to_string());
+    let mut player = match crate::video_player::VideoPlayer::open(&path) {
+        Ok(player) => player,
+        Err(e) => {
+            eprintln!("video_playback: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let start = Instant::now();
+    let mut next_video_at = Duration::ZERO;
+    let frame_interval = player.frame_interval();
+    let mut frames = 0u64;
+    let mut profiler = FrameProfiler::from_env();
+    let cpu = cpu_profile::start();
+    let profile_on = profiler.enabled();
+    let frame_order = FrameOrder::from_env();
+
+    let mut fps_window_start = Instant::now();
+    let mut fps_frames = 0u64;
+    let mut decode_us = 0u128;
+    let mut render_us = 0u128;
+    let mut vsync_us = 0u128;
+    let mut copy_us = 0u128;
+    let mut copy_rows_acc = 0u128;
+
+    let label = if secs == 0 {
+        "forever".to_string()
+    } else {
+        format!("{secs}s")
+    };
+    println!(
+        "video_playback running {label} path={path} frame-order={} animation-clock={}",
+        frame_order.label(),
+        animation_clock.label()
+    );
+
+    while secs == 0 || start.elapsed().as_secs() < secs {
+        let frame_start = Instant::now();
+        let t0 = Instant::now();
+        let mut this_rect: Option<DirtyRect> = None;
+
+        match frame_order {
+            FrameOrder::RenderThenVsync => {
+                update_slint_animations(animation_clock);
+                let now = start.elapsed();
+                if now >= next_video_at {
+                    match player.next_image() {
+                        Ok(image) => {
+                            app.set_frame(image);
+                            window.request_redraw();
+                        }
+                        Err(e) => {
+                            eprintln!("video_playback: {e}");
+                            break;
+                        }
+                    }
+                    next_video_at += frame_interval;
+                    while next_video_at < now {
+                        next_video_at += frame_interval;
+                    }
+                }
+                let t1 = Instant::now();
+                window.draw_if_needed(|renderer| {
+                    let region = renderer.render(&mut cached, ui.render_w());
+                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+                });
+                let t2 = Instant::now();
+                disp.wait_vsync();
+                let t3 = Instant::now();
+                let rows = if let Some(rect) = this_rect {
+                    copy_cached_rect(disp, ui, &cached, rect);
+                    rect.rows()
+                } else {
+                    0
+                };
+                let t4 = Instant::now();
+                let sample = FrameSample {
+                    anim_us: (t1 - t0).as_micros() as u64,
+                    render_us: (t2 - t1).as_micros() as u64,
+                    vsync_us: (t3 - t2).as_micros() as u64,
+                    copy_us: (t4 - t3).as_micros() as u64,
+                    rows,
+                    wall_us: frame_start.elapsed().as_micros() as u64,
+                };
+                record_video_sample(
+                    sample,
+                    &mut profiler,
+                    &mut fps_window_start,
+                    &mut fps_frames,
+                    &mut decode_us,
+                    &mut render_us,
+                    &mut vsync_us,
+                    &mut copy_us,
+                    &mut copy_rows_acc,
+                );
+            }
+            FrameOrder::VsyncThenRender => {
+                disp.wait_vsync();
+                let t1 = Instant::now();
+                update_slint_animations(animation_clock);
+                let now = start.elapsed();
+                if now >= next_video_at {
+                    match player.next_image() {
+                        Ok(image) => {
+                            app.set_frame(image);
+                            window.request_redraw();
+                        }
+                        Err(e) => {
+                            eprintln!("video_playback: {e}");
+                            break;
+                        }
+                    }
+                    next_video_at += frame_interval;
+                    while next_video_at < now {
+                        next_video_at += frame_interval;
+                    }
+                }
+                let t2 = Instant::now();
+                window.draw_if_needed(|renderer| {
+                    let region = renderer.render(&mut cached, ui.render_w());
+                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+                });
+                let t3 = Instant::now();
+                let rows = if let Some(rect) = this_rect {
+                    copy_cached_rect(disp, ui, &cached, rect);
+                    rect.rows()
+                } else {
+                    0
+                };
+                let t4 = Instant::now();
+                let sample = FrameSample {
+                    anim_us: (t2 - t1).as_micros() as u64,
+                    render_us: (t3 - t2).as_micros() as u64,
+                    vsync_us: (t1 - t0).as_micros() as u64,
+                    copy_us: (t4 - t3).as_micros() as u64,
+                    rows,
+                    wall_us: frame_start.elapsed().as_micros() as u64,
+                };
+                record_video_sample(
+                    sample,
+                    &mut profiler,
+                    &mut fps_window_start,
+                    &mut fps_frames,
+                    &mut decode_us,
+                    &mut render_us,
+                    &mut vsync_us,
+                    &mut copy_us,
+                    &mut copy_rows_acc,
+                );
+            }
+        }
+        frames += 1;
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
+        frames as f64 / elapsed
+    );
+    if profile_on {
+        profiler.finish();
+    }
+    cpu_profile::finish(cpu);
+}
+
+#[cfg(feature = "video")]
+#[allow(clippy::too_many_arguments)]
+fn record_video_sample(
+    sample: FrameSample,
+    profiler: &mut FrameProfiler,
+    fps_window_start: &mut Instant,
+    fps_frames: &mut u64,
+    decode_us: &mut u128,
+    render_us: &mut u128,
+    vsync_us: &mut u128,
+    copy_us: &mut u128,
+    copy_rows_acc: &mut u128,
+) {
+    if profiler.enabled() {
+        profiler.record(sample);
+        return;
+    }
+
+    *fps_frames += 1;
+    *decode_us += sample.anim_us as u128;
+    *render_us += sample.render_us as u128;
+    *vsync_us += sample.vsync_us as u128;
+    *copy_us += sample.copy_us as u128;
+    *copy_rows_acc += sample.rows as u128;
+    if fps_window_start.elapsed().as_millis() >= 1000 {
+        let nn = (*fps_frames).max(1) as u128;
+        println!(
+            "  fps ~ {}  | decode+anim {}us  render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
+            *fps_frames,
+            *decode_us / nn,
+            *render_us / nn,
+            *vsync_us / nn,
+            *copy_us / nn,
+            *copy_rows_acc / nn
+        );
+        *fps_frames = 0;
+        *decode_us = 0;
+        *render_us = 0;
+        *vsync_us = 0;
+        *copy_us = 0;
+        *copy_rows_acc = 0;
+        *fps_window_start = Instant::now();
+    }
+}
+
 const CONSOLE_LIST_X: usize = 40;
 const CONSOLE_LIST_Y: usize = 116;
 const CONSOLE_LIST_W: usize = 880;
@@ -1553,7 +1794,7 @@ fn run_launcher_loop(
     let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_arcade_games(slint_arcade_games(&catalog.games));
-    bridge.set_catalog_scan_visible(true);
+    bridge.set_catalog_scan_visible(!catalog_ready);
     bridge.set_catalog_scan_title(if catalog_ready {
         "Refreshing library".into()
     } else {
@@ -1586,6 +1827,12 @@ fn run_launcher_loop(
                 match message {
                     CatalogWorkerMessage::Progress { title, detail } => {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        let visible = !catalog_ready
+                            || title == "Indexing library"
+                            || title == "Library changed"
+                            || title == "Library scan failed"
+                            || title == "Library load failed";
+                        bridge.set_catalog_scan_visible(visible);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_detail(detail.into());
                         bridge_dirty = true;

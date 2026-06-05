@@ -17,7 +17,9 @@ TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
 
 # Slint scenes (see rust/ui/bench/README.md)
-BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll)
+BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll dirty_band)
+VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_crf28.mp4}"
+VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magic/mslug3.mp4}"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -30,6 +32,7 @@ DO_CLEAN=0
 SKIP_BUILD=0
 SKIP_DEVICE=0
 REPLACE_LABEL=0
+INCLUDE_VIDEO=0
 SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 
@@ -39,7 +42,7 @@ usage() {
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
   echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
-  echo "         --device (build profile release-device / A3)  -h"
+  echo "         --device (build profile release-device / A3)  --video  -h"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -51,12 +54,17 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-device) SKIP_DEVICE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
-    --device) BUILD_PROFILE=release-device; BUILD_FLAG=(--device); shift ;;
+    --device) BUILD_PROFILE=release-device; BUILD_FLAG+=(--device); shift ;;
+    --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
 done
+
+if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
+  BENCH_SCENES+=(video_playback)
+fi
 
 # Label defaults: P2* → half-res render (960×540); A*/PS/LS → full-res (1920×1080).
 if [[ -z "$RENDER_SCALE" ]]; then
@@ -334,6 +342,14 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   mister run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"
+  if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
+    if [[ ! -f "$VIDEO_SRC" ]]; then
+      echo "Video benchmark source missing: $VIDEO_SRC" >&2
+      exit 1
+    fi
+    echo "==> Deploy video $VIDEO_SRC -> $VIDEO_REMOTE"
+    mister put "$VIDEO_SRC" "$VIDEO_REMOTE"
+  fi
   mister run "file $REMOTE && ldd $REMOTE 2>&1 | head -3" || HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ldd-fail"
 
   for scene in "${BENCH_SCENES[@]}"; do
