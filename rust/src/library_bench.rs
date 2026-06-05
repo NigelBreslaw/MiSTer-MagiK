@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 
 const DEFAULT_ROOTS: &[&str] = &[
@@ -136,6 +137,7 @@ enum DiscoverySourceKind {
     PayloadFile,
     ArchiveEntry,
     Container,
+    CatalogEntry,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -145,6 +147,7 @@ enum DiscoveryConfidence {
     PayloadPath,
     Extension,
     ArchiveToc,
+    CatalogMetadata,
 }
 
 #[derive(Default)]
@@ -165,6 +168,29 @@ struct FormatStats {
     errors: u64,
 }
 
+#[derive(Default)]
+struct PhaseStats {
+    mra: TimedCount,
+    mgl: TimedCount,
+    payload: TimedCount,
+    archive_toc: TimedCount,
+    optional_catalog: TimedCount,
+    optional_catalog_entries: u64,
+}
+
+#[derive(Default)]
+struct TimedCount {
+    count: u64,
+    us: u64,
+}
+
+impl TimedCount {
+    fn add(&mut self, elapsed_us: u64) {
+        self.count += 1;
+        self.us += elapsed_us;
+    }
+}
+
 #[derive(Clone)]
 struct FoundFile {
     path: PathBuf,
@@ -180,6 +206,10 @@ pub fn run() {
     println!("library-bench roots={}", cfg.roots.join("|"));
     println!("library-bench index_path={}", cfg.index_path.display());
     println!("library-bench archive_toc=header-only no-decompress");
+    println!(
+        "library-bench optional_catalogs={}",
+        if cfg.optional_catalogs { "on" } else { "off" }
+    );
 
     let open_t = Instant::now();
     let previous = load_index(&cfg.index_path);
@@ -205,6 +235,7 @@ pub fn run() {
     let mut entries = Vec::new();
     let mut discoveries = Vec::new();
     let mut format_stats = BTreeMap::<ArchiveFormat, FormatStats>::new();
+    let mut phase_stats = PhaseStats::default();
     let mut largest = Vec::<(u64, String)>::new();
     let mut slowest = Vec::<(u64, String)>::new();
 
@@ -215,7 +246,11 @@ pub fn run() {
                 r.archives += 1;
             }
             largest.push((f.size, f.path.display().to_string()));
+            let archive_phase_t = Instant::now();
             let scan = scan_archive_toc(&f, format);
+            phase_stats
+                .archive_toc
+                .add(archive_phase_t.elapsed().as_micros() as u64);
             slowest.push((scan.container.scan_us, f.path.display().to_string()));
             let stats = format_stats.entry(format).or_default();
             stats.containers += 1;
@@ -235,6 +270,15 @@ pub fn run() {
             } else if is_launchable_container(&f, format) {
                 discoveries.push(discovery_from_file(&f, DiscoverySourceKind::Container));
             }
+            if cfg.optional_catalogs {
+                let catalog_t = Instant::now();
+                let catalog_discoveries = catalog_discoveries_from_container(&f, format);
+                phase_stats
+                    .optional_catalog
+                    .add(catalog_t.elapsed().as_micros() as u64);
+                phase_stats.optional_catalog_entries += catalog_discoveries.len() as u64;
+                discoveries.extend(catalog_discoveries);
+            }
             if !archive_entries_are_rom_parts(&f, format) {
                 discoveries.extend(
                     scan.entries
@@ -250,7 +294,15 @@ pub fn run() {
                 r.normal_launchables += 1;
             }
             normal_files.push(f.path.display().to_string());
-            discoveries.push(discovery_from_file(&f, source_kind_for_ext(&f.ext)));
+            let file_t = Instant::now();
+            let discovery = discovery_from_file(&f, source_kind_for_ext(&f.ext));
+            let file_us = file_t.elapsed().as_micros() as u64;
+            match f.ext.as_str() {
+                "mra" => phase_stats.mra.add(file_us),
+                "mgl" => phase_stats.mgl.add(file_us),
+                _ => phase_stats.payload.add(file_us),
+            }
+            discoveries.push(discovery);
         }
     }
     let classify_us = classify_t.elapsed().as_micros() as u64;
@@ -263,7 +315,9 @@ pub fn run() {
 
     print_root_stats(&root_stats);
     print_format_stats(&format_stats);
+    print_phase_stats(&phase_stats);
     print_taxonomy_stats(&discoveries);
+    print_unknown_stats(&discoveries);
     print_top("largest_archive", &mut largest, 10);
     print_top("slowest_archive_toc", &mut slowest, 10);
 
@@ -301,6 +355,7 @@ pub fn run() {
 struct BenchConfig {
     roots: Vec<String>,
     index_path: PathBuf,
+    optional_catalogs: bool,
 }
 
 impl BenchConfig {
@@ -318,8 +373,24 @@ impl BenchConfig {
         let index_path = std::env::var("MISTER_LIBRARY_BENCH_INDEX")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_INDEX_PATH));
-        Self { roots, index_path }
+        let optional_catalogs = env_bool("MISTER_LIBRARY_OPTIONAL_CATALOGS");
+        Self {
+            roots,
+            index_path,
+            optional_catalogs,
+        }
     }
+}
+
+fn env_bool(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 struct ArchiveScan {
@@ -426,6 +497,71 @@ fn archive_entries_are_rom_parts(file: &FoundFile, format: ArchiveFormat) -> boo
         || path.contains("/games/neogeo/"))
 }
 
+fn catalog_discoveries_from_container(
+    file: &FoundFile,
+    format: ArchiveFormat,
+) -> Vec<GameDiscovery> {
+    if format != ArchiveFormat::SevenZip {
+        return Vec::new();
+    }
+    let path = file.path.to_string_lossy();
+    if !path.contains("/games/Amiga/AmigaVision") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    out.extend(amigavision_listing_discoveries(
+        file,
+        "games/Amiga/listings/games.txt",
+        "AmigaVision",
+    ));
+    out.extend(amigavision_listing_discoveries(
+        file,
+        "games/Amiga/listings/demos.txt",
+        "AmigaVision demos",
+    ));
+    out
+}
+
+fn amigavision_listing_discoveries(
+    file: &FoundFile,
+    entry_path: &str,
+    genre: &str,
+) -> Vec<GameDiscovery> {
+    let tool = std::env::var("MISTER_7ZA").unwrap_or_else(|_| "/media/fat/linux/7za".to_string());
+    let Ok(output) = Command::new(tool)
+        .args(["e", "-so"])
+        .arg(&file.path)
+        .arg(entry_path)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|title| GameDiscovery {
+            source_path: format!("{}::{entry_path}::{title}", file.path.display()),
+            launch_ref: file.path.display().to_string(),
+            source_kind: DiscoverySourceKind::CatalogEntry,
+            title: title.to_string(),
+            category: "Computer".to_string(),
+            platform_id: "amiga".to_string(),
+            core_id: "AmigaVision".to_string(),
+            hardware_id: "commodore-amiga".to_string(),
+            manufacturer: Some("Commodore".to_string()),
+            genre: Some(genre.to_string()),
+            year: None,
+            setname: None,
+            parent: None,
+            confidence: DiscoveryConfidence::CatalogMetadata,
+        })
+        .collect()
+}
+
 fn discovery_from_archive_entry(entry: &LibraryContainerEntry) -> GameDiscovery {
     let mut taxonomy = taxonomy_from_path(&entry.entry_path, "");
     taxonomy.confidence = DiscoveryConfidence::ArchiveToc;
@@ -471,6 +607,30 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
             };
         }
     }
+    if file.ext == "mgl" {
+        if let Some(mgl) = read_mgl_metadata(&file.path) {
+            let taxonomy = taxonomy_from_mgl(&mgl, &file.path.display().to_string());
+            return GameDiscovery {
+                source_path: file.path.display().to_string(),
+                launch_ref: mgl
+                    .file_path
+                    .clone()
+                    .unwrap_or_else(|| file.path.display().to_string()),
+                source_kind,
+                title: title_from_path(&file.path.display().to_string()),
+                category: taxonomy.category,
+                platform_id: taxonomy.platform_id,
+                core_id: taxonomy.core_id,
+                hardware_id: taxonomy.hardware_id,
+                manufacturer: None,
+                genre: None,
+                year: None,
+                setname: None,
+                parent: None,
+                confidence: taxonomy.confidence,
+            };
+        }
+    }
 
     let taxonomy = taxonomy_from_path(&file.path.display().to_string(), &file.ext);
     GameDiscovery {
@@ -504,6 +664,12 @@ struct MraMetadata {
     parent: Option<String>,
 }
 
+#[derive(Default)]
+struct MglMetadata {
+    rbf: Option<String>,
+    file_path: Option<String>,
+}
+
 struct Taxonomy {
     category: String,
     platform_id: String,
@@ -531,6 +697,16 @@ fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
     })
 }
 
+fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
+    let mut file = File::open(path).ok()?;
+    let mut data = String::new();
+    file.read_to_string(&mut data).ok()?;
+    Some(MglMetadata {
+        rbf: tag_text(&data, "rbf"),
+        file_path: attr_text(&data, "path"),
+    })
+}
+
 fn tag_text(text: &str, tag: &str) -> Option<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
@@ -542,6 +718,13 @@ fn tag_text(text: &str, tag: &str) -> Option<String> {
     } else {
         Some(html_unescape_minimal(value))
     }
+}
+
+fn attr_text(text: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let start = text.find(&needle)? + needle.len();
+    let end = text[start..].find('"')? + start;
+    Some(html_unescape_minimal(text[start..end].trim()))
 }
 
 fn html_unescape_minimal(value: &str) -> String {
@@ -574,6 +757,20 @@ fn taxonomy_from_mra(mra: &MraMetadata, path: &str) -> Taxonomy {
         } else {
             DiscoveryConfidence::MraCore
         };
+    }
+    taxonomy
+}
+
+fn taxonomy_from_mgl(mgl: &MglMetadata, path: &str) -> Taxonomy {
+    let payload = mgl.file_path.as_deref().unwrap_or(path);
+    let mut taxonomy = taxonomy_from_path(payload, path_ext(payload).as_deref().unwrap_or(""));
+    if taxonomy.platform_id == "unknown" {
+        taxonomy = taxonomy_from_path(path, "mgl");
+    }
+    if let Some(rbf) = mgl.rbf.as_deref() {
+        if taxonomy.core_id == taxonomy.platform_id || taxonomy.core_id == "unknown" {
+            taxonomy.core_id = normalize_id(rbf);
+        }
     }
     taxonomy
 }
@@ -625,6 +822,9 @@ fn taxonomy_from_path(path: &str, ext: &str) -> Taxonomy {
     if lower.contains("/_arcade/") || lower.contains("/games/mame/") || ext == "mra" {
         return taxonomy_from_arcade_hint(path);
     }
+    if lower.contains("/games/hbmame/") {
+        return simple_taxonomy("Arcade", "hbmame", "hbmame", "arcade-homebrew");
+    }
     if lower.contains("/games/ao486/") {
         return simple_taxonomy("Computer", "ao486", "ao486", "pc-compatible");
     }
@@ -658,6 +858,9 @@ fn taxonomy_from_path(path: &str, ext: &str) -> Taxonomy {
     if lower.contains("/games/gamegear/") {
         return simple_taxonomy("Handheld", "gamegear", "GameGear", "sega-game-gear");
     }
+    if let Some(taxonomy) = taxonomy_from_games_folder(&lower) {
+        return taxonomy;
+    }
 
     Taxonomy {
         category: category_from_ext(ext).to_string(),
@@ -666,6 +869,71 @@ fn taxonomy_from_path(path: &str, ext: &str) -> Taxonomy {
         hardware_id: platform_from_ext(ext).to_string(),
         confidence: DiscoveryConfidence::Extension,
     }
+}
+
+fn taxonomy_from_games_folder(lower_path: &str) -> Option<Taxonomy> {
+    let folder = games_folder(lower_path)?;
+    let row = match folder {
+        "3do" => ("Console", "3do", "3DO", "panasonic-3do"),
+        "apple-i" => ("Computer", "apple-i", "Apple I", "apple-i"),
+        "apple-ii" => ("Computer", "apple-ii", "Apple II", "apple-ii"),
+        "apple-iigs" => ("Computer", "apple-iigs", "Apple IIGS", "apple-iigs"),
+        "archie" => ("Computer", "archie", "Archimedes", "acorn-archimedes"),
+        "atari2600" => ("Console", "atari2600", "Atari2600", "atari-2600"),
+        "atari5200" => ("Console", "atari5200", "Atari5200", "atari-5200"),
+        "atari7800" => ("Console", "atari7800", "Atari7800", "atari-7800"),
+        "atari800" => ("Computer", "atari800", "Atari800", "atari-8-bit"),
+        "atarilynx" => ("Handheld", "atarilynx", "AtariLynx", "atari-lynx"),
+        "atarist" => ("Computer", "atarist", "AtariST", "atari-st"),
+        "bbcmicro" => ("Computer", "bbcmicro", "BBCMicro", "bbc-micro"),
+        "c128" => ("Computer", "c128", "C128", "commodore-c128"),
+        "c16" => ("Computer", "c16", "C16", "commodore-c16"),
+        "c64" => ("Computer", "c64", "C64", "commodore-c64"),
+        "cd-i" => ("Console", "cdi", "CD-i", "philips-cdi"),
+        "coleco" => ("Console", "coleco", "ColecoVision", "colecovision"),
+        "gameboy" => ("Handheld", "gb", "Gameboy", "nintendo-game-boy"),
+        "gameboy2p" => ("Handheld", "gb", "Gameboy", "nintendo-game-boy"),
+        "jaguar" => ("Console", "jaguar", "Jaguar", "atari-jaguar"),
+        "macplus" => ("Computer", "macplus", "MacPlus", "apple-macintosh"),
+        "megacd" => ("Console", "megacd", "MegaCD", "sega-mega-cd"),
+        "megaduck" => ("Handheld", "megaduck", "MegaDuck", "megaduck"),
+        "msx" => ("Computer", "msx", "MSX", "msx"),
+        "msx1" => ("Computer", "msx", "MSX", "msx"),
+        "neogeo-cd" => ("Console", "neogeo-cd", "NeoGeoCD", "snk-neo-geo-cd"),
+        "neogeopocket" => ("Handheld", "ngp", "NeoGeoPocket", "snk-neo-geo-pocket"),
+        "odyssey2" => ("Console", "odyssey2", "Odyssey2", "magnavox-odyssey2"),
+        "openbor" => ("Engine", "openbor", "OpenBOR", "openbor"),
+        "pc8801" => ("Computer", "pc8801", "PC-8801", "nec-pc8801"),
+        "pico-8" => ("Engine", "pico-8", "PICO-8", "pico-8"),
+        "psx" => ("Console", "psx", "PlayStation", "sony-playstation"),
+        "s32x" => ("Console", "s32x", "S32X", "sega-32x"),
+        "sgb" => ("Console", "sgb", "SuperGameBoy", "nintendo-super-game-boy"),
+        "sms" => ("Console", "sms", "MasterSystem", "sega-master-system"),
+        "spectrum" => ("Computer", "spectrum", "Spectrum", "zx-spectrum"),
+        "tgfx16" => ("Console", "tgfx16", "TurboGrafx16", "nec-pc-engine"),
+        "tgfx16-cd" => ("Console", "tgfx16-cd", "TurboGrafx16CD", "nec-pc-engine-cd"),
+        "trs-80" => ("Computer", "trs-80", "TRS-80", "trs-80"),
+        "tsconf" => ("Computer", "tsconf", "TSConf", "tsconf"),
+        "vic20" => ("Computer", "vic20", "VIC20", "commodore-vic20"),
+        "vectrex" => ("Console", "vectrex", "Vectrex", "vectrex"),
+        "wonderswan" => ("Handheld", "wonderswan", "WonderSwan", "bandai-wonderswan"),
+        "wonderswancolor" => (
+            "Handheld",
+            "wonderswancolor",
+            "WonderSwanColor",
+            "bandai-wonderswan-color",
+        ),
+        "x68000" => ("Computer", "x68000", "X68000", "sharp-x68000"),
+        "zx81" => ("Computer", "zx81", "ZX81", "zx81"),
+        "zxnext" => ("Computer", "zxnext", "ZXNext", "zx-spectrum-next"),
+        _ => return None,
+    };
+    Some(simple_taxonomy(row.0, row.1, row.2, row.3))
+}
+
+fn games_folder(lower_path: &str) -> Option<&str> {
+    let rest = lower_path.split("/games/").nth(1)?;
+    rest.split('/').next()
 }
 
 fn simple_taxonomy(category: &str, platform: &str, core: &str, hardware: &str) -> Taxonomy {
@@ -938,6 +1206,37 @@ fn print_format_stats(stats: &BTreeMap<ArchiveFormat, FormatStats>) {
     }
 }
 
+fn print_phase_stats(stats: &PhaseStats) {
+    print_phase("mra_parse", &stats.mra, "");
+    print_phase("mgl_parse", &stats.mgl, "");
+    print_phase("payload_classify", &stats.payload, "");
+    print_phase("archive_toc", &stats.archive_toc, "");
+    print_phase(
+        "optional_catalog_extract",
+        &stats.optional_catalog,
+        &format!("entries={}", stats.optional_catalog_entries),
+    );
+}
+
+fn print_phase(name: &str, count: &TimedCount, extra: &str) {
+    let avg_us = if count.count == 0 {
+        0
+    } else {
+        count.us / count.count
+    };
+    if extra.is_empty() {
+        println!(
+            "library_bench_phase_tsv\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}",
+            count.count, count.us
+        );
+    } else {
+        println!(
+            "library_bench_phase_tsv\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}\t{extra}",
+            count.count, count.us
+        );
+    }
+}
+
 fn print_taxonomy_stats(discoveries: &[GameDiscovery]) {
     let mut seen = HashSet::<String>::new();
     let mut rows = BTreeMap::<(String, String, String, String), u64>::new();
@@ -978,11 +1277,58 @@ fn discovery_unique_key(d: &GameDiscovery) -> String {
                 format!("mra:title:{}:{}", d.hardware_id, normalize_id(&d.title))
             }
         }
-        DiscoverySourceKind::Mgl => format!("mgl:{}", d.launch_ref),
+        DiscoverySourceKind::Mgl => format!("payload:{}", d.launch_ref),
         DiscoverySourceKind::PayloadFile | DiscoverySourceKind::Container => {
             format!("payload:{}", d.launch_ref)
         }
         DiscoverySourceKind::ArchiveEntry => format!("archive:{}", d.launch_ref),
+        DiscoverySourceKind::CatalogEntry => format!("catalog:{}:{}", d.launch_ref, d.title),
+    }
+}
+
+fn print_unknown_stats(discoveries: &[GameDiscovery]) {
+    let mut seen = HashSet::<String>::new();
+    let mut buckets = BTreeMap::<String, (u64, String)>::new();
+    for d in discoveries {
+        if !seen.insert(discovery_unique_key(d)) {
+            continue;
+        }
+        if d.platform_id != "unknown" && d.hardware_id != "unknown" {
+            continue;
+        }
+        let bucket = unknown_bucket(d);
+        let entry = buckets
+            .entry(bucket)
+            .or_insert_with(|| (0, d.source_path.clone()));
+        entry.0 += 1;
+    }
+    let mut rows: Vec<_> = buckets.into_iter().collect();
+    rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0)));
+    for (bucket, (count, sample)) in rows.into_iter().take(30) {
+        println!("library_bench_unknown_tsv\t{bucket}\tcount={count}\tsample={sample}");
+    }
+}
+
+fn unknown_bucket(d: &GameDiscovery) -> String {
+    let ext = path_ext(&d.source_path).unwrap_or_else(|| "none".to_string());
+    let lower_path = d.source_path.to_ascii_lowercase();
+    let folder = games_folder(&lower_path)
+        .or_else(|| launcher_folder(&lower_path))
+        .unwrap_or("none");
+    format!(
+        "source={}\tfolder={folder}\text={ext}",
+        source_kind_str(d.source_kind)
+    )
+}
+
+fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
+    match kind {
+        DiscoverySourceKind::Mra => "mra",
+        DiscoverySourceKind::Mgl => "mgl",
+        DiscoverySourceKind::PayloadFile => "payload",
+        DiscoverySourceKind::ArchiveEntry => "archive-entry",
+        DiscoverySourceKind::Container => "container",
+        DiscoverySourceKind::CatalogEntry => "catalog-entry",
     }
 }
 
@@ -1043,6 +1389,18 @@ fn title_from_path(path: &str) -> String {
         .unwrap_or(path)
         .trim()
         .to_string()
+}
+
+fn path_ext(path: &str) -> Option<String> {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+}
+
+fn launcher_folder(lower_path: &str) -> Option<&str> {
+    let rest = lower_path.split("/_games/").nth(1)?;
+    rest.split('/').next()
 }
 
 fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
