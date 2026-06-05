@@ -8,6 +8,7 @@
 //!   input     gamepad log / sniff / calibrate
 //!   catalog-bench  benchmark arcade catalog pipeline phases
 //!   library-bench  benchmark whole MiSTer library indexing + archive TOCs
+//!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
 //!   library-db-bench  benchmark cached SQLite library database open/query only
 //!   preview-bench  benchmark arcade preview image read/decode
 //!
@@ -72,12 +73,13 @@ fn main() {
         "input" => run_input(),
         "catalog-bench" => run_catalog_bench(),
         "library-bench" => library_bench::run(),
+        "library-scan-bench" => library_bench::run_scan_bench(),
         "library-db-bench" => library_bench::run_db_bench(),
         "preview-bench" => preview_bench::run(),
         other => {
             eprintln!(
                 "unknown command '{other}' \
-                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | library-db-bench | preview-bench)"
+                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | library-scan-bench | library-db-bench | preview-bench)"
             );
             std::process::exit(2);
         }
@@ -109,6 +111,7 @@ fn should_handoff_to_mister(arg: &str) -> bool {
             | "input"
             | "catalog-bench"
             | "library-bench"
+            | "library-scan-bench"
             | "library-db-bench"
             | "preview-bench"
     ) {

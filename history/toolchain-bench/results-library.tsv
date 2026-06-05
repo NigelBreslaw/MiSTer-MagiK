@@ -1,0 +1,17 @@
+label	iteration	scenario	us	notes
+LIB-SMOKE-20260605	1	cold_scan	34529258	discover_us=22016570
+LIB-SMOKE-20260605	1	import	15403704	bytes=20549632
+LIB-SMOKE-20260605	1	cached_arcade_load	112720	rows=2553
+LIB-SMOKE-20260605	1	no_change_manifest	606631	changed=false
+LIB-OPT-20260605	1	cold_scan	34538668	discover_us=22018321
+LIB-OPT-20260605	1	import	15103277	bytes=20549632
+LIB-OPT-20260605	1	cached_arcade_load	112730	rows=2553
+LIB-OPT-20260605	1	no_change_manifest	610456	changed=false
+LIB-OPT-20260605	2	cold_scan	34384871	discover_us=21604882
+LIB-OPT-20260605	2	import	15308558	bytes=20549632
+LIB-OPT-20260605	2	cached_arcade_load	114208	rows=2553
+LIB-OPT-20260605	2	no_change_manifest	622416	changed=false
+LIB-OPT-20260605	3	cold_scan	34353156	discover_us=21880987
+LIB-OPT-20260605	3	import	17266135	bytes=20549632
+LIB-OPT-20260605	3	cached_arcade_load	115418	rows=2553
+LIB-OPT-20260605	3	no_change_manifest	609241	changed=false
