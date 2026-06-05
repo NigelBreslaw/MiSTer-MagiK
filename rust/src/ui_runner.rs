@@ -5,7 +5,10 @@ use crate::fpga::{Fpga, MODE_1080P60};
 use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, Rgb8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{
+    ComponentHandle, Image, ModelRc, PhysicalSize, Rgb8Pixel, SharedPixelBuffer, SharedString,
+    VecModel,
+};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -46,8 +49,8 @@ mod slint_ui {
     }
 }
 
-use crate::controller_db::ControllerDb;
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
+use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
@@ -55,8 +58,8 @@ use crate::launcher::{self, LauncherNav, Screen};
 use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
-use slint_ui::launcher::PreviewStatus;
 use slint::platform::software_renderer::PhysicalRegion;
+use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -151,9 +154,7 @@ impl FrameOrder {
             .map(|s| s.to_ascii_lowercase().replace('_', "-"))
             .as_deref()
         {
-            None | Some("") | Some("render-then-vsync") | Some("render") => {
-                Self::RenderThenVsync
-            }
+            None | Some("") | Some("render-then-vsync") | Some("render") => Self::RenderThenVsync,
             Some("vsync-then-render") | Some("vsync-first") | Some("vsync") => {
                 Self::VsyncThenRender
             }
@@ -193,10 +194,7 @@ pub fn parse_ui_args() -> (String, u64) {
     match (a2.as_deref(), a3.as_deref()) {
         (Some(s), Some(t)) if t.parse::<u64>().is_ok() => (normalize_scene(s), t.parse().unwrap()),
         (Some(s), None) if s.parse::<u64>().is_ok() => ("launcher".into(), s.parse().unwrap()),
-        (Some(s), Some(t)) => (
-            normalize_scene(s),
-            t.parse::<u64>().unwrap_or(0),
-        ),
+        (Some(s), Some(t)) => (normalize_scene(s), t.parse::<u64>().unwrap_or(0)),
         (Some(s), None) => (normalize_scene(s), 0),
         _ => ("launcher".into(), 0),
     }
@@ -215,7 +213,11 @@ pub fn print_scenes() {
     let ui = UiDisplay::from_env();
     println!(
         "Slint UI scenes (render {}x{}, fb {}x{}, ui-scale {}):",
-        ui.render_w(), ui.render_h(), FB_W, FB_H, SLINT_UI_SCALE
+        ui.render_w(),
+        ui.render_h(),
+        FB_W,
+        FB_H,
+        SLINT_UI_SCALE
     );
     for s in UI_SCENES {
         println!("  {s}");
@@ -314,57 +316,64 @@ pub fn run_ui(f: &mut Fpga) {
     match scene.as_str() {
         "demo" => {
             let app = slint_ui::app::AppWindow::new().expect("AppWindow::new");
-            app.global::<slint_ui::app::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::app::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "full_motion" => {
             let app = slint_ui::full_motion::FullMotion::new().expect("FullMotion::new");
-            app.global::<slint_ui::full_motion::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::full_motion::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "static_ui" => {
             let app = slint_ui::static_ui::StaticUi::new().expect("StaticUi::new");
-            app.global::<slint_ui::static_ui::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::static_ui::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "local_motion" => {
             let app = slint_ui::local_motion::LocalMotion::new().expect("LocalMotion::new");
-            app.global::<slint_ui::local_motion::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::local_motion::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "text_heavy" => {
             let app = slint_ui::text_heavy::TextHeavy::new().expect("TextHeavy::new");
-            app.global::<slint_ui::text_heavy::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::text_heavy::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "solid_fill" => {
             let app = slint_ui::solid_fill::SolidFill::new().expect("SolidFill::new");
-            app.global::<slint_ui::solid_fill::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::solid_fill::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "list_scroll" => {
             let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
-            app.global::<slint_ui::list_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::list_scroll::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "console_scroll" => {
-            let app =
-                slint_ui::console_scroll::ConsoleScroll::new().expect("ConsoleScroll::new");
-            app.global::<slint_ui::console_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
+            let app = slint_ui::console_scroll::ConsoleScroll::new().expect("ConsoleScroll::new");
+            app.global::<slint_ui::console_scroll::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
             run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
@@ -372,7 +381,8 @@ pub fn run_ui(f: &mut Fpga) {
         "dirty_band" => {
             let pct = dirty_band_pct_from_env();
             let app = slint_ui::dirty_band::DirtyBand::new().expect("DirtyBand::new");
-            app.global::<slint_ui::dirty_band::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::dirty_band::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             app.set_band_pct(pct);
             println!("dirty_band band-pct={pct}% (MISTER_DIRTY_BAND_PCT)");
             configure_window(&ui, &window);
@@ -382,7 +392,8 @@ pub fn run_ui(f: &mut Fpga) {
         "controller_test" => {
             let pad = open_pads();
             let app = slint_ui::controller::ControllerTest::new().expect("ControllerTest::new");
-            app.global::<slint_ui::controller::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::controller::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             sync_bridge(&app, &pad);
             app.show().expect("show");
@@ -392,7 +403,8 @@ pub fn run_ui(f: &mut Fpga) {
         "launcher" => {
             let pad = open_pads();
             let app = slint_ui::launcher::Launcher::new().expect("Launcher::new");
-            app.global::<slint_ui::launcher::MisterUi>().set_scale(SLINT_UI_SCALE);
+            app.global::<slint_ui::launcher::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
@@ -611,11 +623,7 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
         }
         bridge.set_arcade_preview_title(result.title.into());
         if let Some(image) = result.image {
-            let image = png_to_slint_image(
-                image.width,
-                image.height,
-                image.rgb,
-            );
+            let image = png_to_slint_image(image.width, image.height, image.rgb);
             let image_path = result.image_path;
             preview.cache.insert(image_path.clone(), image.clone());
             preview.has_visible_preview = true;
@@ -655,9 +663,7 @@ fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     }
 }
 
-fn start_arcade_catalog_worker(
-    root: String,
-) -> mpsc::Receiver<CatalogWorkerMessage> {
+fn start_arcade_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("arcade-catalog".to_string())
@@ -733,11 +739,7 @@ fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
     }
 }
 
-fn sync_setup_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
-    pad: &PadPool,
-    setup: &SetupNav,
-) {
+fn sync_setup_bridge(bridge: &slint_ui::launcher::MisterBridge, pad: &PadPool, setup: &SetupNav) {
     let info = setup_pad_info(pad, setup);
     let db = pad.db();
     let active = setup.phase != SetupPhase::None;
@@ -751,10 +753,8 @@ fn sync_setup_bridge(
 
         if setup.phase == SetupPhase::Configure {
             let fields = SetupNav::configure_fields(info, js_path, db);
-            let labels: Vec<SharedString> =
-                fields.iter().map(|(k, _)| k.clone().into()).collect();
-            let values: Vec<SharedString> =
-                fields.iter().map(|(_, v)| v.clone().into()).collect();
+            let labels: Vec<SharedString> = fields.iter().map(|(k, _)| k.clone().into()).collect();
+            let values: Vec<SharedString> = fields.iter().map(|(_, v)| v.clone().into()).collect();
             bridge.set_setup_config_labels(ModelRc::new(VecModel::from(labels)));
             bridge.set_setup_config_values(ModelRc::new(VecModel::from(values)));
             bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
@@ -767,20 +767,16 @@ fn sync_setup_bridge(
             bridge.set_setup_name(setup.draft_label.clone().into());
             bridge.set_setup_kind_label(setup.draft_kind_label().into());
             bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
-                Vec::<SharedString>::new(),
-            )));
-            bridge.set_setup_config_values(ModelRc::new(VecModel::from(
-                Vec::<SharedString>::new(),
-            )));
+            bridge
+                .set_setup_config_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            bridge
+                .set_setup_config_values(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
         } else if setup.phase == SetupPhase::PickExisting {
             bridge.set_setup_subtitle(setup.subtitle(info, db).into());
-            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
-                Vec::<SharedString>::new(),
-            )));
-            bridge.set_setup_config_values(ModelRc::new(VecModel::from(
-                Vec::<SharedString>::new(),
-            )));
+            bridge
+                .set_setup_config_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            bridge
+                .set_setup_config_values(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
             let rows: Vec<SharedString> = db
                 .list_entries()
                 .iter()
@@ -797,22 +793,17 @@ fn sync_setup_bridge(
         } else {
             bridge.set_setup_subtitle(setup.subtitle(info, db).into());
             bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(
-                Vec::<SharedString>::new(),
-            )));
-            bridge.set_setup_config_values(ModelRc::new(VecModel::from(
-                Vec::<SharedString>::new(),
-            )));
+            bridge
+                .set_setup_config_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            bridge
+                .set_setup_config_values(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
             bridge.set_setup_name(String::new().into());
             bridge.set_setup_kind_label(String::new().into());
         }
     }
 }
 
-fn sync_bridge_pad_controller(
-    bridge: &slint_ui::controller::MisterBridge,
-    pad: &PadPool,
-) {
+fn sync_bridge_pad_controller(bridge: &slint_ui::controller::MisterBridge, pad: &PadPool) {
     let state = pad.state();
     let info = pad.info();
     bridge.set_dpad_up(state.dpad_up);
@@ -897,10 +888,13 @@ fn sync_device_info_controller(
     } else {
         info.serial.clone().into()
     });
-    bridge.set_js_counts(format!(
-        "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
-        info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count
-    ).into());
+    bridge.set_js_counts(
+        format!(
+            "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
+            info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count
+        )
+        .into(),
+    );
 }
 
 fn sync_device_info_launcher(
@@ -924,10 +918,13 @@ fn sync_device_info_launcher(
     } else {
         info.serial.clone().into()
     });
-    bridge.set_js_counts(format!(
-        "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
-        info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count
-    ).into());
+    bridge.set_js_counts(
+        format!(
+            "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
+            info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count
+        )
+        .into(),
+    );
 }
 
 fn run_bench_frame(
@@ -1105,16 +1102,13 @@ fn run_console_scroll_loop(
         0,
         &mut font,
     );
-    disp.copy_rect_scaled_at(
-        fb_x,
-        fb_y,
-        scale,
-        &surface,
-        CONSOLE_LIST_W,
-        CONSOLE_LIST_H,
-    );
+    disp.copy_rect_scaled_at(fb_x, fb_y, scale, &surface, CONSOLE_LIST_W, CONSOLE_LIST_H);
 
-    let label = if secs == 0 { "forever".to_string() } else { format!("{secs}s") };
+    let label = if secs == 0 {
+        "forever".to_string()
+    } else {
+        format!("{secs}s")
+    };
     println!("console_scroll running {label} — fb scroll-copy + exposed-strip redraw");
 
     let start = Instant::now();
@@ -1174,14 +1168,7 @@ fn run_console_scroll_loop(
             &mut font,
         );
         let t2 = Instant::now();
-        disp.copy_rect_scaled_at(
-            fb_x,
-            fb_y,
-            scale,
-            &surface,
-            CONSOLE_LIST_W,
-            CONSOLE_LIST_H,
-        );
+        disp.copy_rect_scaled_at(fb_x, fb_y, scale, &surface, CONSOLE_LIST_W, CONSOLE_LIST_H);
         let t3 = Instant::now();
 
         frames += 1;
@@ -1239,7 +1226,11 @@ fn draw_console_virtual_strip(
             12,
             row_screen_y + 27,
             &format!("ROW {row:03}  MISTER GAME"),
-            if row % 11 == 5 { Pixel(0x00fff2a8) } else { Pixel(0x00dbe7ff) },
+            if row % 11 == 5 {
+                Pixel(0x00fff2a8)
+            } else {
+                Pixel(0x00dbe7ff)
+            },
         );
         font.draw_text_clipped(
             dst,
@@ -1277,7 +1268,11 @@ fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
         Pixel(0x000b1220)
     };
     if y < 1 || y >= CONSOLE_ROW_H - 1 {
-        return if selected { Pixel(0x00f5d76e) } else { Pixel(0x001f2d44) };
+        return if selected {
+            Pixel(0x00f5d76e)
+        } else {
+            Pixel(0x001f2d44)
+        };
     }
     if x < 1 || x >= CONSOLE_LIST_W - 1 {
         return Pixel(0x00263752);
@@ -1326,9 +1321,20 @@ impl ConsoleFont {
                 (self.font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
             };
             let glyph = if glyph_id == 0 || ch == ' ' {
-                ConsoleGlyph { left: 0, top: 0, width: 0, height: 0, advance, data: Vec::new() }
+                ConsoleGlyph {
+                    left: 0,
+                    top: 0,
+                    width: 0,
+                    height: 0,
+                    advance,
+                    data: Vec::new(),
+                }
             } else {
-                let mut scaler = self.scale_context.builder(self.font).size(self.pixel_size).build();
+                let mut scaler = self
+                    .scale_context
+                    .builder(self.font)
+                    .size(self.pixel_size)
+                    .build();
                 let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
                     .format(swash::zeno::Format::Alpha)
                     .render(&mut scaler, glyph_id)?;
@@ -1398,7 +1404,11 @@ fn run_controller_loop(
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
-    let label = if secs == 0 { "forever".to_string() } else { format!("{secs}s") };
+    let label = if secs == 0 {
+        "forever".to_string()
+    } else {
+        format!("{secs}s")
+    };
     println!(
         "controller_test running {label} — {} pad(s) connected",
         pad.len()
@@ -1463,9 +1473,7 @@ fn run_launcher_loop(
     );
     if let Some(idx) = pad.index_needing_setup() {
         let status = pad.db().registry_status(pad.info_at(idx));
-        eprintln!(
-            "controller setup: pad {idx} needs setup ({status:?}) — showing prompt"
-        );
+        eprintln!("controller setup: pad {idx} needs setup ({status:?}) — showing prompt");
         setup.open_for(status, idx);
     }
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
@@ -1512,7 +1520,14 @@ fn run_launcher_loop(
         "Starting scan...".into()
     });
     sync_bridge_launcher(
-        &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut preview,
+        &app,
+        &pad,
+        &nav,
+        &setup,
+        "",
+        "",
+        Some(&catalog),
+        &mut preview,
     );
     window.request_redraw();
     let mut first_frame_logged = false;
@@ -1622,8 +1637,14 @@ fn run_launcher_loop(
                         loading_title =
                             format!("Loading {}…", launcher::game_title(&catalog, &mra));
                         sync_bridge_launcher(
-                            &app, &pad, &nav, &setup, &loading_title, "",
-                            Some(&catalog), &mut preview,
+                            &app,
+                            &pad,
+                            &nav,
+                            &setup,
+                            &loading_title,
+                            "",
+                            Some(&catalog),
+                            &mut preview,
                         );
                         window.request_redraw();
                         update_slint_animations(animation_clock);
@@ -1644,8 +1665,14 @@ fn run_launcher_loop(
                                 loading_title.clear();
                                 launcher::reset_launch();
                                 sync_bridge_launcher(
-                                    &app, &pad, &nav, &setup, "", "",
-                                    Some(&catalog), &mut preview,
+                                    &app,
+                                    &pad,
+                                    &nav,
+                                    &setup,
+                                    "",
+                                    "",
+                                    Some(&catalog),
+                                    &mut preview,
                                 );
                                 recover_launcher_ui(f, &mut launch_spawned_mister);
                             }
@@ -1658,8 +1685,14 @@ fn run_launcher_loop(
 
             if bridge_dirty {
                 sync_bridge_launcher(
-                    &app, &pad, &nav, &setup, &loading_title, "",
-                    Some(&catalog), &mut preview,
+                    &app,
+                    &pad,
+                    &nav,
+                    &setup,
+                    &loading_title,
+                    "",
+                    Some(&catalog),
+                    &mut preview,
                 );
                 window.request_redraw();
             }
@@ -1698,7 +1731,11 @@ fn run_launcher_loop(
         }
         if !first_frame_logged {
             first_frame_logged = true;
-            print_startup_event(start, "first_frame", format!("catalog_ready={catalog_ready}"));
+            print_startup_event(
+                start,
+                "first_frame",
+                format!("catalog_ready={catalog_ready}"),
+            );
         }
         frames += 1;
     }

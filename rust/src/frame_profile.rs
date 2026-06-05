@@ -97,7 +97,9 @@ impl FrameProfiler {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(FRAME_BUDGET_US);
-        let out_path = std::env::var("MISTER_PROFILE_FILE").ok().filter(|s| !s.is_empty());
+        let out_path = std::env::var("MISTER_PROFILE_FILE")
+            .ok()
+            .filter(|s| !s.is_empty());
         if mode != ProfileMode::Off {
             println!(
                 "frame_profile: mode={:?} slow_threshold_us={slow_threshold_us}{}",
@@ -210,7 +212,10 @@ impl FrameProfiler {
             if let Err(e) = self.write_tsv(path) {
                 eprintln!("frame_profile: failed to write {path}: {e}");
             } else {
-                println!("frame_profile: wrote {} frames to {path}", self.frames.len());
+                println!(
+                    "frame_profile: wrote {} frames to {path}",
+                    self.frames.len()
+                );
             }
         }
         self.print_summary();

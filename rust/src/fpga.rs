@@ -73,10 +73,7 @@ pub struct Fpga {
 
 impl Fpga {
     pub fn open() -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/mem")?;
+        let file = OpenOptions::new().read(true).write(true).open("/dev/mem")?;
         let base = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),

@@ -126,11 +126,7 @@ impl PadPool {
     /// Open all joystick nodes under `/dev/input/js*` and load the controller registry.
     pub fn open_all() -> io::Result<Self> {
         let mut db = crate::controller_db::ControllerDb::load();
-        eprintln!(
-            "controller db: {} entries from {}",
-            db.len(),
-            db.path()
-        );
+        eprintln!("controller db: {} entries from {}", db.len(), db.path());
         let paths = discover_js_devices();
         let mut pads = Vec::new();
         for path in paths {
@@ -292,10 +288,7 @@ impl PadReader {
         Self::open_path_with_db(path, &db)
     }
 
-    fn open_path_with_db(
-        path: &str,
-        db: &crate::controller_db::ControllerDb,
-    ) -> io::Result<Self> {
+    fn open_path_with_db(path: &str, db: &crate::controller_db::ControllerDb) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
         let info = read_pad_info(path, &file)?;
@@ -466,8 +459,7 @@ impl PadState {
                     4 => self.apply_dpad_x(v, "D-pad X"),
                     5 => self.apply_dpad_y(v, "D-pad Y"),
                     _ => {
-                        self.last_event_label =
-                            format!("unknown axis {number} val={value}");
+                        self.last_event_label = format!("unknown axis {number} val={value}");
                         self.rebuild_pressed_now();
                         return false;
                     }
@@ -578,8 +570,7 @@ impl PadState {
                         self.apply_hat_y(v);
                     }
                     _ => {
-                        self.last_event_label =
-                            format!("unknown axis {number} val={value}");
+                        self.last_event_label = format!("unknown axis {number} val={value}");
                         self.rebuild_pressed_now();
                         return false;
                     }
@@ -710,9 +701,7 @@ fn discover_js_devices() -> Vec<String> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.len() > 2
-            && name.starts_with("js")
-            && name[2..].chars().all(|c| c.is_ascii_digit())
+        if name.len() > 2 && name.starts_with("js") && name[2..].chars().all(|c| c.is_ascii_digit())
         {
             paths.push(format!("/dev/input/{name}"));
         }
@@ -770,7 +759,9 @@ fn merge_pad_states(states: &[&PadState]) -> PadState {
 fn read_pad_info(js_path: &str, file: &File) -> io::Result<PadInfo> {
     use std::path::PathBuf;
     let js_node = resolve_js_node(js_path)?;
-    let sys = PathBuf::from("/sys/class/input").join(&js_node).join("device");
+    let sys = PathBuf::from("/sys/class/input")
+        .join(&js_node)
+        .join("device");
 
     let read = |name: &str| -> String {
         std::fs::read_to_string(sys.join(name))
@@ -829,10 +820,7 @@ fn format_hex_id(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
     }
-    format!(
-        "0x{:04x}",
-        u16::from_str_radix(raw, 16).unwrap_or(0)
-    )
+    format!("0x{:04x}", u16::from_str_radix(raw, 16).unwrap_or(0))
 }
 
 fn usb_port_from_phys(phys: &str) -> Option<String> {
@@ -979,9 +967,7 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
             match h.read(&mut hid_buf) {
                 Ok(n) if n > 0 => {
                     let slice = &hid_buf[..n];
-                    let changed = hid_idle
-                        .map(|prev| prev[..n] != slice[..])
-                        .unwrap_or(true);
+                    let changed = hid_idle.map(|prev| prev[..n] != slice[..]).unwrap_or(true);
                     if changed {
                         println!("[hidraw] {} bytes: {}", n, hex_bytes(slice));
                         hid_idle = Some({
@@ -1145,7 +1131,10 @@ pub fn log_js_events(path: Option<&str>, secs: u64) -> io::Result<()> {
         Some(p) => PadReader::open_path(p)?,
         None => PadReader::open()?,
     };
-    eprintln!("logging {} for {secs}s (press buttons / move sticks)...", reader.path);
+    eprintln!(
+        "logging {} for {secs}s (press buttons / move sticks)...",
+        reader.path
+    );
     let start = std::time::Instant::now();
     let mut file = reader.file;
     let mut buf = [0u8; JS_EVENT_SIZE];
@@ -1181,7 +1170,10 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         Some(p) => PadReader::open_path(p)?,
         None => PadReader::open()?,
     };
-    eprintln!("calibrate on {} — press each control when prompted (10s timeout each)", reader.path);
+    eprintln!(
+        "calibrate on {} — press each control when prompted (10s timeout each)",
+        reader.path
+    );
     let prompts: &[(&str, fn(&PadState) -> bool)] = &[
         ("A", |s| s.btn_a),
         ("B", |s| s.btn_b),

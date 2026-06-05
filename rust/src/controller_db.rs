@@ -492,10 +492,7 @@ mod tests {
     #[test]
     fn logical_id_with_serial() {
         let info = sample_info("0x2563", "0x0575", "1-1.3", "GH-SP-5027-1 A2");
-        assert_eq!(
-            ControllerDb::logical_id(&info),
-            "2563:0575:GH-SP-5027-1 A2"
-        );
+        assert_eq!(ControllerDb::logical_id(&info), "2563:0575:GH-SP-5027-1 A2");
     }
 
     #[test]

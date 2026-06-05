@@ -21,8 +21,8 @@ mod imp {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(99);
-        let out_path = std::env::var("MISTER_PPROF_OUT")
-            .unwrap_or_else(|_| "/tmp/mister-pprof.svg".into());
+        let out_path =
+            std::env::var("MISTER_PPROF_OUT").unwrap_or_else(|_| "/tmp/mister-pprof.svg".into());
         println!("cpu_profile: sampling at {hz} Hz → {out_path}");
         match pprof::ProfilerGuard::new(hz) {
             Ok(guard) => Some(CpuProfiler {
@@ -69,7 +69,10 @@ mod imp {
                     return;
                 }
                 let bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
-                println!("cpu_profile: wrote flamegraph to {} ({bytes} bytes)", p.out_path);
+                println!(
+                    "cpu_profile: wrote flamegraph to {} ({bytes} bytes)",
+                    p.out_path
+                );
             }
             Err(e) => eprintln!("cpu_profile: create {} failed: {e}", p.out_path),
         }
