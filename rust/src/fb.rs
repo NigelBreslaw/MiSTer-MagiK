@@ -13,16 +13,21 @@ use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
 use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 const FBIO_WAITFORVSYNC: libc::c_ulong = 0x4004_4620;
 
 /// Cutoff for glyph/text edges: coverage below this is transparent, at/above is
 /// fully opaque (crisp pixel font after 2× upscale). Tune via `MISTER_GLYPH_ALPHA_THRESHOLD`.
 fn glyph_alpha_threshold() -> u8 {
-    std::env::var("MISTER_GLYPH_ALPHA_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(128)
+    static THRESHOLD: OnceLock<u8> = OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        std::env::var("MISTER_GLYPH_ALPHA_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(128)
+    })
 }
 
 /// One framebuffer pixel in MiSTer's xRGB-8888 layout, stored as 0x00RRGGBB.
@@ -55,6 +60,7 @@ pub struct Display {
 }
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
+const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 
 /// Linux fb_var_screeninfo subset — only fields we need for sizing.
 #[repr(C)]
@@ -95,6 +101,26 @@ struct FbBitfield {
     offset: u32,
     length: u32,
     msb_right: u32,
+}
+
+/// Linux fb_fix_screeninfo subset. Keep the C layout because ioctl writes it.
+#[repr(C)]
+struct FbFixScreeninfo {
+    id: [u8; 16],
+    smem_start: libc::c_ulong,
+    smem_len: u32,
+    type_: u32,
+    type_aux: u32,
+    visual: u32,
+    xpanstep: u16,
+    ypanstep: u16,
+    ywrapstep: u16,
+    line_length: u32,
+    mmio_start: libc::c_ulong,
+    mmio_len: u32,
+    accel: u32,
+    capabilities: u16,
+    reserved: [u16; 3],
 }
 
 const MODE_1080P: &str = "8888 1 1920 1080 7680";
@@ -167,12 +193,62 @@ impl Display {
             reserved: [0; 4],
         };
         let fd = fb0.as_raw_fd();
+        let mut fix = FbFixScreeninfo {
+            id: [0; 16],
+            smem_start: 0,
+            smem_len: 0,
+            type_: 0,
+            type_aux: 0,
+            visual: 0,
+            xpanstep: 0,
+            ypanstep: 0,
+            ywrapstep: 0,
+            line_length: 0,
+            mmio_start: 0,
+            mmio_len: 0,
+            accel: 0,
+            capabilities: 0,
+            reserved: [0; 3],
+        };
         if unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0 {
             let virt = (var.yres_virtual as usize).max(var.yres as usize);
-            if virt > 0 && virt < h {
+            if var.xres > 0 && var.xres as usize != w {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("fb0 width is {}, need {w}", var.xres),
+                ));
+            }
+            if virt > 0 && virt != h {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("fb0 is {}px tall, need {h}", virt),
+                ));
+            }
+            if var.bits_per_pixel != 0 && var.bits_per_pixel != 32 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("fb0 is {}bpp, need 32bpp", var.bits_per_pixel),
+                ));
+            }
+            if var.red.length != 0
+                && (var.red.offset, var.green.offset, var.blue.offset)
+                    != (16, 8, 0)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "fb0 channel offsets are r{} g{} b{}, expected r16 g8 b0",
+                        var.red.offset, var.green.offset, var.blue.offset
+                    ),
+                ));
+            }
+        }
+        if unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0 {
+            let expected = w * 4;
+            if fix.line_length != 0 && fix.line_length as usize != expected {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("fb0 stride is {} bytes, need {expected}", fix.line_length),
                 ));
             }
         }
@@ -233,6 +309,10 @@ impl Display {
             self.copy_rows(src, src_y0, src_y1);
             return;
         }
+        if scale == 2 {
+            self.copy_rect_2x_at(0, src_y0 * 2, src, src_w, 0, src_y0, src_w, src_y1);
+            return;
+        }
         let dst_w = self.w;
         let dst_h = self.h;
         let dst = self.buffer_mut();
@@ -290,6 +370,19 @@ impl Display {
             }
             return;
         }
+        if scale == 2 {
+            self.copy_rect_2x_at(
+                src_x0 * 2,
+                src_y0 * 2,
+                src,
+                src_w,
+                src_x0,
+                src_y0,
+                src_x1,
+                src_y1,
+            );
+            return;
+        }
 
         let dst_w = self.w;
         let dst_h = self.h;
@@ -318,44 +411,10 @@ impl Display {
 
     pub fn wait_vsync(&self) {
         let arg: u32 = 0;
-        unsafe {
-            libc::ioctl(self.fb0.as_raw_fd(), FBIO_WAITFORVSYNC, &arg as *const u32);
-        }
-    }
-
-    /// Scroll a framebuffer rectangle vertically in-place.
-    ///
-    /// This is the console-style fast path: keep most pixels already on screen,
-    /// then redraw only the newly exposed strip.
-    pub fn scroll_rect_y(&mut self, x: usize, y: usize, w: usize, h: usize, dy: isize) {
-        if w == 0 || h == 0 || dy == 0 {
-            return;
-        }
-        let dst_w = self.w;
-        let x1 = (x + w).min(self.w);
-        let y1 = (y + h).min(self.h);
-        if x >= x1 || y >= y1 {
-            return;
-        }
-        let rows = y1 - y;
-        let shift = dy.unsigned_abs();
-        if shift >= rows {
-            return;
-        }
-        let width = x1 - x;
-        let buf = self.buffer_mut();
-
-        if dy < 0 {
-            for row in 0..(rows - shift) {
-                let src = (y + row + shift) * dst_w + x;
-                let dst = (y + row) * dst_w + x;
-                buf.copy_within(src..src + width, dst);
-            }
-        } else {
-            for row in (0..(rows - shift)).rev() {
-                let src = (y + row) * dst_w + x;
-                let dst = (y + row + shift) * dst_w + x;
-                buf.copy_within(src..src + width, dst);
+        if unsafe { libc::ioctl(self.fb0.as_raw_fd(), FBIO_WAITFORVSYNC, &arg as *const u32) } < 0 {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!("warning: FBIO_WAITFORVSYNC failed: {}", io::Error::last_os_error());
             }
         }
     }
@@ -396,6 +455,10 @@ impl Display {
             self.copy_rect_from(dst_x, dst_y, src_w, src_h, src);
             return;
         }
+        if scale == 2 {
+            self.copy_rect_2x_at(dst_x, dst_y, src, src_w, 0, 0, src_w, src_h);
+            return;
+        }
         let dst_w = self.w;
         let dst_h = self.h;
         let dst = self.buffer_mut();
@@ -416,6 +479,60 @@ impl Display {
                             dst_row[px] = color;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    fn copy_rect_2x_at(
+        &mut self,
+        dst_x: usize,
+        dst_y: usize,
+        src: &[Pixel],
+        src_w: usize,
+        src_x0: usize,
+        src_y0: usize,
+        src_x1: usize,
+        src_y1: usize,
+    ) {
+        if src_x1 <= src_x0 || src_y1 <= src_y0 {
+            return;
+        }
+        let dst_w = self.w;
+        let dst_h = self.h;
+        let dst = self.buffer_mut();
+        for sy in src_y0..src_y1 {
+            let py0 = dst_y + (sy - src_y0) * 2;
+            if py0 >= dst_h {
+                break;
+            }
+            let src_row = &src[sy * src_w + src_x0..sy * src_w + src_x1];
+            let row0_start = py0 * dst_w + dst_x;
+            let copy_w = (src_row.len() * 2).min(dst_w.saturating_sub(dst_x));
+            if copy_w == 0 {
+                continue;
+            }
+            {
+                let row0 = &mut dst[row0_start..row0_start + copy_w];
+                for (sx, &color) in src_row.iter().enumerate() {
+                    let dx = sx * 2;
+                    if dx + 1 >= copy_w {
+                        break;
+                    }
+                    row0[dx] = color;
+                    row0[dx + 1] = color;
+                }
+            }
+            if py0 + 1 < dst_h {
+                let row1_start = (py0 + 1) * dst_w + dst_x;
+                let row1 = &mut dst[row1_start..row1_start + copy_w];
+                for (sx, &color) in src_row.iter().enumerate() {
+                    let dx = sx * 2;
+                    if dx + 1 >= copy_w {
+                        break;
+                    }
+                    row1[dx] = color;
+                    row1[dx + 1] = color;
                 }
             }
         }

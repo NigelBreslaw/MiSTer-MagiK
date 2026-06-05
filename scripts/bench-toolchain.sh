@@ -17,7 +17,7 @@ TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
 
 # Slint scenes (see rust/ui/bench/README.md)
-BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll)
+BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll)
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -117,12 +117,25 @@ path = os.environ["UI_LOG"]
 pat = re.compile(
     r"fps ~ (\d+).*render (\d+)us.*vsync-wait (\d+)us.*copy (\d+)us.*\((\d+) (?:logical )?rows avg\)"
 )
+console_pat = re.compile(
+    r"fps ~ (\d+).*ram-scroll (\d+)us.*exposed-strip (\d+)us.*fb-copy (\d+)us"
+)
 rows = []
 with open(path, encoding="utf-8", errors="ignore") as f:
     for line in f:
         m = pat.search(line)
         if m:
             rows.append(tuple(int(m.group(i)) for i in range(1, 6)))
+            continue
+        m = console_pat.search(line)
+        if m:
+            rows.append((
+                int(m.group(1)),
+                int(m.group(2)),
+                int(m.group(3)),
+                int(m.group(4)),
+                0,
+            ))
 if len(rows) <= 3:
     sys.exit(0)
 rows = rows[3:]
@@ -239,6 +252,9 @@ cat /tmp/bench-ui.log
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
     read -r render_us vsync_us copy_us rows_avg fps_val _cnt <<<"$parse_stats"
+    if [[ "$scene" == "console_scroll" ]]; then
+      notes="${notes:+$notes; }console_scroll: render_us=ram-scroll; vsync_us=exposed-strip; copy_us=fb-copy"
+    fi
   else
     notes="no-fps-lines"
   fi
