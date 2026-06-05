@@ -6,10 +6,11 @@
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
 use std::time::Instant;
 
 const DEFAULT_ROOTS: &[&str] = &[
@@ -38,6 +39,11 @@ const NORMAL_LAUNCH_EXTS: &[&str] = &[
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
+type DirectoryManifest = BTreeMap<String, DirectorySignature>;
+
+const SCHEMA_VERSION: u32 = 5;
+const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
@@ -110,6 +116,7 @@ struct LibraryScan {
     version: u32,
     scanned_at_unix: i64,
     file_fingerprints: FileFingerprint,
+    directory_manifest: DirectoryManifest,
     normal_files: Vec<String>,
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
@@ -129,6 +136,7 @@ pub struct LibraryCatalogLoad {
     pub rows: usize,
 }
 
+#[derive(Clone, Debug)]
 pub struct LibraryRefreshSummary {
     pub skipped: bool,
     pub scan_us: u64,
@@ -148,6 +156,15 @@ struct DbFingerprint {
     discoveries: usize,
     file_fingerprints: FileFingerprint,
     container_fingerprints: BTreeMap<String, (u64, i64)>,
+    directory_manifest: DirectoryManifest,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectorySignature {
+    dir_size: u64,
+    dir_mtime_secs: i64,
+    child_count: u64,
+    hash: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -296,6 +313,84 @@ pub fn run_db_bench() {
     benchmark_sqlite_queries(&cfg.sqlite_path);
 }
 
+pub fn run_scan_bench() {
+    let cfg = BenchConfig::from_env();
+    let label = std::env::var("MISTER_LIBRARY_BENCH_LABEL")
+        .unwrap_or_else(|_| "LIB-BENCH".to_string());
+    let iterations = std::env::var("MISTER_LIBRARY_BENCH_ITERATIONS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1)
+        .max(1);
+    println!("library-scan-bench label={label}");
+    println!("library-scan-bench roots={}", cfg.roots.join("|"));
+    println!("library-scan-bench sqlite_path={}", cfg.sqlite_path.display());
+    for iteration in 1..=iterations {
+        match std::fs::remove_file(&cfg.sqlite_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("library-scan-bench remove old sqlite: {e}"),
+        }
+
+        let cold_t = Instant::now();
+        let scan = scan_library(&cfg);
+        let cold_us = cold_t.elapsed().as_micros() as u64;
+
+        let import_t = Instant::now();
+        let bytes = match save_sqlite_scan(&cfg.sqlite_path, &scan) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                println!(
+                    "library_scan_bench_tsv\t{label}\t{iteration}\timport_error\t{}\t{e}",
+                    import_t.elapsed().as_micros()
+                );
+                continue;
+            }
+        };
+        let import_us = import_t.elapsed().as_micros() as u64;
+
+        let load_t = Instant::now();
+        let loaded = load_arcade_catalog_from_sqlite("/media/fat/_Arcade");
+        let (load_us, arcade_rows) = match loaded {
+            Ok(load) => (load.us, load.rows),
+            Err(e) => {
+                eprintln!("library-scan-bench arcade load failed: {e}");
+                (load_t.elapsed().as_micros() as u64, 0)
+            }
+        };
+
+        let manifest_t = Instant::now();
+        let manifest_changed = read_sqlite_fingerprint(&cfg.sqlite_path)
+            .and_then(|fingerprint| {
+                validate_or_rebuild_directory_manifest(&cfg.roots, &fingerprint)
+                    .map(|current| current != fingerprint.directory_manifest)
+            })
+            .unwrap_or(true);
+        let manifest_us = manifest_t.elapsed().as_micros() as u64;
+
+        println!(
+            "library_scan_bench_tsv\t{label}\t{iteration}\tcold_scan\t{cold_us}\tdiscover_us={}\tclassify_us={}\tnormal_files={}\tcontainers={}\tentries={}\tdiscoveries={}\tdirs={}",
+            scan.discover_us,
+            scan.classify_us,
+            scan.normal_files.len(),
+            scan.containers.len(),
+            scan.entries.len(),
+            unique_discovery_count(&scan.discoveries),
+            scan.directory_manifest.len()
+        );
+        println!(
+            "library_scan_bench_tsv\t{label}\t{iteration}\timport\t{import_us}\tbytes={bytes}"
+        );
+        println!(
+            "library_scan_bench_tsv\t{label}\t{iteration}\tcached_arcade_load\t{load_us}\trows={arcade_rows}"
+        );
+        println!(
+            "library_scan_bench_tsv\t{label}\t{iteration}\tno_change_manifest\t{manifest_us}\tchanged={manifest_changed}\tdirs={}",
+            scan.directory_manifest.len()
+        );
+    }
+}
+
 pub fn default_sqlite_path() -> PathBuf {
     std::env::var("MISTER_LIBRARY_SQLITE")
         .map(PathBuf::from)
@@ -369,19 +464,15 @@ pub fn refresh_default_sqlite_database(
         if let Some(report) = progress.as_mut() {
             report("Checking library", "Looking for changed files...");
         }
-        let (files, _) = match progress.as_mut() {
-            Some(report) => discover_files(&cfg.roots, Some(&mut **report)),
-            None => discover_files(&cfg.roots, None),
-        };
-        let current = file_fingerprint_from_files(&files);
+        let current_manifest = validate_or_rebuild_directory_manifest(&cfg.roots, &existing);
         let scan_us = scan_t.elapsed().as_micros() as u64;
-        if current == existing.file_fingerprints {
+        if current_manifest == Some(existing.directory_manifest.clone()) {
             if let Some(report) = progress.as_mut() {
                 report(
                     "Library unchanged",
                     &format!(
-                        "{} files checked; using cached database",
-                        current.len()
+                        "{} directories checked; using cached database",
+                        existing.directory_manifest.len()
                     ),
                 );
             }
@@ -402,7 +493,7 @@ pub fn refresh_default_sqlite_database(
         if let Some(report) = progress.as_mut() {
             report(
                 "Library changed",
-                &format!("{} files checked; rebuilding database...", current.len()),
+                "Directory manifest changed; rebuilding database...",
             );
         }
     } else if let Some(report) = progress.as_mut() {
@@ -502,16 +593,19 @@ fn scan_library_with_progress(
     mut progress: Option<&mut dyn FnMut(&str, &str)>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
-    let (files, mut root_stats) = match progress.as_mut() {
-        Some(report) => discover_files(&cfg.roots, Some(&mut **report)),
-        None => discover_files(&cfg.roots, None),
-    };
-    let discover_us = discover_t.elapsed().as_micros() as u64;
-    let file_fingerprints = file_fingerprint_from_files(&files);
+    let rx = discover_files_pipelined(cfg.roots.clone());
+    let mut discover_us = 0;
+    let mut file_fingerprints = FileFingerprint::new();
+    let mut root_stats = cfg
+        .roots
+        .iter()
+        .map(|root| (root.clone(), RootStats::default()))
+        .collect::<HashMap<_, _>>();
+    let mut directory_manifest = DirectoryManifest::new();
     if let Some(report) = progress.as_mut() {
         report(
             "Classifying library",
-            &format!("Discovered {} files across MiSTer roots", files.len()),
+            "Walking candidates and parsing metadata...",
         );
     }
 
@@ -525,14 +619,32 @@ fn scan_library_with_progress(
     let mut slowest_archives = Vec::<(u64, String)>::new();
 
     let classify_t = Instant::now();
-    let total_files = files.len();
-    for (idx, f) in files.into_iter().enumerate() {
+    let mut idx = 0usize;
+    while let Ok(event) = rx.recv() {
+        let f = match event {
+            DiscoveryEvent::File(file) => file,
+            DiscoveryEvent::Done {
+                stats,
+                manifest,
+                discover_us: us,
+            } => {
+                discover_us = us;
+                directory_manifest = manifest;
+                for (root, discovered) in stats {
+                    let current = root_stats.entry(root).or_default();
+                    current.files = discovered.files;
+                    current.scan_us += discovered.scan_us;
+                }
+                break;
+            }
+        };
+        file_fingerprints.insert(f.path.display().to_string(), (f.size, f.mtime_secs));
         if idx % 250 == 0 {
             if let Some(report) = progress.as_mut() {
                 report(
                     "Classifying library",
                     &format!(
-                        "{idx}/{total_files} files; {} games, {} archives, {} archive entries",
+                        "{idx} candidate files; {} games, {} archives, {} archive entries",
                         discoveries.len(),
                         containers.len(),
                         entries.len()
@@ -540,6 +652,7 @@ fn scan_library_with_progress(
                 );
             }
         }
+        idx += 1;
         if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
             if let Some(r) = root_stats.get_mut(&f.root) {
                 r.archives += 1;
@@ -617,6 +730,9 @@ fn scan_library_with_progress(
             discoveries.push(discovery);
         }
     }
+    if discover_us == 0 {
+        discover_us = discover_t.elapsed().as_micros() as u64;
+    }
     if cfg.optional_catalogs {
         if let Some(report) = progress.as_mut() {
             report("Importing metadata", "Looking for gamelist.xml screenshots...");
@@ -643,9 +759,10 @@ fn scan_library_with_progress(
     }
 
     LibraryScan {
-        version: 4,
+        version: SCHEMA_VERSION,
         scanned_at_unix: unix_now_secs(),
         file_fingerprints,
+        directory_manifest,
         normal_files,
         containers,
         entries,
@@ -660,75 +777,222 @@ fn scan_library_with_progress(
     }
 }
 
-fn file_fingerprint_from_files(files: &[FoundFile]) -> FileFingerprint {
-    files
-        .iter()
-        .map(|f| (f.path.display().to_string(), (f.size, f.mtime_secs)))
-        .collect()
+fn validate_or_rebuild_directory_manifest(
+    roots: &[String],
+    existing: &DbFingerprint,
+) -> Option<DirectoryManifest> {
+    if existing.directory_manifest.is_empty() {
+        return None;
+    }
+    for root in roots {
+        if !existing.directory_manifest.contains_key(root) {
+            return None;
+        }
+    }
+    let mut current = BTreeMap::new();
+    for (dir, sig) in &existing.directory_manifest {
+        let current_sig = read_directory_metadata_signature(Path::new(dir), *sig)?;
+        if current_sig.dir_size != sig.dir_size || current_sig.dir_mtime_secs != sig.dir_mtime_secs
+        {
+            return Some(DirectoryManifest::new());
+        }
+        current.insert(dir.clone(), *sig);
+    }
+    Some(current)
 }
 
-fn discover_files(
-    roots: &[String],
-    mut progress: Option<&mut dyn FnMut(&str, &str)>,
-) -> (Vec<FoundFile>, HashMap<String, RootStats>) {
-    let mut out = Vec::new();
-    let mut stats = HashMap::new();
-    for root in roots {
-        if let Some(report) = progress.as_mut() {
-            report("Scanning roots", &format!("Walking {root}"));
+fn read_directory_metadata_signature(
+    dir: &Path,
+    existing: DirectorySignature,
+) -> Option<DirectorySignature> {
+    let meta = fs::metadata(dir).ok()?;
+    Some(DirectorySignature {
+        dir_size: meta.len(),
+        dir_mtime_secs: mtime_secs(&meta),
+        child_count: existing.child_count,
+        hash: existing.hash,
+    })
+}
+
+enum DiscoveryEvent {
+    File(FoundFile),
+    Done {
+        stats: HashMap<String, RootStats>,
+        manifest: DirectoryManifest,
+        discover_us: u64,
+    },
+}
+
+fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
+    let (tx, rx) = mpsc::sync_channel(256);
+    std::thread::Builder::new()
+        .name("library-walker".to_string())
+        .spawn(move || {
+            let t = Instant::now();
+            let (stats, manifest) = discover_files_streaming(&roots, &tx);
+            let _ = tx.send(DiscoveryEvent::Done {
+                stats,
+                manifest,
+                discover_us: t.elapsed().as_micros() as u64,
+            });
+        })
+        .expect("spawn library-walker");
+    rx
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DirectorySignatureBuilder {
+    dir_size: u64,
+    dir_mtime_secs: i64,
+    child_count: u64,
+    hash: u64,
+}
+
+impl Default for DirectorySignatureBuilder {
+    fn default() -> Self {
+        Self {
+            dir_size: 0,
+            dir_mtime_secs: 0,
+            child_count: 0,
+            hash: MANIFEST_HASH_OFFSET,
         }
+    }
+}
+
+impl DirectorySignatureBuilder {
+    fn set_dir_metadata(&mut self, meta: &std::fs::Metadata) {
+        self.dir_size = meta.len();
+        self.dir_mtime_secs = mtime_secs(meta);
+    }
+
+    fn add_dir_child(&mut self, name: &str) {
+        self.child_count += 1;
+        self.hash ^= manifest_child_hash(b"d", name.as_bytes(), 0, 0);
+    }
+
+    fn add_file_child(&mut self, name: &str, size: u64, mtime_secs: i64) {
+        self.child_count += 1;
+        self.hash ^= manifest_child_hash(b"f", name.as_bytes(), size, mtime_secs);
+    }
+
+    fn finish(self) -> DirectorySignature {
+        DirectorySignature {
+            dir_size: self.dir_size,
+            dir_mtime_secs: self.dir_mtime_secs,
+            child_count: self.child_count,
+            hash: self.hash,
+        }
+    }
+}
+
+fn manifest_child_hash(kind: &[u8], name: &[u8], size: u64, mtime_secs: i64) -> u64 {
+    let mut hash = MANIFEST_HASH_OFFSET;
+    for bytes in [kind, name, &size.to_le_bytes(), &mtime_secs.to_le_bytes()] {
+        for b in bytes {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
+    }
+    hash
+}
+
+fn discover_files_streaming(
+    roots: &[String],
+    tx: &mpsc::SyncSender<DiscoveryEvent>,
+) -> (HashMap<String, RootStats>, DirectoryManifest) {
+    let mut stats = HashMap::new();
+    let mut manifest_builders = BTreeMap::<String, DirectorySignatureBuilder>::new();
+    for root in roots {
         let t = Instant::now();
         let mut rs = RootStats::default();
         let path = Path::new(root);
         if path.is_dir() {
+            let root_key = path.display().to_string();
+            if let Ok(meta) = path.metadata() {
+                manifest_builders
+                    .entry(root_key)
+                    .or_default()
+                    .set_dir_metadata(&meta);
+            } else {
+                manifest_builders.entry(root_key).or_default();
+            }
             for entry in walkdir::WalkDir::new(path)
                 .follow_links(true)
                 .into_iter()
+                .filter_entry(|e| !should_ignore_path(e.path()))
                 .filter_map(Result::ok)
             {
-                if !entry.file_type().is_file() {
+                let p = entry.path();
+                if p == path {
                     continue;
                 }
-                let p = entry.path();
                 if should_ignore_path(p) {
                     continue;
                 }
-                let Ok(meta) = entry.metadata() else {
+                let parent = p.parent().unwrap_or(path).display().to_string();
+                let name = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if entry.file_type().is_dir() {
+                    let dir_key = p.display().to_string();
+                    if let Ok(meta) = entry.metadata() {
+                        manifest_builders
+                            .entry(dir_key)
+                            .or_default()
+                            .set_dir_metadata(&meta);
+                    } else {
+                        manifest_builders.entry(dir_key).or_default();
+                    }
+                    manifest_builders
+                        .entry(parent)
+                        .or_default()
+                        .add_dir_child(&name);
                     continue;
-                };
+                }
+                if !entry.file_type().is_file() {
+                    continue;
+                }
                 let ext = p
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
+                if !is_index_candidate(p, &ext) {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                let mtime_secs = mtime_secs(&meta);
+                manifest_builders
+                    .entry(parent)
+                    .or_default()
+                    .add_file_child(&name, meta.len(), mtime_secs);
                 rs.files += 1;
-                out.push(FoundFile {
+                let file = FoundFile {
                     path: p.to_path_buf(),
                     root: root.clone(),
                     ext,
                     size: meta.len(),
-                    mtime_secs: mtime_secs(&meta),
-                });
-                if rs.files % 500 == 0 {
-                    if let Some(report) = progress.as_mut() {
-                        report(
-                            "Scanning roots",
-                            &format!("{root}: {} files found", rs.files),
-                        );
-                    }
+                    mtime_secs,
+                };
+                if tx.send(DiscoveryEvent::File(file)).is_err() {
+                    break;
                 }
             }
         }
         rs.scan_us = t.elapsed().as_micros() as u64;
-        if let Some(report) = progress.as_mut() {
-            report(
-                "Scanning roots",
-                &format!("{root}: {} files found", rs.files),
-            );
-        }
         stats.insert(root.clone(), rs);
     }
-    (out, stats)
+    let manifest = manifest_builders
+        .into_iter()
+        .map(|(dir, sig)| (dir, sig.finish()))
+        .collect();
+    (stats, manifest)
 }
 
 fn scan_archive_toc(file: &FoundFile, format: ArchiveFormat) -> ArchiveScan {
@@ -1622,6 +1886,7 @@ fn benchmark_sqlite_backend(path: &Path, scan: &LibraryScan) {
     benchmark_sqlite_cached_open(path);
     benchmark_sqlite_queries(path);
     benchmark_sqlite_no_change(path, scan);
+    benchmark_sqlite_manifest_no_change(path, scan);
 }
 
 fn benchmark_sqlite_cached_open(path: &Path) {
@@ -1709,6 +1974,24 @@ fn benchmark_sqlite_no_change(path: &Path, scan: &LibraryScan) {
     );
 }
 
+fn benchmark_sqlite_manifest_no_change(path: &Path, scan: &LibraryScan) {
+    let t = Instant::now();
+    let changed = read_sqlite_fingerprint(path)
+        .and_then(|fingerprint| {
+            validate_or_rebuild_directory_manifest(
+                &scan.root_stats.keys().cloned().collect::<Vec<_>>(),
+                &fingerprint,
+            )
+            .map(|current| current != fingerprint.directory_manifest)
+        })
+        .unwrap_or(true);
+    println!(
+        "library_bench_sqlite_tsv\tno_change_directory_manifest\t{}\tchanged={changed}\tdirs={}",
+        t.elapsed().as_micros(),
+        scan.directory_manifest.len()
+    );
+}
+
 fn benchmark_second_scan(cfg: &BenchConfig, initial_scan: &LibraryScan) {
     let scan = scan_library(cfg);
     let fingerprint_t = Instant::now();
@@ -1747,6 +2030,7 @@ fn db_fingerprint(scan: &LibraryScan) -> DbFingerprint {
             .iter()
             .map(|c| (c.file_path.clone(), (c.size, c.mtime_secs)))
             .collect(),
+        directory_manifest: scan.directory_manifest.clone(),
     }
 }
 
@@ -1857,6 +2141,13 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
             file_path TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
             mtime_secs INTEGER NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE directory_manifest (
+            dir_path TEXT PRIMARY KEY,
+            dir_size INTEGER NOT NULL,
+            dir_mtime_secs INTEGER NOT NULL,
+            child_count INTEGER NOT NULL,
+            hash INTEGER NOT NULL
         ) WITHOUT ROWID;
         "#,
     )
@@ -2011,6 +2302,21 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
             .map_err(|e| format!("insert fingerprint: {e}"))?;
         }
     }
+    {
+        let mut stmt = tx
+            .prepare("INSERT INTO directory_manifest(dir_path,dir_size,dir_mtime_secs,child_count,hash) VALUES (?1,?2,?3,?4,?5)")
+            .map_err(|e| format!("prepare directory manifest insert: {e}"))?;
+        for (dir, sig) in &scan.directory_manifest {
+            stmt.execute(params![
+                dir.as_str(),
+                sig.dir_size as i64,
+                sig.dir_mtime_secs,
+                sig.child_count as i64,
+                sig.hash as i64
+            ])
+            .map_err(|e| format!("insert directory manifest: {e}"))?;
+        }
+    }
     tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))?;
     std::fs::metadata(path)
         .map(|m| m.len())
@@ -2051,6 +2357,9 @@ fn sqlite_count(conn: &Connection, table: &str) -> Result<u64, String> {
 
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
     let conn = Connection::open(path).ok()?;
+    if sqlite_meta_usize(&conn, "version")? != SCHEMA_VERSION as usize {
+        return None;
+    }
     let mut file_fingerprints = BTreeMap::new();
     let mut file_stmt = conn
         .prepare("SELECT file_path,size,mtime_secs FROM file_fingerprints")
@@ -2086,6 +2395,33 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
         let (path, size, mtime) = row.ok()?;
         container_fingerprints.insert(path, (size.max(0) as u64, mtime));
     }
+    let mut directory_manifest = BTreeMap::new();
+    let mut dir_stmt = conn
+        .prepare("SELECT dir_path,dir_size,dir_mtime_secs,child_count,hash FROM directory_manifest")
+        .ok()?;
+    let dir_rows = dir_stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .ok()?;
+    for row in dir_rows {
+        let (path, dir_size, dir_mtime, child_count, hash) = row.ok()?;
+        directory_manifest.insert(
+            path,
+            DirectorySignature {
+                dir_size: dir_size.max(0) as u64,
+                dir_mtime_secs: dir_mtime,
+                child_count: child_count.max(0) as u64,
+                hash: hash as u64,
+            },
+        );
+    }
     Some(DbFingerprint {
         normal_files: sqlite_meta_usize(&conn, "normal_files")?,
         containers: sqlite_meta_usize(&conn, "containers")?,
@@ -2093,6 +2429,7 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
         discoveries: sqlite_meta_usize(&conn, "discoveries")?,
         file_fingerprints,
         container_fingerprints,
+        directory_manifest,
     })
 }
 
@@ -2283,6 +2620,16 @@ fn le_u32(bytes: &[u8]) -> u32 {
 
 fn is_normal_launchable(ext: &str) -> bool {
     NORMAL_LAUNCH_EXTS.contains(&ext)
+}
+
+fn is_index_candidate(path: &Path, ext: &str) -> bool {
+    is_normal_launchable(ext)
+        || ArchiveFormat::from_ext(ext).is_some()
+        || path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("gamelist.xml"))
+            .unwrap_or(false)
 }
 
 fn should_ignore_path(path: &Path) -> bool {

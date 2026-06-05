@@ -680,17 +680,6 @@ fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::
     ModelRc::new(VecModel::from(rows))
 }
 
-fn env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name)
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
 fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     ArcadeCatalog {
         root: PathBuf::from(root),
@@ -698,7 +687,10 @@ fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     }
 }
 
-fn start_library_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
+fn start_library_catalog_worker(
+    root: String,
+    cached_catalog_ready: bool,
+) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("library-catalog".to_string())
@@ -723,6 +715,14 @@ fn start_library_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMes
                     None
                 }
             };
+            if let Some(summary) = summary.as_ref().filter(|summary| summary.skipped) {
+                if cached_catalog_ready {
+                    let _ = tx.send(CatalogWorkerMessage::Unchanged {
+                        summary: summary.clone(),
+                    });
+                    return;
+                }
+            }
             if summary.is_some() {
                 let _ = tx.send(CatalogWorkerMessage::Progress {
                     title: "Loading library".to_string(),
@@ -759,6 +759,9 @@ enum CatalogWorkerMessage {
         catalog: ArcadeCatalog,
         summary: Option<library_bench::LibraryRefreshSummary>,
         load_us: u64,
+    },
+    Unchanged {
+        summary: library_bench::LibraryRefreshSummary,
     },
 }
 
@@ -1545,18 +1548,12 @@ fn run_launcher_loop(
         }
     };
     let mut catalog_ready = !catalog.games.is_empty();
-    let refresh_on_boot = env_flag("MISTER_LIBRARY_REFRESH_ON_BOOT");
-    let catalog_rx = if catalog_ready && !refresh_on_boot {
-        print_startup_event(start, "library_refresh_skipped", "cached database available");
-        None
-    } else {
-        print_startup_event(start, "library_worker_started", &arcade_root);
-        Some(start_library_catalog_worker(arcade_root.clone()))
-    };
-    let mut catalog_refresh_done = catalog_rx.is_none();
+    print_startup_event(start, "library_worker_started", &arcade_root);
+    let catalog_rx = start_library_catalog_worker(arcade_root.clone(), catalog_ready);
+    let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_arcade_games(slint_arcade_games(&catalog.games));
-    bridge.set_catalog_scan_visible(catalog_rx.is_some());
+    bridge.set_catalog_scan_visible(true);
     bridge.set_catalog_scan_title(if catalog_ready {
         "Refreshing library".into()
     } else {
@@ -1585,10 +1582,6 @@ fn run_launcher_loop(
         let mut bridge_dirty = false;
 
         if !catalog_refresh_done {
-            let Some(catalog_rx) = catalog_rx.as_ref() else {
-                catalog_refresh_done = true;
-                continue;
-            };
             while let Ok(message) = catalog_rx.try_recv() {
                 match message {
                     CatalogWorkerMessage::Progress { title, detail } => {
@@ -1646,6 +1639,28 @@ fn run_launcher_loop(
                             Some(&catalog),
                             &mut preview,
                         );
+                        bridge_dirty = true;
+                    }
+                    CatalogWorkerMessage::Unchanged { summary } => {
+                        catalog_refresh_done = true;
+                        print_startup_event(
+                            start,
+                            "library_db_unchanged",
+                            format!(
+                                "bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                                summary.bytes,
+                                summary.scan_us,
+                                summary.import_us,
+                                summary.discoveries,
+                                summary.normal_files,
+                                summary.containers,
+                                summary.entries
+                            ),
+                        );
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_scan_title("".into());
+                        bridge.set_catalog_scan_detail("".into());
                         bridge_dirty = true;
                     }
                 }
