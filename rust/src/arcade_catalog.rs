@@ -670,7 +670,7 @@ fn bench_decode_sample_pngs(games: &[ArcadeGameEntry], limit: usize) -> DecodeSt
 
     for g in games.iter().filter(|g| g.has_image).take(limit) {
         let t = Instant::now();
-        if decode_png_rgba8(&g.image_path).is_some() {
+        if decode_png_rgb8(&g.image_path).is_some() {
             let us = t.elapsed().as_micros() as u64;
             decoded += 1;
             total_us += us;
@@ -685,12 +685,12 @@ fn bench_decode_sample_pngs(games: &[ArcadeGameEntry], limit: usize) -> DecodeSt
     }
 }
 
-pub fn decode_png_rgba8(path: &str) -> Option<(u32, u32, Vec<u8>)> {
-    load_png_rgba8_timed(path).ok().map(|loaded| {
+pub fn decode_png_rgb8(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+    load_png_rgb8_timed(path).ok().map(|loaded| {
         (
             loaded.image.width,
             loaded.image.height,
-            loaded.image.rgba,
+            loaded.image.rgb,
         )
     })
 }
@@ -699,7 +699,7 @@ pub fn decode_png_rgba8(path: &str) -> Option<(u32, u32, Vec<u8>)> {
 pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
-    pub rgba: Vec<u8>,
+    pub rgb: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -708,7 +708,7 @@ pub struct ImageLoadTiming {
     pub decode_us: u64,
     pub total_us: u64,
     pub encoded_bytes: usize,
-    pub rgba_bytes: usize,
+    pub decoded_bytes: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -717,14 +717,14 @@ pub struct LoadedImage {
     pub timing: ImageLoadTiming,
 }
 
-pub fn load_png_rgba8_timed(path: &str) -> Result<LoadedImage, String> {
+pub fn load_png_rgb8_timed(path: &str) -> Result<LoadedImage, String> {
     let total_t = Instant::now();
     let read_t = Instant::now();
     let data = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
     let read_us = read_t.elapsed().as_micros() as u64;
 
     let decode_t = Instant::now();
-    let image = decode_png_rgba8_bytes(&data)?;
+    let image = decode_png_rgb8_bytes(&data)?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
     let total_us = total_t.elapsed().as_micros() as u64;
 
@@ -734,21 +734,19 @@ pub fn load_png_rgba8_timed(path: &str) -> Result<LoadedImage, String> {
             decode_us,
             total_us,
             encoded_bytes: data.len(),
-            rgba_bytes: image.rgba.len(),
+            decoded_bytes: image.rgb.len(),
         },
         image,
     })
 }
 
-fn decode_png_rgba8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
+fn decode_png_rgb8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
     use zune_png::zune_core::bytestream::ZCursor;
     use zune_png::zune_core::colorspace::ColorSpace;
     use zune_png::zune_core::options::DecoderOptions;
     use zune_png::PngDecoder;
 
-    let options = DecoderOptions::default()
-        .png_set_strip_to_8bit(true)
-        .png_set_add_alpha_channel(true);
+    let options = DecoderOptions::default().png_set_strip_to_8bit(true);
     let mut decoder = PngDecoder::new_with_options(ZCursor::new(data), options);
     decoder
         .decode_headers()
@@ -764,19 +762,18 @@ fn decode_png_rgba8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
     let buf = decoder
         .decode_raw()
         .map_err(|e| format!("zune png decode: {e}"))?;
-    let rgba = match colorspace {
-        ColorSpace::RGBA => buf,
-        ColorSpace::RGB => {
-            let mut out = Vec::with_capacity(buf.len() / 3 * 4);
-            for px in buf.chunks_exact(3) {
-                out.extend_from_slice(px);
-                out.push(0xff);
+    let rgb = match colorspace {
+        ColorSpace::RGB => buf,
+        ColorSpace::RGBA => {
+            let mut out = Vec::with_capacity(buf.len() / 4 * 3);
+            for px in buf.chunks_exact(4) {
+                out.extend_from_slice(&px[..3]);
             }
             out
         }
         other => return Err(format!("unsupported zune png colorspace: {other:?}")),
     };
-    Ok(DecodedImage { width, height, rgba })
+    Ok(DecodedImage { width, height, rgb })
 }
 
 #[cfg(test)]
