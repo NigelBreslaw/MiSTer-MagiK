@@ -3,6 +3,8 @@
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
 use crate::input::{layout_profile_name, PadInfo, PadState};
 use crate::input::PadPool;
+use crate::input_repeat::RepeatNav;
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupPhase {
@@ -28,6 +30,7 @@ pub struct SetupNav {
     pub list_index: usize,
     pub draft_label: String,
     pub draft_kind: ControllerKind,
+    repeat: RepeatNav,
     prev: PadState,
     /// Ignore the triggering edge on the same frame we opened from pad activity.
     armed: bool,
@@ -57,6 +60,7 @@ impl SetupNav {
             list_index: 0,
             draft_label: String::new(),
             draft_kind: ControllerKind::Unknown,
+            repeat: RepeatNav::default(),
             prev: PadState::default(),
             armed: false,
         }
@@ -275,6 +279,7 @@ impl SetupNav {
     pub fn handle_input(
         &mut self,
         now: &PadState,
+        frame_now: Instant,
         info: &PadInfo,
         db: &ControllerDb,
     ) -> SetupAction {
@@ -291,10 +296,10 @@ impl SetupNav {
 
         let action = match self.phase {
             SetupPhase::Detected => self.handle_detected(now, info),
-            SetupPhase::NewOrExisting => self.handle_new_or_existing(now, db),
-            SetupPhase::PickExisting => self.handle_pick_existing(now, db),
+            SetupPhase::NewOrExisting => self.handle_new_or_existing(now, frame_now, db),
+            SetupPhase::PickExisting => self.handle_pick_existing(now, frame_now, db),
             SetupPhase::Configure => self.handle_configure(now, info, db),
-            SetupPhase::NameKind => self.handle_name_kind(now),
+            SetupPhase::NameKind => self.handle_name_kind(now, frame_now),
             SetupPhase::None => SetupAction::None,
         };
 
@@ -315,12 +320,19 @@ impl SetupNav {
         SetupAction::None
     }
 
-    fn handle_new_or_existing(&mut self, now: &PadState, db: &ControllerDb) -> SetupAction {
-        if rising(now.dpad_left, self.prev.dpad_left) || rising(now.dpad_up, self.prev.dpad_up) {
+    fn handle_new_or_existing(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        db: &ControllerDb,
+    ) -> SetupAction {
+        if self.repeat.tick_left(now.dpad_left, frame_now)
+            || self.repeat.tick_up(now.dpad_up, frame_now)
+        {
             self.list_index = 0;
         }
-        if rising(now.dpad_right, self.prev.dpad_right)
-            || rising(now.dpad_down, self.prev.dpad_down)
+        if self.repeat.tick_right(now.dpad_right, frame_now)
+            || self.repeat.tick_down(now.dpad_down, frame_now)
         {
             self.list_index = 1;
         }
@@ -340,17 +352,22 @@ impl SetupNav {
         }
     }
 
-    fn handle_pick_existing(&mut self, now: &PadState, db: &ControllerDb) -> SetupAction {
+    fn handle_pick_existing(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        db: &ControllerDb,
+    ) -> SetupAction {
         let count = db.list_entries().len();
         if count == 0 {
             self.phase = SetupPhase::NewOrExisting;
             return SetupAction::None;
         }
 
-        if rising(now.dpad_up, self.prev.dpad_up) {
+        if self.repeat.tick_up(now.dpad_up, frame_now) {
             self.list_index = self.list_index.saturating_sub(1);
         }
-        if rising(now.dpad_down, self.prev.dpad_down) {
+        if self.repeat.tick_down(now.dpad_down, frame_now) {
             self.list_index = (self.list_index + 1).min(count - 1);
         }
         if rising(now.btn_a, self.prev.btn_a) {
@@ -380,12 +397,12 @@ impl SetupNav {
         }
     }
 
-    fn handle_name_kind(&mut self, now: &PadState) -> SetupAction {
-        if rising(now.dpad_up, self.prev.dpad_up) {
+    fn handle_name_kind(&mut self, now: &PadState, frame_now: Instant) -> SetupAction {
+        if self.repeat.tick_up(now.dpad_up, frame_now) {
             let idx = self.draft_kind.index();
             self.draft_kind = ControllerKind::from_index(idx.saturating_sub(1));
         }
-        if rising(now.dpad_down, self.prev.dpad_down) {
+        if self.repeat.tick_down(now.dpad_down, frame_now) {
             let idx = self.draft_kind.index();
             self.draft_kind =
                 ControllerKind::from_index((idx + 1).min(ControllerKind::ALL.len() - 1));

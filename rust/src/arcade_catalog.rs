@@ -87,6 +87,17 @@ struct GamelistEntry {
     image: String,
 }
 
+#[derive(Clone, Debug)]
+struct IndexedGamelistEntry {
+    rel: PathBuf,
+    entry: GamelistEntry,
+}
+
+struct GamelistIndex {
+    by_rel: HashMap<PathBuf, GamelistEntry>,
+    by_basename: HashMap<String, IndexedGamelistEntry>,
+}
+
 pub struct BuildOptions {
     pub sample_image_decodes: usize,
 }
@@ -139,13 +150,13 @@ pub fn build_with_options(
     report("Indexing arcade…", "Reading gamelist.xml…");
     let gamelist = {
         let t = Instant::now();
-        let map = parse_gamelist(&root);
+        let index = parse_gamelist(&root);
         timings.parse_gamelist = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
-            count: map.len() as u64,
-            notes: "gamelist.xml".into(),
+            count: index.by_rel.len() as u64,
+            notes: format!("basename_index={}", index.by_basename.len()),
         };
-        map
+        index
     };
 
     let mut games = {
@@ -169,6 +180,20 @@ pub fn build_with_options(
         rows
     };
 
+    report("Indexing arcade…", "Resolving screenshots…");
+    let setname_resolved = {
+        let n = resolve_setname_images(&root, &mut games, |done, total| {
+            if done == total || done % 400 == 0 {
+                report(
+                    "Indexing arcade…",
+                    &format!("Reading setnames {done}/{total}…"),
+                );
+            }
+        });
+        eprintln!("catalog: setname_resolved={n}");
+        n
+    };
+
     report("Indexing arcade…", "Checking screenshots…");
     {
         let t = Instant::now();
@@ -176,7 +201,7 @@ pub fn build_with_options(
         timings.resolve_images = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
             count: (found + missing) as u64,
-            notes: format!("png_found={found} png_missing={missing}"),
+            notes: format!("png_found={found} png_missing={missing} setname_resolved={setname_resolved}"),
         };
     }
 
@@ -346,13 +371,17 @@ fn prefer_game_entry(a: &ArcadeGameEntry, b: &ArcadeGameEntry) -> bool {
     a.mra_path < b.mra_path
 }
 
-fn parse_gamelist(root: &Path) -> HashMap<PathBuf, GamelistEntry> {
+fn parse_gamelist(root: &Path) -> GamelistIndex {
     let path = root.join("gamelist.xml");
     let Ok(data) = std::fs::read_to_string(&path) else {
-        return HashMap::new();
+        return GamelistIndex {
+            by_rel: HashMap::new(),
+            by_basename: HashMap::new(),
+        };
     };
 
-    let mut map = HashMap::new();
+    let mut by_rel = HashMap::new();
+    let mut by_basename = HashMap::new();
     let mut in_game = false;
     let mut cur_path = String::new();
     let mut cur_name = String::new();
@@ -388,13 +417,38 @@ fn parse_gamelist(root: &Path) -> HashMap<PathBuf, GamelistEntry> {
                 if tag == "game" && in_game {
                     if !cur_path.is_empty() {
                         let rel = es_relative_path(&cur_path);
-                        map.insert(
-                            rel,
-                            GamelistEntry {
-                                name: cur_name.clone(),
-                                image: cur_image.clone(),
-                            },
-                        );
+                        let entry = GamelistEntry {
+                            name: cur_name.clone(),
+                            image: cur_image.clone(),
+                        };
+                        by_rel.insert(rel.clone(), entry.clone());
+                        if let Some(base) = rel.file_name().and_then(|n| n.to_str()) {
+                            let key = base.to_ascii_lowercase();
+                            match by_basename.get(&key) {
+                                None => {
+                                    by_basename.insert(
+                                        key,
+                                        IndexedGamelistEntry {
+                                            rel: rel.clone(),
+                                            entry,
+                                        },
+                                    );
+                                }
+                                Some(existing) => {
+                                    if prefer_gamelist_entry(
+                                        &existing.entry,
+                                        &existing.rel,
+                                        &entry,
+                                        &rel,
+                                    ) {
+                                        by_basename.insert(
+                                            key,
+                                            IndexedGamelistEntry { rel, entry },
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                     in_game = false;
                 } else if in_game && !field.is_empty() && !text.is_empty() {
@@ -417,7 +471,37 @@ fn parse_gamelist(root: &Path) -> HashMap<PathBuf, GamelistEntry> {
         }
     }
 
-    map
+    GamelistIndex {
+        by_rel,
+        by_basename,
+    }
+}
+
+fn prefer_gamelist_entry(
+    existing: &GamelistEntry,
+    existing_rel: &Path,
+    new: &GamelistEntry,
+    new_rel: &Path,
+) -> bool {
+    let existing_org = is_organized_mirror(existing_rel);
+    let new_org = is_organized_mirror(new_rel);
+    if existing_org != new_org {
+        return !new_org;
+    }
+    if existing.image.is_empty() != new.image.is_empty() {
+        return !new.image.is_empty();
+    }
+    false
+}
+
+fn lookup_gamelist<'a>(index: &'a GamelistIndex, rel: &Path, basename: &str) -> Option<&'a GamelistEntry> {
+    if let Some(entry) = index.by_rel.get(rel) {
+        return Some(entry);
+    }
+    index
+        .by_basename
+        .get(&basename.to_ascii_lowercase())
+        .map(|i| &i.entry)
 }
 
 fn es_relative_path(rel: &str) -> PathBuf {
@@ -435,7 +519,7 @@ fn mra_relative_key(root: &Path, path: &Path) -> PathBuf {
 fn merge_entries(
     root: &Path,
     mra_paths: &[PathBuf],
-    gamelist: &HashMap<PathBuf, GamelistEntry>,
+    gamelist: &GamelistIndex,
     mut on_progress: impl FnMut(usize, usize),
 ) -> (Vec<ArcadeGameEntry>, usize) {
     let mut matched = 0usize;
@@ -444,7 +528,11 @@ fn merge_entries(
 
     for (i, path) in mra_paths.iter().enumerate() {
         let rel = mra_relative_key(root, path);
-        let meta = gamelist.get(&rel);
+        let basename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let meta = lookup_gamelist(gamelist, &rel, basename);
         if meta.is_some() {
             matched += 1;
         }
@@ -489,6 +577,66 @@ fn resolve_image_path(root: &Path, rel: &str) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+const SETNAME_READ_BYTES: usize = 4096;
+const MEDIA_IMAGE_DIRS: &[&str] = &[
+    "media/screenshot",
+    "media/screenshots",
+    "media/boxart",
+    "media/images",
+];
+
+fn read_mra_setname(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; SETNAME_READ_BYTES];
+    let n = file.read(&mut buf).ok()?;
+    if n == 0 {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf[..n]);
+    let open = "<setname>";
+    let close = "</setname>";
+    let start = text.find(open)? + open.len();
+    let end = start + text[start..].find(close)?;
+    let name = text[start..end].trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn resolve_setname_media(root: &Path, setname: &str) -> Option<PathBuf> {
+    for dir in MEDIA_IMAGE_DIRS {
+        let path = root.join(dir).join(format!("{setname}.png"));
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn resolve_setname_images(
+    root: &Path,
+    games: &mut [ArcadeGameEntry],
+    mut on_progress: impl FnMut(usize, usize),
+) -> usize {
+    let mut resolved = 0usize;
+    let total = games.len();
+    for (i, game) in games.iter_mut().enumerate() {
+        if game.image_path.is_empty() {
+            if let Some(setname) = read_mra_setname(Path::new(&game.mra_path)) {
+                if let Some(path) = resolve_setname_media(root, &setname) {
+                    game.image_path = path.display().to_string();
+                    resolved += 1;
+                }
+            }
+        }
+        on_progress(i + 1, total);
+    }
+    resolved
 }
 
 fn resolve_images(games: &mut [ArcadeGameEntry]) -> (usize, usize) {

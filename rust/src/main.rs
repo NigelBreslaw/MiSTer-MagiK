@@ -22,6 +22,7 @@ mod fb;
 mod fpga;
 mod frame_profile;
 mod input;
+mod input_repeat;
 mod launcher;
 mod setup_nav;
 mod ui_display;
