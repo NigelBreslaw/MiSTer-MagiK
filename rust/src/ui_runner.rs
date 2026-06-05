@@ -52,6 +52,7 @@ use crate::launcher::{self, LauncherNav, Screen};
 use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
+use slint_ui::launcher::PreviewStatus;
 use slint::platform::software_renderer::PhysicalRegion;
 
 pub const UI_SCENES: &[&str] = &[
@@ -280,6 +281,7 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
     bridge.set_arcade_preview_has_image(false);
+    bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
     bridge.set_arcade_preview_image(Image::default());
     bridge.set_setup_visible(false);
@@ -330,6 +332,8 @@ struct PreviewState {
     worker: PreviewWorker,
     last_preview_idx: Option<usize>,
     current_generation: u64,
+    cached_path: String,
+    cached_image: Option<Image>,
 }
 
 impl PreviewState {
@@ -338,6 +342,8 @@ impl PreviewState {
             worker: PreviewWorker::new(),
             last_preview_idx: None,
             current_generation: 0,
+            cached_path: String::new(),
+            cached_image: None,
         }
     }
 
@@ -346,6 +352,7 @@ impl PreviewState {
             self.last_preview_idx = None;
             self.current_generation = 0;
             bridge.set_arcade_preview_has_image(false);
+            bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
             bridge.set_arcade_preview_image(Image::default());
         }
@@ -365,6 +372,7 @@ fn request_arcade_preview(
 
     let Some(catalog) = catalog else {
         bridge.set_arcade_preview_has_image(false);
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
         bridge.set_arcade_preview_image(Image::default());
         return;
@@ -372,6 +380,7 @@ fn request_arcade_preview(
 
     let Some(game) = catalog.games.get(selected) else {
         bridge.set_arcade_preview_has_image(false);
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
         bridge.set_arcade_preview_image(Image::default());
         return;
@@ -379,17 +388,29 @@ fn request_arcade_preview(
 
     bridge.set_arcade_preview_title(game.title.clone().into());
     if game.has_image {
+        if preview.cached_path == game.image_path {
+            if let Some(image) = preview.cached_image.as_ref() {
+                bridge.set_arcade_preview_image(image.clone());
+                bridge.set_arcade_preview_has_image(true);
+                bridge.set_arcade_preview_status(PreviewStatus::Ready);
+                return;
+            }
+        }
         preview.current_generation =
             preview
                 .worker
                 .request(selected, game.title.clone(), game.image_path.clone());
-        bridge.set_arcade_preview_image(Image::default());
-        bridge.set_arcade_preview_has_image(false);
+        if preview.cached_image.is_none() {
+            bridge.set_arcade_preview_image(Image::default());
+            bridge.set_arcade_preview_has_image(false);
+        }
+        bridge.set_arcade_preview_status(PreviewStatus::Loading);
         return;
     }
     preview.current_generation = 0;
     bridge.set_arcade_preview_image(Image::default());
     bridge.set_arcade_preview_has_image(false);
+    bridge.set_arcade_preview_status(PreviewStatus::Empty);
 }
 
 fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
@@ -401,15 +422,20 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
         }
         bridge.set_arcade_preview_title(result.title.into());
         if let Some(image) = result.image {
-            bridge.set_arcade_preview_image(png_to_slint_image(
+            let image = png_to_slint_image(
                 image.width,
                 image.height,
                 image.rgba,
-            ));
+            );
+            preview.cached_path = result.image_path;
+            preview.cached_image = Some(image.clone());
+            bridge.set_arcade_preview_image(image);
             bridge.set_arcade_preview_has_image(true);
+            bridge.set_arcade_preview_status(PreviewStatus::Ready);
         } else {
             bridge.set_arcade_preview_image(Image::default());
             bridge.set_arcade_preview_has_image(false);
+            bridge.set_arcade_preview_status(PreviewStatus::Empty);
         }
         dirty = true;
     }
