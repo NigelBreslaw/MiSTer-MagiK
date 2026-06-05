@@ -7,6 +7,7 @@
 //!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
 //!   input     gamepad log / sniff / calibrate
 //!   catalog-bench  benchmark arcade catalog pipeline phases
+//!   library-bench  benchmark whole MiSTer library indexing + archive TOCs
 //!   preview-bench  benchmark arcade preview image read/decode
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
@@ -24,6 +25,7 @@ mod fpga;
 mod frame_profile;
 mod input;
 mod input_repeat;
+mod library_bench;
 mod launcher;
 mod preview_bench;
 mod preview_worker;
@@ -68,11 +70,12 @@ fn main() {
         "scenes" => ui_runner::print_scenes(),
         "input" => run_input(),
         "catalog-bench" => run_catalog_bench(),
+        "library-bench" => library_bench::run(),
         "preview-bench" => preview_bench::run(),
         other => {
             eprintln!(
                 "unknown command '{other}' \
-                 (use: read | fb | ui | scenes | input | catalog-bench | preview-bench)"
+                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | preview-bench)"
             );
             std::process::exit(2);
         }
@@ -97,14 +100,22 @@ fn is_launcher_boot(arg: &str) -> bool {
 fn should_handoff_to_mister(arg: &str) -> bool {
     if matches!(
         arg,
-        "read" | "fb" | "ui" | "scenes" | "input" | "catalog-bench" | "preview-bench"
+        "read" | "fb" | "ui" | "scenes" | "input" | "catalog-bench" | "library-bench"
+            | "preview-bench"
     ) {
         return false;
     }
     if arg.ends_with("menu.rbf") {
         return false;
     }
-    arg.ends_with(".rbf") || arg.ends_with(".mra") || arg.ends_with(".mgl")
+    arg.ends_with(".rbf")
+        || arg.ends_with(".mra")
+        || arg.ends_with(".mgl")
+        || arg.ends_with(".zip")
+        || arg.ends_with(".7z")
+        || arg.ends_with(".lha")
+        || arg.ends_with(".lzh")
+        || arg.ends_with(".rar")
 }
 
 fn exec_mister(args: &[String]) {
