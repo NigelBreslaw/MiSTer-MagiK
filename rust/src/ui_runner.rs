@@ -93,12 +93,13 @@ impl AnimationClock {
             .map(|s| s.to_ascii_lowercase().replace('_', "-"))
             .as_deref()
         {
-            None | Some("") | Some("wall") | Some("wall-clock") => Self {
-                fixed_time: None,
+            None | Some("") | Some("fixed60") | Some("fixed-60") | Some("frame")
+            | Some("frame-clock") => Self {
+                fixed_time: Some(Rc::new(Cell::new(Duration::ZERO))),
                 fixed_step: Duration::from_nanos(16_666_667),
             },
-            Some("fixed60") | Some("fixed-60") | Some("frame") | Some("frame-clock") => Self {
-                fixed_time: Some(Rc::new(Cell::new(Duration::ZERO))),
+            Some("wall") | Some("wall-clock") => Self {
+                fixed_time: None,
                 fixed_step: Duration::from_nanos(16_666_667),
             },
             other => {
@@ -128,6 +129,11 @@ impl AnimationClock {
             t.set(t.get() + self.fixed_step);
         }
     }
+}
+
+fn update_slint_animations(animation_clock: &AnimationClock) {
+    animation_clock.advance();
+    slint::platform::update_timers_and_animations();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -359,7 +365,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.global::<slint_ui::console_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
             app.show().expect("show");
-            run_console_scroll_loop(secs, &ui, &mut disp, &window, app);
+            run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
         }
         "dirty_band" => {
             let pct = dirty_band_pct_from_env();
@@ -379,7 +385,7 @@ pub fn run_ui(f: &mut Fpga) {
             sync_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
-            run_controller_loop(secs, &ui, &mut disp, &window, pad, app);
+            run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
         }
         "launcher" => {
             let pad = open_pads();
@@ -389,7 +395,7 @@ pub fn run_ui(f: &mut Fpga) {
             init_launcher_bridge(&app, &pad);
             app.show().expect("show");
             window.request_redraw();
-            run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app);
+            run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
         }
         _ => unreachable!(),
     }
@@ -647,6 +653,7 @@ fn paint_loading_overlay(
     window: &Rc<MinimalSoftwareWindow>,
     cached: &mut [Pixel],
     preview: &mut PreviewState,
+    animation_clock: &AnimationClock,
     message: &str,
     detail: &str,
 ) {
@@ -654,7 +661,7 @@ fn paint_loading_overlay(
         app, pad, nav, setup, message, detail, None, preview,
     );
     window.request_redraw();
-    slint::platform::update_timers_and_animations();
+    update_slint_animations(animation_clock);
     window.draw_if_needed(|renderer| {
         let region = renderer.render(cached, ui.render_w());
         let _ = region;
@@ -673,9 +680,10 @@ fn index_arcade_catalog(
     window: &Rc<MinimalSoftwareWindow>,
     cached: &mut [Pixel],
     preview: &mut PreviewState,
+    animation_clock: &AnimationClock,
 ) -> ArcadeCatalog {
     paint_loading_overlay(
-        app, pad, nav, setup, ui, disp, window, cached, preview,
+        app, pad, nav, setup, ui, disp, window, cached, preview, animation_clock,
         "Indexing arcade…", "Starting…",
     );
 
@@ -685,7 +693,7 @@ fn index_arcade_catalog(
 
     let mut progress = |title: &str, detail: &str| {
         paint_loading_overlay(
-            app, pad, nav, setup, ui, disp, window, cached, preview,
+            app, pad, nav, setup, ui, disp, window, cached, preview, animation_clock,
             title, detail,
         );
     };
@@ -1058,6 +1066,7 @@ fn run_console_scroll_loop(
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
     app: slint_ui::console_scroll::ConsoleScroll,
+    animation_clock: &AnimationClock,
 ) {
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let scale = ui.fb_scale();
@@ -1068,7 +1077,7 @@ fn run_console_scroll_loop(
     let mut font = ConsoleFont::new(12.0);
 
     window.request_redraw();
-    slint::platform::update_timers_and_animations();
+    update_slint_animations(animation_clock);
     window.draw_if_needed(|renderer| {
         let _ = renderer.render(&mut cached, ui.render_w());
     });
@@ -1127,7 +1136,7 @@ fn run_console_scroll_loop(
             fps_window_start = Instant::now();
         }
 
-        slint::platform::update_timers_and_animations();
+        update_slint_animations(animation_clock);
         window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut cached, ui.render_w());
             label_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
