@@ -14,7 +14,7 @@ BUILD_FLAG=()
 REMOTE="/media/fat/mister-magic/mister-magic-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
-SSH="$HERE/scripts/mister_ssh.py"
+MISTER="$HERE/scripts/mister"
 
 # Slint scenes (see rust/ui/bench/README.md)
 BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll)
@@ -31,6 +31,7 @@ SKIP_BUILD=0
 SKIP_DEVICE=0
 REPLACE_LABEL=0
 SCENE_SECS=15
+SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 
 usage() {
   sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
@@ -101,7 +102,7 @@ PY
 fi
 
 mister() {
-  uv run python "$SSH" "$@"
+  "$MISTER" "$@"
 }
 
 rustc_version() {
@@ -169,7 +170,7 @@ set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz (see scripts/bench-diagnose.sh).
 kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
-sleep 0.5
+sleep $SETTLE_SECS
 ${render_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
@@ -314,7 +315,7 @@ echo "    rustc=$rustc_ver  compile_sec=${HOST_COMPILE_SEC:-n/a}  bytes=$HOST_BY
 
 if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   echo "==> Deploy $BIN"
-  mister run "mkdir -p /media/fat/mister-magic"
+  mister run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"
   mister run "file $REMOTE && ldd $REMOTE 2>&1 | head -3" || HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ldd-fail"

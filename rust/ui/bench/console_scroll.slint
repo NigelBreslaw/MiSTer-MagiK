@@ -1,0 +1,99 @@
+// Prototype: console-style list scroller.
+// Slint draws the static chrome; Rust scrolls the inner list surface by
+// framebuffer copy and redraws only the newly exposed strip.
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
+import "../fonts/PressStart2P-Regular.ttf";
+
+export component ConsoleScroll inherits MisterWindow {
+    background: #0b1020;
+    default-font-family: "Press Start 2P";
+
+    property <int> s: MisterUi.scale;
+    in property <string> fps-label: "fps --";
+    in property <string> blit-label: "blit --us";
+    in property <string> strip-label: "strip --us";
+    in property <string> row-label: "row --";
+
+    Text {
+        x: 32px * s;
+        y: 20px * s;
+        text: "bench: console_scroll";
+        font-size: 24px * s;
+        color: #e8ecff;
+    }
+
+    Text {
+        x: 32px * s;
+        y: 52px * s;
+        text: "Slint chrome + fb scroll-copy list surface";
+        font-size: 8px * s;
+        color: #8b93b8;
+    }
+
+    Rectangle {
+        x: 32px * s;
+        y: 88px * s;
+        width: 896px * s;
+        height: 392px * s;
+        background: #050812;
+        border-width: 2px * s;
+        border-color: #394867;
+    }
+
+    Rectangle {
+        x: 32px * s;
+        y: 88px * s;
+        width: 896px * s;
+        height: 24px * s;
+        background: #182848;
+
+        Text {
+            x: 10px * s;
+            y: 8px * s;
+            text: "FAST PATH: COPY OLD PIXELS UP, DRAW ONLY THE NEW STRIP";
+            font-size: 8px * s;
+            color: #f5d76e;
+        }
+    }
+
+    Rectangle {
+        x: 32px * s;
+        y: 492px * s;
+        width: 896px * s;
+        height: 28px * s;
+        background: #11182b;
+
+        Text {
+            x: 10px * s;
+            y: 9px * s;
+            text: root.fps-label;
+            font-size: 8px * s;
+            color: #e8ecff;
+        }
+
+        Text {
+            x: 166px * s;
+            y: 9px * s;
+            text: root.blit-label;
+            font-size: 8px * s;
+            color: #7dd3fc;
+        }
+
+        Text {
+            x: 360px * s;
+            y: 9px * s;
+            text: root.strip-label;
+            font-size: 8px * s;
+            color: #86efac;
+        }
+
+        Text {
+            x: 590px * s;
+            y: 9px * s;
+            text: root.row-label;
+            font-size: 8px * s;
+            color: #fca5a5;
+        }
+    }
+}

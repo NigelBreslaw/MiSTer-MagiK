@@ -32,6 +32,9 @@ mod slint_ui {
     pub mod list_scroll {
         include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
     }
+    pub mod console_scroll {
+        include!(concat!(env!("OUT_DIR"), "/console_scroll.rs"));
+    }
     pub mod dirty_band {
         include!(concat!(env!("OUT_DIR"), "/dirty_band.rs"));
     }
@@ -66,6 +69,7 @@ pub const UI_SCENES: &[&str] = &[
     "text_heavy",
     "solid_fill",
     "list_scroll",
+    "console_scroll",
     "dirty_band",
 ];
 
@@ -255,6 +259,14 @@ pub fn run_ui(f: &mut Fpga) {
             configure_window(&ui, &window);
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window);
+        }
+        "console_scroll" => {
+            let app =
+                slint_ui::console_scroll::ConsoleScroll::new().expect("ConsoleScroll::new");
+            app.global::<slint_ui::console_scroll::MisterUi>().set_scale(SLINT_UI_SCALE);
+            configure_window(&ui, &window);
+            app.show().expect("show");
+            run_console_scroll_loop(secs, &ui, &mut disp, &window, app);
         }
         "dirty_band" => {
             let pct = dirty_band_pct_from_env();
@@ -898,6 +910,247 @@ fn run_frame_loop(
         profiler.finish();
     }
     cpu_profile::finish(cpu);
+}
+
+const CONSOLE_LIST_X: usize = 40;
+const CONSOLE_LIST_Y: usize = 116;
+const CONSOLE_LIST_W: usize = 880;
+const CONSOLE_LIST_H: usize = 356;
+const CONSOLE_ROW_H: usize = 44;
+
+fn run_console_scroll_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    app: slint_ui::console_scroll::ConsoleScroll,
+) {
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let scale = ui.fb_scale();
+    let fb_x = CONSOLE_LIST_X * scale;
+    let fb_y = CONSOLE_LIST_Y * scale;
+    let scroll_px = 2usize;
+    let mut surface = vec![Pixel(0); CONSOLE_LIST_W * CONSOLE_LIST_H];
+
+    window.request_redraw();
+    slint::platform::update_timers_and_animations();
+    window.draw_if_needed(|renderer| {
+        let _ = renderer.render(&mut cached, ui.render_w());
+    });
+    disp.wait_vsync();
+    copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+    draw_console_virtual_strip(&mut surface, CONSOLE_LIST_W, CONSOLE_LIST_W, CONSOLE_LIST_H, 0, 0);
+    disp.copy_rect_scaled_at(
+        fb_x,
+        fb_y,
+        scale,
+        &surface,
+        CONSOLE_LIST_W,
+        CONSOLE_LIST_H,
+    );
+
+    let label = if secs == 0 { "forever".to_string() } else { format!("{secs}s") };
+    println!("console_scroll running {label} — fb scroll-copy + exposed-strip redraw");
+
+    let start = Instant::now();
+    let mut frames = 0u64;
+    let mut virtual_y = 0usize;
+    let mut fps_window_start = Instant::now();
+    let mut fps_frames = 0u64;
+    let mut ram_scroll_us = 0u128;
+    let mut strip_us = 0u128;
+    let mut fb_copy_us = 0u128;
+    let mut label_rect: Option<DirtyRect> = None;
+
+    while secs == 0 || start.elapsed().as_secs() < secs {
+        if fps_window_start.elapsed().as_millis() >= 1000 {
+            let nn = fps_frames.max(1) as u128;
+            let top_row = (virtual_y / CONSOLE_ROW_H) % 1000;
+            app.set_fps_label(format!("fps {fps_frames}").into());
+            app.set_blit_label(format!("ram scroll {}us", ram_scroll_us / nn).into());
+            app.set_strip_label(format!("new strip {}us", strip_us / nn).into());
+            app.set_row_label(format!("top row {top_row:03}").into());
+            window.request_redraw();
+            println!(
+                "  fps ~ {fps_frames}  | ram-scroll {}us  exposed-strip {}us  fb-copy {}us  top-row {top_row}",
+                ram_scroll_us / nn,
+                strip_us / nn,
+                fb_copy_us / nn
+            );
+            fps_frames = 0;
+            ram_scroll_us = 0;
+            strip_us = 0;
+            fb_copy_us = 0;
+            fps_window_start = Instant::now();
+        }
+
+        slint::platform::update_timers_and_animations();
+        window.draw_if_needed(|renderer| {
+            let region = renderer.render(&mut cached, ui.render_w());
+            label_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+        });
+
+        disp.wait_vsync();
+        if let Some(rect) = label_rect.take() {
+            copy_cached_rect(disp, ui, &cached, rect);
+        }
+
+        let t0 = Instant::now();
+        scroll_surface_y(&mut surface, CONSOLE_LIST_W, CONSOLE_LIST_H, scroll_px);
+        let t1 = Instant::now();
+        virtual_y = virtual_y.wrapping_add(scroll_px);
+        draw_console_virtual_strip(
+            &mut surface,
+            CONSOLE_LIST_W,
+            CONSOLE_LIST_W,
+            scroll_px,
+            CONSOLE_LIST_H - scroll_px,
+            virtual_y + CONSOLE_LIST_H - scroll_px,
+        );
+        let t2 = Instant::now();
+        disp.copy_rect_scaled_at(
+            fb_x,
+            fb_y,
+            scale,
+            &surface,
+            CONSOLE_LIST_W,
+            CONSOLE_LIST_H,
+        );
+        let t3 = Instant::now();
+
+        frames += 1;
+        fps_frames += 1;
+        ram_scroll_us += (t1 - t0).as_micros();
+        strip_us += (t2 - t1).as_micros();
+        fb_copy_us += (t3 - t2).as_micros();
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
+        frames as f64 / elapsed
+    );
+}
+
+fn draw_console_virtual_strip(
+    dst: &mut [Pixel],
+    stride: usize,
+    width: usize,
+    height: usize,
+    dst_y: usize,
+    virtual_y_start: usize,
+) {
+    let row_h = CONSOLE_ROW_H;
+    for dy in 0..height {
+        let vy = virtual_y_start + dy;
+        let row = vy / row_h;
+        let row_y = vy % row_h;
+        let y = dst_y + dy;
+        if y * stride >= dst.len() {
+            break;
+        }
+        for dx in 0..width {
+            let pos = y * stride + dx;
+            if pos >= dst.len() {
+                break;
+            }
+            dst[pos] = console_pixel(row, dx, row_y);
+        }
+    }
+}
+
+fn scroll_surface_y(surface: &mut [Pixel], w: usize, h: usize, shift: usize) {
+    if shift == 0 || shift >= h {
+        return;
+    }
+    let rows = h - shift;
+    surface.copy_within(shift * w..h * w, 0);
+    let tail = rows * w;
+    for p in &mut surface[tail..h * w] {
+        *p = Pixel(0);
+    }
+}
+
+fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
+    let selected = row % 11 == 5;
+    let bg = if selected {
+        Pixel(0x003a2750)
+    } else if row % 2 == 0 {
+        Pixel(0x00101928)
+    } else {
+        Pixel(0x000b1220)
+    };
+    if y < 1 || y >= CONSOLE_ROW_H - 1 {
+        return if selected { Pixel(0x00f5d76e) } else { Pixel(0x001f2d44) };
+    }
+    if x < 1 || x >= CONSOLE_LIST_W - 1 {
+        return Pixel(0x00263752);
+    }
+
+    let text = format!("ROW {row:03}  MISTER GAME");
+    let text_color = if selected { Pixel(0x00fff2a8) } else { Pixel(0x00dbe7ff) };
+    if console_text_pixel(&text, x, y, 12, 14, 2) {
+        return text_color;
+    }
+    if console_text_pixel("COPY", x, y, CONSOLE_LIST_W - 110, 15, 1) {
+        return Pixel(0x007dd3fc);
+    }
+    bg
+}
+
+fn console_text_pixel(text: &str, x: usize, y: usize, tx: usize, ty: usize, scale: usize) -> bool {
+    if x < tx || y < ty {
+        return false;
+    }
+    let lx = x - tx;
+    let ly = y - ty;
+    let cell_w = 6 * scale;
+    let glyph_y = ly / scale;
+    if glyph_y >= 7 {
+        return false;
+    }
+    let ch_index = lx / cell_w;
+    let glyph_x = (lx % cell_w) / scale;
+    if glyph_x >= 5 {
+        return false;
+    }
+    let Some(ch) = text.chars().nth(ch_index) else {
+        return false;
+    };
+    let rows = console_glyph(ch);
+    (rows[glyph_y] & (1 << (4 - glyph_x))) != 0
+}
+
+fn console_glyph(ch: char) -> [u8; 7] {
+    match ch {
+        '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
+        '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        '2' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
+        '3' => [0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e],
+        '4' => [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
+        '5' => [0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e],
+        '6' => [0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e],
+        '7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
+        '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e],
+        'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        'C' => [0x0f, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0f],
+        'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
+        'G' => [0x0f, 0x10, 0x10, 0x13, 0x11, 0x11, 0x0f],
+        'I' => [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
+        'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
+        'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
+        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+        ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
+        ' ' => [0; 7],
+        _ => [0x1f, 0x01, 0x02, 0x04, 0x04, 0x00, 0x04],
+    }
 }
 
 fn run_controller_loop(

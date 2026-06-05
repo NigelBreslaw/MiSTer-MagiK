@@ -322,6 +322,104 @@ impl Display {
             libc::ioctl(self.fb0.as_raw_fd(), FBIO_WAITFORVSYNC, &arg as *const u32);
         }
     }
+
+    /// Scroll a framebuffer rectangle vertically in-place.
+    ///
+    /// This is the console-style fast path: keep most pixels already on screen,
+    /// then redraw only the newly exposed strip.
+    pub fn scroll_rect_y(&mut self, x: usize, y: usize, w: usize, h: usize, dy: isize) {
+        if w == 0 || h == 0 || dy == 0 {
+            return;
+        }
+        let dst_w = self.w;
+        let x1 = (x + w).min(self.w);
+        let y1 = (y + h).min(self.h);
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        let rows = y1 - y;
+        let shift = dy.unsigned_abs();
+        if shift >= rows {
+            return;
+        }
+        let width = x1 - x;
+        let buf = self.buffer_mut();
+
+        if dy < 0 {
+            for row in 0..(rows - shift) {
+                let src = (y + row + shift) * dst_w + x;
+                let dst = (y + row) * dst_w + x;
+                buf.copy_within(src..src + width, dst);
+            }
+        } else {
+            for row in (0..(rows - shift)).rev() {
+                let src = (y + row) * dst_w + x;
+                let dst = (y + row + shift) * dst_w + x;
+                buf.copy_within(src..src + width, dst);
+            }
+        }
+    }
+
+    /// Copy a dense source rectangle into the framebuffer at (x,y).
+    pub fn copy_rect_from(&mut self, x: usize, y: usize, w: usize, h: usize, src: &[Pixel]) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let dst_w = self.w;
+        let x1 = (x + w).min(self.w);
+        let y1 = (y + h).min(self.h);
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        let copy_w = x1 - x;
+        let copy_h = y1 - y;
+        let dst = self.buffer_mut();
+        for row in 0..copy_h {
+            let src_a = row * w;
+            let dst_a = (y + row) * dst_w + x;
+            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+        }
+    }
+
+    /// Copy a logical source rectangle into an arbitrary framebuffer location,
+    /// nearest-neighbour scaled by `scale`.
+    pub fn copy_rect_scaled_at(
+        &mut self,
+        dst_x: usize,
+        dst_y: usize,
+        scale: usize,
+        src: &[Pixel],
+        src_w: usize,
+        src_h: usize,
+    ) {
+        if scale <= 1 {
+            self.copy_rect_from(dst_x, dst_y, src_w, src_h, src);
+            return;
+        }
+        let dst_w = self.w;
+        let dst_h = self.h;
+        let dst = self.buffer_mut();
+        for sy in 0..src_h {
+            let src_row = &src[sy * src_w..(sy + 1) * src_w];
+            let py0 = dst_y + sy * scale;
+            for dy in 0..scale {
+                let py = py0 + dy;
+                if py >= dst_h {
+                    break;
+                }
+                let dst_row = &mut dst[py * dst_w..(py + 1) * dst_w];
+                for (sx, &color) in src_row.iter().enumerate() {
+                    let px0 = dst_x + sx * scale;
+                    for dx in 0..scale {
+                        let px = px0 + dx;
+                        if px < dst_w {
+                            dst_row[px] = color;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Drop for Display {
