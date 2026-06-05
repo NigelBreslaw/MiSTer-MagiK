@@ -1,6 +1,6 @@
 import { ListView } from "std-widgets.slint";
 import { MisterUi } from "mister_window.slint";
-import { MisterBridge } from "mister_bridge.slint";
+import { MisterBridge, PreviewStatus } from "mister_bridge.slint";
 
 export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
@@ -91,7 +91,7 @@ export component ArcadeListScreen inherits Rectangle {
                 if !MisterBridge.arcade-preview-has-image : Text {
                     width: 100%;
                     height: 100%;
-                    text: "No screenshot";
+                    text: MisterBridge.arcade-preview-status == PreviewStatus.loading ? "Loading screenshot" : "No screenshot";
                     color: #706080;
                     font-size: 8px * s;
                     horizontal-alignment: center;

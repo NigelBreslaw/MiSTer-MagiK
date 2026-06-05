@@ -1,6 +1,12 @@
 // Rust ↔ Slint bridge for MiSTer input and app state.
 import { ArcadeGame } from "arcade_game.slint";
 
+export enum PreviewStatus {
+    empty,
+    loading,
+    ready,
+}
+
 export global MisterBridge {
     in-out property <bool> dpad-up;
     in-out property <bool> dpad-down;
@@ -45,6 +51,7 @@ export global MisterBridge {
     in-out property <image> arcade-preview-image;
     in-out property <string> arcade-preview-title;
     in-out property <bool> arcade-preview-has-image;
+    in-out property <PreviewStatus> arcade-preview-status: PreviewStatus.empty;
     // Non-empty while launching a game — full-screen loading overlay.
     in-out property <string> loading-message;
     in-out property <string> loading-detail;
