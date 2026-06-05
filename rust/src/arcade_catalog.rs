@@ -748,7 +748,10 @@ fn decode_png_rgba8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
     let mut reader = decoder.read_info().map_err(|e| format!("png read_info: {e}"))?;
     let width = reader.info().width;
     let height = reader.info().height;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let out_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| "png output buffer too large".to_string())?;
+    let mut buf = vec![0u8; out_size];
     let out = reader.next_frame(&mut buf).map_err(|e| format!("png next_frame: {e}"))?;
     let used = out.buffer_size();
     buf.truncate(used);

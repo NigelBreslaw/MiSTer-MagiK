@@ -2554,7 +2554,7 @@ name = "mister-magic-fb"
 version = "0.1.0"
 dependencies = [
  "libc",
- "png 0.17.16",
+ "png 0.18.1",
  "pprof",
  "quick-xml 0.37.5",
  "serde",
