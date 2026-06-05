@@ -837,98 +837,96 @@ fn run_launcher_loop(
         let setup_active = setup.is_active();
 
         if !launching {
-            let changed = pad.poll();
-            if setup_active || changed {
-                if changed {
-                    let state = pad.state();
-                    let active_idx = pad.active_idx();
-                    let info = pad.info();
-                    if setup_active {
-                        let setup_info = pad.info_at(setup.target_pad_idx);
-                        match setup.handle_input(&state, setup_info, pad.db()) {
-                            SetupAction::None => {}
-                            SetupAction::RegisterNew => {
-                                let idx = setup.target_pad_idx;
-                                if let Err(e) = pad.register_new_at(idx) {
-                                    eprintln!("controller setup: register new: {e}");
-                                }
-                            }
-                            SetupAction::ClaimExisting { list_index } => {
-                                let idx = setup.target_pad_idx;
-                                if let Err(e) = pad.claim_existing_at(idx, list_index) {
-                                    eprintln!("controller setup: claim existing: {e}");
-                                }
-                            }
-                            SetupAction::SaveFinish { label, kind } => {
-                                let idx = setup.target_pad_idx;
-                                if let Err(e) = pad.finish_setup_at(idx, label, kind) {
-                                    eprintln!("controller setup: save: {e}");
-                                } else {
-                                    eprintln!(
-                                        "controller setup: saved \"{}\" ({})",
-                                        pad.db().display_label(pad.info_at(idx)),
-                                        kind.as_str()
-                                    );
-                                }
-                                setup.advance_to_next_pad(&pad);
-                            }
-                            SetupAction::Done => {
-                                setup.advance_to_next_pad(&pad);
-                            }
-                        }
-                    } else {
-                        setup.maybe_open(info, active_idx, pad.db(), true);
-                        if !setup.is_active() {
-                            if let Some(mra) = nav.handle_input(&state, &catalog) {
-                                loading_title =
-                                    format!("Loading {}…", launcher::game_title(&catalog, &mra));
-                                sync_bridge_launcher(
-                                    &app, &pad, &nav, &setup, &loading_title, "",
-                                    Some(&catalog), &mut last_preview_idx,
-                                );
-                                window.request_redraw();
-                                slint::platform::update_timers_and_animations();
-                                window.draw_if_needed(|renderer| {
-                                    let region = renderer.render(&mut cached, ui.render_w());
-                                    let _ = region;
-                                });
-                                disp.wait_vsync();
-                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+            let _changed = pad.poll();
+            let frame_now = Instant::now();
+            let state = pad.state();
+            let active_idx = pad.active_idx();
+            let info = pad.info();
+            let mut bridge_dirty = false;
 
-                                match launcher::execute_game_launch(&mra) {
-                                    Ok(spawned) => {
-                                        launch_started = Instant::now();
-                                        launch_spawned_mister = spawned;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("game launch failed: {e}");
-                                        loading_title.clear();
-                                        launcher::reset_launch();
-                                        sync_bridge_launcher(
-                                            &app, &pad, &nav, &setup, "", "",
-                                            Some(&catalog), &mut last_preview_idx,
-                                        );
-                                        recover_launcher_ui(f, &mut launch_spawned_mister);
-                                    }
-                                }
-                                window.request_redraw();
-                            }
+            if setup_active {
+                let setup_info = pad.info_at(setup.target_pad_idx);
+                match setup.handle_input(&state, frame_now, setup_info, pad.db()) {
+                    SetupAction::None => {}
+                    SetupAction::RegisterNew => {
+                        let idx = setup.target_pad_idx;
+                        if let Err(e) = pad.register_new_at(idx) {
+                            eprintln!("controller setup: register new: {e}");
                         }
                     }
+                    SetupAction::ClaimExisting { list_index } => {
+                        let idx = setup.target_pad_idx;
+                        if let Err(e) = pad.claim_existing_at(idx, list_index) {
+                            eprintln!("controller setup: claim existing: {e}");
+                        }
+                    }
+                    SetupAction::SaveFinish { label, kind } => {
+                        let idx = setup.target_pad_idx;
+                        if let Err(e) = pad.finish_setup_at(idx, label, kind) {
+                            eprintln!("controller setup: save: {e}");
+                        } else {
+                            eprintln!(
+                                "controller setup: saved \"{}\" ({})",
+                                pad.db().display_label(pad.info_at(idx)),
+                                kind.as_str()
+                            );
+                        }
+                        setup.advance_to_next_pad(&pad);
+                    }
+                    SetupAction::Done => {
+                        setup.advance_to_next_pad(&pad);
+                    }
                 }
-                if setup_active {
-                    sync_bridge_launcher(
-                        &app, &pad, &nav, &setup, &loading_title, "",
-                        Some(&catalog), &mut last_preview_idx,
-                    );
-                    window.request_redraw();
-                } else if changed {
-                    sync_bridge_launcher(
-                        &app, &pad, &nav, &setup, &loading_title, "",
-                        Some(&catalog), &mut last_preview_idx,
-                    );
-                    window.request_redraw();
+                bridge_dirty = true;
+            } else {
+                if _changed {
+                    setup.maybe_open(info, active_idx, pad.db(), true);
                 }
+                if !setup.is_active() {
+                    if let Some(mra) = nav.handle_input(&state, frame_now, &catalog) {
+                        loading_title =
+                            format!("Loading {}…", launcher::game_title(&catalog, &mra));
+                        sync_bridge_launcher(
+                            &app, &pad, &nav, &setup, &loading_title, "",
+                            Some(&catalog), &mut last_preview_idx,
+                        );
+                        window.request_redraw();
+                        slint::platform::update_timers_and_animations();
+                        window.draw_if_needed(|renderer| {
+                            let region = renderer.render(&mut cached, ui.render_w());
+                            let _ = region;
+                        });
+                        disp.wait_vsync();
+                        copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+
+                        match launcher::execute_game_launch(&mra) {
+                            Ok(spawned) => {
+                                launch_started = Instant::now();
+                                launch_spawned_mister = spawned;
+                            }
+                            Err(e) => {
+                                eprintln!("game launch failed: {e}");
+                                loading_title.clear();
+                                launcher::reset_launch();
+                                sync_bridge_launcher(
+                                    &app, &pad, &nav, &setup, "", "",
+                                    Some(&catalog), &mut last_preview_idx,
+                                );
+                                recover_launcher_ui(f, &mut launch_spawned_mister);
+                            }
+                        }
+                        window.request_redraw();
+                    }
+                    bridge_dirty = true;
+                }
+            }
+
+            if bridge_dirty {
+                sync_bridge_launcher(
+                    &app, &pad, &nav, &setup, &loading_title, "",
+                    Some(&catalog), &mut last_preview_idx,
+                );
+                window.request_redraw();
             }
         } else {
             let _ = pad.poll();
