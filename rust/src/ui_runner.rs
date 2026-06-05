@@ -362,6 +362,7 @@ struct PreviewState {
     current_generation: u64,
     cache: PreviewImageCache,
     has_visible_preview: bool,
+    visible_path: String,
 }
 
 impl PreviewState {
@@ -372,6 +373,7 @@ impl PreviewState {
             current_generation: 0,
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
+            visible_path: String::new(),
         }
     }
 
@@ -380,6 +382,7 @@ impl PreviewState {
             self.last_preview_idx = None;
             self.current_generation = 0;
             self.has_visible_preview = false;
+            self.visible_path.clear();
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
@@ -420,7 +423,10 @@ fn request_arcade_preview(
         if let Some(image) = preview.cache.get(&game.image_path) {
             preview.current_generation = 0;
             preview.has_visible_preview = true;
-            bridge.set_arcade_preview_image(image);
+            if preview.visible_path != game.image_path {
+                preview.visible_path = game.image_path.clone();
+                bridge.set_arcade_preview_image(image);
+            }
             bridge.set_arcade_preview_has_image(true);
             bridge.set_arcade_preview_status(PreviewStatus::Ready);
             return;
@@ -438,6 +444,7 @@ fn request_arcade_preview(
     }
     preview.current_generation = 0;
     preview.has_visible_preview = false;
+    preview.visible_path.clear();
     bridge.set_arcade_preview_image(Image::default());
     bridge.set_arcade_preview_has_image(false);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -457,13 +464,16 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
                 image.height,
                 image.rgba,
             );
-            preview.cache.insert(result.image_path, image.clone());
+            let image_path = result.image_path;
+            preview.cache.insert(image_path.clone(), image.clone());
             preview.has_visible_preview = true;
+            preview.visible_path = image_path;
             bridge.set_arcade_preview_image(image);
             bridge.set_arcade_preview_has_image(true);
             bridge.set_arcade_preview_status(PreviewStatus::Ready);
         } else {
             preview.has_visible_preview = false;
+            preview.visible_path.clear();
             bridge.set_arcade_preview_image(Image::default());
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
