@@ -65,7 +65,7 @@ component HomeGrid inherits Rectangle {
             LauncherTile {
                 vertical-stretch: 1;
                 label: "Arcade";
-                subtitle: MisterBridge.arcade-games.length + " games";
+                subtitle: MisterBridge.catalog-scan-visible ? "Scanning..." : MisterBridge.arcade-games.length + " games";
                 focused: MisterBridge.selected-index == 1;
             }
         }
@@ -75,6 +75,58 @@ component HomeGrid inherits Rectangle {
             color: #706080;
             font-size: 8px;
             horizontal-alignment: center;
+        }
+    }
+}
+
+component CatalogScanPopup inherits Rectangle {
+    in property <int> s;
+    property <duration> tick: animation-tick();
+    property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
+
+    background: #00000080;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 520px * s;
+        height: 150px * s;
+        background: #1e1828;
+        border-width: 2px;
+        border-color: #06d6a0;
+
+        VerticalLayout {
+            padding: 18px * s;
+            spacing: 10px * s;
+
+            Text {
+                text: MisterBridge.catalog-scan-title;
+                color: #e8e0f0;
+                font-size: 16px * s;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: MisterBridge.catalog-scan-detail;
+                color: #9080a8;
+                font-size: 8px * s;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 16px * s;
+                background: #0e0c14;
+                border-width: 1px;
+                border-color: #5c4a72;
+                clip: true;
+
+                Rectangle {
+                    width: 96px * s;
+                    height: 100%;
+                    x: (parent.width - self.width) * root.phase;
+                    background: #06d6a0;
+                }
+            }
         }
     }
 }
@@ -106,6 +158,12 @@ export component Launcher inherits MisterWindow {
         config-values: MisterBridge.setup-config-values;
         setup-name: MisterBridge.setup-name;
         setup-kind-label: MisterBridge.setup-kind-label;
+    }
+
+    if MisterBridge.catalog-scan-visible : CatalogScanPopup {
+        width: 100%;
+        height: 100%;
+        s: MisterUi.scale;
     }
 
     if MisterBridge.loading-message != "": Rectangle {

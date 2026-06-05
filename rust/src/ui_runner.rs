@@ -59,6 +59,8 @@ use slint_ui::launcher::PreviewStatus;
 use slint::platform::software_renderer::PhysicalRegion;
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
+use std::sync::mpsc;
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
@@ -432,6 +434,9 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
     bridge.set_arcade_preview_image(Image::default());
+    bridge.set_catalog_scan_visible(false);
+    bridge.set_catalog_scan_title("".into());
+    bridge.set_catalog_scan_detail("".into());
     bridge.set_setup_visible(false);
     bridge.set_setup_phase(0);
     sync_bridge_pad_launcher(&bridge, pad);
@@ -643,71 +648,65 @@ fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::
     ModelRc::new(VecModel::from(rows))
 }
 
-fn paint_loading_overlay(
-    app: &slint_ui::launcher::Launcher,
-    pad: &PadPool,
-    nav: &LauncherNav,
-    setup: &SetupNav,
-    ui: &UiDisplay,
-    disp: &mut Display,
-    window: &Rc<MinimalSoftwareWindow>,
-    cached: &mut [Pixel],
-    preview: &mut PreviewState,
-    animation_clock: &AnimationClock,
-    message: &str,
-    detail: &str,
-) {
-    sync_bridge_launcher(
-        app, pad, nav, setup, message, detail, None, preview,
-    );
-    window.request_redraw();
-    update_slint_animations(animation_clock);
-    window.draw_if_needed(|renderer| {
-        let region = renderer.render(cached, ui.render_w());
-        let _ = region;
-    });
-    disp.wait_vsync();
-    copy_cached_rows(disp, ui, cached, 0, ui.render_h());
+fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
+    ArcadeCatalog {
+        root: PathBuf::from(root),
+        games: Vec::new(),
+    }
 }
 
-fn index_arcade_catalog(
-    app: &slint_ui::launcher::Launcher,
-    pad: &PadPool,
-    nav: &LauncherNav,
-    setup: &SetupNav,
-    ui: &UiDisplay,
-    disp: &mut Display,
-    window: &Rc<MinimalSoftwareWindow>,
-    cached: &mut [Pixel],
-    preview: &mut PreviewState,
-    animation_clock: &AnimationClock,
-) -> ArcadeCatalog {
-    paint_loading_overlay(
-        app, pad, nav, setup, ui, disp, window, cached, preview, animation_clock,
-        "Indexing arcade…", "Starting…",
+fn start_arcade_catalog_worker(
+    root: String,
+) -> mpsc::Receiver<CatalogWorkerMessage> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("arcade-catalog".to_string())
+        .spawn(move || {
+            lower_background_priority();
+            let progress_tx = tx.clone();
+            let mut progress = move |title: &str, detail: &str| {
+                let _ = progress_tx.send(CatalogWorkerMessage::Progress {
+                    title: title.to_string(),
+                    detail: detail.to_string(),
+                });
+            };
+            let result = arcade_catalog::build_with_options(
+                &root,
+                arcade_catalog::BuildOptions::default(),
+                Some(&mut progress),
+            );
+            let _ = tx.send(CatalogWorkerMessage::Ready {
+                catalog: result.0,
+                timings: result.1,
+            });
+        })
+        .expect("spawn arcade-catalog");
+    rx
+}
+
+enum CatalogWorkerMessage {
+    Progress {
+        title: String,
+        detail: String,
+    },
+    Ready {
+        catalog: ArcadeCatalog,
+        timings: arcade_catalog::CatalogTimings,
+    },
+}
+
+fn lower_background_priority() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+    }
+}
+
+fn print_startup_event(start: Instant, name: &str, detail: impl std::fmt::Display) {
+    println!(
+        "startup_timing\t{name}\t{}ms\t{detail}",
+        start.elapsed().as_millis()
     );
-
-    let root = std::env::var("MISTER_ARCADE_ROOT")
-        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    println!("indexing arcade catalog at {root}…");
-
-    let mut progress = |title: &str, detail: &str| {
-        paint_loading_overlay(
-            app, pad, nav, setup, ui, disp, window, cached, preview, animation_clock,
-            title, detail,
-        );
-    };
-
-    let (catalog, timings) =
-        arcade_catalog::build_with_options(&root, arcade_catalog::BuildOptions::default(), Some(&mut progress));
-    timings.print_summary();
-    println!("arcade catalog: {} games", catalog.len());
-
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    bridge.set_arcade_games(slint_arcade_games(&catalog.games));
-    sync_bridge_launcher(app, pad, nav, setup, "", "", Some(&catalog), preview);
-    window.request_redraw();
-    catalog
 }
 
 fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
@@ -1455,25 +1454,68 @@ fn run_launcher_loop(
     }
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let mut preview = PreviewState::new();
-    let catalog = index_arcade_catalog(
-        &app,
-        &pad,
-        &nav,
-        &setup,
-        ui,
-        disp,
-        window,
-        &mut cached,
-        &mut preview,
-        animation_clock,
-    );
+    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
+        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    let catalog_rx = start_arcade_catalog_worker(arcade_root.clone());
+    let mut catalog = empty_arcade_catalog(&arcade_root);
+    let mut catalog_ready = false;
+    print_startup_event(start, "catalog_worker_started", &arcade_root);
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    bridge.set_arcade_games(slint_arcade_games(&catalog.games));
+    bridge.set_catalog_scan_visible(true);
+    bridge.set_catalog_scan_title("Indexing arcade".into());
+    bridge.set_catalog_scan_detail("Starting scan...".into());
     sync_bridge_launcher(
         &app, &pad, &nav, &setup, "", "", Some(&catalog), &mut preview,
     );
     window.request_redraw();
+    let mut first_frame_logged = false;
     while secs == 0 || start.elapsed().as_secs() < secs {
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
         let setup_active = setup.is_active();
+        let mut bridge_dirty = false;
+
+        if !catalog_ready {
+            while let Ok(message) = catalog_rx.try_recv() {
+                match message {
+                    CatalogWorkerMessage::Progress { title, detail } => {
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_catalog_scan_title(title.into());
+                        bridge.set_catalog_scan_detail(detail.into());
+                        bridge_dirty = true;
+                    }
+                    CatalogWorkerMessage::Ready {
+                        catalog: ready_catalog,
+                        timings,
+                    } => {
+                        catalog = ready_catalog;
+                        catalog_ready = true;
+                        print_startup_event(
+                            start,
+                            "catalog_ready",
+                            format!("games={}", catalog.len()),
+                        );
+                        timings.print_summary();
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_arcade_games(slint_arcade_games(&catalog.games));
+                        bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_scan_title("".into());
+                        bridge.set_catalog_scan_detail("".into());
+                        sync_bridge_launcher(
+                            &app,
+                            &pad,
+                            &nav,
+                            &setup,
+                            &loading_title,
+                            "",
+                            Some(&catalog),
+                            &mut preview,
+                        );
+                        bridge_dirty = true;
+                    }
+                }
+            }
+        }
 
         if !launching {
             let _changed = pad.poll();
@@ -1481,7 +1523,6 @@ fn run_launcher_loop(
             let state = pad.state();
             let active_idx = pad.active_idx();
             let info = pad.info();
-            let mut bridge_dirty = false;
 
             if setup_active {
                 let setup_info = pad.info_at(setup.target_pad_idx);
@@ -1599,6 +1640,10 @@ fn run_launcher_loop(
             copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
         } else if let Some(rect) = this_rect {
             copy_cached_rect(disp, ui, &cached, rect);
+        }
+        if !first_frame_logged {
+            first_frame_logged = true;
+            print_startup_event(start, "first_frame", format!("catalog_ready={catalog_ready}"));
         }
         frames += 1;
     }
