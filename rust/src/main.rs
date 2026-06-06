@@ -11,6 +11,7 @@
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
 //!   library-db-bench  benchmark cached SQLite library database open/query only
 //!   preview-bench  benchmark arcade preview image read/decode
+//!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
 //!
 //! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
 //! Core handoff argv (`.rbf` paths) re-execs stock `/media/fat/MiSTer`.
@@ -29,6 +30,7 @@ mod input;
 mod input_repeat;
 mod launcher;
 mod library_bench;
+mod mr_audio;
 mod preview_bench;
 mod preview_worker;
 mod setup_nav;
@@ -78,10 +80,11 @@ fn main() {
         "library-scan-bench" => library_bench::run_scan_bench(),
         "library-db-bench" => library_bench::run_db_bench(),
         "preview-bench" => preview_bench::run(),
+        "audio-tone" => run_audio_tone(),
         other => {
             eprintln!(
                 "unknown command '{other}' \
-                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | library-scan-bench | library-db-bench | preview-bench)"
+                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | library-scan-bench | library-db-bench | preview-bench | audio-tone)"
             );
             std::process::exit(2);
         }
@@ -116,6 +119,7 @@ fn should_handoff_to_mister(arg: &str) -> bool {
             | "library-scan-bench"
             | "library-db-bench"
             | "preview-bench"
+            | "audio-tone"
     ) {
         return false;
     }
@@ -342,6 +346,14 @@ fn run_catalog_bench() {
     );
     timings.print_summary();
     println!("games={}", catalog.len());
+}
+
+fn run_audio_tone() {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if let Err(e) = mr_audio::run_tone_from_args(&args) {
+        eprintln!("audio-tone failed: {e}");
+        std::process::exit(1);
+    }
 }
 
 fn parse_input_log_args(args: &[String]) -> (Option<&str>, u64) {

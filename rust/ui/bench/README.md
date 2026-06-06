@@ -13,7 +13,9 @@ kill -9 $(pidof MiSTer) 2>/dev/null
 Or use **`scripts/bench-diagnose.sh visible …`** (streams progress, no timeout).
 
 Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`, `console_scroll`, `dirty_band`.
-With a `--video` build, `video_playback` is also available.
+With a `--video` build, `video_playback` is also available. It expects
+`/media/fat/mister-magic/mslug3.mov` by default: H.264 baseline video plus
+48 kHz stereo `pcm_s16le` audio. Override with `MISTER_VIDEO_PATH`.
 
 ### dirty_band — copy budget sweep
 
@@ -66,7 +68,7 @@ Toolchain bench (automated TSV + PNG — kills `mister-magic-fb` + MiSTer before
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device
 ```
 
-Include the video scene and upload the local 320×224 H.264 benchmark clip:
+Include the video scene and upload the local 320×224 H.264 + PCM benchmark clip:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO --video --replace-label
