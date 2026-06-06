@@ -61,12 +61,12 @@ impl LauncherFrameWriter {
         let limit = std::env::var("MISTER_BOOT_FRAME_PROFILE_FRAMES")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(240);
+            .unwrap_or(300);
         match File::create(&path) {
             Ok(mut file) => {
                 let _ = writeln!(
                     file,
-                    "frame\tboot_ms\tanim_us\trender_us\tvsync_us\tcopy_us\trows\treasserted\tedge1_hash\tedge1_nonzero\tedge8_hash\tedge8_nonzero"
+                    "frame\tboot_ms\tanim_us\trender_us\tvsync_us\tcopy_us\trows\treasserted\tedge1_hash\tedge1_nonzero\tedge8_hash\tedge8_nonzero\tleft8_hash\tleft8_nonzero\ttop8_hash\ttop8_nonzero\tbottom8_hash\tbottom8_nonzero\tfull_sample_hash\tfull_sample_nonzero"
                 );
                 event(
                     "launcher_frame_profile_start",
@@ -97,13 +97,21 @@ impl LauncherFrameWriter {
         edge1_nonzero: u32,
         edge8_hash: u64,
         edge8_nonzero: u32,
+        left8_hash: u64,
+        left8_nonzero: u32,
+        top8_hash: u64,
+        top8_nonzero: u32,
+        bottom8_hash: u64,
+        bottom8_nonzero: u32,
+        full_sample_hash: u64,
+        full_sample_nonzero: u32,
     ) {
         if frame >= self.limit {
             return;
         }
         let _ = writeln!(
             self.file,
-            "{frame}\t{}\t{anim_us}\t{render_us}\t{vsync_us}\t{copy_us}\t{rows}\t{}\t{edge1_hash:016x}\t{edge1_nonzero}\t{edge8_hash:016x}\t{edge8_nonzero}",
+            "{frame}\t{}\t{anim_us}\t{render_us}\t{vsync_us}\t{copy_us}\t{rows}\t{}\t{edge1_hash:016x}\t{edge1_nonzero}\t{edge8_hash:016x}\t{edge8_nonzero}\t{left8_hash:016x}\t{left8_nonzero}\t{top8_hash:016x}\t{top8_nonzero}\t{bottom8_hash:016x}\t{bottom8_nonzero}\t{full_sample_hash:016x}\t{full_sample_nonzero}",
             boot_ms(),
             u8::from(reasserted),
         );

@@ -433,6 +433,14 @@ Important gotchas:
   Slint was already rendering. It also found Slint's first-180-frame
   `set_mode_1080p`/`fb_enable_direct` reassert loop and right-edge `/dev/fb0`
   changes. See `history/2026-6-5/boot-flicker-analytics.md`.
+- **Boot black screen is currently self-inflicted by timing.** Whole-boot
+  analytics showed Main routes HDMI to `/dev/fb0` while the buffer is still
+  black, then Slint waits on cached arcade catalog load before its first render.
+  In the `2026-06-07` capture, `fb0` was routed at boot `5114ms`, Slint first
+  copied at `7420ms`, and the catalog cache load consumed about `1.24s`. Static
+  visible before `MiSTer_MagiK main_start` is outside the fork lifetime, likely
+  stock `/media/fat/MiSTer` before `main=` reexec. See
+  `history/2026-6-7/whole-boot-visual-analytics.md`.
 
 ---
 

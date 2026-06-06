@@ -122,6 +122,8 @@ static void analytics_state(const char *event, const char *extra_fmt = NULL, ...
 	if (!analytics_enabled())
 		return;
 
+	video_boot_analytics_snapshot(event);
+
 	char fb_mode[128];
 	char active_vt[64];
 	read_trimmed("/sys/module/MiSTer_fb/parameters/mode", fb_mode, sizeof(fb_mode));
