@@ -514,7 +514,7 @@ fn parse_gamelist(root: &Path) -> GamelistIndex {
             }
             Ok(quick_xml::events::Event::Text(e)) => {
                 if in_game && !field.is_empty() {
-                    text = e.unescape().unwrap_or_default().into_owned();
+                    text = e.xml10_content().unwrap_or_default().into_owned();
                 }
             }
             Ok(quick_xml::events::Event::End(e)) => {
