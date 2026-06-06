@@ -1,2 +1,4 @@
 label	date	rustc	compile_sec	bytes	walk_ms	walk_count	parse_ms	parse_count	merge_ms	merge_count	resolve_ms	resolve_count	sort_ms	sort_count	decode_ms	decode_count	total_ms	games	notes
 catalog-v1	2026-06-04T21:09:45Z	1.97.0-nightly		3202264	870	16765	4562	2318	14816	16765	211	14999	290	16765	4	10	20755	16765	sample=10
+CATSORT-BEFORE-20260606	2026-06-06T09:41:53Z	1.97.0-nightly	73	7753132	1026	4316	291	2611	852	4316	39	2696	62	3633	0	0	9318	3633	sample=0
+CATSORT-AFTER-20260606	2026-06-06T09:43:41Z	1.97.0-nightly	109	7703980	1120	4316	151	2611	94	4316	39	2696	13	3633	0	0	5150	3633	sample=0
