@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$ROOT/rust"
+RUST_DIR="$ROOT/magik-gui"
 
 usage() {
   cat <<'EOF'
@@ -19,13 +19,13 @@ Commands:
   check-arm-ui-full  Cross-check all Slint UI scenes for ARM
   build-arm-debug       Cross-build launcher/controller ARM debug binary
   build-arm-debug-full  Cross-build all-scene ARM debug binary
-  build-ui  Build the ARM Slint binary via rust/build-arm.sh --fast
+  build-ui  Build the ARM Slint binary via magik-gui/build-arm.sh --fast
 EOF
 }
 
 need_component_hint() {
   local component="$1"
-  echo "Hint: this repo declares Rust components in rust/rust-toolchain.toml." >&2
+  echo "Hint: this repo declares Rust components in magik-gui/rust-toolchain.toml." >&2
   echo "      If rustup did not install $component automatically, run:" >&2
   echo "      rustup component add $component --toolchain stable-aarch64-apple-darwin" >&2
 }

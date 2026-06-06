@@ -124,7 +124,7 @@ cat /tmp/bench-ui.log
 
 
 def main() -> int:
-    bin_path = HERE / "rust/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb"
+    bin_path = HERE / "magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb"
     if not bin_path.is_file():
         print(f"missing binary: {bin_path}", file=sys.stderr)
         return 1

@@ -7,7 +7,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$HERE/rust"
+RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release
 BUILD_FLAG=()
 REMOTE="/media/fat/mister-magic/mister-magic-fb"

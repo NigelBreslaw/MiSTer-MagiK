@@ -23,8 +23,8 @@ screen, controller input).
   while UI runs. Games launch via fifo `load_core` (MiSTer spawned briefly).
 - ✅ **Production boot** — `scripts/mister-magic/boot.sh`: MiSTer runs `video_init`,
   then **stopped** so Slint owns SPI + input. Install: `scripts/install-slint-boot.sh`.
-- ✅ FPGA SPI + `fb_enable_direct` + `set_vga_fb` in `rust/src/fpga.rs`.
-- ✅ Gamepad input via Linux js API (`rust/src/input.rs`).
+- ✅ FPGA SPI + `fb_enable_direct` + `set_vga_fb` in `magik-gui/src/fpga.rs`.
+- ✅ Gamepad input via Linux js API (`magik-gui/src/input.rs`).
 
 See `history/2026-5-2/framebuffer-experiments.md` for the exploration path.
 
@@ -46,7 +46,7 @@ Remaining work: live-mode geometry, in-game settings strategy (§7).
 - FB mode is set by writing `/sys/module/MiSTer_fb/parameters/mode` as
   `"<fmt> <rb> <width> <height> <stride>"`, e.g. `8888 1 1920 1080 7680`.
 - No system fonts on MiSTer — the Rust build embeds Press Start 2P in the binary
-  (`rust/ui/fonts/`, SIL OFL).
+  (`magik-gui/ui/fonts/`, SIL OFL).
 - Relevant `MiSTer.ini` keys observed: `direct_video=1`, `vga_scaler=1`,
   `fb_terminal=1`, `fb_size=0`.
 - `MiSTer.ini` has a backup at `/media/fat/MiSTer.ini.bak`.
@@ -115,7 +115,7 @@ To show Slint on HDMI we need:
 3. **A render loop** — custom Slint `Platform`, vsync pacing, dirty-row copy into
    write-combined `/dev/fb0` (§9.7).
 
-We issue the SPI sequence ourselves from Rust (`rust/src/fpga.rs`) to route
+We issue the SPI sequence ourselves from Rust (`magik-gui/src/fpga.rs`) to route
 `/dev/fb0` to HDMI during Slint UI. **Production stops MiSTer after
 `video_init()`** so Slint owns SPI and evdev (no menu grab). Games launch by
 spawning MiSTer briefly and writing fifo `load_core` (§7). Do **not** use external
@@ -143,7 +143,7 @@ scripts/
 reference/              READ-ONLY clones (gitignored) — see §6
 build/                  gitignored framebuffer PNG dumps
 history/                experiment notes (framebuffer-experiments.md, screenshots)
-rust/                   native armv7 frontend — see §12
+magik-gui/                   native armv7 frontend — see §12
   ui/launcher.slint     home grid + embedded controller test
   ui/controller_test.slint
   ui/bench/*.slint      perf bench scenes
@@ -152,7 +152,7 @@ rust/                   native armv7 frontend — see §12
   src/launcher.rs       nav state machine + launch_mra
   src/fpga.rs           SPI + fb_enable_direct + set_vga_fb
   src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy, boot retry
-  build-arm.sh          cross build (--fast | --device); see rust/BUILD.md
+  build-arm.sh          cross build (--fast | --device); see magik-gui/BUILD.md
   BUILD.md              release vs release-device profiles
 ```
 
@@ -172,8 +172,8 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 # Fast daily build + deploy (thin LTO, ~3 min clean)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 
-# Build only: rust/build-arm.sh  |  rust/build-arm.sh --device
-# Profiles: rust/BUILD.md
+# Build only: magik-gui/build-arm.sh  |  magik-gui/build-arm.sh --device
+# Profiles: magik-gui/BUILD.md
 
 # Fast host checks (do not compile Slint/AppKit)
 scripts/dev-rust fmt
@@ -206,7 +206,7 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/fb.png
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean --replace-label
 ```
 
-Bench scenes: `mister-magic-fb scenes` or `ui <scene> 20` — see `rust/ui/bench/README.md`.
+Bench scenes: `mister-magic-fb scenes` or `ui <scene> 20` — see `magik-gui/ui/bench/README.md`.
 Log: [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md).
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
@@ -300,14 +300,14 @@ still owns recovery when running; if wedged, reboot always works).
 - **fbcon clobbers `/dev/fb0` → black screen.** The kernel framebuffer console
   (`vtcon1`) can clear the buffer. The demo UI uses `animation-tick()` for
   continuous repaints; a static UI may need `KD_GRAPHICS` / unbind fbcon (§11).
-- **`ui` / `fb` call `KD_GRAPHICS` on `/dev/tty0`** (`rust/src/vt.rs`) so fbcon
+- **`ui` / `fb` call `KD_GRAPHICS` on `/dev/tty0`** (`magik-gui/src/vt.rs`) so fbcon
   stops drawing the blinking block cursor over the title (confirmed in framebuffer
   PNGs). Restores `KD_TEXT` on exit. If the ioctl fails, we log and continue.
 - **busybox has no `pkill`.** Use `kill -9 $(pidof mister-magic-fb)` to stop the app.
 - **libinput quirks DB missing** → `libinput error: ... device quirks` warnings.
   Rendering is fine; if/when we add input, bundle the quirks DB or point
   libinput at one.
-- **Fonts:** MiSTer has none. The Rust build embeds Press Start 2P (`rust/ui/fonts/`).
+- **Fonts:** MiSTer has none. The Rust build embeds Press Start 2P (`magik-gui/ui/fonts/`).
 - **Framebuffer byte order is BGRX** (`rgba 8/16,8/8,8/0`). `raw_to_png.py`
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't use `main=mister-magic-fb`.** Skips `video_init()` → no HDMI signal
@@ -326,7 +326,7 @@ still owns recovery when running; if wedged, reboot always works).
   (`noarp`, `noipv4ll`) skips all of it. Rootfs is read-only — remount rw to edit.
   See §10.
 - **FPGA SPI from our process** routes `/dev/fb0` scan-out during Slint UI
-  (`rust/src/fpga.rs`). Production stops MiSTer first so we own the bus; no
+  (`magik-gui/src/fpga.rs`). Production stops MiSTer first so we own the bus; no
   SIGSTOP dance needed. Historical dev spike (§9.5) used SIGSTOP for standalone tests.
 - **Don't blind-sleep on reboot.** The device reboots fast (~35s to userspace,
   drops off the network in ~3s). Use `mister_ssh.py reboot-wait` (or `wait`),
@@ -409,14 +409,14 @@ scan-out is FPGA-driven), poke registers, `kill -CONT` after.
 
 ### 9.6 Native Rust port — clean fork-free image (✅ done)
 
-The spike is now reproduced in Rust (`rust/` crate) and renders a **clean,
+The spike is now reproduced in Rust (`magik-gui/` crate) and renders a **clean,
 full-screen image from our own binary**:
 
-- `rust/src/fpga.rs` ports the SPI layer (`mmap` GPO/GPI, EnableIO/DisableIO,
+- `magik-gui/src/fpga.rs` ports the SPI layer (`mmap` GPO/GPI, EnableIO/DisableIO,
   `fpga_spi`) and `video_fb_enable(1,n)` (the SET_FBUF sequence). **Native-speed
   multi-word reads work** (GET_VRES/GET_FB_PAR return stable data; ACK-high ==
   ACK-low), unlike the slow Python which read 0s.
-- `rust/src/fb.rs` mmaps `/dev/fb0` (1920x1080 xRGB8888) for direct pixel writes.
+- `magik-gui/src/fb.rs` mmaps `/dev/fb0` (1920x1080 xRGB8888) for direct pixel writes.
 - `mister-magic-fb fb [xoff] [yoff]` paints a 4-quadrant + border + cross-hair
   test pattern and routes buffer 0. `read` dumps the live mode/fb params.
 - Live values read from the stock menu: `GET_FB_PAR` → `fb_w=1920 fb_h=1080
@@ -491,13 +491,13 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
   bare cross container and the MiSTer don't have). Our own crate still uses `std`.
 - `build.rs` uses `EmbedResourcesKind::EmbedForSoftwareRenderer` so glyphs/images
   are baked into the binary. With no system fonts, the embedder needs a font:
-  we bundle `rust/ui/fonts/PressStart2P-Regular.ttf` (SIL OFL) and set
+  we bundle `magik-gui/ui/fonts/PressStart2P-Regular.ttf` (SIL OFL) and set
   `default-font-family: "Press Start 2P"` on the Windows.
 - Slint's deps need **rustc ≥ 1.90**; the toolchain is pinned to `stable`
-  (1.96 at time of writing) in `rust/rust-toolchain.toml`, with a matching
+  (1.96 at time of writing) in `magik-gui/rust-toolchain.toml`, with a matching
   `stable-x86_64-unknown-linux-gnu` installed (`--force-non-host`) for the
   emulated cross container.
-- **Two release profiles** (`rust/BUILD.md`): `release` (fast daily, thin LTO)
+- **Two release profiles** (`magik-gui/BUILD.md`): `release` (fast daily, thin LTO)
   and `release-device` (fat LTO + Cortex-A9, ship to MiSTer). `opt-level = 3` on both.
 
 **Known follow-ups for the real frontend:** the copy is still ~half the screen
@@ -542,10 +542,10 @@ scripts/deploy-rust.sh                   # release-device (full MiSTer build)
 scripts/deploy-rust.sh --fast            # release (faster compile)
 scripts/deploy-rust.sh --fast --video    # includes minimal static FFmpeg + video asset
 # or manually:
-rust/build-arm.sh --device
-rust/build-arm.sh --device --video
+magik-gui/build-arm.sh --device
+magik-gui/build-arm.sh --device --video
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
-  put rust/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb \
+  put magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb \
   /media/fat/mister-magic/mister-magic-fb
 ```
 
@@ -553,20 +553,20 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
 `scripts/dev-rust check` for routine local validation. These run the
 host-testable Rust library with `--no-default-features`, so pure logic tests do
 not compile the Slint UI binary or macOS AppKit code. Use `scripts/dev-rust
-build-ui` or `rust/build-arm.sh --fast` when you need the ARM Slint binary.
+build-ui` or `magik-gui/build-arm.sh --fast` when you need the ARM Slint binary.
 
-Every `rust/build-arm.sh` run prints the binary size and appends a local,
+Every `magik-gui/build-arm.sh` run prints the binary size and appends a local,
 gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the
 formal benchmark/size history in `history/toolchain-bench/results.tsv` via
 `scripts/bench-toolchain.sh`.
 
 GitHub Actions CI lives in `.github/workflows/rust-arm.yml`. It builds
 `--fast`, `--device`, `--fast --video`, and `--device --video`, uploads the ARM
-binaries and size TSVs, and runs `rust/scripts/check-arm-shared-libs.sh` so
+binaries and size TSVs, and runs `magik-gui/scripts/check-arm-shared-libs.sh` so
 video builds fail if FFmpeg becomes a runtime `libav*` dependency.
 
 Video builds use a project-local **minimal static FFmpeg 8.1.x** built by
-`rust/scripts/build-minimal-ffmpeg.sh` under `rust/target/ffmpeg-minimal/armv7`.
+`magik-gui/scripts/build-minimal-ffmpeg.sh` under `magik-gui/target/ffmpeg-minimal/armv7`.
 It enables only H.264 decode/parse, `pcm_s16le`, MOV/MP4 demuxing, file
 protocol, and `avcodec`/`avformat`/`avutil`/`swscale`; no system `libav*`
 runtime is required. `video_playback` defaults to
@@ -576,11 +576,11 @@ and writes PCM packets directly to `/dev/MrAudio` with video as the master clock
 For binary-size diagnosis, build an unstripped profile binary and group symbols:
 
 ```bash
-rust/build-arm.sh --profile
-rust/scripts/analyze-binary-size.sh
+magik-gui/build-arm.sh --profile
+magik-gui/scripts/analyze-binary-size.sh
 ```
 
-See **`rust/BUILD.md`** for profile table, size tracking, FFmpeg notes, and bench
+See **`magik-gui/BUILD.md`** for profile table, size tracking, FFmpeg notes, and bench
 mapping (A0 ≈ `release`, A3 ≈ `release-device`).
 
 **One-time host setup (done):**
@@ -602,12 +602,12 @@ rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-n
   emulation cost is negligible. (`build-arm.sh` sets this.)
 - **sccache wrapper:** the global `~/.cargo/config.toml` sets
   `rustc-wrapper=/opt/homebrew/bin/sccache` — a macOS path that doesn't exist in
-  the container. `rust/.cargo/config.toml` overrides it to empty.
-- **toolchain pin:** `rust/rust-toolchain.toml` pins `stable` + the armv7 target.
+  the container. `magik-gui/.cargo/config.toml` overrides it to empty.
+- **toolchain pin:** `magik-gui/rust-toolchain.toml` pins `stable` + the armv7 target.
 
 **Crate layout:**
-- `rust/src/fpga.rs` — SPI layer + `video_fb_enable` port (§9.6), UIO/FB constants.
-- `rust/src/fb.rs` — `/dev/fb0` mmap wrapper for direct pixel writes.
-- `rust/src/main.rs` — `read` | `fb` | `ui` subcommands.
+- `magik-gui/src/fpga.rs` — SPI layer + `video_fb_enable` port (§9.6), UIO/FB constants.
+- `magik-gui/src/fb.rs` — `/dev/fb0` mmap wrapper for direct pixel writes.
+- `magik-gui/src/main.rs` — `read` | `fb` | `ui` subcommands.
 
 See §7 for roadmap.

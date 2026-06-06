@@ -22,7 +22,7 @@ from mister_ssh import connect, run  # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
 REMOTE = "/media/fat/mister-magic/mister-magic-fb"
-BIN = HERE / "rust/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb"
+BIN = HERE / "magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb"
 OUT_DIR = HERE / "history/toolchain-bench"
 TSV = OUT_DIR / "results.tsv"
 
@@ -48,12 +48,12 @@ class Sample:
 
 
 def ensure_binary() -> int:
-    slint = HERE / "rust/ui/bench/dirty_band.slint"
+    slint = HERE / "magik-gui/ui/bench/dirty_band.slint"
     if not BIN.is_file() or slint.stat().st_mtime > BIN.stat().st_mtime:
         print("==> building release-device (dirty_band changed or binary missing)")
         subprocess.run(
-            [str(HERE / "rust/build-arm.sh"), "--device"],
-            cwd=HERE / "rust",
+            [str(HERE / "magik-gui/build-arm.sh"), "--device"],
+            cwd=HERE / "magik-gui",
             check=True,
         )
     return BIN.stat().st_size
