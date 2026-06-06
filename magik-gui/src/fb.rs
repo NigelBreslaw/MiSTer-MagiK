@@ -10,6 +10,8 @@
 
 use crate::fpga::FB_SIZE_PX;
 use mister_magik_fb::framebuffer_copy;
+
+use crate::boot_analytics;
 use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
 use std::fs::OpenOptions;
 use std::io;
@@ -129,8 +131,14 @@ const MODE_1080P: &str = "8888 1 1920 1080 7680";
 impl Display {
     /// Request 1080p from the MiSTer_fb driver (no-op if sysfs missing).
     pub fn set_mode_1080p() {
-        if let Err(e) = std::fs::write("/sys/module/MiSTer_fb/parameters/mode", MODE_1080P) {
-            eprintln!("note: could not set MiSTer_fb mode: {e}");
+        let path = "/sys/module/MiSTer_fb/parameters/mode";
+        boot_analytics::event("fb_mode_write_attempt", MODE_1080P);
+        match std::fs::write(path, MODE_1080P) {
+            Ok(()) => boot_analytics::event("fb_mode_write_ok", MODE_1080P),
+            Err(e) => {
+                boot_analytics::event("fb_mode_write_failed", format!("error={e}"));
+                eprintln!("note: could not set MiSTer_fb mode: {e}");
+            }
         }
     }
 
@@ -139,6 +147,7 @@ impl Display {
         const RETRIES: u32 = 30;
         let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
         for attempt in 0..RETRIES {
+            boot_analytics::event("display_open_attempt", format!("attempt={attempt}"));
             Self::set_mode_1080p();
             std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
                 0
@@ -147,12 +156,20 @@ impl Display {
             }));
             match Self::open(w, h) {
                 Ok(d) => {
+                    boot_analytics::event(
+                        "display_open_ok",
+                        format!("attempt={attempt} w={w} h={h}"),
+                    );
                     if attempt > 0 {
                         println!("display open ok after {attempt} retries");
                     }
                     return Ok(d);
                 }
                 Err(e) => {
+                    boot_analytics::event(
+                        "display_open_failed",
+                        format!("attempt={attempt} error={e}"),
+                    );
                     if attempt == 0 || attempt % 5 == 0 {
                         eprintln!("display open attempt {attempt}: {e}");
                     }
@@ -299,6 +316,25 @@ impl Display {
     /// The (single) on-screen buffer, as a mutable pixel slice.
     pub fn buffer_mut(&mut self) -> &mut [Pixel] {
         unsafe { std::slice::from_raw_parts_mut(self.mem, self.w * self.h) }
+    }
+
+    pub fn right_edge_signature(&self, cols: usize) -> (u64, u32) {
+        let cols = cols.min(self.w).max(1);
+        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut nonzero = 0u32;
+        for y in 0..self.h {
+            let row = y * self.w;
+            for x in self.w - cols..self.w {
+                let p = pixels[row + x].0;
+                if p != 0 {
+                    nonzero += 1;
+                }
+                hash ^= p as u64;
+                hash = hash.wrapping_mul(0x1000_0000_01b3);
+            }
+        }
+        (hash, nonzero)
     }
 
     /// Copy rows [y0,y1) from `src` into the framebuffer (write-combined).

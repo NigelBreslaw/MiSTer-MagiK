@@ -232,12 +232,21 @@ impl Fpga {
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
         let xoff = xoff_override.unwrap_or(mode.hbp as i32 - FB_DV_LBRD);
         let yoff = yoff_override.unwrap_or(mode.vbp as i32 - FB_DV_UBRD);
+        let right = xoff + mode.hact as i32 - 1;
+        let bottom = yoff + mode.vact as i32 - 1;
 
         // Clean chip-select edge first (we may be interrupting a stopped MiSTer
         // mid-transaction), then send the command and read its support flag from
         // the ACK-high phase.
         self.disable_io();
         let (flag, _) = self.cmd_capture(UIO_SET_FBUF);
+        crate::boot_analytics::event(
+            "rust_fb_enable_direct_route",
+            format!(
+                "n={n} fb_width={fb_width} fb_height={fb_height} xoff={xoff} yoff={yoff} right={right} bottom={bottom} stride={} support_flag={flag}",
+                fb_width * 4
+            ),
+        );
 
         self.spi_w(FB_EN | FB_FMT_RXB | FB_FMT_8888); // format + enable
         self.spi_w(fb_addr as u16); // base addr low
@@ -245,9 +254,9 @@ impl Fpga {
         self.spi_w(fb_width); // frame width
         self.spi_w(fb_height); // frame height
         self.spi_w(xoff as u16); // scaled left
-        self.spi_w((xoff + mode.hact as i32 - 1) as u16); // scaled right
+        self.spi_w(right as u16); // scaled right
         self.spi_w(yoff as u16); // scaled top
-        self.spi_w((yoff + mode.vact as i32 - 1) as u16); // scaled bottom
+        self.spi_w(bottom as u16); // scaled bottom
         self.spi_w(fb_width * 4); // stride (bytes)
         self.disable_io();
         // MiSTer calls set_vga_fb(enable) here when cfg.direct_video; main= boot

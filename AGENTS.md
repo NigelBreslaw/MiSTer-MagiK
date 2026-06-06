@@ -427,6 +427,12 @@ Important gotchas:
   start the benchmark scene after the normal settle delay. If the original OSD is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
+- **Boot flicker analytics found Main OSD still updates after Slint handoff.**
+  The `2026-06-07` analytics run recorded repeated post-handoff
+  `main-osd OsdUpdate dirty_lines=3 n=19 is_menu=1 osdset=0x70000` events while
+  Slint was already rendering. It also found Slint's first-180-frame
+  `set_mode_1080p`/`fb_enable_direct` reassert loop and right-edge `/dev/fb0`
+  changes. See `history/2026-6-5/boot-flicker-analytics.md`.
 
 ---
 

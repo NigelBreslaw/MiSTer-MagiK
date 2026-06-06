@@ -8,6 +8,8 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 
+use crate::boot_analytics;
+
 // linux/kd.h — not in libc bindings on all targets.
 const KDSETMODE: libc::c_ulong = 0x4B3A;
 const KD_GRAPHICS: libc::c_ulong = 0x01;
@@ -21,11 +23,15 @@ pub struct VtGraphicsGuard {
 impl VtGraphicsGuard {
     /// Prefer the virtual-console device that owns the HDMI framebuffer.
     pub fn enter() -> io::Result<Self> {
-        let tty = open_vt_tty()?;
+        boot_analytics::event("vt_graphics_attempt", "open_tty");
+        let (tty, path) = open_vt_tty()?;
         let fd = tty.as_raw_fd();
         if unsafe { libc::ioctl(fd, KDSETMODE, KD_GRAPHICS) } < 0 {
-            return Err(io::Error::last_os_error());
+            let e = io::Error::last_os_error();
+            boot_analytics::event("vt_graphics_result", format!("ok=0 path={path} error={e}"));
+            return Err(e);
         }
+        boot_analytics::event("vt_graphics_result", format!("ok=1 path={path}"));
         eprintln!("vt: KD_GRAPHICS (fbcon cursor hidden)");
         Ok(Self { tty })
     }
@@ -51,11 +57,14 @@ impl Drop for VtGraphicsGuard {
     }
 }
 
-fn open_vt_tty() -> io::Result<File> {
+fn open_vt_tty() -> io::Result<(File, &'static str)> {
     for path in ["/dev/tty0", "/dev/console", "/dev/tty"] {
         match OpenOptions::new().read(true).write(true).open(path) {
-            Ok(f) => return Ok(f),
-            Err(e) => eprintln!("vt: open {path}: {e}"),
+            Ok(f) => return Ok((f, path)),
+            Err(e) => {
+                boot_analytics::event("vt_open_failed", format!("path={path} error={e}"));
+                eprintln!("vt: open {path}: {e}");
+            }
         }
     }
     Err(io::Error::new(

@@ -22,6 +22,7 @@
 
 use std::ffi::CString;
 
+mod boot_analytics;
 mod capture;
 mod cpu_profile;
 mod fb;
@@ -67,6 +68,7 @@ const COMMANDS: &[&str] = &[
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    boot_analytics::event("process_start", format!("args={}", args.join(" ")));
 
     if args.len() >= 2 {
         if should_handoff_to_mister(&args[1]) {

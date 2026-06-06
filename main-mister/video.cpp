@@ -20,6 +20,7 @@
 #include "mat4x4.h"
 #include "menu.h"
 #include "video.h"
+#include "support/mister_magik/alt_launcher.h"
 #include "input.h"
 #include "shmem.h"
 #include "smbus.h"
@@ -3287,6 +3288,8 @@ void video_fb_enable(int enable, int n)
 
 	if (fb_base)
 	{
+		int requested_enable = enable;
+		int requested_n = n;
 		int res = spi_uio_cmd_cont(UIO_SET_FBUF);
 		if (res)
 		{
@@ -3307,6 +3310,16 @@ void video_fb_enable(int enable, int n)
 					xoff = v_cur.item[4] - FB_DV_LBRD;
 					yoff = v_cur.item[8] - FB_DV_UBRD;
 				}
+				int scaled_right = xoff + v_cur.item[1] - 1;
+				int scaled_bottom = yoff + v_cur.item[5] - 1;
+
+				mister_magik_boot_analytics_event(
+				    "main-video",
+				    "video_fb_enable_route",
+				    "requested_enable=%d requested_n=%d actual_enable=%d actual_n=%d fb_width=%d fb_height=%d xoff=%d yoff=%d right=%d bottom=%d stride=%d direct_video=%d is_menu=%d menu_bg=%d menu_bgn=%d fb_addr=0x%08x",
+				    requested_enable, requested_n, enable, n, fb_width, fb_height, xoff, yoff,
+				    scaled_right, scaled_bottom, fb_width * 4, cfg.direct_video, is_menu(),
+				    menu_bg, menu_bgn, fb_addr);
 
 				//printf("Switch to Linux frame buffer\n");
 				spi_w((uint16_t)(FB_EN | FB_FMT_RxB | FB_FMT_8888)); // format, enable flag
@@ -3315,9 +3328,9 @@ void video_fb_enable(int enable, int n)
 				spi_w(fb_width);          // frame width
 				spi_w(fb_height);         // frame height
 				spi_w(xoff);                 // scaled left
-				spi_w(xoff + v_cur.item[1] - 1); // scaled right
+				spi_w(scaled_right); // scaled right
 				spi_w(yoff);                 // scaled top
-				spi_w(yoff + v_cur.item[5] - 1); // scaled bottom
+				spi_w(scaled_bottom); // scaled bottom
 				spi_w(fb_width * 4);      // stride
 
 				//printf("Linux frame buffer: %dx%d, stride = %d bytes\n", fb_width, fb_height, fb_width * 4);
@@ -3333,6 +3346,12 @@ void video_fb_enable(int enable, int n)
 			}
 			else
 			{
+				mister_magik_boot_analytics_event(
+				    "main-video",
+				    "video_fb_enable_core",
+				    "requested_enable=%d requested_n=%d actual_enable=%d actual_n=%d direct_video=%d is_menu=%d menu_bg=%d menu_bgn=%d",
+				    requested_enable, requested_n, enable, n, cfg.direct_video, is_menu(), menu_bg,
+				    menu_bgn);
 				printf("Switch to core frame buffer\n");
 				spi_w(0); // enable flag
 				input_switch(1);
@@ -3342,6 +3361,11 @@ void video_fb_enable(int enable, int n)
 		}
 		else
 		{
+			mister_magik_boot_analytics_event(
+			    "main-video",
+			    "video_fb_enable_unsupported",
+			    "requested_enable=%d requested_n=%d direct_video=%d is_menu=%d",
+			    requested_enable, requested_n, cfg.direct_video, is_menu());
 			printf("Core doesn't support HPS frame buffer\n");
 			input_switch(1);
 		}
@@ -3697,6 +3721,13 @@ void video_menu_bg(int n, int idle)
 	static Imlib_Image curtain = 0;
 
 	static int cached_idle = 0;
+	int requested_n = n;
+	int requested_idle = idle;
+	mister_magik_boot_analytics_event(
+	    "main-video",
+	    "video_menu_bg_start",
+	    "requested_n=%d requested_idle=%d menu_bg=%d menu_bgn=%d fb_width=%d fb_height=%d is_menu=%d",
+	    requested_n, requested_idle, menu_bg, menu_bgn, fb_width, fb_height, is_menu());
 	bg_has_picture = 0;
 
 	if (n < 0)
@@ -3942,6 +3973,11 @@ void video_menu_bg(int n, int idle)
 	}
 
 	video_fb_enable(0);
+	mister_magik_boot_analytics_event(
+	    "main-video",
+	    "video_menu_bg_done",
+	    "requested_n=%d requested_idle=%d actual_n=%d actual_idle=%d menu_bg=%d menu_bgn=%d bg_has_picture=%d",
+	    requested_n, requested_idle, n, idle, menu_bg, menu_bgn, bg_has_picture);
 }
 
 void dbg_draw_cursor(int x, int y)
@@ -4300,4 +4336,3 @@ int video_get_rotated()
 {
   return current_video_info.rotated;
 }
-
