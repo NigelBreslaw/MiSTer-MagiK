@@ -1540,7 +1540,16 @@ void user_io_init(const char *path, const char *xml)
 			else if (is_menu())
 			{
 				user_io_status_set("[4]", (cfg.menu_pal) ? 1 : 0);
-				if (mm_launcher_configured()) mm_launcher_init_for_menu();
+				if (mm_launcher_configured())
+				{
+					FILE *f = fopen("/tmp/mister-magic-main.log", "a");
+					if (f)
+					{
+						fprintf(f, "user_io menu hook\n");
+						fclose(f);
+					}
+					mm_launcher_init_for_menu();
+				}
 				else if (cfg.fb_terminal) video_menu_bg(user_io_status_get("[3:1]"));
 				else user_io_status_set("[3:1]", 0);
 			}

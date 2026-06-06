@@ -14,22 +14,42 @@
 #include "video.h"
 
 static const char s_launcher_path[] = "/media/fat/mister-magic/mister-magic-fb";
+static const char s_log_path[] = "/tmp/mister-magic-main.log";
 static pid_t s_pid = 0;
 static int s_crash_count = 0;
 static unsigned long s_respawn_timer = 0;
 static bool s_init_pending = false;
 static bool s_gave_up = false;
 
+static void log_line(const char *msg)
+{
+	FILE *f = fopen(s_log_path, "a");
+	if (!f) return;
+	fprintf(f, "%s\n", msg);
+	fclose(f);
+}
+
+static void log_errno(const char *prefix)
+{
+	FILE *f = fopen(s_log_path, "a");
+	if (!f) return;
+	fprintf(f, "%s: %s\n", prefix, strerror(errno));
+	fclose(f);
+}
+
 void mm_launcher_cfg_apply(void)
 {
 	// Experimental Main-as-parent mode needs the Linux framebuffer path alive.
 	cfg.fb_terminal = 1;
 	cfg.recents = 1;
+	log_line("cfg_apply");
 }
 
 bool mm_launcher_configured(void)
 {
-	return access(s_launcher_path, X_OK) == 0;
+	bool configured = access(s_launcher_path, X_OK) == 0;
+	if (!configured) log_errno("launcher access failed");
+	return configured;
 }
 
 bool mm_launcher_active(void)
@@ -73,15 +93,18 @@ static void spawn(void)
 	if (!mm_launcher_configured())
 	{
 		printf("mister_magic: launcher not executable: %s\n", s_launcher_path);
+		log_line("spawn gave up: launcher not executable");
 		s_gave_up = true;
 		return;
 	}
 
 	printf("mister_magic: spawning Slint debug UI: %s\n", s_launcher_path);
+	log_line("spawn");
 	s_pid = fork();
 	if (s_pid < 0)
 	{
 		printf("mister_magic: fork failed: %s\n", strerror(errno));
+		log_errno("fork failed");
 		s_pid = 0;
 		s_gave_up = true;
 		return;
@@ -91,7 +114,7 @@ static void spawn(void)
 	{
 		setsid();
 		setenv("MISTER_MAGIC_PARENT", "main-mister", 1);
-		execl(s_launcher_path, s_launcher_path, "ui", "debug", "0", NULL);
+		execl(s_launcher_path, s_launcher_path, "ui", "debug", "86400", NULL);
 		_exit(127);
 	}
 
@@ -102,6 +125,7 @@ static void spawn(void)
 
 void mm_launcher_init_for_menu(void)
 {
+	log_line("init_for_menu");
 	if (s_pid || s_gave_up)
 		return;
 	s_crash_count = 0;
@@ -141,6 +165,7 @@ void mm_launcher_poll(void)
 
 	if (s_init_pending)
 	{
+		log_line("poll init pending");
 		s_init_pending = false;
 		spawn();
 		return;
@@ -155,6 +180,7 @@ void mm_launcher_poll(void)
 
 void mm_launcher_shutdown(void)
 {
+	log_line("shutdown");
 	if (s_pid)
 		wait_launcher_stopped(s_pid);
 	s_init_pending = false;
@@ -165,6 +191,7 @@ void mm_launcher_shutdown(void)
 void mm_launcher_prepare_for_launch(void)
 {
 	printf("mister_magic: preparing Main-owned launch\n");
+	log_line("prepare_for_launch");
 	mm_launcher_shutdown();
 	if (menu_present()) MenuHide();
 }
