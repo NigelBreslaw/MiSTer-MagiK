@@ -498,7 +498,7 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
   `stable-x86_64-unknown-linux-gnu` installed (`--force-non-host`) for the
   emulated cross container.
 - **Two release profiles** (`rust/BUILD.md`): `release` (fast daily, thin LTO)
-  and `release-device` (fat LTO + NEON, ship to MiSTer). `opt-level = 3` on both.
+  and `release-device` (fat LTO + Cortex-A9, ship to MiSTer). `opt-level = 3` on both.
 
 **Known follow-ups for the real frontend:** the copy is still ~half the screen
 because the demo's gradient bar spans full width (full-width dirty rows). A real

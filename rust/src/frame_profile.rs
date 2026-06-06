@@ -24,10 +24,6 @@ impl FrameSample {
         self.anim_us + self.render_us + self.vsync_us + self.copy_us
     }
 
-    pub fn total_us(self) -> u64 {
-        self.wall_us
-    }
-
     fn dominant_phase(self) -> &'static str {
         let m = self
             .anim_us

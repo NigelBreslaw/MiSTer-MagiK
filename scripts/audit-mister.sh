@@ -39,7 +39,7 @@ esac
 
 case " $FEATURES " in
   *" vfpv3 "*) echo "VFPv3: yes" ;;
-  *) echo "VFPv3: NO (A1 rustflags use +vfp3)"; FAIL=1 ;;
+  *) echo "VFPv3: NO"; FAIL=1 ;;
 esac
 
 ARCH=$(uname -m)
@@ -50,10 +50,10 @@ if [ "$ARCH" != armv7l ]; then
 fi
 
 if [ "$FAIL" -ne 0 ]; then
-  echo "A1 prerequisite: FAILED — do not enable +neon until cpuinfo matches"
+  echo "A1 prerequisite: FAILED — do not use Cortex-A9-tuned builds until cpuinfo matches"
   exit 1
 fi
-echo "A1 prerequisite: OK — safe for rustflags: target-cpu=cortex-a9, +neon,+vfp3"
+echo "A1 prerequisite: OK — safe for rustflags: target-cpu=cortex-a9"
 
 echo "=== glibc ==="
 ldd --version 2>&1 | head -1
