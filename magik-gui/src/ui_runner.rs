@@ -2451,18 +2451,7 @@ fn run_launcher_loop(
             copy_cached_rect(disp, ui, &cached, rect);
         }
         let frame_t4 = Instant::now();
-        let mut reasserted = false;
-        if frames < 180 && frames % 10 == 0 {
-            reasserted = true;
-            boot_analytics::event("early_reassert_set_mode_1080p", format!("frame={frames}"));
-            Display::set_mode_1080p();
-            let flag =
-                f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
-            boot_analytics::event(
-                "early_reassert_fb_enable_direct",
-                format!("frame={frames} support_flag={flag}"),
-            );
-        }
+        let reasserted = false;
         if let Some(profile) = boot_frame_profile.as_mut() {
             let (edge1_hash, edge1_nonzero) = disp.right_edge_signature(1);
             let (edge8_hash, edge8_nonzero) = disp.right_edge_signature(8);

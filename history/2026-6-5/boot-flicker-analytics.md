@@ -44,6 +44,8 @@ Bundles land under `build/boot-analytics/<timestamp>/`.
 - `build/boot-analytics/20260606T205528Z` - added launcher frame timings.
 - `build/boot-analytics/20260606T212900Z` - added Main video/OSD events and
   right-edge framebuffer signatures.
+- `build/boot-analytics/20260606T213633Z` - post-fix validation with OSD
+  suppression and no early Slint fb-route reasserts.
 
 ## Findings
 
@@ -85,3 +87,24 @@ Two issues are likely interacting:
   - no early reassert events;
   - stable right-edge signatures;
   - no visible boot flashing.
+
+## Follow-up validation
+
+The first fix suppressed Main OSD writes while the MagiK launcher child is
+active and removed Slint's first-180-frame fb-route reassert loop. The
+post-fix capture in `20260606T213633Z` showed:
+
+- no `early_reassert_set_mode_1080p` or `early_reassert_fb_enable_direct`
+  events;
+- no live post-handoff `main-osd OsdUpdate` writes;
+- 14 `main-osd OsdUpdate_suppressed` events, proving Main still wanted to
+  refresh the stock OSD but the launcher gate prevented it from reaching the
+  FPGA OSD path;
+- only one Slint `route_fb` event, from the initial display open path;
+- stable right-edge signatures for all sampled launcher frames
+  (`edge1` unique hashes = 1, `edge8` unique hashes = 1, edge changes = 0).
+
+This strongly points at two concrete flicker sources: Main's stock OSD path was
+still active under the Slint launcher, and Slint was unnecessarily poking the
+HDMI/fb route during its first few seconds. The analytics now needs visual
+confirmation on HDMI, but the captured framebuffer and event timeline are clean.
