@@ -80,7 +80,7 @@ fn main() {
         "library-scan-bench" => library_bench::run_scan_bench(),
         "library-db-bench" => library_bench::run_db_bench(),
         "preview-bench" => preview_bench::run(),
-        "audio-tone" => run_audio_tone(),
+        "audio-tone" => run_audio_tone(&mut f),
         other => {
             eprintln!(
                 "unknown command '{other}' \
@@ -348,7 +348,8 @@ fn run_catalog_bench() {
     println!("games={}", catalog.len());
 }
 
-fn run_audio_tone() {
+fn run_audio_tone(f: &mut Fpga) {
+    f.set_audio_volume(0);
     let args: Vec<String> = std::env::args().skip(2).collect();
     if let Err(e) = mr_audio::run_tone_from_args(&args) {
         eprintln!("audio-tone failed: {e}");
