@@ -41,7 +41,7 @@ const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -463,9 +463,7 @@ pub fn load_arcade_catalog_from_sqlite(
     for row in rows {
         games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
-    games.retain(|game| {
-        is_launcher_load_core_xml_path(&game.mra_path) && !is_support_file_path(&game.mra_path)
-    });
+    games.retain(|game| is_launcher_launch_ref(&game.mra_path) && !is_support_file_path(&game.mra_path));
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
@@ -1087,7 +1085,10 @@ fn catalog_discoveries_from_container(
         return Vec::new();
     }
     let path = file.path.to_string_lossy();
-    if !path.contains("/games/Amiga/AmigaVision") {
+    if !path
+        .to_ascii_lowercase()
+        .contains("/games/amiga/amigavision")
+    {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -1160,6 +1161,7 @@ fn enrich_discoveries_from_gamelists(
 ) -> usize {
     let mut by_path = HashMap::<String, GamelistMetadata>::new();
     let mut by_stem = HashMap::<String, GamelistMetadata>::new();
+    let neogeo_media = build_neogeo_media_index(roots);
     let mut xml_files = 0usize;
     let mut xml_games = 0usize;
     for root in roots {
@@ -1222,7 +1224,8 @@ fn enrich_discoveries_from_gamelists(
             .get(&normalize_match_path(&discovery.source_path))
             .or_else(|| by_path.get(&normalize_match_path(&discovery.launch_ref)))
             .or_else(|| by_stem.get(&match_stem(&discovery.source_path)))
-            .or_else(|| by_stem.get(&match_stem(&discovery.launch_ref)));
+            .or_else(|| by_stem.get(&match_stem(&discovery.launch_ref)))
+            .or_else(|| lookup_neogeo_media(&neogeo_media, discovery));
         let Some(meta) = meta else {
             continue;
         };
@@ -1236,6 +1239,146 @@ fn enrich_discoveries_from_gamelists(
         matched += 1;
     }
     matched
+}
+
+fn build_neogeo_media_index(roots: &[String]) -> HashMap<String, GamelistMetadata> {
+    let mut by_setname = HashMap::new();
+    for dir in neogeo_media_dirs(roots) {
+        let screenshots = dir.join("screenshots");
+        if let Ok(entries) = fs::read_dir(&screenshots) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if !path.is_file() || path_ext_path(&path).as_deref() != Some("png") {
+                    continue;
+                }
+                let Some(setname) = path.file_stem().and_then(|s| s.to_str()).map(normalize_id)
+                else {
+                    continue;
+                };
+                by_setname
+                    .entry(setname)
+                    .or_insert_with(|| GamelistMetadata {
+                        title: None,
+                        image_path: Some(path.display().to_string()),
+                        has_image: true,
+                    });
+            }
+        }
+
+        for (game_path, meta) in parse_gamelist_metadata(&dir.join("gamelist.xml"), &dir) {
+            let setname = match_stem(&game_path);
+            let fallback = screenshots.join(format!("{setname}.png"));
+            let image_path = if meta.has_image {
+                meta.image_path
+            } else if fallback.is_file() {
+                Some(fallback.display().to_string())
+            } else {
+                meta.image_path
+            };
+            let has_image = image_path
+                .as_deref()
+                .map(|p| Path::new(p).is_file())
+                .unwrap_or(false);
+            by_setname.insert(
+                setname,
+                GamelistMetadata {
+                    title: meta.title,
+                    image_path,
+                    has_image,
+                },
+            );
+        }
+    }
+    by_setname
+}
+
+fn neogeo_media_dirs(roots: &[String]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for root in roots {
+        let path = Path::new(root);
+        for candidate in [
+            path.to_path_buf(),
+            path.join("NEOGEO"),
+            path.join("games/NEOGEO"),
+        ] {
+            if !candidate.is_dir() {
+                continue;
+            }
+            let Some(name) = candidate.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !name.eq_ignore_ascii_case("NEOGEO") {
+                continue;
+            }
+            let key = candidate.display().to_string();
+            if seen.insert(key) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+fn lookup_neogeo_media<'a>(
+    by_setname: &'a HashMap<String, GamelistMetadata>,
+    discovery: &GameDiscovery,
+) -> Option<&'a GamelistMetadata> {
+    if by_setname.is_empty() || !is_neogeo_discovery(discovery) {
+        return None;
+    }
+    neogeo_setname_candidates(discovery)
+        .into_iter()
+        .find_map(|setname| by_setname.get(&setname))
+}
+
+fn is_neogeo_discovery(discovery: &GameDiscovery) -> bool {
+    discovery.platform_id == "neogeo"
+        || discovery.core_id.eq_ignore_ascii_case("neogeo")
+        || discovery.hardware_id == "snk-neo-geo"
+        || discovery
+            .source_path
+            .to_ascii_lowercase()
+            .contains("/games/neogeo/")
+}
+
+fn neogeo_setname_candidates(discovery: &GameDiscovery) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(setname) = discovery.setname.as_deref() {
+        push_setname_candidate(&mut out, setname);
+    }
+    push_parenthesized_setname(&mut out, &discovery.source_path);
+    push_parenthesized_setname(&mut out, &discovery.launch_ref);
+    push_setname_candidate(&mut out, &match_stem(&discovery.source_path));
+    push_setname_candidate(&mut out, &match_stem(&discovery.launch_ref));
+    out
+}
+
+fn push_parenthesized_setname(out: &mut Vec<String>, path: &str) {
+    let stem = Path::new(path.split("::").next().unwrap_or(path))
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    if let Some(open) = stem.rfind('(') {
+        if let Some(close) = stem[open + 1..].find(')') {
+            push_setname_candidate(out, &stem[open + 1..open + 1 + close]);
+        }
+    }
+}
+
+fn push_setname_candidate(out: &mut Vec<String>, raw: &str) {
+    let setname = normalize_id(raw);
+    if setname == "unknown"
+        || setname.len() > 32
+        || !setname
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return;
+    }
+    if !out.iter().any(|existing| existing == &setname) {
+        out.push(setname);
+    }
 }
 
 fn parse_gamelist_metadata(path: &Path, base: &Path) -> Vec<(String, GamelistMetadata)> {
@@ -1301,6 +1444,12 @@ fn match_stem(path: &str) -> String {
             .and_then(|s| s.to_str())
             .unwrap_or(path),
     )
+}
+
+fn path_ext_path(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
 }
 
 fn discovery_from_archive_entry(entry: &LibraryContainerEntry) -> GameDiscovery {
@@ -2582,7 +2731,7 @@ fn is_playable_discovery(d: &GameDiscovery) -> bool {
     match d.source_kind {
         DiscoverySourceKind::Mra => !is_support_file_path(&d.launch_ref),
         DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry => {
-            is_launcher_load_core_xml_path(&d.launch_ref) && !is_support_file_path(&d.launch_ref)
+            is_launcher_launch_ref(&d.launch_ref) && !is_support_file_path(&d.launch_ref)
         }
         DiscoverySourceKind::PayloadFile
         | DiscoverySourceKind::ArchiveEntry
@@ -2590,11 +2739,17 @@ fn is_playable_discovery(d: &GameDiscovery) -> bool {
     }
 }
 
-fn is_launcher_load_core_xml_path(path: &str) -> bool {
+fn is_launcher_launch_ref(path: &str) -> bool {
     match path_ext(path).as_deref() {
         Some("mra" | "mgl") => !path.contains("::"),
+        Some("7z") => is_amigavision_archive_path(path),
         _ => false,
     }
+}
+
+fn is_amigavision_archive_path(path: &str) -> bool {
+    path.to_ascii_lowercase()
+        .contains("/games/amiga/amigavision")
 }
 
 fn is_support_file_path(path: &str) -> bool {
@@ -2952,7 +3107,162 @@ mod tests {
     }
 
     #[test]
-    fn catalog_entries_need_xml_launch_refs_to_count_as_games() {
+    fn neogeo_mgl_uses_setname_screenshot_from_neogeo_folder() {
+        let root = unique_temp_dir("neogeo-media");
+        let neogeo = root.join("games/NEOGEO");
+        let screenshots = neogeo.join("screenshots");
+        std::fs::create_dir_all(&screenshots).expect("create screenshots");
+        std::fs::write(screenshots.join("mslug3.png"), b"png").expect("write screenshot");
+        std::fs::write(
+            neogeo.join("gamelist.xml"),
+            r#"
+            <gameList>
+              <game>
+                <path>./mslug3.zip</path>
+                <name>Metal Slug 3</name>
+                <image>./../../../../Volumes/MiSTer_Data/games/NEOGEO/screenshots/mslug3.png</image>
+              </game>
+            </gameList>
+            "#,
+        )
+        .expect("write gamelist");
+        let mut discoveries = vec![GameDiscovery {
+            source_path:
+                "/media/fat/_Games/_Neo Geo MVS & AES/_ World A-Z/Metal Slug 3 (mslug3).mgl"
+                    .to_string(),
+            launch_ref:
+                "/media/fat/_Games/_Neo Geo MVS & AES/_ World A-Z/Metal Slug 3 (mslug3).mgl"
+                    .to_string(),
+            source_kind: DiscoverySourceKind::Mgl,
+            title: "Metal Slug 3 (mslug3)".to_string(),
+            category: "Arcade".to_string(),
+            platform_id: "neogeo".to_string(),
+            core_id: "NeoGeo".to_string(),
+            hardware_id: "snk-neo-geo".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        }];
+
+        let matched = enrich_discoveries_from_gamelists(
+            &mut discoveries,
+            &[root.join("games").display().to_string()],
+            None,
+        );
+
+        assert_eq!(matched, 1);
+        assert_eq!(discoveries[0].title, "Metal Slug 3");
+        assert_eq!(
+            discoveries[0].image_path.as_deref(),
+            Some(
+                screenshots
+                    .join("mslug3.png")
+                    .display()
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert!(discoveries[0].has_image);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn neogeo_mgl_can_use_screenshot_file_without_gamelist_row() {
+        let root = unique_temp_dir("neogeo-screenshot-only");
+        let screenshots = root.join("NEOGEO/screenshots");
+        std::fs::create_dir_all(&screenshots).expect("create screenshots");
+        std::fs::write(screenshots.join("aof2a.png"), b"png").expect("write screenshot");
+        let mut discoveries = vec![GameDiscovery {
+            source_path: "/media/fat/_Games/_Neo Geo MVS & AES/Art of Fighting 2 (AES) (aof2a).mgl"
+                .to_string(),
+            launch_ref: "/media/fat/_Games/_Neo Geo MVS & AES/Art of Fighting 2 (AES) (aof2a).mgl"
+                .to_string(),
+            source_kind: DiscoverySourceKind::Mgl,
+            title: "Art of Fighting 2 (AES) (aof2a)".to_string(),
+            category: "Arcade".to_string(),
+            platform_id: "neogeo".to_string(),
+            core_id: "NeoGeo".to_string(),
+            hardware_id: "snk-neo-geo".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        }];
+
+        let matched = enrich_discoveries_from_gamelists(
+            &mut discoveries,
+            &[root.display().to_string()],
+            None,
+        );
+
+        assert_eq!(matched, 1);
+        assert_eq!(
+            discoveries[0].image_path.as_deref(),
+            Some(screenshots.join("aof2a.png").display().to_string().as_str())
+        );
+        assert!(discoveries[0].has_image);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn neogeo_setname_does_not_need_digits() {
+        let root = unique_temp_dir("neogeo-no-digit-setname");
+        let screenshots = root.join("NEOGEO/screenshots");
+        std::fs::create_dir_all(&screenshots).expect("create screenshots");
+        std::fs::write(screenshots.join("samsho.png"), b"png").expect("write screenshot");
+        let mut discoveries = vec![GameDiscovery {
+            source_path: "/media/fat/_Games/_Neo Geo MVS & AES/Samurai Shodown (samsho).mgl"
+                .to_string(),
+            launch_ref: "/media/fat/_Games/_Neo Geo MVS & AES/Samurai Shodown (samsho).mgl"
+                .to_string(),
+            source_kind: DiscoverySourceKind::Mgl,
+            title: "Samurai Shodown (samsho)".to_string(),
+            category: "Arcade".to_string(),
+            platform_id: "neogeo".to_string(),
+            core_id: "NeoGeo".to_string(),
+            hardware_id: "snk-neo-geo".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        }];
+
+        let matched = enrich_discoveries_from_gamelists(
+            &mut discoveries,
+            &[root.display().to_string()],
+            None,
+        );
+
+        assert_eq!(matched, 1);
+        assert_eq!(
+            discoveries[0].image_path.as_deref(),
+            Some(
+                screenshots
+                    .join("samsho.png")
+                    .display()
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert!(discoveries[0].has_image);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_catalog_entries_count_as_games() {
         let mut discovery = GameDiscovery {
             source_path: "/media/fat/games/Amiga/AmigaVision.7z::games.txt::Agony".to_string(),
             launch_ref: "/media/fat/games/Amiga/AmigaVision.7z".to_string(),
@@ -2972,7 +3282,12 @@ mod tests {
             confidence: DiscoveryConfidence::CatalogMetadata,
         };
 
+        assert!(is_playable_discovery(&discovery));
+        assert_eq!(unique_discovery_count(&[discovery.clone()]), 1);
+
+        discovery.launch_ref = "/media/fat/games/Other/System.7z".to_string();
         assert!(!is_playable_discovery(&discovery));
+
         discovery.launch_ref = "/media/fat/games/Amiga/Agony.mgl".to_string();
         assert!(is_playable_discovery(&discovery));
     }
@@ -3097,5 +3412,16 @@ mod tests {
             has_image: false,
             confidence: DiscoveryConfidence::ArchiveToc,
         }
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-{label}-{}-{}",
+            std::process::id(),
+            unix_now_secs()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
     }
 }
