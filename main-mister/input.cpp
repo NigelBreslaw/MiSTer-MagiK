@@ -43,6 +43,19 @@
 
 bool update_advanced_state(int devnum, uint16_t evcode, int evstate);
 
+static void mister_magic_log_key_event(const char *where, int dev, uint16_t code, int value)
+{
+	if (!mm_launcher_active()) return;
+	bool trace_all = access("/tmp/mister-magic-input-trace", F_OK) == 0;
+	if (!trace_all && code != KEY_F12 && code != KEY_ESC && code != KEY_MENU && code != KEY_HOMEPAGE)
+		return;
+
+	FILE *f = fopen("/tmp/mister-magic-main.log", "a");
+	if (!f) return;
+	fprintf(f, "input %s dev=%d code=%u value=%d\n", where, dev, code, value);
+	fclose(f);
+}
+
 char joy_bnames[NUMBUTTONS][32] = {};
 int  joy_bcount = 0;
 static struct pollfd pool[NUMDEV + 3];
@@ -2992,6 +3005,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER && !(mapping && mapping_type == 3 && mapping_button));
 	int origcode = ev->code;
 
+	if (ev->type == EV_KEY)
+		mister_magic_log_key_event("raw", dev, ev->code, ev->value);
+
 	if (!input[dev].has_mmap)
 	{
 		if (input[dev].quirk == QUIRK_TOUCHGUN)
@@ -3890,6 +3906,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				}
 
 				if (ev->code == KEY_HOMEPAGE) ev->code = KEY_MENU;
+				mister_magic_log_key_event("user_io_kbd", dev, ev->code, ev->value);
 				if (send_key) user_io_kbd(ev->code, ev->value);
 				return;
 			}

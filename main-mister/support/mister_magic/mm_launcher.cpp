@@ -13,13 +13,17 @@
 #include "menu.h"
 #include "video.h"
 
+char user_io_osd_is_visible(void);
+
 static const char s_launcher_path[] = "/media/fat/mister-magic/mister-magic-fb";
 static const char s_log_path[] = "/tmp/mister-magic-main.log";
 static pid_t s_pid = 0;
 static int s_crash_count = 0;
 static unsigned long s_respawn_timer = 0;
+static unsigned long s_osd_restore_timer = 0;
 static bool s_init_pending = false;
 static bool s_gave_up = false;
+static bool s_yielded_for_osd = false;
 
 static void log_line(const char *msg)
 {
@@ -137,6 +141,16 @@ void mm_launcher_poll(void)
 {
 	if (s_pid)
 	{
+		if (s_yielded_for_osd && CheckTimer(s_osd_restore_timer) && !user_io_osd_is_visible())
+		{
+			log_line("osd yield restore");
+			s_yielded_for_osd = false;
+			s_osd_restore_timer = 0;
+			video_chvt(2);
+			video_fb_enable(1);
+			if (menu_present()) MenuHide();
+		}
+
 		int status = 0;
 		if (waitpid(s_pid, &status, WNOHANG) == s_pid)
 		{
@@ -185,6 +199,8 @@ void mm_launcher_shutdown(void)
 		wait_launcher_stopped(s_pid);
 	s_init_pending = false;
 	s_respawn_timer = 0;
+	s_osd_restore_timer = 0;
+	s_yielded_for_osd = false;
 	video_fb_enable(0);
 }
 
@@ -194,4 +210,23 @@ void mm_launcher_prepare_for_launch(void)
 	log_line("prepare_for_launch");
 	mm_launcher_shutdown();
 	if (menu_present()) MenuHide();
+}
+
+void mm_launcher_yield_for_osd(unsigned short key, int press)
+{
+	if (!s_pid)
+		return;
+
+	FILE *f = fopen(s_log_path, "a");
+	if (f)
+	{
+		fprintf(f, "osd yield key=%u press=%d visible=%d\n",
+		        key, press, user_io_osd_is_visible() ? 1 : 0);
+		fclose(f);
+	}
+
+	s_yielded_for_osd = true;
+	s_osd_restore_timer = GetTimer(1500);
+	if (!s_osd_restore_timer) s_osd_restore_timer = 1;
+	video_fb_enable(0);
 }
