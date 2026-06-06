@@ -10,8 +10,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SSH="$HERE/scripts/mister_ssh.py"
-DEVICE_SCRIPT="/media/fat/mister-magic/bench-diagnose.sh"
-HOST_SCRIPT="$HERE/scripts/mister-magic/bench-diagnose.sh"
+DEVICE_SCRIPT="/media/fat/mister-magik/bench-diagnose.sh"
+HOST_SCRIPT="$HERE/scripts/mister-magik/bench-diagnose.sh"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -54,8 +54,8 @@ if [[ "$RESTORE_LAUNCHER" -eq 1 && -z "$MODE" ]]; then
   echo "==> restore Slint launcher (kill MiSTer, exec boot handoff path)"
   mister run "
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
-kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true
-exec /media/fat/mister-magic/mister-magic-fb ui launcher 0
+kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
+exec /media/fat/mister-magik/mister-magik-fb ui launcher 0
 " --stream
   exit 0
 fi

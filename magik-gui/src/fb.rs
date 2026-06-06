@@ -9,7 +9,7 @@
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
 use crate::fpga::FB_SIZE_PX;
-use mister_magic_fb::framebuffer_copy;
+use mister_magik_fb::framebuffer_copy;
 use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
 use std::fs::OpenOptions;
 use std::io;

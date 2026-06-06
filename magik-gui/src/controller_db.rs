@@ -11,7 +11,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-pub const CONTROLLERS_PATH: &str = "/media/fat/mister-magic/controllers.json";
+pub const CONTROLLERS_PATH: &str = "/media/fat/mister-magik/controllers.json";
 
 const DB_VERSION: u32 = 2;
 

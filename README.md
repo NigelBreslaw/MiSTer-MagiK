@@ -19,18 +19,18 @@ The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
 ## Project layout
 
 ```
-magik-gui/                         native frontend (mister-magic-fb)
+magik-gui/                         native frontend (mister-magik-fb)
   ui/launcher.slint           2×2 home grid + game launch
   ui/controller_test.slint    pad test scene
   src/launcher.rs             nav + fifo load_core game launch
   src/fpga.rs                 SPI, fb_enable_direct, set_vga_fb
 main-mister/                       Main_MiSTer fork experiments
 scripts/
-  deploy-rust.sh              build + deploy binary + boot.sh
+  deploy-rust.sh              build + deploy Slint child binary
   deploy-main-mister-experiment.sh build + deploy Main-as-parent experiment
-  install-slint-boot.sh       one-time: inittab → Slint launcher at boot
+  install-slint-boot.sh       one-time: MiSTer.ini main= handoff to MiSTer_MagiK
   restore-stock-boot.sh       revert to stock MiSTer menu
-  mister-magic/boot.sh        on-device boot handoff script
+  mister-magik/boot.sh        legacy boot handoff script; not production
   mister_ssh.py               paramiko SSH helper
 history/                      experiment notes
 AGENTS.md                     operational guide (read this for MiSTer quirks)
@@ -45,18 +45,29 @@ Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
 See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.
 See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork experiment.
 
-## Boot into Slint (production)
+## Boot into Mister MagiK
 
-**Do not** set `main=mister-magic-fb` in `MiSTer.ini` — MiSTer execs away before
+**Do not** set `main=mister-magik-fb` in `MiSTer.ini` — MiSTer execs away before
 `video_init()` and the TV gets no HDMI signal.
 
-Instead, install the boot handoff once (MiSTer brings up HDMI, then Slint takes over):
+Production boot follows the Zaparoo-compatible model: `/etc/inittab` keeps
+booting stock `/media/fat/MiSTer`, and `[MiSTer] main=MiSTer_MagiK` hands off to
+the Main_MiSTer fork. This preserves `update_all` and makes rollback simple.
+
+Build and deploy the fork + Slint child:
+
+```bash
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-main-mister-experiment.sh --fast
+```
+
+Or install the boot handoff after deploying binaries:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 ```
 
-Restore stock menu:
+Restore stock menu by removing the `main=MiSTer_MagiK` handoff and ensuring
+`inittab` boots stock MiSTer:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
@@ -68,7 +79,7 @@ Kill stock MiSTer so it releases the gamepad, then run the launcher:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
-  'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magic/mister-magic-fb ui launcher 60'
+  'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
 ```
 
 ## Subcommands

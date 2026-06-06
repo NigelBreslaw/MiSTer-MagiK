@@ -5,7 +5,7 @@ use std::io::{self, Read};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
-pub use mister_magic_fb::input_info::PadInfo;
+pub use mister_magik_fb::input_info::PadInfo;
 
 const JS_EVENT_SIZE: usize = 8;
 const JS_EVENT_BUTTON: u8 = 0x01;

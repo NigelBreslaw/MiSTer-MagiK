@@ -9,7 +9,7 @@
 #include "osd.h"
 #include "profiling.h"
 #include "video.h"
-#include "support/mister_magic/mm_launcher.h"
+#include "support/mister_magik/mm_launcher.h"
 
 static cothread_t co_scheduler = nullptr;
 static cothread_t co_poll = nullptr;

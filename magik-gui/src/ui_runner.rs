@@ -342,10 +342,9 @@ pub fn run_ui(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
-    let main_parent = std::env::var_os("MISTER_MAGIK_PARENT").is_some()
-        || std::env::var_os("MISTER_MAGIC_PARENT").is_some();
+    let main_parent = std::env::var_os("MISTER_MAGIK_PARENT").is_some();
     let flag = if main_parent {
-        println!("fb route owned by MiSTer_Magik parent; rendering into /dev/fb0");
+        println!("fb route owned by MiSTer_MagiK parent; rendering into /dev/fb0");
         0
     } else {
         f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0))

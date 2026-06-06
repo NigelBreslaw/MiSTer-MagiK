@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mister_ssh import connect, run  # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
-REMOTE = "/media/fat/mister-magic/mister-magic-fb"
+REMOTE = "/media/fat/mister-magik/mister-magik-fb"
 TSV = HERE / "history/toolchain-bench/results.tsv"
 BENCH_DIR = HERE / "history/toolchain-bench"
 SECS = int(os.environ.get("BENCH_SECS", "15"))
@@ -46,7 +46,7 @@ def parse_log(text: str) -> tuple[int, int, int, int, int] | None:
 def bench_scale(client, label: str, scale: int, bin_bytes: int) -> None:
     capture_at = SECS - 2 if SECS > 4 else 2
     cmd = f"""
-kill -9 $(pidof mister-magic-fb) 2>/dev/null || true
+kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer) 2>/dev/null || true
 sleep 0.5
 MISTER_RENDER_SCALE={scale} {REMOTE} ui list_scroll {SECS} > /tmp/bench-ui.log 2>&1 &
@@ -124,7 +124,7 @@ cat /tmp/bench-ui.log
 
 
 def main() -> int:
-    bin_path = HERE / "magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb"
+    bin_path = HERE / "magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
     if not bin_path.is_file():
         print(f"missing binary: {bin_path}", file=sys.stderr)
         return 1

@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mister_ssh import connect, run  # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
-REMOTE = "/media/fat/mister-magic/mister-magic-fb"
-BIN = HERE / "magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb"
+REMOTE = "/media/fat/mister-magik/mister-magik-fb"
+BIN = HERE / "magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 OUT_DIR = HERE / "history/toolchain-bench"
 TSV = OUT_DIR / "results.tsv"
 
@@ -91,7 +91,7 @@ def parse_log(text: str) -> tuple[float, int, int, int, int] | None:
 
 def bench_pct(client, pct: int, bin_bytes: int) -> Sample | None:
     cmd = f"""
-kill -9 $(pidof mister-magic-fb) 2>/dev/null || true
+kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer) 2>/dev/null || true
 sleep 0.5
 MISTER_DIRTY_BAND_PCT={pct} {REMOTE} ui dirty_band {SECS} > /tmp/bench-dirty-band.log 2>&1

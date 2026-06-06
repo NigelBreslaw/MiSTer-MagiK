@@ -9,8 +9,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
-BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magic-fb"
-REMOTE="/media/fat/mister-magic/mister-magic-fb"
+BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+REMOTE="/media/fat/mister-magik/mister-magik-fb"
 SSH="$HERE/scripts/mister_ssh.py"
 OUT_ROOT="$HERE/history/toolchain-bench"
 ANALYZE="$HERE/scripts/analyze-frame-profile.py"

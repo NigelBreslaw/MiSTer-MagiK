@@ -11,7 +11,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release
 BUILD_FLAG=()
-REMOTE="/media/fat/mister-magic/mister-magic-fb"
+REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
@@ -19,7 +19,7 @@ MISTER="$HERE/scripts/mister"
 # Slint scenes (see magik-gui/ui/bench/README.md)
 BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll dirty_band)
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
-VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magic/mslug3.mov}"
+VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magik/mslug3.mov}"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -92,7 +92,7 @@ if [[ -z "${MISTER_RENDER_SCALE:-}" && -n "$PIXEL_SCALE" ]]; then
   esac
 fi
 
-BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magic-fb"
+BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
 
 mkdir -p "$BENCH_DIR"
 
@@ -199,8 +199,8 @@ run_scene_on_device() {
   mister run "
 set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz (see scripts/bench-diagnose.sh).
-kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_Magik) 2>/dev/null || true
+kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
+kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
 ${render_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
@@ -350,7 +350,7 @@ echo "    rustc=$rustc_ver  compile_sec=${HOST_COMPILE_SEC:-n/a}  bytes=$HOST_BY
 
 if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   echo "==> Deploy $BIN"
-  mister run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
+  mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"
   if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then

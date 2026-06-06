@@ -1,4 +1,4 @@
-# Cross-build profiles (`mister-magic-fb`)
+# Cross-build profiles (`mister-magik-fb`)
 
 Two **release** profiles separate fast host compiles from the binary we ship to the MiSTer.
 
@@ -40,7 +40,7 @@ scripts/bench-debug-build.sh --scenario all --samples 3 --state package-dirty
 ```
 
 The benchmark writes `build/debug-build-bench.tsv` with wall time, Cargo total
-time, and the largest `mister-magic-fb` timing units. `check-arm-ui` uses
+time, and the largest `mister-magik-fb` timing units. `check-arm-ui` uses
 `MISTER_UI_BUILD_SCOPE=launcher`, so it compiles only the launcher, controller
 test, and demo Slint entrypoints. Full optimized builds and `check-arm-ui-full`
 still compile every benchmark scene.
@@ -50,21 +50,21 @@ still compile every benchmark scene.
 ```bash
 # Fast — default for bare build-arm.sh
 magik-gui/build-arm.sh
-# → target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb
+# → target/armv7-unknown-linux-gnueabihf/release/mister-magik-fb
 
 # Full MiSTer release (fat LTO + Cortex-A9 via RUSTFLAGS)
 magik-gui/build-arm.sh --device
-# → target/.../release-device/mister-magic-fb
+# → target/.../release-device/mister-magik-fb
 
 # Profiling build (symbols, pprof feature — do not ship)
 magik-gui/build-arm.sh --profile
-# → target/.../release-device-profile/mister-magic-fb
+# → target/.../release-device-profile/mister-magik-fb
 # Run on device: scripts/profile-scene.sh full_motion 30
 
 # Video/audio benchmark build
 magik-gui/build-arm.sh --fast --video
 # Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
-# Default media path on MiSTer: /media/fat/mister-magic/mslug3.mov
+# Default media path on MiSTer: /media/fat/mister-magik/mslug3.mov
 
 # Deploy (default = release-device)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh

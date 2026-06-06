@@ -5,16 +5,16 @@ All scenes render at **960×540**; Rust upscales 2× to 1920×1080 HDMI.
 **Before a manual run**, stop anything else that owns SPI/HDMI (required for 60 fps):
 
 ```bash
-kill -9 $(pidof mister-magic-fb) 2>/dev/null
+kill -9 $(pidof mister-magik-fb) 2>/dev/null
 kill -9 $(pidof MiSTer) 2>/dev/null
-/media/fat/mister-magic/mister-magic-fb ui full_motion 20
+/media/fat/mister-magik/mister-magik-fb ui full_motion 20
 ```
 
 Or use **`scripts/bench-diagnose.sh visible …`** (streams progress, no timeout).
 
 Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`, `console_scroll`, `dirty_band`.
 With a `--video` build, `video_playback` is also available. It expects
-`/media/fat/mister-magic/mslug3.mov` by default: H.264 baseline video plus
+`/media/fat/mister-magik/mslug3.mov` by default: H.264 baseline video plus
 48 kHz stereo `pcm_s16le` audio. Override with `MISTER_VIDEO_PATH`.
 
 ### dirty_band — copy budget sweep
@@ -22,7 +22,7 @@ With a `--video` build, `video_playback` is also available. It expects
 Solid-color band scrolling vertically. Set band height (% of 540 logical rows) via env:
 
 ```bash
-MISTER_DIRTY_BAND_PCT=50 /media/fat/mister-magic/mister-magic-fb ui dirty_band 15
+MISTER_DIRTY_BAND_PCT=50 /media/fat/mister-magik/mister-magik-fb ui dirty_band 15
 ```
 
 Sweep 10–100% and print the ~60 fps cutoff:
@@ -48,7 +48,7 @@ MISTER_PROFILE=1 \
 MISTER_PROFILE_FILE=/tmp/frames.tsv \
 MISTER_PPROF=1 \
 MISTER_PPROF_OUT=/tmp/cpu.svg \
-/media/fat/mister-magic/mister-magic-fb ui full_motion 30
+/media/fat/mister-magik/mister-magik-fb ui full_motion 30
 ```
 
 | Env | Effect |
@@ -62,7 +62,7 @@ Phase breakdown each frame: **anim** (Slint timers) · **render** (software rend
 
 Host-side TSV rollup: `python3 scripts/analyze-frame-profile.py history/toolchain-bench/profile-*/mister-frame-*.tsv`
 
-Toolchain bench (automated TSV + PNG — kills `mister-magic-fb` + MiSTer before each scene):
+Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device

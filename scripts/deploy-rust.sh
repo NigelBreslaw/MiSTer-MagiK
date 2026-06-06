@@ -8,7 +8,7 @@
 # Default installs the release-device (A3) binary — use --fast for daily iteration.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE="/media/fat/mister-magic/mister-magic-fb"
+REMOTE="/media/fat/mister-magik/mister-magik-fb"
 DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
   DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov"
@@ -20,7 +20,7 @@ if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
   DEFAULT_VIDEO_SRC="/Users/nigelb/Desktop/mslug3.mp4"
 fi
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$DEFAULT_VIDEO_SRC}"
-VIDEO_REMOTE="/media/fat/mister-magic/mslug3.mov"
+VIDEO_REMOTE="/media/fat/mister-magik/mslug3.mov"
 
 PROFILE=release-device
 BUILD_FLAG=(--device)
@@ -37,7 +37,7 @@ for arg in "$@"; do
   esac
 done
 
-BIN="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magic-fb"
+BIN="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
 
 bytes() {
   stat -f%z "$1" 2>/dev/null || stat -c%s "$1"
@@ -63,13 +63,13 @@ echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 echo "==> Deploying $BIN -> $REMOTE"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
+  uv run python "$HERE/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" put "$BIN" "$REMOTE"
+  uv run python "$HERE/scripts/mister_ssh.py" put "$BIN" "$REMOTE.upload"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" put "$HERE/scripts/mister-magic/boot.sh" "/media/fat/mister-magic/boot.sh"
+  uv run python "$HERE/scripts/mister_ssh.py" run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'"
 if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   if [ ! -f "$VIDEO_SRC" ]; then
     echo "ERROR: --video requested but $VIDEO_SRC does not exist" >&2
@@ -82,7 +82,7 @@ if [ "$DEPLOY_VIDEO" -eq 1 ]; then
 fi
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "chmod +x $REMOTE /media/fat/mister-magic/boot.sh"
+  uv run python "$HERE/scripts/mister_ssh.py" run "chmod +x $REMOTE"
 
 REMOTE_BYTES="$(
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
@@ -95,6 +95,6 @@ if [ -n "$REMOTE_BYTES" ]; then
 fi
 
 echo "==> Deployed ($PROFILE)."
-echo "    Production boot: scripts/install-slint-boot.sh  (once — inittab handoff)"
+echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Dev / bench:     kill -9 \$(pidof MiSTer); $REMOTE ui launcher 60"
 echo "    Restore stock:   scripts/restore-stock-boot.sh"
