@@ -26,7 +26,7 @@ rusqlite = { version = "0.40.0", default-features = false, features = ["bundled"
 # Crate release is 5.0.0+ffmpeg-8.1; Cargo ignores semver build metadata in
 # version requirements, so pin the semver-visible part and keep the FFmpeg 8.1
 # binding intent here.
-ffmpeg-the-third = { version = "5.0.0", optional = true, default-features = false, features = ["codec", "format", "software-scaling", "software-resampling", "build", "static"] }
+ffmpeg-the-third = { version = "5.0.0", optional = true, default-features = false, features = ["codec", "format", "software-scaling", "static"] }
 
 [features]
 default = []

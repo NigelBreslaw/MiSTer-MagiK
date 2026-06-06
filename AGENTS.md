@@ -518,14 +518,34 @@ Apple-Silicon host runs on the MiSTer (`arch=arm, os=linux, glibc 2.31`).
 ```bash
 scripts/deploy-rust.sh                   # release-device (full MiSTer build)
 scripts/deploy-rust.sh --fast            # release (faster compile)
+scripts/deploy-rust.sh --fast --video    # includes minimal static FFmpeg + video asset
 # or manually:
 rust/build-arm.sh --device
+rust/build-arm.sh --device --video
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
   put rust/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb \
   /media/fat/mister-magic/mister-magic-fb
 ```
 
-See **`rust/BUILD.md`** for profile table and bench mapping (A0 ≈ `release`, A3 ≈ `release-device`).
+Every `rust/build-arm.sh` run prints the binary size and appends a local,
+gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the
+formal benchmark/size history in `history/toolchain-bench/results.tsv` via
+`scripts/bench-toolchain.sh`.
+
+Video builds use a project-local **minimal static FFmpeg 8.1.x** built by
+`rust/scripts/build-minimal-ffmpeg.sh` under `rust/target/ffmpeg-minimal/armv7`.
+It enables only H.264 decode/parse, MOV/MP4 demuxing, file protocol, and
+`avcodec`/`avformat`/`avutil`/`swscale`; no system `libav*` runtime is required.
+
+For binary-size diagnosis, build an unstripped profile binary and group symbols:
+
+```bash
+rust/build-arm.sh --profile
+rust/scripts/analyze-binary-size.sh
+```
+
+See **`rust/BUILD.md`** for profile table, size tracking, FFmpeg notes, and bench
+mapping (A0 ≈ `release`, A3 ≈ `release-device`).
 
 **One-time host setup (done):**
 

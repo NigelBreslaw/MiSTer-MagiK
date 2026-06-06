@@ -26,12 +26,49 @@ rust/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magic-fb
 # Run on device: scripts/profile-scene.sh full_motion 30
 
+# Video benchmark build
+rust/build-arm.sh --fast --video
+# Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
+
 # Deploy (default = release-device)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
 # Deploy after a fast build (same path on device, larger binary)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 ```
+
+Every `build-arm.sh` run prints the binary size and appends a local row to
+`build/binary-size.tsv` with profile, features, bytes, and delta versus the prior
+matching build. The file is intentionally gitignored; formal benchmark byte
+history remains in `history/toolchain-bench/results.tsv`.
+
+## Size analysis
+
+For subsystem-level size work, build an unstripped diagnostic binary and generate
+symbol reports:
+
+```bash
+rust/build-arm.sh --profile
+rust/scripts/analyze-binary-size.sh
+```
+
+Reports are written to `build/binary-size-analysis/`:
+
+- `groups.tsv` — rough grouping: FFmpeg/video, Slint/generated UI, fonts/text,
+  SQLite/catalog, PNG/preview, launcher/input/fb, other.
+- `top-symbols.tsv` — largest symbols.
+- `nm-symbols.tsv` — raw symbol-size listing.
+
+## Minimal FFmpeg
+
+`--video` builds do not use the broad `ffmpeg-the-third` FFmpeg builder. Instead,
+`build-arm.sh` runs `rust/scripts/build-minimal-ffmpeg.sh`, then passes
+`FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist` into `cross`.
+
+The minimal FFmpeg build enables only H.264-in-MP4 playback plus software scaling:
+`avcodec`, `avformat`, `avutil`, `swscale`, H.264 decoder/parser, MOV demuxer,
+and file protocol. Audio, swresample, avfilter, avdevice, programs, docs, and
+autodetected libraries are disabled.
 
 `scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release`** (matches historical A0 toolchain experiments unless you edit the script to pass `--device` for A3-style benches).
 

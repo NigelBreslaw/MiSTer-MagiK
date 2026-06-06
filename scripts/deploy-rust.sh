@@ -9,7 +9,11 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="/media/fat/mister-magic/mister-magic-fb"
-VIDEO_SRC="/Users/nigelb/Desktop/mslug3.mp4"
+DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_crf28.mp4"
+if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
+  DEFAULT_VIDEO_SRC="/Users/nigelb/Desktop/mslug3.mp4"
+fi
+VIDEO_SRC="${MISTER_VIDEO_SRC:-$DEFAULT_VIDEO_SRC}"
 VIDEO_REMOTE="/media/fat/mister-magic/mslug3.mp4"
 
 PROFILE=release-device
@@ -29,13 +33,31 @@ done
 
 BIN="$HERE/rust/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magic-fb"
 
+bytes() {
+  stat -f%z "$1" 2>/dev/null || stat -c%s "$1"
+}
+
+human_bytes() {
+  awk -v b="$1" 'BEGIN {
+    split("B KiB MiB GiB", u, " ");
+    n = b + 0;
+    i = 1;
+    while (n >= 1024 && i < 4) { n /= 1024; i++ }
+    if (i == 1) printf "%d %s", n, u[i];
+    else printf "%.2f %s", n, u[i];
+  }'
+}
+
 echo "==> Cross-building (armv7 profile=$PROFILE)"
 "$HERE/rust/build-arm.sh" "${BUILD_FLAG[@]}"
+
+LOCAL_BYTES="$(bytes "$BIN")"
+echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Deploying $BIN -> $REMOTE"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "mkdir -p /media/fat/mister-magic"
+  uv run python "$HERE/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   uv run python "$HERE/scripts/mister_ssh.py" put "$BIN" "$REMOTE"
@@ -55,6 +77,16 @@ fi
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   uv run python "$HERE/scripts/mister_ssh.py" run "chmod +x $REMOTE /media/fat/mister-magic/boot.sh"
+
+REMOTE_BYTES="$(
+  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+  MISTER_PASS="${MISTER_PASS:-1}" \
+    uv run python "$HERE/scripts/mister_ssh.py" run "wc -c $REMOTE" \
+    | awk '{print $1}' | tail -1
+)"
+if [ -n "$REMOTE_BYTES" ]; then
+  echo "==> Deployed binary size: $REMOTE_BYTES bytes ($(human_bytes "$REMOTE_BYTES"))"
+fi
 
 echo "==> Deployed ($PROFILE)."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — inittab handoff)"

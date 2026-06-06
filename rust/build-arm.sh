@@ -18,6 +18,7 @@ cd "$(dirname "$0")"
 
 PROFILE=release
 FEATURES=()
+FEATURE_LIST=""
 for arg in "$@"; do
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
@@ -63,6 +64,15 @@ if [ "${#FEATURES[@]}" -gt 0 ]; then
   FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
   BUILD_ARGS+=(--features "$FEATURE_LIST")
 fi
+
+if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
+  "$PWD/scripts/build-minimal-ffmpeg.sh"
+  export FFMPEG_DIR="/project/target/ffmpeg-minimal/armv7/dist"
+  export PKG_CONFIG_PATH="/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
+  export PKG_CONFIG_ALLOW_CROSS=1
+  echo "==> using minimal FFmpeg: $FFMPEG_DIR"
+fi
+
 if ! cross build "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG"; then
   exit 1
 fi
@@ -71,3 +81,6 @@ if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
   exit 1
 fi
 echo "==> cross build OK"
+
+BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magic-fb"
+"$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"
