@@ -13,7 +13,7 @@ use std::time::Duration;
 
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magic/mslug3.mov";
 const AUDIO_RATE: u32 = 48_000;
-const AUDIO_CHANNELS: u16 = 2;
+const OUTPUT_AUDIO_CHANNELS: usize = 2;
 
 pub struct VideoPlayer {
     path: String,
@@ -161,7 +161,7 @@ impl VideoPlayer {
                     }));
                 }
             } else if stream_index == self.audio_stream_index {
-                append_pcm_audio_packet(&packet, &mut self.queued_audio)?;
+                append_pcm_audio_packet(&packet, self.audio_channels, &mut self.queued_audio)?;
             }
         }
 
@@ -180,7 +180,7 @@ impl VideoPlayer {
     }
 
     fn ensure_audio(&mut self, frames: usize) -> Result<(), String> {
-        let target_samples = frames * AUDIO_CHANNELS as usize;
+        let target_samples = frames * OUTPUT_AUDIO_CHANNELS;
         if self.queued_audio.len() >= target_samples {
             return Ok(());
         }
@@ -189,7 +189,7 @@ impl VideoPlayer {
             let (stream, packet) = item.map_err(|e| format!("read audio packet: {e}"))?;
             let stream_index = stream.index();
             if stream_index == self.audio_stream_index {
-                append_pcm_audio_packet(&packet, &mut self.queued_audio)?;
+                append_pcm_audio_packet(&packet, self.audio_channels, &mut self.queued_audio)?;
                 if self.queued_audio.len() >= target_samples {
                     return Ok(());
                 }
@@ -203,7 +203,7 @@ impl VideoPlayer {
     }
 
     fn take_audio(&mut self, frames: usize) -> Vec<i16> {
-        let samples = frames * AUDIO_CHANNELS as usize;
+        let samples = frames * OUTPUT_AUDIO_CHANNELS;
         let n = samples.min(self.queued_audio.len());
         self.queued_audio.drain(..n).collect()
     }
@@ -228,20 +228,39 @@ fn receive_image(
 
 fn append_pcm_audio_packet(
     packet: &ffmpeg::codec::packet::Packet,
+    input_channels: u32,
     queued_audio: &mut Vec<i16>,
 ) -> Result<(), String> {
     let Some(data) = packet.data() else {
         return Ok(());
     };
-    if data.len() % 4 != 0 {
+    let input_channels = input_channels as usize;
+    let input_frame_bytes = input_channels * std::mem::size_of::<i16>();
+    if input_frame_bytes == 0 || data.len() % input_frame_bytes != 0 {
         return Err(format!(
-            "pcm_s16le packet has {} bytes, expected a multiple of 4 for stereo frames",
-            data.len()
+            "pcm_s16le packet has {} bytes, expected a multiple of {input_frame_bytes} for {input_channels}ch frames",
+            data.len(),
         ));
     }
-    queued_audio.reserve(data.len() / 2);
-    for chunk in data.chunks_exact(2) {
-        queued_audio.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+    queued_audio.reserve(data.len() / input_frame_bytes * OUTPUT_AUDIO_CHANNELS);
+    match input_channels {
+        1 => {
+            for chunk in data.chunks_exact(2) {
+                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+                queued_audio.push(sample);
+                queued_audio.push(sample);
+            }
+        }
+        2 => {
+            for chunk in data.chunks_exact(2) {
+                queued_audio.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+            }
+        }
+        _ => {
+            return Err(format!(
+                "pcm_s16le audio must be mono or stereo, got {input_channels} channels"
+            ));
+        }
     }
     Ok(())
 }
@@ -263,9 +282,9 @@ fn validate_audio_parameters(
         ));
     }
     let channels = parameters.ch_layout().channels();
-    if channels != AUDIO_CHANNELS as u32 {
+    if channels != 1 && channels != 2 {
         return Err(format!(
-            "{path}: audio must be stereo PCM, got {} channels",
+            "{path}: audio must be mono or stereo PCM, got {} channels",
             channels
         ));
     }

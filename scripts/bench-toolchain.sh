@@ -18,7 +18,7 @@ MISTER="$HERE/scripts/mister"
 
 # Slint scenes (see rust/ui/bench/README.md)
 BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll dirty_band)
-VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov}"
+VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
 VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magic/mslug3.mov}"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
