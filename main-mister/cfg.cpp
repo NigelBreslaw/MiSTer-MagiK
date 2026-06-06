@@ -14,7 +14,6 @@
 #include "user_io.h"
 #include "video.h"
 #include "support/arcade/mra_loader.h"
-#include "support/mister_magic/mm_launcher.h"
 
 cfg_t cfg;
 static FILE *orig_stdout = NULL;
@@ -622,8 +621,6 @@ void cfg_parse()
 		// second pass to look for section without vrefresh
 		ini_parse(altcfg(), video_get_core_mode_name(0));
 	}
-
-	mm_launcher_cfg_apply();
 
 	if (strlen(cfg.vga_mode))
 	{
