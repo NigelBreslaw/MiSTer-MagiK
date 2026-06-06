@@ -63,4 +63,4 @@ codegen-units = 1
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"
 strip = false
-debug = 1
+debug = true

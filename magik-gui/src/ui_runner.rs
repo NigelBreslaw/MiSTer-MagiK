@@ -56,6 +56,9 @@ mod slint_ui {
     pub mod controller {
         include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
     }
+    pub mod debug {
+        include!(concat!(env!("OUT_DIR"), "/debug.rs"));
+    }
     pub mod launcher {
         include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
     }
@@ -84,6 +87,7 @@ use std::sync::mpsc;
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
+    "debug",
     "demo",
     "controller_test",
     #[cfg(not(mister_ui_scope_launcher))]
@@ -445,6 +449,15 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             window.request_redraw();
             run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+        }
+        "debug" => {
+            let app = slint_ui::debug::DebugUi::new().expect("DebugUi::new");
+            app.global::<slint_ui::debug::MisterUi>()
+                .set_scale(SLINT_UI_SCALE);
+            configure_window(&ui, &window);
+            app.show().expect("show");
+            window.request_redraw();
+            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
         "launcher" => {
             let pad = open_pads();

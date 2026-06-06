@@ -39,10 +39,19 @@ done
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32,48}"
 
-if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  echo "ERROR: Docker is not running — cross needs it for armv7 builds." >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: Docker is not installed or not on PATH — cross needs it for armv7 builds." >&2
   exit 1
 fi
+
+DOCKER_INFO_ERR="$(mktemp)"
+if ! docker info >/dev/null 2>"$DOCKER_INFO_ERR"; then
+  echo "ERROR: Docker is not reachable — cross needs it for armv7 builds." >&2
+  sed -n '1,6p' "$DOCKER_INFO_ERR" >&2
+  rm -f "$DOCKER_INFO_ERR"
+  exit 1
+fi
+rm -f "$DOCKER_INFO_ERR"
 
 if [ "$PROFILE" = release-device ] || [ "$PROFILE" = release-device-profile ]; then
   export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9"

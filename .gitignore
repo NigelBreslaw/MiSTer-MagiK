@@ -41,6 +41,10 @@ htmlcov/
 # Rust build output (the native frontend crate)
 /magik-gui/target/
 /magik-gui/build/
+
+# Main_MiSTer fork build output
+/main-mister/bin/
+/main-mister/releases/
 *.whl
 *.tar.gz
 *.tar.zst

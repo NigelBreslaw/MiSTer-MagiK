@@ -25,6 +25,7 @@ fn compile_ui() {
     let mut sources = vec![
         "ui/app.slint",
         "ui/controller_test.slint",
+        "ui/debug.slint",
         "ui/launcher.slint",
     ];
     if !launcher_only {

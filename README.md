@@ -24,8 +24,10 @@ magik-gui/                         native frontend (mister-magic-fb)
   ui/controller_test.slint    pad test scene
   src/launcher.rs             nav + fifo load_core game launch
   src/fpga.rs                 SPI, fb_enable_direct, set_vga_fb
+main-mister/                       Main_MiSTer fork experiments
 scripts/
   deploy-rust.sh              build + deploy binary + boot.sh
+  deploy-main-mister-experiment.sh build + deploy Main-as-parent experiment
   install-slint-boot.sh       one-time: inittab → Slint launcher at boot
   restore-stock-boot.sh       revert to stock MiSTer menu
   mister-magic/boot.sh        on-device boot handoff script
@@ -41,6 +43,7 @@ Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
 
 
 See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.
+See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork experiment.
 
 ## Boot into Slint (production)
 
