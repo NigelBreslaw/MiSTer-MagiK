@@ -52,6 +52,14 @@ static void log_errno(const char *prefix)
 	fclose(f);
 }
 
+static void focus_slint_framebuffer()
+{
+	video_chvt(2);
+	video_fb_enable(1);
+	if (menu_present()) MenuHide();
+	OsdDisable();
+}
+
 void mm_launcher_cfg_apply(void)
 {
 	// Experimental Main-as-parent mode needs the Linux framebuffer path alive.
@@ -70,6 +78,11 @@ bool mm_launcher_configured(void)
 bool mm_launcher_active(void)
 {
 	return s_pid != 0;
+}
+
+bool mm_launcher_suppresses_stock_osd(void)
+{
+	return s_pid != 0 || s_init_pending || s_overlay_visible;
 }
 
 static void kill_launcher(pid_t pid, int sig)
@@ -133,9 +146,7 @@ static void spawn(void)
 		_exit(127);
 	}
 
-	video_chvt(2);
-	video_fb_enable(1);
-	if (menu_present()) MenuHide();
+	focus_slint_framebuffer();
 }
 
 static void draw_overlay_osd()
@@ -161,6 +172,7 @@ static void close_overlay_osd()
 {
 	OsdDisable();
 	s_overlay_visible = false;
+	focus_slint_framebuffer();
 }
 
 void mm_launcher_init_for_menu(void)
@@ -260,8 +272,7 @@ void mm_launcher_yield_for_osd(unsigned short key, int press)
 		return;
 	}
 
-	video_chvt(2);
-	video_fb_enable(1);
+	focus_slint_framebuffer();
 	s_overlay_selected = 0;
 	draw_overlay_osd();
 	s_overlay_visible = true;

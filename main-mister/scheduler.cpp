@@ -49,8 +49,11 @@ static void scheduler_co_ui(void)
 	{
 		{
 			SPIKE_SCOPE("co_ui", 1000);
-			HandleUI();
-			OsdUpdate();
+			if (!mm_launcher_suppresses_stock_osd())
+			{
+				HandleUI();
+				OsdUpdate();
+			}
 		}
 
 		scheduler_yield();

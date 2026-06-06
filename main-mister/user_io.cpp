@@ -4233,7 +4233,11 @@ void user_io_kbd(uint16_t key, int press)
 				}
 			}
 			if (mm_launcher_handle_osd_key(key, press)) return;
-			if (is_menu_event && mm_launcher_active()) mm_launcher_yield_for_osd(key, press);
+			if (is_menu_event && mm_launcher_active())
+			{
+				mm_launcher_yield_for_osd(key, press);
+				return;
+			}
 			if (!press)
 			{
 				if (is_menu() && !video_fb_state()) printf("PS2 code(break)%s for core: %d(0x%X)\n", (code & EXT) ? "(ext)" : "", code & 255, code & 255);
