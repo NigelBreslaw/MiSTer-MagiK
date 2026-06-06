@@ -154,6 +154,8 @@ magik-gui/                   native armv7 frontend — see §12
   src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy, boot retry
   build-arm.sh          cross build (--fast | --device); see magik-gui/BUILD.md
   BUILD.md              release vs release-device profiles
+main-mister/            buildable Main_MiSTer fork experiments — see docs/main-mister-fork.md
+  build-docker.sh       Dockerized Main build with ARM GCC 10.2
 ```
 
 On the device the binary lives at `/media/fat/mister-magic/mister-magic-fb`.
