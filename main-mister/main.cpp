@@ -34,7 +34,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "scheduler.h"
 #include "osd.h"
 #include "offload.h"
-#include "support/mister_magik/mm_launcher.h"
 
 const char *version = "$VER:" VDATE;
 
@@ -87,11 +86,8 @@ int main(int argc, char *argv[])
 		user_io_poll();
 		frame_timer();
 		input_poll(0);
-		if (!mm_launcher_suppresses_stock_osd())
-		{
-			HandleUI();
-			OsdUpdate();
-		}
+		HandleUI();
+		OsdUpdate();
 	}
 #endif
 	return 0;

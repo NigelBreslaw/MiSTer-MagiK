@@ -75,6 +75,10 @@ MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   uv run python "$ROOT/scripts/mister_ssh.py" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
 
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  uv run python "$ROOT/scripts/mister_ssh.py" put "$ROOT/scripts/mister-magik/repair-boot-ini.awk" /tmp/mister-magik-repair-boot-ini.awk
+
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
@@ -84,95 +88,12 @@ mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
 cp -n "$INI" "$INI.before-mister-magik-main" 2>/dev/null || true
 
-# Set the native main= handoff to the fork in [MiSTer] only. Leave unrelated
-# per-core main= entries alone.
+# Normalize CRLF, collapse duplicate [MiSTer] sections, set HDMI-safe
+# direct_video=0, and install the native main= handoff to the fork.
 tmp="$INI.new"
-awk '"'"'
-BEGIN { in_mister = 0; seen_mister = 0; wrote = 0 }
-/^\[[^]]+\]/ {
-  if (in_mister && !wrote) {
-    print "main=MiSTer_MagiK"
-    wrote = 1
-  }
-  in_mister = 0
-  if (tolower($0) == "[mister]") {
-    in_mister = 1
-    seen_mister = 1
-    wrote = 0
-  }
-}
-in_mister && tolower($0) ~ /^[[:space:]]*main[[:space:]]*=/ {
-  if (!wrote) {
-    print "main=MiSTer_MagiK"
-    wrote = 1
-  }
-  next
-}
-!in_mister && tolower($0) ~ /^[[:space:]]*main[[:space:]]*=[[:space:]]*mister_magik[[:space:]]*$/ {
-  next
-}
-{ print }
-END {
-  if (in_mister && !wrote) print "main=MiSTer_MagiK"
-  if (!seen_mister) {
-    print "[MiSTer]"
-    print "main=MiSTer_MagiK"
-  }
-}
-'"'"' "$INI" > "$tmp"
+awk -f /tmp/mister-magik-repair-boot-ini.awk "$INI" > "$tmp"
 mv "$tmp" "$INI"
-echo "main=MiSTer_MagiK ensured"
-
-tmp="$INI.new"
-awk '"'"'
-BEGIN { in_menu = 0; seen_menu = 0; wrote = 0 }
-/^\[[^]]+\]/ {
-  if (in_menu && !wrote) {
-    print "video_mode=8"
-    wrote = 1
-  }
-  in_menu = 0
-  if (tolower($0) == "[menu]") {
-    in_menu = 1
-    seen_menu = 1
-    wrote = 0
-  }
-}
-in_menu && tolower($0) ~ /^[[:space:]]*video_mode[[:space:]]*=/ {
-  if (!wrote) {
-    print "video_mode=8"
-    wrote = 1
-  }
-  next
-}
-{ print }
-END {
-  if (in_menu && !wrote) print "video_mode=8"
-  if (!seen_menu) {
-    print ""
-    print "[Menu]"
-    print "video_mode=8"
-  }
-}
-'"'"' "$INI" > "$tmp"
-mv "$tmp" "$INI"
-echo "Menu video_mode=8 ensured"
-
-# Current Main_MiSTer release accepts vrr_mode and vrr_vesa_framerate, but not
-# these min/max keys. Leave them documented, never active, to avoid boot warnings.
-for ini_path in "$INI" /media/fat/MiSTer.ini.bak; do
-  [ -f "$ini_path" ] || continue
-  tmp="$ini_path.new"
-  awk '"'"'
-tolower($0) ~ /^[[:space:]]*vrr_(min|max)_framerate[[:space:]]*=/ {
-  print ";" $0
-  next
-}
-{ print }
-'"'"' "$ini_path" > "$tmp"
-  mv "$tmp" "$ini_path"
-done
-echo "unsupported VRR min/max keys commented"
+echo "MiSTer.ini boot/display keys repaired"
 
 tmp=/tmp/inittab.magik
 awk '"'"'

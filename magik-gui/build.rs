@@ -26,6 +26,7 @@ fn compile_ui() {
         "ui/app.slint",
         "ui/controller_test.slint",
         "ui/debug.slint",
+        "ui/green.slint",
         "ui/launcher.slint",
     ];
     if !launcher_only {
