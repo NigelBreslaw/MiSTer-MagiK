@@ -53,6 +53,8 @@ See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork exp
 Production boot follows the Zaparoo-compatible model: `/etc/inittab` keeps
 booting stock `/media/fat/MiSTer`, and `[MiSTer] main=MiSTer_MagiK` hands off to
 the Main_MiSTer fork. This preserves `update_all` and makes rollback simple.
+For the verified HDMI TV path, the scripts also repair `MiSTer.ini` so it has
+one `[MiSTer]` section with `direct_video=0` and one `[Menu] video_mode=8`.
 
 Build and deploy the fork + Slint child:
 

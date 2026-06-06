@@ -15,7 +15,7 @@ displays a Linux UI, the tooling we built, and the concrete next steps.
 game/app front end. Long-term it should feel like a real frontend (own the
 screen, controller input).
 
-**Status (2026-06-03):**
+**Status (2026-06-06):**
 
 - ✅ **Native Rust frontend** — `mister-magik-fb ui` at locked 60fps, smooth +
   tear-free. See §9.7.
@@ -24,6 +24,9 @@ screen, controller input).
 - ✅ **Production boot** — update_all-compatible Zaparoo-style handoff:
   `/etc/inittab` boots stock `/media/fat/MiSTer`, then `[MiSTer]
   main=MiSTer_MagiK` re-execs the Main fork, which launches Slint as its child.
+- ✅ **HDMI boot verified** — repaired `MiSTer.ini` uses one `[MiSTer]` section,
+  `direct_video=0`, `[Menu] video_mode=8`, and `main=MiSTer_MagiK`. This fixed
+  the blank/zoomed TV output while preserving update_all compatibility.
 - ✅ FPGA SPI + `fb_enable_direct` + `set_vga_fb` in `magik-gui/src/fpga.rs`.
 - ✅ Gamepad input via Linux js API (`magik-gui/src/input.rs`).
 
@@ -58,8 +61,8 @@ Remaining work: live-mode geometry, in-game settings strategy (§7).
   `"<fmt> <rb> <width> <height> <stride>"`, e.g. `8888 1 1920 1080 7680`.
 - No system fonts on MiSTer — the Rust build embeds Press Start 2P in the binary
   (`magik-gui/ui/fonts/`, SIL OFL).
-- Relevant `MiSTer.ini` keys observed: `direct_video=1`, `vga_scaler=1`,
-  `fb_terminal=1`, `fb_size=0`.
+- Production `MiSTer.ini` keys: `[MiSTer] direct_video=0`, `fb_terminal=1`,
+  `fb_size=0`, `main=MiSTer_MagiK`; `[Menu] video_mode=8`.
 - `MiSTer.ini` has a backup at `/media/fat/MiSTer.ini.bak`.
 - `/media/fat` is exFAT (via FUSE). Writing many small files is **slow**; that
   dominates deploy time, not the network.
@@ -121,18 +124,17 @@ the Slint binary runs before `video_init()` and the TV gets no HDMI signal (§7)
 To show Slint on HDMI we need:
 
 1. **`video_fb_enable(1, 0)`** — FPGA SPI (`SET_FBUF`) pointing scan-out at buffer 0.
-2. **Correct geometry** — `xoff`/`yoff` and scaled coords for `direct_video=1`
-   (see §9.6; currently hardcoded `0,0` for this 1080p menu).
+2. **Correct HDMI mode** — for this TV boot path, `direct_video=0` and
+   `[Menu] video_mode=8` are required. `direct_video=1` produced blank HDMI even
+   when `/dev/fb0` captured a correct 1920×1080 Slint frame.
 3. **A render loop** — custom Slint `Platform`, vsync pacing, dirty-row copy into
    write-combined `/dev/fb0` (§9.7).
 
-We issue the SPI sequence ourselves from Rust (`magik-gui/src/fpga.rs`) to route
-`/dev/fb0` to HDMI during Slint UI. In the Main-as-parent boot model, the fork
-starts the Slint child, but Slint still reasserts the final 1080p framebuffer
-route with `fb_enable_direct(... MODE_1080P60 ...)`. Do not rely on the fork
-parent's plain `video_fb_enable(1)` for final geometry: on 2026-06-06 that left
-the TV showing a massively zoomed crop even though `/dev/fb0` captured correctly.
-Games launch by spawning MiSTer briefly and writing fifo `load_core` (§7). Do
+The Main fork copies Zaparoo's launcher handoff: spawn Slint through `agetty` on
+`tty2`, switch to VT2, call Main's `video_fb_enable(1)`, and let the Slint child
+continue rendering to `/dev/fb0`. Slint also has Rust SPI diagnostics
+(`magik-gui/src/fpga.rs`) for reading/reasserting framebuffer state. Games launch
+by spawning MiSTer briefly and writing fifo `load_core` (§7). Do
 **not** use external `rbf_load` from Slint — bricks HDMI.
 
 **F9 / keep-MiSTer-running was tried and rejected:** MiSTer keeps `EVIOCGRAB`
@@ -268,15 +270,12 @@ canonical boot binary, while `/media/fat/MiSTer_MagiK` is an add-on payload that
 can later be managed by update_all. Rollback is simple: remove
 `main=MiSTer_MagiK`, ensure inittab boots `/media/fat/MiSTer`, and reboot.
 
-Like Zaparoo, the fork must suppress the normal menu path immediately when the
-alternate launcher is configured. The menu hook clears `/dev/fb0` and spawns
-Slint at once; if spawn is deferred, the stock menu can leak onto HDMI and can
-also leave confusing intermediate video state for the TV.
-Do not call Main's `video_fb_enable(1)` for this blackout: once Main sets
-`fb_enabled`, `video_poll()` can keep reapplying Main's route and override
-Slint's correct HDMI geometry. Slint is responsible for the final framebuffer
-route. The fork can ask the Slint binary to run `mister-magik-fb route` when it
-needs to return HDMI to Slint after the stock OSD.
+Like Zaparoo, the fork must suppress the normal menu path as soon as the
+alternate launcher is configured. The fork writes a tiny `/tmp/mister_magik_launcher`
+script, starts it through `/sbin/agetty` on `tty2`, switches to VT2, calls
+`video_fb_enable(1)`, and hides any visible menu OSD. This exact sequence fixed
+the blank/static/zoomed HDMI path once `MiSTer.ini` was repaired to
+`direct_video=0`.
 
 **Game launch:** Slint spawns MiSTer if needed, writes `load_core <path.mra>` to
 `/dev/MiSTer_cmd`, then exits when the arcade core is detected. On launch failure,
@@ -320,13 +319,10 @@ Use `scripts/deploy-main-mister-experiment.sh --fast` to build/deploy both.
 Current intended flow (2026-06-06): `/etc/inittab` starts stock
 `/media/fat/MiSTer`; `MiSTer.ini main=MiSTer_MagiK` hands off to the fork; the
 fork initializes the menu core, then starts
-`/media/fat/mister-magik/mister-magik-fb ui launcher 0` as a child. The command
+`/media/fat/mister-magik/mister-magik-fb ui launcher 0` as a child through the
+Zaparoo-style `agetty`/tty2 handoff. The command
 `mister_magik_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
-the Slint child and launches through Main. Metal Slug 3 reached the `NEOGEO`
-core via this path with fb mode `8888 1 640 240 2560` and no SDRAM/memory error
-strings in logs. After `update_all`, the device was retested against
-`NeoGeo_20260603.rbf` with the same clean result; the user visually confirmed
-Metal Slug 3 runs correctly.
+the Slint child and launches through Main's existing path.
 
 Fork baseline policy: pin `main-mister/` to upstream Main_MiSTer release commits
 named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`, not arbitrary
@@ -338,11 +334,12 @@ Important gotchas:
 - Disable the old `/etc/inittab` `mister-magik/boot.sh` handoff. Production
   inittab must boot `/media/fat/MiSTer`; `deploy-main-mister-experiment.sh`
   installs/repairs `[MiSTer] main=MiSTer_MagiK`.
+- `deploy-main-mister-experiment.sh` and `install-slint-boot.sh` upload
+  `scripts/mister-magik/repair-boot-ini.awk` and use it to normalize CRLF,
+  collapse duplicate `[MiSTer]` sections, set `direct_video=0`, set
+  `main=MiSTer_MagiK`, and ensure `[Menu] video_mode=8`.
 - Main clean rebuilds matter. If `main-mister/bin/MiSTer` is stale, new
   `support/mister_magik/*.cpp` files may not be reflected in the deployed binary.
-- `ui debug 0` exits immediately because generic bench/debug scenes treat
-  `secs=0` as zero duration. The launcher loop treats `0` as infinite. The Main
-  experiment currently uses `debug 86400`.
 
 ### TODO
 
@@ -466,9 +463,9 @@ scan-out is FPGA-driven), poke registers, `kill -CONT` after.
   (`FB_EN|FB_FMT_RxB|FB_FMT_8888 = 0x8016`), addr-lo, addr-hi, width, height,
   scaled L, scaled R, scaled T, scaled B, stride.
 
-**Open issues for the Rust port (why the spike showed colour columns):**
+**Historical direct_video=1 notes (why the spike showed colour columns):**
 
-- **`direct_video=1` on this device.** `video_fb_enable` then positions the fb via
+- In the old direct-video spike, `video_fb_enable` positioned the fb via
   `xoff = v_cur.item[4] - FB_DV_LBRD(3)`, `yoff = v_cur.item[8] - FB_DV_UBRD(2)`,
   uses tiny border porches (`FB_DV_*`), and calls `set_vga_fb()`. Our probe used
   `xoff=yoff=0` (non-direct path) → misaligned columns. The Rust port must reuse
@@ -589,7 +586,8 @@ UI with localised motion will copy far less. Could also copy only the dirty
   `/media/fat/mister-magik/mister-magik-fb ui launcher 0`.
 - `MiSTer.ini` must **not** set `main=mister-magik-fb`; Slint is not Main and
   cannot initialize HDMI before `main=` re-exec.
-- `direct_video=1`, `[Menu] video_mode=8` (1080p) in `MiSTer.ini`.
+- `direct_video=0`, `[Menu] video_mode=8` (1080p), and exactly one active
+  `main=MiSTer_MagiK` in the single `[MiSTer]` section of `MiSTer.ini`.
 - **Static IP `192.168.1.117` (no DHCP).** See §8 for dhcpcd.conf details.
 - Fork binary at `/media/fat/MiSTer_MagiK`; Slint child at
   `/media/fat/mister-magik/mister-magik-fb`.

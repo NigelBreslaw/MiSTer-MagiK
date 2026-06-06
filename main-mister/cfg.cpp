@@ -14,7 +14,7 @@
 #include "user_io.h"
 #include "video.h"
 #include "support/arcade/mra_loader.h"
-#include "support/mister_magik/mm_launcher.h"
+#include "support/mister_magik/alt_launcher.h"
 
 cfg_t cfg;
 static FILE *orig_stdout = NULL;
@@ -205,17 +205,6 @@ static int ini_getline(char* line)
 	return c == 0;
 }
 
-static int ini_section_matches_core(const char *section, const char *core, int wc_pos)
-{
-	return (wc_pos >= 0) ? !strncasecmp(section, core, wc_pos) : !strcasecmp(section, core);
-}
-
-static int ini_section_is_magik_menu_alias(const char *section)
-{
-	return is_menu() &&
-		!strcasecmp(section, "MiSTer_MagiK");
-}
-
 static int ini_get_section(char* buf, const char *vmode)
 {
 	int i = 0;
@@ -250,9 +239,8 @@ static int ini_get_section(char* buf, const char *vmode)
 	if (!strcasecmp(buf, "MiSTer") ||
 		(is_arcade() && !strcasecmp(buf, "arcade")) ||
 		(arcade_is_vertical() && !strcasecmp(buf, "arcade_vertical")) ||
-		ini_section_matches_core(buf, user_io_get_core_name(1), wc_pos) ||
-		ini_section_matches_core(buf, user_io_get_core_name(0), wc_pos) ||
-		ini_section_is_magik_menu_alias(buf))
+		((wc_pos >= 0) ? !strncasecmp(buf, user_io_get_core_name(1), wc_pos) : !strcasecmp(buf, user_io_get_core_name(1))) ||
+		((wc_pos >= 0) ? !strncasecmp(buf, user_io_get_core_name(0), wc_pos) : !strcasecmp(buf, user_io_get_core_name(0))))
 	{
 		if (incl)
 		{
@@ -621,7 +609,7 @@ void cfg_parse()
 	cfg.video_contrast = 50;
 	cfg.video_saturation = 100;
 	strcpy(cfg.video_gain_offset, "1, 0, 1, 0, 1, 0");
-	strcpy(cfg.main, "MiSTer_MagiK");
+	strcpy(cfg.main, "MiSTer");
 	has_video_sections = false;
 	using_video_section = false;
 	cfg_error_count = 0;
@@ -635,7 +623,7 @@ void cfg_parse()
 		ini_parse(altcfg(), video_get_core_mode_name(0));
 	}
 
-	mm_launcher_cfg_apply();
+	mister_magik_launcher_cfg_apply();
 
 	if (strlen(cfg.vga_mode))
 	{

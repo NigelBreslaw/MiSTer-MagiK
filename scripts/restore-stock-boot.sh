@@ -9,6 +9,9 @@ cd "$ROOT"
 MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
 MISTER_PASS="${MISTER_PASS:-1}"
 
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
+  uv run python scripts/mister_ssh.py put scripts/mister-magik/restore-stock-ini.awk /tmp/mister-magik-restore-stock-ini.awk
+
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_ssh.py run '
 set -e
 mount -o remount,rw / 2>/dev/null || true
@@ -43,16 +46,7 @@ END {
 cp "$tmp" /etc/inittab
 
 tmp="$INI.new"
-awk '"'"'
-BEGIN { in_mister = 0 }
-/^\[[^]]+\]/ {
-  in_mister = (tolower($0) == "[mister]")
-}
-in_mister && tolower($0) ~ /^[[:space:]]*main[[:space:]]*=[[:space:]]*mister_magik[[:space:]]*$/ {
-  next
-}
-{ print }
-'"'"' "$INI" > "$tmp"
+awk -f /tmp/mister-magik-restore-stock-ini.awk "$INI" > "$tmp"
 mv "$tmp" "$INI"
 echo "MiSTer_MagiK main= handoff removed"
 

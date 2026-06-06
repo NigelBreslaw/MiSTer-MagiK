@@ -26,32 +26,26 @@ This is not an official MiSTer-devel build. The experiment binary is deployed as
 ```
 
 - Main keeps polling while Slint is a child process.
-- Slint reasserts the final 1920x1080 framebuffer route after launch. Main's
-  `video_fb_enable(1)` is useful as an initial handoff, but it must not be the
-  final HDMI geometry authority; on 2026-06-06 it produced a TV-visible zoomed
-  crop while `/dev/fb0` captured correctly.
-- Like Zaparoo, the fork must suppress the normal menu path as soon as the
-  alternate launcher is configured. The menu hook clears `/dev/fb0` and spawns
-  Slint immediately; delaying to a later scheduler tick lets the stock menu leak
-  onto HDMI.
-- Do not use Main's `video_fb_enable(1)` for the blackout. Once Main sets
-  `fb_enabled`, `video_poll()` can keep reapplying Main's route and override
-  Slint's correct HDMI geometry. Slint owns the final route; the fork uses
-  `mister-magik-fb route` to return HDMI to Slint after stock OSD handoff.
-- Main exposes an experimental command through `/dev/MiSTer_cmd`:
+- Like Zaparoo, the fork uses an `agetty` handoff on `tty2`: it writes
+  `/tmp/mister_magik_launcher`, starts `/sbin/agetty -l` against that script,
+  switches to VT2, calls `video_fb_enable(1)`, and hides any open menu OSD.
+- `MiSTer.ini` must have one `[MiSTer]` section with `direct_video=0` and
+  `main=MiSTer_MagiK`, plus `[Menu] video_mode=8`. A duplicate `[MiSTer]`
+  section and `direct_video=1` produced blank HDMI even when `/dev/fb0` captured
+  a correct 1920x1080 Slint frame.
+- Main exposes a minimal launch command through `/dev/MiSTer_cmd`:
 
 ```text
 mister_magik_launch <absolute-core-or-mra-path>
 ```
 
-That command terminates the Slint child, drops the framebuffer route, and uses
-Main's existing `xml_load` / `fpga_load_rbf` path. This is the path to test
-Metal Slug 3 and the NeoGeo SDRAM setup bug.
+That command shuts down the Slint child with the new `alt_launcher` lifecycle
+and then uses Main's existing `xml_load` / `fpga_load_rbf` path.
 
 ## Patch map
 
-- `support/mister_magik/mm_launcher.cpp`: Slint child lifecycle.
-- `cfg.cpp`: forces framebuffer-terminal-friendly config for the experiment.
+- `support/mister_magik/alt_launcher.cpp`: Zaparoo-style Slint child lifecycle.
+- `cfg.cpp`: applies launcher-friendly config when the child binary exists.
 - `scheduler.cpp`: polls the launcher child.
 - `user_io.cpp`: starts the launcher after the menu core is initialized.
 - `input.cpp`: handles `mister_magik_launch`.
@@ -65,6 +59,8 @@ update_all-compatible boot model as Zaparoo Frontend:
 ::sysinit:/media/fat/MiSTer &
 [MiSTer]
 main=MiSTer_MagiK
+[Menu]
+video_mode=8
 ```
 
 Stock `/media/fat/MiSTer` remains the canonical boot binary. It reads
@@ -75,6 +71,12 @@ become an update_all-managed add-on later.
 `scripts/restore-stock-boot.sh` returns boot to stock by removing
 `main=MiSTer_MagiK` from `[MiSTer]` and ensuring `inittab` still boots
 `/media/fat/MiSTer`.
+
+`scripts/deploy-main-mister-experiment.sh` and `scripts/install-slint-boot.sh`
+upload `scripts/mister-magik/repair-boot-ini.awk` to the device before editing
+`MiSTer.ini`. That helper normalizes CRLF, collapses duplicate `[MiSTer]`
+sections, sets `direct_video=0`, installs `main=MiSTer_MagiK`, comments
+unsupported VRR min/max keys, and ensures `[Menu] video_mode=8`.
 
 ## Build
 
@@ -94,13 +96,7 @@ when available and otherwise uses the Docker wrapper.
 - CRT support is not wired yet.
 - Input ownership is intentionally left in the experimental state so we can see
   what Main, Slint, and the OSD do without over-designing the first pass.
-- Escape-menu experiment: while the Slint child is active, `F12`/Menu opens a
-  transparent two-option MiSTer MagiK OSD over Slint. `Show MiSTer Menu` hands
-  off to the stock OSD; when the stock OSD closes, Main restores Slint
-  framebuffer routing. `Return to MiSTer MagiK` simply closes the overlay.
-  Normal logs only include OSD-relevant keys; create
-  `/tmp/mister-magik-input-trace` on the device to log every `EV_KEY` code while
-  the launcher child is active.
+- Escape menu and return-to-launcher behavior are not wired yet.
 
 ## Release Baseline Policy
 
@@ -132,8 +128,11 @@ Current intended boot result:
 
 - `/etc/inittab` boots `/media/fat/MiSTer`.
 - `[MiSTer] main=MiSTer_MagiK` hands off to the fork before the stock menu loop.
+- `[MiSTer] direct_video=0` is required for the verified HDMI TV path.
 - `/media/fat/MiSTer_MagiK` initializes the menu core and starts
   `/media/fat/mister-magik/mister-magik-fb ui launcher 0`.
+- `mister_magik_launch <path>` shuts down the Slint child and launches through
+  Main.
 - `[Menu] video_mode=8` keeps the menu framebuffer at 1920x1080.
 
 Metal Slug 3 test:

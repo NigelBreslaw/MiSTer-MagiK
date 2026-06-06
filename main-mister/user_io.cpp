@@ -40,7 +40,7 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "support.h"
-#include "support/mister_magik/mm_launcher.h"
+#include "support/mister_magik/alt_launcher.h"
 
 static char core_path[1024] = {};
 static char rbf_path[1024] = {};
@@ -1540,17 +1540,9 @@ void user_io_init(const char *path, const char *xml)
 			else if (is_menu())
 			{
 				user_io_status_set("[4]", (cfg.menu_pal) ? 1 : 0);
-				if (mm_launcher_configured())
-				{
-					FILE *f = fopen("/tmp/mister-magik-main.log", "a");
-					if (f)
-					{
-						fprintf(f, "user_io menu hook\n");
-						fclose(f);
-					}
-					mm_launcher_init_for_menu();
-				}
-				else if (cfg.fb_terminal) video_menu_bg(user_io_status_get("[3:1]"));
+				if (mister_magik_launcher_configured()) mister_magik_launcher_init_for_menu();
+				else
+				if (cfg.fb_terminal) video_menu_bg(user_io_status_get("[3:1]"));
 				else user_io_status_set("[3:1]", 0);
 			}
 			else
@@ -4222,22 +4214,6 @@ void user_io_kbd(uint16_t key, int press)
 		{
 			uint32_t code = get_ps2_code(key);
 			bool is_menu_event = ((has_menu() || osd_is_visible || (get_key_mod() & (LALT | RALT | RGUI | LGUI))) && (((key == KEY_F12) && (!is_f12_mod_needed() || (get_key_mod() & (RGUI | LGUI)))) || key == KEY_MENU));
-			if ((key == KEY_F12 || key == KEY_MENU || key == KEY_ESC) && mm_launcher_active())
-			{
-				FILE *f = fopen("/tmp/mister-magik-main.log", "a");
-				if (f)
-				{
-					fprintf(f, "user_io_kbd key=%u press=%d menu_event=%d visible=%d\n",
-					        key, press, is_menu_event ? 1 : 0, osd_is_visible ? 1 : 0);
-					fclose(f);
-				}
-			}
-			if (mm_launcher_handle_osd_key(key, press)) return;
-			if (is_menu_event && mm_launcher_active() && !mm_launcher_stock_osd_active())
-			{
-				mm_launcher_yield_for_osd(key, press);
-				return;
-			}
 			if (!press)
 			{
 				if (is_menu() && !video_fb_state()) printf("PS2 code(break)%s for core: %d(0x%X)\n", (code & EXT) ? "(ext)" : "", code & 255, code & 255);

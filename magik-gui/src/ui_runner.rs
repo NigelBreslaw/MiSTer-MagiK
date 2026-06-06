@@ -59,6 +59,9 @@ mod slint_ui {
     pub mod debug {
         include!(concat!(env!("OUT_DIR"), "/debug.rs"));
     }
+    pub mod green {
+        include!(concat!(env!("OUT_DIR"), "/green.rs"));
+    }
     pub mod launcher {
         include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
     }
@@ -87,6 +90,7 @@ use std::sync::mpsc;
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
+    "green",
     "debug",
     "demo",
     "controller_test",
@@ -443,6 +447,13 @@ pub fn run_ui(f: &mut Fpga) {
         }
         "debug" => {
             with_scene_app!(debug::DebugUi, &ui, &window, app, {
+                app.show().expect("show");
+                window.request_redraw();
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
+        }
+        "green" => {
+            with_scene_app!(green::GreenProof, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
                 run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
@@ -1231,12 +1242,17 @@ fn run_frame_loop(
     let mut copy_rows_acc = 0u128;
     let frame_order = FrameOrder::from_env();
 
+    let label = if secs == 0 {
+        "forever".to_string()
+    } else {
+        format!("{secs}s")
+    };
     println!(
-        "bench scene running {secs}s (vsync-locked, dirty-row copy, frame-order={}, animation-clock={})...",
+        "bench scene running {label} (vsync-locked, dirty-row copy, frame-order={}, animation-clock={})...",
         frame_order.label(),
         animation_clock.label()
     );
-    while start.elapsed().as_secs() < secs {
+    while secs == 0 || start.elapsed().as_secs() < secs {
         let sample = run_bench_frame(ui, disp, window, &mut cached, frame_order, animation_clock);
         frames += 1;
 
