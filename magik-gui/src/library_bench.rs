@@ -463,7 +463,9 @@ pub fn load_arcade_catalog_from_sqlite(
     for row in rows {
         games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
-    games.retain(|game| is_launcher_launch_ref(&game.mra_path) && !is_support_file_path(&game.mra_path));
+    games.retain(|game| {
+        is_launcher_launch_ref(&game.mra_path) && !is_support_file_path(&game.mra_path)
+    });
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
