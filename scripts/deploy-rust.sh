@@ -9,7 +9,10 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="/media/fat/mister-magic/mister-magic-fb"
-DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov"
+DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
+if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
+  DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov"
+fi
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
   DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_crf28.mp4"
 fi
