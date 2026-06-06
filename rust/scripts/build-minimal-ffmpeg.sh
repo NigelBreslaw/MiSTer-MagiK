@@ -6,7 +6,7 @@ VERSION="${MISTER_FFMPEG_VERSION:-8.1.1}"
 WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
-STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION"
+STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-pcm-s16le"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 
 if [ -f "$STAMP" ] && [ -f "$DIST/lib/libavcodec.a" ]; then
@@ -62,6 +62,7 @@ rm -rf ../dist
   --enable-avutil \
   --enable-swscale \
   --enable-decoder=h264 \
+  --enable-decoder=pcm_s16le \
   --enable-parser=h264 \
   --enable-demuxer=mov \
   --enable-protocol=file

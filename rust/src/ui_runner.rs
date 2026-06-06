@@ -1149,11 +1149,19 @@ fn run_video_playback_loop(
             std::process::exit(1);
         }
     };
+    let mut audio_sink = match crate::mr_audio::MrAudioSink::open_default() {
+        Ok(sink) => sink,
+        Err(e) => {
+            eprintln!("video_playback audio: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut next_video_at = Duration::ZERO;
     let frame_interval = player.frame_interval();
+    let mut audio_pacer = AudioPacer::new();
     let mut frames = 0u64;
     let mut profiler = FrameProfiler::from_env();
     let cpu = cpu_profile::start();
@@ -1167,6 +1175,7 @@ fn run_video_playback_loop(
     let mut vsync_us = 0u128;
     let mut copy_us = 0u128;
     let mut copy_rows_acc = 0u128;
+    let mut audio_stats = AudioWindowStats::default();
 
     let label = if secs == 0 {
         "forever".to_string()
@@ -1189,10 +1198,26 @@ fn run_video_playback_loop(
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
                 if now >= next_video_at {
-                    match player.next_image() {
-                        Ok(image) => {
-                            app.set_frame(image);
+                    let audio_frames = audio_pacer.next_frames(frame_interval);
+                    match player.next_frame(audio_frames) {
+                        Ok(frame) => {
+                            app.set_frame(frame.image);
                             window.request_redraw();
+                            let audio_t0 = Instant::now();
+                            match audio_sink.write_frames(&frame.audio) {
+                                Ok(written) => {
+                                    audio_stats.add(
+                                        audio_t0.elapsed(),
+                                        frame.audio_requested_frames,
+                                        written,
+                                        frame.loop_count,
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!("video_playback audio: {e}");
+                                    break;
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("video_playback: {e}");
@@ -1237,6 +1262,7 @@ fn run_video_playback_loop(
                     &mut vsync_us,
                     &mut copy_us,
                     &mut copy_rows_acc,
+                    &mut audio_stats,
                 );
             }
             FrameOrder::VsyncThenRender => {
@@ -1245,10 +1271,26 @@ fn run_video_playback_loop(
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
                 if now >= next_video_at {
-                    match player.next_image() {
-                        Ok(image) => {
-                            app.set_frame(image);
+                    let audio_frames = audio_pacer.next_frames(frame_interval);
+                    match player.next_frame(audio_frames) {
+                        Ok(frame) => {
+                            app.set_frame(frame.image);
                             window.request_redraw();
+                            let audio_t0 = Instant::now();
+                            match audio_sink.write_frames(&frame.audio) {
+                                Ok(written) => {
+                                    audio_stats.add(
+                                        audio_t0.elapsed(),
+                                        frame.audio_requested_frames,
+                                        written,
+                                        frame.loop_count,
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!("video_playback audio: {e}");
+                                    break;
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("video_playback: {e}");
@@ -1291,6 +1333,7 @@ fn run_video_playback_loop(
                     &mut vsync_us,
                     &mut copy_us,
                     &mut copy_rows_acc,
+                    &mut audio_stats,
                 );
             }
         }
@@ -1302,10 +1345,66 @@ fn run_video_playback_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+    if let Ok(status) = crate::mr_audio::read_status() {
+        print!("video_playback audio status: {status}");
+    }
     if profile_on {
         profiler.finish();
     }
     cpu_profile::finish(cpu);
+}
+
+#[cfg(feature = "video")]
+struct AudioPacer {
+    nanos_remainder: u128,
+}
+
+#[cfg(feature = "video")]
+impl AudioPacer {
+    fn new() -> Self {
+        Self { nanos_remainder: 0 }
+    }
+
+    fn next_frames(&mut self, interval: Duration) -> usize {
+        let total = crate::mr_audio::SAMPLE_RATE as u128 * interval.as_nanos()
+            + self.nanos_remainder;
+        let frames = total / 1_000_000_000;
+        self.nanos_remainder = total % 1_000_000_000;
+        frames as usize
+    }
+}
+
+#[cfg(feature = "video")]
+#[derive(Default)]
+struct AudioWindowStats {
+    write_us: u128,
+    requested_frames: u128,
+    written_frames: u128,
+    underruns: u64,
+    loop_count: u64,
+}
+
+#[cfg(feature = "video")]
+impl AudioWindowStats {
+    fn add(
+        &mut self,
+        write_elapsed: Duration,
+        requested_frames: usize,
+        written_frames: usize,
+        loop_count: u64,
+    ) {
+        self.write_us += write_elapsed.as_micros();
+        self.requested_frames += requested_frames as u128;
+        self.written_frames += written_frames as u128;
+        if written_frames < requested_frames {
+            self.underruns += 1;
+        }
+        self.loop_count = self.loop_count.max(loop_count);
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[cfg(feature = "video")]
@@ -1320,6 +1419,7 @@ fn record_video_sample(
     vsync_us: &mut u128,
     copy_us: &mut u128,
     copy_rows_acc: &mut u128,
+    audio_stats: &mut AudioWindowStats,
 ) {
     if profiler.enabled() {
         profiler.record(sample);
@@ -1335,13 +1435,18 @@ fn record_video_sample(
     if fps_window_start.elapsed().as_millis() >= 1000 {
         let nn = (*fps_frames).max(1) as u128;
         println!(
-            "  fps ~ {}  | decode+anim {}us  render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
+            "  fps ~ {}  | decode+anim {}us  render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)  audio-write {}us audio {}/{}f underruns {} loops {}",
             *fps_frames,
             *decode_us / nn,
             *render_us / nn,
             *vsync_us / nn,
             *copy_us / nn,
-            *copy_rows_acc / nn
+            *copy_rows_acc / nn,
+            audio_stats.write_us / nn,
+            audio_stats.written_frames,
+            audio_stats.requested_frames,
+            audio_stats.underruns,
+            audio_stats.loop_count
         );
         *fps_frames = 0;
         *decode_us = 0;
@@ -1349,6 +1454,7 @@ fn record_video_sample(
         *vsync_us = 0;
         *copy_us = 0;
         *copy_rows_acc = 0;
+        audio_stats.reset();
         *fps_window_start = Instant::now();
     }
 }

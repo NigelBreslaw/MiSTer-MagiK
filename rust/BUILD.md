@@ -26,9 +26,10 @@ rust/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magic-fb
 # Run on device: scripts/profile-scene.sh full_motion 30
 
-# Video benchmark build
+# Video/audio benchmark build
 rust/build-arm.sh --fast --video
 # Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
+# Default media path on MiSTer: /media/fat/mister-magic/mslug3.mov
 
 # Deploy (default = release-device)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
@@ -65,10 +66,12 @@ Reports are written to `build/binary-size-analysis/`:
 `build-arm.sh` runs `rust/scripts/build-minimal-ffmpeg.sh`, then passes
 `FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist` into `cross`.
 
-The minimal FFmpeg build enables only H.264-in-MP4 playback plus software scaling:
-`avcodec`, `avformat`, `avutil`, `swscale`, H.264 decoder/parser, MOV demuxer,
-and file protocol. Audio, swresample, avfilter, avdevice, programs, docs, and
-autodetected libraries are disabled.
+The minimal FFmpeg build enables only H.264-in-MOV/MP4 playback plus software
+scaling and PCM stream discovery: `avcodec`, `avformat`, `avutil`, `swscale`,
+H.264 decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
+`video_playback` writes 48 kHz stereo signed 16-bit PCM packets directly to
+`/dev/MrAudio`, so AAC and swresample stay out of V1. avfilter, avdevice,
+programs, and autodetected libraries are disabled.
 
 `scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release`** (matches historical A0 toolchain experiments unless you edit the script to pass `--device` for A3-style benches).
 

@@ -1,4 +1,4 @@
-//! FFmpeg-backed video frame pump for the Slint video benchmark.
+//! FFmpeg-backed media pump for the Slint video benchmark.
 
 use ffmpeg::codec;
 use ffmpeg::format;
@@ -11,15 +11,29 @@ use slint::{Image, Rgb8Pixel, SharedPixelBuffer};
 use std::path::Path;
 use std::time::Duration;
 
-pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magic/mslug3.mp4";
+pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magic/mslug3.mov";
+const AUDIO_RATE: u32 = 48_000;
+const AUDIO_CHANNELS: u16 = 2;
 
 pub struct VideoPlayer {
     path: String,
     input: format::context::Input,
-    stream_index: usize,
-    decoder: ffmpeg::decoder::Video,
+    video_stream_index: usize,
+    audio_stream_index: usize,
+    video_decoder: ffmpeg::decoder::Video,
     scaler: ScalingContext,
     frame_interval: Duration,
+    audio_rate: u32,
+    audio_channels: u32,
+    queued_audio: Vec<i16>,
+    loop_count: u64,
+}
+
+pub struct PlaybackFrame {
+    pub image: Image,
+    pub audio: Vec<i16>,
+    pub audio_requested_frames: usize,
+    pub loop_count: u64,
 }
 
 impl VideoPlayer {
@@ -28,11 +42,13 @@ impl VideoPlayer {
         let path = path.as_ref().display().to_string();
         let player = Self::open_inner(path)?;
         println!(
-            "video: opened {} ({}x{}, frame_interval={}us)",
+            "video: opened {} ({}x{}, frame_interval={}us; audio={}Hz {}ch pcm_s16le)",
             player.path,
-            player.decoder.width(),
-            player.decoder.height(),
-            player.frame_interval.as_micros()
+            player.video_decoder.width(),
+            player.video_decoder.height(),
+            player.frame_interval.as_micros(),
+            player.audio_rate,
+            player.audio_channels
         );
         Ok(player)
     }
@@ -41,37 +57,50 @@ impl VideoPlayer {
         self.frame_interval
     }
 
-    pub fn next_image(&mut self) -> Result<Image, String> {
+    pub fn next_frame(&mut self, audio_frames: usize) -> Result<PlaybackFrame, String> {
         for _ in 0..2 {
-            if let Some(image) = self.next_image_until_eof()? {
-                return Ok(image);
+            if let Some(frame) = self.next_frame_until_eof(audio_frames)? {
+                return Ok(frame);
             }
             self.rewind()?;
         }
-        Err("video decode reached EOF twice without a frame".into())
+        Err("media decode reached EOF twice without a video frame".into())
     }
 
     fn open_inner(path: String) -> Result<Self, String> {
         let input = format::input(&path).map_err(|e| format!("open {path}: {e}"))?;
-        let stream = input
+        let video_stream = input
             .streams()
             .best(media::Type::Video)
             .ok_or_else(|| format!("{path}: no video stream"))?;
-        let stream_index = stream.index();
-        let frame_interval = stream_frame_interval(&stream);
-        let context = codec::context::Context::from_parameters(stream.parameters())
+        let audio_stream = input
+            .streams()
+            .best(media::Type::Audio)
+            .ok_or_else(|| format!("{path}: no audio stream"))?;
+
+        let video_stream_index = video_stream.index();
+        let audio_stream_index = audio_stream.index();
+        let frame_interval = stream_frame_interval(&video_stream);
+
+        let video_context = codec::context::Context::from_parameters(video_stream.parameters())
             .map_err(|e| format!("decoder parameters: {e}"))?;
-        let decoder = context
+        let video_decoder = video_context
             .decoder()
             .video()
             .map_err(|e| format!("open video decoder: {e}"))?;
+
+        let audio_parameters = audio_stream.parameters();
+        validate_audio_parameters(&path, &audio_parameters)?;
+        let audio_rate = audio_parameters.sample_rate();
+        let audio_channels = audio_parameters.ch_layout().channels();
+
         let scaler = ScalingContext::get(
-            decoder.format(),
-            decoder.width(),
-            decoder.height(),
+            video_decoder.format(),
+            video_decoder.width(),
+            video_decoder.height(),
             FfmpegPixel::RGB24,
-            decoder.width(),
-            decoder.height(),
+            video_decoder.width(),
+            video_decoder.height(),
             Flags::BILINEAR,
         )
         .map_err(|e| format!("create RGB scaler: {e}"))?;
@@ -79,42 +108,104 @@ impl VideoPlayer {
         Ok(Self {
             path,
             input,
-            stream_index,
-            decoder,
+            video_stream_index,
+            audio_stream_index,
+            video_decoder,
             scaler,
             frame_interval,
+            audio_rate,
+            audio_channels,
+            queued_audio: Vec::new(),
+            loop_count: 0,
         })
     }
 
     fn rewind(&mut self) -> Result<(), String> {
         let path = self.path.clone();
+        let loop_count = self.loop_count + 1;
         *self = Self::open_inner(path)?;
+        self.loop_count = loop_count;
         Ok(())
     }
 
-    fn next_image_until_eof(&mut self) -> Result<Option<Image>, String> {
-        if let Some(image) = receive_image(&mut self.decoder, &mut self.scaler)? {
-            return Ok(Some(image));
+    fn next_frame_until_eof(
+        &mut self,
+        audio_frames: usize,
+    ) -> Result<Option<PlaybackFrame>, String> {
+        if let Some(image) = receive_image(&mut self.video_decoder, &mut self.scaler)? {
+            self.ensure_audio(audio_frames)?;
+            let audio = self.take_audio(audio_frames);
+            return Ok(Some(PlaybackFrame {
+                image,
+                audio,
+                audio_requested_frames: audio_frames,
+                loop_count: self.loop_count,
+            }));
         }
 
-        let stream_index = self.stream_index;
-        let decoder = &mut self.decoder;
-        let scaler = &mut self.scaler;
         for item in self.input.packets() {
             let (stream, packet) = item.map_err(|e| format!("read video packet: {e}"))?;
-            if stream.index() != stream_index {
-                continue;
-            }
-            decoder
-                .send_packet(&packet)
-                .map_err(|e| format!("send video packet: {e}"))?;
-            if let Some(image) = receive_image(decoder, scaler)? {
-                return Ok(Some(image));
+            let stream_index = stream.index();
+            if stream_index == self.video_stream_index {
+                self.video_decoder
+                    .send_packet(&packet)
+                    .map_err(|e| format!("send video packet: {e}"))?;
+                if let Some(image) = receive_image(&mut self.video_decoder, &mut self.scaler)? {
+                    self.ensure_audio(audio_frames)?;
+                    let audio = self.take_audio(audio_frames);
+                    return Ok(Some(PlaybackFrame {
+                        image,
+                        audio,
+                        audio_requested_frames: audio_frames,
+                        loop_count: self.loop_count,
+                    }));
+                }
+            } else if stream_index == self.audio_stream_index {
+                append_pcm_audio_packet(&packet, &mut self.queued_audio)?;
             }
         }
 
-        let _ = decoder.send_eof();
-        receive_image(decoder, scaler)
+        let _ = self.video_decoder.send_eof();
+        if let Some(image) = receive_image(&mut self.video_decoder, &mut self.scaler)? {
+            self.ensure_audio(audio_frames)?;
+            let audio = self.take_audio(audio_frames);
+            return Ok(Some(PlaybackFrame {
+                image,
+                audio,
+                audio_requested_frames: audio_frames,
+                loop_count: self.loop_count,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn ensure_audio(&mut self, frames: usize) -> Result<(), String> {
+        let target_samples = frames * AUDIO_CHANNELS as usize;
+        if self.queued_audio.len() >= target_samples {
+            return Ok(());
+        }
+
+        for item in self.input.packets() {
+            let (stream, packet) = item.map_err(|e| format!("read audio packet: {e}"))?;
+            let stream_index = stream.index();
+            if stream_index == self.audio_stream_index {
+                append_pcm_audio_packet(&packet, &mut self.queued_audio)?;
+                if self.queued_audio.len() >= target_samples {
+                    return Ok(());
+                }
+            } else if stream_index == self.video_stream_index {
+                self.video_decoder
+                    .send_packet(&packet)
+                    .map_err(|e| format!("send video packet while filling audio: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn take_audio(&mut self, frames: usize) -> Vec<i16> {
+        let samples = frames * AUDIO_CHANNELS as usize;
+        let n = samples.min(self.queued_audio.len());
+        self.queued_audio.drain(..n).collect()
     }
 }
 
@@ -133,6 +224,52 @@ fn receive_image(
         }
         Err(_) => Ok(None),
     }
+}
+
+fn append_pcm_audio_packet(
+    packet: &ffmpeg::codec::packet::Packet,
+    queued_audio: &mut Vec<i16>,
+) -> Result<(), String> {
+    let Some(data) = packet.data() else {
+        return Ok(());
+    };
+    if data.len() % 4 != 0 {
+        return Err(format!(
+            "pcm_s16le packet has {} bytes, expected a multiple of 4 for stereo frames",
+            data.len()
+        ));
+    }
+    queued_audio.reserve(data.len() / 2);
+    for chunk in data.chunks_exact(2) {
+        queued_audio.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    Ok(())
+}
+
+fn validate_audio_parameters(
+    path: &str,
+    parameters: &ffmpeg::codec::ParametersRef<'_>,
+) -> Result<(), String> {
+    if parameters.id() != ffmpeg::codec::Id::PCM_S16LE {
+        return Err(format!(
+            "{path}: audio must be pcm_s16le, got {:?}",
+            parameters.id()
+        ));
+    }
+    if parameters.sample_rate() != AUDIO_RATE {
+        return Err(format!(
+            "{path}: audio must be {AUDIO_RATE}Hz PCM, got {}Hz",
+            parameters.sample_rate()
+        ));
+    }
+    let channels = parameters.ch_layout().channels();
+    if channels != AUDIO_CHANNELS as u32 {
+        return Err(format!(
+            "{path}: audio must be stereo PCM, got {} channels",
+            channels
+        ));
+    }
+    Ok(())
 }
 
 fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {

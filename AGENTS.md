@@ -40,6 +40,9 @@ Remaining work: live-mode geometry, in-game settings strategy (§7).
 - Framebuffer: `/dev/fb0`, driver **`MiSTer_fb`** (`/proc/fb` → `0 MiSTer_fb`),
   **1920×1080×32**, `rgba 8/16,8/8,8/0` → byte order is **B,G,R,X**
   (little-endian). No `/dev/dri` (no DRM/KMS).
+- Audio: ALSA exposes only `Dummy PCM` on this device. HDMI-capable Linux-side
+  audio is `/dev/MrAudio` (`/sys/devices/virtual/MrAudio_sys/MrAudio/dev` →
+  `246:0`), backed by the MiSTer kernel audio buffer.
 - FB mode is set by writing `/sys/module/MiSTer_fb/parameters/mode` as
   `"<fmt> <rb> <width> <height> <stride>"`, e.g. `8888 1 1920 1080 7680`.
 - No system fonts on MiSTer — the Rust build embeds fonts in the binary
@@ -325,6 +328,12 @@ still owns recovery when running; if wedged, reboot always works).
   which detects the down→up transition and returns the instant `pidof MiSTer`
   answers, instead of a fixed `sleep`. Polling port 22 alone is not enough —
   it confirm-runs a command so we don't act before the rootfs is ready.
+- **HDMI audio from Slint uses `/dev/MrAudio`, not ALSA.** Kernel source
+  `sound/drivers/MiSTer-audio-spi.c` creates the char device. Normal writes copy
+  32-bit-aligned chunks into the MiSTer audio buffer and send an SPI
+  `{addr,len,ptr,reserved}` update; reads return status text
+  (`rptr/wptr/len/comp`). A standalone `audio-tone` probe produced audible HDMI
+  tone with MiSTer stopped, confirming Slint-owned boot can feed audio.
 - **Perf runs can be contaminated by a 30fps cadence.** We observed benchmark
   scenes sometimes starting in a bad 30fps/vsync phase after repeated Slint
   restarts or immediately after deploy/reboot, then recovering later. For
@@ -539,8 +548,11 @@ video builds fail if FFmpeg becomes a runtime `libav*` dependency.
 
 Video builds use a project-local **minimal static FFmpeg 8.1.x** built by
 `rust/scripts/build-minimal-ffmpeg.sh` under `rust/target/ffmpeg-minimal/armv7`.
-It enables only H.264 decode/parse, MOV/MP4 demuxing, file protocol, and
-`avcodec`/`avformat`/`avutil`/`swscale`; no system `libav*` runtime is required.
+It enables only H.264 decode/parse, `pcm_s16le`, MOV/MP4 demuxing, file
+protocol, and `avcodec`/`avformat`/`avutil`/`swscale`; no system `libav*`
+runtime is required. `video_playback` defaults to
+`/media/fat/mister-magic/mslug3.mov` (H.264 baseline + 48 kHz stereo signed PCM)
+and writes PCM packets directly to `/dev/MrAudio` with video as the master clock.
 
 For binary-size diagnosis, build an unstripped profile binary and group symbols:
 
