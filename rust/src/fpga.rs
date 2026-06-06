@@ -28,6 +28,7 @@ pub const UIO_GET_VRES: u16 = 0x23;
 pub const UIO_GET_FB_PAR: u16 = 0x40;
 pub const UIO_SET_FBUF: u16 = 0x2F;
 pub const UIO_BUT_SW: u16 = 0x01;
+pub const UIO_AUDVOL: u16 = 0x26;
 
 // user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
 pub const CONF_VGA_SCALER: u16 = 0x0004;
@@ -204,6 +205,12 @@ impl Fpga {
             map |= CONF_VGA_FB;
         }
         self.uio_cmd16(UIO_BUT_SW, map);
+    }
+
+    /// Set the FPGA digital audio attenuation. This mirrors Main_MiSTer's
+    /// `send_volume()` path; `0` is max volume and bit 4 would mute.
+    pub fn set_audio_volume(&mut self, attenuation: u8) {
+        self.uio_cmd16(UIO_AUDVOL, attenuation as u16);
     }
 
     /// Port of `video_fb_enable(1, n)` for a `direct_video` system, replicating

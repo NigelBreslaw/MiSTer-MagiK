@@ -309,6 +309,7 @@ pub fn run_ui(f: &mut Fpga) {
         }
     };
     let flag = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+    f.set_audio_volume(0);
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
