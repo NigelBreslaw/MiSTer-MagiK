@@ -283,14 +283,14 @@ still owns recovery when running; if wedged, reboot always works).
 ### Main fork experiment — Main as parent of Slint
 
 `main-mister/` is a buildable Main_MiSTer fork for coexistence experiments. The
-device experiment deploys it as `/media/fat/MiSTer_Magic` and enables stock
-`main=MiSTer_Magic`, while `magik-gui/` stays the separate Slint binary project.
+device experiment deploys it as `/media/fat/MiSTer_Magik` and boots it directly
+from inittab, while `magik-gui/` stays the separate Slint binary project.
 Use `scripts/deploy-main-mister-experiment.sh --fast` to build/deploy both.
 
-Current proven flow (2026-06-06): `/media/fat/MiSTer` re-execs
-`MiSTer_Magic`, the fork initializes the menu core, then starts
+Current intended flow (2026-06-06): `/etc/inittab` starts
+`/media/fat/MiSTer_Magik`, the fork initializes the menu core, then starts
 `/media/fat/mister-magic/mister-magic-fb ui debug 86400` as a child. The command
-`mister_magic_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
+`mister_magik_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
 the Slint child and launches through Main. Metal Slug 3 reached the `NEOGEO`
 core via this path with fb mode `8888 1 640 240 2560` and no SDRAM/memory error
 strings in logs. After `update_all`, the device was retested against
@@ -305,8 +305,8 @@ development commits. Current baseline is `Release 20260603`
 Important gotchas:
 
 - Disable the old `/etc/inittab` `mister-magic/boot.sh` handoff for this
-  experiment. `deploy-main-mister-experiment.sh` restores
-  `::sysinit:/media/fat/MiSTer &` before setting `main=MiSTer_Magic`.
+  experiment. `deploy-main-mister-experiment.sh` installs
+  `::sysinit:/media/fat/MiSTer_Magik &` and removes `main=` from `MiSTer.ini`.
 - Main clean rebuilds matter. If `main-mister/bin/MiSTer` is stale, new
   `support/mister_magic/*.cpp` files may not be reflected in the deployed binary.
 - `ui debug 0` exits immediately because generic bench/debug scenes treat
@@ -391,11 +391,11 @@ Important gotchas:
   thing being measured. Reboot and rerun before concluding a copy/render change
   regressed performance.
 - **Visual benchmarks must not leave the fork parent running.** In the
-  Main-as-parent experiment, `/media/fat/MiSTer` re-execs the fork as
-  `MiSTer_Magic`, and that parent can keep the stock FPGA OSD/menu compositor
+  Main-as-parent experiment, `/media/fat/MiSTer_Magik` is the fork parent,
+  and that parent can keep the stock FPGA OSD/menu compositor
   alive over standalone `mister-magic-fb ui <scene> ...` benchmark runs. Before
   any visual benchmark that is not intentionally testing coexistence, stop all
-  three possible owners: `mister-magic-fb`, `MiSTer_Magic`, and `MiSTer`; then
+  three possible owners: `mister-magic-fb`, `MiSTer_Magik`, and `MiSTer`; then
   start the benchmark scene after the normal settle delay. If the original OSD is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
