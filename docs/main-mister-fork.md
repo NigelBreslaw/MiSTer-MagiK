@@ -7,9 +7,9 @@ Slint owns the product UI.
 The fork provenance lives in `main-mister/FORK.md`. Current upstream baseline:
 
 - Upstream: `MiSTer-devel/Main_MiSTer`
-- Commit: `1f5337ee2cba8c62c361b1c044a2966b75c9ac67`
-- Date: `2026-06-01T01:18:27+08:00`
-- Subject: `CD-i: Added support for Subchannel RW (#1206)`
+- Commit: `c73802332ff9c73659410084b6319ccd29f0b3aa`
+- Date: `2026-06-03T21:38:21+08:00`
+- Subject: `Release 20260603.`
 - License: GPL-3.0, preserved in `main-mister/LICENSE`
 
 This is not an official MiSTer-devel build. The experiment binary is deployed as
@@ -73,6 +73,15 @@ when available and otherwise uses the Docker wrapper.
 - Input ownership is intentionally left in the experimental state so we can see
   what Main, Slint, and the OSD do without over-designing the first pass.
 
+## Release Baseline Policy
+
+Main_MiSTer does not publish GitHub release tags. Its release markers are commits
+named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`.
+
+MiSTer Magic should pin `main-mister/` to one of those release commits, not an
+arbitrary upstream `master` commit. The current baseline is `Release 20260603`
+(`c73802332ff9c73659410084b6319ccd29f0b3aa`).
+
 ## 2026-06-06 Device Result
 
 Experiment boot is now working on the test MiSTer:
@@ -103,3 +112,25 @@ Observed after launch:
 No `Not enough memory` or `SDRAM config not found` strings appeared in device
 logs. Visual HDMI confirmation is still required because the NeoGeo error is an
 on-screen core message, not a normal Linux log line.
+
+After `update_all` on 2026-06-06, the test MiSTer has stock Main/menu/core
+release files from 20260603, including `NeoGeo_20260603.rbf`. The device's
+`MiSTer.ini` had two unsupported VRR-specific keys, so they were commented with
+MiSTer-style semicolon comments:
+
+```text
+;vrr_min_framerate=0
+;vrr_max_framerate=0
+```
+
+The release-baseline fork was rebuilt and redeployed after `update_all`.
+Retesting Metal Slug 3 through `mister_magic_launch` produced:
+
+```text
+/media/fat/MiSTer /media/fat/_Console/NeoGeo_20260603.rbf ... Metal Slug 3 (mslug3).mgl
+/tmp/CORENAME: NEOGEO
+/tmp/RBFNAME: NEOGEO
+/sys/module/MiSTer_fb/parameters/mode: 8888 1 640 240 2560
+```
+
+No `Not enough memory` or `SDRAM config not found` strings appeared in logs.

@@ -36,6 +36,7 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "file_io.h"
+#include "support/mister_magic/mm_launcher.h"
 
 #define NUMDEV 30
 #define UINPUT_NAME "MiSTer virtual input"
@@ -6234,6 +6235,12 @@ int input_test(int getchar)
 					{
 						if(isXmlName(cmd)) xml_load(cmd + 10);
 						else fpga_load_rbf(cmd + 10);
+					}
+					else if (!strncmp(cmd, "mister_magic_launch ", 20))
+					{
+						mm_launcher_prepare_for_launch();
+						if(isXmlName(cmd + 20)) xml_load(cmd + 20);
+						else fpga_load_rbf(cmd + 20);
 					}
 					else if (!strncmp(cmd, "screenshot", 10))
 					{

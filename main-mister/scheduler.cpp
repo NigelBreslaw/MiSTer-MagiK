@@ -9,6 +9,7 @@
 #include "osd.h"
 #include "profiling.h"
 #include "video.h"
+#include "support/mister_magic/mm_launcher.h"
 
 static cothread_t co_scheduler = nullptr;
 static cothread_t co_poll = nullptr;
@@ -34,6 +35,7 @@ static void scheduler_co_poll(void)
 			user_io_poll();
 			frame_timer();
 			input_poll(0);
+			mm_launcher_poll();
 			video_poll();
 		}
 
