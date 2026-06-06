@@ -200,7 +200,7 @@ run_scene_on_device() {
 set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz (see scripts/bench-diagnose.sh).
 kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_Magic) 2>/dev/null || true
+kill -9 \$(pidof MiSTer_Magik) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
 ${render_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &

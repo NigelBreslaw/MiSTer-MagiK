@@ -1,6 +1,6 @@
-# MiSTer Magic Main_MiSTer Fork
+# MiSTer Magik Main_MiSTer Fork
 
-This directory is a project fork of upstream Main_MiSTer for MiSTer Magic
+This directory is a project fork of upstream Main_MiSTer for MiSTer Magik
 launcher experiments.
 
 ## Upstream
@@ -12,18 +12,18 @@ launcher experiments.
 - License: GPL-3.0, preserved in `LICENSE`
 
 This fork is not an official MiSTer-devel build. The deployed experiment binary
-is named `MiSTer_Magic` so users can distinguish it from stock `/media/fat/MiSTer`.
+is named `MiSTer_Magik` so users can distinguish it from stock `/media/fat/MiSTer`.
 
 ## Why This Fork Exists
 
-MiSTer Magic needs Main to remain the parent of core launch and hardware setup,
+MiSTer Magik needs Main to remain the parent of core launch and hardware setup,
 while the Slint GUI owns the product launcher experience. The first experiment
 keeps the patch surface small:
 
 - Start stock Main normally.
 - Spawn `/media/fat/mister-magic/mister-magic-fb ui debug 86400` after menu init.
 - Keep Main alive while Slint runs as a child process.
-- Accept `mister_magic_launch <absolute-path>` on `/dev/MiSTer_cmd`.
+- Accept `mister_magik_launch <absolute-path>` on `/dev/MiSTer_cmd`.
 - Route launch requests through Main's existing MRA/RBF loading path.
 
 The main hypothesis is that Main-as-parent preserves NeoGeo SDRAM setup and
@@ -47,7 +47,7 @@ necessary by a device experiment.
 - Keep local changes documented in this file and `docs/main-mister-fork.md`.
 - Prefer small commits that can be rebased onto upstream Main_MiSTer.
 - Do not vendor release artifacts from upstream; `releases/` is ignored.
-- When publishing binaries, label them as MiSTer Magic builds, not official
+- When publishing binaries, label them as MiSTer Magik builds, not official
   MiSTer-devel releases.
 
 ## Updating The Baseline

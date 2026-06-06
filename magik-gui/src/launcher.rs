@@ -15,7 +15,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
-const MISTER_BIN: &str = "/media/fat/MiSTer";
+const MISTER_BIN: &str = "/media/fat/MiSTer_Magik";
+const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_Magik", "MiSTer"];
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
@@ -32,6 +33,7 @@ pub enum Screen {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmAction {
+    ExitToMister,
     ResetDatabase,
     Restart,
 }
@@ -39,6 +41,7 @@ pub enum ConfirmAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LauncherAction {
     LaunchGame,
+    ExitToMister,
     ResetDatabase,
     Restart,
 }
@@ -220,20 +223,21 @@ impl LauncherNav {
             self.screen = Screen::Home;
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now) && self.settings_selected < 2 {
+        if self.repeat.tick_down(now.dpad_down, frame_now) && self.settings_selected < 3 {
             self.settings_selected += 1;
         }
         if self.repeat.tick_up(now.dpad_up, frame_now) && self.settings_selected > 0 {
             self.settings_selected -= 1;
         }
         if rising(now.btn_a, self.prev.btn_a) {
-            if self.settings_selected == 0 {
+            if self.settings_selected == 1 {
                 self.screen = Screen::Controller;
                 return None;
             }
-            self.confirm_selected = 0;
+            self.confirm_selected = if self.settings_selected == 0 { 1 } else { 0 };
             self.confirm_action = Some(match self.settings_selected {
-                1 => ConfirmAction::ResetDatabase,
+                0 => ConfirmAction::ExitToMister,
+                2 => ConfirmAction::ResetDatabase,
                 _ => ConfirmAction::Restart,
             });
         }
@@ -254,11 +258,18 @@ impl LauncherNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             let action = self.confirm_action;
-            let confirmed = self.confirm_selected == 1;
+            let confirmed = match action {
+                Some(ConfirmAction::ExitToMister) => self.confirm_selected == 0,
+                _ => self.confirm_selected == 1,
+            };
             self.confirm_action = None;
             self.confirm_selected = 0;
             if confirmed {
                 return match action {
+                    Some(ConfirmAction::ExitToMister) => Some(LauncherEvent {
+                        action: LauncherAction::ExitToMister,
+                        path: None,
+                    }),
                     Some(ConfirmAction::ResetDatabase) => Some(LauncherEvent {
                         action: LauncherAction::ResetDatabase,
                         path: None,
@@ -330,28 +341,21 @@ fn wait_for_fifo() -> bool {
     false
 }
 
-fn write_load_core(mra_path: &str) -> Result<(), String> {
-    let cmd = format!("load_core {mra_path}\n");
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(CMD_FIFO)
-        .and_then(|mut f| f.write_all(cmd.as_bytes()))
-        .map_err(|e| format!("failed to write {CMD_FIFO}: {e}"))
-}
-
 fn mister_running() -> bool {
-    Command::new("pidof")
-        .arg("MiSTer")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    MISTER_PROCESS_NAMES.iter().any(|name| {
+        Command::new("pidof")
+            .arg(name)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
-/// Stop stock MiSTer so Slint owns SPI, HDMI routing, and evdev (no grab).
+/// Stop Main so Slint owns SPI, HDMI routing, and evdev (no grab).
 pub fn stop_mister() {
     let _ = Command::new("sh")
         .arg("-c")
-        .arg("kill -9 $(pidof MiSTer) 2>/dev/null")
+        .arg("kill -9 $(pidof MiSTer_Magik) 2>/dev/null; kill -9 $(pidof MiSTer) 2>/dev/null")
         .status();
     for _ in 0..30 {
         if !mister_running() {
@@ -376,17 +380,36 @@ fn spawn_mister() -> Result<(), String> {
     Err(format!("timed out waiting for {MISTER_BIN} + {CMD_FIFO}"))
 }
 
+fn restore_menu_wallpaper() {
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(
+            "[ -f /media/fat/mister-magic/.menu.png.boot-hide ] && mv /media/fat/mister-magic/.menu.png.boot-hide /media/fat/menu.png 2>/dev/null || true",
+        )
+        .status();
+}
+
+pub fn exit_to_mister() -> Result<(), String> {
+    std::fs::write("/tmp/mister-magic-stock-menu", b"1\n")
+        .map_err(|e| format!("failed to write stock-menu marker: {e}"))?;
+    restore_menu_wallpaper();
+    if !mister_running() {
+        spawn_mister()?;
+    }
+    Ok(())
+}
+
 /// True while Slint should keep the loading screen up.
 pub fn launch_in_progress() -> bool {
     LAUNCH_STATE.load(Ordering::Acquire) == LAUNCH_SENT
 }
 
-/// MiSTer is running an arcade core (argv contains `.rbf`, not `menu.rbf`).
+/// Main is running an arcade core (argv contains `.rbf`, not `menu.rbf`).
 pub fn mister_running_arcade_core() -> bool {
     let output = Command::new("sh")
         .arg("-c")
         .arg(
-            "pid=$(pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
+            "pid=$(pidof MiSTer_Magik 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
         )
         .output();
     let Ok(output) = output else {
@@ -399,8 +422,8 @@ pub fn mister_running_arcade_core() -> bool {
     cmdline.contains(".rbf") && !cmdline.contains("menu.rbf")
 }
 
-/// Launch via fifo `load_core`. Spawns MiSTer if Slint owns the device (normal boot).
-/// Returns `true` if MiSTer was spawned for this launch (caller should stop it on failure).
+/// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
+/// Returns `true` if Main was spawned for this launch (caller should stop it on failure).
 pub fn execute_game_launch(launch_ref: &str) -> Result<bool, String> {
     if !Path::new(launch_ref).exists() {
         return Err(format!("launch target not found: {launch_ref}"));
@@ -418,8 +441,22 @@ pub fn execute_game_launch(launch_ref: &str) -> Result<bool, String> {
         return Err(format!("timed out waiting for {CMD_FIFO}"));
     }
 
-    println!("launch: load_core {launch_ref}");
-    write_load_core(launch_ref)?;
+    let cmd = if Command::new("pidof")
+        .arg("MiSTer_Magik")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        format!("mister_magik_launch {launch_ref}\n")
+    } else {
+        format!("load_core {launch_ref}\n")
+    };
+    println!("launch: {}", cmd.trim_end());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(CMD_FIFO)
+        .and_then(|mut f| f.write_all(cmd.as_bytes()))
+        .map_err(|e| format!("failed to write {CMD_FIFO}: {e}"))?;
 
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
     Ok(spawned)

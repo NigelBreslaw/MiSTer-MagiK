@@ -609,7 +609,7 @@ void cfg_parse()
 	cfg.video_contrast = 50;
 	cfg.video_saturation = 100;
 	strcpy(cfg.video_gain_offset, "1, 0, 1, 0, 1, 0");
-	strcpy(cfg.main, "MiSTer");
+	strcpy(cfg.main, "MiSTer_Magik");
 	has_video_sections = false;
 	using_video_section = false;
 	cfg_error_count = 0;

@@ -126,7 +126,7 @@ static void spawn(void)
 {
 	if (!mm_launcher_configured())
 	{
-		printf("mister_magic: launcher not executable: %s\n", s_launcher_path);
+		printf("mister_magik: launcher not executable: %s\n", s_launcher_path);
 		log_line("spawn gave up: launcher not executable");
 		s_gave_up = true;
 		return;
@@ -137,12 +137,12 @@ static void spawn(void)
 	system("kill -TERM $(pidof mister-magic-fb) 2>/dev/null");
 	usleep(100000);
 
-	printf("mister_magic: spawning Slint launcher UI: %s\n", s_launcher_path);
+	printf("mister_magik: spawning Slint launcher UI: %s\n", s_launcher_path);
 	log_line("spawn");
 	s_pid = fork();
 	if (s_pid < 0)
 	{
-		printf("mister_magic: fork failed: %s\n", strerror(errno));
+		printf("mister_magik: fork failed: %s\n", strerror(errno));
 		log_errno("fork failed");
 		s_pid = 0;
 		s_gave_up = true;
@@ -152,7 +152,7 @@ static void spawn(void)
 	if (!s_pid)
 	{
 		setsid();
-		setenv("MISTER_MAGIC_PARENT", "main-mister", 1);
+		setenv("MISTER_MAGIK_PARENT", "main-mister", 1);
 		execl(s_launcher_path, s_launcher_path, "ui", "launcher", "0", NULL);
 		_exit(127);
 	}
@@ -238,7 +238,7 @@ void mm_launcher_poll(void)
 			int sig = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
 			bool clean = (exited && exit_status == 0) || sig == SIGTERM || sig == SIGINT;
 
-			printf("mister_magic: launcher exited clean=%d status=%d sig=%d\n",
+			printf("mister_magik: launcher exited clean=%d status=%d sig=%d\n",
 			       clean ? 1 : 0, exit_status, sig);
 
 			if (!clean && ++s_crash_count < 3)
@@ -287,7 +287,7 @@ void mm_launcher_shutdown(void)
 
 void mm_launcher_prepare_for_launch(void)
 {
-	printf("mister_magic: preparing Main-owned launch\n");
+	printf("mister_magik: preparing Main-owned launch\n");
 	log_line("prepare_for_launch");
 	mm_launcher_shutdown();
 	if (menu_present()) MenuHide();

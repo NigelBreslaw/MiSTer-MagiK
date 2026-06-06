@@ -74,6 +74,30 @@ component SettingsButton inherits Rectangle {
     }
 }
 
+component OsdSideLabel inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    width: 56px * s;
+    height: 100%;
+    background: #101420;
+    border-width: 1px;
+    border-color: #52647d;
+
+    VerticalLayout {
+        padding-top: 26px * s;
+        padding-bottom: 26px * s;
+        spacing: 10px * s;
+        alignment: center;
+
+        Text { text: "M"; color: #d7eef8; font-size: 18px * s; horizontal-alignment: center; }
+        Text { text: "I"; color: #d7eef8; font-size: 18px * s; horizontal-alignment: center; }
+        Text { text: "S"; color: #d7eef8; font-size: 18px * s; horizontal-alignment: center; }
+        Text { text: "T"; color: #d7eef8; font-size: 18px * s; horizontal-alignment: center; }
+        Text { text: "E"; color: #d7eef8; font-size: 18px * s; horizontal-alignment: center; }
+        Text { text: "R"; color: #d7eef8; font-size: 18px * s; horizontal-alignment: center; }
+    }
+}
+
 component HomeGrid inherits Rectangle {
     property <int> s: MisterUi.scale;
     property <length> tile-width: 220px * s;
@@ -82,59 +106,74 @@ component HomeGrid inherits Rectangle {
         + Math.max(0, MisterBridge.game-systems.length - 1) * tile-gap;
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
 
-    VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
+    background: #0b0d14;
 
-        HorizontalLayout {
-            height: 56px;
-            spacing: 16px;
+    HorizontalLayout {
+        OsdSideLabel { }
 
-            Rectangle { horizontal-stretch: 1; background: transparent; }
+        VerticalLayout {
+            padding: 18px * s;
+            spacing: 14px * s;
 
-            Text {
-                text: "MiSTer MagiK";
-                color: #e8e0f0;
-                font-size: 24px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                horizontal-stretch: 4;
-            }
+            Rectangle {
+                height: 42px * s;
+                background: #172131;
+                border-width: 1px;
+                border-color: #52647d;
 
-            SettingsButton {
-                focused: MisterBridge.settings-focused;
-            }
-        }
+                HorizontalLayout {
+                    padding-left: 14px * s;
+                    padding-right: 10px * s;
+                    spacing: 12px * s;
 
-        system-list := ListView {
-            vertical-stretch: 1;
-            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-            viewport-width: root.content-width;
-            viewport-height: self.height;
-            viewport-x: -scroll-x;
+                    Text {
+                        text: "Magik";
+                        color: #d7eef8;
+                        font-size: 18px * s;
+                        vertical-alignment: center;
+                    }
 
-            for _ in 1: Rectangle {
-                width: root.content-width;
-                height: parent.height;
-                background: transparent;
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
 
-                for system[i] in MisterBridge.game-systems: LauncherTile {
-                    x: i * (root.tile-width + root.tile-gap);
-                    width: root.tile-width;
-                    height: parent.height;
-                    label: system.title;
-                    subtitle: system.count + " games";
-                    focused: !MisterBridge.settings-focused && MisterBridge.selected-index == i;
+                    Text {
+                        text: MisterBridge.clock-text;
+                        color: #d7eef8;
+                        font-size: 14px * s;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+
+                    SettingsButton {
+                        width: 44px * s;
+                        height: 34px * s;
+                        focused: MisterBridge.settings-focused;
+                    }
                 }
             }
-        }
 
-        Text {
-            text: "D-pad: move  ·  A: select  ·  Home: back";
-            color: #706080;
-            font-size: 8px;
-            horizontal-alignment: center;
+            system-list := ListView {
+                vertical-stretch: 1;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                viewport-width: root.content-width;
+                viewport-height: self.height;
+                viewport-x: -scroll-x;
+
+                for _ in 1: Rectangle {
+                    width: root.content-width;
+                    height: parent.height;
+                    background: transparent;
+
+                    for system[i] in MisterBridge.game-systems: LauncherTile {
+                        x: i * (root.tile-width + root.tile-gap);
+                        width: root.tile-width;
+                        height: parent.height;
+                        label: system.title;
+                        subtitle: system.count + " games";
+                        focused: !MisterBridge.settings-focused && MisterBridge.selected-index == i;
+                    }
+                }
+            }
         }
     }
 }
@@ -220,44 +259,46 @@ component SettingsRow inherits Rectangle {
 }
 
 component SettingsScreen inherits Rectangle {
-    background: #1a1424;
+    background: #0b0d14;
 
-    VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
+    HorizontalLayout {
 
-        Text {
-            text: "Settings";
-            color: #e8e0f0;
-            font-size: 24px;
-            horizontal-alignment: center;
-        }
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
 
-        SettingsRow {
-            label: "Controller Test";
-            detail: "Open joypad tester";
-            focused: MisterBridge.settings-selected == 0;
-        }
+            Text {
+                text: "Magik";
+                color: #e8e0f0;
+                font-size: 24px;
+                horizontal-alignment: center;
+            }
 
-        SettingsRow {
-            label: "Reset Database";
-            detail: "Delete library database and reboot";
-            focused: MisterBridge.settings-selected == 1;
-        }
+            SettingsRow {
+                label: "Exit to Mister";
+                detail: "Use the stock MiSTer menu until reboot";
+                focused: MisterBridge.settings-selected == 0;
+            }
 
-        SettingsRow {
-            label: "Restart";
-            detail: "Reboot the MiSTer";
-            focused: MisterBridge.settings-selected == 2;
-        }
+            SettingsRow {
+                label: "Controller Test";
+                detail: "Open joypad tester";
+                focused: MisterBridge.settings-selected == 1;
+            }
 
-        Rectangle { vertical-stretch: 1; background: transparent; }
+            SettingsRow {
+                label: "Reset Database";
+                detail: "Delete library database and reboot";
+                focused: MisterBridge.settings-selected == 2;
+            }
 
-        Text {
-            text: "D-pad: move  ·  A: select  ·  B/Home: back";
-            color: #706080;
-            font-size: 8px;
-            horizontal-alignment: center;
+            SettingsRow {
+                label: "Restart";
+                detail: "Reboot the MiSTer";
+                focused: MisterBridge.settings-selected == 3;
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
         }
     }
 }
@@ -266,8 +307,6 @@ component ConfirmDialog inherits Rectangle {
     background: #000000b0;
 
     Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
         width: 680px;
         height: 260px;
         background: #0e0c14;
@@ -299,14 +338,14 @@ component ConfirmDialog inherits Rectangle {
                 spacing: 16px;
 
                 LauncherTile {
-                    label: "Cancel";
-                    subtitle: "B";
+                    label: MisterBridge.confirm-left-label;
+                    subtitle: "";
                     focused: MisterBridge.confirm-selected == 0;
                 }
 
                 LauncherTile {
-                    label: "Confirm";
-                    subtitle: "A";
+                    label: MisterBridge.confirm-right-label;
+                    subtitle: "";
                     focused: MisterBridge.confirm-selected == 1;
                 }
             }
@@ -316,7 +355,7 @@ component ConfirmDialog inherits Rectangle {
 
 export component Launcher inherits MisterWindow {
     default-font-family: "Press Start 2P";
-    title: "MiSTer Magic Launcher";
+    title: "MiSTer Magik Launcher";
     background: #1a1424;
 
     if MisterBridge.screen-mode == 0 : HomeGrid {

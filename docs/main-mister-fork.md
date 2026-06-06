@@ -13,7 +13,7 @@ The fork provenance lives in `main-mister/FORK.md`. Current upstream baseline:
 - License: GPL-3.0, preserved in `main-mister/LICENSE`
 
 This is not an official MiSTer-devel build. The experiment binary is deployed as
-`MiSTer_Magic` so it is visually and operationally distinct from stock
+`MiSTer_Magik` so it is visually and operationally distinct from stock
 `/media/fat/MiSTer`.
 
 ## Current experiment
@@ -29,7 +29,7 @@ This is not an official MiSTer-devel build. The experiment binary is deployed as
 - Main exposes an experimental command through `/dev/MiSTer_cmd`:
 
 ```text
-mister_magic_launch <absolute-core-or-mra-path>
+mister_magik_launch <absolute-core-or-mra-path>
 ```
 
 That command terminates the Slint child, drops the framebuffer route, and uses
@@ -42,17 +42,19 @@ Metal Slug 3 and the NeoGeo SDRAM setup bug.
 - `cfg.cpp`: forces framebuffer-terminal-friendly config for the experiment.
 - `scheduler.cpp`: polls the launcher child.
 - `user_io.cpp`: starts the launcher after the menu core is initialized.
-- `input.cpp`: handles `mister_magic_launch`.
+- `input.cpp`: handles `mister_magik_launch`.
 
 ## Install model
 
-The experiment deploys the fork as `/media/fat/MiSTer_Magic` and enables it with:
+The experiment deploys the fork as `/media/fat/MiSTer_Magik` and boots it directly
+from `/etc/inittab`:
 
 ```text
-main=MiSTer_Magic
+::sysinit:/media/fat/MiSTer_Magik &
 ```
 
-Removing that line returns boot to stock `/media/fat/MiSTer`.
+`MiSTer.ini` must not contain a `main=` override in this mode.
+`scripts/restore-stock-boot.sh` returns boot to `/media/fat/MiSTer`.
 
 ## Build
 
@@ -85,7 +87,7 @@ when available and otherwise uses the Docker wrapper.
 Main_MiSTer does not publish GitHub release tags. Its release markers are commits
 named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`.
 
-MiSTer Magic should pin `main-mister/` to one of those release commits, not an
+MiSTer Magik should pin `main-mister/` to one of those release commits, not an
 arbitrary upstream `master` commit. The current baseline is `Release 20260603`
 (`c73802332ff9c73659410084b6319ccd29f0b3aa`).
 
@@ -93,25 +95,25 @@ arbitrary upstream `master` commit. The current baseline is `Release 20260603`
 
 Experiment boot is now working on the test MiSTer:
 
-- `/media/fat/MiSTer` boots with `main=MiSTer_Magic`.
-- `/media/fat/MiSTer_Magic` initializes the menu core.
+- `/etc/inittab` boots `/media/fat/MiSTer_Magik` directly.
+- `/media/fat/MiSTer_Magik` initializes the menu core.
 - Main starts `/media/fat/mister-magic/mister-magic-fb ui launcher 0` as a
   child process.
 - The old inittab `mister-magic/boot.sh` handoff must be disabled for this
-  experiment; the deploy script restores `::sysinit:/media/fat/MiSTer &`.
-- `mister_magic_launch <path>` shuts down the Slint child and launches through
+  experiment; the deploy script installs `::sysinit:/media/fat/MiSTer_Magik &`.
+- `mister_magik_launch <path>` shuts down the Slint child and launches through
   Main.
 
 Metal Slug 3 test:
 
 ```text
-mister_magic_launch /media/fat/_Games/_Neo Geo MVS & AES/_Neo Geo Mister FGPA Ultra Pack/_ World A-Z/Metal Slug 3 (mslug3).mgl
+mister_magik_launch /media/fat/_Games/_Neo Geo MVS & AES/_Neo Geo Mister FGPA Ultra Pack/_ World A-Z/Metal Slug 3 (mslug3).mgl
 ```
 
 Observed after launch:
 
 ```text
-/media/fat/MiSTer /media/fat/_Console/NeoGeo_20250909.rbf ... Metal Slug 3 (mslug3).mgl
+/media/fat/MiSTer_Magik /media/fat/_Console/NeoGeo_20250909.rbf ... Metal Slug 3 (mslug3).mgl
 /tmp/CORENAME: NEOGEO
 /sys/module/MiSTer_fb/parameters/mode: 8888 1 640 240 2560
 ```
@@ -131,10 +133,10 @@ MiSTer-style semicolon comments:
 ```
 
 The release-baseline fork was rebuilt and redeployed after `update_all`.
-Retesting Metal Slug 3 through `mister_magic_launch` produced:
+Retesting Metal Slug 3 through `mister_magik_launch` produced:
 
 ```text
-/media/fat/MiSTer /media/fat/_Console/NeoGeo_20260603.rbf ... Metal Slug 3 (mslug3).mgl
+/media/fat/MiSTer_Magik /media/fat/_Console/NeoGeo_20260603.rbf ... Metal Slug 3 (mslug3).mgl
 /tmp/CORENAME: NEOGEO
 /tmp/RBFNAME: NEOGEO
 /sys/module/MiSTer_fb/parameters/mode: 8888 1 640 240 2560
@@ -159,13 +161,13 @@ This proves the fork can hand the framebuffer route back to Main and open the
 OSD from the Slint child.
 
 Follow-up overlay experiment: instead of handing the framebuffer route back to
-Main, `KEY_F12`/Menu now toggles a tiny MiSTer Magic OSD directly through
+Main, `KEY_F12`/Menu now toggles a tiny MiSTer Magik OSD directly through
 `OsdWrite` while keeping Slint's buffer 0 active. The goal is to prove the OSD
 plane can float over the Slint UI without the stock full-screen menu background,
 CRT-static effect, or wallpaper flash. If this works visually, the next step is
 to replace the placeholder rows with a navigable minimal escape menu.
 
-Visual result: confirmed on HDMI. The MiSTer Magic OSD appears over the Slint
+Visual result: confirmed on HDMI. The MiSTer Magik OSD appears over the Slint
 UI without the stock full-screen background.
 
 Navigation follow-up: the overlay now has a tiny local state machine. While the

@@ -10,12 +10,14 @@ MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_s
 set -e
 mount -o remount,rw / 2>/dev/null || true
 sed -i "s|::sysinit:/media/fat/mister-magic/boot.sh &|::sysinit:/media/fat/MiSTer &|" /etc/inittab
+sed -i "s|::sysinit:/media/fat/MiSTer_Magik &|::sysinit:/media/fat/MiSTer &|" /etc/inittab
 if [ -f /media/fat/MiSTer.ini.bak ]; then
   cp /media/fat/MiSTer.ini.bak /media/fat/MiSTer.ini
   echo "restored MiSTer.ini from .bak"
 fi
 grep sysinit /etc/inittab | grep MiSTer
 killall mister-magic-fb 2>/dev/null || true
+killall MiSTer_Magik 2>/dev/null || true
 '
 
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_ssh.py reboot-wait
