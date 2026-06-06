@@ -2613,6 +2613,7 @@ version = "0.1.0"
 dependencies = [
  "ffmpeg-the-third",
  "libc",
+ "miniz_oxide",
  "pprof",
  "quick-xml 0.37.5",
  "rusqlite",
