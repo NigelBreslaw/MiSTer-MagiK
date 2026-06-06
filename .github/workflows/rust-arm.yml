@@ -16,6 +16,40 @@ env:
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
 
 jobs:
+  host-dev:
+    name: host-dev
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        working-directory: rust
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-host-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-host-${{ runner.os }}-
+
+      - name: Format
+        working-directory: rust
+        run: cargo fmt --check
+
+      - name: Test host logic
+        working-directory: rust
+        run: cargo test --lib --no-default-features
+
+      - name: Check host logic
+        working-directory: rust
+        run: cargo check --lib --no-default-features
+
   arm-build:
     name: ${{ matrix.name }}
     runs-on: ubuntu-22.04

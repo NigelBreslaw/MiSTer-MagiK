@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Fast Rust dev commands for host-side checks and tests.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUST_DIR="$ROOT/rust"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/dev-rust <command>
+
+Commands:
+  fmt       Run cargo fmt --check
+  fmt-fix   Run cargo fmt
+  test      Run fast host logic tests without Slint/UI
+  check     Compile the host-testable library without Slint/UI
+  build-ui  Build the ARM Slint binary via rust/build-arm.sh --fast
+EOF
+}
+
+need_component_hint() {
+  local component="$1"
+  echo "Hint: this repo declares Rust components in rust/rust-toolchain.toml." >&2
+  echo "      If rustup did not install $component automatically, run:" >&2
+  echo "      rustup component add $component --toolchain stable-aarch64-apple-darwin" >&2
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  fmt)
+    cd "$RUST_DIR"
+    if ! cargo fmt --check; then
+      need_component_hint rustfmt
+      exit 1
+    fi
+    ;;
+  fmt-fix)
+    cd "$RUST_DIR"
+    if ! cargo fmt; then
+      need_component_hint rustfmt
+      exit 1
+    fi
+    ;;
+  test)
+    cd "$RUST_DIR"
+    cargo test --lib --no-default-features
+    ;;
+  check)
+    cd "$RUST_DIR"
+    cargo check --lib --no-default-features
+    ;;
+  build-ui)
+    "$RUST_DIR/build-arm.sh" --fast
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    echo "ERROR: unknown command: $cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

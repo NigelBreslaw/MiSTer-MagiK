@@ -74,7 +74,11 @@ fn bgrx_to_png(raw: &[u8], w: usize, h: usize) -> Vec<u8> {
     ihdr.extend_from_slice(&(h as u32).to_be_bytes());
     ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // RGBA, 8-bit, deflate, no interlace.
     write_chunk(&mut png, b"IHDR", &ihdr);
-    write_chunk(&mut png, b"IDAT", &miniz_oxide::deflate::compress_to_vec_zlib(&rgba, 1));
+    write_chunk(
+        &mut png,
+        b"IDAT",
+        &miniz_oxide::deflate::compress_to_vec_zlib(&rgba, 1),
+    );
     write_chunk(&mut png, b"IEND", &[]);
     png
 }

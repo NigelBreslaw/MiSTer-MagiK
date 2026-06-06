@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PROFILE=release
-FEATURES=()
+FEATURES=(ui)
 FEATURE_LIST=""
 for arg in "$@"; do
   case "$arg" in

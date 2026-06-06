@@ -7,6 +7,7 @@ description = "Native MiSTer frontend: owns the FPGA framebuffer and renders Sli
 [[bin]]
 name = "mister-magic-fb"
 path = "src/main.rs"
+required-features = ["ui"]
 
 [dependencies]
 libc = "0.2"
@@ -14,7 +15,7 @@ libc = "0.2"
 # we don't have/want on the MiSTer. Instead we embed a font for the software
 # renderer (see build.rs) and provide time/etc. ourselves via the Platform trait.
 # Our own crate still uses std freely; this only affects Slint internals.
-slint = { version = "1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
+slint = { version = "1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
@@ -32,10 +33,11 @@ ffmpeg-the-third = { version = "5.0.0", optional = true, default-features = fals
 [features]
 default = []
 profile = ["dep:pprof"]
+ui = ["dep:slint", "dep:slint-build"]
 video = ["dep:ffmpeg-the-third"]
 
 [build-dependencies]
-slint-build = "1"
+slint-build = { version = "1", optional = true }
 
 # Slint from git master (1.17.x); bench vs 1.16 in history/toolchain-bench/slint-master.md.
 [patch.crates-io]

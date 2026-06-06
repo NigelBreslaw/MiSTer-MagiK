@@ -206,12 +206,10 @@ impl LauncherNav {
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            return games
-                .get(self.arcade.selected)
-                .map(|game| LauncherEvent {
-                    action: LauncherAction::LaunchGame,
-                    path: Some(game.mra_path.clone()),
-                });
+            return games.get(self.arcade.selected).map(|game| LauncherEvent {
+                action: LauncherAction::LaunchGame,
+                path: Some(game.mra_path.clone()),
+            });
         }
 
         None

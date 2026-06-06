@@ -41,7 +41,7 @@ const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -315,8 +315,8 @@ pub fn run_db_bench() {
 
 pub fn run_scan_bench() {
     let cfg = BenchConfig::from_env();
-    let label = std::env::var("MISTER_LIBRARY_BENCH_LABEL")
-        .unwrap_or_else(|_| "LIB-BENCH".to_string());
+    let label =
+        std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
     let iterations = std::env::var("MISTER_LIBRARY_BENCH_ITERATIONS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -324,7 +324,10 @@ pub fn run_scan_bench() {
         .max(1);
     println!("library-scan-bench label={label}");
     println!("library-scan-bench roots={}", cfg.roots.join("|"));
-    println!("library-scan-bench sqlite_path={}", cfg.sqlite_path.display());
+    println!(
+        "library-scan-bench sqlite_path={}",
+        cfg.sqlite_path.display()
+    );
     for iteration in 1..=iterations {
         match std::fs::remove_file(&cfg.sqlite_path) {
             Ok(()) => {}
@@ -458,6 +461,7 @@ pub fn load_arcade_catalog_from_sqlite(
     for row in rows {
         games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
+    games.retain(|game| !is_support_file_path(&game.mra_path));
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
@@ -513,7 +517,10 @@ pub fn refresh_default_sqlite_database(
             );
         }
     } else if let Some(report) = progress.as_mut() {
-        report("Indexing library", "No usable database fingerprint; full scan...");
+        report(
+            "Indexing library",
+            "No usable database fingerprint; full scan...",
+        );
     }
 
     let scan = match progress.as_mut() {
@@ -751,15 +758,16 @@ fn scan_library_with_progress(
     }
     if cfg.optional_catalogs {
         if let Some(report) = progress.as_mut() {
-            report("Importing metadata", "Looking for gamelist.xml screenshots...");
+            report(
+                "Importing metadata",
+                "Looking for gamelist.xml screenshots...",
+            );
         }
         let catalog_t = Instant::now();
         let imported = match progress.as_mut() {
-            Some(report) => enrich_discoveries_from_gamelists(
-                &mut discoveries,
-                &cfg.roots,
-                Some(&mut **report),
-            ),
+            Some(report) => {
+                enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, Some(&mut **report))
+            }
             None => enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, None),
         };
         phase_stats
@@ -984,10 +992,11 @@ fn discover_files_streaming(
                     continue;
                 };
                 let mtime_secs = mtime_secs(&meta);
-                manifest_builders
-                    .entry(parent)
-                    .or_default()
-                    .add_file_child(&name, meta.len(), mtime_secs);
+                manifest_builders.entry(parent).or_default().add_file_child(
+                    &name,
+                    meta.len(),
+                    mtime_secs,
+                );
                 rs.files += 1;
                 let file = FoundFile {
                     path: p.to_path_buf(),
@@ -2053,6 +2062,7 @@ fn db_fingerprint(scan: &LibraryScan) -> DbFingerprint {
 fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
     discoveries
         .iter()
+        .filter(|d| is_playable_discovery(d))
         .map(discovery_unique_key)
         .collect::<HashSet<_>>()
         .len()
@@ -2237,6 +2247,9 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
             .map_err(|e| format!("prepare discovery fts insert: {e}"))?;
         let mut seen = HashSet::<String>::new();
         for discovery in &scan.discoveries {
+            if !is_playable_discovery(discovery) {
+                continue;
+            }
             let key = discovery_unique_key(discovery);
             if !seen.insert(key.clone()) {
                 continue;
@@ -2564,6 +2577,114 @@ fn discovery_unique_key(d: &GameDiscovery) -> String {
     }
 }
 
+fn is_playable_discovery(d: &GameDiscovery) -> bool {
+    match d.source_kind {
+        DiscoverySourceKind::Mra | DiscoverySourceKind::CatalogEntry => true,
+        DiscoverySourceKind::Mgl => !is_support_file_path(&d.launch_ref),
+        DiscoverySourceKind::PayloadFile
+        | DiscoverySourceKind::ArchiveEntry
+        | DiscoverySourceKind::Container => {
+            !is_support_file_path(&d.source_path) && !is_support_file_path(&d.launch_ref)
+        }
+    }
+}
+
+fn is_support_file_path(path: &str) -> bool {
+    path.split("::").any(is_support_file_part)
+}
+
+fn is_support_file_part(path: &str) -> bool {
+    let ext = path_ext(path).unwrap_or_default();
+    if ext == "mra" {
+        return false;
+    }
+    if ext == "rbf" || is_menu_launcher_path(path, &ext) {
+        return true;
+    }
+
+    let file_stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let key = support_name_key(&file_stem);
+    if is_boot_helper_key(&key)
+        || matches!(
+            key.as_str(),
+            "bios"
+                | "backgroundgen2"
+                | "basic4k32"
+                | "blank"
+                | "bootloader"
+                | "bootrom"
+                | "cdbios"
+                | "cd32"
+                | "disk605"
+                | "dolphindos20"
+                | "empty"
+                | "emptyhdd"
+                | "firmware"
+                | "fw"
+                | "ipl"
+                | "iplrom"
+                | "kanji"
+                | "kick"
+                | "kick13"
+                | "kick20"
+                | "kick31"
+                | "kickstart"
+                | "misterboot"
+                | "neocd"
+                | "os"
+                | "riscos"
+                | "speeddosplus27"
+                | "supergameboy"
+                | "supergameboy2"
+                | "system"
+                | "topsp1"
+                | "unibioscd"
+        )
+        || key.contains("bios")
+    {
+        return true;
+    }
+
+    let lower = path.to_ascii_lowercase();
+    lower.split('/').any(|component| {
+        let component = support_name_key(component);
+        matches!(
+            component.as_str(),
+            "bios" | "boot" | "bootloader" | "firmware" | "fw" | "kickstart"
+        )
+    })
+}
+
+fn is_menu_launcher_path(path: &str, ext: &str) -> bool {
+    if ext != "mgl" {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("/media/fat/_computer/")
+        || lower.starts_with("/media/fat/_console/")
+        || lower.starts_with("/media/fat/_other/")
+        || lower.starts_with("/media/fat/_utility/")
+}
+
+fn support_name_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+fn is_boot_helper_key(key: &str) -> bool {
+    key == "boot"
+        || key
+            .strip_prefix("boot")
+            .map(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
+}
+
 fn print_unknown_stats(discoveries: &[GameDiscovery]) {
     let mut seen = HashSet::<String>::new();
     let mut buckets = BTreeMap::<String, (u64, String)>::new();
@@ -2713,6 +2834,7 @@ mod tests {
     #[test]
     fn eocd_search_finds_last_signature() {
         let mut data = b"PK\x05\x06 noise".to_vec();
+        data.extend_from_slice(&[0; 22]);
         data.extend_from_slice(b"abcPK\x05\x06");
         assert_eq!(find_eocd(&data), Some(data.len() - 4));
     }
@@ -2723,5 +2845,198 @@ mod tests {
         assert_eq!(ArchiveFormat::from_ext("7z"), Some(ArchiveFormat::SevenZip));
         assert_eq!(ArchiveFormat::from_ext("chd"), Some(ArchiveFormat::Chd));
         assert_eq!(ArchiveFormat::from_ext("mra"), None);
+    }
+
+    #[test]
+    fn support_roms_do_not_count_as_games() {
+        let discoveries = vec![
+            payload("/media/fat/games/Saturn/boot.rom"),
+            payload("/media/fat/games/PSX/bios/scph5501.bin"),
+            payload("/media/fat/games/Amiga/Kickstart.rom"),
+            payload("/media/fat/games/3DO/kanji.rom"),
+            payload("/media/fat/games/ARCHIE/riscos.rom"),
+            payload("/media/fat/games/C64/DolphinDOS_2.0.rom"),
+            payload("/media/fat/games/MACPLUS/Disk605.dsk"),
+            payload("/media/fat/games/NeoGeo-CD/uni-bioscd.rom"),
+            payload("/media/fat/games/SGB/Super Game Boy.sfc"),
+            payload("/media/fat/games/X68000/boot3.vhd"),
+            payload("/media/fat/games/Altair8800/basic4k32.rom"),
+            payload("/media/fat/games/Tamagotchi/background_gen2.bin"),
+            payload("/media/fat/games/AmigaCD32/CD32.rom"),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 0);
+    }
+
+    #[test]
+    fn normal_payloads_still_count_as_games() {
+        let discoveries = vec![
+            payload("/media/fat/games/NES/Super Mario Bros.nes"),
+            payload("/media/fat/games/MegaDrive/Bio-Hazard Battle.md"),
+            payload("/media/fat/games/Saturn/Guardian Heroes.cue"),
+            payload("/media/fat/games/NES/Boot Hill.nes"),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 4);
+    }
+
+    #[test]
+    fn rbf_cores_do_not_count_as_games() {
+        let discoveries = vec![
+            payload("/media/fat/_Computer/AcornAtom_20251001.rbf"),
+            payload("/media/fat/_Console/Gameboy_20250618.rbf"),
+            payload("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf"),
+            payload("/media/fat/_YCArcade/cores/Arkanoid_20220517.rbf"),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 0);
+    }
+
+    #[test]
+    fn menu_mgl_launchers_do_not_count_as_games() {
+        let discoveries = vec![
+            mgl(
+                "/media/fat/_Computer/Amiga.mgl",
+                "/media/fat/_Computer/Amiga.mgl",
+            ),
+            mgl(
+                "/media/fat/_Console/Game Gear.mgl",
+                "/media/fat/_Console/Game Gear.mgl",
+            ),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 0);
+    }
+
+    #[test]
+    fn dos_mgl_games_still_count_as_games() {
+        let discoveries = vec![mgl(
+            "/media/fat/_DOS Games/Doom (Ultimate).mgl",
+            "media/doom ultimate/doom ultimate.r2.vhd",
+        )];
+
+        assert_eq!(unique_discovery_count(&discoveries), 1);
+    }
+
+    #[test]
+    fn support_archive_entries_do_not_count_as_games() {
+        let discoveries = vec![archive_entry(
+            "/media/fat/games/MACPLUS/empty_hdd.zip::boot.vhd",
+        )];
+
+        assert_eq!(unique_discovery_count(&discoveries), 0);
+    }
+
+    #[test]
+    fn mgl_boot_helpers_do_not_count_as_games() {
+        let discovery = GameDiscovery {
+            source_path: "/media/fat/games/TGFX16/mister-boot.mgl".to_string(),
+            launch_ref: "/media/fat/games/TGFX16/mister-boot.pce".to_string(),
+            source_kind: DiscoverySourceKind::Mgl,
+            title: "mister-boot".to_string(),
+            category: "Console".to_string(),
+            platform_id: "tgfx16".to_string(),
+            core_id: "TurboGrafx16".to_string(),
+            hardware_id: "nec-pc-engine".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        };
+
+        assert!(!is_playable_discovery(&discovery));
+    }
+
+    #[test]
+    fn mra_files_are_not_filtered_by_support_names() {
+        let discovery = GameDiscovery {
+            source_path: "/media/fat/_Arcade/BIOS.mra".to_string(),
+            launch_ref: "/media/fat/_Arcade/BIOS.mra".to_string(),
+            source_kind: DiscoverySourceKind::Mra,
+            title: "BIOS".to_string(),
+            category: "Arcade".to_string(),
+            platform_id: "arcade".to_string(),
+            core_id: "arcade".to_string(),
+            hardware_id: "arcade-unknown".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::MraCore,
+        };
+
+        assert!(is_playable_discovery(&discovery));
+    }
+
+    fn payload(path: &str) -> GameDiscovery {
+        let ext = path_ext(path).unwrap_or_default();
+        let taxonomy = taxonomy_from_path(path, &ext);
+        GameDiscovery {
+            source_path: path.to_string(),
+            launch_ref: path.to_string(),
+            source_kind: DiscoverySourceKind::PayloadFile,
+            title: title_from_path(path),
+            category: taxonomy.category,
+            platform_id: taxonomy.platform_id,
+            core_id: taxonomy.core_id,
+            hardware_id: taxonomy.hardware_id,
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        }
+    }
+
+    fn mgl(source_path: &str, launch_ref: &str) -> GameDiscovery {
+        GameDiscovery {
+            source_path: source_path.to_string(),
+            launch_ref: launch_ref.to_string(),
+            source_kind: DiscoverySourceKind::Mgl,
+            title: title_from_path(source_path),
+            category: "Unknown".to_string(),
+            platform_id: "unknown".to_string(),
+            core_id: "unknown".to_string(),
+            hardware_id: "unknown".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        }
+    }
+
+    fn archive_entry(path: &str) -> GameDiscovery {
+        GameDiscovery {
+            source_path: path.to_string(),
+            launch_ref: path.to_string(),
+            source_kind: DiscoverySourceKind::ArchiveEntry,
+            title: title_from_path(path),
+            category: "Unknown".to_string(),
+            platform_id: "unknown".to_string(),
+            core_id: "unknown".to_string(),
+            hardware_id: "unknown".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::ArchiveToc,
+        }
     }
 }

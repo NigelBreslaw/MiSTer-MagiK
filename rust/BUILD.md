@@ -10,6 +10,24 @@ Two **release** profiles separate fast host compiles from the binary we ship to 
 
 Benchmark labels: **A0** ≈ `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
 
+## Daily host checks
+
+Routine host development should use the lightweight library checks instead of
+plain `cargo test`, because the Slint UI binary intentionally cross-builds for
+the MiSTer and can trip macOS AppKit code in Slint before reaching our tests.
+
+```bash
+scripts/dev-rust fmt       # cargo fmt --check
+scripts/dev-rust fmt-fix   # cargo fmt
+scripts/dev-rust test      # cargo test --lib --no-default-features
+scripts/dev-rust check     # cargo check --lib --no-default-features
+scripts/dev-rust build-ui  # rust/build-arm.sh --fast
+```
+
+The host-testable library contains pure catalog/controller/repeat logic. The
+framebuffer, FPGA, Linux input loop, and Slint renderer stay in the binary target
+behind Cargo feature `ui`.
+
 ## Commands
 
 ```bash
@@ -99,6 +117,7 @@ project-local minimal build.
 ## Config files
 
 - **`Cargo.toml`** — `[profile.release]` vs `[profile.release-device]` (inherits release, overrides LTO/CGU).
+- **Cargo feature `ui`** — enables Slint and `slint-build`; `build-arm.sh` passes it for every MiSTer binary build.
 - **`.cargo/config.toml`** — sccache override only; no always-on `rustflags`.
 - **`build-arm.sh`** — sets `RUSTFLAGS` for `release-device` only.
 

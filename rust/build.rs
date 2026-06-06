@@ -1,4 +1,9 @@
 fn main() {
+    compile_ui();
+}
+
+#[cfg(feature = "ui")]
+fn compile_ui() {
     // Press Start 2P at all app design sizes used by the 960×540 UI.
     if std::env::var("SLINT_FONT_SIZES").is_err() {
         std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32,48");
@@ -25,3 +30,6 @@ fn main() {
             .unwrap_or_else(|e| panic!("Slint build failed for {path}: {e}"));
     }
 }
+
+#[cfg(not(feature = "ui"))]
+fn compile_ui() {}
