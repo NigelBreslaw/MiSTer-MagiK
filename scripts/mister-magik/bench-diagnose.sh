@@ -8,7 +8,7 @@
 #   bench-diagnose.sh vsync     static_ui 10    # alias for sigstop (timing; HDMI may stay menu)
 set -u
 
-REMOTE="${MISTER_MAGIC_FB:-/media/fat/mister-magic/mister-magic-fb}"
+REMOTE="${MISTER_MAGIK_FB:-/media/fat/mister-magik/mister-magik-fb}"
 MISTER="${MISTER_BIN:-/media/fat/MiSTer}"
 LOG="${BENCH_LOG:-/tmp/bench-diagnose.log}"
 
@@ -61,7 +61,7 @@ visible)
 	;;
 sigstop | vsync)
 	log "start stock MiSTer for menu video timing (HDMI may show menu wallpaper)"
-	kill -9 $(pidof mister-magic-fb) 2>/dev/null || true
+	kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 	kill -9 $(pidof MiSTer) 2>/dev/null || true
 	sleep 0.5
 	"$MISTER" &

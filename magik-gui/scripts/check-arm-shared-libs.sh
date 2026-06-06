@@ -2,7 +2,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb}"
+BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb}"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 
 if [ ! -f "$BIN" ]; then

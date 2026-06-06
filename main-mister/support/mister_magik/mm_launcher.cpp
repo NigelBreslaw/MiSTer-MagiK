@@ -17,8 +17,8 @@
 
 char user_io_osd_is_visible(void);
 
-static const char s_launcher_path[] = "/media/fat/mister-magic/mister-magic-fb";
-static const char s_log_path[] = "/tmp/mister-magic-main.log";
+static const char s_launcher_path[] = "/media/fat/mister-magik/mister-magik-fb";
+static const char s_log_path[] = "/tmp/mister-magik-main.log";
 static pid_t s_pid = 0;
 static int s_crash_count = 0;
 static unsigned long s_respawn_timer = 0;
@@ -31,7 +31,7 @@ static bool s_stock_osd_was_visible = false;
 
 static const char *s_overlay_items[] = {
 	"Show MiSTer Menu",
-	"Return to MiSTer Magik",
+	"Return to MiSTer MagiK",
 };
 static const int s_overlay_item_count = sizeof(s_overlay_items) / sizeof(s_overlay_items[0]);
 
@@ -134,7 +134,7 @@ static void spawn(void)
 
 	// If Main was re-entered/restarted, an old launcher child can survive with
 	// no matching pid in this process. Clear stale children before forking.
-	system("kill -TERM $(pidof mister-magic-fb) 2>/dev/null");
+	system("kill -TERM $(pidof mister-magik-fb) 2>/dev/null");
 	usleep(100000);
 
 	printf("mister_magik: spawning Slint launcher UI: %s\n", s_launcher_path);
@@ -166,11 +166,11 @@ static void draw_overlay_osd()
 	if (rows < 8) rows = 8;
 
 	OsdClear();
-	OsdSetTitle("MiSTer Magik");
+	OsdSetTitle("MiSTer MagiK");
 	for (int i = 0; i < rows; i++) OsdWrite(i);
 
 	OsdWrite(4,  "        Show MiSTer Menu", s_overlay_selected == 0);
-	OsdWrite(6,  "        Return to MiSTer Magik", s_overlay_selected == 1);
+	OsdWrite(6,  "        Return to MiSTer MagiK", s_overlay_selected == 1);
 	OsdWrite(rows - 1, "      D-pad moves, A selects");
 	OsdUpdate();
 	OsdEnable(DISABLE_KEYBOARD);

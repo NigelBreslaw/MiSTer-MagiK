@@ -28,8 +28,8 @@ const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_Utility",
 ];
 
-pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magic/library.sqlite3";
-const LEGACY_BENCH_SQLITE_PATH: &str = "/media/fat/mister-magic/library-bench.sqlite3";
+pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
+const LEGACY_BENCH_SQLITE_PATH: &str = "/media/fat/mister-magik/library-bench.sqlite3";
 
 const NORMAL_LAUNCH_EXTS: &[&str] = &[
     "mra", "mgl", "rbf", "rom", "bin", "cue", "iso", "img", "dsk", "vhd", "hdf", "adf", "ipf",
@@ -2929,7 +2929,7 @@ mod tests {
     #[test]
     fn mgl_discovery_preserves_script_as_launch_ref() {
         let path =
-            std::env::temp_dir().join(format!("mister-magic-mgl-test-{}.mgl", std::process::id()));
+            std::env::temp_dir().join(format!("mister-magik-mgl-test-{}.mgl", std::process::id()));
         std::fs::write(
             &path,
             r#"<mistergamelist><file delay="2" type="s" path="games/NES/Mario.nes"/></mistergamelist>"#,

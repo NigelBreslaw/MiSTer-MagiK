@@ -3,7 +3,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magic-fb}"
+BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb}"
 OUT_DIR="${2:-$ROOT/build/binary-size-analysis}"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 

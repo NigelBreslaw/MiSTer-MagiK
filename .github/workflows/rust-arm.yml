@@ -117,13 +117,13 @@ jobs:
         run: magik-gui/build-arm.sh ${{ matrix.args }}
 
       - name: Check ARM shared libraries
-        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magic-fb
+        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v4
         with:
-          name: mister-magic-fb-${{ matrix.name }}
-          path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magic-fb
+          name: mister-magik-fb-${{ matrix.name }}
+          path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
           if-no-files-found: error
 
       - name: Upload size history

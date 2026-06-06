@@ -40,7 +40,7 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "support.h"
-#include "support/mister_magic/mm_launcher.h"
+#include "support/mister_magik/mm_launcher.h"
 
 static char core_path[1024] = {};
 static char rbf_path[1024] = {};
@@ -1542,7 +1542,7 @@ void user_io_init(const char *path, const char *xml)
 				user_io_status_set("[4]", (cfg.menu_pal) ? 1 : 0);
 				if (mm_launcher_configured())
 				{
-					FILE *f = fopen("/tmp/mister-magic-main.log", "a");
+					FILE *f = fopen("/tmp/mister-magik-main.log", "a");
 					if (f)
 					{
 						fprintf(f, "user_io menu hook\n");
@@ -4224,7 +4224,7 @@ void user_io_kbd(uint16_t key, int press)
 			bool is_menu_event = ((has_menu() || osd_is_visible || (get_key_mod() & (LALT | RALT | RGUI | LGUI))) && (((key == KEY_F12) && (!is_f12_mod_needed() || (get_key_mod() & (RGUI | LGUI)))) || key == KEY_MENU));
 			if ((key == KEY_F12 || key == KEY_MENU || key == KEY_ESC) && mm_launcher_active())
 			{
-				FILE *f = fopen("/tmp/mister-magic-main.log", "a");
+				FILE *f = fopen("/tmp/mister-magik-main.log", "a");
 				if (f)
 				{
 					fprintf(f, "user_io_kbd key=%u press=%d menu_event=%d visible=%d\n",

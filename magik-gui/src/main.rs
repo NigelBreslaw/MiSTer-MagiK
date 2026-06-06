@@ -15,7 +15,7 @@
 //!   capture-raw [out] [w] [h]  capture /dev/fb0 to raw BGRX on the MiSTer
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
 //!
-//! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_Magik`.
+//! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
 //!
 //! See AGENTS.md §9.5 (spike) and §12 (toolchain).
 
@@ -38,7 +38,7 @@ mod ui_runner;
 mod video_player;
 mod vt;
 
-pub use mister_magic_fb::{arcade_catalog, controller_db, input_repeat, library_bench};
+pub use mister_magik_fb::{arcade_catalog, controller_db, input_repeat, library_bench};
 
 use fb::{Display, Pixel};
 use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
@@ -46,7 +46,7 @@ use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
 const W: usize = 1920;
 const H: usize = 1080;
 
-const MISTER_BIN: &str = "/media/fat/MiSTer_Magik";
+const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const COMMANDS: &[&str] = &[
     "read",
     "fb",
@@ -74,7 +74,7 @@ fn main() {
 
     let cmd = resolve_command(&args);
 
-    println!("mister-magic-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+    println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
 
     let mut f = match Fpga::open() {
         Ok(f) => f,
@@ -119,7 +119,7 @@ fn is_launcher_boot(arg: &str) -> bool {
     arg.ends_with("menu.rbf") || arg.ends_with("/menu.rbf")
 }
 
-/// Main re-exec'd us with a core path — hand off to MiSTer_Magik so gameplay works.
+/// Main re-exec'd us with a core path — hand off to MiSTer_MagiK so gameplay works.
 fn should_handoff_to_mister(arg: &str) -> bool {
     if COMMANDS.contains(&arg) {
         return false;

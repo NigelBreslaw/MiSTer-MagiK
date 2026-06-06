@@ -10,8 +10,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release
 BUILD_FLAG=()
-REMOTE="/media/fat/mister-magic/mister-magic-fb"
-BENCH_SQLITE="/media/fat/mister-magic/library-scan-bench.sqlite3"
+REMOTE="/media/fat/mister-magik/mister-magik-fb"
+BENCH_SQLITE="/media/fat/mister-magik/library-scan-bench.sqlite3"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-library.tsv"
 ITERATIONS=3
@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magic-fb"
+BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
 mkdir -p "$BENCH_DIR"
 
 if [[ ! -f "$TSV" ]]; then
@@ -61,7 +61,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
 fi
 
 echo "== deploy =="
-"$HERE/scripts/mister" run 'kill -9 $(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magic'
+"$HERE/scripts/mister" run 'kill -9 $(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik'
 "$HERE/scripts/mister" put "$BIN" "$REMOTE"
 
 echo "== library-scan-bench on device =="

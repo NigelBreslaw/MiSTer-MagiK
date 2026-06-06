@@ -17,12 +17,13 @@ screen, controller input).
 
 **Status (2026-06-03):**
 
-- ✅ **Native Rust frontend** — `mister-magic-fb ui` at locked 60fps, smooth +
+- ✅ **Native Rust frontend** — `mister-magik-fb ui` at locked 60fps, smooth +
   tear-free. See §9.7.
 - ✅ **Slint launcher** — 2×2 home grid, controller test; gamepad owned by Slint
   while UI runs. Games launch via fifo `load_core` (MiSTer spawned briefly).
-- ✅ **Production boot** — `scripts/mister-magic/boot.sh`: MiSTer runs `video_init`,
-  then **stopped** so Slint owns SPI + input. Install: `scripts/install-slint-boot.sh`.
+- ✅ **Production boot** — update_all-compatible Zaparoo-style handoff:
+  `/etc/inittab` boots stock `/media/fat/MiSTer`, then `[MiSTer]
+  main=MiSTer_MagiK` re-execs the Main fork, which launches Slint as its child.
 - ✅ FPGA SPI + `fb_enable_direct` + `set_vga_fb` in `magik-gui/src/fpga.rs`.
 - ✅ Gamepad input via Linux js API (`magik-gui/src/input.rs`).
 
@@ -101,9 +102,9 @@ did not. Only `video_fb_enable(1, 0)` (FPGA SPI, main-binary only) makes buffer
 - Stock `reference/Main_MiSTer/MiSTer.ini:381` documents `;main=some_binary_file`.
 
 Setting `main=some/path/to/binary` makes `/media/fat/MiSTer` re-exec that binary
-at boot instead of the stock menu. **We do not use `main=` for our binary** — it
-runs before `video_init()` and the TV gets no HDMI signal (§7). Production boot
-uses `boot.sh` via inittab: stock MiSTer first, then hand off to Slint.
+at boot instead of the stock menu. Use this for the Main fork
+(`main=MiSTer_MagiK`), not for the Slint binary (`main=mister-magik-fb`), because
+the Slint binary runs before `video_init()` and the TV gets no HDMI signal (§7).
 
 ### 3.3 Engineering takeaway
 
@@ -132,10 +133,10 @@ is unreliable; coexistence gave stock menu on HDMI with no Slint input.
 ```
 pyproject.toml          host tooling only (uv + paramiko for mister_ssh.py)
 scripts/
-  deploy-rust.sh            build + deploy binary + boot.sh
-  install-slint-boot.sh     one-time Slint boot via inittab handoff
+  deploy-rust.sh            build + deploy Slint child binary
+  install-slint-boot.sh     one-time MiSTer.ini main=MiSTer_MagiK handoff
   restore-stock-boot.sh     revert to stock MiSTer menu
-  mister-magic/boot.sh      on-device: MiSTer video_init → Slint launcher
+  mister-magik/boot.sh      legacy boot handoff script (not production)
   mister_ssh.py             paramiko helper — run/reboot/reboot-wait/wait/put/get
   capture-fb.sh         grab /dev/fb0 → PNG (via mister_ssh + raw_to_png.py)
   raw_to_png.py         stdlib-only BGRX dump → PNG
@@ -158,7 +159,7 @@ main-mister/            buildable Main_MiSTer fork experiments — see docs/main
   build-docker.sh       Dockerized Main build with ARM GCC 10.2
 ```
 
-On the device the binary lives at `/media/fat/mister-magic/mister-magic-fb`.
+On the device the binary lives at `/media/fat/mister-magik/mister-magik-fb`.
 
 ---
 
@@ -182,15 +183,15 @@ scripts/dev-rust fmt
 scripts/dev-rust test
 scripts/dev-rust check
 
-# One-time: boot straight into Slint launcher (see §7 — not via main=)
+# One-time: boot into MiSTer_MagiK through stock MiSTer main= handoff
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 
-# Re-deploy binary + boot.sh after code changes
+# Re-deploy binary + fork after code changes
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 
 # Dev run (stop MiSTer so Slint owns gamepad — see §7)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
-  'kill -9 $(pidof MiSTer) 2>/dev/null; /media/fat/mister-magic/mister-magic-fb ui launcher 60'
+  'kill -9 $(pidof MiSTer) 2>/dev/null; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
 
 # Restore stock MiSTer menu boot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
@@ -208,11 +209,11 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/fb.png
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean --replace-label
 ```
 
-Bench scenes: `mister-magic-fb scenes` or `ui <scene> 20` — see `magik-gui/ui/bench/README.md`.
+Bench scenes: `mister-magik-fb scenes` or `ui <scene> 20` — see `magik-gui/ui/bench/README.md`.
 Log: [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md).
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
-PNG **while `mister-magic-fb ui` is running**. After exit, fbcon shows `login:` and
+PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and
 the dump is useless. `bench-toolchain.sh` snapshots at ~`scene_secs - 2` s mid-run.
 
 ---
@@ -243,13 +244,16 @@ To refresh: `git -C reference/<repo> pull` (or re-clone `--depth 1`).
 
 ### Current — production boot + dev binary
 
-**Production:** `/etc/inittab` runs `scripts/mister-magic/boot.sh` (installed by
-`install-slint-boot.sh`). Flow:
+**Production:** use the Zaparoo-compatible `main=` handoff, not direct inittab
+replacement. `/etc/inittab` must keep stock `/media/fat/MiSTer` as the menu
+entry. `[MiSTer] main=MiSTer_MagiK` in `MiSTer.ini` makes stock MiSTer re-exec
+the Main fork, and the fork launches
+`/media/fat/mister-magik/mister-magik-fb ui launcher 0` as its child.
 
-1. Start stock `/media/fat/MiSTer` (must **not** have `main=mister-magic-fb` in INI).
-2. Wait for `video_init()` — 1080p fb in sysfs.
-3. **Stop MiSTer** — Slint owns SPI routing, HDMI scan-out, and gamepad evdev.
-4. Exec `mister-magic-fb ui launcher 0`.
+This keeps `update_all` first-class: stock `/media/fat/MiSTer` remains the
+canonical boot binary, while `/media/fat/MiSTer_MagiK` is an add-on payload that
+can later be managed by update_all. Rollback is simple: remove
+`main=MiSTer_MagiK`, ensure inittab boots `/media/fat/MiSTer`, and reboot.
 
 **Game launch:** Slint spawns MiSTer if needed, writes `load_core <path.mra>` to
 `/dev/MiSTer_cmd`, then exits when the arcade core is detected. On launch failure,
@@ -264,14 +268,16 @@ unreliable; coexistence gave stock menu on HDMI with no Slint input.
 **Do not SIGSTOP MiSTer for the launcher.** A stopped MiSTer keeps **evdev grabs**
 (joystick dead) and the **FPGA menu OSD** composited on HDMI.
 
-**Why not `main=` on our binary?** `user_io_init` calls `app_restart(main=…)`
-*before* `video_init()` (HDMI timing, I2C). Result: Slint renders to `/dev/fb0`
-but the TV reports no signal. `set_vga_fb` alone is not enough.
+**Why not `main=` on the Slint binary?** `user_io_init` calls
+`app_restart(main=…)` *before* `video_init()` (HDMI timing, I2C). Result: Slint
+renders to `/dev/fb0` but the TV reports no signal. `main=MiSTer_MagiK` is
+different because MiSTer_MagiK is a full Main_MiSTer fork and runs `video_init()`
+itself.
 
-**Dev:** `kill -9 $(pidof MiSTer)` then `mister-magic-fb ui launcher …` for a
+**Dev:** `kill -9 $(pidof MiSTer)` then `mister-magik-fb ui launcher …` for a
 manual run matching production boot.
 
-Cross-built binary at `/media/fat/mister-magic/mister-magic-fb`. Subcommands:
+Cross-built binary at `/media/fat/mister-magik/mister-magik-fb`. Subcommands:
 `read`, `fb`, `ui` (default scene `launcher`), `input`, `scenes`.
 
 Launcher: D-pad nav, A to open controller test or launch arcade games. Launch spawns
@@ -283,13 +289,15 @@ still owns recovery when running; if wedged, reboot always works).
 ### Main fork experiment — Main as parent of Slint
 
 `main-mister/` is a buildable Main_MiSTer fork for coexistence experiments. The
-device experiment deploys it as `/media/fat/MiSTer_Magik` and boots it directly
-from inittab, while `magik-gui/` stays the separate Slint binary project.
+device deploys it as `/media/fat/MiSTer_MagiK` and selects it through
+`[MiSTer] main=MiSTer_MagiK`, while `magik-gui/` stays the separate Slint binary
+project.
 Use `scripts/deploy-main-mister-experiment.sh --fast` to build/deploy both.
 
-Current intended flow (2026-06-06): `/etc/inittab` starts
-`/media/fat/MiSTer_Magik`, the fork initializes the menu core, then starts
-`/media/fat/mister-magic/mister-magic-fb ui debug 86400` as a child. The command
+Current intended flow (2026-06-06): `/etc/inittab` starts stock
+`/media/fat/MiSTer`; `MiSTer.ini main=MiSTer_MagiK` hands off to the fork; the
+fork initializes the menu core, then starts
+`/media/fat/mister-magik/mister-magik-fb ui launcher 0` as a child. The command
 `mister_magik_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
 the Slint child and launches through Main. Metal Slug 3 reached the `NEOGEO`
 core via this path with fb mode `8888 1 640 240 2560` and no SDRAM/memory error
@@ -304,11 +312,11 @@ development commits. Current baseline is `Release 20260603`
 
 Important gotchas:
 
-- Disable the old `/etc/inittab` `mister-magic/boot.sh` handoff for this
-  experiment. `deploy-main-mister-experiment.sh` installs
-  `::sysinit:/media/fat/MiSTer_Magik &` and removes `main=` from `MiSTer.ini`.
+- Disable the old `/etc/inittab` `mister-magik/boot.sh` handoff. Production
+  inittab must boot `/media/fat/MiSTer`; `deploy-main-mister-experiment.sh`
+  installs/repairs `[MiSTer] main=MiSTer_MagiK`.
 - Main clean rebuilds matter. If `main-mister/bin/MiSTer` is stale, new
-  `support/mister_magic/*.cpp` files may not be reflected in the deployed binary.
+  `support/mister_magik/*.cpp` files may not be reflected in the deployed binary.
 - `ui debug 0` exits immediately because generic bench/debug scenes treat
   `secs=0` as zero duration. The launcher loop treats `0` as infinite. The Main
   experiment currently uses `debug 86400`.
@@ -338,15 +346,15 @@ Important gotchas:
 - **`ui` / `fb` call `KD_GRAPHICS` on `/dev/tty0`** (`magik-gui/src/vt.rs`) so fbcon
   stops drawing the blinking block cursor over the title (confirmed in framebuffer
   PNGs). Restores `KD_TEXT` on exit. If the ioctl fails, we log and continue.
-- **busybox has no `pkill`.** Use `kill -9 $(pidof mister-magic-fb)` to stop the app.
+- **busybox has no `pkill`.** Use `kill -9 $(pidof mister-magik-fb)` to stop the app.
 - **libinput quirks DB missing** → `libinput error: ... device quirks` warnings.
   Rendering is fine; if/when we add input, bundle the quirks DB or point
   libinput at one.
 - **Fonts:** MiSTer has none. The Rust build embeds Press Start 2P (`magik-gui/ui/fonts/`).
 - **Framebuffer byte order is BGRX** (`rgba 8/16,8/8,8/0`). `raw_to_png.py`
   swaps B/R; keep that in mind for any direct fb work.
-- **Don't use `main=mister-magic-fb`.** Skips `video_init()` → no HDMI signal
-  (§7). Use `boot.sh` inittab handoff instead.
+- **Don't use `main=mister-magik-fb`.** Skips `video_init()` → no HDMI signal
+  (§7). Use `main=MiSTer_MagiK`; the fork is Main and can initialize video.
 - **Don't external `rbf_load` from Slint.** `core_reset` + failed `socfpga_load`
   leaves the FPGA without valid scan-out → TV "no signal". Use fifo `load_core`
   on the running MiSTer process (§7).
@@ -386,16 +394,16 @@ Important gotchas:
   scenes sometimes starting in a bad 30fps/vsync phase after repeated Slint
   restarts or immediately after deploy/reboot, then recovering later. For
   performance comparisons, put the MiSTer in a clean state, kill any existing
-  `mister-magic-fb`, wait/settle before starting the scene (5s worked in tests),
+  `mister-magik-fb`, wait/settle before starting the scene (5s worked in tests),
   and distrust short runs whose first seconds show `fps ~ 30` unless that is the
   thing being measured. Reboot and rerun before concluding a copy/render change
   regressed performance.
 - **Visual benchmarks must not leave the fork parent running.** In the
-  Main-as-parent experiment, `/media/fat/MiSTer_Magik` is the fork parent,
+  Main-as-parent experiment, `/media/fat/MiSTer_MagiK` is the fork parent,
   and that parent can keep the stock FPGA OSD/menu compositor
-  alive over standalone `mister-magic-fb ui <scene> ...` benchmark runs. Before
+  alive over standalone `mister-magik-fb ui <scene> ...` benchmark runs. Before
   any visual benchmark that is not intentionally testing coexistence, stop all
-  three possible owners: `mister-magic-fb`, `MiSTer_Magik`, and `MiSTer`; then
+  three possible owners: `mister-magik-fb`, `MiSTer_MagiK`, and `MiSTer`; then
   start the benchmark scene after the normal settle delay. If the original OSD is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
@@ -461,7 +469,7 @@ full-screen image from our own binary**:
   multi-word reads work** (GET_VRES/GET_FB_PAR return stable data; ACK-high ==
   ACK-low), unlike the slow Python which read 0s.
 - `magik-gui/src/fb.rs` mmaps `/dev/fb0` (1920x1080 xRGB8888) for direct pixel writes.
-- `mister-magic-fb fb [xoff] [yoff]` paints a 4-quadrant + border + cross-hair
+- `mister-magik-fb fb [xoff] [yoff]` paints a 4-quadrant + border + cross-hair
   test pattern and routes buffer 0. `read` dumps the live mode/fb params.
 - Live values read from the stock menu: `GET_FB_PAR` → `fb_w=1920 fb_h=1080
   fb_fmt=0x00d6 fb_en=1`; `GET_VRES` → `width=529 height=240 pixrep=2` (the
@@ -491,7 +499,7 @@ outputs). The plumbing already reads these registers; only the derivation is TOD
 
 ### 9.7 Slint software renderer @ locked 60fps — smooth + tear-free (✅ done)
 
-`mister-magic-fb ui [secs]` runs Slint's **software renderer** directly on the
+`mister-magik-fb ui [secs]` runs Slint's **software renderer** directly on the
 framebuffer (no X/Wayland) at a **rock-steady 60fps, smooth and tear-free**
 (confirmed on HDMI). Per-frame budget (1080p, animated demo UI):
 
@@ -553,14 +561,18 @@ UI with localised motion will copy far less. Could also copy only the dirty
 
 ## 10. Current device state & recovery
 
-- **Boot:** `/etc/inittab` → `/media/fat/mister-magic/boot.sh` → Slint launcher.
-  `MiSTer.ini` must **not** set `main=mister-magic/…` (backup:
-  `/media/fat/MiSTer.ini.bak`).
-- `direct_video=1`, `video_mode=8` (1080p) in `MiSTer.ini`.
+- **Boot:** `/etc/inittab` → `/media/fat/MiSTer`; `[MiSTer]
+  main=MiSTer_MagiK` hands off to the Main fork; the fork starts
+  `/media/fat/mister-magik/mister-magik-fb ui launcher 0`.
+- `MiSTer.ini` must **not** set `main=mister-magik-fb`; Slint is not Main and
+  cannot initialize HDMI before `main=` re-exec.
+- `direct_video=1`, `[Menu] video_mode=8` (1080p) in `MiSTer.ini`.
 - **Static IP `192.168.1.117` (no DHCP).** See §8 for dhcpcd.conf details.
-- Binary + boot.sh at `/media/fat/mister-magic/`.
-- **Recovery to stock menu:** `scripts/restore-stock-boot.sh` (or SSH: restore
-  inittab + `MiSTer.ini.bak`, reboot). Works even with no HDMI.
+- Fork binary at `/media/fat/MiSTer_MagiK`; Slint child at
+  `/media/fat/mister-magik/mister-magik-fb`.
+- **Recovery to stock menu:** `scripts/restore-stock-boot.sh` removes
+  `main=MiSTer_MagiK`, ensures inittab boots `/media/fat/MiSTer`, and reboots.
+  Works over SSH even with no HDMI.
 
 ---
 
@@ -589,8 +601,8 @@ scripts/deploy-rust.sh --fast --video    # includes minimal static FFmpeg + vide
 magik-gui/build-arm.sh --device
 magik-gui/build-arm.sh --device --video
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
-  put magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb \
-  /media/fat/mister-magic/mister-magic-fb
+  put magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
+  /media/fat/mister-magik/mister-magik-fb
 ```
 
 **Host dev checks:** use `scripts/dev-rust fmt`, `scripts/dev-rust test`, and
@@ -614,7 +626,7 @@ Video builds use a project-local **minimal static FFmpeg 8.1.x** built by
 It enables only H.264 decode/parse, `pcm_s16le`, MOV/MP4 demuxing, file
 protocol, and `avcodec`/`avformat`/`avutil`/`swscale`; no system `libav*`
 runtime is required. `video_playback` defaults to
-`/media/fat/mister-magic/mslug3.mov` (H.264 baseline + 48 kHz stereo signed PCM)
+`/media/fat/mister-magik/mslug3.mov` (H.264 baseline + 48 kHz stereo signed PCM)
 and writes PCM packets directly to `/dev/MrAudio` with video as the master clock.
 Video CPU benchmark notes from 2026-06-06: passing a
 `SharedPixelBuffer<Rgb8Pixel>` from the decode worker avoids an extra

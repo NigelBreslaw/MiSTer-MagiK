@@ -91,5 +91,5 @@ if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
 fi
 echo "==> cross build OK"
 
-BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magic-fb"
+BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"

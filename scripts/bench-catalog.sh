@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release
 BUILD_FLAG=()
-REMOTE="/media/fat/mister-magic/mister-magic-fb"
+REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-catalog.tsv"
 SSH="$HERE/scripts/mister_ssh.py"
@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magic-fb"
+BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
 mkdir -p "$BENCH_DIR"
 
 TSV_HEADER="label	date	rustc	compile_sec	bytes	walk_ms	walk_count	parse_ms	parse_count	merge_ms	merge_count	resolve_ms	resolve_count	sort_ms	sort_count	decode_ms	decode_count	total_ms	games	notes"
@@ -92,7 +92,7 @@ MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
 echo "== catalog-bench on device =="
 OUT=$(MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
   uv run python "$SSH" run \
-  "kill -9 \$(pidof mister-magic-fb) 2>/dev/null; $REMOTE catalog-bench --sample-images $SAMPLE_IMAGES" \
+  "kill -9 \$(pidof mister-magik-fb) 2>/dev/null; $REMOTE catalog-bench --sample-images $SAMPLE_IMAGES" \
   2>&1) || true
 echo "$OUT"
 

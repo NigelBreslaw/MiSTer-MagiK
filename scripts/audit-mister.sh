@@ -67,8 +67,8 @@ ls /dev/dri 2>/dev/null || echo "no /dev/dri"
 echo "=== Memory ==="
 grep MemTotal /proc/meminfo
 echo "=== Rust binary ==="
-ls -lh /media/fat/mister-magic/mister-magic-fb 2>/dev/null || echo "not deployed"
-file /media/fat/mister-magic/mister-magic-fb 2>/dev/null || true
+ls -lh /media/fat/mister-magik/mister-magik-fb 2>/dev/null || echo "not deployed"
+file /media/fat/mister-magik/mister-magik-fb 2>/dev/null || true
 ' || rc=$?
 
 exit "$rc"

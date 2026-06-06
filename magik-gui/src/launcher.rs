@@ -15,8 +15,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
-const MISTER_BIN: &str = "/media/fat/MiSTer_Magik";
-const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_Magik", "MiSTer"];
+const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
+const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
@@ -355,7 +355,7 @@ fn mister_running() -> bool {
 pub fn stop_mister() {
     let _ = Command::new("sh")
         .arg("-c")
-        .arg("kill -9 $(pidof MiSTer_Magik) 2>/dev/null; kill -9 $(pidof MiSTer) 2>/dev/null")
+        .arg("kill -9 $(pidof MiSTer_MagiK) 2>/dev/null; kill -9 $(pidof MiSTer) 2>/dev/null")
         .status();
     for _ in 0..30 {
         if !mister_running() {
@@ -384,13 +384,13 @@ fn restore_menu_wallpaper() {
     let _ = Command::new("sh")
         .arg("-c")
         .arg(
-            "[ -f /media/fat/mister-magic/.menu.png.boot-hide ] && mv /media/fat/mister-magic/.menu.png.boot-hide /media/fat/menu.png 2>/dev/null || true",
+            "[ -f /media/fat/mister-magik/.menu.png.boot-hide ] && mv /media/fat/mister-magik/.menu.png.boot-hide /media/fat/menu.png 2>/dev/null || true",
         )
         .status();
 }
 
 pub fn exit_to_mister() -> Result<(), String> {
-    std::fs::write("/tmp/mister-magic-stock-menu", b"1\n")
+    std::fs::write("/tmp/mister-magik-stock-menu", b"1\n")
         .map_err(|e| format!("failed to write stock-menu marker: {e}"))?;
     restore_menu_wallpaper();
     if !mister_running() {
@@ -409,7 +409,7 @@ pub fn mister_running_arcade_core() -> bool {
     let output = Command::new("sh")
         .arg("-c")
         .arg(
-            "pid=$(pidof MiSTer_Magik 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
+            "pid=$(pidof MiSTer_MagiK 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
         )
         .output();
     let Ok(output) = output else {
@@ -442,7 +442,7 @@ pub fn execute_game_launch(launch_ref: &str) -> Result<bool, String> {
     }
 
     let cmd = if Command::new("pidof")
-        .arg("MiSTer_Magik")
+        .arg("MiSTer_MagiK")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

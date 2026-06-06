@@ -34,7 +34,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "scheduler.h"
 #include "osd.h"
 #include "offload.h"
-#include "support/mister_magic/mm_launcher.h"
+#include "support/mister_magik/mm_launcher.h"
 
 const char *version = "$VER:" VDATE;
 

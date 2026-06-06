@@ -103,7 +103,7 @@ pub fn run() {
 
 fn run_fixtures() {
     let dir = std::env::var("MISTER_PREVIEW_FIXTURE_DIR")
-        .unwrap_or_else(|_| "/media/fat/mister-magic/png-fixtures".to_string());
+        .unwrap_or_else(|_| "/media/fat/mister-magik/png-fixtures".to_string());
     let repeats = std::env::var("MISTER_PREVIEW_FIXTURE_REPEATS")
         .ok()
         .and_then(|s| s.parse().ok())

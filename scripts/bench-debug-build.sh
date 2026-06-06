@@ -55,8 +55,8 @@ latest_timing() {
 
 prepare_state() {
   if [[ "$STATE" == package-dirty ]]; then
-    (cd "$RUST_DIR" && cargo clean -p mister-magic-fb --target armv7-unknown-linux-gnueabihf >/dev/null)
-    (cd "$RUST_DIR" && cargo clean -p mister-magic-fb >/dev/null)
+    (cd "$RUST_DIR" && cargo clean -p mister-magik-fb --target armv7-unknown-linux-gnueabihf >/dev/null)
+    (cd "$RUST_DIR" && cargo clean -p mister-magik-fb >/dev/null)
   fi
 }
 
@@ -114,7 +114,7 @@ build_script = lib = bin_ = ""
 if m:
     units = json.loads(m.group(1))
     for unit in units:
-        if unit.get("name") != "mister-magic-fb" or unit.get("duration", 0) <= 0:
+        if unit.get("name") != "mister-magik-fb" or unit.get("duration", 0) <= 0:
             continue
         target = unit.get("target", "")
         duration = str(round(unit["duration"], 2))

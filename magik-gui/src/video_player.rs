@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
-pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magic/mslug3.mov";
+pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
 const AUDIO_RATE: u32 = 48_000;
 const OUTPUT_AUDIO_CHANNELS: usize = 2;
 
