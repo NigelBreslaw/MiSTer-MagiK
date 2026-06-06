@@ -317,6 +317,16 @@ fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
     ));
 }
 
+macro_rules! with_scene_app {
+    ($module:ident::$ty:ident, $ui:expr, $window:expr, $app:ident, $body:block) => {{
+        let $app = slint_ui::$module::$ty::new().expect(stringify!($ty));
+        $app.global::<slint_ui::$module::MisterUi>()
+            .set_scale(SLINT_UI_SCALE);
+        configure_window($ui, $window);
+        $body
+    }};
+}
+
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     let ui = UiDisplay::from_env();
@@ -347,128 +357,102 @@ pub fn run_ui(f: &mut Fpga) {
 
     match scene.as_str() {
         "demo" => {
-            let app = slint_ui::app::AppWindow::new().expect("AppWindow::new");
-            app.global::<slint_ui::app::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(app::AppWindow, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "full_motion" => {
-            let app = slint_ui::full_motion::FullMotion::new().expect("FullMotion::new");
-            app.global::<slint_ui::full_motion::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(full_motion::FullMotion, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "static_ui" => {
-            let app = slint_ui::static_ui::StaticUi::new().expect("StaticUi::new");
-            app.global::<slint_ui::static_ui::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(static_ui::StaticUi, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "local_motion" => {
-            let app = slint_ui::local_motion::LocalMotion::new().expect("LocalMotion::new");
-            app.global::<slint_ui::local_motion::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(local_motion::LocalMotion, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "text_heavy" => {
-            let app = slint_ui::text_heavy::TextHeavy::new().expect("TextHeavy::new");
-            app.global::<slint_ui::text_heavy::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(text_heavy::TextHeavy, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "solid_fill" => {
-            let app = slint_ui::solid_fill::SolidFill::new().expect("SolidFill::new");
-            app.global::<slint_ui::solid_fill::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(solid_fill::SolidFill, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "list_scroll" => {
-            let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
-            app.global::<slint_ui::list_scroll::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(list_scroll::ListScroll, &ui, &window, app, {
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "console_scroll" => {
-            let app = slint_ui::console_scroll::ConsoleScroll::new().expect("ConsoleScroll::new");
-            app.global::<slint_ui::console_scroll::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
+            with_scene_app!(console_scroll::ConsoleScroll, &ui, &window, app, {
+                app.show().expect("show");
+                run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
+            });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "dirty_band" => {
             let pct = dirty_band_pct_from_env();
-            let app = slint_ui::dirty_band::DirtyBand::new().expect("DirtyBand::new");
-            app.global::<slint_ui::dirty_band::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            app.set_band_pct(pct);
-            println!("dirty_band band-pct={pct}% (MISTER_DIRTY_BAND_PCT)");
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(dirty_band::DirtyBand, &ui, &window, app, {
+                app.set_band_pct(pct);
+                println!("dirty_band band-pct={pct}% (MISTER_DIRTY_BAND_PCT)");
+                app.show().expect("show");
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
         "video_playback" => {
-            let app = slint_ui::video_playback::VideoPlayback::new().expect("VideoPlayback::new");
-            app.global::<slint_ui::video_playback::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            window.request_redraw();
-            run_video_playback_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
+            with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
+                app.show().expect("show");
+                window.request_redraw();
+                run_video_playback_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
+            });
         }
         "controller_test" => {
             let pad = open_pads();
-            let app = slint_ui::controller::ControllerTest::new().expect("ControllerTest::new");
-            app.global::<slint_ui::controller::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            sync_bridge(&app, &pad);
-            app.show().expect("show");
-            window.request_redraw();
-            run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+            with_scene_app!(controller::ControllerTest, &ui, &window, app, {
+                sync_bridge(&app, &pad);
+                app.show().expect("show");
+                window.request_redraw();
+                run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+            });
         }
         "debug" => {
-            let app = slint_ui::debug::DebugUi::new().expect("DebugUi::new");
-            app.global::<slint_ui::debug::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            app.show().expect("show");
-            window.request_redraw();
-            run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            with_scene_app!(debug::DebugUi, &ui, &window, app, {
+                app.show().expect("show");
+                window.request_redraw();
+                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+            });
         }
         "launcher" => {
             let pad = open_pads();
-            let app = slint_ui::launcher::Launcher::new().expect("Launcher::new");
-            app.global::<slint_ui::launcher::MisterUi>()
-                .set_scale(SLINT_UI_SCALE);
-            configure_window(&ui, &window);
-            init_launcher_bridge(&app, &pad);
-            app.show().expect("show");
-            window.request_redraw();
-            run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
+            with_scene_app!(launcher::Launcher, &ui, &window, app, {
+                init_launcher_bridge(&app, &pad);
+                app.show().expect("show");
+                window.request_redraw();
+                run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
+            });
         }
         _ => unreachable!(),
     }

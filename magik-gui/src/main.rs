@@ -48,6 +48,21 @@ const W: usize = 1920;
 const H: usize = 1080;
 
 const MISTER_BIN: &str = "/media/fat/MiSTer";
+const COMMANDS: &[&str] = &[
+    "read",
+    "fb",
+    "ui",
+    "scenes",
+    "input",
+    "catalog-bench",
+    "library-bench",
+    "library-scan-bench",
+    "library-db-bench",
+    "preview-bench",
+    "capture-png",
+    "capture-raw",
+    "audio-tone",
+];
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -85,10 +100,7 @@ fn main() {
         "capture-raw" => run_capture_raw(),
         "audio-tone" => run_audio_tone(&mut f),
         other => {
-            eprintln!(
-                "unknown command '{other}' \
-                 (use: read | fb | ui | scenes | input | catalog-bench | library-bench | library-scan-bench | library-db-bench | preview-bench | capture-png | capture-raw | audio-tone)"
-            );
+            eprintln!("unknown command '{other}' (use: {})", COMMANDS.join(" | "));
             std::process::exit(2);
         }
     }
@@ -110,22 +122,7 @@ fn is_launcher_boot(arg: &str) -> bool {
 
 /// MiSTer re-exec'd us with a core path — hand off to stock Main so gameplay works.
 fn should_handoff_to_mister(arg: &str) -> bool {
-    if matches!(
-        arg,
-        "read"
-            | "fb"
-            | "ui"
-            | "scenes"
-            | "input"
-            | "catalog-bench"
-            | "library-bench"
-            | "library-scan-bench"
-            | "library-db-bench"
-            | "preview-bench"
-            | "capture-png"
-            | "capture-raw"
-            | "audio-tone"
-    ) {
+    if COMMANDS.contains(&arg) {
         return false;
     }
     if arg.ends_with("menu.rbf") {
