@@ -72,6 +72,27 @@ autodetected libraries are disabled.
 
 `scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release`** (matches historical A0 toolchain experiments unless you edit the script to pass `--device` for A3-style benches).
 
+## CI
+
+GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
+
+The matrix covers the local build modes that matter:
+
+- `rust/build-arm.sh --fast`
+- `rust/build-arm.sh --device`
+- `rust/build-arm.sh --fast --video`
+- `rust/build-arm.sh --device --video`
+
+Each job installs pinned `cross` 0.2.5, uses `rust/Dockerfile.cross-armv7` via
+`rust/Cross.toml`, caches Cargo registry/git data, caches the minimal FFmpeg tree
+for video jobs, records `build/binary-size.tsv`, checks the ARM ELF dynamic
+dependencies with `rust/scripts/check-arm-shared-libs.sh`, and uploads the binary
+plus size TSV as artifacts.
+
+The shared-library check intentionally fails if any `libav*`, `libswscale`, or
+`libswresample` dependency appears. FFmpeg must stay statically linked from the
+project-local minimal build.
+
 ## Config files
 
 - **`Cargo.toml`** — `[profile.release]` vs `[profile.release-device]` (inherits release, overrides LTO/CGU).
@@ -88,10 +109,13 @@ After `cargo update`, confirm `Cargo.lock` still points at the intended git rev 
 
 ## cross-rs
 
-Pin **0.2.5** from crates.io (matches MiSTer glibc 2.31 via our link setup):
+Pin **0.2.5** from crates.io. Builds use the checked-in
+`rust/Dockerfile.cross-armv7` through `rust/Cross.toml`; the image is based on
+Ubuntu 20.04 to match the MiSTer glibc 2.31 runtime:
 
 ```bash
 cargo install cross --version 0.2.5 --locked
 ```
 
-Docker image: `ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5`. Do not use `cargo install cross --git …` (that pulls the `:main` image).
+Do not use `cargo install cross --git ...` unless you deliberately also change
+the CI image/tooling assumptions.
