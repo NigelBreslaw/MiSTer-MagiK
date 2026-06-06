@@ -58,8 +58,8 @@ use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
-use crate::library_bench;
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
+use crate::library_bench;
 use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
@@ -399,8 +399,7 @@ pub fn run_ui(f: &mut Fpga) {
         }
         #[cfg(feature = "video")]
         "video_playback" => {
-            let app =
-                slint_ui::video_playback::VideoPlayback::new().expect("VideoPlayback::new");
+            let app = slint_ui::video_playback::VideoPlayback::new().expect("VideoPlayback::new");
             app.global::<slint_ui::video_playback::MisterUi>()
                 .set_scale(SLINT_UI_SCALE);
             configure_window(&ui, &window);
@@ -465,9 +464,9 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_confirm_title("".into());
     bridge.set_confirm_message("".into());
     bridge.set_confirm_selected(0);
-    bridge.set_game_systems(ModelRc::new(VecModel::from(
-        Vec::<slint_ui::launcher::GameSystem>::new(),
-    )));
+    bridge.set_game_systems(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::GameSystem,
+    >::new())));
     bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
     bridge.set_arcade_selected(0);

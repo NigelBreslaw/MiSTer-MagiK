@@ -175,6 +175,11 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 # Build only: rust/build-arm.sh  |  rust/build-arm.sh --device
 # Profiles: rust/BUILD.md
 
+# Fast host checks (do not compile Slint/AppKit)
+scripts/dev-rust fmt
+scripts/dev-rust test
+scripts/dev-rust check
+
 # One-time: boot straight into Slint launcher (see §7 — not via main=)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 
@@ -334,6 +339,14 @@ still owns recovery when running; if wedged, reboot always works).
   `{addr,len,ptr,reserved}` update; reads return status text
   (`rptr/wptr/len/comp`). A standalone `audio-tone` probe produced audible HDMI
   tone with MiSTer stopped, confirming Slint-owned boot can feed audio.
+- **Library scan must not count core helper payloads as games.** Some systems
+  store launchable-looking support files under `/media/fat/games/<system>/`,
+  e.g. `boot.rom`, `boot3.vhd`, `mister-boot.*`, `riscos.rom`, `kanji.rom`,
+  `uni-bioscd.rom`, and `Super Game Boy.sfc`. Filter these before writing or
+  grouping catalog discoveries; otherwise empty systems show as having 1-2 games.
+  Also treat raw `.rbf` core binaries and menu-level `.mgl` launchers in
+  `_Computer` / `_Console` / `_Other` / `_Utility` as helpers, while preserving
+  DOS game `.mgl` files whose payload is under `media/...`.
 - **Perf runs can be contaminated by a 30fps cadence.** We observed benchmark
   scenes sometimes starting in a bad 30fps/vsync phase after repeated Slint
   restarts or immediately after deploy/reboot, then recovering later. For
@@ -535,6 +548,12 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
   put rust/target/armv7-unknown-linux-gnueabihf/release-device/mister-magic-fb \
   /media/fat/mister-magic/mister-magic-fb
 ```
+
+**Host dev checks:** use `scripts/dev-rust fmt`, `scripts/dev-rust test`, and
+`scripts/dev-rust check` for routine local validation. These run the
+host-testable Rust library with `--no-default-features`, so pure logic tests do
+not compile the Slint UI binary or macOS AppKit code. Use `scripts/dev-rust
+build-ui` or `rust/build-arm.sh --fast` when you need the ARM Slint binary.
 
 Every `rust/build-arm.sh` run prints the binary size and appends a local,
 gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the

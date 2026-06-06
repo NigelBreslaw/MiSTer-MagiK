@@ -4,7 +4,7 @@
 //! changes. `last_usb_port` records where the pad was last seen; when it differs
 //! from the current port the setup UI can offer "existing controller" vs "new".
 
-use crate::input::PadInfo;
+use crate::input_info::PadInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

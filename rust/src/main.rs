@@ -22,17 +22,13 @@
 
 use std::ffi::CString;
 
-mod arcade_catalog;
 mod capture;
-mod controller_db;
 mod cpu_profile;
 mod fb;
 mod fpga;
 mod frame_profile;
 mod input;
-mod input_repeat;
 mod launcher;
-mod library_bench;
 mod mr_audio;
 mod preview_bench;
 mod preview_worker;
@@ -42,6 +38,8 @@ mod ui_runner;
 #[cfg(feature = "video")]
 mod video_player;
 mod vt;
+
+pub use mister_magic_fb::{arcade_catalog, controller_db, input_repeat, library_bench};
 
 use fb::{Display, Pixel};
 use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};

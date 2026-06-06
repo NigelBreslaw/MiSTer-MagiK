@@ -76,8 +76,7 @@ impl VideoFrameWorker {
                 loop {
                     let buffers = recycle_rx.try_recv().unwrap_or_default();
                     let audio_frames = audio_pacer.next_frames(frame_interval);
-                    let frame =
-                        player.next_frame_into(audio_frames, buffers.rgb, buffers.audio);
+                    let frame = player.next_frame_into(audio_frames, buffers.rgb, buffers.audio);
                     let failed = frame.is_err();
                     if tx.send(frame).is_err() || failed {
                         break;

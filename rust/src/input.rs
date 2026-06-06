@@ -5,6 +5,8 @@ use std::io::{self, Read};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
+pub use mister_magic_fb::input_info::PadInfo;
+
 const JS_EVENT_SIZE: usize = 8;
 const JS_EVENT_BUTTON: u8 = 0x01;
 const JS_EVENT_AXIS: u8 = 0x02;
@@ -102,24 +104,6 @@ pub struct PadPool {
     merged: PadState,
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
-}
-
-/// Static metadata read from sysfs / ioctl when the pad is opened.
-#[derive(Debug, Clone, Default)]
-pub struct PadInfo {
-    pub name: String,
-    pub vendor_id: String,
-    pub product_id: String,
-    pub serial: String,
-    pub phys: String,
-    /// USB topology port, e.g. `1-1.3` from sysfs path / `usb-…-1.3` from phys.
-    pub usb_port: String,
-    pub js_buttons: u8,
-    pub js_axes: u8,
-    pub evdev_key_count: usize,
-    pub evdev_abs_count: usize,
-    /// False when the kernel js API exposes no button slot beyond Home (js 12).
-    pub capture_available: bool,
 }
 
 impl PadPool {
