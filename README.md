@@ -1,8 +1,8 @@
-# mister-slint
+# MiSTer-MagiK
 
 A [Slint](https://slint.dev) front end for the **MiSTer FPGA**, built as a native
 **Rust** binary with a custom software renderer, vsync pacing, and direct FPGA
-framebuffer routing — no X11, Wayland, Zaparoo, or Python on device.
+framebuffer routing.
 
 The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
 `history/2026-5-2/framebuffer-experiments.md` for how we got there.
@@ -39,9 +39,6 @@ AGENTS.md                     operational guide (read this for MiSTer quirks)
 Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
 [uv](https://docs.astral.sh/uv/) (host SSH only).
 
-```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
-```
 
 See [`rust/BUILD.md`](rust/BUILD.md) for release profiles.
 
