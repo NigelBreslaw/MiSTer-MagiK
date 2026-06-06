@@ -293,8 +293,14 @@ Current proven flow (2026-06-06): `/media/fat/MiSTer` re-execs
 `mister_magic_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
 the Slint child and launches through Main. Metal Slug 3 reached the `NEOGEO`
 core via this path with fb mode `8888 1 640 240 2560` and no SDRAM/memory error
-strings in logs; HDMI visual confirmation is still required because the NeoGeo
-memory complaint is an on-screen core message.
+strings in logs. After `update_all`, the device was retested against
+`NeoGeo_20260603.rbf` with the same clean result; the user visually confirmed
+Metal Slug 3 runs correctly.
+
+Fork baseline policy: pin `main-mister/` to upstream Main_MiSTer release commits
+named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`, not arbitrary
+development commits. Current baseline is `Release 20260603`
+(`c73802332ff9c73659410084b6319ccd29f0b3aa`).
 
 Important gotchas:
 

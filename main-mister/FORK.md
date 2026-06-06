@@ -6,9 +6,9 @@ launcher experiments.
 ## Upstream
 
 - Upstream project: https://github.com/MiSTer-devel/Main_MiSTer
-- Imported baseline: `1f5337ee2cba8c62c361b1c044a2966b75c9ac67`
-- Baseline date: `2026-06-01T01:18:27+08:00`
-- Baseline subject: `CD-i: Added support for Subchannel RW (#1206)`
+- Imported baseline: `c73802332ff9c73659410084b6319ccd29f0b3aa`
+- Baseline date: `2026-06-03T21:38:21+08:00`
+- Baseline subject: `Release 20260603.`
 - License: GPL-3.0, preserved in `LICENSE`
 
 This fork is not an official MiSTer-devel build. The deployed experiment binary
@@ -54,8 +54,10 @@ necessary by a device experiment.
 
 When refreshing from upstream:
 
-1. Fetch or copy the new upstream Main_MiSTer tree.
-2. Reapply the patch map above.
-3. Update the baseline commit/date/subject in this file.
-4. Build with `main-mister/build-docker.sh`.
-5. Re-run the Main + Slint coexistence experiment on device.
+1. Find the latest upstream commit whose subject is `Release YYYYMMDD.` and
+   whose diff updates `releases/MiSTer_YYYYMMDD`.
+2. Copy that upstream tree into `main-mister/`, excluding `releases/`.
+3. Reapply the patch map above.
+4. Update the baseline commit/date/subject in this file.
+5. Build with `main-mister/build-docker.sh`.
+6. Re-run the Main + Slint coexistence experiment on device.
