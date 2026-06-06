@@ -3237,6 +3237,12 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		osd_timer = 0;
 	}
 
+	if (mm_launcher_active() && osd_event)
+	{
+		mm_launcher_yield_for_osd(KEY_MENU, osd_event == 1 ? 1 : 0);
+		return;
+	}
+
 
 	//mapping
 

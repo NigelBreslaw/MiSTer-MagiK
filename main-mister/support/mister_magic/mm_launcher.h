@@ -9,3 +9,4 @@ void mm_launcher_yield_for_osd(unsigned short key, int press);
 bool mm_launcher_handle_osd_key(unsigned short key, int press);
 bool mm_launcher_active(void);
 bool mm_launcher_configured(void);
+bool mm_launcher_suppresses_stock_osd(void);
