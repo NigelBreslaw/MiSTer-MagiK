@@ -22,7 +22,7 @@ This is not an official MiSTer-devel build. The experiment binary is deployed as
 - If `/media/fat/mister-magic/mister-magic-fb` exists, Main spawns:
 
 ```text
-/media/fat/mister-magic/mister-magic-fb ui debug 86400
+/media/fat/mister-magic/mister-magic-fb ui launcher 0
 ```
 
 - Main keeps polling while Slint is a child process.
@@ -72,9 +72,10 @@ when available and otherwise uses the Docker wrapper.
 - CRT support is not wired yet.
 - Input ownership is intentionally left in the experimental state so we can see
   what Main, Slint, and the OSD do without over-designing the first pass.
-- Escape-menu experiment: while the Slint child is active, `F12`/Menu yields
-  the framebuffer route back to Main before forwarding the normal OSD key. If
-  OSD closes or fails to open, Main restores Slint framebuffer routing.
+- Escape-menu experiment: while the Slint child is active, `F12`/Menu opens a
+  transparent two-option MiSTer Magik OSD over Slint. `Show MiSTer Menu` hands
+  off to the stock OSD; when the stock OSD closes, Main restores Slint
+  framebuffer routing. `Return to MiSTer Magik` simply closes the overlay.
   Normal logs only include OSD-relevant keys; create
   `/tmp/mister-magic-input-trace` on the device to log every `EV_KEY` code while
   the launcher child is active.
@@ -94,7 +95,7 @@ Experiment boot is now working on the test MiSTer:
 
 - `/media/fat/MiSTer` boots with `main=MiSTer_Magic`.
 - `/media/fat/MiSTer_Magic` initializes the menu core.
-- Main starts `/media/fat/mister-magic/mister-magic-fb ui debug 86400` as a
+- Main starts `/media/fat/mister-magic/mister-magic-fb ui launcher 0` as a
   child process.
 - The old inittab `mister-magic/boot.sh` handoff must be disabled for this
   experiment; the deploy script restores `::sysinit:/media/fat/MiSTer &`.
@@ -165,18 +166,19 @@ CRT-static effect, or wallpaper flash. If this works visually, the next step is
 to replace the placeholder rows with a navigable minimal escape menu.
 
 Visual result: confirmed on HDMI. The MiSTer Magic OSD appears over the Slint
-debug UI without the stock full-screen background. The Slint child still shows
-only the debug scene (`ui debug 86400`, including the flashing
-`Main alive + Slint child running` text); that is expected until the fork spawns
-`ui launcher` instead.
+UI without the stock full-screen background.
 
 Navigation follow-up: the overlay now has a tiny local state machine. While the
-overlay is visible, D-pad/arrow keys move the selected row, Enter/Space closes
-the placeholder action, and Menu/F12/Esc closes the overlay. Device logs confirm
-`KEY_DOWN` (`108`), `KEY_UP` (`103`), and `KEY_ENTER` (`28`) reach this handler
-and update the selected index.
+overlay is visible, D-pad/arrow keys move between `Show MiSTer Menu` and
+`Return to MiSTer Magik`. Enter/Space selects. `Show MiSTer Menu` closes the
+transparent overlay, opens the stock MiSTer OSD, and restores Slint after the
+stock OSD closes. While the stock OSD is open, Main stops intercepting the
+Menu/F12 event so the old menu can own its normal close behavior. `Return to
+MiSTer Magik` closes the transparent overlay.
+Device logs confirm `KEY_DOWN` (`108`), `KEY_UP` (`103`), and `KEY_ENTER`
+(`28`) reach this handler and update the selected index.
 
-Still to verify: visible highlight movement on HDMI, real actions for
-Scripts/Input Mapping/Video/Reboot, and a deliberate product mapping for the
-Retro-bit X/Menu button instead of relying on the current controller-generated
-`KEY_F12` or `KEY_MENU` path.
+Still to verify: real Slint launcher input while Main remains alive, stock OSD
+handoff/restore on-device from the two-option overlay, and a deliberate product
+mapping for the Retro-bit X/Menu button instead of relying on the current
+controller-generated `KEY_F12` or `KEY_MENU` path.

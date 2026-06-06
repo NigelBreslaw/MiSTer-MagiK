@@ -26,13 +26,12 @@ static bool s_init_pending = false;
 static bool s_gave_up = false;
 static bool s_overlay_visible = false;
 static int s_overlay_selected = 0;
+static bool s_stock_osd_active = false;
+static bool s_stock_osd_was_visible = false;
 
 static const char *s_overlay_items[] = {
-	"Return to Slint",
-	"Scripts",
-	"Input Mapping",
-	"Video / CRT",
-	"Reboot",
+	"Show MiSTer Menu",
+	"Return to MiSTer Magik",
 };
 static const int s_overlay_item_count = sizeof(s_overlay_items) / sizeof(s_overlay_items[0]);
 
@@ -82,7 +81,14 @@ bool mm_launcher_active(void)
 
 bool mm_launcher_suppresses_stock_osd(void)
 {
+	if (s_stock_osd_active)
+		return false;
 	return s_pid != 0 || s_init_pending || s_overlay_visible;
+}
+
+bool mm_launcher_stock_osd_active(void)
+{
+	return s_stock_osd_active;
 }
 
 static void kill_launcher(pid_t pid, int sig)
@@ -126,7 +132,12 @@ static void spawn(void)
 		return;
 	}
 
-	printf("mister_magic: spawning Slint debug UI: %s\n", s_launcher_path);
+	// If Main was re-entered/restarted, an old launcher child can survive with
+	// no matching pid in this process. Clear stale children before forking.
+	system("kill -TERM $(pidof mister-magic-fb) 2>/dev/null");
+	usleep(100000);
+
+	printf("mister_magic: spawning Slint launcher UI: %s\n", s_launcher_path);
 	log_line("spawn");
 	s_pid = fork();
 	if (s_pid < 0)
@@ -142,7 +153,7 @@ static void spawn(void)
 	{
 		setsid();
 		setenv("MISTER_MAGIC_PARENT", "main-mister", 1);
-		execl(s_launcher_path, s_launcher_path, "ui", "debug", "86400", NULL);
+		execl(s_launcher_path, s_launcher_path, "ui", "launcher", "0", NULL);
 		_exit(127);
 	}
 
@@ -155,15 +166,12 @@ static void draw_overlay_osd()
 	if (rows < 8) rows = 8;
 
 	OsdClear();
-	OsdSetTitle("MiSTer Magic");
+	OsdSetTitle("MiSTer Magik");
 	for (int i = 0; i < rows; i++) OsdWrite(i);
 
-	OsdWrite(2,  "        Return to Slint", s_overlay_selected == 0);
-	OsdWrite(4,  "        Scripts", s_overlay_selected == 1);
-	OsdWrite(5,  "        Input Mapping", s_overlay_selected == 2);
-	OsdWrite(6,  "        Video / CRT", s_overlay_selected == 3);
-	OsdWrite(8,  "        Reboot", s_overlay_selected == 4);
-	OsdWrite(rows - 1, "     D-pad moves, Menu exits");
+	OsdWrite(4,  "        Show MiSTer Menu", s_overlay_selected == 0);
+	OsdWrite(6,  "        Return to MiSTer Magik", s_overlay_selected == 1);
+	OsdWrite(rows - 1, "      D-pad moves, A selects");
 	OsdUpdate();
 	OsdEnable(DISABLE_KEYBOARD);
 }
@@ -173,6 +181,23 @@ static void close_overlay_osd()
 	OsdDisable();
 	s_overlay_visible = false;
 	focus_slint_framebuffer();
+}
+
+static void show_stock_mister_menu()
+{
+	FILE *f = fopen(s_log_path, "a");
+	if (f)
+	{
+		fprintf(f, "osd stock menu\n");
+		fclose(f);
+	}
+
+	OsdDisable();
+	s_overlay_visible = false;
+	s_stock_osd_active = true;
+	s_stock_osd_was_visible = false;
+	video_fb_enable(0);
+	menu_key_set(KEY_F12);
 }
 
 void mm_launcher_init_for_menu(void)
@@ -189,6 +214,21 @@ void mm_launcher_poll(void)
 {
 	if (s_pid)
 	{
+		if (s_stock_osd_active)
+		{
+			if (user_io_osd_is_visible())
+			{
+				s_stock_osd_was_visible = true;
+			}
+			else if (s_stock_osd_was_visible)
+			{
+				log_line("osd stock menu closed");
+				s_stock_osd_active = false;
+				s_stock_osd_was_visible = false;
+				focus_slint_framebuffer();
+			}
+		}
+
 		int status = 0;
 		if (waitpid(s_pid, &status, WNOHANG) == s_pid)
 		{
@@ -239,6 +279,8 @@ void mm_launcher_shutdown(void)
 	s_respawn_timer = 0;
 	s_overlay_visible = false;
 	s_overlay_selected = 0;
+	s_stock_osd_active = false;
+	s_stock_osd_was_visible = false;
 	OsdDisable();
 	video_fb_enable(0);
 }
@@ -254,6 +296,8 @@ void mm_launcher_prepare_for_launch(void)
 void mm_launcher_yield_for_osd(unsigned short key, int press)
 {
 	if (!s_pid)
+		return;
+	if (s_stock_osd_active)
 		return;
 	if (press != 1)
 		return;
@@ -312,8 +356,10 @@ bool mm_launcher_handle_osd_key(unsigned short key, int press)
 		break;
 	case KEY_ENTER:
 	case KEY_SPACE:
-		// Placeholder menu: every selectable action currently returns to Slint.
-		close_overlay_osd();
+		if (s_overlay_selected == 0)
+			show_stock_mister_menu();
+		else
+			close_overlay_osd();
 		break;
 	case KEY_ESC:
 	case KEY_MENU:
