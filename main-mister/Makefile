@@ -1,8 +1,7 @@
 # makefile to fail if any command in pipe is failed.
 SHELL = /bin/bash -o pipefail
 
-JOBS := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-MAKEFLAGS += "-j $(JOBS)"
+MAKEFLAGS += "-j $(shell nproc)"
 
 # using gcc version 10.2.1
 BASE    = arm-none-linux-gnueabihf
