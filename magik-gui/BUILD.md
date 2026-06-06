@@ -25,7 +25,7 @@ scripts/dev-rust check-arm-lib       # ARM --lib check, no Slint/UI
 scripts/dev-rust check-arm-ui        # ARM launcher/controller UI check
 scripts/dev-rust check-arm-ui-full   # ARM all-scenes UI check
 scripts/dev-rust build-arm-debug     # ARM launcher/controller debug binary
-scripts/dev-rust build-ui  # rust/build-arm.sh --fast
+scripts/dev-rust build-ui  # magik-gui/build-arm.sh --fast
 ```
 
 The host-testable library contains pure catalog/controller/repeat logic. The
@@ -49,20 +49,20 @@ still compile every benchmark scene.
 
 ```bash
 # Fast — default for bare build-arm.sh
-rust/build-arm.sh
+magik-gui/build-arm.sh
 # → target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb
 
 # Full MiSTer release (fat LTO + Cortex-A9 via RUSTFLAGS)
-rust/build-arm.sh --device
+magik-gui/build-arm.sh --device
 # → target/.../release-device/mister-magic-fb
 
 # Profiling build (symbols, pprof feature — do not ship)
-rust/build-arm.sh --profile
+magik-gui/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magic-fb
 # Run on device: scripts/profile-scene.sh full_motion 30
 
 # Video/audio benchmark build
-rust/build-arm.sh --fast --video
+magik-gui/build-arm.sh --fast --video
 # Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
 # Default media path on MiSTer: /media/fat/mister-magic/mslug3.mov
 
@@ -84,8 +84,8 @@ For subsystem-level size work, build an unstripped diagnostic binary and generat
 symbol reports:
 
 ```bash
-rust/build-arm.sh --profile
-rust/scripts/analyze-binary-size.sh
+magik-gui/build-arm.sh --profile
+magik-gui/scripts/analyze-binary-size.sh
 ```
 
 Reports are written to `build/binary-size-analysis/`:
@@ -98,7 +98,7 @@ Reports are written to `build/binary-size-analysis/`:
 ## Minimal FFmpeg
 
 `--video` builds do not use the broad `ffmpeg-the-third` FFmpeg builder. Instead,
-`build-arm.sh` runs `rust/scripts/build-minimal-ffmpeg.sh`, then passes
+`build-arm.sh` runs `magik-gui/scripts/build-minimal-ffmpeg.sh`, then passes
 `FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist` into `cross`.
 
 The minimal FFmpeg build enables only H.264-in-MOV/MP4 playback plus software
@@ -116,15 +116,15 @@ GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
 
 The matrix covers the local build modes that matter:
 
-- `rust/build-arm.sh --fast`
-- `rust/build-arm.sh --device`
-- `rust/build-arm.sh --fast --video`
-- `rust/build-arm.sh --device --video`
+- `magik-gui/build-arm.sh --fast`
+- `magik-gui/build-arm.sh --device`
+- `magik-gui/build-arm.sh --fast --video`
+- `magik-gui/build-arm.sh --device --video`
 
-Each job installs pinned `cross` 0.2.5, uses `rust/Dockerfile.cross-armv7` via
-`rust/Cross.toml`, caches Cargo registry/git data, caches the minimal FFmpeg tree
+Each job installs pinned `cross` 0.2.5, uses `magik-gui/Dockerfile.cross-armv7` via
+`magik-gui/Cross.toml`, caches Cargo registry/git data, caches the minimal FFmpeg tree
 for video jobs, records `build/binary-size.tsv`, checks the ARM ELF dynamic
-dependencies with `rust/scripts/check-arm-shared-libs.sh`, and uploads the binary
+dependencies with `magik-gui/scripts/check-arm-shared-libs.sh`, and uploads the binary
 plus size TSV as artifacts.
 
 The shared-library check intentionally fails if any `libav*`, `libswscale`, or
@@ -149,7 +149,7 @@ After `cargo update`, confirm `Cargo.lock` still points at the intended git rev 
 ## cross-rs
 
 Pin **0.2.5** from crates.io. Builds use the checked-in
-`rust/Dockerfile.cross-armv7` through `rust/Cross.toml`; the image is based on
+`magik-gui/Dockerfile.cross-armv7` through `magik-gui/Cross.toml`; the image is based on
 Ubuntu 20.04 to match the MiSTer glibc 2.31 runtime:
 
 ```bash

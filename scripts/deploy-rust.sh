@@ -37,7 +37,7 @@ for arg in "$@"; do
   esac
 done
 
-BIN="$HERE/rust/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magic-fb"
+BIN="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magic-fb"
 
 bytes() {
   stat -f%z "$1" 2>/dev/null || stat -c%s "$1"
@@ -55,7 +55,7 @@ human_bytes() {
 }
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"
-"$HERE/rust/build-arm.sh" "${BUILD_FLAG[@]}"
+"$HERE/magik-gui/build-arm.sh" "${BUILD_FLAG[@]}"
 
 LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"

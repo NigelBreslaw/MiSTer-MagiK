@@ -8,7 +8,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$HERE/rust"
+RUST_DIR="$HERE/magik-gui"
 BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magic-fb"
 REMOTE="/media/fat/mister-magic/mister-magic-fb"
 SSH="$HERE/scripts/mister_ssh.py"

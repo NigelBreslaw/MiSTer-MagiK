@@ -9,7 +9,7 @@ IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52
 
 if [ ! -f "$BIN" ]; then
   echo "ERROR: binary missing: $BIN" >&2
-  echo "Hint: build an unstripped diagnostic binary first: rust/build-arm.sh --profile" >&2
+  echo "Hint: build an unstripped diagnostic binary first: magik-gui/build-arm.sh --profile" >&2
   exit 1
 fi
 

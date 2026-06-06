@@ -14,12 +14,12 @@ The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
 | CPU / ABI | ARM Cortex-A9, `armv7l` hard-float (`gnueabihf`) |
 | glibc | **2.31** (matches the cross container) |
 | Display | `/dev/fb0`, 1920×1080, 32bpp (B,G,R,X); **no `/dev/dri`** |
-| Framebuffer routing | FPGA SPI `SET_FBUF` + `set_vga_fb` — see `rust/src/fpga.rs` |
+| Framebuffer routing | FPGA SPI `SET_FBUF` + `set_vga_fb` — see `magik-gui/src/fpga.rs` |
 
 ## Project layout
 
 ```
-rust/                         native frontend (mister-magic-fb)
+magik-gui/                         native frontend (mister-magic-fb)
   ui/launcher.slint           2×2 home grid + game launch
   ui/controller_test.slint    pad test scene
   src/launcher.rs             nav + fifo load_core game launch
@@ -40,7 +40,7 @@ Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
 [uv](https://docs.astral.sh/uv/) (host SSH only).
 
 
-See [`rust/BUILD.md`](rust/BUILD.md) for release profiles.
+See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.
 
 ## Boot into Slint (production)
 

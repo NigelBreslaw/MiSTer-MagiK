@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$ROOT/rust"
+RUST_DIR="$ROOT/magik-gui"
 OUT="$ROOT/build/debug-build-bench.tsv"
 
 SAMPLES=3

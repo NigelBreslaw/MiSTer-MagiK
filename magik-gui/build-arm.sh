@@ -1,7 +1,7 @@
 #!/bin/bash
 # Cross-compile the native MiSTer frontend for armv7 (the DE10-Nano's ARM core).
 #
-# Profiles (see rust/BUILD.md):
+# Profiles (see magik-gui/BUILD.md):
 #   ./build-arm.sh              → release (fast daily)
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --fast       → alias for release
@@ -77,7 +77,7 @@ if ! cross build "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG"; then
   exit 1
 fi
 if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
-  echo "ERROR: cross fell back to host cargo (Docker not used). Check Docker and run from rust/." >&2
+  echo "ERROR: cross fell back to host cargo (Docker not used). Check Docker and run from magik-gui/." >&2
   exit 1
 fi
 echo "==> cross build OK"

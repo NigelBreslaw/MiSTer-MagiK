@@ -8,7 +8,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUST_DIR="$HERE/rust"
+RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release
 BUILD_FLAG=()
 REMOTE="/media/fat/mister-magic/mister-magic-fb"
@@ -16,7 +16,7 @@ BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
 
-# Slint scenes (see rust/ui/bench/README.md)
+# Slint scenes (see magik-gui/ui/bench/README.md)
 BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll dirty_band)
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
 VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magic/mslug3.mov}"

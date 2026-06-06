@@ -39,8 +39,8 @@ htmlcov/
 /history/toolchain-bench/*-ui.log
 
 # Rust build output (the native frontend crate)
-/rust/target/
-/rust/build/
+/magik-gui/target/
+/magik-gui/build/
 *.whl
 *.tar.gz
 *.tar.zst
