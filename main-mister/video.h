@@ -65,6 +65,7 @@ int   hasAPI1_5();
 
 void video_fb_enable(int enable, int n = 0);
 int video_fb_state();
+void video_boot_analytics_snapshot(const char *reason);
 void video_menu_bg(int n, int idle = 0);
 int video_bg_has_picture();
 int video_chvt(int num);

@@ -280,6 +280,20 @@ impl DirtyRect {
     }
 }
 
+fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
+    match rect {
+        Some(rect) => format!(
+            "x0={} y0={} x1={} y1={} rows={}",
+            rect.x0,
+            rect.y0,
+            rect.x1,
+            rect.y1,
+            rect.rows()
+        ),
+        None => "none".to_string(),
+    }
+}
+
 fn dirty_rect(region: &PhysicalRegion, render_w: usize, render_h: usize) -> Option<DirtyRect> {
     let o = region.bounding_box_origin();
     let s = region.bounding_box_size();
@@ -326,7 +340,15 @@ fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
 
 macro_rules! with_scene_app {
     ($module:ident::$ty:ident, $ui:expr, $window:expr, $app:ident, $body:block) => {{
+        boot_analytics::event(
+            "app_construct_attempt",
+            format!("scene_type={}", stringify!($module::$ty)),
+        );
         let $app = slint_ui::$module::$ty::new().expect(stringify!($ty));
+        boot_analytics::event(
+            "app_construct",
+            format!("scene_type={} ok=1", stringify!($module::$ty)),
+        );
         $app.global::<slint_ui::$module::MisterUi>()
             .set_scale(SLINT_UI_SCALE);
         configure_window($ui, $window);
@@ -350,6 +372,7 @@ pub fn run_ui(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
+    disp.record_visual_sample("after_display_open_before_initial_route");
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         println!("MiSTer_MagiK parent detected; Slint reasserting 1080p framebuffer route");
     }
@@ -362,6 +385,7 @@ pub fn run_ui(f: &mut Fpga) {
         "initial_fb_enable_direct_done",
         format!("support_flag={flag}"),
     );
+    disp.record_visual_sample("after_initial_route_before_slint_draw");
     f.set_audio_volume(0);
     boot_analytics::event("set_audio_volume", "attenuation=0");
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
@@ -2060,6 +2084,16 @@ fn run_launcher_loop(
         Ok(loaded) => {
             print_startup_event(
                 start,
+                "catalog_cache_load",
+                format!(
+                    "ok=1 games={} rows={} load_us={}",
+                    loaded.catalog.len(),
+                    loaded.rows,
+                    loaded.us
+                ),
+            );
+            print_startup_event(
+                start,
                 "library_db_loaded",
                 format!(
                     "games={} rows={} load_us={}",
@@ -2071,12 +2105,13 @@ fn run_launcher_loop(
             loaded.catalog
         }
         Err(e) => {
+            print_startup_event(start, "catalog_cache_load", format!("ok=0 error={e}"));
             print_startup_event(start, "library_db_miss", e);
             empty_arcade_catalog(&arcade_root)
         }
     };
     let mut catalog_ready = !catalog.games.is_empty();
-    print_startup_event(start, "library_worker_started", &arcade_root);
+    print_startup_event(start, "catalog_worker_start", &arcade_root);
     let catalog_rx = start_library_catalog_worker(arcade_root.clone(), catalog_ready);
     let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -2104,6 +2139,10 @@ fn run_launcher_loop(
     );
     window.request_redraw();
     let mut first_frame_logged = false;
+    let mut first_render_logged = false;
+    let mut first_vsync_logged = false;
+    let mut first_copy_logged = false;
+    let mut stable_frame_logged = false;
     while secs == 0 || start.elapsed().as_secs() < secs {
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
         let setup_active = setup.is_active();
@@ -2440,8 +2479,19 @@ fn run_launcher_loop(
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
+        if !first_render_logged {
+            first_render_logged = true;
+            boot_analytics::event(
+                "first_render",
+                format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
+            );
+        }
         disp.wait_vsync();
         let frame_t3 = Instant::now();
+        if !first_vsync_logged {
+            first_vsync_logged = true;
+            boot_analytics::event("first_vsync", format!("frame={frames}"));
+        }
         let mut copied_rows = 0u32;
         if launching {
             copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
@@ -2451,10 +2501,34 @@ fn run_launcher_loop(
             copy_cached_rect(disp, ui, &cached, rect);
         }
         let frame_t4 = Instant::now();
+        if copied_rows > 0 && !first_copy_logged {
+            first_copy_logged = true;
+            boot_analytics::event(
+                "first_copy",
+                format!(
+                    "frame={frames} rows={copied_rows} dirty_rect={}",
+                    format_dirty_rect(this_rect)
+                ),
+            );
+            disp.record_visual_sample("after_first_copy");
+        }
+        if frames == 30 && !stable_frame_logged {
+            stable_frame_logged = true;
+            boot_analytics::event("stable_frame", "frame=30");
+            disp.record_visual_sample("stable_frame_30");
+        } else if frames == 120 {
+            disp.record_visual_sample("sample_frame_120");
+        } else if frames == 240 {
+            disp.record_visual_sample("sample_frame_240");
+        }
         let reasserted = false;
         if let Some(profile) = boot_frame_profile.as_mut() {
             let (edge1_hash, edge1_nonzero) = disp.right_edge_signature(1);
             let (edge8_hash, edge8_nonzero) = disp.right_edge_signature(8);
+            let (left8_hash, left8_nonzero) = disp.left_edge_signature(8);
+            let (top8_hash, top8_nonzero) = disp.top_edge_signature(8);
+            let (bottom8_hash, bottom8_nonzero) = disp.bottom_edge_signature(8);
+            let (full_sample_hash, full_sample_nonzero) = disp.sampled_signature();
             profile.record(
                 frames,
                 (frame_t1 - frame_t0).as_micros() as u64,
@@ -2467,6 +2541,14 @@ fn run_launcher_loop(
                 edge1_nonzero,
                 edge8_hash,
                 edge8_nonzero,
+                left8_hash,
+                left8_nonzero,
+                top8_hash,
+                top8_nonzero,
+                bottom8_hash,
+                bottom8_nonzero,
+                full_sample_hash,
+                full_sample_nonzero,
             );
         }
         if !first_frame_logged {

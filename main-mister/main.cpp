@@ -34,11 +34,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "scheduler.h"
 #include "osd.h"
 #include "offload.h"
+#include "support/mister_magik/alt_launcher.h"
 
 const char *version = "$VER:" VDATE;
 
 int main(int argc, char *argv[])
 {
+	mister_magik_boot_analytics_event("main", "main_start", "argc=%d", argc);
+
 	// Always pin main worker process to core #1 as core #0 is the
 	// hardware interrupt handler in Linux.  This reduces idle latency
 	// in the main loop by about 6-7x.
@@ -71,6 +74,7 @@ int main(int argc, char *argv[])
 
 	FindStorage();
 	user_io_init((argc > 1) ? argv[1] : "",(argc > 2) ? argv[2] : NULL);
+	mister_magik_boot_analytics_event("main", "user_io_init_done", "argc=%d", argc);
 
 #ifdef USE_SCHEDULER
 	scheduler_init();

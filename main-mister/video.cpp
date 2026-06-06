@@ -81,6 +81,7 @@ static int brd_y = 0;
 
 static int menu_bg = 0;
 static int menu_bgn = 0;
+static int bg_has_picture = 0;
 
 VideoInfo current_video_info;
 
@@ -3386,6 +3387,21 @@ int video_fb_state()
 	return fb_enabled;
 }
 
+void video_boot_analytics_snapshot(const char *reason)
+{
+	const char *owner = "core";
+	if (fb_enabled)
+	{
+		owner = fb_num ? "menu_bg" : "fb0";
+	}
+	mister_magik_boot_analytics_event(
+	    "main-video",
+	    "visible_owner",
+	    "reason=%s owner=%s fb_enabled=%d fb_num=%d fb_width=%d fb_height=%d direct_video=%d is_menu=%d menu_bg=%d menu_bgn=%d bg_has_picture=%d",
+	    reason ? reason : "unknown", owner, fb_enabled, fb_num, fb_width, fb_height,
+	    cfg.direct_video, is_menu(), menu_bg, menu_bgn, bg_has_picture);
+}
+
 
 static void video_fb_config()
 {
@@ -3712,7 +3728,6 @@ static Imlib_Image load_bg()
 
 static Imlib_Image *bg = 0;
 static Imlib_Image menubg = 0;
-static int bg_has_picture = 0;
 extern uint8_t  _binary_logo_png_start[], _binary_logo_png_end[];
 
 void video_menu_bg(int n, int idle)
@@ -3723,6 +3738,7 @@ void video_menu_bg(int n, int idle)
 	static int cached_idle = 0;
 	int requested_n = n;
 	int requested_idle = idle;
+	const char *draw_kind = "none";
 	mister_magik_boot_analytics_event(
 	    "main-video",
 	    "video_menu_bg_start",
@@ -3817,6 +3833,7 @@ void video_menu_bg(int n, int idle)
 			switch (n)
 			{
 			case 1:
+				draw_kind = "wallpaper_or_checkers";
 				if (!menubg) menubg = load_bg();
 				if (menubg)
 				{
@@ -3845,21 +3862,27 @@ void video_menu_bg(int n, int idle)
 				draw_checkers();
 				break;
 			case 2:
+				draw_kind = "horizontal_bars_1";
 				draw_hbars1();
 				break;
 			case 3:
+				draw_kind = "horizontal_bars_2";
 				draw_hbars2();
 				break;
 			case 4:
+				draw_kind = "vertical_bars_1";
 				draw_vbars1();
 				break;
 			case 5:
+				draw_kind = "vertical_bars_2";
 				draw_vbars2();
 				break;
 			case 6:
+				draw_kind = "spectrum";
 				draw_spectrum();
 				break;
 			case 7:
+				draw_kind = "black";
 				draw_black();
 				break;
 			}
@@ -3976,8 +3999,9 @@ void video_menu_bg(int n, int idle)
 	mister_magik_boot_analytics_event(
 	    "main-video",
 	    "video_menu_bg_done",
-	    "requested_n=%d requested_idle=%d actual_n=%d actual_idle=%d menu_bg=%d menu_bgn=%d bg_has_picture=%d",
-	    requested_n, requested_idle, n, idle, menu_bg, menu_bgn, bg_has_picture);
+	    "requested_n=%d requested_idle=%d actual_n=%d actual_idle=%d menu_bg=%d menu_bgn=%d bg_has_picture=%d draw_kind=%s",
+	    requested_n, requested_idle, n, idle, menu_bg, menu_bgn, bg_has_picture, draw_kind);
+	video_boot_analytics_snapshot("video_menu_bg_done");
 }
 
 void dbg_draw_cursor(int x, int y)
