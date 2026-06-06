@@ -72,6 +72,12 @@ when available and otherwise uses the Docker wrapper.
 - CRT support is not wired yet.
 - Input ownership is intentionally left in the experimental state so we can see
   what Main, Slint, and the OSD do without over-designing the first pass.
+- Escape-menu experiment: while the Slint child is active, `F12`/Menu yields
+  the framebuffer route back to Main before forwarding the normal OSD key. If
+  OSD closes or fails to open, Main restores Slint framebuffer routing.
+  Normal logs only include OSD-relevant keys; create
+  `/tmp/mister-magic-input-trace` on the device to log every `EV_KEY` code while
+  the launcher child is active.
 
 ## Release Baseline Policy
 
@@ -110,8 +116,8 @@ Observed after launch:
 ```
 
 No `Not enough memory` or `SDRAM config not found` strings appeared in device
-logs. Visual HDMI confirmation is still required because the NeoGeo error is an
-on-screen core message, not a normal Linux log line.
+logs. Visual HDMI confirmation was completed on 2026-06-06: Metal Slug 3 boots
+and runs correctly through Main-as-parent.
 
 After `update_all` on 2026-06-06, the test MiSTer has stock Main/menu/core
 release files from 20260603, including `NeoGeo_20260603.rbf`. The device's
@@ -134,3 +140,21 @@ Retesting Metal Slug 3 through `mister_magic_launch` produced:
 ```
 
 No `Not enough memory` or `SDRAM config not found` strings appeared in logs.
+
+Escape-menu test:
+
+- With the Slint debug child running, the Retro-bit/controller path generated
+  `KEY_F12` (`code=88`) through Main's input path.
+- Main classified it as a menu event and called the OSD-yield hook:
+
+```text
+user_io_kbd key=88 press=1 menu_event=1 visible=0
+osd yield key=88 press=1 visible=0
+user_io_kbd key=88 press=0 menu_event=1 visible=1
+osd yield key=88 press=0 visible=1
+```
+
+This proves the fork can hand the framebuffer route back to Main and open the
+OSD over the Slint child. Still to verify: close/restore behavior after the OSD
+is dismissed, and a deliberate product mapping for the Retro-bit X/Menu button
+instead of relying on the current controller-generated `KEY_F12` path.
