@@ -227,7 +227,7 @@ pub fn build_with_options(
     report("Indexing arcade…", "Sorting…");
     {
         let t = Instant::now();
-        games.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        games.sort_by_cached_key(|game| game.title.to_lowercase());
         timings.sort_catalog = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
             count: games.len() as u64,
