@@ -9,6 +9,7 @@
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
 use crate::fpga::FB_SIZE_PX;
+use mister_magic_fb::framebuffer_copy;
 use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
 use std::fs::OpenOptions;
 use std::io;
@@ -329,32 +330,41 @@ impl Display {
             return;
         }
         if scale == 2 {
-            self.copy_rect_2x_at(0, src_y0 * 2, src, src_w, 0, src_y0, src_w, src_y1);
+            let dst_w = self.w;
+            let dst_h = self.h;
+            let dst = self.buffer_mut();
+            framebuffer_copy::copy_rect_2x_to(
+                dst,
+                dst_w,
+                dst_h,
+                0,
+                src_y0 * 2,
+                src,
+                src_w,
+                0,
+                src_y0,
+                src_w,
+                src_y1,
+            );
             return;
         }
         let dst_w = self.w;
         let dst_h = self.h;
         let dst = self.buffer_mut();
-        for sy in src_y0..src_y1 {
-            let src_row = &src[sy * src_w..(sy + 1) * src_w];
-            let py0 = sy * scale;
-            for dy in 0..scale {
-                let py = py0 + dy;
-                if py >= dst_h {
-                    break;
-                }
-                let dst_row = &mut dst[py * dst_w..(py + 1) * dst_w];
-                for (sx, &color) in src_row.iter().enumerate() {
-                    let px0 = sx * scale;
-                    for dx in 0..scale {
-                        let dst_x = px0 + dx;
-                        if dst_x < dst_w {
-                            dst_row[dst_x] = color;
-                        }
-                    }
-                }
-            }
-        }
+        framebuffer_copy::copy_rect_scaled_to(
+            dst,
+            dst_w,
+            dst_h,
+            0,
+            src_y0 * scale,
+            scale,
+            src,
+            src_w,
+            0,
+            src_y0,
+            src_w,
+            src_y1,
+        );
     }
 
     /// Copy logical rect [src_x0,src_x1) × [src_y0,src_y1) from `src` into the fb.
@@ -390,7 +400,13 @@ impl Display {
             return;
         }
         if scale == 2 {
-            self.copy_rect_2x_at(
+            let dst_w = self.w;
+            let dst_h = self.h;
+            let dst = self.buffer_mut();
+            framebuffer_copy::copy_rect_2x_to(
+                dst,
+                dst_w,
+                dst_h,
                 src_x0 * 2,
                 src_y0 * 2,
                 src,
@@ -406,26 +422,20 @@ impl Display {
         let dst_w = self.w;
         let dst_h = self.h;
         let dst = self.buffer_mut();
-        for sy in src_y0..src_y1 {
-            let src_row = &src[sy * src_w..(sy + 1) * src_w];
-            let py0 = sy * scale;
-            for dy in 0..scale {
-                let py = py0 + dy;
-                if py >= dst_h {
-                    break;
-                }
-                let dst_row = &mut dst[py * dst_w..(py + 1) * dst_w];
-                for (sx, &color) in src_row[src_x0..src_x1].iter().enumerate() {
-                    let px0 = (src_x0 + sx) * scale;
-                    for dx in 0..scale {
-                        let dst_x = px0 + dx;
-                        if dst_x < dst_w {
-                            dst_row[dst_x] = color;
-                        }
-                    }
-                }
-            }
-        }
+        framebuffer_copy::copy_rect_scaled_to(
+            dst,
+            dst_w,
+            dst_h,
+            src_x0 * scale,
+            src_y0 * scale,
+            scale,
+            src,
+            src_w,
+            src_x0,
+            src_y0,
+            src_x1,
+            src_y1,
+        );
     }
 
     pub fn wait_vsync(&self) {
@@ -480,86 +490,20 @@ impl Display {
             return;
         }
         if scale == 2 {
-            self.copy_rect_2x_at(dst_x, dst_y, src, src_w, 0, 0, src_w, src_h);
+            let dst_w = self.w;
+            let dst_h = self.h;
+            let dst = self.buffer_mut();
+            framebuffer_copy::copy_rect_2x_to(
+                dst, dst_w, dst_h, dst_x, dst_y, src, src_w, 0, 0, src_w, src_h,
+            );
             return;
         }
         let dst_w = self.w;
         let dst_h = self.h;
         let dst = self.buffer_mut();
-        for sy in 0..src_h {
-            let src_row = &src[sy * src_w..(sy + 1) * src_w];
-            let py0 = dst_y + sy * scale;
-            for dy in 0..scale {
-                let py = py0 + dy;
-                if py >= dst_h {
-                    break;
-                }
-                let dst_row = &mut dst[py * dst_w..(py + 1) * dst_w];
-                for (sx, &color) in src_row.iter().enumerate() {
-                    let px0 = dst_x + sx * scale;
-                    for dx in 0..scale {
-                        let px = px0 + dx;
-                        if px < dst_w {
-                            dst_row[px] = color;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn copy_rect_2x_at(
-        &mut self,
-        dst_x: usize,
-        dst_y: usize,
-        src: &[Pixel],
-        src_w: usize,
-        src_x0: usize,
-        src_y0: usize,
-        src_x1: usize,
-        src_y1: usize,
-    ) {
-        if src_x1 <= src_x0 || src_y1 <= src_y0 {
-            return;
-        }
-        let dst_w = self.w;
-        let dst_h = self.h;
-        let dst = self.buffer_mut();
-        for sy in src_y0..src_y1 {
-            let py0 = dst_y + (sy - src_y0) * 2;
-            if py0 >= dst_h {
-                break;
-            }
-            let src_row = &src[sy * src_w + src_x0..sy * src_w + src_x1];
-            let row0_start = py0 * dst_w + dst_x;
-            let copy_w = (src_row.len() * 2).min(dst_w.saturating_sub(dst_x));
-            if copy_w == 0 {
-                continue;
-            }
-            {
-                let row0 = &mut dst[row0_start..row0_start + copy_w];
-                for (sx, &color) in src_row.iter().enumerate() {
-                    let dx = sx * 2;
-                    if dx + 1 >= copy_w {
-                        break;
-                    }
-                    row0[dx] = color;
-                    row0[dx + 1] = color;
-                }
-            }
-            if py0 + 1 < dst_h {
-                let row1_start = (py0 + 1) * dst_w + dst_x;
-                let row1 = &mut dst[row1_start..row1_start + copy_w];
-                for (sx, &color) in src_row.iter().enumerate() {
-                    let dx = sx * 2;
-                    if dx + 1 >= copy_w {
-                        break;
-                    }
-                    row1[dx] = color;
-                    row1[dx + 1] = color;
-                }
-            }
-        }
+        framebuffer_copy::copy_rect_scaled_to(
+            dst, dst_w, dst_h, dst_x, dst_y, scale, src, src_w, 0, 0, src_w, src_h,
+        );
     }
 }
 
