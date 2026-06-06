@@ -1,11 +1,12 @@
 import { MisterWindow, MisterUi } from "mister_window.slint";
+import { ListView } from "std-widgets.slint";
 export { MisterUi }
 import { MisterBridge } from "mister_bridge.slint";
 import { ControllerPanel } from "controller_test.slint";
 import { SetupOverlay } from "controller_setup.slint";
 import { ArcadeListScreen } from "arcade_list.slint";
 export { MisterBridge }
-export { ArcadeGame } from "arcade_game.slint";
+export { ArcadeGame, GameSystem } from "arcade_game.slint";
 import "fonts/PressStart2P-Regular.ttf";
 
 component LauncherTile inherits Rectangle {
@@ -74,6 +75,13 @@ component SettingsButton inherits Rectangle {
 }
 
 component HomeGrid inherits Rectangle {
+    property <int> s: MisterUi.scale;
+    property <length> tile-width: 220px * s;
+    property <length> tile-gap: 16px * s;
+    property <length> content-width: MisterBridge.game-systems.length * tile-width
+        + Math.max(0, MisterBridge.game-systems.length - 1) * tile-gap;
+    property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
+
     VerticalLayout {
         padding: 24px;
         spacing: 16px;
@@ -94,26 +102,31 @@ component HomeGrid inherits Rectangle {
             }
 
             SettingsButton {
-                focused: MisterBridge.selected-index == 2;
+                focused: MisterBridge.settings-focused;
             }
         }
 
-        HorizontalLayout {
+        system-list := ListView {
             vertical-stretch: 1;
-            spacing: 16px;
+            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            viewport-width: root.content-width;
+            viewport-height: self.height;
+            viewport-x: -scroll-x;
 
-            LauncherTile {
-                vertical-stretch: 1;
-                label: "Controller Test";
-                subtitle: "Press A";
-                focused: MisterBridge.selected-index == 0;
-            }
+            for _ in 1: Rectangle {
+                width: root.content-width;
+                height: parent.height;
+                background: transparent;
 
-            LauncherTile {
-                vertical-stretch: 1;
-                label: "Arcade";
-                subtitle: MisterBridge.catalog-scan-visible ? "Scanning..." : MisterBridge.arcade-games.length + " games";
-                focused: MisterBridge.selected-index == 1;
+                for system[i] in MisterBridge.game-systems: LauncherTile {
+                    x: i * (root.tile-width + root.tile-gap);
+                    width: root.tile-width;
+                    height: parent.height;
+                    label: system.title;
+                    subtitle: system.count + " games";
+                    focused: !MisterBridge.settings-focused && MisterBridge.selected-index == i;
+                }
             }
         }
 
@@ -221,15 +234,21 @@ component SettingsScreen inherits Rectangle {
         }
 
         SettingsRow {
+            label: "Controller Test";
+            detail: "Open joypad tester";
+            focused: MisterBridge.settings-selected == 0;
+        }
+
+        SettingsRow {
             label: "Reset Database";
             detail: "Delete library database and reboot";
-            focused: MisterBridge.settings-selected == 0;
+            focused: MisterBridge.settings-selected == 1;
         }
 
         SettingsRow {
             label: "Restart";
             detail: "Reboot the MiSTer";
-            focused: MisterBridge.settings-selected == 1;
+            focused: MisterBridge.settings-selected == 2;
         }
 
         Rectangle { vertical-stretch: 1; background: transparent; }

@@ -3,7 +3,7 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
+use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
@@ -426,11 +426,21 @@ pub fn load_arcade_catalog_from_sqlite(
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
         .prepare(
-            "SELECT title, launch_ref, COALESCE(image_path,''), has_image
+            "SELECT title, launch_ref, COALESCE(image_path,''), has_image,
+                    CASE
+                      WHEN category='Arcade'
+                       AND (platform_id='neogeo'
+                         OR lower(core_id) IN ('neogeo', 'neo geo', 'neo-geo')
+                         OR hardware_id='snk-neo-geo'
+                         OR lower(hardware_id) LIKE '%neo%geo%') THEN 'neogeo'
+                      WHEN category='Arcade' THEN 'arcade'
+                      WHEN platform_id='' THEN 'unknown'
+                      ELSE platform_id
+                    END
              FROM discoveries
-             WHERE category='Arcade' AND source_kind='mra'
+             WHERE launch_ref != ''
              ORDER BY lower(title)
-             LIMIT 5000",
+             LIMIT 20000",
         )
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
@@ -440,6 +450,7 @@ pub fn load_arcade_catalog_from_sqlite(
                 mra_path: row.get::<_, String>(1)?,
                 image_path: row.get::<_, String>(2)?,
                 has_image: row.get::<_, i64>(3)? != 0,
+                system_id: row.get::<_, String>(4)?,
             })
         })
         .map_err(|e| format!("query arcade catalog: {e}"))?;
@@ -448,8 +459,13 @@ pub fn load_arcade_catalog_from_sqlite(
         games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
     let rows = games.len();
+    let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
-        catalog: ArcadeCatalog { root, games },
+        catalog: ArcadeCatalog {
+            root,
+            games,
+            systems,
+        },
         us: t.elapsed().as_micros() as u64,
         rows,
     })
