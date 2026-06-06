@@ -2,21 +2,21 @@
 component ConfigRow inherits HorizontalLayout {
     in property <string> label;
     in property <string> value;
-    spacing: 24px;
-    padding: 6px;
+    spacing: 12px;
+    padding: 3px;
 
     Text {
         text: label;
         color: #9080a8;
-        font-size: 32px;
-        min-width: 260px;
+        font-size: 16px;
+        min-width: 130px;
         horizontal-alignment: left;
     }
 
     Text {
         text: value;
         color: #e8e0f0;
-        font-size: 32px;
+        font-size: 16px;
         horizontal-alignment: left;
         wrap: word-wrap;
     }
@@ -37,58 +37,58 @@ export component SetupOverlay inherits Rectangle {
     background: #1a1424e0;
 
     VerticalLayout {
-        padding: 48px;
-        spacing: 24px;
+        padding: 24px;
+        spacing: 12px;
         alignment: center;
 
         Text {
             text: title;
             color: #e8e0f0;
-            font-size: 48px;
+            font-size: 24px;
             horizontal-alignment: center;
         }
 
         if phase != 4 && phase != 5 : Text {
             text: subtitle;
             color: #9080a8;
-            font-size: 32px;
+            font-size: 16px;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
 
         if phase == 2 : HorizontalLayout {
-            spacing: 48px;
+            spacing: 24px;
             alignment: center;
 
             Rectangle {
-                width: 360px;
-                height: 120px;
-                border-radius: 16px;
-                border-width: 4px;
+                width: 180px;
+                height: 60px;
+                border-radius: 8px;
+                border-width: 2px;
                 border-color: list-selected == 0 ? #06d6a0 : #5c4a72;
                 background: list-selected == 0 ? #2a2236 : #1e1828;
 
                 Text {
                     text: "New controller";
                     color: list-selected == 0 ? #06d6a0 : #e8e0f0;
-                    font-size: 32px;
+                    font-size: 16px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
             }
 
             Rectangle {
-                width: 360px;
-                height: 120px;
-                border-radius: 16px;
-                border-width: 4px;
+                width: 180px;
+                height: 60px;
+                border-radius: 8px;
+                border-width: 2px;
                 border-color: list-selected == 1 ? #06d6a0 : #5c4a72;
                 background: list-selected == 1 ? #2a2236 : #1e1828;
 
                 Text {
                     text: "Existing controller";
                     color: list-selected == 1 ? #06d6a0 : #e8e0f0;
-                    font-size: 32px;
+                    font-size: 16px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -96,21 +96,21 @@ export component SetupOverlay inherits Rectangle {
         }
 
         if phase == 3 : VerticalLayout {
-            spacing: 12px;
+            spacing: 6px;
             alignment: center;
 
             for item[i] in list-items : Rectangle {
-                width: 900px;
-                height: 72px;
-                border-radius: 12px;
-                border-width: list-selected == i ? 4px : 2px;
+                width: 450px;
+                height: 36px;
+                border-radius: 6px;
+                border-width: list-selected == i ? 2px : 1px;
                 border-color: list-selected == i ? #06d6a0 : #5c4a72;
                 background: list-selected == i ? #2a2236 : #1e1828;
 
                 Text {
                     text: item;
                     color: list-selected == i ? #06d6a0 : #e8e0f0;
-                    font-size: 32px;
+                    font-size: 16px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -118,22 +118,22 @@ export component SetupOverlay inherits Rectangle {
         }
 
         if phase == 4 : VerticalLayout {
-            spacing: 16px;
+            spacing: 8px;
             vertical-stretch: 1;
 
             Text {
                 text: subtitle;
                 color: #06d6a0;
-                font-size: 32px;
+                font-size: 16px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
             Rectangle {
-                width: 1100px;
+                width: 700px;
                 vertical-stretch: 1;
-                border-radius: 12px;
-                border-width: 2px;
+                border-radius: 6px;
+                border-width: 1px;
                 border-color: #5c4a72;
                 background: #1e1828;
 
@@ -142,8 +142,8 @@ export component SetupOverlay inherits Rectangle {
                     height: 100%;
 
                     VerticalLayout {
-                        padding: 20px;
-                        spacing: 2px;
+                        padding: 10px;
+                        spacing: 1px;
 
                         for label[i] in config-labels : ConfigRow {
                             label: label;
@@ -155,40 +155,40 @@ export component SetupOverlay inherits Rectangle {
         }
 
         if phase == 5 : VerticalLayout {
-            spacing: 24px;
+            spacing: 12px;
             alignment: center;
 
             Text {
                 text: subtitle;
                 color: #9080a8;
-                font-size: 32px;
+                font-size: 16px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
             VerticalLayout {
-                spacing: 8px;
+                spacing: 4px;
                 alignment: center;
 
                 Text {
                     text: "Name";
                     color: #9080a8;
-                    font-size: 16px;
+                    font-size: 8px;
                     horizontal-alignment: left;
                 }
 
                 Rectangle {
-                    width: 900px;
-                    height: 72px;
-                    border-radius: 12px;
-                    border-width: 2px;
+                    width: 450px;
+                    height: 36px;
+                    border-radius: 6px;
+                    border-width: 1px;
                     border-color: #5c4a72;
                     background: #1e1828;
 
                     Text {
                         text: setup-name;
                         color: #e8e0f0;
-                        font-size: 32px;
+                        font-size: 16px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         wrap: word-wrap;
@@ -197,28 +197,28 @@ export component SetupOverlay inherits Rectangle {
             }
 
             VerticalLayout {
-                spacing: 8px;
+                spacing: 4px;
                 alignment: center;
 
                 Text {
                     text: "Type";
                     color: #9080a8;
-                    font-size: 16px;
+                    font-size: 8px;
                     horizontal-alignment: left;
                 }
 
                 Rectangle {
-                    width: 900px;
-                    height: 72px;
-                    border-radius: 12px;
-                    border-width: 4px;
+                    width: 450px;
+                    height: 36px;
+                    border-radius: 6px;
+                    border-width: 2px;
                     border-color: #06d6a0;
                     background: #2a2236;
 
                     Text {
                         text: setup-kind-label;
                         color: #06d6a0;
-                        font-size: 32px;
+                        font-size: 16px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -234,7 +234,7 @@ export component SetupOverlay inherits Rectangle {
                 : phase == 5 ? "D-pad: change type  ·  A: save"
                 : "";
             color: #706080;
-            font-size: 16px;
+            font-size: 8px;
             horizontal-alignment: center;
         }
     }

@@ -63,7 +63,7 @@ echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 echo "==> Deploying $BIN -> $REMOTE"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
+  uv run python "$HERE/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   uv run python "$HERE/scripts/mister_ssh.py" put "$BIN" "$REMOTE.upload"

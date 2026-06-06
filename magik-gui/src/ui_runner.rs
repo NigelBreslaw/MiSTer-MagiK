@@ -342,13 +342,10 @@ pub fn run_ui(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
-    let main_parent = std::env::var_os("MISTER_MAGIK_PARENT").is_some();
-    let flag = if main_parent {
-        println!("fb route owned by MiSTer_MagiK parent; rendering into /dev/fb0");
-        0
-    } else {
-        f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0))
-    };
+    if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
+        println!("MiSTer_MagiK parent detected; Slint reasserting 1080p framebuffer route");
+    }
+    let flag = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
     f.set_audio_volume(0);
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
@@ -2406,6 +2403,10 @@ fn run_launcher_loop(
             copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
         } else if let Some(rect) = this_rect {
             copy_cached_rect(disp, ui, &cached, rect);
+        }
+        if frames < 180 && frames % 10 == 0 {
+            Display::set_mode_1080p();
+            let _ = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
         }
         if !first_frame_logged {
             first_frame_logged = true;

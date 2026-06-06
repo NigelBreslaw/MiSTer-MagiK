@@ -57,9 +57,7 @@ mv "$tmp" "$INI"
 echo "MiSTer_MagiK main= handoff removed"
 
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 $(pidof mister-magic-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 $(pidof Mister_MagiK) 2>/dev/null || true
 sync
 
 echo "=== restored inittab ==="
