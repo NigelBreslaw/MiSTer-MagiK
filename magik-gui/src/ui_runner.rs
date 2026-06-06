@@ -342,7 +342,14 @@ pub fn run_ui(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
-    let flag = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+    let main_parent = std::env::var_os("MISTER_MAGIK_PARENT").is_some()
+        || std::env::var_os("MISTER_MAGIC_PARENT").is_some();
+    let flag = if main_parent {
+        println!("fb route owned by MiSTer_Magik parent; rendering into /dev/fb0");
+        0
+    } else {
+        f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0))
+    };
     f.set_audio_volume(0);
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
@@ -530,6 +537,7 @@ fn sync_bridge_launcher(
         Screen::Arcade => 2,
         Screen::Settings => 3,
     });
+    bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
@@ -548,17 +556,29 @@ fn sync_bridge_launcher(
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     match nav.confirm_action {
+        Some(launcher::ConfirmAction::ExitToMister) => {
+            bridge.set_confirm_title("Exit to Mister".into());
+            bridge.set_confirm_message("Use the stock MiSTer menu until reboot.".into());
+            bridge.set_confirm_left_label("Exit to Mister".into());
+            bridge.set_confirm_right_label("Return to Magik".into());
+        }
         Some(launcher::ConfirmAction::ResetDatabase) => {
             bridge.set_confirm_title("Reset Database?".into());
             bridge.set_confirm_message("Delete the library database and reboot the MiSTer?".into());
+            bridge.set_confirm_left_label("Cancel".into());
+            bridge.set_confirm_right_label("Confirm".into());
         }
         Some(launcher::ConfirmAction::Restart) => {
             bridge.set_confirm_title("Restart MiSTer?".into());
             bridge.set_confirm_message("Reboot the MiSTer now?".into());
+            bridge.set_confirm_left_label("Cancel".into());
+            bridge.set_confirm_right_label("Confirm".into());
         }
         None => {
             bridge.set_confirm_title("".into());
             bridge.set_confirm_message("".into());
+            bridge.set_confirm_left_label("".into());
+            bridge.set_confirm_right_label("".into());
         }
     }
     bridge.set_loading_message(loading_message.into());
@@ -577,6 +597,20 @@ fn sync_bridge_launcher(
 fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
     let buffer = SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, width, height);
     Image::from_rgb8(buffer)
+}
+
+fn launcher_clock_text() -> String {
+    unsafe {
+        let mut now: libc::time_t = 0;
+        if libc::time(&mut now) == -1 {
+            return "--:--".to_string();
+        }
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&now, &mut tm).is_null() {
+            return "--:--".to_string();
+        }
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+    }
 }
 
 const PREVIEW_IMAGE_CACHE_CAP: usize = 16;
@@ -1968,6 +2002,7 @@ fn run_launcher_loop(
     let mut loading_title = String::new();
     let mut launch_started = Instant::now();
     let mut launch_spawned_mister = false;
+    let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let label = if secs == 0 {
         "forever".to_string()
     } else {
@@ -2038,6 +2073,12 @@ fn run_launcher_loop(
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
         let setup_active = setup.is_active();
         let mut bridge_dirty = false;
+        if last_clock_update.elapsed() >= Duration::from_secs(1) {
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            bridge.set_clock_text(launcher_clock_text().into());
+            last_clock_update = Instant::now();
+            bridge_dirty = true;
+        }
 
         if !catalog_refresh_done {
             while let Ok(message) = catalog_rx.try_recv() {
@@ -2183,6 +2224,34 @@ fn run_launcher_loop(
                     let nav_before = LauncherBridgeKey::from_nav(&nav);
                     if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
                         match event.action {
+                            LauncherAction::ExitToMister => {
+                                loading_title = "Exit to Mister".to_string();
+                                sync_bridge_launcher(
+                                    &app,
+                                    &pad,
+                                    &nav,
+                                    &setup,
+                                    &loading_title,
+                                    "Return to Magik after reboot",
+                                    Some(&catalog),
+                                    &mut preview,
+                                );
+                                window.request_redraw();
+                                update_slint_animations(animation_clock);
+                                window.draw_if_needed(|renderer| {
+                                    let region = renderer.render(&mut cached, ui.render_w());
+                                    let _ = region;
+                                });
+                                disp.wait_vsync();
+                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                                match launcher::exit_to_mister() {
+                                    Ok(()) => std::process::exit(0),
+                                    Err(e) => {
+                                        eprintln!("exit to MiSTer failed: {e}");
+                                        loading_title.clear();
+                                    }
+                                }
+                            }
                             LauncherAction::ResetDatabase => {
                                 loading_title = "Resetting database…".to_string();
                                 sync_bridge_launcher(

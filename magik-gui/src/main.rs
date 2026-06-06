@@ -15,8 +15,7 @@
 //!   capture-raw [out] [w] [h]  capture /dev/fb0 to raw BGRX on the MiSTer
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
 //!
-//! When installed as `main=` in MiSTer.ini, boots straight into the launcher.
-//! Core handoff argv (`.rbf` paths) re-execs stock `/media/fat/MiSTer`.
+//! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_Magik`.
 //!
 //! See AGENTS.md §9.5 (spike) and §12 (toolchain).
 
@@ -47,7 +46,7 @@ use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
 const W: usize = 1920;
 const H: usize = 1080;
 
-const MISTER_BIN: &str = "/media/fat/MiSTer";
+const MISTER_BIN: &str = "/media/fat/MiSTer_Magik";
 const COMMANDS: &[&str] = &[
     "read",
     "fb",
@@ -120,7 +119,7 @@ fn is_launcher_boot(arg: &str) -> bool {
     arg.ends_with("menu.rbf") || arg.ends_with("/menu.rbf")
 }
 
-/// MiSTer re-exec'd us with a core path — hand off to stock Main so gameplay works.
+/// Main re-exec'd us with a core path — hand off to MiSTer_Magik so gameplay works.
 fn should_handoff_to_mister(arg: &str) -> bool {
     if COMMANDS.contains(&arg) {
         return false;

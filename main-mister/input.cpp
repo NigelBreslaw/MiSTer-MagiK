@@ -6259,7 +6259,7 @@ int input_test(int getchar)
 						if(isXmlName(cmd)) xml_load(cmd + 10);
 						else fpga_load_rbf(cmd + 10);
 					}
-					else if (!strncmp(cmd, "mister_magic_launch ", 20))
+					else if (!strncmp(cmd, "mister_magik_launch ", 20))
 					{
 						mm_launcher_prepare_for_launch();
 						if(isXmlName(cmd + 20)) xml_load(cmd + 20);

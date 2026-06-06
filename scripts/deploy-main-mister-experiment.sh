@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Build and deploy the Main-as-parent experiment:
 #   - magik-gui Slint binary -> /media/fat/mister-magic/mister-magic-fb
-#   - main-mister fork       -> /media/fat/MiSTer_Magic
-#   - MiSTer.ini main=MiSTer_Magic
+#   - main-mister fork       -> /media/fat/MiSTer_Magik
+#   - inittab boots          -> /media/fat/MiSTer_Magik
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUI_DIR="$ROOT/magik-gui"
 MAIN_DIR="$ROOT/main-mister"
 GUI_REMOTE="/media/fat/mister-magic/mister-magic-fb"
-MAIN_REMOTE="/media/fat/MiSTer_Magic"
+MAIN_REMOTE="/media/fat/MiSTer_Magik"
 GUI_PROFILE=release
 GUI_BUILD_ARGS=(--fast)
 
@@ -48,7 +48,7 @@ fi
 echo "==> Deploying experiment binaries"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_Magic) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
+  uv run python "$ROOT/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_Magik) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
@@ -62,10 +62,10 @@ MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   uv run python "$ROOT/scripts/mister_ssh.py" run "chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
 
-echo "==> Enabling main=MiSTer_Magic"
+echo "==> Enabling direct MiSTer_Magik boot"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run "mount -o remount,rw / 2>/dev/null || true; sed -i 's|::sysinit:/media/fat/mister-magic/boot.sh .*|::sysinit:/media/fat/MiSTer \\&|' /etc/inittab; cp -n /media/fat/MiSTer.ini /media/fat/MiSTer.ini.before-mister-magic-main 2>/dev/null || true; grep -v '^main=' /media/fat/MiSTer.ini > /tmp/MiSTer.ini.magic; printf '%s\n' 'main=MiSTer_Magic' >> /tmp/MiSTer.ini.magic; cp /tmp/MiSTer.ini.magic /media/fat/MiSTer.ini; sync"
+  uv run python "$ROOT/scripts/mister_ssh.py" run "mount -o remount,rw / 2>/dev/null || true; cp -n /media/fat/MiSTer.ini /media/fat/MiSTer.ini.before-mister-magik-main 2>/dev/null || true; grep -v '^main=' /media/fat/MiSTer.ini > /tmp/MiSTer.ini.magik; cp /tmp/MiSTer.ini.magik /media/fat/MiSTer.ini; if grep -q '^::sysinit:/media/fat/MiSTer_Magik ' /etc/inittab; then echo 'inittab already uses MiSTer_Magik'; elif grep -q '^::sysinit:/media/fat/MiSTer ' /etc/inittab; then sed -i 's|^::sysinit:/media/fat/MiSTer &|::sysinit:/media/fat/MiSTer_Magik \\&|' /etc/inittab; else sed -i 's|^::sysinit:/media/fat/mister-magic/boot.sh .*|::sysinit:/media/fat/MiSTer_Magik \\&|' /etc/inittab; fi; grep sysinit /etc/inittab | grep -E 'MiSTer|boot.sh'; sync"
 
-echo "==> Installed. Reboot to start MiSTer_Magic."
-echo "    Restore stock by removing main=MiSTer_Magic or running scripts/restore-stock-boot.sh if Slint boot is installed."
+echo "==> Installed. Reboot to start MiSTer_Magik."
+echo "    Restore stock with scripts/restore-stock-boot.sh."
