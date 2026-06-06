@@ -4232,6 +4232,7 @@ void user_io_kbd(uint16_t key, int press)
 					fclose(f);
 				}
 			}
+			if (mm_launcher_handle_osd_key(key, press)) return;
 			if (is_menu_event && mm_launcher_active()) mm_launcher_yield_for_osd(key, press);
 			if (!press)
 			{

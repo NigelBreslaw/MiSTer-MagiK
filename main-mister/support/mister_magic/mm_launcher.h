@@ -6,5 +6,6 @@ void mm_launcher_poll(void);
 void mm_launcher_shutdown(void);
 void mm_launcher_prepare_for_launch(void);
 void mm_launcher_yield_for_osd(unsigned short key, int press);
+bool mm_launcher_handle_osd_key(unsigned short key, int press);
 bool mm_launcher_active(void);
 bool mm_launcher_configured(void);

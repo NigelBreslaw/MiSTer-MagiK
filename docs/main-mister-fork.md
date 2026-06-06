@@ -155,6 +155,28 @@ osd yield key=88 press=0 visible=1
 ```
 
 This proves the fork can hand the framebuffer route back to Main and open the
-OSD over the Slint child. Still to verify: close/restore behavior after the OSD
-is dismissed, and a deliberate product mapping for the Retro-bit X/Menu button
-instead of relying on the current controller-generated `KEY_F12` path.
+OSD from the Slint child.
+
+Follow-up overlay experiment: instead of handing the framebuffer route back to
+Main, `KEY_F12`/Menu now toggles a tiny MiSTer Magic OSD directly through
+`OsdWrite` while keeping Slint's buffer 0 active. The goal is to prove the OSD
+plane can float over the Slint UI without the stock full-screen menu background,
+CRT-static effect, or wallpaper flash. If this works visually, the next step is
+to replace the placeholder rows with a navigable minimal escape menu.
+
+Visual result: confirmed on HDMI. The MiSTer Magic OSD appears over the Slint
+debug UI without the stock full-screen background. The Slint child still shows
+only the debug scene (`ui debug 86400`, including the flashing
+`Main alive + Slint child running` text); that is expected until the fork spawns
+`ui launcher` instead.
+
+Navigation follow-up: the overlay now has a tiny local state machine. While the
+overlay is visible, D-pad/arrow keys move the selected row, Enter/Space closes
+the placeholder action, and Menu/F12/Esc closes the overlay. Device logs confirm
+`KEY_DOWN` (`108`), `KEY_UP` (`103`), and `KEY_ENTER` (`28`) reach this handler
+and update the selected index.
+
+Still to verify: visible highlight movement on HDMI, real actions for
+Scripts/Input Mapping/Video/Reboot, and a deliberate product mapping for the
+Retro-bit X/Menu button instead of relying on the current controller-generated
+`KEY_F12` or `KEY_MENU` path.
