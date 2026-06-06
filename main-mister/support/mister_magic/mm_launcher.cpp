@@ -6,11 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <linux/input.h>
 #include <sys/wait.h>
 
 #include "cfg.h"
 #include "hardware.h"
 #include "menu.h"
+#include "osd.h"
 #include "video.h"
 
 char user_io_osd_is_visible(void);
@@ -20,10 +22,19 @@ static const char s_log_path[] = "/tmp/mister-magic-main.log";
 static pid_t s_pid = 0;
 static int s_crash_count = 0;
 static unsigned long s_respawn_timer = 0;
-static unsigned long s_osd_restore_timer = 0;
 static bool s_init_pending = false;
 static bool s_gave_up = false;
-static bool s_yielded_for_osd = false;
+static bool s_overlay_visible = false;
+static int s_overlay_selected = 0;
+
+static const char *s_overlay_items[] = {
+	"Return to Slint",
+	"Scripts",
+	"Input Mapping",
+	"Video / CRT",
+	"Reboot",
+};
+static const int s_overlay_item_count = sizeof(s_overlay_items) / sizeof(s_overlay_items[0]);
 
 static void log_line(const char *msg)
 {
@@ -127,6 +138,31 @@ static void spawn(void)
 	if (menu_present()) MenuHide();
 }
 
+static void draw_overlay_osd()
+{
+	int rows = OsdGetSize();
+	if (rows < 8) rows = 8;
+
+	OsdClear();
+	OsdSetTitle("MiSTer Magic");
+	for (int i = 0; i < rows; i++) OsdWrite(i);
+
+	OsdWrite(2,  "        Return to Slint", s_overlay_selected == 0);
+	OsdWrite(4,  "        Scripts", s_overlay_selected == 1);
+	OsdWrite(5,  "        Input Mapping", s_overlay_selected == 2);
+	OsdWrite(6,  "        Video / CRT", s_overlay_selected == 3);
+	OsdWrite(8,  "        Reboot", s_overlay_selected == 4);
+	OsdWrite(rows - 1, "     D-pad moves, Menu exits");
+	OsdUpdate();
+	OsdEnable(DISABLE_KEYBOARD);
+}
+
+static void close_overlay_osd()
+{
+	OsdDisable();
+	s_overlay_visible = false;
+}
+
 void mm_launcher_init_for_menu(void)
 {
 	log_line("init_for_menu");
@@ -141,16 +177,6 @@ void mm_launcher_poll(void)
 {
 	if (s_pid)
 	{
-		if (s_yielded_for_osd && CheckTimer(s_osd_restore_timer) && !user_io_osd_is_visible())
-		{
-			log_line("osd yield restore");
-			s_yielded_for_osd = false;
-			s_osd_restore_timer = 0;
-			video_chvt(2);
-			video_fb_enable(1);
-			if (menu_present()) MenuHide();
-		}
-
 		int status = 0;
 		if (waitpid(s_pid, &status, WNOHANG) == s_pid)
 		{
@@ -199,8 +225,9 @@ void mm_launcher_shutdown(void)
 		wait_launcher_stopped(s_pid);
 	s_init_pending = false;
 	s_respawn_timer = 0;
-	s_osd_restore_timer = 0;
-	s_yielded_for_osd = false;
+	s_overlay_visible = false;
+	s_overlay_selected = 0;
+	OsdDisable();
 	video_fb_enable(0);
 }
 
@@ -216,17 +243,73 @@ void mm_launcher_yield_for_osd(unsigned short key, int press)
 {
 	if (!s_pid)
 		return;
+	if (press != 1)
+		return;
 
 	FILE *f = fopen(s_log_path, "a");
 	if (f)
 	{
-		fprintf(f, "osd yield key=%u press=%d visible=%d\n",
-		        key, press, user_io_osd_is_visible() ? 1 : 0);
+		fprintf(f, "osd overlay key=%u press=%d visible=%d overlay=%d\n",
+		        key, press, user_io_osd_is_visible() ? 1 : 0, s_overlay_visible ? 1 : 0);
 		fclose(f);
 	}
 
-	s_yielded_for_osd = true;
-	s_osd_restore_timer = GetTimer(1500);
-	if (!s_osd_restore_timer) s_osd_restore_timer = 1;
-	video_fb_enable(0);
+	if (s_overlay_visible)
+	{
+		close_overlay_osd();
+		return;
+	}
+
+	video_chvt(2);
+	video_fb_enable(1);
+	s_overlay_selected = 0;
+	draw_overlay_osd();
+	s_overlay_visible = true;
+}
+
+bool mm_launcher_handle_osd_key(unsigned short key, int press)
+{
+	if (!s_overlay_visible)
+		return false;
+
+	if (key != KEY_UP && key != KEY_DOWN && key != KEY_LEFT && key != KEY_RIGHT &&
+	    key != KEY_ENTER && key != KEY_SPACE && key != KEY_ESC &&
+	    key != KEY_MENU && key != KEY_F12)
+		return false;
+
+	if (press != 1)
+		return true;
+
+	FILE *f = fopen(s_log_path, "a");
+	if (f)
+	{
+		fprintf(f, "osd overlay nav key=%u selected=%d\n", key, s_overlay_selected);
+		fclose(f);
+	}
+
+	switch (key)
+	{
+	case KEY_UP:
+	case KEY_LEFT:
+		s_overlay_selected = (s_overlay_selected + s_overlay_item_count - 1) % s_overlay_item_count;
+		draw_overlay_osd();
+		break;
+	case KEY_DOWN:
+	case KEY_RIGHT:
+		s_overlay_selected = (s_overlay_selected + 1) % s_overlay_item_count;
+		draw_overlay_osd();
+		break;
+	case KEY_ENTER:
+	case KEY_SPACE:
+		// Placeholder menu: every selectable action currently returns to Slint.
+		close_overlay_osd();
+		break;
+	case KEY_ESC:
+	case KEY_MENU:
+	case KEY_F12:
+		close_overlay_osd();
+		break;
+	}
+
+	return true;
 }
