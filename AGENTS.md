@@ -280,6 +280,33 @@ MiSTer briefly, sends `load_core` via fifo, shows loading overlay until core run
 **HDMI recovery:** If launch leaves a black screen, `mister_ssh.py reboot` (MiSTer
 still owns recovery when running; if wedged, reboot always works).
 
+### Main fork experiment — Main as parent of Slint
+
+`main-mister/` is a buildable Main_MiSTer fork for coexistence experiments. The
+device experiment deploys it as `/media/fat/MiSTer_Magic` and enables stock
+`main=MiSTer_Magic`, while `magik-gui/` stays the separate Slint binary project.
+Use `scripts/deploy-main-mister-experiment.sh --fast` to build/deploy both.
+
+Current proven flow (2026-06-06): `/media/fat/MiSTer` re-execs
+`MiSTer_Magic`, the fork initializes the menu core, then starts
+`/media/fat/mister-magic/mister-magic-fb ui debug 86400` as a child. The command
+`mister_magic_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
+the Slint child and launches through Main. Metal Slug 3 reached the `NEOGEO`
+core via this path with fb mode `8888 1 640 240 2560` and no SDRAM/memory error
+strings in logs; HDMI visual confirmation is still required because the NeoGeo
+memory complaint is an on-screen core message.
+
+Important gotchas:
+
+- Disable the old `/etc/inittab` `mister-magic/boot.sh` handoff for this
+  experiment. `deploy-main-mister-experiment.sh` restores
+  `::sysinit:/media/fat/MiSTer &` before setting `main=MiSTer_Magic`.
+- Main clean rebuilds matter. If `main-mister/bin/MiSTer` is stale, new
+  `support/mister_magic/*.cpp` files may not be reflected in the deployed binary.
+- `ui debug 0` exits immediately because generic bench/debug scenes treat
+  `secs=0` as zero duration. The launcher loop treats `0` as infinite. The Main
+  experiment currently uses `debug 86400`.
+
 ### TODO
 
 - Derive `xoff/yoff`/geometry from the **live** video mode (`rust-livemode`).

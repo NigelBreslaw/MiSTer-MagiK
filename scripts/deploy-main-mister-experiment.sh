@@ -38,15 +38,17 @@ echo "==> Building magik-gui ($GUI_PROFILE)"
 
 echo "==> Building main-mister"
 if command -v arm-none-linux-gnueabihf-gcc >/dev/null 2>&1; then
+  make -C "$MAIN_DIR" clean
   make -C "$MAIN_DIR"
 else
+  "$MAIN_DIR/build-docker.sh" clean
   "$MAIN_DIR/build-docker.sh"
 fi
 
 echo "==> Deploying experiment binaries"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run "mkdir -p /media/fat/mister-magic"
+  uv run python "$ROOT/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_Magic) 2>/dev/null || true; mkdir -p /media/fat/mister-magic"
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
@@ -63,7 +65,7 @@ MISTER_PASS="${MISTER_PASS:-1}" \
 echo "==> Enabling main=MiSTer_Magic"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run "cp -n /media/fat/MiSTer.ini /media/fat/MiSTer.ini.before-mister-magic-main 2>/dev/null || true; grep -v '^main=' /media/fat/MiSTer.ini > /tmp/MiSTer.ini.magic; printf '%s\n' 'main=MiSTer_Magic' >> /tmp/MiSTer.ini.magic; cp /tmp/MiSTer.ini.magic /media/fat/MiSTer.ini; sync"
+  uv run python "$ROOT/scripts/mister_ssh.py" run "mount -o remount,rw / 2>/dev/null || true; sed -i 's|::sysinit:/media/fat/mister-magic/boot.sh .*|::sysinit:/media/fat/MiSTer \\&|' /etc/inittab; cp -n /media/fat/MiSTer.ini /media/fat/MiSTer.ini.before-mister-magic-main 2>/dev/null || true; grep -v '^main=' /media/fat/MiSTer.ini > /tmp/MiSTer.ini.magic; printf '%s\n' 'main=MiSTer_Magic' >> /tmp/MiSTer.ini.magic; cp /tmp/MiSTer.ini.magic /media/fat/MiSTer.ini; sync"
 
 echo "==> Installed. Reboot to start MiSTer_Magic."
 echo "    Restore stock by removing main=MiSTer_Magic or running scripts/restore-stock-boot.sh if Slint boot is installed."
