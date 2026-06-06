@@ -3,7 +3,7 @@
 #
 # Profiles (see rust/BUILD.md):
 #   ./build-arm.sh              → release (fast daily)
-#   ./build-arm.sh --device     → release-device (fat LTO + NEON, ship to MiSTer)
+#   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --fast       → alias for release
 #
 # Wraps `cross` with the settings the toolchain needs on an Apple-Silicon host
@@ -45,12 +45,12 @@ if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
 fi
 
 if [ "$PROFILE" = release-device ] || [ "$PROFILE" = release-device-profile ]; then
-  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9 -C target-feature=+neon,+vfp3"
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9"
   if [ "$PROFILE" = release-device-profile ]; then
     export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
-    echo "==> cross build profile=release-device-profile (symbols + pprof + NEON)"
+    echo "==> cross build profile=release-device-profile (symbols + pprof + Cortex-A9)"
   else
-    echo "==> cross build profile=release-device (fat LTO + NEON)"
+    echo "==> cross build profile=release-device (fat LTO + Cortex-A9)"
   fi
 else
   unset RUSTFLAGS

@@ -1,0 +1,545 @@
+import { MisterBridge } from "mister_bridge.slint";
+import "fonts/PressStart2P-Regular.ttf";
+export { MisterBridge }
+
+// Palette — flat fills only (software renderer friendly).
+global ControllerColors {
+    out property <brush> shell: #9a8aa8;
+    out property <brush> shell-dark: #7a6a88;
+    out property <brush> shell-line: #5c4a72;
+    out property <brush> well: #6a5a78;
+    out property <brush> btn-idle: #b8aec8;
+    out property <brush> btn-pressed: #06d6a0;
+    out property <brush> btn-border: #5c4a72;
+    out property <brush> label: #2a2236;
+    out property <brush> label-light: #e8e0f0;
+}
+
+component CircleBtn inherits Rectangle {
+    in property <bool> pressed;
+    in property <string> caption;
+    in property <length> btn-size: 56px;
+    width: btn-size;
+    height: btn-size;
+    border-radius: btn-size / 2;
+    background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
+    border-width: 3px;
+    border-color: pressed ? #048a68 : ControllerColors.btn-border;
+
+    Text {
+        y: parent.height + 6px;
+        width: parent.width + 40px;
+        x: -20px;
+        text: caption;
+        color: ControllerColors.label-light;
+        font-size: 16px;
+        horizontal-alignment: center;
+    }
+}
+
+component DpadArm inherits Rectangle {
+    in property <bool> pressed;
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
+    border-width: 2px;
+    border-color: pressed ? #048a68 : ControllerColors.btn-border;
+}
+
+component Dpad inherits Rectangle {
+    in property <bool> up;
+    in property <bool> down;
+    in property <bool> left;
+    in property <bool> right;
+    width: 148px;
+    height: 148px;
+
+    // Circular well
+    Rectangle {
+        width: 148px;
+        height: 148px;
+        border-radius: 74px;
+        background: ControllerColors.well;
+        border-width: 3px;
+        border-color: ControllerColors.shell-line;
+    }
+
+    DpadArm {
+        x: 56px;
+        y: 8px;
+        pressed: up;
+    }
+    DpadArm {
+        x: 56px;
+        y: 104px;
+        pressed: down;
+    }
+    DpadArm {
+        x: 8px;
+        y: 56px;
+        pressed: left;
+    }
+    DpadArm {
+        x: 104px;
+        y: 56px;
+        pressed: right;
+    }
+
+    // Center hub
+    Rectangle {
+        x: 52px;
+        y: 52px;
+        width: 44px;
+        height: 44px;
+        border-radius: 4px;
+        background: ControllerColors.well;
+        border-width: 2px;
+        border-color: ControllerColors.shell-line;
+    }
+}
+
+component StickWell inherits Rectangle {
+    in property <float> stick-x;
+    in property <float> stick-y;
+    width: 130px;
+    height: 130px;
+    border-radius: 65px;
+    background: ControllerColors.well;
+    border-width: 3px;
+    border-color: ControllerColors.shell-line;
+
+    // Crosshair ring
+    Rectangle {
+        x: 64px;
+        y: 20px;
+        width: 2px;
+        height: 90px;
+        background: ControllerColors.shell-line;
+    }
+    Rectangle {
+        x: 20px;
+        y: 64px;
+        width: 90px;
+        height: 2px;
+        background: ControllerColors.shell-line;
+    }
+
+    Rectangle {
+        width: 44px;
+        height: 44px;
+        border-radius: 22px;
+        background: ControllerColors.btn-pressed;
+        border-width: 2px;
+        border-color: #048a68;
+        x: (parent.width - self.width) / 2 + stick-x * 36px;
+        y: (parent.height - self.height) / 2 + stick-y * 36px;
+    }
+}
+
+component ShoulderBtn inherits Rectangle {
+    in property <bool> pressed;
+    in property <string> caption;
+    width: 140px;
+    height: 28px;
+    border-radius: 10px;
+    background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
+    border-width: 2px;
+    border-color: pressed ? #048a68 : ControllerColors.btn-border;
+
+    Text {
+        text: caption;
+        color: ControllerColors.label;
+        font-size: 16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component PillBtn inherits Rectangle {
+    in property <bool> pressed;
+    in property <string> caption;
+    width: 88px;
+    height: 26px;
+    border-radius: 13px;
+    background: pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle;
+    border-width: 2px;
+    border-color: pressed ? #048a68 : ControllerColors.btn-border;
+
+    Text {
+        y: parent.height + 8px;
+        width: parent.width;
+        text: caption;
+        color: ControllerColors.label-light;
+        font-size: 16px;
+        horizontal-alignment: center;
+    }
+}
+
+component SysBtn inherits Rectangle {
+    in property <bool> pressed;
+    in property <bool> available: true;
+    in property <string> caption;
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    background: !available ? #5a5068 : (pressed ? ControllerColors.btn-pressed : ControllerColors.btn-idle);
+    border-width: 2px;
+    border-color: !available ? #4a4058 : (pressed ? #048a68 : ControllerColors.btn-border);
+    opacity: available ? 1.0 : 0.55;
+
+    Text {
+        y: parent.height + 6px;
+        width: parent.width + 40px;
+        x: -20px;
+        text: available ? caption : caption + " (n/a)";
+        color: ControllerColors.label-light;
+        font-size: 16px;
+        horizontal-alignment: center;
+    }
+}
+
+component FaceCluster inherits Rectangle {
+    in property <bool> btn-x;
+    in property <bool> btn-y;
+    in property <bool> btn-a;
+    in property <bool> btn-b;
+    width: 200px;
+    height: 200px;
+
+    // Diagonal pairing accents (X–Y and A–B), like the reference drawing.
+    Rectangle {
+        x: 18px;
+        y: 38px;
+        width: 72px;
+        height: 124px;
+        border-radius: 36px;
+        background: #88789820;
+        border-width: 2px;
+        border-color: ControllerColors.shell-line;
+    }
+    Rectangle {
+        x: 110px;
+        y: 38px;
+        width: 72px;
+        height: 124px;
+        border-radius: 36px;
+        background: #88789820;
+        border-width: 2px;
+        border-color: ControllerColors.shell-line;
+    }
+
+    // SNES diamond: X top, Y left, A right, B bottom.
+    CircleBtn {
+        x: 72px;
+        y: 8px;
+        caption: "X";
+        pressed: btn-x;
+    }
+    CircleBtn {
+        x: 8px;
+        y: 72px;
+        caption: "Y";
+        pressed: btn-y;
+    }
+    CircleBtn {
+        x: 136px;
+        y: 72px;
+        caption: "A";
+        pressed: btn-a;
+    }
+    CircleBtn {
+        x: 72px;
+        y: 136px;
+        caption: "B";
+        pressed: btn-b;
+    }
+}
+
+// Dog-bone controller shell with SNES layout + analog stick lobes.
+component ControllerBody inherits Rectangle {
+    in property <bool> dpad-up;
+    in property <bool> dpad-down;
+    in property <bool> dpad-left;
+    in property <bool> dpad-right;
+    in property <bool> btn-a;
+    in property <bool> btn-b;
+    in property <bool> btn-x;
+    in property <bool> btn-y;
+    in property <bool> btn-l;
+    in property <bool> btn-r;
+    in property <bool> btn-zl;
+    in property <bool> btn-zr;
+    in property <bool> btn-select;
+    in property <bool> btn-start;
+    in property <bool> btn-home;
+    in property <bool> btn-capture;
+    in property <bool> capture-available;
+    in property <float> left-x;
+    in property <float> left-y;
+    in property <float> right-x;
+    in property <float> right-y;
+
+    width: 1180px;
+    height: 540px;
+
+    // Main torso
+    Rectangle {
+        y: 0px;
+        width: 1180px;
+        height: 360px;
+        border-radius: 80px;
+        background: ControllerColors.shell;
+        border-width: 4px;
+        border-color: ControllerColors.shell-line;
+    }
+
+    // Bottom lobes (stick wells extend the dog-bone silhouette)
+    Rectangle {
+        x: 130px;
+        y: 280px;
+        width: 180px;
+        height: 180px;
+        border-radius: 90px;
+        background: ControllerColors.shell;
+        border-width: 4px;
+        border-color: ControllerColors.shell-line;
+    }
+    Rectangle {
+        x: 870px;
+        y: 280px;
+        width: 180px;
+        height: 180px;
+        border-radius: 90px;
+        background: ControllerColors.shell;
+        border-width: 4px;
+        border-color: ControllerColors.shell-line;
+    }
+
+    // Top-center grip recess
+    Rectangle {
+        x: 490px;
+        y: 12px;
+        width: 200px;
+        height: 36px;
+        border-radius: 18px;
+        background: ControllerColors.shell-dark;
+        border-width: 2px;
+        border-color: ControllerColors.shell-line;
+    }
+
+    // Shoulder buttons along top edge
+    ShoulderBtn {
+        x: 80px;
+        y: 52px;
+        caption: "L";
+        pressed: btn-l;
+    }
+    ShoulderBtn {
+        x: 960px;
+        y: 52px;
+        caption: "R";
+        pressed: btn-r;
+    }
+
+    // ZL / ZR (smaller, inset — not on classic SNES diagram but on the pad)
+    ShoulderBtn {
+        x: 80px;
+        y: 88px;
+        width: 100px;
+        height: 22px;
+        caption: "ZL";
+        pressed: btn-zl;
+    }
+    ShoulderBtn {
+        x: 1000px;
+        y: 88px;
+        width: 100px;
+        height: 22px;
+        caption: "ZR";
+        pressed: btn-zr;
+    }
+
+    // D-pad (left)
+    Dpad {
+        x: 170px;
+        y: 120px;
+        up: dpad-up;
+        down: dpad-down;
+        left: dpad-left;
+        right: dpad-right;
+    }
+
+    // Face buttons (right) — SNES diamond
+    FaceCluster {
+        x: 780px;
+        y: 100px;
+        btn-x: btn-x;
+        btn-y: btn-y;
+        btn-a: btn-a;
+        btn-b: btn-b;
+    }
+
+    // Center: home / capture (above select / start)
+    SysBtn {
+        x: 520px;
+        y: 155px;
+        caption: "Home";
+        pressed: btn-home;
+    }
+    SysBtn {
+        x: 620px;
+        y: 155px;
+        caption: "Capture";
+        pressed: btn-capture;
+        available: capture-available;
+    }
+
+    // Center: select / start
+    PillBtn {
+        x: 470px;
+        y: 210px;
+        caption: "SELECT";
+        pressed: btn-select;
+    }
+    PillBtn {
+        x: 620px;
+        y: 210px;
+        caption: "START";
+        pressed: btn-start;
+    }
+
+    // Analog sticks in bottom lobes
+    StickWell {
+        x: 155px;
+        y: 305px;
+        stick-x: left-x;
+        stick-y: left-y;
+    }
+    StickWell {
+        x: 895px;
+        y: 305px;
+        stick-x: right-x;
+        stick-y: right-y;
+    }
+}
+
+export component ControllerPanel inherits Rectangle {
+    VerticalLayout {
+        padding: 32px;
+        spacing: 20px;
+
+        HorizontalLayout {
+            spacing: 24px;
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: MisterBridge.device-name;
+                    color: #e8e0f0;
+                    font-size: 32px;
+                }
+                Text {
+                    text: "input test";
+                    color: #9080a8;
+                    font-size: 16px;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            VerticalLayout {
+                spacing: 6px;
+                alignment: end;
+                Text {
+                    text: "USB " + MisterBridge.usb-port;
+                    color: #06d6a0;
+                    font-size: 16px;
+                    horizontal-alignment: right;
+                }
+                Text {
+                    text: MisterBridge.usb-id + "  ·  " + MisterBridge.serial-id;
+                    color: #9080a8;
+                    font-size: 16px;
+                    horizontal-alignment: right;
+                }
+                Text {
+                    text: MisterBridge.js-counts;
+                    color: #706080;
+                    font-size: 16px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            ControllerBody {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                dpad-up: MisterBridge.dpad-up;
+                dpad-down: MisterBridge.dpad-down;
+                dpad-left: MisterBridge.dpad-left;
+                dpad-right: MisterBridge.dpad-right;
+                btn-a: MisterBridge.btn-a;
+                btn-b: MisterBridge.btn-b;
+                btn-x: MisterBridge.btn-x;
+                btn-y: MisterBridge.btn-y;
+                btn-l: MisterBridge.btn-l;
+                btn-r: MisterBridge.btn-r;
+                btn-zl: MisterBridge.btn-zl;
+                btn-zr: MisterBridge.btn-zr;
+                btn-select: MisterBridge.btn-select;
+                btn-start: MisterBridge.btn-start;
+                btn-home: MisterBridge.btn-home;
+                btn-capture: MisterBridge.btn-capture;
+                capture-available: MisterBridge.capture-available;
+                left-x: MisterBridge.left-x;
+                left-y: MisterBridge.left-y;
+                right-x: MisterBridge.right-x;
+                right-y: MisterBridge.right-y;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text {
+                    text: "Pressed now:";
+                    color: #9080a8;
+                    font-size: 16px;
+                }
+                Text {
+                    text: MisterBridge.pressed-now;
+                    color: #06d6a0;
+                    font-size: 16px;
+                    horizontal-stretch: 1;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text {
+                    text: "Last event:";
+                    color: #9080a8;
+                    font-size: 16px;
+                }
+                Text {
+                    text: MisterBridge.last-event-label;
+                    color: #c8b8d8;
+                    font-size: 16px;
+                    horizontal-stretch: 1;
+                }
+            }
+
+            Text {
+                text: MisterBridge.last-raw-event;
+                color: #605068;
+                font-size: 16px;
+            }
+        }
+    }
+}

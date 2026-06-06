@@ -5,7 +5,7 @@ Two **release** profiles separate fast host compiles from the binary we ship to 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
 | **`release`** | `build-arm.sh` or `--fast` | thin (`lto = true`) | 16 (default) | generic armv7 | ~3 min | ~1.65 MB | Daily Slint/UI iteration, quick deploy |
-| **`release-device`** | `build-arm.sh --device` | fat | 1 | cortex-a9 + NEON | ~5 min | ~1.61 MB | SD card / bench / production |
+| **`release-device`** | `build-arm.sh --device` | fat | 1 | cortex-a9 | ~5 min | ~1.61 MB | SD card / bench / production |
 | **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
 Benchmark labels: **A0** ≈ `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
@@ -35,7 +35,7 @@ behind Cargo feature `ui`.
 rust/build-arm.sh
 # → target/armv7-unknown-linux-gnueabihf/release/mister-magic-fb
 
-# Full MiSTer release (fat LTO + NEON via RUSTFLAGS)
+# Full MiSTer release (fat LTO + Cortex-A9 via RUSTFLAGS)
 rust/build-arm.sh --device
 # → target/.../release-device/mister-magic-fb
 
@@ -121,7 +121,7 @@ project-local minimal build.
 - **`.cargo/config.toml`** — sccache override only; no always-on `rustflags`.
 - **`build-arm.sh`** — sets `RUSTFLAGS` for `release-device` only.
 
-Prerequisite for NEON: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
+Prerequisite for Cortex-A9 tuning: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
 
 ## Slint version
 

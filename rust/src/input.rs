@@ -141,10 +141,6 @@ impl PadPool {
         &self.db
     }
 
-    pub fn db_mut(&mut self) -> &mut crate::controller_db::ControllerDb {
-        &mut self.db
-    }
-
     pub fn len(&self) -> usize {
         self.pads.len()
     }
@@ -176,25 +172,12 @@ impl PadPool {
         self.pads.iter().position(|p| self.db.needs_setup(&p.info))
     }
 
-    pub fn set_active_idx(&mut self, idx: usize) {
-        if idx < self.pads.len() {
-            self.active_idx = idx;
-        }
-    }
-
     pub fn path_at(&self, idx: usize) -> &str {
         &self.pads[idx].path
     }
 
     pub fn state_at(&self, idx: usize) -> &PadState {
         &self.pads[idx].state
-    }
-
-    /// Re-read button layout from the registry after setup changes.
-    pub fn refresh_layouts(&mut self) {
-        for pad in &mut self.pads {
-            pad.refresh_layout();
-        }
     }
 
     /// Save a new default registry entry for a pad (does not mark setup complete).
