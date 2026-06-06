@@ -45,8 +45,8 @@ Remaining work: live-mode geometry, in-game settings strategy (§7).
   `246:0`), backed by the MiSTer kernel audio buffer.
 - FB mode is set by writing `/sys/module/MiSTer_fb/parameters/mode` as
   `"<fmt> <rb> <width> <height> <stride>"`, e.g. `8888 1 1920 1080 7680`.
-- No system fonts on MiSTer — the Rust build embeds fonts in the binary
-  (`rust/ui/fonts/` — P2 experiment: Press Start 2P SIL OFL; DejaVu retained for revert).
+- No system fonts on MiSTer — the Rust build embeds Press Start 2P in the binary
+  (`rust/ui/fonts/`, SIL OFL).
 - Relevant `MiSTer.ini` keys observed: `direct_video=1`, `vga_scaler=1`,
   `fb_terminal=1`, `fb_size=0`.
 - `MiSTer.ini` has a backup at `/media/fat/MiSTer.ini.bak`.
@@ -147,7 +147,7 @@ rust/                   native armv7 frontend — see §12
   ui/launcher.slint     home grid + embedded controller test
   ui/controller_test.slint
   ui/bench/*.slint      perf bench scenes
-  ui/fonts/DejaVuSans.ttf
+  ui/fonts/PressStart2P-Regular.ttf
   src/main.rs           read | fb | ui | input | scenes
   src/launcher.rs       nav state machine + launch_mra
   src/fpga.rs           SPI + fb_enable_direct + set_vga_fb
@@ -307,7 +307,7 @@ still owns recovery when running; if wedged, reboot always works).
 - **libinput quirks DB missing** → `libinput error: ... device quirks` warnings.
   Rendering is fine; if/when we add input, bundle the quirks DB or point
   libinput at one.
-- **Fonts:** MiSTer has none. The Rust build embeds DejaVu (`rust/ui/fonts/`).
+- **Fonts:** MiSTer has none. The Rust build embeds Press Start 2P (`rust/ui/fonts/`).
 - **Framebuffer byte order is BGRX** (`rgba 8/16,8/8,8/0`). `raw_to_png.py`
   swaps B/R; keep that in mind for any direct fb work.
 - **Don't use `main=mister-magic-fb`.** Skips `video_init()` → no HDMI signal
@@ -491,8 +491,8 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
   bare cross container and the MiSTer don't have). Our own crate still uses `std`.
 - `build.rs` uses `EmbedResourcesKind::EmbedForSoftwareRenderer` so glyphs/images
   are baked into the binary. With no system fonts, the embedder needs a font:
-  we bundle `rust/ui/fonts/DejaVuSans.ttf` (Bitstream Vera license) and set
-  `default-font-family: "DejaVu Sans"` on the Window.
+  we bundle `rust/ui/fonts/PressStart2P-Regular.ttf` (SIL OFL) and set
+  `default-font-family: "Press Start 2P"` on the Windows.
 - Slint's deps need **rustc ≥ 1.90**; the toolchain is pinned to `stable`
   (1.96 at time of writing) in `rust/rust-toolchain.toml`, with a matching
   `stable-x86_64-unknown-linux-gnu` installed (`--force-non-host`) for the
