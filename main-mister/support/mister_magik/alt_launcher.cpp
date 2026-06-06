@@ -17,6 +17,7 @@
 #include "file_io.h"
 #include "hardware.h"
 #include "menu.h"
+#include "osd.h"
 #include "user_io.h"
 #include "video.h"
 
@@ -374,6 +375,7 @@ static void spawn(void)
 	video_fb_enable(1);
 	analytics_state("video_fb_enable_on");
 	if (menu_present()) MenuHide();
+	OsdDisable();
 	analytics_state("menu_hide", "menu_present_after=%d", menu_present());
 }
 
