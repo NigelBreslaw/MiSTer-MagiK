@@ -9,6 +9,7 @@ use ffmpeg::util::frame::video::Video;
 use ffmpeg_the_third as ffmpeg;
 use slint::{Image, Rgb8Pixel, SharedPixelBuffer};
 use std::path::Path;
+use std::sync::mpsc;
 use std::time::Duration;
 
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magic/mslug3.mov";
@@ -30,10 +31,91 @@ pub struct VideoPlayer {
 }
 
 pub struct PlaybackFrame {
-    pub image: Image,
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<u8>,
     pub audio: Vec<i16>,
     pub audio_requested_frames: usize,
     pub loop_count: u64,
+}
+
+pub struct VideoFrameWorker {
+    rx: mpsc::Receiver<Result<PlaybackFrame, String>>,
+    frame_interval: Duration,
+}
+
+impl VideoFrameWorker {
+    pub fn start(path: String) -> Result<Self, String> {
+        let (tx, rx) = mpsc::sync_channel(2);
+        let (init_tx, init_rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("video-decode".to_string())
+            .spawn(move || {
+                lower_decode_thread_priority();
+                let mut player = match VideoPlayer::open(&path) {
+                    Ok(player) => {
+                        let _ = init_tx.send(Ok(player.frame_interval()));
+                        player
+                    }
+                    Err(e) => {
+                        let _ = init_tx.send(Err(e));
+                        return;
+                    }
+                };
+                let frame_interval = player.frame_interval();
+                let mut audio_pacer = AudioFramePacer::new();
+                loop {
+                    let audio_frames = audio_pacer.next_frames(frame_interval);
+                    let frame = player.next_frame(audio_frames);
+                    let failed = frame.is_err();
+                    if tx.send(frame).is_err() || failed {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("spawn video-decode: {e}"))?;
+        let frame_interval = init_rx
+            .recv()
+            .map_err(|_| "video decode worker failed to start".to_string())??;
+        Ok(Self { rx, frame_interval })
+    }
+
+    pub fn frame_interval(&self) -> Duration {
+        self.frame_interval
+    }
+
+    pub fn try_recv(&self) -> Result<Option<PlaybackFrame>, String> {
+        match self.rx.try_recv() {
+            Ok(Ok(frame)) => Ok(Some(frame)),
+            Ok(Err(e)) => Err(e),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err("video decode worker stopped".into()),
+        }
+    }
+}
+
+fn lower_decode_thread_priority() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 5);
+    }
+}
+
+struct AudioFramePacer {
+    nanos_remainder: u128,
+}
+
+impl AudioFramePacer {
+    fn new() -> Self {
+        Self { nanos_remainder: 0 }
+    }
+
+    fn next_frames(&mut self, interval: Duration) -> usize {
+        let total = AUDIO_RATE as u128 * interval.as_nanos() + self.nanos_remainder;
+        let frames = total / 1_000_000_000;
+        self.nanos_remainder = total % 1_000_000_000;
+        frames as usize
+    }
 }
 
 impl VideoPlayer {
@@ -132,11 +214,15 @@ impl VideoPlayer {
         &mut self,
         audio_frames: usize,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some(image) = receive_image(&mut self.video_decoder, &mut self.scaler)? {
+        if let Some((width, height, rgb)) =
+            receive_rgb_frame(&mut self.video_decoder, &mut self.scaler)?
+        {
             self.ensure_audio(audio_frames)?;
             let audio = self.take_audio(audio_frames);
             return Ok(Some(PlaybackFrame {
-                image,
+                width,
+                height,
+                rgb,
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
@@ -150,11 +236,15 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some(image) = receive_image(&mut self.video_decoder, &mut self.scaler)? {
+                if let Some((width, height, rgb)) =
+                    receive_rgb_frame(&mut self.video_decoder, &mut self.scaler)?
+                {
                     self.ensure_audio(audio_frames)?;
                     let audio = self.take_audio(audio_frames);
                     return Ok(Some(PlaybackFrame {
-                        image,
+                        width,
+                        height,
+                        rgb,
                         audio,
                         audio_requested_frames: audio_frames,
                         loop_count: self.loop_count,
@@ -166,11 +256,15 @@ impl VideoPlayer {
         }
 
         let _ = self.video_decoder.send_eof();
-        if let Some(image) = receive_image(&mut self.video_decoder, &mut self.scaler)? {
+        if let Some((width, height, rgb)) =
+            receive_rgb_frame(&mut self.video_decoder, &mut self.scaler)?
+        {
             self.ensure_audio(audio_frames)?;
             let audio = self.take_audio(audio_frames);
             return Ok(Some(PlaybackFrame {
-                image,
+                width,
+                height,
+                rgb,
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
@@ -209,10 +303,10 @@ impl VideoPlayer {
     }
 }
 
-fn receive_image(
+fn receive_rgb_frame(
     decoder: &mut ffmpeg::decoder::Video,
     scaler: &mut ScalingContext,
-) -> Result<Option<Image>, String> {
+) -> Result<Option<(u32, u32, Vec<u8>)>, String> {
     let mut decoded = Video::empty();
     match decoder.receive_frame(&mut decoded) {
         Ok(()) => {
@@ -220,7 +314,7 @@ fn receive_image(
             scaler
                 .run(&decoded, &mut rgb)
                 .map_err(|e| format!("scale video frame: {e}"))?;
-            Ok(Some(rgb_frame_to_slint_image(&rgb)))
+            Ok(Some(rgb_frame_to_vec(&rgb)))
         }
         Err(_) => Ok(None),
     }
@@ -303,7 +397,7 @@ fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {
     }
 }
 
-fn rgb_frame_to_slint_image(frame: &Video) -> Image {
+fn rgb_frame_to_vec(frame: &Video) -> (u32, u32, Vec<u8>) {
     let width = frame.width();
     let height = frame.height();
     let stride = frame.stride(0);
@@ -315,6 +409,11 @@ fn rgb_frame_to_slint_image(frame: &Video) -> Image {
         let dst = &mut rgb[y * row_len..(y + 1) * row_len];
         dst.copy_from_slice(src);
     }
-    let buffer = SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, width, height);
+    (width, height, rgb)
+}
+
+pub fn rgb_image(width: u32, height: u32, rgb: &[u8]) -> Image {
+    let mut buffer = SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
+    buffer.make_mut_bytes().copy_from_slice(rgb);
     Image::from_rgb8(buffer)
 }

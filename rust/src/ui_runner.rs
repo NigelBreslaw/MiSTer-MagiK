@@ -1142,8 +1142,8 @@ fn run_video_playback_loop(
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| crate::video_player::DEFAULT_VIDEO_PATH.to_string());
-    let mut player = match crate::video_player::VideoPlayer::open(&path) {
-        Ok(player) => player,
+    let frame_worker = match crate::video_player::VideoFrameWorker::start(path.clone()) {
+        Ok(worker) => worker,
         Err(e) => {
             eprintln!("video_playback: {e}");
             std::process::exit(1);
@@ -1160,8 +1160,7 @@ fn run_video_playback_loop(
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut next_video_at = Duration::ZERO;
-    let frame_interval = player.frame_interval();
-    let mut audio_pacer = AudioPacer::new();
+    let frame_interval = frame_worker.frame_interval();
     let mut frames = 0u64;
     let mut profiler = FrameProfiler::from_env();
     let cpu = cpu_profile::start();
@@ -1198,10 +1197,13 @@ fn run_video_playback_loop(
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
                 if now >= next_video_at {
-                    let audio_frames = audio_pacer.next_frames(frame_interval);
-                    match player.next_frame(audio_frames) {
-                        Ok(frame) => {
-                            app.set_frame(frame.image);
+                    match frame_worker.try_recv() {
+                        Ok(Some(frame)) => {
+                            app.set_frame(crate::video_player::rgb_image(
+                                frame.width,
+                                frame.height,
+                                &frame.rgb,
+                            ));
                             window.request_redraw();
                             let audio_t0 = Instant::now();
                             match audio_sink.write_frames(&frame.audio) {
@@ -1219,6 +1221,7 @@ fn run_video_playback_loop(
                                 }
                             }
                         }
+                        Ok(None) => {}
                         Err(e) => {
                             eprintln!("video_playback: {e}");
                             break;
@@ -1271,10 +1274,13 @@ fn run_video_playback_loop(
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
                 if now >= next_video_at {
-                    let audio_frames = audio_pacer.next_frames(frame_interval);
-                    match player.next_frame(audio_frames) {
-                        Ok(frame) => {
-                            app.set_frame(frame.image);
+                    match frame_worker.try_recv() {
+                        Ok(Some(frame)) => {
+                            app.set_frame(crate::video_player::rgb_image(
+                                frame.width,
+                                frame.height,
+                                &frame.rgb,
+                            ));
                             window.request_redraw();
                             let audio_t0 = Instant::now();
                             match audio_sink.write_frames(&frame.audio) {
@@ -1292,6 +1298,7 @@ fn run_video_playback_loop(
                                 }
                             }
                         }
+                        Ok(None) => {}
                         Err(e) => {
                             eprintln!("video_playback: {e}");
                             break;
@@ -1352,26 +1359,6 @@ fn run_video_playback_loop(
         profiler.finish();
     }
     cpu_profile::finish(cpu);
-}
-
-#[cfg(feature = "video")]
-struct AudioPacer {
-    nanos_remainder: u128,
-}
-
-#[cfg(feature = "video")]
-impl AudioPacer {
-    fn new() -> Self {
-        Self { nanos_remainder: 0 }
-    }
-
-    fn next_frames(&mut self, interval: Duration) -> usize {
-        let total = crate::mr_audio::SAMPLE_RATE as u128 * interval.as_nanos()
-            + self.nanos_remainder;
-        let frames = total / 1_000_000_000;
-        self.nanos_remainder = total % 1_000_000_000;
-        frames as usize
-    }
 }
 
 #[cfg(feature = "video")]

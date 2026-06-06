@@ -39,7 +39,7 @@ impl MrAudioSink {
         }
         let bytes = samples_as_le_bytes(frames);
         self.file
-            .write_all(&bytes)
+            .write_all(bytes)
             .map_err(|e| format!("write {DEFAULT_DEVICE}: {e}"))?;
         let written = frames.len() / CHANNELS;
         self.frames_written += written as u64;
@@ -125,10 +125,12 @@ pub fn run_tone_from_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn samples_as_le_bytes(samples: &[i16]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(samples.len() * 2);
-    for sample in samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
+fn samples_as_le_bytes(samples: &[i16]) -> &[u8] {
+    debug_assert!(cfg!(target_endian = "little"));
+    unsafe {
+        std::slice::from_raw_parts(
+            samples.as_ptr() as *const u8,
+            std::mem::size_of_val(samples),
+        )
     }
-    bytes
 }
