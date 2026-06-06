@@ -429,7 +429,9 @@ pub fn load_arcade_catalog_from_sqlite(
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
         .prepare(
-            "SELECT title, launch_ref, COALESCE(image_path,''), has_image,
+            "SELECT title,
+                    CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END,
+                    COALESCE(image_path,''), has_image,
                     CASE
                       WHEN category='Arcade'
                        AND (platform_id='neogeo'
@@ -461,7 +463,9 @@ pub fn load_arcade_catalog_from_sqlite(
     for row in rows {
         games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
-    games.retain(|game| !is_support_file_path(&game.mra_path));
+    games.retain(|game| {
+        is_launcher_load_core_xml_path(&game.mra_path) && !is_support_file_path(&game.mra_path)
+    });
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
@@ -1353,10 +1357,7 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
             let taxonomy = taxonomy_from_mgl(&mgl, &file.path.display().to_string());
             return GameDiscovery {
                 source_path: file.path.display().to_string(),
-                launch_ref: mgl
-                    .file_path
-                    .clone()
-                    .unwrap_or_else(|| file.path.display().to_string()),
+                launch_ref: file.path.display().to_string(),
                 source_kind,
                 title: title_from_path(&file.path.display().to_string()),
                 category: taxonomy.category,
@@ -2579,13 +2580,20 @@ fn discovery_unique_key(d: &GameDiscovery) -> String {
 
 fn is_playable_discovery(d: &GameDiscovery) -> bool {
     match d.source_kind {
-        DiscoverySourceKind::Mra | DiscoverySourceKind::CatalogEntry => true,
-        DiscoverySourceKind::Mgl => !is_support_file_path(&d.launch_ref),
+        DiscoverySourceKind::Mra => !is_support_file_path(&d.launch_ref),
+        DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry => {
+            is_launcher_load_core_xml_path(&d.launch_ref) && !is_support_file_path(&d.launch_ref)
+        }
         DiscoverySourceKind::PayloadFile
         | DiscoverySourceKind::ArchiveEntry
-        | DiscoverySourceKind::Container => {
-            !is_support_file_path(&d.source_path) && !is_support_file_path(&d.launch_ref)
-        }
+        | DiscoverySourceKind::Container => false,
+    }
+}
+
+fn is_launcher_load_core_xml_path(path: &str) -> bool {
+    match path_ext(path).as_deref() {
+        Some("mra" | "mgl") => !path.contains("::"),
+        _ => false,
     }
 }
 
@@ -2869,7 +2877,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_payloads_still_count_as_games() {
+    fn raw_payloads_do_not_count_as_launchable_games() {
         let discoveries = vec![
             payload("/media/fat/games/NES/Super Mario Bros.nes"),
             payload("/media/fat/games/MegaDrive/Bio-Hazard Battle.md"),
@@ -2877,7 +2885,7 @@ mod tests {
             payload("/media/fat/games/NES/Boot Hill.nes"),
         ];
 
-        assert_eq!(unique_discovery_count(&discoveries), 4);
+        assert_eq!(unique_discovery_count(&discoveries), 0);
     }
 
     #[test]
@@ -2912,10 +2920,61 @@ mod tests {
     fn dos_mgl_games_still_count_as_games() {
         let discoveries = vec![mgl(
             "/media/fat/_DOS Games/Doom (Ultimate).mgl",
-            "media/doom ultimate/doom ultimate.r2.vhd",
+            "/media/fat/_DOS Games/Doom (Ultimate).mgl",
         )];
 
         assert_eq!(unique_discovery_count(&discoveries), 1);
+    }
+
+    #[test]
+    fn mgl_discovery_preserves_script_as_launch_ref() {
+        let path =
+            std::env::temp_dir().join(format!("mister-magic-mgl-test-{}.mgl", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><file delay="2" type="s" path="games/NES/Mario.nes"/></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+        let meta = std::fs::metadata(&path).expect("stat mgl fixture");
+        let file = FoundFile {
+            path: path.clone(),
+            root: "/media/fat/_Console".to_string(),
+            ext: "mgl".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+
+        let discovery = discovery_from_file(&file, DiscoverySourceKind::Mgl);
+
+        assert_eq!(discovery.source_path, path.display().to_string());
+        assert_eq!(discovery.launch_ref, path.display().to_string());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn catalog_entries_need_xml_launch_refs_to_count_as_games() {
+        let mut discovery = GameDiscovery {
+            source_path: "/media/fat/games/Amiga/AmigaVision.7z::games.txt::Agony".to_string(),
+            launch_ref: "/media/fat/games/Amiga/AmigaVision.7z".to_string(),
+            source_kind: DiscoverySourceKind::CatalogEntry,
+            title: "Agony".to_string(),
+            category: "Computer".to_string(),
+            platform_id: "amiga".to_string(),
+            core_id: "AmigaVision".to_string(),
+            hardware_id: "commodore-amiga".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::CatalogMetadata,
+        };
+
+        assert!(!is_playable_discovery(&discovery));
+        discovery.launch_ref = "/media/fat/games/Amiga/Agony.mgl".to_string();
+        assert!(is_playable_discovery(&discovery));
     }
 
     #[test]
