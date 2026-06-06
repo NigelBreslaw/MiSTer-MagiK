@@ -1,6 +1,6 @@
 //! Arcade catalog helpers: recursive `.mra` scan + optional `gamelist.xml` metadata.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -10,6 +10,9 @@ pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 pub const ARCADE_ROW_HEIGHT: i32 = 48;
 /// Visible list height: 540 − 72 layout chrome (matches `arcade_list.slint` left pane).
 pub const ARCADE_LIST_VISIBLE_H: i32 = 468;
+pub const HOME_TILE_WIDTH: i32 = 220;
+pub const HOME_TILE_GAP: i32 = 16;
+pub const HOME_LIST_VISIBLE_W: i32 = 912;
 
 #[derive(Clone, Debug, Default)]
 pub struct PhaseTiming {
@@ -54,12 +57,21 @@ pub struct ArcadeGameEntry {
     pub mra_path: String,
     pub image_path: String,
     pub has_image: bool,
+    pub system_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GameSystemEntry {
+    pub id: String,
+    pub title: String,
+    pub count: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Vec<ArcadeGameEntry>,
+    pub systems: Vec<GameSystemEntry>,
 }
 
 impl ArcadeCatalog {
@@ -75,8 +87,12 @@ impl ArcadeCatalog {
             .unwrap_or("Game")
     }
 
-    pub fn path_at(&self, index: usize) -> Option<&str> {
-        self.games.get(index).map(|g| g.mra_path.as_str())
+    pub fn system_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
+        self.games
+            .iter()
+            .filter(|g| g.system_id == system_id)
+            .cloned()
+            .collect()
     }
 }
 
@@ -251,7 +267,93 @@ pub fn build_with_options(
     );
     timings.total_ms = t0.elapsed().as_millis() as u64;
 
-    (ArcadeCatalog { root, games }, timings)
+    let systems = systems_from_games(&games);
+    (
+        ArcadeCatalog {
+            root,
+            games,
+            systems,
+        },
+        timings,
+    )
+}
+
+pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for game in games {
+        *counts.entry(game.system_id.clone()).or_default() += 1;
+    }
+    let mut systems: Vec<GameSystemEntry> = counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(id, count)| GameSystemEntry {
+            title: system_title(&id),
+            id,
+            count,
+        })
+        .collect();
+    systems.sort_by_cached_key(system_sort_key);
+    systems
+}
+
+fn system_sort_key(system: &GameSystemEntry) -> String {
+    let rank = match system.id.as_str() {
+        "arcade" => 0,
+        "amiga" => 1,
+        "neogeo" => 2,
+        "nes" => 3,
+        "snes" => 4,
+        "saturn" => 5,
+        "megadrive" => 6,
+        "gba" => 7,
+        "gbc" => 8,
+        "n64" => 9,
+        "gamegear" => 10,
+        "vectrex" => 11,
+        "ao486" => 12,
+        "unknown" => 999,
+        _ => 100,
+    };
+    format!("{rank:03}-{}", system.title.to_lowercase())
+}
+
+pub fn system_title(id: &str) -> String {
+    match id {
+        "arcade" => "Arcade".to_string(),
+        "neogeo" | "neo-geo" | "snk-neo-geo" => "NeoGeo".to_string(),
+        "cps1" | "capcom-cps1" => "CPS1".to_string(),
+        "cps2" | "capcom-cps2" => "CPS2".to_string(),
+        "cps3" | "capcom-cps3" => "CPS3".to_string(),
+        "system16" | "sega-system16" => "System 16".to_string(),
+        "system18" | "sega-system18" => "System 18".to_string(),
+        "m72" | "irem-m72" => "Irem M72".to_string(),
+        "m92" | "irem-m92" => "Irem M92".to_string(),
+        "gba" => "GBA".to_string(),
+        "gbc" => "GBC".to_string(),
+        "gb" => "GB".to_string(),
+        "nes" => "NES".to_string(),
+        "snes" => "SNES".to_string(),
+        "n64" => "N64".to_string(),
+        "sms" => "SMS".to_string(),
+        "psx" => "PSX".to_string(),
+        "ao486" => "ao486".to_string(),
+        "megadrive" => "Mega Drive".to_string(),
+        "megacd" => "Mega CD".to_string(),
+        "gamegear" => "Game Gear".to_string(),
+        "unknown" => "Unknown".to_string(),
+        other => other
+            .split(['-', '_'])
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
 }
 
 fn walk_mra(root: &Path) -> Vec<PathBuf> {
@@ -563,6 +665,7 @@ fn merge_entries(
             mra_path: path.display().to_string(),
             image_path,
             has_image: false,
+            system_id: "arcade".to_string(),
         });
         on_progress(i + 1, total);
     }
@@ -806,12 +909,14 @@ mod tests {
                 mra_path: "/media/fat/_Arcade/_Organized/a/1943- Kai Midway Kaisen (JP).mra".into(),
                 image_path: String::new(),
                 has_image: false,
+                system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "1943- Kai Midway Kaisen (JP)".into(),
                 mra_path: "/media/fat/_Arcade/1943- Kai Midway Kaisen (JP).mra".into(),
                 image_path: String::new(),
                 has_image: true,
+                system_id: "arcade".into(),
             },
         ];
         let out = dedupe_by_title(games);

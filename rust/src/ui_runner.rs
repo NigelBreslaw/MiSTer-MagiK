@@ -459,11 +459,17 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(0);
     bridge.set_selected_index(0);
+    bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
     bridge.set_confirm_visible(false);
     bridge.set_confirm_title("".into());
     bridge.set_confirm_message("".into());
     bridge.set_confirm_selected(0);
+    bridge.set_game_systems(ModelRc::new(VecModel::from(
+        Vec::<slint_ui::launcher::GameSystem>::new(),
+    )));
+    bridge.set_home_scroll_x(0);
+    bridge.set_active_system_title("".into());
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
     bridge.set_arcade_preview_has_image(false);
@@ -501,9 +507,20 @@ fn sync_bridge_launcher(
         Screen::Settings => 3,
     });
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_home_scroll_x(nav.scroll_x);
+    bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_arcade_selected(nav.arcade.selected as i32);
     bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    if let Some(catalog) = catalog {
+        let games = active_system_games(catalog, nav);
+        let title = active_system(catalog, nav)
+            .map(|system| system.title.clone())
+            .unwrap_or_else(|| "Games".to_string());
+        bridge.set_game_systems(slint_game_systems(&catalog.systems));
+        bridge.set_active_system_title(title.into());
+        bridge.set_arcade_games(slint_arcade_games(&games));
+    }
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     match nav.confirm_action {
@@ -523,7 +540,10 @@ fn sync_bridge_launcher(
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
-        request_arcade_preview(&bridge, catalog, nav.arcade.selected, preview);
+        let games = catalog
+            .map(|catalog| active_system_games(catalog, nav))
+            .unwrap_or_default();
+        request_arcade_preview(&bridge, &games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
     }
@@ -564,7 +584,7 @@ impl PreviewImageCache {
 
 struct PreviewState {
     worker: PreviewWorker,
-    last_preview_idx: Option<usize>,
+    last_preview_path: Option<String>,
     current_generation: u64,
     cache: PreviewImageCache,
     has_visible_preview: bool,
@@ -575,7 +595,7 @@ impl PreviewState {
     fn new() -> Self {
         Self {
             worker: PreviewWorker::new(),
-            last_preview_idx: None,
+            last_preview_path: None,
             current_generation: 0,
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
@@ -584,8 +604,8 @@ impl PreviewState {
     }
 
     fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
-        if self.last_preview_idx.is_some() || self.current_generation != 0 {
-            self.last_preview_idx = None;
+        if self.last_preview_path.is_some() || self.current_generation != 0 {
+            self.last_preview_path = None;
             self.current_generation = 0;
             self.has_visible_preview = false;
             self.visible_path.clear();
@@ -599,30 +619,22 @@ impl PreviewState {
 
 fn request_arcade_preview(
     bridge: &slint_ui::launcher::MisterBridge,
-    catalog: Option<&ArcadeCatalog>,
+    games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
 ) {
-    if preview.last_preview_idx == Some(selected) {
+    let Some(game) = games.get(selected) else {
+        preview.last_preview_path = None;
+        bridge.set_arcade_preview_has_image(false);
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+        bridge.set_arcade_preview_title("".into());
+        bridge.set_arcade_preview_image(Image::default());
+        return;
+    };
+    if preview.last_preview_path.as_deref() == Some(game.mra_path.as_str()) {
         return;
     }
-    preview.last_preview_idx = Some(selected);
-
-    let Some(catalog) = catalog else {
-        bridge.set_arcade_preview_has_image(false);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        bridge.set_arcade_preview_title("".into());
-        bridge.set_arcade_preview_image(Image::default());
-        return;
-    };
-
-    let Some(game) = catalog.games.get(selected) else {
-        bridge.set_arcade_preview_has_image(false);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        bridge.set_arcade_preview_title("".into());
-        bridge.set_arcade_preview_image(Image::default());
-        return;
-    };
+    preview.last_preview_path = Some(game.mra_path.clone());
 
     bridge.set_arcade_preview_title(game.title.clone().into());
     if game.has_image {
@@ -693,6 +705,21 @@ fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::
             mra_path: g.mra_path.clone().into(),
             image_path: g.image_path.clone().into(),
             has_image: g.has_image,
+            system_id: g.system_id.clone().into(),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+fn slint_game_systems(
+    systems: &[arcade_catalog::GameSystemEntry],
+) -> ModelRc<slint_ui::launcher::GameSystem> {
+    let rows: Vec<slint_ui::launcher::GameSystem> = systems
+        .iter()
+        .map(|system| slint_ui::launcher::GameSystem {
+            id: system.id.clone().into(),
+            title: system.title.clone().into(),
+            count: system.count as i32,
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
@@ -702,7 +729,21 @@ fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     ArcadeCatalog {
         root: PathBuf::from(root),
         games: Vec::new(),
+        systems: Vec::new(),
     }
+}
+
+fn active_system<'a>(
+    catalog: &'a ArcadeCatalog,
+    nav: &LauncherNav,
+) -> Option<&'a arcade_catalog::GameSystemEntry> {
+    catalog.systems.get(nav.selected)
+}
+
+fn active_system_games(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<ArcadeGameEntry> {
+    active_system(catalog, nav)
+        .map(|system| catalog.system_games(&system.id))
+        .unwrap_or_default()
 }
 
 fn start_library_catalog_worker(
@@ -832,6 +873,8 @@ impl SetupBridgeKey {
 struct LauncherBridgeKey {
     screen: Screen,
     selected: usize,
+    scroll_x: i32,
+    settings_focused: bool,
     settings_selected: usize,
     confirm_action: Option<launcher::ConfirmAction>,
     confirm_selected: usize,
@@ -844,6 +887,8 @@ impl LauncherBridgeKey {
         Self {
             screen: nav.screen,
             selected: nav.selected,
+            scroll_x: nav.scroll_x,
+            settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
             confirm_action: nav.confirm_action,
             confirm_selected: nav.confirm_selected,
@@ -1937,7 +1982,7 @@ fn run_launcher_loop(
     let catalog_rx = start_library_catalog_worker(arcade_root.clone(), catalog_ready);
     let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    bridge.set_arcade_games(slint_arcade_games(&catalog.games));
+    bridge.set_game_systems(slint_game_systems(&catalog.systems));
     bridge.set_catalog_scan_visible(!catalog_ready);
     bridge.set_catalog_scan_title(if catalog_ready {
         "Refreshing library".into()
@@ -2016,7 +2061,6 @@ fn run_launcher_loop(
                             );
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_arcade_games(slint_arcade_games(&catalog.games));
                         bridge.set_catalog_scan_visible(false);
                         bridge.set_catalog_scan_title("".into());
                         bridge.set_catalog_scan_detail("".into());

@@ -1,6 +1,9 @@
 //! Launcher navigation and arcade game launch.
 
-use crate::arcade_catalog::{ArcadeCatalog, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT};
+use crate::arcade_catalog::{
+    ArcadeCatalog, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W, HOME_TILE_GAP,
+    HOME_TILE_WIDTH,
+};
 use crate::input::PadState;
 use crate::input_repeat::RepeatNav;
 use crate::library_bench;
@@ -67,6 +70,8 @@ impl ArcadeNav {
 pub struct LauncherNav {
     pub screen: Screen,
     pub selected: usize,
+    pub scroll_x: i32,
+    pub settings_focused: bool,
     pub settings_selected: usize,
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
@@ -80,6 +85,8 @@ impl LauncherNav {
         Self {
             screen: Screen::Home,
             selected: 0,
+            scroll_x: 0,
+            settings_focused: false,
             settings_selected: 0,
             confirm_action: None,
             confirm_selected: 0,
@@ -100,7 +107,7 @@ impl LauncherNav {
             self.handle_confirm(now, frame_now)
         } else {
             match self.screen {
-                Screen::Home => self.handle_home(now, frame_now),
+                Screen::Home => self.handle_home(now, frame_now, catalog.systems.len()),
                 Screen::Controller => {
                     if rising(now.btn_home, self.prev.btn_home)
                         || rising(now.btn_b, self.prev.btn_b)
@@ -117,38 +124,46 @@ impl LauncherNav {
         result
     }
 
-    fn handle_home(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+    fn handle_home(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        system_count: usize,
+    ) -> Option<LauncherEvent> {
+        if self.repeat.tick_up(now.dpad_up, frame_now) {
+            self.settings_focused = true;
+        }
+        if self.repeat.tick_down(now.dpad_down, frame_now) {
+            self.settings_focused = false;
+        }
+        if self.settings_focused {
+            if rising(now.btn_a, self.prev.btn_a) {
+                self.settings_selected = 0;
+                self.screen = Screen::Settings;
+            }
+            return None;
+        }
+
+        if system_count == 0 {
+            return None;
+        }
+
+        if self.selected >= system_count {
+            self.selected = system_count - 1;
+            keep_home_visible(self.selected, &mut self.scroll_x, system_count);
+        }
         if self.repeat.tick_left(now.dpad_left, frame_now) && self.selected > 0 {
             self.selected -= 1;
+            keep_home_visible(self.selected, &mut self.scroll_x, system_count);
         }
-        if self.repeat.tick_right(now.dpad_right, frame_now) && self.selected < 2 {
+        if self.repeat.tick_right(now.dpad_right, frame_now) && self.selected + 1 < system_count {
             self.selected += 1;
-        }
-        if self.repeat.tick_up(now.dpad_up, frame_now) && self.selected > 0 {
-            self.selected -= 1;
-        }
-        if self.repeat.tick_down(now.dpad_down, frame_now) && self.selected < 2 {
-            self.selected += 1;
+            keep_home_visible(self.selected, &mut self.scroll_x, system_count);
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            return match self.selected {
-                0 => {
-                    self.screen = Screen::Controller;
-                    None
-                }
-                1 => {
-                    self.arcade.reset();
-                    self.screen = Screen::Arcade;
-                    None
-                }
-                2 => {
-                    self.settings_selected = 0;
-                    self.screen = Screen::Settings;
-                    None
-                }
-                _ => None,
-            };
+            self.arcade.reset();
+            self.screen = Screen::Arcade;
         }
 
         None
@@ -160,7 +175,12 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        let count = catalog.len();
+        let games = catalog
+            .systems
+            .get(self.selected)
+            .map(|system| catalog.system_games(&system.id))
+            .unwrap_or_default();
+        let count = games.len();
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Home;
@@ -186,11 +206,11 @@ impl LauncherNav {
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            return catalog
-                .path_at(self.arcade.selected)
-                .map(|p| LauncherEvent {
+            return games
+                .get(self.arcade.selected)
+                .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
-                    path: Some(p.to_string()),
+                    path: Some(game.mra_path.clone()),
                 });
         }
 
@@ -202,16 +222,20 @@ impl LauncherNav {
             self.screen = Screen::Home;
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now) && self.settings_selected < 1 {
+        if self.repeat.tick_down(now.dpad_down, frame_now) && self.settings_selected < 2 {
             self.settings_selected += 1;
         }
         if self.repeat.tick_up(now.dpad_up, frame_now) && self.settings_selected > 0 {
             self.settings_selected -= 1;
         }
         if rising(now.btn_a, self.prev.btn_a) {
+            if self.settings_selected == 0 {
+                self.screen = Screen::Controller;
+                return None;
+            }
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
-                0 => ConfirmAction::ResetDatabase,
+                1 => ConfirmAction::ResetDatabase,
                 _ => ConfirmAction::Restart,
             });
         }
@@ -256,6 +280,26 @@ impl LauncherNav {
 fn arcade_max_scroll(count: usize) -> i32 {
     let content = count as i32 * ARCADE_ROW_HEIGHT;
     (content - ARCADE_LIST_VISIBLE_H).max(0)
+}
+
+fn home_max_scroll(count: usize) -> i32 {
+    if count == 0 {
+        return 0;
+    }
+    let content = count as i32 * HOME_TILE_WIDTH + (count.saturating_sub(1) as i32 * HOME_TILE_GAP);
+    (content - HOME_LIST_VISIBLE_W).max(0)
+}
+
+fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
+    let tile_left = selected as i32 * (HOME_TILE_WIDTH + HOME_TILE_GAP);
+    let tile_right = tile_left + HOME_TILE_WIDTH;
+    if tile_left < *scroll_x {
+        *scroll_x = tile_left;
+    }
+    if tile_right > *scroll_x + HOME_LIST_VISIBLE_W {
+        *scroll_x = tile_right - HOME_LIST_VISIBLE_W;
+    }
+    *scroll_x = (*scroll_x).clamp(0, home_max_scroll(count));
 }
 
 fn keep_arcade_visible(arcade: &mut ArcadeNav, count: usize) {
@@ -359,9 +403,9 @@ pub fn mister_running_arcade_core() -> bool {
 
 /// Launch via fifo `load_core`. Spawns MiSTer if Slint owns the device (normal boot).
 /// Returns `true` if MiSTer was spawned for this launch (caller should stop it on failure).
-pub fn execute_game_launch(mra_path: &str) -> Result<bool, String> {
-    if !Path::new(mra_path).exists() {
-        return Err(format!("MRA not found: {mra_path}"));
+pub fn execute_game_launch(launch_ref: &str) -> Result<bool, String> {
+    if !Path::new(launch_ref).exists() {
+        return Err(format!("launch target not found: {launch_ref}"));
     }
 
     let spawned = if mister_running() {
@@ -376,8 +420,8 @@ pub fn execute_game_launch(mra_path: &str) -> Result<bool, String> {
         return Err(format!("timed out waiting for {CMD_FIFO}"));
     }
 
-    println!("launch: load_core {mra_path}");
-    write_load_core(mra_path)?;
+    println!("launch: load_core {launch_ref}");
+    write_load_core(launch_ref)?;
 
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
     Ok(spawned)
