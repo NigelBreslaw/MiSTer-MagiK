@@ -21,12 +21,29 @@ scripts/dev-rust fmt       # cargo fmt --check
 scripts/dev-rust fmt-fix   # cargo fmt
 scripts/dev-rust test      # cargo test --lib --no-default-features
 scripts/dev-rust check     # cargo check --lib --no-default-features
+scripts/dev-rust check-arm-lib       # ARM --lib check, no Slint/UI
+scripts/dev-rust check-arm-ui        # ARM launcher/controller UI check
+scripts/dev-rust check-arm-ui-full   # ARM all-scenes UI check
+scripts/dev-rust build-arm-debug     # ARM launcher/controller debug binary
 scripts/dev-rust build-ui  # rust/build-arm.sh --fast
 ```
 
 The host-testable library contains pure catalog/controller/repeat logic. The
 framebuffer, FPGA, Linux input loop, and Slint renderer stay in the binary target
 behind Cargo feature `ui`.
+
+For debug-time build measurements, use:
+
+```bash
+scripts/bench-debug-build.sh --scenario arm-check-launcher --samples 3
+scripts/bench-debug-build.sh --scenario all --samples 3 --state package-dirty
+```
+
+The benchmark writes `build/debug-build-bench.tsv` with wall time, Cargo total
+time, and the largest `mister-magic-fb` timing units. `check-arm-ui` uses
+`MISTER_UI_BUILD_SCOPE=launcher`, so it compiles only the launcher, controller
+test, and demo Slint entrypoints. Full optimized builds and `check-arm-ui-full`
+still compile every benchmark scene.
 
 ## Commands
 

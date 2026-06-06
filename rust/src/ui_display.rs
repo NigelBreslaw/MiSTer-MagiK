@@ -71,6 +71,7 @@ impl UiDisplay {
 }
 
 /// `dirty_band` scene: 1–100 (% of logical height dirtied per frame).
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 pub fn dirty_band_pct_from_env() -> i32 {
     std::env::var("MISTER_DIRTY_BAND_PCT")
         .ok()

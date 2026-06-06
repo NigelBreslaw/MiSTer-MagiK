@@ -442,6 +442,7 @@ impl Display {
     }
 
     /// Copy a dense source rectangle into the framebuffer at (x,y).
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
     pub fn copy_rect_from(&mut self, x: usize, y: usize, w: usize, h: usize, src: &[Pixel]) {
         if w == 0 || h == 0 {
             return;
@@ -464,6 +465,7 @@ impl Display {
 
     /// Copy a logical source rectangle into an arbitrary framebuffer location,
     /// nearest-neighbour scaled by `scale`.
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
     pub fn copy_rect_scaled_at(
         &mut self,
         dst_x: usize,

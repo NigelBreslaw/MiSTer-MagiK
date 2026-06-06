@@ -14,6 +14,11 @@ Commands:
   fmt-fix   Run cargo fmt
   test      Run fast host logic tests without Slint/UI
   check     Compile the host-testable library without Slint/UI
+  check-arm-lib      Cross-check host-testable library for ARM, without Slint/UI
+  check-arm-ui       Cross-check launcher/controller Slint UI for ARM
+  check-arm-ui-full  Cross-check all Slint UI scenes for ARM
+  build-arm-debug       Cross-build launcher/controller ARM debug binary
+  build-arm-debug-full  Cross-build all-scene ARM debug binary
   build-ui  Build the ARM Slint binary via rust/build-arm.sh --fast
 EOF
 }
@@ -23,6 +28,11 @@ need_component_hint() {
   echo "Hint: this repo declares Rust components in rust/rust-toolchain.toml." >&2
   echo "      If rustup did not install $component automatically, run:" >&2
   echo "      rustup component add $component --toolchain stable-aarch64-apple-darwin" >&2
+}
+
+cross_env() {
+  export DOCKER_DEFAULT_PLATFORM=linux/amd64
+  export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32,48}"
 }
 
 cmd="${1:-}"
@@ -48,6 +58,52 @@ case "$cmd" in
   check)
     cd "$RUST_DIR"
     cargo check --lib --no-default-features
+    ;;
+  check-arm-lib)
+    cd "$RUST_DIR"
+    cross_env
+    cross check \
+      --lib \
+      --target armv7-unknown-linux-gnueabihf \
+      --no-default-features \
+      --timings \
+      --locked
+    ;;
+  check-arm-ui)
+    cd "$RUST_DIR"
+    cross_env
+    MISTER_UI_BUILD_SCOPE=launcher cross check \
+      --target armv7-unknown-linux-gnueabihf \
+      --features ui \
+      --timings \
+      --locked
+    ;;
+  check-arm-ui-full)
+    cd "$RUST_DIR"
+    cross_env
+    MISTER_UI_BUILD_SCOPE=all cross check \
+      --target armv7-unknown-linux-gnueabihf \
+      --features ui \
+      --timings \
+      --locked
+    ;;
+  build-arm-debug)
+    cd "$RUST_DIR"
+    cross_env
+    MISTER_UI_BUILD_SCOPE=launcher cross build \
+      --target armv7-unknown-linux-gnueabihf \
+      --features ui \
+      --timings \
+      --locked
+    ;;
+  build-arm-debug-full)
+    cd "$RUST_DIR"
+    cross_env
+    MISTER_UI_BUILD_SCOPE=all cross build \
+      --target armv7-unknown-linux-gnueabihf \
+      --features ui \
+      --timings \
+      --locked
     ;;
   build-ui)
     "$RUST_DIR/build-arm.sh" --fast
