@@ -60,9 +60,7 @@ cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || t
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 $(pidof mister-magic-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 $(pidof Mister_MagiK) 2>/dev/null || true
 '
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
@@ -160,6 +158,22 @@ END {
 mv "$tmp" "$INI"
 echo "Menu video_mode=8 ensured"
 
+# Current Main_MiSTer release accepts vrr_mode and vrr_vesa_framerate, but not
+# these min/max keys. Leave them documented, never active, to avoid boot warnings.
+for ini_path in "$INI" /media/fat/MiSTer.ini.bak; do
+  [ -f "$ini_path" ] || continue
+  tmp="$ini_path.new"
+  awk '"'"'
+tolower($0) ~ /^[[:space:]]*vrr_(min|max)_framerate[[:space:]]*=/ {
+  print ";" $0
+  next
+}
+{ print }
+'"'"' "$ini_path" > "$tmp"
+  mv "$tmp" "$ini_path"
+done
+echo "unsupported VRR min/max keys commented"
+
 tmp=/tmp/inittab.magik
 awk '"'"'
 BEGIN { wrote = 0 }
@@ -186,7 +200,7 @@ grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
 echo "=== post-install MiSTer.ini boot keys ==="
 awk '"'"'BEGIN{s="global"} /^\[/ {s=$0} /^[[:space:]]*(main|video_mode|direct_video)[[:space:]]*=/ {print s " " NR ":" $0}'"'"' "$INI"
 echo "=== post-install processes ==="
-ps | grep -E "[M]iSTer|[M]ister_MagiK|[m]ister-magic-fb" || true
+ps | grep -E "[M]iSTer|[M]iSTer_MagiK|[m]ister-magik-fb" || true
 echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '

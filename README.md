@@ -1,4 +1,4 @@
-# MiSTer-MagiK
+# MiSTer MagiK
 
 A [Slint](https://slint.dev) front end for the **MiSTer FPGA**, built as a native
 **Rust** binary with a custom software renderer, vsync pacing, and direct FPGA
@@ -45,7 +45,7 @@ Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
 See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.
 See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork experiment.
 
-## Boot into Mister MagiK
+## Boot into MiSTer MagiK
 
 **Do not** set `main=mister-magik-fb` in `MiSTer.ini` — MiSTer execs away before
 `video_init()` and the TV gets no HDMI signal.

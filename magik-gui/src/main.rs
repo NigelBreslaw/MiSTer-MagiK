@@ -2,6 +2,7 @@
 //!
 //! Subcommands:
 //!   read      read & print the live video mode + fb params (UIO_GET_VRES/FB_PAR)
+//!   route     set /dev/fb0 to 1080p and route buffer 0 to HDMI
 //!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!   scenes    list Slint scene names
 //!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
@@ -49,6 +50,7 @@ const H: usize = 1080;
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const COMMANDS: &[&str] = &[
     "read",
+    "route",
     "fb",
     "ui",
     "scenes",
@@ -86,6 +88,7 @@ fn main() {
 
     match cmd.as_str() {
         "read" => read_mode(&mut f),
+        "route" => route_framebuffer(&mut f),
         "fb" => fb_test(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
@@ -155,6 +158,12 @@ fn exec_mister(args: &[String]) {
     let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
     eprintln!("execv({MISTER_BIN}) failed: {err}");
     std::process::exit(1);
+}
+
+fn route_framebuffer(f: &mut Fpga) {
+    Display::set_mode_1080p();
+    let flag = f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
+    println!("route: fb0 1920x1080 -> HDMI support_flag={flag}");
 }
 
 fn fb_test(f: &mut Fpga) {

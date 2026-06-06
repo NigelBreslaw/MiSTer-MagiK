@@ -26,6 +26,18 @@ This is not an official MiSTer-devel build. The experiment binary is deployed as
 ```
 
 - Main keeps polling while Slint is a child process.
+- Slint reasserts the final 1920x1080 framebuffer route after launch. Main's
+  `video_fb_enable(1)` is useful as an initial handoff, but it must not be the
+  final HDMI geometry authority; on 2026-06-06 it produced a TV-visible zoomed
+  crop while `/dev/fb0` captured correctly.
+- Like Zaparoo, the fork must suppress the normal menu path as soon as the
+  alternate launcher is configured. The menu hook clears `/dev/fb0` and spawns
+  Slint immediately; delaying to a later scheduler tick lets the stock menu leak
+  onto HDMI.
+- Do not use Main's `video_fb_enable(1)` for the blackout. Once Main sets
+  `fb_enabled`, `video_poll()` can keep reapplying Main's route and override
+  Slint's correct HDMI geometry. Slint owns the final route; the fork uses
+  `mister-magik-fb route` to return HDMI to Slint after stock OSD handoff.
 - Main exposes an experimental command through `/dev/MiSTer_cmd`:
 
 ```text
@@ -57,7 +69,7 @@ main=MiSTer_MagiK
 
 Stock `/media/fat/MiSTer` remains the canonical boot binary. It reads
 `MiSTer.ini` and re-execs `/media/fat/MiSTer_MagiK` through MiSTer's native
-`main=` hook. This keeps `update_all` working normally and lets Mister MagiK
+`main=` hook. This keeps `update_all` working normally and lets MiSTer MagiK
 become an update_all-managed add-on later.
 
 `scripts/restore-stock-boot.sh` returns boot to stock by removing
@@ -144,8 +156,9 @@ and runs correctly through Main-as-parent.
 
 After `update_all` on 2026-06-06, the test MiSTer has stock Main/menu/core
 release files from 20260603, including `NeoGeo_20260603.rbf`. The device's
-`MiSTer.ini` had two unsupported VRR-specific keys, so they were commented with
-MiSTer-style semicolon comments:
+`MiSTer.ini` had two unsupported VRR-specific keys, so they must stay commented
+with MiSTer-style semicolon comments. `vrr_mode` and `vrr_vesa_framerate` are
+present in the current upstream template; the min/max keys are not.
 
 ```text
 ;vrr_min_framerate=0

@@ -31,6 +31,16 @@ See `history/2026-5-2/framebuffer-experiments.md` for the exploration path.
 
 Remaining work: live-mode geometry, in-game settings strategy (§7).
 
+### Canonical names
+
+- Product/UI text: **MiSTer MagiK**.
+- Main_MiSTer fork binary/process/device path: `MiSTer_MagiK`.
+- Slug for directories and scripts: `mister-magik`.
+- Slint framebuffer binary/package: `mister-magik-fb`; Rust crate/import name:
+  `mister_magik_fb`.
+- Do not introduce legacy mixed-case variants or the old `magic` spelling in
+  operational code, paths, scripts, or docs.
+
 ---
 
 ## 2. The MiSTer device (facts)
@@ -117,10 +127,13 @@ To show Slint on HDMI we need:
    write-combined `/dev/fb0` (§9.7).
 
 We issue the SPI sequence ourselves from Rust (`magik-gui/src/fpga.rs`) to route
-`/dev/fb0` to HDMI during Slint UI. **Production stops MiSTer after
-`video_init()`** so Slint owns SPI and evdev (no menu grab). Games launch by
-spawning MiSTer briefly and writing fifo `load_core` (§7). Do **not** use external
-`rbf_load` from Slint — bricks HDMI.
+`/dev/fb0` to HDMI during Slint UI. In the Main-as-parent boot model, the fork
+starts the Slint child, but Slint still reasserts the final 1080p framebuffer
+route with `fb_enable_direct(... MODE_1080P60 ...)`. Do not rely on the fork
+parent's plain `video_fb_enable(1)` for final geometry: on 2026-06-06 that left
+the TV showing a massively zoomed crop even though `/dev/fb0` captured correctly.
+Games launch by spawning MiSTer briefly and writing fifo `load_core` (§7). Do
+**not** use external `rbf_load` from Slint — bricks HDMI.
 
 **F9 / keep-MiSTer-running was tried and rejected:** MiSTer keeps `EVIOCGRAB`
 and the FPGA menu OSD unless it processes F9 internally. Injected F9 from uinput
@@ -254,6 +267,16 @@ This keeps `update_all` first-class: stock `/media/fat/MiSTer` remains the
 canonical boot binary, while `/media/fat/MiSTer_MagiK` is an add-on payload that
 can later be managed by update_all. Rollback is simple: remove
 `main=MiSTer_MagiK`, ensure inittab boots `/media/fat/MiSTer`, and reboot.
+
+Like Zaparoo, the fork must suppress the normal menu path immediately when the
+alternate launcher is configured. The menu hook clears `/dev/fb0` and spawns
+Slint at once; if spawn is deferred, the stock menu can leak onto HDMI and can
+also leave confusing intermediate video state for the TV.
+Do not call Main's `video_fb_enable(1)` for this blackout: once Main sets
+`fb_enabled`, `video_poll()` can keep reapplying Main's route and override
+Slint's correct HDMI geometry. Slint is responsible for the final framebuffer
+route. The fork can ask the Slint binary to run `mister-magik-fb route` when it
+needs to return HDMI to Slint after the stock OSD.
 
 **Game launch:** Slint spawns MiSTer if needed, writes `load_core <path.mra>` to
 `/dev/MiSTer_cmd`, then exits when the arcade core is detected. On launch failure,

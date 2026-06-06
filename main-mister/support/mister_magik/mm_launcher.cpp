@@ -1,6 +1,7 @@
 #include "mm_launcher.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@ char user_io_osd_is_visible(void);
 
 static const char s_launcher_path[] = "/media/fat/mister-magik/mister-magik-fb";
 static const char s_log_path[] = "/tmp/mister-magik-main.log";
+static const char s_route_cmd[] = "/media/fat/mister-magik/mister-magik-fb route >/tmp/mister-magik-route.log 2>&1";
 static pid_t s_pid = 0;
 static int s_crash_count = 0;
 static unsigned long s_respawn_timer = 0;
@@ -54,9 +56,37 @@ static void log_errno(const char *prefix)
 static void focus_slint_framebuffer()
 {
 	video_chvt(2);
-	video_fb_enable(1);
+	system(s_route_cmd);
 	if (menu_present()) MenuHide();
 	OsdDisable();
+}
+
+static void clear_linux_framebuffer()
+{
+	int fd = open("/dev/fb0", O_WRONLY | O_CLOEXEC);
+	if (fd < 0)
+	{
+		log_errno("clear fb open failed");
+		return;
+	}
+
+	static const char zeros[4096] = {};
+	const size_t bytes = 1920 * 1080 * 4;
+	size_t written = 0;
+	lseek(fd, 0, SEEK_SET);
+	while (written < bytes)
+	{
+		size_t chunk = bytes - written;
+		if (chunk > sizeof(zeros)) chunk = sizeof(zeros);
+		ssize_t n = write(fd, zeros, chunk);
+		if (n <= 0)
+		{
+			if (errno != ENOSPC) log_errno("clear fb write failed");
+			break;
+		}
+		written += (size_t)n;
+	}
+	close(fd);
 }
 
 void mm_launcher_cfg_apply(void)
@@ -208,6 +238,9 @@ void mm_launcher_init_for_menu(void)
 	s_crash_count = 0;
 	s_respawn_timer = 0;
 	s_init_pending = true;
+	clear_linux_framebuffer();
+	spawn();
+	s_init_pending = false;
 }
 
 void mm_launcher_poll(void)
