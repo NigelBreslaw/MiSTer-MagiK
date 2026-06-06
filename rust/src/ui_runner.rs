@@ -804,6 +804,54 @@ fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
     }
 }
 
+#[derive(PartialEq, Eq)]
+struct SetupBridgeKey {
+    phase: SetupPhase,
+    trigger_status: crate::controller_db::PadRegistryStatus,
+    target_pad_idx: usize,
+    list_index: usize,
+    draft_label: String,
+    draft_kind: crate::controller_db::ControllerKind,
+}
+
+impl SetupBridgeKey {
+    fn from_setup(setup: &SetupNav) -> Self {
+        Self {
+            phase: setup.phase,
+            trigger_status: setup.trigger_status,
+            target_pad_idx: setup.target_pad_idx,
+            list_index: setup.list_index,
+            draft_label: setup.draft_label.clone(),
+            draft_kind: setup.draft_kind,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct LauncherBridgeKey {
+    screen: Screen,
+    selected: usize,
+    settings_selected: usize,
+    confirm_action: Option<launcher::ConfirmAction>,
+    confirm_selected: usize,
+    arcade_selected: usize,
+    arcade_scroll_y: i32,
+}
+
+impl LauncherBridgeKey {
+    fn from_nav(nav: &LauncherNav) -> Self {
+        Self {
+            screen: nav.screen,
+            selected: nav.selected,
+            settings_selected: nav.settings_selected,
+            confirm_action: nav.confirm_action,
+            confirm_selected: nav.confirm_selected,
+            arcade_selected: nav.arcade.selected,
+            arcade_scroll_y: nav.arcade.scroll_y,
+        }
+    }
+}
+
 fn sync_setup_bridge(bridge: &slint_ui::launcher::MisterBridge, pad: &PadPool, setup: &SetupNav) {
     let info = setup_pad_info(pad, setup);
     let db = pad.db();
@@ -2010,13 +2058,14 @@ fn run_launcher_loop(
         }
 
         if !launching {
-            let _changed = pad.poll();
+            let pad_changed = pad.poll();
             let frame_now = Instant::now();
             let state = pad.state();
             let active_idx = pad.active_idx();
             let info = pad.info();
 
             if setup_active {
+                let setup_before = SetupBridgeKey::from_setup(&setup);
                 let setup_info = pad.info_at(setup.target_pad_idx);
                 match setup.handle_input(&state, frame_now, setup_info, pad.db()) {
                     SetupAction::None => {}
@@ -2049,12 +2098,16 @@ fn run_launcher_loop(
                         setup.advance_to_next_pad(&pad);
                     }
                 }
-                bridge_dirty = true;
+                let setup_after = SetupBridgeKey::from_setup(&setup);
+                bridge_dirty |= pad_changed || setup_before != setup_after;
             } else {
-                if _changed {
+                if pad_changed {
+                    let setup_before = SetupBridgeKey::from_setup(&setup);
                     setup.maybe_open(info, active_idx, pad.db(), true);
+                    bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
                 }
                 if !setup.is_active() {
+                    let nav_before = LauncherBridgeKey::from_nav(&nav);
                     if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
                         match event.action {
                             LauncherAction::ResetDatabase => {
@@ -2163,7 +2216,7 @@ fn run_launcher_loop(
                         }
                         window.request_redraw();
                     }
-                    bridge_dirty = true;
+                    bridge_dirty |= pad_changed || nav_before != LauncherBridgeKey::from_nav(&nav);
                 }
             }
 
@@ -2208,7 +2261,7 @@ fn run_launcher_loop(
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         disp.wait_vsync();
-        if launching || setup.is_active() {
+        if launching {
             copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
         } else if let Some(rect) = this_rect {
             copy_cached_rect(disp, ui, &cached, rect);
