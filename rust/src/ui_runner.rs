@@ -1220,6 +1220,7 @@ fn run_video_playback_loop(
                                     break;
                                 }
                             }
+                            frame_worker.recycle(frame);
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -1297,6 +1298,7 @@ fn run_video_playback_loop(
                                     break;
                                 }
                             }
+                            frame_worker.recycle(frame);
                         }
                         Ok(None) => {}
                         Err(e) => {

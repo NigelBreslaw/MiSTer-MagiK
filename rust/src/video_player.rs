@@ -27,6 +27,7 @@ pub struct VideoPlayer {
     audio_rate: u32,
     audio_channels: u32,
     queued_audio: Vec<i16>,
+    audio_start: usize,
     loop_count: u64,
 }
 
@@ -39,14 +40,22 @@ pub struct PlaybackFrame {
     pub loop_count: u64,
 }
 
+#[derive(Default)]
+struct RecycledFrame {
+    rgb: Vec<u8>,
+    audio: Vec<i16>,
+}
+
 pub struct VideoFrameWorker {
     rx: mpsc::Receiver<Result<PlaybackFrame, String>>,
+    recycle_tx: mpsc::SyncSender<RecycledFrame>,
     frame_interval: Duration,
 }
 
 impl VideoFrameWorker {
     pub fn start(path: String) -> Result<Self, String> {
         let (tx, rx) = mpsc::sync_channel(2);
+        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<RecycledFrame>(2);
         let (init_tx, init_rx) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("video-decode".to_string())
@@ -65,8 +74,10 @@ impl VideoFrameWorker {
                 let frame_interval = player.frame_interval();
                 let mut audio_pacer = AudioFramePacer::new();
                 loop {
+                    let buffers = recycle_rx.try_recv().unwrap_or_default();
                     let audio_frames = audio_pacer.next_frames(frame_interval);
-                    let frame = player.next_frame(audio_frames);
+                    let frame =
+                        player.next_frame_into(audio_frames, buffers.rgb, buffers.audio);
                     let failed = frame.is_err();
                     if tx.send(frame).is_err() || failed {
                         break;
@@ -77,7 +88,11 @@ impl VideoFrameWorker {
         let frame_interval = init_rx
             .recv()
             .map_err(|_| "video decode worker failed to start".to_string())??;
-        Ok(Self { rx, frame_interval })
+        Ok(Self {
+            rx,
+            recycle_tx,
+            frame_interval,
+        })
     }
 
     pub fn frame_interval(&self) -> Duration {
@@ -91,6 +106,15 @@ impl VideoFrameWorker {
             Err(mpsc::TryRecvError::Empty) => Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => Err("video decode worker stopped".into()),
         }
+    }
+
+    pub fn recycle(&self, mut frame: PlaybackFrame) {
+        frame.rgb.clear();
+        frame.audio.clear();
+        let _ = self.recycle_tx.try_send(RecycledFrame {
+            rgb: frame.rgb,
+            audio: frame.audio,
+        });
     }
 }
 
@@ -137,16 +161,6 @@ impl VideoPlayer {
 
     pub fn frame_interval(&self) -> Duration {
         self.frame_interval
-    }
-
-    pub fn next_frame(&mut self, audio_frames: usize) -> Result<PlaybackFrame, String> {
-        for _ in 0..2 {
-            if let Some(frame) = self.next_frame_until_eof(audio_frames)? {
-                return Ok(frame);
-            }
-            self.rewind()?;
-        }
-        Err("media decode reached EOF twice without a video frame".into())
     }
 
     fn open_inner(path: String) -> Result<Self, String> {
@@ -198,6 +212,7 @@ impl VideoPlayer {
             audio_rate,
             audio_channels,
             queued_audio: Vec::new(),
+            audio_start: 0,
             loop_count: 0,
         })
     }
@@ -210,15 +225,34 @@ impl VideoPlayer {
         Ok(())
     }
 
-    fn next_frame_until_eof(
+    fn next_frame_into(
         &mut self,
         audio_frames: usize,
+        mut rgb: Vec<u8>,
+        mut audio: Vec<i16>,
+    ) -> Result<PlaybackFrame, String> {
+        for _ in 0..2 {
+            if let Some(frame) = self.next_frame_until_eof_into(audio_frames, rgb, audio)? {
+                return Ok(frame);
+            }
+            rgb = Vec::new();
+            audio = Vec::new();
+            self.rewind()?;
+        }
+        Err("media decode reached EOF twice without a video frame".into())
+    }
+
+    fn next_frame_until_eof_into(
+        &mut self,
+        audio_frames: usize,
+        mut rgb: Vec<u8>,
+        mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some((width, height, rgb)) =
-            receive_rgb_frame(&mut self.video_decoder, &mut self.scaler)?
+        if let Some((width, height)) =
+            receive_rgb_frame_into(&mut self.video_decoder, &mut self.scaler, &mut rgb)?
         {
             self.ensure_audio(audio_frames)?;
-            let audio = self.take_audio(audio_frames);
+            self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
                 width,
                 height,
@@ -236,11 +270,11 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((width, height, rgb)) =
-                    receive_rgb_frame(&mut self.video_decoder, &mut self.scaler)?
+                if let Some((width, height)) =
+                    receive_rgb_frame_into(&mut self.video_decoder, &mut self.scaler, &mut rgb)?
                 {
                     self.ensure_audio(audio_frames)?;
-                    let audio = self.take_audio(audio_frames);
+                    self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
                         width,
                         height,
@@ -256,11 +290,11 @@ impl VideoPlayer {
         }
 
         let _ = self.video_decoder.send_eof();
-        if let Some((width, height, rgb)) =
-            receive_rgb_frame(&mut self.video_decoder, &mut self.scaler)?
+        if let Some((width, height)) =
+            receive_rgb_frame_into(&mut self.video_decoder, &mut self.scaler, &mut rgb)?
         {
             self.ensure_audio(audio_frames)?;
-            let audio = self.take_audio(audio_frames);
+            self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
                 width,
                 height,
@@ -275,7 +309,7 @@ impl VideoPlayer {
 
     fn ensure_audio(&mut self, frames: usize) -> Result<(), String> {
         let target_samples = frames * OUTPUT_AUDIO_CHANNELS;
-        if self.queued_audio.len() >= target_samples {
+        if self.queued_audio.len().saturating_sub(self.audio_start) >= target_samples {
             return Ok(());
         }
 
@@ -284,7 +318,7 @@ impl VideoPlayer {
             let stream_index = stream.index();
             if stream_index == self.audio_stream_index {
                 append_pcm_audio_packet(&packet, self.audio_channels, &mut self.queued_audio)?;
-                if self.queued_audio.len() >= target_samples {
+                if self.queued_audio.len().saturating_sub(self.audio_start) >= target_samples {
                     return Ok(());
                 }
             } else if stream_index == self.video_stream_index {
@@ -296,17 +330,25 @@ impl VideoPlayer {
         Ok(())
     }
 
-    fn take_audio(&mut self, frames: usize) -> Vec<i16> {
+    fn take_audio_into(&mut self, frames: usize, out: &mut Vec<i16>) {
         let samples = frames * OUTPUT_AUDIO_CHANNELS;
-        let n = samples.min(self.queued_audio.len());
-        self.queued_audio.drain(..n).collect()
+        let available = self.queued_audio.len().saturating_sub(self.audio_start);
+        let n = samples.min(available);
+        out.clear();
+        out.extend_from_slice(&self.queued_audio[self.audio_start..self.audio_start + n]);
+        self.audio_start += n;
+        if self.audio_start > 8192 && self.audio_start * 2 > self.queued_audio.len() {
+            self.queued_audio.drain(..self.audio_start);
+            self.audio_start = 0;
+        }
     }
 }
 
-fn receive_rgb_frame(
+fn receive_rgb_frame_into(
     decoder: &mut ffmpeg::decoder::Video,
     scaler: &mut ScalingContext,
-) -> Result<Option<(u32, u32, Vec<u8>)>, String> {
+    rgb_buf: &mut Vec<u8>,
+) -> Result<Option<(u32, u32)>, String> {
     let mut decoded = Video::empty();
     match decoder.receive_frame(&mut decoded) {
         Ok(()) => {
@@ -314,7 +356,7 @@ fn receive_rgb_frame(
             scaler
                 .run(&decoded, &mut rgb)
                 .map_err(|e| format!("scale video frame: {e}"))?;
-            Ok(Some(rgb_frame_to_vec(&rgb)))
+            Ok(Some(rgb_frame_to_vec_into(&rgb, rgb_buf)))
         }
         Err(_) => Ok(None),
     }
@@ -397,19 +439,19 @@ fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {
     }
 }
 
-fn rgb_frame_to_vec(frame: &Video) -> (u32, u32, Vec<u8>) {
+fn rgb_frame_to_vec_into(frame: &Video, rgb: &mut Vec<u8>) -> (u32, u32) {
     let width = frame.width();
     let height = frame.height();
     let stride = frame.stride(0);
     let row_len = width as usize * 3;
     let data = frame.data(0);
-    let mut rgb = vec![0u8; row_len * height as usize];
+    rgb.resize(row_len * height as usize, 0);
     for y in 0..height as usize {
         let src = &data[y * stride..y * stride + row_len];
         let dst = &mut rgb[y * row_len..(y + 1) * row_len];
         dst.copy_from_slice(src);
     }
-    (width, height, rgb)
+    (width, height)
 }
 
 pub fn rgb_image(width: u32, height: u32, rgb: &[u8]) -> Image {
