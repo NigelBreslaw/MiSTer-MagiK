@@ -33,6 +33,7 @@ SKIP_BUILD=0
 SKIP_DEVICE=0
 REPLACE_LABEL=0
 INCLUDE_VIDEO=0
+SCENE_FILTER=0
 SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 
@@ -42,7 +43,7 @@ usage() {
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
   echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
-  echo "         --device (build profile release-device / A3)  --video  -h"
+  echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -56,13 +57,22 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --device) BUILD_PROFILE=release-device; BUILD_FLAG+=(--device); shift ;;
     --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
+    --scene)
+      SCENE_FILTER=1
+      BENCH_SCENES=("${2:?}")
+      if [[ "$2" == "video_playback" ]]; then
+        INCLUDE_VIDEO=1
+        BUILD_FLAG+=(--video)
+      fi
+      shift 2
+      ;;
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
 done
 
-if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
+if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
   BENCH_SCENES+=(video_playback)
 fi
 
@@ -190,6 +200,7 @@ run_scene_on_device() {
 set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz (see scripts/bench-diagnose.sh).
 kill -9 \$(pidof mister-magic-fb) 2>/dev/null || true
+kill -9 \$(pidof MiSTer_Magic) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
 ${render_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &

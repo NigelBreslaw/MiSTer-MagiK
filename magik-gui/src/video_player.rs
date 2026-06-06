@@ -7,7 +7,7 @@ use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags}
 use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
 use ffmpeg::util::frame::video::Video;
 use ffmpeg_the_third as ffmpeg;
-use slint::{Image, Rgb8Pixel, SharedPixelBuffer};
+use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -32,9 +32,7 @@ pub struct VideoPlayer {
 }
 
 pub struct PlaybackFrame {
-    pub width: u32,
-    pub height: u32,
-    pub rgb: Vec<u8>,
+    pub pixel_buffer: SharedPixelBuffer<Rgb8Pixel>,
     pub audio: Vec<i16>,
     pub audio_requested_frames: usize,
     pub loop_count: u64,
@@ -42,7 +40,6 @@ pub struct PlaybackFrame {
 
 #[derive(Default)]
 struct RecycledFrame {
-    rgb: Vec<u8>,
     audio: Vec<i16>,
 }
 
@@ -76,7 +73,7 @@ impl VideoFrameWorker {
                 loop {
                     let buffers = recycle_rx.try_recv().unwrap_or_default();
                     let audio_frames = audio_pacer.next_frames(frame_interval);
-                    let frame = player.next_frame_into(audio_frames, buffers.rgb, buffers.audio);
+                    let frame = player.next_frame_into(audio_frames, buffers.audio);
                     let failed = frame.is_err();
                     if tx.send(frame).is_err() || failed {
                         break;
@@ -108,12 +105,10 @@ impl VideoFrameWorker {
     }
 
     pub fn recycle(&self, mut frame: PlaybackFrame) {
-        frame.rgb.clear();
         frame.audio.clear();
-        let _ = self.recycle_tx.try_send(RecycledFrame {
-            rgb: frame.rgb,
-            audio: frame.audio,
-        });
+        let _ = self
+            .recycle_tx
+            .try_send(RecycledFrame { audio: frame.audio });
     }
 }
 
@@ -227,14 +222,12 @@ impl VideoPlayer {
     fn next_frame_into(
         &mut self,
         audio_frames: usize,
-        mut rgb: Vec<u8>,
         mut audio: Vec<i16>,
     ) -> Result<PlaybackFrame, String> {
         for _ in 0..2 {
-            if let Some(frame) = self.next_frame_until_eof_into(audio_frames, rgb, audio)? {
+            if let Some(frame) = self.next_frame_until_eof_into(audio_frames, audio)? {
                 return Ok(frame);
             }
-            rgb = Vec::new();
             audio = Vec::new();
             self.rewind()?;
         }
@@ -244,18 +237,15 @@ impl VideoPlayer {
     fn next_frame_until_eof_into(
         &mut self,
         audio_frames: usize,
-        mut rgb: Vec<u8>,
         mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some((width, height)) =
-            receive_rgb_frame_into(&mut self.video_decoder, &mut self.scaler, &mut rgb)?
+        if let Some(pixel_buffer) =
+            receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
         {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
-                width,
-                height,
-                rgb,
+                pixel_buffer,
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
@@ -269,15 +259,13 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((width, height)) =
-                    receive_rgb_frame_into(&mut self.video_decoder, &mut self.scaler, &mut rgb)?
+                if let Some(pixel_buffer) =
+                    receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
                 {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
-                        width,
-                        height,
-                        rgb,
+                        pixel_buffer,
                         audio,
                         audio_requested_frames: audio_frames,
                         loop_count: self.loop_count,
@@ -289,15 +277,13 @@ impl VideoPlayer {
         }
 
         let _ = self.video_decoder.send_eof();
-        if let Some((width, height)) =
-            receive_rgb_frame_into(&mut self.video_decoder, &mut self.scaler, &mut rgb)?
+        if let Some(pixel_buffer) =
+            receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
         {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
-                width,
-                height,
-                rgb,
+                pixel_buffer,
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
@@ -343,11 +329,10 @@ impl VideoPlayer {
     }
 }
 
-fn receive_rgb_frame_into(
+fn receive_rgb_pixel_buffer(
     decoder: &mut ffmpeg::decoder::Video,
     scaler: &mut ScalingContext,
-    rgb_buf: &mut Vec<u8>,
-) -> Result<Option<(u32, u32)>, String> {
+) -> Result<Option<SharedPixelBuffer<Rgb8Pixel>>, String> {
     let mut decoded = Video::empty();
     match decoder.receive_frame(&mut decoded) {
         Ok(()) => {
@@ -355,7 +340,7 @@ fn receive_rgb_frame_into(
             scaler
                 .run(&decoded, &mut rgb)
                 .map_err(|e| format!("scale video frame: {e}"))?;
-            Ok(Some(rgb_frame_to_vec_into(&rgb, rgb_buf)))
+            Ok(Some(rgb_frame_to_pixel_buffer(&rgb)))
         }
         Err(_) => Ok(None),
     }
@@ -438,23 +423,17 @@ fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {
     }
 }
 
-fn rgb_frame_to_vec_into(frame: &Video, rgb: &mut Vec<u8>) -> (u32, u32) {
+fn rgb_frame_to_pixel_buffer(frame: &Video) -> SharedPixelBuffer<Rgb8Pixel> {
     let width = frame.width();
     let height = frame.height();
     let stride = frame.stride(0);
     let row_len = width as usize * 3;
     let data = frame.data(0);
-    rgb.resize(row_len * height as usize, 0);
+    let mut buffer = SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
+    let dst = buffer.make_mut_bytes();
     for y in 0..height as usize {
         let src = &data[y * stride..y * stride + row_len];
-        let dst = &mut rgb[y * row_len..(y + 1) * row_len];
-        dst.copy_from_slice(src);
+        dst[y * row_len..(y + 1) * row_len].copy_from_slice(src);
     }
-    (width, height)
-}
-
-pub fn rgb_image(width: u32, height: u32, rgb: &[u8]) -> Image {
-    let mut buffer = SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
-    buffer.make_mut_bytes().copy_from_slice(rgb);
-    Image::from_rgb8(buffer)
+    buffer
 }

@@ -6,7 +6,7 @@ VERSION="${MISTER_FFMPEG_VERSION:-8.1.1}"
 WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
-STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-pcm-s16le"
+STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-pcm-s16le-cortex-a9-o3"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 
 if [ -f "$STAMP" ] && [ -f "$DIST/lib/libavcodec.a" ]; then
@@ -42,8 +42,11 @@ rm -rf ../dist
   --prefix=/project/target/ffmpeg-minimal/armv7/dist \
   --cross-prefix=arm-linux-gnueabihf- \
   --arch=arm \
+  --cpu=cortex-a9 \
   --target-os=linux \
   --enable-cross-compile \
+  --extra-cflags="-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard" \
+  --extra-cxxflags="-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard" \
   --enable-static \
   --disable-shared \
   --enable-pic \
@@ -52,7 +55,6 @@ rm -rf ../dist
   --disable-doc \
   --disable-debug \
   --enable-stripping \
-  --enable-small \
   --disable-everything \
   --disable-avdevice \
   --disable-avfilter \

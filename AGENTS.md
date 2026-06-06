@@ -390,6 +390,15 @@ Important gotchas:
   and distrust short runs whose first seconds show `fps ~ 30` unless that is the
   thing being measured. Reboot and rerun before concluding a copy/render change
   regressed performance.
+- **Visual benchmarks must not leave the fork parent running.** In the
+  Main-as-parent experiment, `/media/fat/MiSTer` re-execs the fork as
+  `MiSTer_Magic`, and that parent can keep the stock FPGA OSD/menu compositor
+  alive over standalone `mister-magic-fb ui <scene> ...` benchmark runs. Before
+  any visual benchmark that is not intentionally testing coexistence, stop all
+  three possible owners: `mister-magic-fb`, `MiSTer_Magic`, and `MiSTer`; then
+  start the benchmark scene after the normal settle delay. If the original OSD is
+  visible over the benchmark, the run is invalid even if the framebuffer PNG
+  looks correct.
 
 ---
 
@@ -607,6 +616,14 @@ protocol, and `avcodec`/`avformat`/`avutil`/`swscale`; no system `libav*`
 runtime is required. `video_playback` defaults to
 `/media/fat/mister-magic/mslug3.mov` (H.264 baseline + 48 kHz stereo signed PCM)
 and writes PCM packets directly to `/dev/MrAudio` with video as the master clock.
+Video CPU benchmark notes from 2026-06-06: passing a
+`SharedPixelBuffer<Rgb8Pixel>` from the decode worker avoids an extra
+RGB byte-copy on the UI thread and reduced `video_playback` CPU mean from
+`75%` to `64-67%` on the Cortex-A9. RGBA output was worse (`85%` mean), and a
+naive fixed `yuv420p`→RGB converter was also worse (`70%`) than swscale. FFmpeg
+logs `No accelerated colorspace conversion found from yuv420p to rgb24`, so the
+next likely win is a genuinely optimized color-conversion path or cheaper H.264
+encode settings, not another generic build-flag tweak.
 
 For binary-size diagnosis, build an unstripped profile binary and group symbols:
 

@@ -5,8 +5,6 @@
 
 #[cfg(feature = "profile")]
 mod imp {
-    use std::io::Write;
-
     pub struct CpuProfiler {
         guard: pprof::ProfilerGuard<'static>,
         hz: i32,

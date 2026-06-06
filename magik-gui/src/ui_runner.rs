@@ -1317,11 +1317,7 @@ fn run_video_playback_loop(
                 if now >= next_video_at {
                     match frame_worker.try_recv() {
                         Ok(Some(frame)) => {
-                            app.set_frame(crate::video_player::rgb_image(
-                                frame.width,
-                                frame.height,
-                                &frame.rgb,
-                            ));
+                            app.set_frame(slint::Image::from_rgb8(frame.pixel_buffer.clone()));
                             window.request_redraw();
                             let audio_t0 = Instant::now();
                             match audio_sink.write_frames(&frame.audio) {
@@ -1395,11 +1391,7 @@ fn run_video_playback_loop(
                 if now >= next_video_at {
                     match frame_worker.try_recv() {
                         Ok(Some(frame)) => {
-                            app.set_frame(crate::video_player::rgb_image(
-                                frame.width,
-                                frame.height,
-                                &frame.rgb,
-                            ));
+                            app.set_frame(slint::Image::from_rgb8(frame.pixel_buffer.clone()));
                             window.request_redraw();
                             let audio_t0 = Instant::now();
                             match audio_sink.write_frames(&frame.audio) {
