@@ -24,6 +24,8 @@ static const char s_launcher_path[] = "mister-magik/mister-magik-fb";
 static const char s_launcher_scene[] = "launcher";
 static const char s_script_path[] = "/tmp/mister_magik_launcher";
 static const char s_log_path[] = "/tmp/mister-magik-main.log";
+static const char s_analytics_flag_path[] = "/media/fat/mister-magik/boot-analytics.enabled";
+static const char s_analytics_path[] = "/tmp/mister-magik-boot-analytics.tsv";
 static const int s_vt = 2;
 static const char s_tty[] = "tty2";
 static const char s_tty_path[] = "/dev/tty2";
@@ -34,6 +36,10 @@ static unsigned long s_respawn_timer = 0;
 static bool s_init_pending = false;
 static bool s_gave_up = false;
 static bool s_escaped = false;
+static unsigned long s_analytics_seq = 0;
+static bool s_analytics_header_written = false;
+
+static bool launcher_tty_ready(pid_t pid);
 
 static void log_msg(const char *fmt, ...)
 {
@@ -46,6 +52,98 @@ static void log_msg(const char *fmt, ...)
 	va_end(args);
 	fputc('\n', f);
 	fclose(f);
+}
+
+static bool analytics_enabled(void)
+{
+	return access(s_analytics_flag_path, F_OK) == 0;
+}
+
+static void sanitize_detail(char *s)
+{
+	for (; *s; s++)
+	{
+		if (*s == '\t' || *s == '\n' || *s == '\r')
+			*s = ' ';
+	}
+}
+
+static void read_trimmed(const char *path, char *buf, size_t len)
+{
+	if (!buf || !len) return;
+	buf[0] = 0;
+
+	FILE *f = fopen(path, "r");
+	if (!f) return;
+	if (fgets(buf, len, f))
+	{
+		size_t n = strlen(buf);
+		while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == '\t' || buf[n - 1] == ' '))
+			buf[--n] = 0;
+		sanitize_detail(buf);
+	}
+	fclose(f);
+}
+
+static void analytics_event(const char *event, const char *fmt, ...)
+{
+	if (!analytics_enabled())
+		return;
+
+	FILE *f = fopen(s_analytics_path, "a");
+	if (!f) return;
+
+	if (!s_analytics_header_written)
+	{
+		fprintf(f, "seq\tsource\tboot_ms\tevent\tpid\tdetails\n");
+		s_analytics_header_written = true;
+	}
+
+	char detail[768];
+	detail[0] = 0;
+	if (fmt)
+	{
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf(detail, sizeof(detail), fmt, args);
+		va_end(args);
+		detail[sizeof(detail) - 1] = 0;
+		sanitize_detail(detail);
+	}
+
+	fprintf(f, "%lu\tmain\t%lu\t%s\t%d\t%s\n",
+	        ++s_analytics_seq, GetTimer(0), event, getpid(), detail);
+	fclose(f);
+}
+
+static void analytics_state(const char *event, const char *extra_fmt = NULL, ...)
+{
+	if (!analytics_enabled())
+		return;
+
+	char fb_mode[128];
+	char active_vt[64];
+	read_trimmed("/sys/module/MiSTer_fb/parameters/mode", fb_mode, sizeof(fb_mode));
+	read_trimmed("/sys/class/tty/tty0/active", active_vt, sizeof(active_vt));
+
+	char extra[384];
+	extra[0] = 0;
+	if (extra_fmt)
+	{
+		va_list args;
+		va_start(args, extra_fmt);
+		vsnprintf(extra, sizeof(extra), extra_fmt, args);
+		va_end(args);
+		extra[sizeof(extra) - 1] = 0;
+		sanitize_detail(extra);
+	}
+
+	analytics_event(event, "pid=%d crash_count=%d respawn_timer=%lu init_pending=%d gave_up=%d escaped=%d tty_ready=%d active_vt=%s fb_mode=%s%s%s",
+	                s_pid, s_crash_count, s_respawn_timer, s_init_pending, s_gave_up,
+	                s_escaped, s_pid ? launcher_tty_ready(s_pid) : 0,
+	                active_vt[0] ? active_vt : "unknown",
+	                fb_mode[0] ? fb_mode : "unknown",
+	                extra[0] ? " " : "", extra);
 }
 
 bool mister_magik_launcher_configured(void)
@@ -175,6 +273,7 @@ static void wait_launcher_stopped(pid_t pid)
 
 static void return_to_normal_mode(void)
 {
+	analytics_state("return_to_normal_mode_start");
 	user_io_osd_key_enable(1);
 	reset_launcher_tty();
 	video_fb_enable(0);
@@ -184,30 +283,47 @@ static void return_to_normal_mode(void)
 	s_gave_up = true;
 	s_escaped = true;
 	log_msg("return_to_normal_mode");
+	analytics_state("return_to_normal_mode_done");
 }
 
 static bool write_launcher_script(void)
 {
 	static const char cmd[] =
-		"#!/bin/bash\n"
-		"export LC_ALL=en_US.UTF-8\n"
-		"export HOME=/root\n"
-		"export MISTER_MAGIK_PARENT=main-mister\n"
-		"printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
-		"exec \"$MISTER_MAGIK_PATH\" ui \"$MISTER_MAGIK_SCENE\" 0\n";
+	    "#!/bin/bash\n"
+	    "export LC_ALL=en_US.UTF-8\n"
+	    "export HOME=/root\n"
+	    "export MISTER_MAGIK_PARENT=main-mister\n"
+	    "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+	    "exec \"$MISTER_MAGIK_PATH\" ui \"$MISTER_MAGIK_SCENE\" 0\n";
+	static const char analytics_cmd[] =
+	    "#!/bin/bash\n"
+	    "export LC_ALL=en_US.UTF-8\n"
+	    "export HOME=/root\n"
+	    "export MISTER_MAGIK_PARENT=main-mister\n"
+	    "export MISTER_BOOT_ANALYTICS=1\n"
+	    "export MISTER_PROFILE=summary\n"
+	    "export MISTER_PROFILE_FILE=/tmp/mister-magik-frame-profile.tsv\n"
+	    "export MISTER_BOOT_FRAME_PROFILE_FILE=/tmp/mister-magik-launcher-frame-profile.tsv\n"
+	    "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+	    "exec \"$MISTER_MAGIK_PATH\" ui \"$MISTER_MAGIK_SCENE\" 0 >/tmp/mister-magik-slint.log 2>&1\n";
 
 	unlink(s_script_path);
-	return FileSave(s_script_path, (void*)cmd, strlen(cmd)) != 0;
+	const char *script = analytics_enabled() ? analytics_cmd : cmd;
+	bool ok = FileSave(s_script_path, (void*)script, strlen(script)) != 0;
+	analytics_event("write_script", "ok=%d analytics=%d path=%s", ok, analytics_enabled(), s_script_path);
+	return ok;
 }
 
 static void spawn(void)
 {
+	analytics_state("spawn_start");
 	char path[2100];
 	strncpy(path, getFullPath(s_launcher_path), sizeof(path) - 1);
 	path[sizeof(path) - 1] = '\0';
 
 	if (!FileExists(s_launcher_path, 0))
 	{
+		analytics_event("spawn_missing_launcher", "path=%s", s_launcher_path);
 		log_msg("spawn skipped: missing %s", s_launcher_path);
 		return_to_normal_mode();
 		return;
@@ -215,6 +331,7 @@ static void spawn(void)
 
 	if (!write_launcher_script())
 	{
+		analytics_event("spawn_script_failed", "path=%s", s_script_path);
 		log_msg("spawn failed: unable to write %s", s_script_path);
 		return_to_normal_mode();
 		return;
@@ -226,6 +343,7 @@ static void spawn(void)
 	s_pid = fork();
 	if (s_pid < 0)
 	{
+		analytics_event("fork_failed", "errno=%d error=%s", errno, strerror(errno));
 		log_msg("fork failed: %s", strerror(errno));
 		s_pid = 0;
 		user_io_osd_key_enable(1);
@@ -248,15 +366,56 @@ static void spawn(void)
 	}
 
 	log_msg("spawned pid=%d path=%s scene=%s", s_pid, path, s_launcher_scene);
+	analytics_state("forked", "path=%s scene=%s", path, s_launcher_scene);
 	wait_launcher_tty_ready(s_pid);
+	analytics_state("tty_ready");
 	video_chvt(s_vt);
+	analytics_state("chvt_tty2");
 	video_fb_enable(1);
+	analytics_state("video_fb_enable_on");
 	if (menu_present()) MenuHide();
+	analytics_state("menu_hide", "menu_present_after=%d", menu_present());
 }
 
 bool mister_magik_launcher_active(void)
 {
 	return s_pid != 0;
+}
+
+bool mister_magik_boot_analytics_enabled(void)
+{
+	return analytics_enabled();
+}
+
+void mister_magik_boot_analytics_event(const char *source, const char *event, const char *fmt, ...)
+{
+	if (!analytics_enabled())
+		return;
+
+	FILE *f = fopen(s_analytics_path, "a");
+	if (!f) return;
+
+	if (!s_analytics_header_written)
+	{
+		fprintf(f, "seq\tsource\tboot_ms\tevent\tpid\tdetails\n");
+		s_analytics_header_written = true;
+	}
+
+	char detail[768];
+	detail[0] = 0;
+	if (fmt)
+	{
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf(detail, sizeof(detail), fmt, args);
+		va_end(args);
+		detail[sizeof(detail) - 1] = 0;
+		sanitize_detail(detail);
+	}
+
+	fprintf(f, "%lu\t%s\t%lu\t%s\t%d\t%s\n",
+	        ++s_analytics_seq, source ? source : "main", GetTimer(0), event, getpid(), detail);
+	fclose(f);
 }
 
 void mister_magik_launcher_init_for_menu(void)
@@ -268,6 +427,7 @@ void mister_magik_launcher_init_for_menu(void)
 	s_respawn_timer = 0;
 	s_init_pending = true;
 	log_msg("init_for_menu");
+	analytics_state("init_for_menu");
 }
 
 void mister_magik_launcher_poll(void)
@@ -288,7 +448,10 @@ void mister_magik_launcher_poll(void)
 
 			log_msg("launcher exited escaped=%d crashed=%d status=%d sig=%d",
 			        escaped, crashed, exit_status, sig);
+			analytics_state("launcher_exited", "escaped=%d crashed=%d status=%d sig=%d",
+			                escaped, crashed, exit_status, sig);
 			reset_launcher_tty();
+			analytics_state("reset_launcher_tty");
 
 			if (escaped)
 			{
@@ -299,6 +462,7 @@ void mister_magik_launcher_poll(void)
 			if (crashed && ++s_crash_count >= 3)
 			{
 				log_msg("giving up after 3 crashes");
+				analytics_state("giving_up_after_crashes");
 				return_to_normal_mode();
 				return;
 			}
@@ -308,6 +472,7 @@ void mister_magik_launcher_poll(void)
 
 			s_respawn_timer = GetTimer(1000);
 			if (!s_respawn_timer) s_respawn_timer = 1;
+			analytics_state("respawn_scheduled");
 		}
 		return;
 	}
@@ -318,6 +483,7 @@ void mister_magik_launcher_poll(void)
 	if (s_init_pending)
 	{
 		s_init_pending = false;
+		analytics_state("init_pending_spawn");
 		spawn();
 		return;
 	}
@@ -325,6 +491,7 @@ void mister_magik_launcher_poll(void)
 	if (s_respawn_timer && CheckTimer(s_respawn_timer))
 	{
 		s_respawn_timer = 0;
+		analytics_state("respawn_timer_elapsed");
 		spawn();
 	}
 }
@@ -344,4 +511,5 @@ void mister_magik_launcher_shutdown(void)
 	video_fb_enable(0);
 	reset_launcher_tty();
 	log_msg("shutdown");
+	analytics_state("shutdown");
 }

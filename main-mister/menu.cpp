@@ -67,6 +67,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "profiling.h"
 #include "str_util.h"
 #include "autofire.h"
+#include "support/mister_magik/alt_launcher.h"
 
 /*menu states*/
 enum MENU
@@ -7918,8 +7919,10 @@ void InfoMessage(const char *message, int timeout, const char *title)
 
 void MenuHide()
 {
+	mister_magik_boot_analytics_event("main-menu", "MenuHide", "menustate_before=%d menu_present_before=%d", menustate, menu_present());
 	menustate = MENU_NONE1;
 	HandleUI();
+	mister_magik_boot_analytics_event("main-menu", "MenuHide_done", "menustate_after=%d menu_present_after=%d", menustate, menu_present());
 }
 
 int menu_present()

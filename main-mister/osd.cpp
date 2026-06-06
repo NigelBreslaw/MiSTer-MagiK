@@ -39,6 +39,7 @@ as rotated copies of the first 128 entries.  -- AMR
 #include <stdio.h>
 
 #include "osd.h"
+#include "support/mister_magik/alt_launcher.h"
 #include "spi.h"
 
 #include "charrom.h"
@@ -500,6 +501,7 @@ void OsdClear(void)
 // enable displaying of OSD
 void OsdEnable(unsigned char mode)
 {
+	mister_magik_boot_analytics_event("main-osd", "OsdEnable", "mode=%u", mode);
 	user_io_osd_key_enable(mode & DISABLE_KEYBOARD);
 	mode &= (DISABLE_KEYBOARD | OSD_MSG);
 	spi_osd_cmd(OSD_CMD_ENABLE | mode);
@@ -507,6 +509,8 @@ void OsdEnable(unsigned char mode)
 
 void InfoEnable(int x, int y, int width, int height)
 {
+	mister_magik_boot_analytics_event(
+	    "main-osd", "InfoEnable", "x=%d y=%d width=%d height=%d", x, y, width, height);
 	user_io_osd_key_enable(0);
 	spi_osd_cmd_cont(OSD_CMD_ENABLE | OSD_INFO);
 	spi_w(x);
@@ -530,12 +534,14 @@ void OsdRotation(uint8_t rotate)
 // disable displaying of OSD
 void OsdDisable()
 {
+	mister_magik_boot_analytics_event("main-osd", "OsdDisable", "");
 	user_io_osd_key_enable(0);
 	spi_osd_cmd(OSD_CMD_DISABLE);
 }
 
 void OsdMenuCtl(int en)
 {
+	mister_magik_boot_analytics_event("main-osd", "OsdMenuCtl", "en=%d", en);
 	if (en)
 	{
 		spi_osd_cmd(OSD_CMD_WRITE | 8);
@@ -664,6 +670,17 @@ void OsdUpdate()
 {
 	PROFILE_FUNCTION();
 	int n = is_menu() ? 19 : osd_size;
+	int dirty_lines = 0;
+	for (int i = 0; i < n; i++)
+	{
+		if (osdset & (1 << i)) dirty_lines++;
+	}
+	if (dirty_lines)
+	{
+		mister_magik_boot_analytics_event(
+		    "main-osd", "OsdUpdate", "dirty_lines=%d n=%d is_menu=%d osd_size=%d osdset=0x%x",
+		    dirty_lines, n, is_menu(), osd_size, osdset);
+	}
 	for (int i = 0; i < n; i++)
 	{
 		if (osdset & (1 << i))

@@ -68,6 +68,7 @@ mod slint_ui {
 }
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
+use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::frame_profile::{FrameProfiler, FrameSample};
@@ -87,6 +88,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc;
+
+const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
@@ -334,6 +337,7 @@ macro_rules! with_scene_app {
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     let ui = UiDisplay::from_env();
+    boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     println!("ui scene={scene} secs={secs}");
     println!("{}", ui.log_line());
 
@@ -349,8 +353,17 @@ pub fn run_ui(f: &mut Fpga) {
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         println!("MiSTer_MagiK parent detected; Slint reasserting 1080p framebuffer route");
     }
+    boot_analytics::event(
+        "initial_fb_enable_direct_attempt",
+        format!("w={FB_W} h={FB_H} mode=1080p60"),
+    );
     let flag = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+    boot_analytics::event(
+        "initial_fb_enable_direct_done",
+        format!("support_flag={flag}"),
+    );
     f.set_audio_volume(0);
+    boot_analytics::event("set_audio_volume", "attenuation=0");
     println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
@@ -361,6 +374,7 @@ pub fn run_ui(f: &mut Fpga) {
         fixed_time: animation_clock.platform_time(),
     }))
     .expect("set_platform");
+    boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
         "demo" => {
@@ -463,7 +477,9 @@ pub fn run_ui(f: &mut Fpga) {
             let pad = open_pads();
             with_scene_app!(launcher::Launcher, &ui, &window, app, {
                 init_launcher_bridge(&app, &pad);
+                boot_analytics::event("app_show_attempt", "scene=launcher");
                 app.show().expect("show");
+                boot_analytics::event("app_show", "scene=launcher ok=1");
                 window.request_redraw();
                 run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
             });
@@ -897,10 +913,10 @@ fn lower_background_priority() {
 }
 
 fn print_startup_event(start: Instant, name: &str, detail: impl std::fmt::Display) {
-    println!(
-        "startup_timing\t{name}\t{}ms\t{detail}",
-        start.elapsed().as_millis()
-    );
+    let elapsed_ms = start.elapsed().as_millis();
+    let detail = detail.to_string();
+    boot_analytics::event(name, format!("since_run_ui_ms={elapsed_ms} {detail}"));
+    println!("startup_timing\t{name}\t{}ms\t{detail}", elapsed_ms);
 }
 
 fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
@@ -2024,12 +2040,19 @@ fn run_launcher_loop(
         "launcher running {label} — {} pad(s), D-pad to move, A to select, Home to go back...",
         pad.len()
     );
-    if let Some(idx) = pad.index_needing_setup() {
-        let status = pad.db().registry_status(pad.info_at(idx));
-        eprintln!("controller setup: pad {idx} needs setup ({status:?}) — showing prompt");
-        setup.open_for(status, idx);
+    boot_analytics::event(
+        "launcher_loop_start",
+        format!("label={label} pads={}", pad.len()),
+    );
+    if AUTO_CONTROLLER_SETUP_ENABLED {
+        if let Some(idx) = pad.index_needing_setup() {
+            let status = pad.db().registry_status(pad.info_at(idx));
+            eprintln!("controller setup: pad {idx} needs setup ({status:?}) - showing prompt");
+            setup.open_for(status, idx);
+        }
     }
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
@@ -2227,7 +2250,7 @@ fn run_launcher_loop(
                 let setup_after = SetupBridgeKey::from_setup(&setup);
                 bridge_dirty |= pad_changed || setup_before != setup_after;
             } else {
-                if pad_changed {
+                if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
                     let setup_before = SetupBridgeKey::from_setup(&setup);
                     setup.maybe_open(info, active_idx, pad.db(), true);
                     bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
@@ -2408,24 +2431,58 @@ fn run_launcher_loop(
             window.request_redraw();
         }
 
+        let frame_t0 = Instant::now();
         update_slint_animations(animation_clock);
+        let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut cached, ui.render_w());
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
+        let frame_t2 = Instant::now();
         disp.wait_vsync();
+        let frame_t3 = Instant::now();
+        let mut copied_rows = 0u32;
         if launching {
             copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+            copied_rows = ui.render_h() as u32;
         } else if let Some(rect) = this_rect {
+            copied_rows = rect.rows();
             copy_cached_rect(disp, ui, &cached, rect);
         }
+        let frame_t4 = Instant::now();
+        let mut reasserted = false;
         if frames < 180 && frames % 10 == 0 {
+            reasserted = true;
+            boot_analytics::event("early_reassert_set_mode_1080p", format!("frame={frames}"));
             Display::set_mode_1080p();
-            let _ = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+            let flag =
+                f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+            boot_analytics::event(
+                "early_reassert_fb_enable_direct",
+                format!("frame={frames} support_flag={flag}"),
+            );
+        }
+        if let Some(profile) = boot_frame_profile.as_mut() {
+            let (edge1_hash, edge1_nonzero) = disp.right_edge_signature(1);
+            let (edge8_hash, edge8_nonzero) = disp.right_edge_signature(8);
+            profile.record(
+                frames,
+                (frame_t1 - frame_t0).as_micros() as u64,
+                (frame_t2 - frame_t1).as_micros() as u64,
+                (frame_t3 - frame_t2).as_micros() as u64,
+                (frame_t4 - frame_t3).as_micros() as u64,
+                copied_rows,
+                reasserted,
+                edge1_hash,
+                edge1_nonzero,
+                edge8_hash,
+                edge8_nonzero,
+            );
         }
         if !first_frame_logged {
             first_frame_logged = true;
+            boot_analytics::event("first_frame", format!("catalog_ready={catalog_ready}"));
             print_startup_event(
                 start,
                 "first_frame",
