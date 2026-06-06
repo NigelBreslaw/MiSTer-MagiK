@@ -17,31 +17,39 @@ mod slint_ui {
     pub mod app {
         include!(concat!(env!("OUT_DIR"), "/app.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod full_motion {
         include!(concat!(env!("OUT_DIR"), "/full_motion.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod static_ui {
         include!(concat!(env!("OUT_DIR"), "/static_ui.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod local_motion {
         include!(concat!(env!("OUT_DIR"), "/local_motion.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod text_heavy {
         include!(concat!(env!("OUT_DIR"), "/text_heavy.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod solid_fill {
         include!(concat!(env!("OUT_DIR"), "/solid_fill.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod list_scroll {
         include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod console_scroll {
         include!(concat!(env!("OUT_DIR"), "/console_scroll.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
     pub mod dirty_band {
         include!(concat!(env!("OUT_DIR"), "/dirty_band.rs"));
     }
-    #[cfg(feature = "video")]
+    #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
     pub mod video_playback {
         include!(concat!(env!("OUT_DIR"), "/video_playback.rs"));
     }
@@ -62,11 +70,15 @@ use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_bench;
 use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{dirty_band_pct_from_env, UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
+#[cfg(not(mister_ui_scope_launcher))]
+use crate::ui_display::dirty_band_pct_from_env;
+use crate::ui_display::{UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+#[cfg(not(mister_ui_scope_launcher))]
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -74,15 +86,23 @@ pub const UI_SCENES: &[&str] = &[
     "launcher",
     "demo",
     "controller_test",
+    #[cfg(not(mister_ui_scope_launcher))]
     "full_motion",
+    #[cfg(not(mister_ui_scope_launcher))]
     "static_ui",
+    #[cfg(not(mister_ui_scope_launcher))]
     "local_motion",
+    #[cfg(not(mister_ui_scope_launcher))]
     "text_heavy",
+    #[cfg(not(mister_ui_scope_launcher))]
     "solid_fill",
+    #[cfg(not(mister_ui_scope_launcher))]
     "list_scroll",
+    #[cfg(not(mister_ui_scope_launcher))]
     "console_scroll",
+    #[cfg(not(mister_ui_scope_launcher))]
     "dirty_band",
-    #[cfg(feature = "video")]
+    #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
     "video_playback",
 ];
 
@@ -330,6 +350,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "full_motion" => {
             let app = slint_ui::full_motion::FullMotion::new().expect("FullMotion::new");
             app.global::<slint_ui::full_motion::MisterUi>()
@@ -338,6 +359,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "static_ui" => {
             let app = slint_ui::static_ui::StaticUi::new().expect("StaticUi::new");
             app.global::<slint_ui::static_ui::MisterUi>()
@@ -346,6 +368,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "local_motion" => {
             let app = slint_ui::local_motion::LocalMotion::new().expect("LocalMotion::new");
             app.global::<slint_ui::local_motion::MisterUi>()
@@ -354,6 +377,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "text_heavy" => {
             let app = slint_ui::text_heavy::TextHeavy::new().expect("TextHeavy::new");
             app.global::<slint_ui::text_heavy::MisterUi>()
@@ -362,6 +386,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "solid_fill" => {
             let app = slint_ui::solid_fill::SolidFill::new().expect("SolidFill::new");
             app.global::<slint_ui::solid_fill::MisterUi>()
@@ -370,6 +395,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "list_scroll" => {
             let app = slint_ui::list_scroll::ListScroll::new().expect("ListScroll::new");
             app.global::<slint_ui::list_scroll::MisterUi>()
@@ -378,6 +404,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "console_scroll" => {
             let app = slint_ui::console_scroll::ConsoleScroll::new().expect("ConsoleScroll::new");
             app.global::<slint_ui::console_scroll::MisterUi>()
@@ -386,6 +413,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "dirty_band" => {
             let pct = dirty_band_pct_from_env();
             let app = slint_ui::dirty_band::DirtyBand::new().expect("DirtyBand::new");
@@ -397,7 +425,7 @@ pub fn run_ui(f: &mut Fpga) {
             app.show().expect("show");
             run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
         }
-        #[cfg(feature = "video")]
+        #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
         "video_playback" => {
             let app = slint_ui::video_playback::VideoPlayback::new().expect("VideoPlayback::new");
             app.global::<slint_ui::video_playback::MisterUi>()
@@ -1222,7 +1250,7 @@ fn run_frame_loop(
     cpu_profile::finish(cpu);
 }
 
-#[cfg(feature = "video")]
+#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
 fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -1541,12 +1569,18 @@ fn record_video_sample(
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_LIST_X: usize = 40;
+#[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_LIST_Y: usize = 116;
+#[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_LIST_W: usize = 880;
+#[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_LIST_H: usize = 356;
+#[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_ROW_H: usize = 44;
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn run_console_scroll_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -1662,6 +1696,7 @@ fn run_console_scroll_loop(
     );
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn draw_console_virtual_strip(
     dst: &mut [Pixel],
     stride: usize,
@@ -1723,6 +1758,7 @@ fn draw_console_virtual_strip(
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn scroll_surface_y(surface: &mut [Pixel], w: usize, h: usize, shift: usize) {
     if shift == 0 || shift >= h {
         return;
@@ -1735,6 +1771,7 @@ fn scroll_surface_y(surface: &mut [Pixel], w: usize, h: usize, shift: usize) {
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
     let selected = row % 11 == 5;
     let bg = if selected {
@@ -1757,6 +1794,7 @@ fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
     bg
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 struct ConsoleGlyph {
     left: i32,
     top: i32,
@@ -1766,6 +1804,7 @@ struct ConsoleGlyph {
     data: Vec<u8>,
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 struct ConsoleFont {
     font: swash::FontRef<'static>,
     scale_context: swash::scale::ScaleContext,
@@ -1774,6 +1813,7 @@ struct ConsoleFont {
     units_per_em: f32,
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 impl ConsoleFont {
     fn new(pixel_size: f32) -> Self {
         let data = include_bytes!("../ui/fonts/PressStart2P-Regular.ttf");
