@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magic-fb}"
+OUT_DIR="${2:-$ROOT/build/binary-size-analysis}"
+IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
+
+if [ ! -f "$BIN" ]; then
+  echo "ERROR: binary missing: $BIN" >&2
+  echo "Hint: build an unstripped diagnostic binary first: rust/build-arm.sh --profile" >&2
+  exit 1
+fi
+
+export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "==> building cross helper image $IMAGE"
+  docker build -t "$IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
+fi
+
+mkdir -p "$OUT_DIR"
+RAW="$OUT_DIR/nm-symbols.tsv"
+GROUPS_FILE="$OUT_DIR/groups.tsv"
+TOP="$OUT_DIR/top-symbols.tsv"
+
+REL_BIN="/project/${BIN#"$HERE/"}"
+if [[ "$BIN" != "$HERE/"* ]]; then
+  echo "ERROR: binary must be under $HERE so the Docker helper can read it" >&2
+  exit 1
+fi
+
+docker run --rm \
+  --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  -v "$HERE:/project" \
+  -w /project \
+  "$IMAGE" \
+  bash -lc "arm-linux-gnueabihf-nm -S --size-sort --radix=d '$REL_BIN' 2>/dev/null" \
+  >"$RAW.tmp" || true
+
+if [ ! -s "$RAW.tmp" ]; then
+  rm -f "$RAW.tmp"
+  echo "ERROR: no symbols found. Use an unstripped build such as --profile." >&2
+  exit 1
+fi
+
+awk '
+  NF >= 4 {
+    name = $4
+    for (i = 5; i <= NF; i++) name = name " " $i
+    print $1 "\t" $2 "\t" $3 "\t" name
+  }
+' "$RAW.tmp" >"$RAW"
+rm -f "$RAW.tmp"
+
+awk -F '\t' '
+  function group(name) {
+    if (name ~ /ffmpeg|avcodec|avformat|avutil|swscale|h264|mov|mpeg|cabac|golomb/) return "FFmpeg/video"
+    if (name ~ /slint|i_slint|corelib|software_renderer|femtovg/) return "Slint/generated UI"
+    if (name ~ /swash|font|glyph|ttf|typeface|textlayout/) return "Fonts/text"
+    if (name ~ /sqlite|rusqlite|catalog|library|quick_xml|walkdir/) return "SQLite/catalog"
+    if (name ~ /png|zune|preview|image/) return "PNG/preview"
+    if (name ~ /launcher|input|gamepad|joystick|evdev|fpga|fb|vt/) return "Launcher/input/fb"
+    return "Other"
+  }
+  {
+    size = $2 + 0
+    g = group($4)
+    bytes[g] += size
+    count[g] += 1
+    total += size
+  }
+  END {
+    print "group\tbytes\tpercent\tsymbols"
+    for (g in bytes) {
+      pct = total ? (bytes[g] * 100.0 / total) : 0
+      printf "%s\t%d\t%.2f\t%d\n", g, bytes[g], pct, count[g]
+    }
+  }
+' "$RAW" >"$GROUPS_FILE.tmp"
+{
+  head -1 "$GROUPS_FILE.tmp"
+  tail -n +2 "$GROUPS_FILE.tmp" | sort -t "$(printf '\t')" -k2,2nr
+} >"$GROUPS_FILE"
+rm -f "$GROUPS_FILE.tmp"
+
+{
+  echo "bytes\ttype\tsymbol"
+  sort -t "$(printf '\t')" -k2,2nr "$RAW" | awk -F '\t' 'NR <= 100 { print $2 "\t" $3 "\t" $4 }'
+} >"$TOP"
+
+echo "==> size analysis"
+echo "    symbols: $RAW"
+echo "    groups:  $GROUPS_FILE"
+echo "    top:     $TOP"
+column -t -s "$(printf '\t')" "$GROUPS_FILE" 2>/dev/null || cat "$GROUPS_FILE"

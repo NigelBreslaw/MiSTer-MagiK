@@ -40,6 +40,7 @@ htmlcov/
 
 # Rust build output (the native frontend crate)
 /rust/target/
+/rust/build/
 *.whl
 *.tar.gz
 *.tar.zst

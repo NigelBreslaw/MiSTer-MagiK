@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="${MISTER_FFMPEG_VERSION:-8.1.1}"
+WORK="$HERE/target/ffmpeg-minimal/armv7"
+SRC="$WORK/ffmpeg-$VERSION"
+DIST="$WORK/dist"
+STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION"
+IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
+
+if [ -f "$STAMP" ] && [ -f "$DIST/lib/libavcodec.a" ]; then
+  echo "==> minimal FFmpeg already built: $DIST"
+  exit 0
+fi
+
+export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "==> building cross helper image $IMAGE"
+  docker build -t "$IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
+fi
+
+mkdir -p "$WORK"
+if [ ! -d "$SRC/.git" ]; then
+  rm -rf "$SRC"
+  echo "==> fetching FFmpeg n$VERSION"
+  git clone --depth=1 -b "n$VERSION" "${FFMPEG_GIT_URL:-https://github.com/FFmpeg/FFmpeg}" "$SRC"
+fi
+
+echo "==> configuring minimal FFmpeg n$VERSION"
+docker run --rm \
+  --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  -v "$HERE:/project" \
+  -w "/project/target/ffmpeg-minimal/armv7/ffmpeg-$VERSION" \
+  "$IMAGE" \
+  bash -lc '
+set -euo pipefail
+rm -rf ../dist
+./configure \
+  --prefix=/project/target/ffmpeg-minimal/armv7/dist \
+  --cross-prefix=arm-linux-gnueabihf- \
+  --arch=arm \
+  --target-os=linux \
+  --enable-cross-compile \
+  --enable-static \
+  --disable-shared \
+  --enable-pic \
+  --disable-autodetect \
+  --disable-programs \
+  --disable-doc \
+  --disable-debug \
+  --enable-stripping \
+  --enable-small \
+  --disable-everything \
+  --disable-avdevice \
+  --disable-avfilter \
+  --disable-swresample \
+  --enable-avcodec \
+  --enable-avformat \
+  --enable-avutil \
+  --enable-swscale \
+  --enable-decoder=h264 \
+  --enable-parser=h264 \
+  --enable-demuxer=mov \
+  --enable-protocol=file
+make -j"$(nproc)" install
+'
+
+touch "$STAMP"
+echo "==> minimal FFmpeg built: $DIST"
+find "$DIST/lib" -name "*.a" -exec ls -lh {} +
