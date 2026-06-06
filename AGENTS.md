@@ -532,6 +532,11 @@ gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the
 formal benchmark/size history in `history/toolchain-bench/results.tsv` via
 `scripts/bench-toolchain.sh`.
 
+GitHub Actions CI lives in `.github/workflows/rust-arm.yml`. It builds
+`--fast`, `--device`, `--fast --video`, and `--device --video`, uploads the ARM
+binaries and size TSVs, and runs `rust/scripts/check-arm-shared-libs.sh` so
+video builds fail if FFmpeg becomes a runtime `libav*` dependency.
+
 Video builds use a project-local **minimal static FFmpeg 8.1.x** built by
 `rust/scripts/build-minimal-ffmpeg.sh` under `rust/target/ffmpeg-minimal/armv7`.
 It enables only H.264 decode/parse, MOV/MP4 demuxing, file protocol, and
