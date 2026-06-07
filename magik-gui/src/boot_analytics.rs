@@ -87,6 +87,10 @@ impl LauncherFrameWriter {
         }
     }
 
+    pub fn should_record(&self, frame: u64) -> bool {
+        frame < self.limit
+    }
+
     pub fn record(
         &mut self,
         frame: u64,
@@ -109,7 +113,7 @@ impl LauncherFrameWriter {
         full_sample_hash: u64,
         full_sample_nonzero: u32,
     ) {
-        if frame >= self.limit {
+        if !self.should_record(frame) {
             return;
         }
         let _ = writeln!(

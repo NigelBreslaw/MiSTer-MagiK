@@ -2502,6 +2502,12 @@ fn run_launcher_loop(
             disp.record_visual_sample("sample_frame_240");
         }
         let reasserted = false;
+        if boot_frame_profile
+            .as_ref()
+            .is_some_and(|profile| !profile.should_record(frames))
+        {
+            boot_frame_profile = None;
+        }
         if let Some(profile) = boot_frame_profile.as_mut() {
             let (edge1_hash, edge1_nonzero) = disp.right_edge_signature(1);
             let (edge8_hash, edge8_nonzero) = disp.right_edge_signature(8);
