@@ -11,3 +11,4 @@ pub mod framebuffer_copy;
 pub mod input_info;
 pub mod input_repeat;
 pub mod library_bench;
+pub mod runtime_status;

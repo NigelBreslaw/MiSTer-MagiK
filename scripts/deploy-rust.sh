@@ -63,13 +63,13 @@ echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 echo "==> Deploying $BIN -> $REMOTE"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
+  "$HERE/scripts/mister" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" put "$BIN" "$REMOTE.upload"
+  "$HERE/scripts/mister" put "$BIN" "$REMOTE.upload"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'"
+  "$HERE/scripts/mister" run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'"
 if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   if [ ! -f "$VIDEO_SRC" ]; then
     echo "ERROR: --video requested but $VIDEO_SRC does not exist" >&2
@@ -78,16 +78,16 @@ if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   echo "==> Deploying $VIDEO_SRC -> $VIDEO_REMOTE"
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
   MISTER_PASS="${MISTER_PASS:-1}" \
-    uv run python "$HERE/scripts/mister_ssh.py" put "$VIDEO_SRC" "$VIDEO_REMOTE"
+    "$HERE/scripts/mister" put "$VIDEO_SRC" "$VIDEO_REMOTE"
 fi
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$HERE/scripts/mister_ssh.py" run "chmod +x $REMOTE"
+  "$HERE/scripts/mister" run "chmod +x $REMOTE"
 
 REMOTE_BYTES="$(
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
   MISTER_PASS="${MISTER_PASS:-1}" \
-    uv run python "$HERE/scripts/mister_ssh.py" run "wc -c $REMOTE" \
+    "$HERE/scripts/mister" run "wc -c $REMOTE" \
     | awk '{print $1}' | tail -1
 )"
 if [ -n "$REMOTE_BYTES" ]; then

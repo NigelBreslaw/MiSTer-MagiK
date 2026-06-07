@@ -21,6 +21,9 @@ pub fn enabled() -> bool {
 }
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
+    let detail = detail.to_string();
+    crate::runtime_status::event(name, &detail);
+
     if !enabled() {
         return;
     }
@@ -28,7 +31,7 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let boot_ms = boot_ms();
     let pid = unsafe { libc::getpid() };
-    let detail = sanitize(&detail.to_string());
+    let detail = sanitize(&detail);
     let needs_header = std::fs::metadata(OUT_PATH)
         .map(|m| m.len() == 0)
         .unwrap_or(true);

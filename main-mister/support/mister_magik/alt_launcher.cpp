@@ -12,6 +12,7 @@
 #include <linux/kd.h>
 #include <linux/vt.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include "cfg.h"
 #include "file_io.h"
@@ -25,6 +26,9 @@ static const char s_launcher_path[] = "mister-magik/mister-magik-fb";
 static const char s_launcher_scene[] = "launcher";
 static const char s_script_path[] = "/tmp/mister_magik_launcher";
 static const char s_log_path[] = "/tmp/mister-magik-main.log";
+static const char s_status_dir[] = "/tmp/mister-magik";
+static const char s_status_path[] = "/tmp/mister-magik/main-status.json";
+static const char s_events_path[] = "/tmp/mister-magik/events.jsonl";
 static const char s_analytics_flag_path[] = "/media/fat/mister-magik/boot-analytics.enabled";
 static const char s_analytics_path[] = "/tmp/mister-magik-boot-analytics.tsv";
 static const int s_vt = 2;
@@ -39,8 +43,16 @@ static bool s_gave_up = false;
 static bool s_escaped = false;
 static unsigned long s_analytics_seq = 0;
 static bool s_analytics_header_written = false;
+static unsigned long s_osd_suppressed_count = 0;
+static char s_visible_owner[32] = "unknown";
+static int s_visible_fb_enabled = 0;
+static int s_visible_fb_num = -1;
+static int s_visible_fb_width = 0;
+static int s_visible_fb_height = 0;
 
 static bool launcher_tty_ready(pid_t pid);
+static void json_escape(FILE *f, const char *s);
+static void read_trimmed(const char *path, char *buf, size_t len);
 
 static void log_msg(const char *fmt, ...)
 {
@@ -53,6 +65,99 @@ static void log_msg(const char *fmt, ...)
 	va_end(args);
 	fputc('\n', f);
 	fclose(f);
+}
+
+static void ensure_status_dir(void)
+{
+	mkdir(s_status_dir, 0755);
+}
+
+static void json_escape(FILE *f, const char *s)
+{
+	fputc('"', f);
+	if (s)
+	{
+		for (; *s; s++)
+		{
+			switch (*s)
+			{
+			case '\\': fputs("\\\\", f); break;
+			case '"': fputs("\\\"", f); break;
+			case '\n': fputs("\\n", f); break;
+			case '\r': fputs("\\r", f); break;
+			case '\t': fputs("\\t", f); break;
+			default: fputc(*s, f); break;
+			}
+		}
+	}
+	fputc('"', f);
+}
+
+static void event_jsonl(const char *source, const char *event, const char *detail)
+{
+	ensure_status_dir();
+	FILE *f = fopen(s_events_path, "a");
+	if (!f) return;
+	fprintf(f, "{\"ts_boot_ms\":%lu,\"source\":", GetTimer(0));
+	json_escape(f, source ? source : "main");
+	fprintf(f, ",\"pid\":%d,\"event\":", getpid());
+	json_escape(f, event ? event : "unknown");
+	fprintf(f, ",\"detail\":");
+	json_escape(f, detail ? detail : "");
+	fprintf(f, "}\n");
+	fclose(f);
+}
+
+void mister_magik_status_write(void)
+{
+	ensure_status_dir();
+	FILE *f = fopen(s_status_path, "w");
+	if (!f) return;
+
+	char active_vt[64];
+	char fb_mode[128];
+	read_trimmed("/sys/class/tty/tty0/active", active_vt, sizeof(active_vt));
+	read_trimmed("/sys/module/MiSTer_fb/parameters/mode", fb_mode, sizeof(fb_mode));
+
+	fprintf(f, "{");
+	fprintf(f, "\"schema\":\"mister-magik-main-status-v1\",");
+	fprintf(f, "\"ts_boot_ms\":%lu,", GetTimer(0));
+	fprintf(f, "\"pid\":%d,", getpid());
+	fprintf(f, "\"launcher_pid\":%d,", s_pid);
+	fprintf(f, "\"launcher_active\":%s,", s_pid ? "true" : "false");
+	fprintf(f, "\"crash_count\":%d,", s_crash_count);
+	fprintf(f, "\"respawn_timer\":%lu,", s_respawn_timer);
+	fprintf(f, "\"init_pending\":%s,", s_init_pending ? "true" : "false");
+	fprintf(f, "\"gave_up\":%s,", s_gave_up ? "true" : "false");
+	fprintf(f, "\"escaped\":%s,", s_escaped ? "true" : "false");
+	fprintf(f, "\"tty_ready\":%s,", (s_pid && launcher_tty_ready(s_pid)) ? "true" : "false");
+	fprintf(f, "\"active_vt\":");
+	json_escape(f, active_vt[0] ? active_vt : "unknown");
+	fprintf(f, ",\"fb_mode\":");
+	json_escape(f, fb_mode[0] ? fb_mode : "unknown");
+	fprintf(f, ",\"visible_owner\":");
+	json_escape(f, s_visible_owner);
+	fprintf(f, ",\"fb_enabled\":%d,\"fb_num\":%d,\"fb_width\":%d,\"fb_height\":%d,",
+	        s_visible_fb_enabled, s_visible_fb_num, s_visible_fb_width, s_visible_fb_height);
+	fprintf(f, "\"osd_suppressed_count\":%lu", s_osd_suppressed_count);
+	fprintf(f, "}\n");
+	fclose(f);
+}
+
+void mister_magik_note_visible_owner(const char *owner, int fb_enabled, int fb_num, int fb_width, int fb_height)
+{
+	snprintf(s_visible_owner, sizeof(s_visible_owner), "%s", owner ? owner : "unknown");
+	s_visible_fb_enabled = fb_enabled;
+	s_visible_fb_num = fb_num;
+	s_visible_fb_width = fb_width;
+	s_visible_fb_height = fb_height;
+	mister_magik_status_write();
+}
+
+void mister_magik_note_osd_suppressed(void)
+{
+	s_osd_suppressed_count++;
+	mister_magik_status_write();
 }
 
 static bool analytics_enabled(void)
@@ -88,6 +193,20 @@ static void read_trimmed(const char *path, char *buf, size_t len)
 
 static void analytics_event(const char *event, const char *fmt, ...)
 {
+	char detail[768];
+	detail[0] = 0;
+	if (fmt)
+	{
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf(detail, sizeof(detail), fmt, args);
+		va_end(args);
+		detail[sizeof(detail) - 1] = 0;
+		sanitize_detail(detail);
+	}
+	event_jsonl("main", event, detail);
+	mister_magik_status_write();
+
 	if (!analytics_enabled())
 		return;
 
@@ -100,18 +219,6 @@ static void analytics_event(const char *event, const char *fmt, ...)
 		s_analytics_header_written = true;
 	}
 
-	char detail[768];
-	detail[0] = 0;
-	if (fmt)
-	{
-		va_list args;
-		va_start(args, fmt);
-		vsnprintf(detail, sizeof(detail), fmt, args);
-		va_end(args);
-		detail[sizeof(detail) - 1] = 0;
-		sanitize_detail(detail);
-	}
-
 	fprintf(f, "%lu\tmain\t%lu\t%s\t%d\t%s\n",
 	        ++s_analytics_seq, GetTimer(0), event, getpid(), detail);
 	fclose(f);
@@ -119,9 +226,6 @@ static void analytics_event(const char *event, const char *fmt, ...)
 
 static void analytics_state(const char *event, const char *extra_fmt = NULL, ...)
 {
-	if (!analytics_enabled())
-		return;
-
 	video_boot_analytics_snapshot(event);
 
 	char fb_mode[128];
@@ -369,12 +473,14 @@ static void spawn(void)
 	}
 
 	log_msg("spawned pid=%d path=%s scene=%s", s_pid, path, s_launcher_scene);
+	mister_magik_status_write();
 	analytics_state("forked", "path=%s scene=%s", path, s_launcher_scene);
 	wait_launcher_tty_ready(s_pid);
 	analytics_state("tty_ready");
 	video_chvt(s_vt);
 	analytics_state("chvt_tty2");
 	video_fb_enable(1);
+	mister_magik_status_write();
 	analytics_state("video_fb_enable_on");
 	if (menu_present()) MenuHide();
 	OsdDisable();
@@ -393,18 +499,6 @@ bool mister_magik_boot_analytics_enabled(void)
 
 void mister_magik_boot_analytics_event(const char *source, const char *event, const char *fmt, ...)
 {
-	if (!analytics_enabled())
-		return;
-
-	FILE *f = fopen(s_analytics_path, "a");
-	if (!f) return;
-
-	if (!s_analytics_header_written)
-	{
-		fprintf(f, "seq\tsource\tboot_ms\tevent\tpid\tdetails\n");
-		s_analytics_header_written = true;
-	}
-
 	char detail[768];
 	detail[0] = 0;
 	if (fmt)
@@ -415,6 +509,20 @@ void mister_magik_boot_analytics_event(const char *source, const char *event, co
 		va_end(args);
 		detail[sizeof(detail) - 1] = 0;
 		sanitize_detail(detail);
+	}
+	event_jsonl(source ? source : "main", event, detail);
+	mister_magik_status_write();
+
+	if (!analytics_enabled())
+		return;
+
+	FILE *f = fopen(s_analytics_path, "a");
+	if (!f) return;
+
+	if (!s_analytics_header_written)
+	{
+		fprintf(f, "seq\tsource\tboot_ms\tevent\tpid\tdetails\n");
+		s_analytics_header_written = true;
 	}
 
 	fprintf(f, "%lu\t%s\t%lu\t%s\t%d\t%s\n",
@@ -431,6 +539,7 @@ void mister_magik_launcher_init_for_menu(void)
 	s_respawn_timer = 0;
 	s_init_pending = true;
 	log_msg("init_for_menu");
+	mister_magik_status_write();
 	analytics_state("init_for_menu");
 }
 
@@ -452,6 +561,7 @@ void mister_magik_launcher_poll(void)
 
 			log_msg("launcher exited escaped=%d crashed=%d status=%d sig=%d",
 			        escaped, crashed, exit_status, sig);
+			mister_magik_status_write();
 			analytics_state("launcher_exited", "escaped=%d crashed=%d status=%d sig=%d",
 			                escaped, crashed, exit_status, sig);
 			reset_launcher_tty();
@@ -515,5 +625,6 @@ void mister_magik_launcher_shutdown(void)
 	video_fb_enable(0);
 	reset_launcher_tty();
 	log_msg("shutdown");
+	mister_magik_status_write();
 	analytics_state("shutdown");
 }

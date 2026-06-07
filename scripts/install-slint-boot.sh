@@ -2,7 +2,7 @@
 # Install update_all-compatible Magik boot through MiSTer's native main= hook.
 #
 # Stock /media/fat/MiSTer stays as the only inittab menu entry. It reads
-# MiSTer.ini and re-execs /media/fat/MiSTer_MagiK, matching Zaparoo's model.
+# MiSTer.ini and re-execs /media/fat/MiSTer_MagiK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -11,10 +11,10 @@ MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
 MISTER_PASS="${MISTER_PASS:-1}"
 
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
-  uv run python scripts/mister_ssh.py put scripts/mister-magik/repair-boot-ini.awk /tmp/mister-magik-repair-boot-ini.awk
+  scripts/mister put scripts/mister-magik/repair-boot-ini.awk /tmp/mister-magik-repair-boot-ini.awk
 
 echo "==> Configure device (stock inittab + MiSTer.ini main=MiSTer_MagiK)"
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_ssh.py run '
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister run '
 set -e
 if [ ! -x /media/fat/MiSTer_MagiK ]; then
   echo "ERROR: /media/fat/MiSTer_MagiK is missing or not executable"
@@ -75,6 +75,6 @@ cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
 
 echo "==> Reboot to apply"
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_ssh.py reboot-wait
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister reboot-wait
 
 echo "Done. Stock MiSTer should hand off to MiSTer_MagiK via MiSTer.ini main=."

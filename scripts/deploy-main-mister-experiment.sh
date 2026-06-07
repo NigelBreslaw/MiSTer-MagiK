@@ -48,7 +48,7 @@ fi
 echo "==> Deploying experiment binaries"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run '
+  "$ROOT/scripts/mister" run '
 set -e
 STAMP=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)
 SNAP="/media/fat/mister-magik/snapshots/$STAMP-deploy"
@@ -65,24 +65,24 @@ kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" put "$GUI_BIN" "$GUI_REMOTE.upload"
+  "$ROOT/scripts/mister" put "$GUI_BIN" "$GUI_REMOTE.upload"
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
+  "$ROOT/scripts/mister" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
+  "$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
 
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" put "$ROOT/scripts/mister-magik/repair-boot-ini.awk" /tmp/mister-magik-repair-boot-ini.awk
+  "$ROOT/scripts/mister" put "$ROOT/scripts/mister-magik/repair-boot-ini.awk" /tmp/mister-magik-repair-boot-ini.awk
 
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  uv run python "$ROOT/scripts/mister_ssh.py" run '
+  "$ROOT/scripts/mister" run '
 set -e
 mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini

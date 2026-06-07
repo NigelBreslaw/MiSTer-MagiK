@@ -3394,6 +3394,7 @@ void video_boot_analytics_snapshot(const char *reason)
 	{
 		owner = fb_num ? "menu_bg" : "fb0";
 	}
+	mister_magik_note_visible_owner(owner, fb_enabled, fb_num, fb_width, fb_height);
 	mister_magik_boot_analytics_event(
 	    "main-video",
 	    "visible_owner",

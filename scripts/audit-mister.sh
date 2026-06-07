@@ -11,7 +11,7 @@ export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
 
 rc=0
-uv run python "$HERE/scripts/mister_ssh.py" run '
+"$HERE/scripts/mister" run '
 echo "=== OS / CPU ==="
 uname -a
 uname -m

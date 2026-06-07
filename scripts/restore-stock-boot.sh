@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore stock MiSTer boot.
 #
-# Rollback is intentionally Zaparoo-style: keep stock /media/fat/MiSTer in
+# keep stock /media/fat/MiSTer in
 # inittab and remove the MiSTer_MagiK main= handoff from [MiSTer].
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,9 +10,9 @@ MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
 MISTER_PASS="${MISTER_PASS:-1}"
 
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
-  uv run python scripts/mister_ssh.py put scripts/mister-magik/restore-stock-ini.awk /tmp/mister-magik-restore-stock-ini.awk
+  scripts/mister put scripts/mister-magik/restore-stock-ini.awk /tmp/mister-magik-restore-stock-ini.awk
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_ssh.py run '
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister run '
 set -e
 mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
@@ -60,5 +60,5 @@ echo "=== restored MiSTer.ini boot keys ==="
 awk '"'"'BEGIN{s="global"} /^\[/ {s=$0} /^[[:space:]]*(main|video_mode|direct_video)[[:space:]]*=/ {print s " " NR ":" $0}'"'"' "$INI"
 '
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" uv run python scripts/mister_ssh.py reboot-wait
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister reboot-wait
 echo "Stock MiSTer boot restored."
