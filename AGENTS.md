@@ -19,6 +19,9 @@ screen, controller input).
 
 - ✅ **Native Rust frontend** — `mister-magik-fb ui` at locked 60fps, smooth +
   tear-free. See §9.7.
+- ✅ **Dynamic framebuffer path** — benchmarks and launcher open the current
+  MiSTer framebuffer and render Slint 1:1 at that size. The old fixed
+  960x540-to-1080p framebuffer path has been removed.
 - ✅ **Slint launcher** — 2×2 home grid, controller test; gamepad owned by Slint
   while UI runs. Games launch via fifo `load_core` (MiSTer spawned briefly).
 - ✅ **Production boot** — update_all-compatible handoff:
@@ -32,7 +35,7 @@ screen, controller input).
 
 See `history/2026-5-2/framebuffer-experiments.md` for the exploration path.
 
-Remaining work: live-mode geometry, in-game settings strategy (§7).
+Remaining work: in-game settings strategy (§7).
 
 ### Canonical names
 
@@ -51,9 +54,9 @@ Remaining work: live-mode geometry, in-game settings strategy (§7).
 - Host on the LAN: `192.168.1.117`, SSH `root` / password `1`.
 - CPU/OS: ARM Cortex-A9 **armv7l**, minimal Linux, **glibc 2.31**. DE10-Nano,
   **1 GiB DDR3** (≈400 MB free in our tests).
-- Framebuffer: `/dev/fb0`, driver **`MiSTer_fb`** (`/proc/fb` → `0 MiSTer_fb`),
-  **1920×1080×32**, `rgba 8/16,8/8,8/0` → byte order is **B,G,R,X**
-  (little-endian). No `/dev/dri` (no DRM/KMS).
+- Framebuffer: `/dev/fb0`, driver **`MiSTer_fb`** (`/proc/fb` → `0 MiSTer_fb`).
+  Size follows the active MiSTer mode; byte order is **B,G,R,X** for
+  `rgba 8/16,8/8,8/0` 32-bit modes (little-endian). No `/dev/dri` (no DRM/KMS).
 - Audio: ALSA exposes only `Dummy PCM` on this device. HDMI-capable Linux-side
   audio is `/dev/MrAudio` (`/sys/devices/virtual/MrAudio_sys/MrAudio/dev` →
   `246:0`), backed by the MiSTer kernel audio buffer.
@@ -223,8 +226,8 @@ scripts/bench-toolchain.sh A0 --clean --replace-label
 
 `bench-toolchain.sh` keeps the historical TSV schema, but new rows append
 display metadata to `notes`: `ini_mode`, `physical_mode`, `fb_size`,
-`render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, and
-`bench_render_scale`. Display-mode visual sweep records live in
+`render_size`, `fb_scale`, `pixel_repetition`, and `uio_fb`.
+Display-mode visual sweep records live in
 `history/toolchain-bench/display-modes-20260607.md`.
 
 ### Agent sandbox / approval hygiene
@@ -470,9 +473,9 @@ Important gotchas:
 - **Boot flicker analytics found Main OSD still updates after Slint handoff.**
   The `2026-06-07` analytics run recorded repeated post-handoff
   `main-osd OsdUpdate dirty_lines=3 n=19 is_menu=1 osdset=0x70000` events while
-  Slint was already rendering. It also found Slint's first-180-frame
-  `set_mode_1080p`/`fb_enable_direct` reassert loop and right-edge `/dev/fb0`
-  changes. See `history/2026-6-5/boot-flicker-analytics.md`.
+  Slint was already rendering. It also found the old fixed-mode reassert loop
+  and right-edge `/dev/fb0` changes. See
+  `history/2026-6-5/boot-flicker-analytics.md`.
 - **Boot black screen is currently self-inflicted by timing.** Whole-boot
   analytics showed Main routes HDMI to `/dev/fb0` while the buffer is still
   black, then Slint waits on cached arcade catalog load before its first render.
@@ -563,13 +566,10 @@ full-screen image from our own binary**:
   values are **`xoff=yoff=0`**. Confirmed clean on HDMI at `0,0`.
 
 **Resolution / CRT generality (answer to "will this cope with lower res / CRT?"):**
-Yes, but not by hardcoding. `MODE_1080P60` and the `0,0` offset are specific to
-this 1080p direct_video menu. The robust path (todo `rust-livemode`) is to read
-the **live** mode each time — `UIO_GET_VRES` for the active resolution, plus the
-mode timing for the porches — and compute `fb_width/height`, `xoff/yoff`, and the
-scaled coords from that. Our own `main=` frontend will set/own its mode, so it
-always knows the correct geometry (including low-res and CRT/`direct_video`
-outputs). The plumbing already reads these registers; only the derivation is TODO.
+Yes, but not by hardcoding. The current frontend opens the **live** framebuffer
+size and routes Slint 1:1 with runtime-sized geometry. CRT/`direct_video` smoke
+paths are opt-in tests; the normal HDMI path does not force a mode before
+opening `/dev/fb0`.
 
 ### 9.7 Slint software renderer @ locked 60fps — smooth + tear-free (✅ done)
 

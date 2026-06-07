@@ -2,11 +2,11 @@
 //!
 //! Subcommands:
 //!   read      read & print the live video mode + fb params (UIO_GET_VRES/FB_PAR)
-//!   route     set /dev/fb0 to 1080p and route buffer 0 to HDMI
+//!   route     route the current /dev/fb0 buffer 0 to HDMI
 //!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!   scenes    list Slint scene names
-//!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
-//!   fb-current [secs] [normal|direct|none]  paint + optionally route current fb size
+//!   fb [secs] [normal|direct|none]  paint + optionally route current fb size
+//!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
 //!   input     gamepad log / sniff / calibrate
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
@@ -40,10 +40,7 @@ pub use mister_magik_fb::{
 };
 
 use fb::{Display, Pixel};
-use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
-
-const W: usize = 1920;
-const H: usize = 1080;
+use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
@@ -71,7 +68,7 @@ fn main() {
     match cmd.as_str() {
         "read" => read_mode(&mut f),
         "route" => route_framebuffer(&mut f),
-        "fb" => fb_test(&mut f),
+        "fb" => fb_current_probe(&mut f),
         "fb-current" => fb_current_probe(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
@@ -118,87 +115,25 @@ fn exec_mister(args: &[String]) {
 }
 
 fn route_framebuffer(f: &mut Fpga) {
-    Display::set_mode_1080p();
-    let flag = f.fb_enable_direct(0, W as u16, H as u16, MODE_1080P60, Some(0), Some(0));
-    println!("route: fb0 1920x1080 -> HDMI support_flag={flag}");
-}
-
-fn fb_test(f: &mut Fpga) {
-    let _vt = vt::VtGraphicsGuard::enter_or_warn();
-    let mut disp = match Display::open(W, H) {
+    let disp = match Display::open_current() {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("failed to open display (/dev/fb0 + /dev/mem): {e}");
+            eprintln!("failed to open current display (/dev/fb0): {e}");
             std::process::exit(1);
         }
     };
-    const N: u32 = 0; // paint + route buffer 0 (the write-combined /dev/fb0 buffer)
-
-    // Geometry-revealing pattern: four solid quadrants, a 6px white border that
-    // must touch all four screen edges, and a white cross-hair through centre.
-    // Any horizontal-total mismatch shears this into diagonal columns; any
-    // offset pulls the border off an edge.
-    const RED: u32 = 0x00FF_0000;
-    const GREEN: u32 = 0x0000_FF00;
-    const BLUE: u32 = 0x0000_00FF;
-    const YELLOW: u32 = 0x00FF_FF00;
-    const WHITE: u32 = 0x00FF_FFFF;
-
-    let buf = disp.buffer_mut();
-    fill_rect(buf, 0, 0, W / 2, H / 2, RED);
-    fill_rect(buf, W / 2, 0, W, H / 2, GREEN);
-    fill_rect(buf, 0, H / 2, W / 2, H, BLUE);
-    fill_rect(buf, W / 2, H / 2, W, H, YELLOW);
-
-    let b = 6;
-    fill_rect(buf, 0, 0, W, b, WHITE); // top
-    fill_rect(buf, 0, H - b, W, H, WHITE); // bottom
-    fill_rect(buf, 0, 0, b, H, WHITE); // left
-    fill_rect(buf, W - b, 0, W, H, WHITE); // right
-    fill_rect(buf, 0, H / 2 - b / 2, W, H / 2 + b / 2, WHITE); // horizontal centre
-    fill_rect(buf, W / 2 - b / 2, 0, W / 2 + b / 2, H, WHITE); // vertical centre
-
-    println!("painted {W}x{H} test pattern to buffer {N}");
-
-    // Empirically, the stock menu's HPS buffer 0 (direct_video=1) sits at the
-    // visible-area origin: xoff=yoff=0. That's the direct_video formula
-    // (xoff=item[4]-FB_DV_LBRD) evaluated with the *running* menu mode, whose
-    // porches are already the tiny border constants (item[4]=3, item[8]=2) -> 0.
-    // Hardcoding the original mode-8 porches (148/36) put us ~145px too far
-    // right. The real frontend must derive xoff/yoff from the LIVE mode (read via
-    // UIO_GET_VRES + the mode table) so it adapts to other resolutions / CRT.
-    // Override on the CLI for tuning: `fb <xoff> <yoff>`.
-    let xo = Some(
-        std::env::args()
-            .nth(2)
-            .and_then(|s| s.parse::<i32>().ok())
-            .unwrap_or(0),
+    let w = disp.width();
+    let h = disp.height();
+    let flag = f.fb_enable(
+        0,
+        w as u16,
+        h as u16,
+        Mode::framebuffer_sized(w as u16, h as u16),
+        Some(0),
+        Some(0),
+        std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
     );
-    let yo = Some(
-        std::env::args()
-            .nth(3)
-            .and_then(|s| s.parse::<i32>().ok())
-            .unwrap_or(0),
-    );
-
-    let mode: Mode = MODE_1080P60;
-    let flag = f.fb_enable_direct(N, W as u16, H as u16, mode, xo, yo);
-    let xoff = xo.unwrap_or(mode.hbp as i32 - fpga::FB_DV_LBRD);
-    let yoff = yo.unwrap_or(mode.vbp as i32 - fpga::FB_DV_UBRD);
-    println!(
-        "fb_enable_direct(n={N}): support_flag={flag}; scaled L={} R={} T={} B={} stride={}",
-        xoff,
-        xoff + mode.hact as i32 - 1,
-        yoff,
-        yoff + mode.vact as i32 - 1,
-        W * 4
-    );
-
-    // Hold so the (SIGSTOPped) menu can't repaint while you look at HDMI.
-    let secs = 12;
-    println!("holding {secs}s — check HDMI for a clean 4-quadrant pattern...");
-    std::thread::sleep(std::time::Duration::from_secs(secs));
-    println!("done (MiSTer will resume after this process exits)");
+    println!("route: fb0 {w}x{h} -> HDMI support_flag={flag}");
 }
 
 fn fb_current_probe(f: &mut Fpga) {
@@ -263,14 +198,6 @@ fn fb_current_probe(f: &mut Fpga) {
     }
     println!("holding {secs}s — check HDMI for bordered colour test pattern...");
     std::thread::sleep(std::time::Duration::from_secs(secs));
-}
-
-fn fill_rect(buf: &mut [Pixel], x0: usize, y0: usize, x1: usize, y1: usize, c: u32) {
-    for y in y0..y1 {
-        for x in x0..x1 {
-            buf[y * W + x] = Pixel(c);
-        }
-    }
 }
 
 fn paint_pattern(buf: &mut [Pixel], w: usize, h: usize) {

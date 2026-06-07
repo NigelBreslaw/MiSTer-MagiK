@@ -217,8 +217,6 @@ fn fb_info_from(
     }
 }
 
-const MODE_1080P: &str = "8888 1 1920 1080 7680";
-
 fn pixels_as_u32(src: &[Pixel]) -> &[u32] {
     unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u32>(), src.len()) }
 }
@@ -228,57 +226,6 @@ fn pixels_as_u32_mut(dst: &mut [Pixel]) -> &mut [u32] {
 }
 
 impl Display {
-    /// Request 1080p from the MiSTer_fb driver (no-op if sysfs missing).
-    pub fn set_mode_1080p() {
-        let path = "/sys/module/MiSTer_fb/parameters/mode";
-        boot_analytics::event("fb_mode_write_attempt", MODE_1080P);
-        match std::fs::write(path, MODE_1080P) {
-            Ok(()) => boot_analytics::event("fb_mode_write_ok", MODE_1080P),
-            Err(e) => {
-                boot_analytics::event("fb_mode_write_failed", format!("error={e}"));
-                eprintln!("note: could not set MiSTer_fb mode: {e}");
-            }
-        }
-    }
-
-    /// Open /dev/fb0, retrying while the driver comes up after cold boot / main= handoff.
-    pub fn open_boot(w: usize, h: usize) -> io::Result<Self> {
-        const RETRIES: u32 = 30;
-        let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
-        for attempt in 0..RETRIES {
-            boot_analytics::event("display_open_attempt", format!("attempt={attempt}"));
-            Self::set_mode_1080p();
-            std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
-                0
-            } else {
-                200
-            }));
-            match Self::open(w, h) {
-                Ok(d) => {
-                    boot_analytics::event(
-                        "display_open_ok",
-                        format!("attempt={attempt} w={w} h={h}"),
-                    );
-                    if attempt > 0 {
-                        println!("display open ok after {attempt} retries");
-                    }
-                    return Ok(d);
-                }
-                Err(e) => {
-                    boot_analytics::event(
-                        "display_open_failed",
-                        format!("attempt={attempt} error={e}"),
-                    );
-                    if attempt == 0 || attempt % 5 == 0 {
-                        eprintln!("display open attempt {attempt}: {e}");
-                    }
-                    last_err = e;
-                }
-            }
-        }
-        Err(last_err)
-    }
-
     /// Open the framebuffer at its current kernel-reported size, without writing
     /// `/sys/module/MiSTer_fb/parameters/mode`.
     pub fn open_current_boot() -> io::Result<Self> {

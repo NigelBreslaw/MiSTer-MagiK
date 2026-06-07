@@ -25,9 +25,6 @@ export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
 
 LABEL="A0"
-RENDER_SCALE="${MISTER_RENDER_SCALE:-}"
-# Legacy alias (downscale-from-HDMI): PIXEL_SCALE=2 ≡ RENDER_SCALE=1.
-PIXEL_SCALE="${MISTER_PIXEL_SCALE:-}"
 DO_CLEAN=0
 SKIP_BUILD=0
 SKIP_DEVICE=0
@@ -74,23 +71,6 @@ done
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
   BENCH_SCENES+=(video_playback)
-fi
-
-# Label defaults kept for historical A/P2 comparisons; runtime logs decide the
-# real render/framebuffer sizes recorded in notes and PNG conversion.
-if [[ -z "$RENDER_SCALE" ]]; then
-  case "$LABEL" in
-    P2*|p2*) RENDER_SCALE=1 ;;
-    A*|PS|LS) RENDER_SCALE=2 ;;
-    *) RENDER_SCALE=1 ;;
-  esac
-fi
-# Legacy MISTER_PIXEL_SCALE overrides when RENDER_SCALE was not set explicitly.
-if [[ -z "${MISTER_RENDER_SCALE:-}" && -n "$PIXEL_SCALE" ]]; then
-  case "$PIXEL_SCALE" in
-    1) RENDER_SCALE=2 ;;
-    2) RENDER_SCALE=1 ;;
-  esac
 fi
 
 BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
@@ -186,7 +166,6 @@ function value_after(line, key, rest) {
   render = value_after($0, "render=")
   fb = value_after($0, "fb=")
   fb_scale = value_after($0, "fb_scale=")
-  bench_render_scale = value_after($0, "bench_render_scale=")
 }
 /^display-config:/ {
   fb0 = value_after($0, "fb0=")
@@ -201,7 +180,6 @@ END {
   add_note("fb_scale", fb_scale)
   add_note("pixel_repetition", pixel_repetition)
   add_note("uio_fb", uio_fb)
-  add_note("bench_render_scale", bench_render_scale)
   print out
 }
 ' "$ui_log"
@@ -246,10 +224,6 @@ run_scene_on_device() {
   # Post-exit capture only sees fbcon "Welcome / login:" — not the bench scene.
   local capture_at=$((secs > 4 ? secs - 2 : 2))
 
-  local render_env=""
-  if [[ -n "$RENDER_SCALE" ]]; then
-    render_env="MISTER_RENDER_SCALE=$RENDER_SCALE "
-  fi
   mister run "
 set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz.
@@ -257,7 +231,7 @@ kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
-${render_env}$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+$REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0
@@ -372,7 +346,7 @@ cat /tmp/bench-ui.log
   rm -f "$ui_log" "$ui_full"
 }
 
-echo "==> Toolchain bench label=$LABEL render_scale=$RENDER_SCALE scenes=${BENCH_SCENES[*]} (${SCENE_SECS}s each)"
+echo "==> Toolchain bench label=$LABEL scenes=${BENCH_SCENES[*]} (${SCENE_SECS}s each)"
 
 HOST_COMPILE_SEC=""
 HOST_BYTES=""
@@ -387,21 +361,11 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
   HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
-  HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui"
-  if [[ "$RENDER_SCALE" == "2" ]]; then
-    HOST_NOTES="${HOST_NOTES}; render_scale=2; design=960x540; render=1920x1080; font=PressStart2P"
-  else
-    HOST_NOTES="${HOST_NOTES}; render_scale=1; design=runtime; render=runtime; font=PressStart2P"
-  fi
+  HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P"
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
-  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; prep=kill-mister-ui"
-  if [[ "$RENDER_SCALE" == "2" ]]; then
-    HOST_NOTES="${HOST_NOTES}; render_scale=2; design=960x540; render=1920x1080; font=PressStart2P"
-  else
-    HOST_NOTES="${HOST_NOTES}; render_scale=1; design=runtime; render=runtime; font=PressStart2P"
-  fi
+  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P"
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
 

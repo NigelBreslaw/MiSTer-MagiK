@@ -131,14 +131,6 @@ impl Mode {
     }
 }
 
-/// video_mode=8 → 1920x1080@60 (vmodes[8] = {1920,88,44,148,1080,4,5,36}).
-pub const MODE_1080P60: Mode = Mode {
-    hact: 1920,
-    hbp: 148,
-    vact: 1080,
-    vbp: 36,
-};
-
 /// Bounded spin so a wedged FPGA (GPI bit31 set / ACK never toggles) can't hang
 /// us forever, unlike MiSTer which reboots in that case.
 const SPIN_LIMIT: u32 = 2_000_000;

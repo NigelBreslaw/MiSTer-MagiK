@@ -1,9 +1,9 @@
 # Slint bench scenes (toolchain / device)
 
-Benchmark scenes use the detected MiSTer framebuffer size at runtime. At the
-legacy 1080p HDMI mode they still render a 960x540 surface and 2x upscale into
-1920x1080. At lower framebuffer modes, such as 960x540, 720p, and 640x480, they
-render 1:1 with no pixel-doubling path.
+Benchmark scenes use the detected MiSTer framebuffer size at runtime. The Slint
+surface is the framebuffer size and copies 1:1 in every verified mode, including
+1080p, 960x540, 720p, 640x480, and CRT/direct-video smoke modes. The old
+960x540-to-1080p pixel-doubling path has been removed.
 
 **Before a manual run**, stop anything else that owns SPI/HDMI (required for 60 fps):
 
@@ -39,7 +39,7 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PROFILE_FILE=…` | Write per-frame TSV |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
 
-Phase breakdown each frame: **anim** (Slint timers) · **render** (software renderer) · **vsync** (`FBIO_WAITFORVSYNC`) · **copy** (dirty rect/rows → fb0, includes 2× upscale). **wall** = whole iteration.
+Phase breakdown each frame: **anim** (Slint timers) · **render** (software renderer) · **vsync** (`FBIO_WAITFORVSYNC`) · **copy** (dirty rect/rows → fb0). **wall** = whole iteration.
 
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 
@@ -49,9 +49,8 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build
 
 `history/toolchain-bench/results.tsv` keeps the historical schema. New display
 metadata is appended to the `notes` field per row: `physical_mode`, `fb_size`,
-`render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, `bench_render_scale`,
-and `ini_mode`. PNG capture dimensions are parsed from the runtime log instead
-of assuming 1920x1080.
+`render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, and `ini_mode`. PNG
+capture dimensions are parsed from the runtime log.
 
 Include the video scene and upload the local 320×224 H.264 + PCM benchmark clip:
 

@@ -1,7 +1,7 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 
 use crate::fb::{Display, Pixel};
-use crate::fpga::{Fpga, Mode, MODE_1080P60};
+use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -57,7 +57,7 @@ use crate::library_bench;
 use crate::preview_worker::PreviewWorker;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
+use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
@@ -229,22 +229,10 @@ fn normalize_scene(s: &str) -> String {
 }
 
 pub fn print_scenes() {
-    let ui = UiDisplay::from_env();
-    println!(
-        "Slint UI scenes (render {}x{}, fb {}x{}, ui-scale {}):",
-        ui.render_w(),
-        ui.render_h(),
-        FB_W,
-        FB_H,
-        SLINT_UI_SCALE
-    );
+    println!("Slint UI scenes (runtime framebuffer sized, ui-scale {SLINT_UI_SCALE}):");
     for s in UI_SCENES {
         println!("  {s}");
     }
-}
-
-fn uses_legacy_1080p_boot_path(scene: &str) -> bool {
-    matches!(scene, "launcher" | "controller_test")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -350,27 +338,15 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    let legacy_1080p = uses_legacy_1080p_boot_path(&scene);
-    println!(
-        "display-open-path={}",
-        if legacy_1080p {
-            "legacy-1080p-mode-write"
-        } else {
-            "current-fb-no-mode-write"
-        }
-    );
-    let mut disp = match if legacy_1080p {
-        Display::open_boot(FB_W, FB_H)
-    } else {
-        Display::open_current_boot()
-    } {
+    println!("display-open-path=current-fb-no-mode-write");
+    let mut disp = match Display::open_current_boot() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
             std::process::exit(1);
         }
     };
-    let ui = UiDisplay::for_framebuffer(disp.width(), disp.height(), legacy_1080p);
+    let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
     println!("{}", ui.log_line());
     disp.record_visual_sample("after_display_open_before_initial_route");
     let display_config = DisplayConfig::detect(f, disp.info(), &ui);
@@ -382,21 +358,13 @@ pub fn run_ui(f: &mut Fpga) {
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
     }
-    let route_mode = if legacy_1080p {
-        MODE_1080P60
-    } else {
-        Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16)
-    };
-    let route_mode_label = if legacy_1080p {
-        "1080p60"
-    } else {
-        "framebuffer-sized"
-    };
+    let route_mode = Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16);
+    let route_mode_label = "framebuffer-sized";
     let set_vga_fb = std::env::var_os("MISTER_DIRECT_VIDEO").is_some();
     boot_analytics::event(
         "initial_fb_enable_direct_attempt",
         format!(
-            "w={} h={} mode={route_mode_label} legacy_1080p={legacy_1080p} set_vga_fb={set_vga_fb}",
+            "w={} h={} mode={route_mode_label} set_vga_fb={set_vga_fb}",
             disp.width(),
             disp.height()
         ),
@@ -2185,10 +2153,18 @@ fn run_controller_loop(
     );
 }
 
-fn recover_launcher_ui(f: &mut Fpga, spawned_mister: &mut bool) {
+fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
-        f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+        f.fb_enable(
+            0,
+            ui.fb_w() as u16,
+            ui.fb_h() as u16,
+            Mode::framebuffer_sized(ui.fb_w() as u16, ui.fb_h() as u16),
+            Some(0),
+            Some(0),
+            std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+        );
         *spawned_mister = false;
     }
 }
@@ -2584,7 +2560,7 @@ fn run_launcher_loop(
                                     Some(&catalog),
                                     &mut preview,
                                 );
-                                recover_launcher_ui(f, &mut launch_spawned_mister);
+                                recover_launcher_ui(f, ui, &mut launch_spawned_mister);
                             }
                         }
                         window.request_redraw();
@@ -2615,7 +2591,7 @@ fn run_launcher_loop(
                 std::process::exit(0);
             } else if launch_started.elapsed() > Duration::from_secs(90) {
                 eprintln!("game launch timed out");
-                recover_launcher_ui(f, &mut launch_spawned_mister);
+                recover_launcher_ui(f, ui, &mut launch_spawned_mister);
                 std::process::exit(1);
             }
         }
