@@ -5,7 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
-export RUSTC_WRAPPER="${MISTER_RUSTC_WRAPPER:-}"
+export RUSTC_WRAPPER=""
 
 cd "$HERE"
 exec cargo run --quiet --manifest-path tools/mister/Cargo.toml -- "$@"

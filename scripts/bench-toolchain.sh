@@ -23,6 +23,7 @@ VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magik/mslug3.mov}"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
+export RUSTC_WRAPPER=""
 
 LABEL="A0"
 DO_CLEAN=0

@@ -739,9 +739,11 @@ rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-n
 - **`DOCKER_DEFAULT_PLATFORM=linux/amd64`:** the cross image has no arm64 manifest;
   on arm64 Docker we must request amd64 (qemu-emulated). Our crate is tiny so the
   emulation cost is negligible. (`build-arm.sh` sets this.)
-- **sccache wrapper:** the global `~/.cargo/config.toml` sets
-  `rustc-wrapper=/opt/homebrew/bin/sccache` — a macOS path that doesn't exist in
-  the container. `magik-gui/.cargo/config.toml` overrides it to empty.
+- **sccache wrapper:** this repo must not use `sccache`. The root
+  `.cargo/config.toml` and `magik-gui/.cargo/config.toml` set
+  `rustc-wrapper=""`, and Rust workflow scripts export `RUSTC_WRAPPER=""` so a
+  global `~/.cargo/config.toml` or shell environment cannot route builds through
+  a missing/host-specific wrapper.
 - **toolchain pin:** `magik-gui/rust-toolchain.toml` pins `stable` + the armv7 target.
 
 **Crate layout:**

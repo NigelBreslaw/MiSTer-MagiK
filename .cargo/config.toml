@@ -1,0 +1,5 @@
+# Keep this repo independent from any global Cargo compiler wrapper. Some host
+# machines set rustc-wrapper to sccache in ~/.cargo/config.toml; that path is not
+# valid inside cross containers and can break ordinary host-tool builds too.
+[build]
+rustc-wrapper = ""

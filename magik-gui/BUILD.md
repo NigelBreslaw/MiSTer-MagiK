@@ -135,7 +135,8 @@ project-local minimal build.
 
 - **`Cargo.toml`** — `[profile.release]` vs `[profile.release-device]` (inherits release, overrides LTO/CGU).
 - **Cargo feature `ui`** — enables Slint and `slint-build`; `build-arm.sh` passes it for every MiSTer binary build.
-- **`.cargo/config.toml`** — sccache override only; no always-on `rustflags`.
+- **root `.cargo/config.toml` + `.cargo/config.toml`** — disable any inherited
+  compiler wrapper such as sccache; no always-on `rustflags`.
 - **`build-arm.sh`** — sets Cortex-A9 `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
 
 Prerequisite for Cortex-A9 tuning: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
