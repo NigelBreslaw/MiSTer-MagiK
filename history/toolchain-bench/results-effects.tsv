@@ -14,3 +14,10 @@ SIMD-8457248	fire_haze	raw	half	480x270	2	2026-06-07T19:41:44Z	1.96.0		6887620	7
 VHS-GLITCH	vhs_glitch	raw	half	480x270	2	2026-06-07T19:52:11Z	1.96.0		6891740	360	30.0	18459	0	2142	12735	33344	57	67	0	yes	profile=release; prep=kill-mister-ui
 VHS-GLITCH-OPT	vhs_glitch	raw	half	480x270	2	2026-06-07T19:55:04Z	1.96.0		6895836	720	60.0	9359	0	2198	5092	16660	64	73	0	yes	profile=release; prep=kill-mister-ui
 VHS-GLITCH-2X	vhs_glitch	raw	half	480x270	2	2026-06-07T19:57:51Z	1.96.0		6895836	720	59.9	5539	0	2185	8941	16674	43	51	0	yes	profile=release; prep=kill-mister-ui
+CRT-MSLUG-20260607	vhs_glitch	raw	half	480x270	2	2026-06-07T20:48:44Z	1.96.0	101.88	6789316	601	60.0	8090	0	2191	6361	16652	56	68	0	yes	profile=release-device; prep=kill-mister-ui
+CRT-MSLUG-OPT-20260607	vhs_glitch	raw	half	480x270	2	2026-06-07T20:54:34Z	1.96.0	84.46	6789316	600	60.0	4788	0	2170	9700	16667	38	46	0	yes	profile=release-device; prep=kill-mister-ui
+CRT-MSLUG-GLITCH-20260607	vhs_glitch	raw	half	480x270	2	2026-06-07T21:00:50Z	1.96.0	84.81	6789316	1201	60.0	4793	0	2227	9622	16652	41	47	0	yes	profile=release-device; prep=kill-mister-ui
+CRT-MSLUG-BARREL-20260608	vhs_glitch	raw	half	480x270	2	2026-06-07T21:05:49Z	1.96.0	85.88	6789316	1200	60.0	5139	0	2194	9318	16660	43	48	0	yes	profile=release-device; prep=kill-mister-ui
+CRT-MSLUG-NATIVE-OPT-20260608	vhs_glitch	raw	native	320x224	1	2026-06-07T21:16:27Z	1.96.0	85.36	6793652	1200	60.0	1878	0	403	14376	16665	14	16	0	yes	profile=release-device; prep=kill-mister-ui
+CRT-MSLUG-RERUN-20260608	vhs_glitch	raw	native	320x224	1	2026-06-07T21:21:42Z	1.96.0		6793652	1200	60.0	1841	0	390	14422	16661	13	18	0	yes	profile=release-device; prep=kill-mister-ui
+CRT-MSLUG-2X-480-RERUN-20260608	vhs_glitch	raw	half	480x270	2	2026-06-07T21:24:03Z	1.96.0		6793652	1200	60.0	3312	0	2224	11122	16667	32	40	0	yes	profile=release-device; prep=kill-mister-ui
