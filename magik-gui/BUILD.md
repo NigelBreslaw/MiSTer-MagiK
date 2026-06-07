@@ -1,12 +1,12 @@
 # Cross-build profiles (`mister-magik-fb`)
 
-Two **release** profiles separate fast host compiles from the binary we ship to the MiSTer.
+Two **release** profiles separate quick iteration compiles from the binary we ship to the MiSTer.
 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
-| **`release`** | `build-arm.sh` or `--fast` | thin (`lto = true`) | 16 (default) | generic armv7 | ~3 min | ~1.65 MB | Daily Slint/UI iteration, quick deploy |
+| **`release`** | `build-arm.sh` or `--fast` | thin (`lto = true`) | 16 (default) | cortex-a9 | ~3 min | ~1.65 MB | Daily Slint/UI iteration, quick deploy |
 | **`release-device`** | `build-arm.sh --device` | fat | 1 | cortex-a9 | ~5 min | ~1.61 MB | SD card / bench / production |
-| **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
+| **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
 Benchmark labels: **A0** ≈ `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
 
@@ -48,11 +48,11 @@ still compile every benchmark scene.
 ## Commands
 
 ```bash
-# Fast — default for bare build-arm.sh
+# Fast — default for bare build-arm.sh, still Cortex-A9 tuned
 magik-gui/build-arm.sh
 # → target/armv7-unknown-linux-gnueabihf/release/mister-magik-fb
 
-# Full MiSTer release (fat LTO + Cortex-A9 via RUSTFLAGS)
+# Full MiSTer release (fat LTO + Cortex-A9)
 magik-gui/build-arm.sh --device
 # → target/.../release-device/mister-magik-fb
 
@@ -69,7 +69,7 @@ magik-gui/build-arm.sh --fast --video
 # Deploy (default = release-device)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
-# Deploy after a fast build (same path on device, larger binary)
+# Deploy after a fast build (same path on device, thin LTO + Cortex-A9)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 ```
 
@@ -108,7 +108,7 @@ H.264 decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
 `/dev/MrAudio`, so AAC and swresample stay out of V1. avfilter, avdevice,
 programs, and autodetected libraries are disabled.
 
-`scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release`** (matches historical A0 toolchain experiments unless you edit the script to pass `--device` for A3-style benches).
+`scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release`**. Current release builds are Cortex-A9 tuned; older A0 history used the same profile shape before that fast-path tuning was added.
 
 ## CI
 
@@ -136,7 +136,7 @@ project-local minimal build.
 - **`Cargo.toml`** — `[profile.release]` vs `[profile.release-device]` (inherits release, overrides LTO/CGU).
 - **Cargo feature `ui`** — enables Slint and `slint-build`; `build-arm.sh` passes it for every MiSTer binary build.
 - **`.cargo/config.toml`** — sccache override only; no always-on `rustflags`.
-- **`build-arm.sh`** — sets `RUSTFLAGS` for `release-device` only.
+- **`build-arm.sh`** — sets Cortex-A9 `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
 
 Prerequisite for Cortex-A9 tuning: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
 

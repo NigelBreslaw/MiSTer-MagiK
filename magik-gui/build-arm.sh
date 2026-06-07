@@ -2,7 +2,7 @@
 # Cross-compile the native MiSTer frontend for armv7 (the DE10-Nano's ARM core).
 #
 # Profiles (see magik-gui/BUILD.md):
-#   ./build-arm.sh              → release (fast daily)
+#   ./build-arm.sh              → release (thin LTO + Cortex-A9)
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --fast       → alias for release
 #
@@ -53,17 +53,14 @@ if ! docker info >/dev/null 2>"$DOCKER_INFO_ERR"; then
 fi
 rm -f "$DOCKER_INFO_ERR"
 
-if [ "$PROFILE" = release-device ] || [ "$PROFILE" = release-device-profile ]; then
-  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9"
-  if [ "$PROFILE" = release-device-profile ]; then
-    export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
-    echo "==> cross build profile=release-device-profile (symbols + pprof + Cortex-A9)"
-  else
-    echo "==> cross build profile=release-device (fat LTO + Cortex-A9)"
-  fi
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9"
+if [ "$PROFILE" = release-device-profile ]; then
+  export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
+  echo "==> cross build profile=release-device-profile (symbols + pprof + Cortex-A9)"
+elif [ "$PROFILE" = release-device ]; then
+  echo "==> cross build profile=release-device (fat LTO + Cortex-A9)"
 else
-  unset RUSTFLAGS
-  echo "==> cross build profile=release (thin LTO, fast)"
+  echo "==> cross build profile=release (thin LTO + Cortex-A9)"
 fi
 
 BUILD_LOG="$(mktemp)"
