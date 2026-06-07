@@ -5,6 +5,8 @@ pub const COMMANDS: &[&str] = &[
     "fb-current",
     "ui",
     "scenes",
+    "effects",
+    "effect-bench",
     "input",
     "library-scan-bench",
     "audio-tone",

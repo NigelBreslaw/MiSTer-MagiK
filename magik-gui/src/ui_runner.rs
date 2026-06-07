@@ -33,6 +33,10 @@ mod slint_ui {
     pub mod console_scroll {
         include!(concat!(env!("OUT_DIR"), "/console_scroll.rs"));
     }
+    #[cfg(not(mister_ui_scope_launcher))]
+    pub mod effect_hud {
+        include!(concat!(env!("OUT_DIR"), "/effect_hud.rs"));
+    }
     #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
     pub mod video_playback {
         include!(concat!(env!("OUT_DIR"), "/video_playback.rs"));
@@ -58,6 +62,7 @@ use crate::preview_worker::PreviewWorker;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
+use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
@@ -235,6 +240,18 @@ pub fn print_scenes() {
     }
 }
 
+pub fn print_effects() {
+    println!("Framebuffer effects:");
+    for &kind in EffectKind::all() {
+        println!("  {}", kind.name());
+    }
+    println!("Supported internal sizes:");
+    for &(w, h) in EFFECT_SIZES {
+        let scale = EffectSize { w, h }.scale_to_1080p().unwrap_or(0);
+        println!("  {w}x{h} ({scale}x to 1920x1080)");
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct DirtyRect {
     x0: usize,
@@ -265,6 +282,456 @@ fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
         ),
         None => "none".to_string(),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectBenchMode {
+    Raw,
+    Overlay,
+}
+
+impl EffectBenchMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::Overlay => "overlay",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectFill {
+    Full,
+    Half,
+}
+
+impl EffectFill {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Half => "half",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "full" => Some(Self::Full),
+            "half" => Some(Self::Half),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EffectTarget {
+    physical_x: usize,
+    physical_y: usize,
+    physical_w: usize,
+    physical_h: usize,
+    render_w: usize,
+    render_h: usize,
+    scale: usize,
+}
+
+impl EffectTarget {
+    fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
+        let (physical_w, physical_h, scale) = match fill {
+            EffectFill::Full => (1920, 1080, size.scale_to_1080p()?),
+            EffectFill::Half => (960, 540, size.scale_to_half_1080p()?),
+        };
+        if physical_w > ui.fb_w() || physical_h > ui.fb_h() {
+            return None;
+        }
+        Some(Self {
+            physical_x: (ui.fb_w() - physical_w) / 2,
+            physical_y: (ui.fb_h() - physical_h) / 2,
+            physical_w,
+            physical_h,
+            render_w: physical_w / ui.fb_scale(),
+            render_h: physical_h / ui.fb_scale(),
+            scale,
+        })
+    }
+}
+
+fn parse_effect_bench_args() -> (
+    Vec<EffectKind>,
+    u64,
+    Vec<EffectBenchMode>,
+    EffectSize,
+    EffectFill,
+) {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let effect_arg = args.first().map(String::as_str).unwrap_or("all");
+    let effects = if effect_arg == "all" {
+        EffectKind::all().to_vec()
+    } else {
+        match EffectKind::parse(effect_arg) {
+            Some(kind) => vec![kind],
+            None => {
+                eprintln!("unknown effect '{effect_arg}' (use `effects` to list names)");
+                std::process::exit(2);
+            }
+        }
+    };
+    let secs = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let modes = match args.get(2).map(String::as_str).unwrap_or("both") {
+        "raw" => vec![EffectBenchMode::Raw],
+        "overlay" => vec![EffectBenchMode::Overlay],
+        "both" => vec![EffectBenchMode::Raw, EffectBenchMode::Overlay],
+        other => {
+            eprintln!("unknown effect-bench mode '{other}' (use raw|overlay|both)");
+            std::process::exit(2);
+        }
+    };
+    let size = match args.get(3).map(String::as_str) {
+        Some(s) => match EffectSize::parse(s) {
+            Some(size) => size,
+            None => {
+                eprintln!("unsupported effect size '{s}' (use 320x180|480x270|640x360|960x540)");
+                std::process::exit(2);
+            }
+        },
+        None => EffectSize { w: 480, h: 270 },
+    };
+    let fill = match args.get(4).map(String::as_str) {
+        Some(s) => EffectFill::parse(s).unwrap_or_else(|| {
+            eprintln!("unknown effect fill '{s}' (use full|half)");
+            std::process::exit(2);
+        }),
+        None => EffectFill::Full,
+    };
+    (effects, secs, modes, size, fill)
+}
+
+#[derive(Default)]
+struct EffectBenchTotals {
+    frames: u64,
+    effect_us: u128,
+    slint_us: u128,
+    scale_copy_us: u128,
+    vsync_us: u128,
+    wall_us: u128,
+    slow_frames: u64,
+}
+
+impl EffectBenchTotals {
+    fn record(
+        &mut self,
+        effect_us: u64,
+        slint_us: u64,
+        scale_copy_us: u64,
+        vsync_us: u64,
+        wall_us: u64,
+    ) {
+        self.frames += 1;
+        self.effect_us += effect_us as u128;
+        self.slint_us += slint_us as u128;
+        self.scale_copy_us += scale_copy_us as u128;
+        self.vsync_us += vsync_us as u128;
+        self.wall_us += wall_us as u128;
+        if wall_us >= 16_667 {
+            self.slow_frames += 1;
+        }
+    }
+
+    fn avg(v: u128, frames: u64) -> u64 {
+        if frames == 0 {
+            0
+        } else {
+            (v / frames as u128) as u64
+        }
+    }
+}
+
+fn scale_effect_to_pixels_fit(
+    src: &[u32],
+    src_w: usize,
+    src_h: usize,
+    dst_w: usize,
+    dst_h: usize,
+    dst: &mut [Pixel],
+) {
+    assert!(dst.len() >= dst_w * dst_h);
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return;
+    }
+    for y in 0..dst_h {
+        let sy = (y * src_h / dst_h).min(src_h - 1);
+        let src_row = &src[sy * src_w..(sy + 1) * src_w];
+        let dst_row = &mut dst[y * dst_w..(y + 1) * dst_w];
+        for (x, p) in dst_row.iter_mut().enumerate() {
+            let sx = (x * src_w / dst_w).min(src_w - 1);
+            *p = Pixel(src_row[sx]);
+        }
+    }
+}
+
+#[cfg(not(mister_ui_scope_launcher))]
+pub fn run_effect_bench(f: &mut Fpga) {
+    let (effects, secs, modes, size, fill) = parse_effect_bench_args();
+    println!(
+        "effect-bench effects={} secs={} modes={} fill={} internal={}x{}",
+        effects
+            .iter()
+            .map(|k| k.name())
+            .collect::<Vec<_>>()
+            .join(","),
+        secs,
+        modes
+            .iter()
+            .map(|m| m.label())
+            .collect::<Vec<_>>()
+            .join(","),
+        fill.label(),
+        size.w,
+        size.h
+    );
+
+    let _vt = VtGraphicsGuard::enter_or_warn();
+    let mut disp = match Display::open_current_boot() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("failed to open display (/dev/fb0): {e}");
+            std::process::exit(1);
+        }
+    };
+    let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
+    let target = EffectTarget::new(fill, size, &ui).unwrap_or_else(|| {
+        eprintln!(
+            "effect size {}x{} cannot fill={} on framebuffer {}x{}",
+            size.w,
+            size.h,
+            fill.label(),
+            disp.width(),
+            disp.height()
+        );
+        std::process::exit(2);
+    });
+    println!("{}", ui.log_line());
+    let display_config = DisplayConfig::detect(f, disp.info(), &ui);
+    println!("{}", display_config.log_line());
+    let flag = f.fb_enable(
+        0,
+        disp.width() as u16,
+        disp.height() as u16,
+        Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16),
+        Some(0),
+        Some(0),
+        std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+    );
+    f.set_audio_volume(0);
+    println!("fb routed (support_flag={flag}); native retro effect benchmark");
+
+    let needs_overlay = modes.contains(&EffectBenchMode::Overlay);
+    let mut overlay_ctx = if needs_overlay {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let animation_clock = AnimationClock::from_env();
+        slint::platform::set_platform(Box::new(MisterPlatform {
+            window: window.clone(),
+            start: Instant::now(),
+            fixed_time: animation_clock.platform_time(),
+        }))
+        .expect("set_platform");
+        let app = slint_ui::effect_hud::EffectHud::new().expect("EffectHud");
+        let mister_ui = app.global::<slint_ui::effect_hud::MisterUi>();
+        mister_ui.set_scale(SLINT_UI_SCALE);
+        mister_ui.set_window_width(target.render_w as i32);
+        mister_ui.set_window_height(target.render_h as i32);
+        window.set_size(PhysicalSize::new(
+            target.render_w as u32,
+            target.render_h as u32,
+        ));
+        app.show().expect("show");
+        Some((
+            window,
+            app,
+            animation_clock,
+            vec![Pixel(0); target.render_w * target.render_h],
+        ))
+    } else {
+        None
+    };
+
+    let mut low = vec![0u32; size.w * size.h];
+    for &kind in &effects {
+        for &mode in &modes {
+            run_one_effect_bench(
+                &mut disp,
+                &mut overlay_ctx,
+                kind,
+                mode,
+                fill,
+                size,
+                target,
+                secs,
+                &mut low,
+            );
+        }
+    }
+}
+
+#[cfg(mister_ui_scope_launcher)]
+pub fn run_effect_bench(_f: &mut Fpga) {
+    eprintln!("effect-bench is unavailable in launcher-only UI builds");
+    std::process::exit(2);
+}
+
+#[cfg(not(mister_ui_scope_launcher))]
+fn run_one_effect_bench(
+    disp: &mut Display,
+    overlay_ctx: &mut Option<(
+        Rc<MinimalSoftwareWindow>,
+        slint_ui::effect_hud::EffectHud,
+        AnimationClock,
+        Vec<Pixel>,
+    )>,
+    kind: EffectKind,
+    mode: EffectBenchMode,
+    fill: EffectFill,
+    size: EffectSize,
+    target: EffectTarget,
+    secs: u64,
+    low: &mut [u32],
+) {
+    let mut state = EffectState::new(kind, size);
+    disp.clear(Pixel(0));
+    let start = Instant::now();
+    let mut frame = 0u64;
+    let mut totals = EffectBenchTotals::default();
+    let mut live_start = Instant::now();
+    let mut live_frames = 0u64;
+
+    println!(
+        "effect bench running {} mode={} fill={} internal={}x{} target={}x{}+{},{} scale={} secs={}...",
+        kind.name(),
+        mode.label(),
+        fill.label(),
+        size.w,
+        size.h,
+        target.physical_w,
+        target.physical_h,
+        target.physical_x,
+        target.physical_y,
+        target.scale,
+        secs
+    );
+    while secs == 0 || start.elapsed().as_secs() < secs {
+        let wall_start = Instant::now();
+        let t0 = Instant::now();
+        state.render(frame, low);
+        let t1 = Instant::now();
+        disp.wait_vsync();
+        let t2 = Instant::now();
+        let mut slint_us = 0;
+        let scale_copy_us;
+        match mode {
+            EffectBenchMode::Raw => {
+                let c0 = Instant::now();
+                disp.copy_u32_rect_scaled_at(
+                    target.physical_x,
+                    target.physical_y,
+                    target.scale,
+                    low,
+                    size.w,
+                    size.h,
+                );
+                scale_copy_us = c0.elapsed().as_micros() as u64;
+            }
+            EffectBenchMode::Overlay => {
+                let Some((window, app, animation_clock, full)) = overlay_ctx.as_mut() else {
+                    eprintln!("effect-bench internal error: overlay context missing");
+                    std::process::exit(1);
+                };
+                let c0 = Instant::now();
+                scale_effect_to_pixels_fit(
+                    low,
+                    size.w,
+                    size.h,
+                    target.render_w,
+                    target.render_h,
+                    full,
+                );
+                let mut copy_acc = c0.elapsed().as_micros() as u64;
+                app.set_effect_name(kind.name().into());
+                app.set_mode_label("overlay".into());
+                app.set_fps_label(format!("fps {live_frames}").into());
+                app.set_timing_label(format!("fx {}us", (t1 - t0).as_micros()).into());
+                app.set_frame_phase((frame % 16) as i32);
+                update_slint_animations(animation_clock);
+                window.request_redraw();
+                let s0 = Instant::now();
+                window.draw_if_needed(|renderer| {
+                    let _ = renderer.render(full, target.render_w);
+                });
+                slint_us = s0.elapsed().as_micros() as u64;
+                let c1 = Instant::now();
+                disp.copy_rect_scaled_at(
+                    target.physical_x,
+                    target.physical_y,
+                    UiDisplay::for_framebuffer(disp.width(), disp.height()).fb_scale(),
+                    full,
+                    target.render_w,
+                    target.render_h,
+                );
+                copy_acc += c1.elapsed().as_micros() as u64;
+                scale_copy_us = copy_acc;
+            }
+        }
+        let wall_us = wall_start.elapsed().as_micros() as u64;
+        totals.record(
+            (t1 - t0).as_micros() as u64,
+            slint_us,
+            scale_copy_us,
+            (t2 - t1).as_micros() as u64,
+            wall_us,
+        );
+        frame += 1;
+        live_frames += 1;
+        if live_start.elapsed().as_millis() >= 1000 {
+            let nn = live_frames.max(1) as u128;
+            println!(
+                "  fps ~ {live_frames}  | effect {}us  slint {}us  scale-copy {}us  vsync-wait {}us",
+                totals.effect_us / totals.frames.max(1) as u128,
+                totals.slint_us / totals.frames.max(1) as u128,
+                totals.scale_copy_us / totals.frames.max(1) as u128,
+                totals.vsync_us / totals.frames.max(1) as u128
+            );
+            let _ = nn;
+            live_frames = 0;
+            live_start = Instant::now();
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let fps = if elapsed > 0.0 {
+        totals.frames as f64 / elapsed
+    } else {
+        0.0
+    };
+    println!(
+        "effect_bench_result\t{}\t{}\t{}\t{}\t{}x{}\t{}\t{}\t{:.1}\t{}\t{}\t{}\t{}\t{}",
+        std::env::var("MISTER_EFFECT_BENCH_LABEL").unwrap_or_else(|_| "manual".into()),
+        kind.name(),
+        mode.label(),
+        fill.label(),
+        size.w,
+        size.h,
+        target.scale,
+        totals.frames,
+        fps,
+        EffectBenchTotals::avg(totals.effect_us, totals.frames),
+        EffectBenchTotals::avg(totals.slint_us, totals.frames),
+        EffectBenchTotals::avg(totals.scale_copy_us, totals.frames),
+        EffectBenchTotals::avg(totals.vsync_us, totals.frames),
+        EffectBenchTotals::avg(totals.wall_us, totals.frames)
+    );
+    println!(
+        "effect_bench_summary effect={} mode={} fill={} slow_frames={} elapsed={elapsed:.1}s",
+        kind.name(),
+        mode.label(),
+        fill.label(),
+        totals.slow_frames
+    );
 }
 
 fn dirty_rect(region: &PhysicalRegion, render_w: usize, render_h: usize) -> Option<DirtyRect> {

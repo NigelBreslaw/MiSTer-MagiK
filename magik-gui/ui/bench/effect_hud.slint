@@ -1,0 +1,57 @@
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
+import "../fonts/PressStart2P-Regular.ttf";
+
+export component EffectHud inherits MisterWindow {
+    default-font-family: "Press Start 2P";
+
+    in property <string> effect-name: "effect";
+    in property <string> mode-label: "raw";
+    in property <string> fps-label: "fps --";
+    in property <string> timing-label: "--";
+    in property <int> frame-phase: 0;
+
+    property <int> s: MisterUi.scale;
+
+    Rectangle {
+        x: 24px * s;
+        y: 22px * s;
+        width: 620px * s;
+        height: 112px * s;
+        background: #07101f;
+        border-color: #5df2ff;
+        border-width: 2px * s;
+    }
+
+    Text {
+        x: 44px * s;
+        y: 40px * s;
+        text: "MiSTer MagiK FX";
+        font-size: 24px * s;
+        color: #fff2a8;
+    }
+
+    Text {
+        x: 44px * s;
+        y: 76px * s;
+        text: root.effect-name + " / " + root.mode-label;
+        font-size: 16px * s;
+        color: #e8ecff;
+    }
+
+    Text {
+        x: 44px * s;
+        y: 104px * s;
+        text: root.fps-label + "  " + root.timing-label;
+        font-size: 16px * s;
+        color: #8fffd2;
+    }
+
+    for bar[i] in 16: Rectangle {
+        x: (700px + i * 34px) * s;
+        y: 44px * s;
+        width: 20px * s;
+        height: (24px + Math.mod(i + root.frame-phase, 8) * 8px) * s;
+        background: Math.mod(i, 3) == 0 ? #ff5d73 : Math.mod(i, 3) == 1 ? #5df2ff : #fff06a;
+    }
+}

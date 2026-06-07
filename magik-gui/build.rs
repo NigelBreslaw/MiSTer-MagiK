@@ -33,6 +33,7 @@ fn compile_ui() {
             "ui/bench/static_ui.slint",
             "ui/bench/local_motion.slint",
             "ui/bench/console_scroll.slint",
+            "ui/bench/effect_hud.slint",
         ]);
         if std::env::var_os("CARGO_FEATURE_VIDEO").is_some() {
             sources.push("ui/bench/video_playback.slint");

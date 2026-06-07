@@ -392,6 +392,11 @@ impl Display {
         unsafe { std::slice::from_raw_parts_mut(self.mem, self.w * self.h) }
     }
 
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    pub fn clear(&mut self, color: Pixel) {
+        self.buffer_mut().fill(color);
+    }
+
     pub fn right_edge_signature(&self, cols: usize) -> (u64, u32) {
         self.vertical_edge_signature(self.w.saturating_sub(cols), self.w, cols)
     }
@@ -816,6 +821,49 @@ impl Display {
         let dst_w = self.w;
         let dst_h = self.h;
         let dst = self.buffer_mut();
+        framebuffer_copy::copy_rect_scaled_to(
+            dst, dst_w, dst_h, dst_x, dst_y, scale, src, src_w, 0, 0, src_w, src_h,
+        );
+    }
+
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    pub fn copy_u32_rect_scaled_at(
+        &mut self,
+        dst_x: usize,
+        dst_y: usize,
+        scale: usize,
+        src: &[u32],
+        src_w: usize,
+        src_h: usize,
+    ) {
+        if scale == 0 || src_w == 0 || src_h == 0 {
+            return;
+        }
+        let dst_w = self.w;
+        let dst_h = self.h;
+        let dst = pixels_as_u32_mut(self.buffer_mut());
+        if scale == 1 {
+            for sy in 0..src_h {
+                let dy = dst_y + sy;
+                if dy >= dst_h {
+                    break;
+                }
+                let copy_w = src_w.min(dst_w.saturating_sub(dst_x));
+                if copy_w == 0 {
+                    continue;
+                }
+                let src_a = sy * src_w;
+                let dst_a = dy * dst_w + dst_x;
+                dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+            }
+            return;
+        }
+        if scale == 2 {
+            framebuffer_copy::copy_rect_2x_u32_to(
+                dst, dst_w, dst_h, dst_x, dst_y, src, src_w, 0, 0, src_w, src_h,
+            );
+            return;
+        }
         framebuffer_copy::copy_rect_scaled_to(
             dst, dst_w, dst_h, dst_x, dst_y, scale, src, src_w, 0, 0, src_w, src_h,
         );
