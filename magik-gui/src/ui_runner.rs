@@ -64,6 +64,10 @@ use std::cell::Cell;
 #[cfg(not(mister_ui_scope_launcher))]
 use std::collections::HashMap;
 use std::collections::VecDeque;
+#[cfg(not(mister_ui_scope_launcher))]
+use std::fs::File;
+#[cfg(not(mister_ui_scope_launcher))]
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -1635,6 +1639,93 @@ const CONSOLE_LIST_H: usize = 356;
 const CONSOLE_ROW_H: usize = 44;
 #[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_FONT_PX: f32 = 16.0;
+#[cfg(not(mister_ui_scope_launcher))]
+const CONSOLE_TRACE_DEFAULT_PATH: &str = "/tmp/mister-magik-console-scroll-trace.tsv";
+
+#[cfg(not(mister_ui_scope_launcher))]
+struct ConsoleScrollTrace {
+    file: File,
+    start: Instant,
+    frame: u64,
+    fb_sample_step: usize,
+    copy_budget_us: u64,
+}
+
+#[cfg(not(mister_ui_scope_launcher))]
+struct ConsoleScrollTraceSample {
+    virtual_y: usize,
+    slint_us: u64,
+    ram_scroll_us: u64,
+    strip_us: u64,
+    vsync_wait_us: u64,
+    fb_copy_us: u64,
+    label_copy_us: u64,
+    frame_wall_us: u64,
+    copy_done_after_vsync_us: u64,
+    fb_hash_us: u64,
+    fb_hash: u64,
+    fb_nonzero: u32,
+}
+
+#[cfg(not(mister_ui_scope_launcher))]
+impl ConsoleScrollTrace {
+    fn open(display_h: usize, list_y: usize) -> Option<Self> {
+        let path = std::env::var("MISTER_CONSOLE_SCROLL_TRACE_FILE").ok()?;
+        let path = if path.is_empty() {
+            CONSOLE_TRACE_DEFAULT_PATH.to_string()
+        } else {
+            path
+        };
+        let mut file = File::create(&path).ok()?;
+        let _ = writeln!(
+            file,
+            "frame\telapsed_ms\tvirtual_y\tslint_us\tram_scroll_us\tstrip_us\tvsync_wait_us\tfb_copy_us\tlabel_copy_us\tframe_wall_us\tcopy_done_after_vsync_us\tcopy_budget_us\tfb_hash_us\tfb_hash\tfb_nonzero"
+        );
+        let fb_sample_step = std::env::var("MISTER_CONSOLE_SCROLL_TRACE_STEP")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32);
+        let copy_budget_us = if display_h == 0 {
+            0
+        } else {
+            ((list_y as u64) * 16_667) / (display_h as u64)
+        };
+        println!(
+            "console_scroll trace: path={path} fb_sample_step={fb_sample_step} copy_budget_us={copy_budget_us}"
+        );
+        Some(Self {
+            file,
+            start: Instant::now(),
+            frame: 0,
+            fb_sample_step,
+            copy_budget_us,
+        })
+    }
+
+    fn record(&mut self, sample: ConsoleScrollTraceSample) {
+        let elapsed_ms = self.start.elapsed().as_millis();
+        let _ = writeln!(
+            self.file,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:016x}\t{}",
+            self.frame,
+            elapsed_ms,
+            sample.virtual_y,
+            sample.slint_us,
+            sample.ram_scroll_us,
+            sample.strip_us,
+            sample.vsync_wait_us,
+            sample.fb_copy_us,
+            sample.label_copy_us,
+            sample.frame_wall_us,
+            sample.copy_done_after_vsync_us,
+            self.copy_budget_us,
+            sample.fb_hash_us,
+            sample.fb_hash,
+            sample.fb_nonzero
+        );
+        self.frame += 1;
+    }
+}
 
 #[cfg(not(mister_ui_scope_launcher))]
 fn run_console_scroll_loop(
@@ -1651,7 +1742,9 @@ fn run_console_scroll_loop(
     let fb_y = CONSOLE_LIST_Y * scale;
     let scroll_px = 2usize;
     let mut surface = vec![Pixel(0); CONSOLE_LIST_W * CONSOLE_LIST_H];
+    let mut surface_y = 0usize;
     let mut font = ConsoleFont::new(CONSOLE_FONT_PX);
+    let mut trace = ConsoleScrollTrace::open(disp.height(), fb_y);
 
     window.request_redraw();
     update_slint_animations(animation_clock);
@@ -1669,7 +1762,7 @@ fn run_console_scroll_loop(
         0,
         &mut font,
     );
-    disp.copy_rect_scaled_at(fb_x, fb_y, scale, &surface, CONSOLE_LIST_W, CONSOLE_LIST_H);
+    copy_console_surface(disp, fb_x, fb_y, scale, &surface, surface_y);
 
     let label = if secs == 0 {
         "forever".to_string()
@@ -1689,6 +1782,7 @@ fn run_console_scroll_loop(
     let mut label_rect: Option<DirtyRect> = None;
 
     while secs == 0 || start.elapsed().as_secs() < secs {
+        let frame_start = Instant::now();
         if fps_window_start.elapsed().as_millis() >= 1000 {
             let nn = fps_frames.max(1) as u128;
             let top_row = (virtual_y / CONSOLE_ROW_H) % 1000;
@@ -1715,34 +1809,62 @@ fn run_console_scroll_loop(
             let region = renderer.render(&mut cached, ui.render_w());
             label_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
-
-        disp.wait_vsync();
-        if let Some(rect) = label_rect.take() {
-            copy_cached_rect(disp, ui, &cached, rect);
-        }
+        let t_slint_done = Instant::now();
 
         let t0 = Instant::now();
-        scroll_surface_y(&mut surface, CONSOLE_LIST_W, CONSOLE_LIST_H, scroll_px);
+        surface_y = (surface_y + scroll_px) % CONSOLE_LIST_H;
         let t1 = Instant::now();
         virtual_y = virtual_y.wrapping_add(scroll_px);
-        draw_console_virtual_strip(
+        draw_console_virtual_strip_wrapped(
             &mut surface,
             CONSOLE_LIST_W,
-            CONSOLE_LIST_W,
+            (surface_y + CONSOLE_LIST_H - scroll_px) % CONSOLE_LIST_H,
             scroll_px,
-            CONSOLE_LIST_H - scroll_px,
             virtual_y + CONSOLE_LIST_H - scroll_px,
             &mut font,
         );
         let t2 = Instant::now();
-        disp.copy_rect_scaled_at(fb_x, fb_y, scale, &surface, CONSOLE_LIST_W, CONSOLE_LIST_H);
+
+        let t_wait_start = Instant::now();
+        disp.wait_vsync();
         let t3 = Instant::now();
+        copy_console_surface(disp, fb_x, fb_y, scale, &surface, surface_y);
+        let t4 = Instant::now();
+        if let Some(rect) = label_rect.take() {
+            copy_cached_rect(disp, ui, &cached, rect);
+        }
+        let t5 = Instant::now();
+        if let Some(trace) = trace.as_mut() {
+            let hash_start = Instant::now();
+            let (fb_hash, fb_nonzero) = disp.rect_sampled_signature(
+                fb_x,
+                fb_y,
+                CONSOLE_LIST_W * scale,
+                CONSOLE_LIST_H * scale,
+                trace.fb_sample_step,
+            );
+            let hash_end = Instant::now();
+            trace.record(ConsoleScrollTraceSample {
+                virtual_y,
+                slint_us: (t_slint_done - frame_start).as_micros() as u64,
+                ram_scroll_us: (t1 - t0).as_micros() as u64,
+                strip_us: (t2 - t1).as_micros() as u64,
+                vsync_wait_us: (t3 - t_wait_start).as_micros() as u64,
+                fb_copy_us: (t4 - t3).as_micros() as u64,
+                label_copy_us: (t5 - t4).as_micros() as u64,
+                frame_wall_us: (t5 - frame_start).as_micros() as u64,
+                copy_done_after_vsync_us: (t4 - t3).as_micros() as u64,
+                fb_hash_us: (hash_end - hash_start).as_micros() as u64,
+                fb_hash,
+                fb_nonzero,
+            });
+        }
 
         frames += 1;
         fps_frames += 1;
         ram_scroll_us += (t1 - t0).as_micros();
         strip_us += (t2 - t1).as_micros();
-        fb_copy_us += (t3 - t2).as_micros();
+        fb_copy_us += (t4 - t3).as_micros();
     }
 
     let elapsed = start.elapsed().as_secs_f64();
@@ -1750,6 +1872,72 @@ fn run_console_scroll_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+}
+
+#[cfg(not(mister_ui_scope_launcher))]
+fn copy_console_surface(
+    disp: &mut Display,
+    fb_x: usize,
+    fb_y: usize,
+    scale: usize,
+    surface: &[Pixel],
+    surface_y: usize,
+) {
+    if surface_y == 0 {
+        disp.copy_rect_scaled_at(fb_x, fb_y, scale, surface, CONSOLE_LIST_W, CONSOLE_LIST_H);
+        return;
+    }
+
+    let lower_h = CONSOLE_LIST_H - surface_y;
+    disp.copy_rect_scaled_at(
+        fb_x,
+        fb_y,
+        scale,
+        &surface[surface_y * CONSOLE_LIST_W..],
+        CONSOLE_LIST_W,
+        lower_h,
+    );
+    disp.copy_rect_scaled_at(
+        fb_x,
+        fb_y + lower_h * scale,
+        scale,
+        surface,
+        CONSOLE_LIST_W,
+        surface_y,
+    );
+}
+
+#[cfg(not(mister_ui_scope_launcher))]
+fn draw_console_virtual_strip_wrapped(
+    dst: &mut [Pixel],
+    stride: usize,
+    dst_y: usize,
+    height: usize,
+    virtual_y_start: usize,
+    font: &mut ConsoleFont,
+) {
+    let first_h = height.min(CONSOLE_LIST_H - dst_y);
+    draw_console_virtual_strip(
+        dst,
+        stride,
+        CONSOLE_LIST_W,
+        first_h,
+        dst_y,
+        virtual_y_start,
+        font,
+    );
+
+    if first_h < height {
+        draw_console_virtual_strip(
+            dst,
+            stride,
+            CONSOLE_LIST_W,
+            height - first_h,
+            0,
+            virtual_y_start + first_h,
+            font,
+        );
+    }
 }
 
 #[cfg(not(mister_ui_scope_launcher))]
@@ -1811,19 +1999,6 @@ fn draw_console_virtual_strip(
             "COPY",
             Pixel(0x007dd3fc),
         );
-    }
-}
-
-#[cfg(not(mister_ui_scope_launcher))]
-fn scroll_surface_y(surface: &mut [Pixel], w: usize, h: usize, shift: usize) {
-    if shift == 0 || shift >= h {
-        return;
-    }
-    let rows = h - shift;
-    surface.copy_within(shift * w..h * w, 0);
-    let tail = rows * w;
-    for p in &mut surface[tail..h * w] {
-        *p = Pixel(0);
     }
 }
 
