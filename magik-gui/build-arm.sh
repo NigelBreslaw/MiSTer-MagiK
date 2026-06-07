@@ -38,6 +38,7 @@ done
 
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32,48}"
+export RUSTC_WRAPPER=""
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: Docker is not installed or not on PATH — cross needs it for armv7 builds." >&2

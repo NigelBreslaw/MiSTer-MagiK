@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$ROOT/magik-gui"
+export RUSTC_WRAPPER=""
 
 usage() {
   cat <<'EOF'

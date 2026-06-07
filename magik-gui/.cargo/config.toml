@@ -1,6 +1,6 @@
-# Override the global ~/.cargo/config.toml sccache wrapper: its macOS Homebrew
-# path (/opt/homebrew/bin/sccache) does not exist inside the cross Linux
-# container, which breaks cross-compilation. Empty string disables the wrapper.
+# Override any global ~/.cargo/config.toml compiler wrapper. This crate also has
+# a repo-root override, but keeping this local file protects direct invocations
+# from inside magik-gui if Cargo config discovery changes.
 [build]
 rustc-wrapper = ""
 
