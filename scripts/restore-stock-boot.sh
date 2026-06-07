@@ -1,30 +1,35 @@
 #!/usr/bin/env bash
 # Restore stock MiSTer boot.
 #
-# keep stock /media/fat/MiSTer in
-# inittab and remove the MiSTer_MagiK main= handoff from [MiSTer].
+# Keep stock /media/fat/MiSTer in inittab and restore the MiSTer.ini backup
+# captured before MiSTer MagiK installed its main= handoff.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
 MISTER_PASS="${MISTER_PASS:-1}"
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
-  scripts/mister put scripts/mister-magik/restore-stock-ini.awk /tmp/mister-magik-restore-stock-ini.awk
-
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister run '
 set -e
 mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
+BACKUP=/media/fat/MiSTer.ini.before-mister-magik-main
 STAMP=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)
 SNAP="/media/fat/mister-magik/snapshots/$STAMP-restore-stock"
 mkdir -p "$SNAP"
 cp /etc/inittab "$SNAP/inittab" 2>/dev/null || true
 cp "$INI" "$SNAP/MiSTer.ini" 2>/dev/null || true
+cp "$BACKUP" "$SNAP/MiSTer.ini.before-mister-magik-main" 2>/dev/null || true
 ps > "$SNAP/ps.txt" 2>/dev/null || true
 cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || true
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
+
+if [ ! -f "$BACKUP" ]; then
+  echo "ERROR: missing stock MiSTer.ini backup: $BACKUP"
+  echo "Cannot safely restore MiSTer.ini without the original copy."
+  exit 1
+fi
 
 tmp=/tmp/inittab.stock
 awk '"'"'
@@ -45,10 +50,8 @@ END {
 '"'"' /etc/inittab > "$tmp"
 cp "$tmp" /etc/inittab
 
-tmp="$INI.new"
-awk -f /tmp/mister-magik-restore-stock-ini.awk "$INI" > "$tmp"
-mv "$tmp" "$INI"
-echo "MiSTer_MagiK main= handoff removed"
+cp "$BACKUP" "$INI"
+echo "MiSTer.ini restored from $BACKUP"
 
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true

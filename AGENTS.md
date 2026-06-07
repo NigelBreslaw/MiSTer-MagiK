@@ -146,14 +146,13 @@ is unreliable; coexistence gave stock menu on HDMI with no Slint input.
 ## 4. Repo layout (this project)
 
 ```
-pyproject.toml          host tooling only (uv + paramiko for mister_ssh.py)
 scripts/
   deploy-rust.sh            build + deploy Slint child binary
   install-slint-boot.sh     one-time MiSTer.ini main=MiSTer_MagiK handoff
   restore-stock-boot.sh     revert to stock MiSTer menu
-  mister_ssh.py             paramiko helper — run/reboot/reboot-wait/wait/put/get
-  raw_to_png.py         stdlib-only BGRX dump → PNG (used by bench-toolchain)
+  mister               Rust SSH/status/snapshot wrapper
   audit-mister.sh       device sanity check (+ Cortex-A9 / NEON cpuinfo for A1)
+tools/mister/          Rust host-side MiSTer SSH + observability CLI
 reference/              READ-ONLY clones (gitignored) — see §6
 build/                  gitignored framebuffer PNG dumps
 history/                experiment notes (framebuffer-experiments.md, screenshots)
@@ -178,8 +177,8 @@ On the device the binary lives at `/media/fat/mister-magik/mister-magik-fb`.
 
 ## 5. Workflow & commands
 
-Always go through `uv` on the host; always use **paramiko** (`mister_ssh.py`)
-for device comms — see §8 for why `expect`/raw `ssh` was unreliable.
+Always use `scripts/mister` for device comms. It is the Rust SSH/status wrapper
+and keeps the password-auth behavior reliable without raw `ssh`/`scp`.
 
 ```bash
 # Build + deploy (default = release-device / A3, ~1.6 MB)
@@ -203,17 +202,17 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
 
 # Dev run (stop MiSTer so Slint owns gamepad — see §7)
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister run \
   'kill -9 $(pidof MiSTer) 2>/dev/null; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
 
 # Restore stock MiSTer menu boot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
 
 # Device comms
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run "uname -a"
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot-wait
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py wait
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister run "uname -a"
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister reboot
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister reboot-wait
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister wait
 
 # Toolchain A/B (host build + all ui/bench scenes on device) → history/toolchain-bench/results.tsv
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean --replace-label
@@ -238,7 +237,7 @@ Cloned under `reference/` (shallow). For study only; do not edit/commit.
 | `reference/Main_MiSTer` | `ZaparooProject/Main_MiSTer` (fork) | **`video.cpp`** (`video_fb_enable` :3284), **`fpga_io.cpp`/`spi.cpp`** (SPI bit-bang), **`cfg.cpp`** (`main=` hook). **`support/zaparoo/alt_launcher*.cpp`** — external frontend spawn/coexistence. **`ZAPAROO_FORK.md`** change map. |
 | `reference/cybermobile_Main_MiSTer` | `cybermobile/Main_MiSTer` | In-process **`gfx_menu.cpp`** (~3k lines, Imlib2) reskins the stock menu; toggled via `gfx_menu_enable` in INI. No separate process. |
 | `reference/zaparoo-launcher` | `ZaparooProject/zaparoo-launcher` | Qt/QML **`zaparoo/frontend`** binary that `alt_launcher.cpp` execs on **tty2**. Rust Core client via cxx-qt. |
-| `reference/mister-companion` | `Anime0t4ku/mister-companion` | Reliable MiSTer SSH — modelled `mister_ssh.py` on this. See §8. |
+| `reference/mister-companion` | `Anime0t4ku/mister-companion` | Historical reliable MiSTer SSH reference. The active wrapper is now Rust (`scripts/mister`). |
 
 Optional clones (historical — explored other front ends, **not used by this project**):
 `Menu_MiSTer`, `zaparoo-frontend`, `zaparoo-core`, `Zaparoo_MiSTer`.
@@ -300,8 +299,8 @@ Cross-built binary at `/media/fat/mister-magik/mister-magik-fb`. Subcommands:
 Launcher: D-pad nav, A to open controller test or launch arcade games. Launch spawns
 MiSTer briefly, sends `load_core` via fifo, shows loading overlay until core runs.
 
-**HDMI recovery:** If launch leaves a black screen, `mister_ssh.py reboot` (MiSTer
-still owns recovery when running; if wedged, reboot always works).
+**HDMI recovery:** If launch leaves a black screen, `scripts/mister reboot`
+(MiSTer still owns recovery when running; if wedged, reboot always works).
 
 ### Main fork experiment — Main as parent of Slint
 
@@ -347,11 +346,10 @@ Important gotchas:
 
 ## 8. Lessons learned / gotchas
 
-- **SSH:** use **paramiko with `allow_agent=False, look_for_keys=False`** (see
-  `scripts/mister_ssh.py`, modeled on `mister-companion`). Raw `ssh`/`scp` hit
-  "Too many authentication failures" (client offers every agent key) and the
-  documented MiSTer pubkey-auth hang. `expect` works but is brittle for
-  long/streaming commands. **Prefer `mister_ssh.py` for everything.**
+- **SSH:** use `scripts/mister`, the Rust wrapper. Raw `ssh`/`scp` hit "Too many
+  authentication failures" (client offers every agent key) and the documented
+  MiSTer pubkey-auth hang. `expect` works but is brittle for long/streaming
+  commands. **Prefer `scripts/mister` for everything.**
 - **`/dev/fb0` ≠ HDMI** at the menu (§3). Don't trust "it's in the framebuffer"
   as "it's on screen." Always confirm on the actual HDMI output / by knowing the
   fb-enable state.
@@ -366,8 +364,8 @@ Important gotchas:
   Rendering is fine; if/when we add input, bundle the quirks DB or point
   libinput at one.
 - **Fonts:** MiSTer has none. The Rust build embeds Press Start 2P (`magik-gui/ui/fonts/`).
-- **Framebuffer byte order is BGRX** (`rgba 8/16,8/8,8/0`). `raw_to_png.py`
-  swaps B/R; keep that in mind for any direct fb work.
+- **Framebuffer byte order is BGRX** (`rgba 8/16,8/8,8/0`). `scripts/mister
+  raw-to-png` swaps B/R; keep that in mind for any direct fb work.
 - **Don't use `main=mister-magik-fb`.** Skips `video_init()` → no HDMI signal
   (§7). Use `main=MiSTer_MagiK`; the fork is Main and can initialize video.
 - **Don't external `rbf_load` from Slint.** `core_reset` + failed `socfpga_load`
@@ -387,7 +385,7 @@ Important gotchas:
   (`magik-gui/src/fpga.rs`). Production stops MiSTer first so we own the bus; no
   SIGSTOP dance needed. Historical dev spike (§9.5) used SIGSTOP for standalone tests.
 - **Don't blind-sleep on reboot.** The device reboots fast (~35s to userspace,
-  drops off the network in ~3s). Use `mister_ssh.py reboot-wait` (or `wait`),
+  drops off the network in ~3s). Use `scripts/mister reboot-wait` (or `wait`),
   which detects the down→up transition and returns the instant `pidof MiSTer`
   answers, instead of a fixed `sleep`. Polling port 22 alone is not enough —
   it confirm-runs a command so we don't act before the rootfs is ready.
@@ -600,9 +598,9 @@ UI with localised motion will copy far less. Could also copy only the dirty
 - **Static IP `192.168.1.117` (no DHCP).** See §8 for dhcpcd.conf details.
 - Fork binary at `/media/fat/MiSTer_MagiK`; Slint child at
   `/media/fat/mister-magik/mister-magik-fb`.
-- **Recovery to stock menu:** `scripts/restore-stock-boot.sh` removes
-  `main=MiSTer_MagiK`, ensures inittab boots `/media/fat/MiSTer`, and reboots.
-  Works over SSH even with no HDMI.
+- **Recovery to stock menu:** `scripts/restore-stock-boot.sh` restores
+  `/media/fat/MiSTer.ini.before-mister-magik-main`, ensures inittab boots
+  `/media/fat/MiSTer`, and reboots. Works over SSH even with no HDMI.
 
 ---
 
@@ -630,7 +628,7 @@ scripts/deploy-rust.sh --fast --video    # includes minimal static FFmpeg + vide
 # or manually:
 magik-gui/build-arm.sh --device
 magik-gui/build-arm.sh --device --video
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py \
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister \
   put magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
   /media/fat/mister-magik/mister-magik-fb
 ```
