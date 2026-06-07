@@ -54,6 +54,7 @@ use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_bench;
 use crate::preview_worker::PreviewWorker;
+use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
@@ -66,6 +67,15 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
+
+fn screen_label(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Home => "home",
+        Screen::Controller => "controller",
+        Screen::Arcade => "arcade",
+        Screen::Settings => "settings",
+    }
+}
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
@@ -1975,6 +1985,7 @@ fn run_launcher_loop(
     let mut launch_started = Instant::now();
     let mut launch_spawned_mister = false;
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
+    let mut last_status_write = Instant::now() - Duration::from_secs(2);
     let label = if secs == 0 {
         "forever".to_string()
     } else {
@@ -2479,6 +2490,29 @@ fn run_launcher_loop(
                 "first_frame",
                 format!("catalog_ready={catalog_ready}"),
             );
+        }
+        if last_status_write.elapsed() >= Duration::from_secs(1) {
+            let fps_estimate = if start.elapsed().as_secs_f64() > 0.0 {
+                frames as f64 / start.elapsed().as_secs_f64()
+            } else {
+                0.0
+            };
+            runtime_status::write_launcher_status(LauncherStatus {
+                scene: "launcher",
+                screen: screen_label(nav.screen),
+                frames,
+                fps_estimate,
+                last_frame_ms_ago: 0,
+                catalog_ready,
+                catalog_games: catalog.len(),
+                catalog_systems: catalog.systems.len(),
+                catalog_refresh_done,
+                launch_state: if launching { "launching" } else { "idle" },
+                loading_title: &loading_title,
+                input_pad_count: pad.len(),
+                active_pad_index: pad.active_idx(),
+            });
+            last_status_write = Instant::now();
         }
         frames += 1;
     }

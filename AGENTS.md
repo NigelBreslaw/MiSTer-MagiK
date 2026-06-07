@@ -21,7 +21,7 @@ screen, controller input).
   tear-free. See §9.7.
 - ✅ **Slint launcher** — 2×2 home grid, controller test; gamepad owned by Slint
   while UI runs. Games launch via fifo `load_core` (MiSTer spawned briefly).
-- ✅ **Production boot** — update_all-compatible Zaparoo-style handoff:
+- ✅ **Production boot** — update_all-compatible handoff:
   `/etc/inittab` boots stock `/media/fat/MiSTer`, then `[MiSTer]
   main=MiSTer_MagiK` re-execs the Main fork, which launches Slint as its child.
 - ✅ **HDMI boot verified** — repaired `MiSTer.ini` uses one `[MiSTer]` section,
@@ -130,7 +130,7 @@ To show Slint on HDMI we need:
 3. **A render loop** — custom Slint `Platform`, vsync pacing, dirty-row copy into
    write-combined `/dev/fb0` (§9.7).
 
-The Main fork copies Zaparoo's launcher handoff: spawn Slint through `agetty` on
+The Main fork spawn Slint through `agetty` on
 `tty2`, switch to VT2, call Main's `video_fb_enable(1)`, and let the Slint child
 continue rendering to `/dev/fb0`. Slint also has Rust SPI diagnostics
 (`magik-gui/src/fpga.rs`) for reading/reasserting framebuffer state. Games launch
@@ -254,7 +254,7 @@ To refresh: `git -C reference/<repo> pull` (or re-clone `--depth 1`).
 
 ### Current — production boot + dev binary
 
-**Production:** use the Zaparoo-compatible `main=` handoff, not direct inittab
+**Production:** use `main=` handoff, not direct inittab
 replacement. `/etc/inittab` must keep stock `/media/fat/MiSTer` as the menu
 entry. `[MiSTer] main=MiSTer_MagiK` in `MiSTer.ini` makes stock MiSTer re-exec
 the Main fork, and the fork launches

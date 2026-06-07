@@ -25,7 +25,7 @@ htmlcov/
 .tox/
 .nox/
 
-# Read-only reference clones (Zaparoo / MiSTer source) for study only.
+# Read-only reference clones for study only.
 # See AGENTS.md "Reference source" for what lives here and why.
 /reference/
 

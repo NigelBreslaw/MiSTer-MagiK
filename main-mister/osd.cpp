@@ -503,6 +503,7 @@ void OsdEnable(unsigned char mode)
 {
 	if (mister_magik_launcher_active())
 	{
+		mister_magik_note_osd_suppressed();
 		mister_magik_boot_analytics_event("main-osd", "OsdEnable_suppressed", "mode=%u", mode);
 		user_io_osd_key_enable(0);
 		spi_osd_cmd(OSD_CMD_DISABLE);
@@ -518,6 +519,7 @@ void InfoEnable(int x, int y, int width, int height)
 {
 	if (mister_magik_launcher_active())
 	{
+		mister_magik_note_osd_suppressed();
 		mister_magik_boot_analytics_event(
 		    "main-osd", "InfoEnable_suppressed", "x=%d y=%d width=%d height=%d", x, y, width, height);
 		user_io_osd_key_enable(0);
@@ -558,6 +560,7 @@ void OsdMenuCtl(int en)
 {
 	if (mister_magik_launcher_active())
 	{
+		mister_magik_note_osd_suppressed();
 		mister_magik_boot_analytics_event("main-osd", "OsdMenuCtl_suppressed", "en=%d", en);
 		spi_osd_cmd(OSD_CMD_DISABLE);
 		return;
@@ -700,6 +703,7 @@ void OsdUpdate()
 	{
 		if (mister_magik_launcher_active())
 		{
+			mister_magik_note_osd_suppressed();
 			mister_magik_boot_analytics_event(
 			    "main-osd", "OsdUpdate_suppressed", "dirty_lines=%d n=%d is_menu=%d osd_size=%d osdset=0x%x",
 			    dirty_lines, n, is_menu(), osd_size, osdset);

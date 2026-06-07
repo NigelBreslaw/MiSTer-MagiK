@@ -49,7 +49,7 @@ See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork exp
 **Do not** set `main=mister-magik-fb` in `MiSTer.ini` — MiSTer execs away before
 `video_init()` and the TV gets no HDMI signal.
 
-Production boot follows the Zaparoo-compatible model: `/etc/inittab` keeps
+Production boot: `/etc/inittab` keeps
 booting stock `/media/fat/MiSTer`, and `[MiSTer] main=MiSTer_MagiK` hands off to
 the Main_MiSTer fork. This preserves `update_all` and makes rollback simple.
 For the verified HDMI TV path, the scripts also repair `MiSTer.ini` so it has

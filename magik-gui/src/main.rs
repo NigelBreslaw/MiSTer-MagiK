@@ -25,6 +25,7 @@ mod input;
 mod launcher;
 mod mr_audio;
 mod preview_worker;
+mod runtime_status;
 mod setup_nav;
 mod ui_display;
 mod ui_runner;
