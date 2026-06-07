@@ -1,6 +1,9 @@
 # Slint bench scenes (toolchain / device)
 
-All scenes render at **960×540**; Rust upscales 2× to 1920×1080 HDMI.
+Benchmark scenes use the detected MiSTer framebuffer size at runtime. At the
+legacy 1080p HDMI mode they still render a 960x540 surface and 2x upscale into
+1920x1080. At lower framebuffer modes, such as 960x540, 720p, and 640x480, they
+render 1:1 with no pixel-doubling path.
 
 **Before a manual run**, stop anything else that owns SPI/HDMI (required for 60 fps):
 
@@ -43,6 +46,12 @@ Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device
 ```
+
+`history/toolchain-bench/results.tsv` keeps the historical schema. New display
+metadata is appended to the `notes` field per row: `physical_mode`, `fb_size`,
+`render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, `bench_render_scale`,
+and `ini_mode`. PNG capture dimensions are parsed from the runtime log instead
+of assuming 1920x1080.
 
 Include the video scene and upload the local 320×224 H.264 + PCM benchmark clip:
 
