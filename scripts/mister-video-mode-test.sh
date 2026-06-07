@@ -5,6 +5,11 @@
 #   scripts/mister-video-mode-test.sh set-960
 #   scripts/mister-video-mode-test.sh magik-run static_ui 12
 #   scripts/mister-video-mode-test.sh restore
+#
+# Common PR5 flow:
+#   scripts/mister-video-mode-test.sh sweep-list
+#   scripts/mister-video-mode-test.sh sweep-mode 960 static_ui
+#   # visually verify, then repeat for the next label
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,6 +30,10 @@ Usage:
   scripts/mister-video-mode-test.sh magik-run [SCENE] [SECS]
   scripts/mister-video-mode-test.sh magik-sweep [SECS]
   scripts/mister-video-mode-test.sh capture-console [SECS]
+  scripts/mister-video-mode-test.sh sweep-list
+  scripts/mister-video-mode-test.sh sweep-mode LABEL [SCENE]
+  scripts/mister-video-mode-test.sh stock-ui-mode LABEL
+  scripts/mister-video-mode-test.sh stock-ui-auto
   scripts/mister-video-mode-test.sh stock-ui
   scripts/mister-video-mode-test.sh pattern [SECS] [normal|direct|none]
   scripts/mister-video-mode-test.sh run [SCENE] [SECS]
@@ -35,6 +44,10 @@ Examples:
   scripts/mister-video-mode-test.sh magik-run static_ui 12
   scripts/mister-video-mode-test.sh magik-sweep 12
   scripts/mister-video-mode-test.sh capture-console 15
+  scripts/mister-video-mode-test.sh sweep-list
+  scripts/mister-video-mode-test.sh sweep-mode 720p static_ui
+  scripts/mister-video-mode-test.sh stock-ui-mode high
+  scripts/mister-video-mode-test.sh stock-ui-auto
   scripts/mister-video-mode-test.sh restore
 EOF
 }
@@ -45,6 +58,51 @@ mister() {
 
 latest_local_backup() {
   ls -t "$WORK"/MiSTer.ini.*.bak 2>/dev/null | head -1
+}
+
+mode_value_for_label() {
+  case "$1" in
+    auto|native|edid) echo "auto" ;;
+    low|480p|640x480) echo "6" ;;
+    960|540p|960x540) echo "960,540,60" ;;
+    720p|1280x720) echo "0" ;;
+    1080p|1920x1080) echo "8" ;;
+    high|1440p|2560x1440) echo "14" ;;
+    *,*,*) echo "$1" ;;
+    *)
+      echo "Unknown mode label: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+sweep_list() {
+  cat <<EOF
+Representative HDMI mode sweep labels:
+  auto    -> EDID/native    (comment [Menu] video_mode and let MiSTer choose)
+  low     -> 6              (MiSTer preset: 640x480@60)
+  960     -> 960,540,60
+  720p    -> 0              (MiSTer preset: 1280x720@60)
+  1080p   -> 8              (MiSTer preset: 1920x1080@60)
+  high    -> 14             (MiSTer pixel-repetition preset, optional)
+
+Run one visual checkpoint at a time:
+  scripts/mister-video-mode-test.sh sweep-mode auto static_ui
+  scripts/mister-video-mode-test.sh sweep-mode low static_ui
+  scripts/mister-video-mode-test.sh sweep-mode 960 static_ui
+  scripts/mister-video-mode-test.sh sweep-mode 720p full_motion
+
+Use the preset labels for standard HDMI modes. Custom WIDTH,HEIGHT,REFRESH
+values ask MiSTer to synthesize a CVT mode, which may not match stock timings.
+The high preset is display-dependent. Stock MiSTer was also glitchy on the
+current TV with both preset 14 and calculated 2560,1440,60, while EDID/native
+auto mode selected stable 1080p. Treat high failure as unsupported
+hardware/timing unless stock MiSTer proves otherwise.
+
+Each run backs up MiSTer.ini, writes the mode, reboots through MiSTer_MagiK,
+starts the selected benchmark indefinitely, captures a PNG using detected fb
+dimensions, and leaves the scene on screen for visual verification.
+EOF
 }
 
 set_mode() {
@@ -68,18 +126,70 @@ set_mode() {
   echo "==> Mode set; run a scene with: scripts/mister-video-mode-test.sh magik-run static_ui 12"
 }
 
+write_mode_no_reboot() {
+  local mode="$1"
+  local out_dir="$2"
+  mkdir -p "$WORK" "$out_dir"
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local before="$out_dir/MiSTer.ini.$stamp.bak"
+  local after="$out_dir/MiSTer.ini.$stamp.mode"
+
+  echo "==> Backing up $REMOTE_INI"
+  mister get "$REMOTE_INI" "$before"
+  cp "$before" "$WORK/MiSTer.ini.$stamp.bak"
+  mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
+
+  echo "==> Writing [Menu] video_mode=$mode"
+  awk -v mode="$mode" -f "$AWK" "$before" >"$after"
+  mister put "$after" "$REMOTE_INI"
+}
+
+write_auto_no_reboot() {
+  local out_dir="$1"
+  mkdir -p "$WORK" "$out_dir"
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local before="$out_dir/MiSTer.ini.$stamp.bak"
+  local after="$out_dir/MiSTer.ini.$stamp.auto"
+
+  echo "==> Backing up $REMOTE_INI"
+  mister get "$REMOTE_INI" "$before"
+  cp "$before" "$WORK/MiSTer.ini.$stamp.bak"
+  mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
+
+  echo "==> Commenting [Menu] video_mode for EDID/native mode"
+  awk '
+    BEGIN { section = "" }
+    {
+      sub(/\r$/, "", $0)
+      if ($0 ~ /^\[/) {
+        section = tolower($0)
+      }
+      if (section == "[menu]" && $0 ~ /^[[:space:]]*video_mode[[:space:]]*=/) {
+        print ";" $0 " ; MiSTer MagiK EDID/native video-mode probe"
+      } else {
+        print
+      }
+    }
+  ' "$before" >"$after"
+  mister put "$after" "$REMOTE_INI"
+}
+
 restore_mode() {
   mkdir -p "$WORK"
   mister run "rm -f '$REMOTE_BENCH_REQUEST'; kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true"
   local backup
   backup="$(latest_local_backup || true)"
-  if [[ -n "$backup" ]]; then
-    echo "==> Restoring local backup $backup"
+  if mister run "test -f '$REMOTE_BACKUP'" >/dev/null 2>&1; then
+    echo "==> Restoring persistent remote backup $REMOTE_BACKUP"
+    mister run "cp '$REMOTE_BACKUP' '$REMOTE_INI'"
+  elif [[ -n "$backup" ]]; then
+    echo "==> Restoring latest local backup $backup"
     mister put "$backup" "$REMOTE_INI"
   else
-    echo "==> Restoring remote backup $REMOTE_BACKUP"
+    echo "==> No backup found to restore" >&2
     mister run "test -f '$REMOTE_BACKUP'"
-    mister run "cp '$REMOTE_BACKUP' '$REMOTE_INI'"
   fi
   echo "==> Rebooting after restore"
   mister reboot-wait
@@ -210,6 +320,90 @@ capture_console() {
   echo "==> Capture files: $dir"
 }
 
+extract_fb_size_from_log() {
+  local log="$1"
+  sed -n 's/.*fb0=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$log" | head -1
+}
+
+capture_current_fb_png() {
+  local dir="$1"
+  local log="$2"
+  local raw="$dir/fb0.raw"
+  local png="$dir/fb0.png"
+  local size w h
+  size="$(extract_fb_size_from_log "$log")"
+  if [[ -z "$size" ]]; then
+    echo "capture warning: could not detect fb size from $log" >&2
+    return 1
+  fi
+  read -r w h <<<"$size"
+  echo "==> Capturing framebuffer PNG ${w}x${h}"
+  mister run "dd if=/dev/fb0 of=/tmp/mister-mode-sweep-fb.raw bs=1M count=32 2>/dev/null || true; wc -c /tmp/mister-mode-sweep-fb.raw"
+  mister get /tmp/mister-mode-sweep-fb.raw "$raw"
+  mister raw-to-png "$raw" "$w" "$h" "$png"
+  echo "$png" >"$dir/fb0.png.path"
+}
+
+sweep_mode() {
+  local label="${1:-}"
+  local scene="${2:-static_ui}"
+  [[ -n "$label" ]] || {
+    echo "sweep-mode needs a mode label; run sweep-list" >&2
+    exit 2
+  }
+  safe_scene "$scene" || {
+    echo "Unsupported scene for sweep-mode: $scene" >&2
+    exit 2
+  }
+
+  local mode safe_label stamp dir
+  mode="$(mode_value_for_label "$label")"
+  safe_label="${label//[^A-Za-z0-9_.-]/_}"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dir="$WORK/sweeps/${stamp}-${safe_label}-${scene}"
+  mkdir -p "$dir"
+
+  echo "==> Sweep mode label=$label mode=$mode scene=$scene"
+  printf 'label=%s\nmode=%s\nscene=%s\n' "$label" "$mode" "$scene" >"$dir/run.env"
+  if [[ "$mode" == "auto" ]]; then
+    write_auto_no_reboot "$dir"
+  else
+    write_mode_no_reboot "$mode" "$dir"
+  fi
+  write_bench_request "$scene" 0
+
+  echo "==> Rebooting into $mode and launching $scene through MiSTer_MagiK"
+  mister reboot-wait
+  mister run "for i in \$(seq 1 30); do test -f '/tmp/mister-magik-bench-$scene.log' && break; sleep 1; done; sleep 6"
+
+  mister get "/tmp/mister-magik-bench-$scene.log" "$dir/$scene.log" || true
+  mister get /tmp/mister-magik/main-status.json "$dir/main-status.json" || true
+  mister run "cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true" >"$dir/fb-mode.txt" || true
+
+  if [[ -f "$dir/$scene.log" ]]; then
+    capture_current_fb_png "$dir" "$dir/$scene.log" || true
+    sed -n '1,40p' "$dir/$scene.log" >"$dir/log-head.txt"
+    {
+      echo "label=$label"
+      echo "mode=$mode"
+      echo "scene=$scene"
+      echo "log=$dir/$scene.log"
+      [[ -f "$dir/fb0.png.path" ]] && echo "png=$(cat "$dir/fb0.png.path")"
+      echo "fb_mode=$(cat "$dir/fb-mode.txt" 2>/dev/null)"
+      grep -m1 '^slint-scale=' "$dir/$scene.log" || true
+      grep -m1 '^display-config:' "$dir/$scene.log" || true
+      if [[ "$label" == "high" || "$label" == "1440p" || "$label" == "2560x1440" ]]; then
+        echo "note=high preset is optional/display-dependent; compare detected fb_mode and visual output against stock MiSTer"
+      fi
+      grep 'fps ~' "$dir/$scene.log" | tail -3 || true
+    } | tee "$dir/summary.txt"
+  fi
+
+  echo "==> Visual checkpoint is live on HDMI."
+  echo "==> Verify the display, then run another sweep-mode or restore."
+  echo "==> Results: $dir"
+}
+
 stock_ui_probe() {
   mkdir -p "$WORK"
   local stamp before after
@@ -233,6 +427,88 @@ stock_ui_probe() {
   echo "==> Rebooting into stock MiSTer for display compatibility check"
   mister reboot-wait
   echo "==> Check the stock MiSTer OSD. Then run: scripts/mister-video-mode-test.sh pattern 0 normal"
+}
+
+stock_ui_mode_probe() {
+  local label="${1:-}"
+  [[ -n "$label" ]] || {
+    echo "stock-ui-mode needs a mode label; run sweep-list" >&2
+    exit 2
+  }
+
+  local mode stamp dir before mode_ini stock_ini
+  mode="$(mode_value_for_label "$label")"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dir="$WORK/stock-ui/${stamp}-${label//[^A-Za-z0-9_.-]/_}"
+  before="$dir/MiSTer.ini.$stamp.bak"
+  mode_ini="$dir/MiSTer.ini.$stamp.mode"
+  stock_ini="$dir/MiSTer.ini.$stamp.stock-ui"
+  mkdir -p "$dir"
+
+  echo "==> Backing up $REMOTE_INI"
+  mister get "$REMOTE_INI" "$before"
+  cp "$before" "$WORK/MiSTer.ini.$stamp.bak"
+  mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
+
+  echo "==> Writing [Menu] video_mode=$mode and disabling main=MiSTer_MagiK"
+  awk -v mode="$mode" -f "$AWK" "$before" >"$mode_ini"
+  awk '
+    {
+      sub(/\r$/, "", $0)
+      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock UI video-mode probe"
+      else print
+    }
+  ' "$mode_ini" >"$stock_ini"
+  mister put "$stock_ini" "$REMOTE_INI"
+
+  echo "==> Rebooting into stock MiSTer mode label=$label mode=$mode"
+  mister reboot-wait
+  echo "==> Check the stock MiSTer OSD. Restore with: scripts/mister-video-mode-test.sh restore"
+  echo "==> Files: $dir"
+}
+
+stock_ui_auto_probe() {
+  local stamp dir before auto_ini stock_ini
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dir="$WORK/stock-ui/${stamp}-auto"
+  before="$dir/MiSTer.ini.$stamp.bak"
+  auto_ini="$dir/MiSTer.ini.$stamp.auto"
+  stock_ini="$dir/MiSTer.ini.$stamp.stock-ui-auto"
+  mkdir -p "$dir"
+
+  echo "==> Backing up $REMOTE_INI"
+  mister get "$REMOTE_INI" "$before"
+  cp "$before" "$WORK/MiSTer.ini.$stamp.bak"
+  mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
+
+  echo "==> Commenting [Menu] video_mode for EDID/native stock MiSTer probe"
+  awk '
+    BEGIN { section = "" }
+    {
+      sub(/\r$/, "", $0)
+      if ($0 ~ /^\[/) {
+        section = tolower($0)
+      }
+      if (section == "[menu]" && $0 ~ /^[[:space:]]*video_mode[[:space:]]*=/) {
+        print ";" $0 " ; stock UI EDID/native video-mode probe"
+      } else {
+        print
+      }
+    }
+  ' "$before" >"$auto_ini"
+  awk '
+    {
+      sub(/\r$/, "", $0)
+      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock UI EDID/native probe"
+      else print
+    }
+  ' "$auto_ini" >"$stock_ini"
+  mister put "$stock_ini" "$REMOTE_INI"
+
+  echo "==> Rebooting into stock MiSTer EDID/native mode"
+  mister reboot-wait
+  echo "==> Check the stock MiSTer OSD. Restore with: scripts/mister-video-mode-test.sh restore"
+  echo "==> Files: $dir"
 }
 
 pause_stock_mister() {
@@ -275,8 +551,22 @@ case "${1:-}" in
     shift
     capture_console "$@"
     ;;
+  sweep-list)
+    sweep_list
+    ;;
+  sweep-mode)
+    shift
+    sweep_mode "$@"
+    ;;
   stock-ui)
     stock_ui_probe
+    ;;
+  stock-ui-mode)
+    shift
+    stock_ui_mode_probe "$@"
+    ;;
+  stock-ui-auto)
+    stock_ui_auto_probe
     ;;
   pattern)
     shift

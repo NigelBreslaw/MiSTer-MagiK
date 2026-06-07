@@ -439,6 +439,16 @@ Important gotchas:
   start the benchmark scene after the normal settle delay. If the original OSD is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
+- **Use MiSTer preset IDs for standard HDMI sweep modes.** Shorthand calculated
+  modes such as `1280,720,60` ask MiSTer to synthesize CVT-RB timings; on the
+  current TV that made stock MiSTer, games, and the Slint framebuffer jump
+  badly. `720p` should use preset `0`, `1080p` preset `8`, and `640x480` preset
+  `6`. The documented 1440p preset `14` is a pixel-repetition mode
+  (`2560x1440@60` with internal `1280x1440` timing) and is display-dependent:
+  stock MiSTer was glitchy on the current TV with both preset `14` and calculated
+  `2560,1440,60`. For “whatever this display actually supports”, comment
+  `[Menu] video_mode` and let MiSTer use EDID/native detection; on the current TV
+  that selected stable `1920x1080`.
 - **Boot flicker analytics found Main OSD still updates after Slint handoff.**
   The `2026-06-07` analytics run recorded repeated post-handoff
   `main-osd OsdUpdate dirty_lines=3 n=19 is_menu=1 osdset=0x70000` events while
