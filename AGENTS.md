@@ -456,7 +456,11 @@ Important gotchas:
   HDMI DACs and resolves back to normal HDMI when the attached display is not a
   known DAC. Use `scripts/mister-video-mode-test.sh crt-list` and `crt-smoke`
   for opt-in smoke tests, and always restore the persistent INI backup after any
-  direct-video run.
+  direct-video run. On 2026-06-07, `crt-smoke direct-auto stock` was stable on
+  the HDMI TV and resolved to normal `1920x1080`; `crt-smoke ntsc31 stock`
+  (`direct_video=1`, `forced_scandoubler=1`, `menu_pal=0`) was also stable, with
+  Linux fb `640x480` and the TV reporting `529x480p` with TV-managed aspect
+  ratio.
 - **Boot flicker analytics found Main OSD still updates after Slint handoff.**
   The `2026-06-07` analytics run recorded repeated post-handoff
   `main-osd OsdUpdate dirty_lines=3 n=19 is_menu=1 osdset=0x70000` events while
