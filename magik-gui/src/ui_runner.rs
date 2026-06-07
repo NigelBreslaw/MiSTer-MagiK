@@ -1633,6 +1633,8 @@ const CONSOLE_LIST_W: usize = 880;
 const CONSOLE_LIST_H: usize = 356;
 #[cfg(not(mister_ui_scope_launcher))]
 const CONSOLE_ROW_H: usize = 44;
+#[cfg(not(mister_ui_scope_launcher))]
+const CONSOLE_FONT_PX: f32 = 16.0;
 
 #[cfg(not(mister_ui_scope_launcher))]
 fn run_console_scroll_loop(
@@ -1649,7 +1651,7 @@ fn run_console_scroll_loop(
     let fb_y = CONSOLE_LIST_Y * scale;
     let scroll_px = 2usize;
     let mut surface = vec![Pixel(0); CONSOLE_LIST_W * CONSOLE_LIST_H];
-    let mut font = ConsoleFont::new(12.0);
+    let mut font = ConsoleFont::new(CONSOLE_FONT_PX);
 
     window.request_redraw();
     update_slint_animations(animation_clock);
