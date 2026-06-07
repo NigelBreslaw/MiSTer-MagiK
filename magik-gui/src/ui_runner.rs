@@ -392,7 +392,7 @@ pub fn run_ui(f: &mut Fpga) {
     } else {
         "framebuffer-sized"
     };
-    let set_vga_fb = legacy_1080p || std::env::var_os("MISTER_DIRECT_VIDEO").is_some();
+    let set_vga_fb = std::env::var_os("MISTER_DIRECT_VIDEO").is_some();
     boot_analytics::event(
         "initial_fb_enable_direct_attempt",
         format!(

@@ -360,7 +360,17 @@ impl Fpga {
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
         let xoff = xoff_override.unwrap_or(mode.hbp as i32 - FB_DV_LBRD);
         let yoff = yoff_override.unwrap_or(mode.vbp as i32 - FB_DV_UBRD);
-        let right = xoff + mode.hact as i32 - 1;
+        // The MiSTer HPS framebuffer path exposes an unstable shimmer on the
+        // final HDMI column when the scaled rectangle reaches the inclusive
+        // active-area right edge. Keep one guard column off the scan rectangle;
+        // /dev/fb0 still contains the full frame, but HDMI no longer samples the
+        // noisy edge. Override only for hardware diagnostics.
+        let right_guard_cols = std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(1)
+            .clamp(0, mode.hact.saturating_sub(1) as i32);
+        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
         let bottom = yoff + mode.vact as i32 - 1;
 
         // Clean chip-select edge first (we may be interrupting a stopped MiSTer
@@ -371,7 +381,7 @@ impl Fpga {
         crate::boot_analytics::event(
             "rust_fb_enable_direct_route",
             format!(
-                "n={n} fb_width={fb_width} fb_height={fb_height} xoff={xoff} yoff={yoff} right={right} bottom={bottom} stride={} support_flag={flag}",
+                "n={n} fb_width={fb_width} fb_height={fb_height} xoff={xoff} yoff={yoff} right={right} bottom={bottom} right_guard_cols={right_guard_cols} stride={} support_flag={flag}",
                 fb_width * 4
             ),
         );
