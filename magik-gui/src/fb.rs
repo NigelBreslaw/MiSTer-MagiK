@@ -128,6 +128,14 @@ struct FbFixScreeninfo {
 
 const MODE_1080P: &str = "8888 1 1920 1080 7680";
 
+fn pixels_as_u32(src: &[Pixel]) -> &[u32] {
+    unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u32>(), src.len()) }
+}
+
+fn pixels_as_u32_mut(dst: &mut [Pixel]) -> &mut [u32] {
+    unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u32>(), dst.len()) }
+}
+
 impl Display {
     /// Request 1080p from the MiSTer_fb driver (no-op if sysfs missing).
     pub fn set_mode_1080p() {
@@ -534,13 +542,13 @@ impl Display {
             let dst_w = self.w;
             let dst_h = self.h;
             let dst = self.buffer_mut();
-            framebuffer_copy::copy_rect_2x_to(
-                dst,
+            framebuffer_copy::copy_rect_2x_u32_to(
+                pixels_as_u32_mut(dst),
                 dst_w,
                 dst_h,
                 0,
                 src_y0 * 2,
-                src,
+                pixels_as_u32(src),
                 src_w,
                 0,
                 src_y0,
@@ -604,13 +612,13 @@ impl Display {
             let dst_w = self.w;
             let dst_h = self.h;
             let dst = self.buffer_mut();
-            framebuffer_copy::copy_rect_2x_to(
-                dst,
+            framebuffer_copy::copy_rect_2x_u32_to(
+                pixels_as_u32_mut(dst),
                 dst_w,
                 dst_h,
                 src_x0 * 2,
                 src_y0 * 2,
-                src,
+                pixels_as_u32(src),
                 src_w,
                 src_x0,
                 src_y0,
@@ -694,8 +702,18 @@ impl Display {
             let dst_w = self.w;
             let dst_h = self.h;
             let dst = self.buffer_mut();
-            framebuffer_copy::copy_rect_2x_to(
-                dst, dst_w, dst_h, dst_x, dst_y, src, src_w, 0, 0, src_w, src_h,
+            framebuffer_copy::copy_rect_2x_u32_to(
+                pixels_as_u32_mut(dst),
+                dst_w,
+                dst_h,
+                dst_x,
+                dst_y,
+                pixels_as_u32(src),
+                src_w,
+                0,
+                0,
+                src_w,
+                src_h,
             );
             return;
         }
