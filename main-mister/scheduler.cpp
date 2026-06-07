@@ -49,8 +49,11 @@ static void scheduler_co_ui(void)
 	{
 		{
 			SPIKE_SCOPE("co_ui", 1000);
-			HandleUI();
-			OsdUpdate();
+			if (!mister_magik_launcher_active())
+			{
+				HandleUI();
+				OsdUpdate();
+			}
 		}
 
 		scheduler_yield();
