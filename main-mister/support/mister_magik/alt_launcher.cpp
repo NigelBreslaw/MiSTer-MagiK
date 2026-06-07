@@ -41,6 +41,7 @@ static unsigned long s_respawn_timer = 0;
 static bool s_init_pending = false;
 static bool s_gave_up = false;
 static bool s_escaped = false;
+static bool s_stock_menu_enabled = false;
 static unsigned long s_analytics_seq = 0;
 static bool s_analytics_header_written = false;
 static unsigned long s_osd_suppressed_count = 0;
@@ -130,6 +131,7 @@ void mister_magik_status_write(void)
 	fprintf(f, "\"init_pending\":%s,", s_init_pending ? "true" : "false");
 	fprintf(f, "\"gave_up\":%s,", s_gave_up ? "true" : "false");
 	fprintf(f, "\"escaped\":%s,", s_escaped ? "true" : "false");
+	fprintf(f, "\"stock_menu_enabled\":%s,", s_stock_menu_enabled ? "true" : "false");
 	fprintf(f, "\"tty_ready\":%s,", (s_pid && launcher_tty_ready(s_pid)) ? "true" : "false");
 	fprintf(f, "\"active_vt\":");
 	json_escape(f, active_vt[0] ? active_vt : "unknown");
@@ -255,7 +257,7 @@ static void analytics_state(const char *event, const char *extra_fmt = NULL, ...
 
 bool mister_magik_launcher_configured(void)
 {
-	if (s_escaped) return false;
+	if (s_stock_menu_enabled) return false;
 
 	static int cached = -1;
 	if (cached < 0) cached = FileExists(s_launcher_path, 0) ? 1 : 0;
@@ -381,6 +383,8 @@ static void wait_launcher_stopped(pid_t pid)
 static void return_to_normal_mode(void)
 {
 	analytics_state("return_to_normal_mode_start");
+	s_stock_menu_enabled = true;
+	s_escaped = true;
 	user_io_osd_key_enable(1);
 	reset_launcher_tty();
 	video_fb_enable(0);
@@ -388,9 +392,22 @@ static void return_to_normal_mode(void)
 	s_respawn_timer = 0;
 	s_crash_count = 0;
 	s_gave_up = true;
-	s_escaped = true;
 	log_msg("return_to_normal_mode");
 	analytics_state("return_to_normal_mode_done");
+}
+
+static void stay_in_magik_mode(const char *reason)
+{
+	s_stock_menu_enabled = false;
+	s_escaped = false;
+	s_respawn_timer = 0;
+	s_init_pending = false;
+	s_gave_up = true;
+	user_io_osd_key_enable(0);
+	OsdDisable();
+	video_fb_enable(1);
+	log_msg("stay_in_magik_mode reason=%s", reason ? reason : "unknown");
+	analytics_state("stay_in_magik_mode", "reason=%s", reason ? reason : "unknown");
 }
 
 static bool write_launcher_script(void)
@@ -432,7 +449,7 @@ static void spawn(void)
 	{
 		analytics_event("spawn_missing_launcher", "path=%s", s_launcher_path);
 		log_msg("spawn skipped: missing %s", s_launcher_path);
-		return_to_normal_mode();
+		stay_in_magik_mode("launcher_missing");
 		return;
 	}
 
@@ -440,7 +457,7 @@ static void spawn(void)
 	{
 		analytics_event("spawn_script_failed", "path=%s", s_script_path);
 		log_msg("spawn failed: unable to write %s", s_script_path);
-		return_to_normal_mode();
+		stay_in_magik_mode("script_failed");
 		return;
 	}
 
@@ -453,8 +470,7 @@ static void spawn(void)
 		analytics_event("fork_failed", "errno=%d error=%s", errno, strerror(errno));
 		log_msg("fork failed: %s", strerror(errno));
 		s_pid = 0;
-		user_io_osd_key_enable(1);
-		video_fb_enable(0);
+		stay_in_magik_mode("fork_failed");
 		return;
 	}
 
@@ -489,7 +505,7 @@ static void spawn(void)
 
 bool mister_magik_launcher_active(void)
 {
-	return s_pid != 0;
+	return !s_stock_menu_enabled && FileExists(s_launcher_path, 0);
 }
 
 bool mister_magik_boot_analytics_enabled(void)
@@ -538,6 +554,10 @@ void mister_magik_launcher_init_for_menu(void)
 	s_crash_count = 0;
 	s_respawn_timer = 0;
 	s_init_pending = true;
+	s_stock_menu_enabled = false;
+	user_io_osd_key_enable(0);
+	OsdDisable();
+	video_fb_enable(1);
 	log_msg("init_for_menu");
 	mister_magik_status_write();
 	analytics_state("init_for_menu");
@@ -551,7 +571,7 @@ void mister_magik_launcher_poll(void)
 		if (waitpid(s_pid, &status, WNOHANG) == s_pid)
 		{
 			s_pid = 0;
-			user_io_osd_key_enable(1);
+			user_io_osd_key_enable(0);
 
 			bool exited = WIFEXITED(status);
 			int exit_status = exited ? WEXITSTATUS(status) : 0;
@@ -569,7 +589,9 @@ void mister_magik_launcher_poll(void)
 
 			if (escaped)
 			{
-				return_to_normal_mode();
+				s_respawn_timer = GetTimer(1000);
+				if (!s_respawn_timer) s_respawn_timer = 1;
+				analytics_state("respawn_scheduled_after_exit");
 				return;
 			}
 
@@ -577,7 +599,7 @@ void mister_magik_launcher_poll(void)
 			{
 				log_msg("giving up after 3 crashes");
 				analytics_state("giving_up_after_crashes");
-				return_to_normal_mode();
+				stay_in_magik_mode("launcher_crash_limit");
 				return;
 			}
 
@@ -621,10 +643,24 @@ void mister_magik_launcher_shutdown(void)
 	s_init_pending = false;
 	s_gave_up = false;
 	s_escaped = false;
-	user_io_osd_key_enable(1);
+	s_stock_menu_enabled = false;
+	user_io_osd_key_enable(0);
 	video_fb_enable(0);
 	reset_launcher_tty();
 	log_msg("shutdown");
 	mister_magik_status_write();
 	analytics_state("shutdown");
+}
+
+void mister_magik_launcher_exit_to_menu(void)
+{
+	if (s_pid)
+		wait_launcher_stopped(s_pid);
+
+	s_pid = 0;
+	s_respawn_timer = 0;
+	s_crash_count = 0;
+	s_init_pending = false;
+	log_msg("exit_to_menu_requested");
+	return_to_normal_mode();
 }
