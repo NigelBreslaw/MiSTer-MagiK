@@ -24,6 +24,7 @@
 
 static const char s_launcher_path[] = "mister-magik/mister-magik-fb";
 static const char s_launcher_scene[] = "launcher";
+static const char s_bench_request_path[] = "/media/fat/mister-magik/bench-boot";
 static const char s_script_path[] = "/tmp/mister_magik_launcher";
 static const char s_log_path[] = "/tmp/mister-magik-main.log";
 static const char s_status_dir[] = "/tmp/mister-magik";
@@ -41,6 +42,7 @@ static unsigned long s_respawn_timer = 0;
 static bool s_init_pending = false;
 static bool s_gave_up = false;
 static bool s_escaped = false;
+static bool s_last_spawn_was_bench = false;
 static bool s_stock_menu_enabled = false;
 static unsigned long s_analytics_seq = 0;
 static bool s_analytics_header_written = false;
@@ -51,9 +53,17 @@ static int s_visible_fb_num = -1;
 static int s_visible_fb_width = 0;
 static int s_visible_fb_height = 0;
 
+struct launcher_command_t
+{
+	char scene[64];
+	char secs[16];
+	bool bench;
+};
+
 static bool launcher_tty_ready(pid_t pid);
 static void json_escape(FILE *f, const char *s);
 static void read_trimmed(const char *path, char *buf, size_t len);
+static void analytics_event(const char *event, const char *fmt, ...);
 
 static void log_msg(const char *fmt, ...)
 {
@@ -131,6 +141,7 @@ void mister_magik_status_write(void)
 	fprintf(f, "\"init_pending\":%s,", s_init_pending ? "true" : "false");
 	fprintf(f, "\"gave_up\":%s,", s_gave_up ? "true" : "false");
 	fprintf(f, "\"escaped\":%s,", s_escaped ? "true" : "false");
+	fprintf(f, "\"bench_active\":%s,", s_last_spawn_was_bench ? "true" : "false");
 	fprintf(f, "\"stock_menu_enabled\":%s,", s_stock_menu_enabled ? "true" : "false");
 	fprintf(f, "\"tty_ready\":%s,", (s_pid && launcher_tty_ready(s_pid)) ? "true" : "false");
 	fprintf(f, "\"active_vt\":");
@@ -165,6 +176,61 @@ void mister_magik_note_osd_suppressed(void)
 static bool analytics_enabled(void)
 {
 	return access(s_analytics_flag_path, F_OK) == 0;
+}
+
+static bool token_is_safe(const char *s)
+{
+	if (!s || !s[0]) return false;
+	for (; *s; s++)
+	{
+		if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
+		    (*s >= '0' && *s <= '9') || *s == '_' || *s == '-')
+			continue;
+		return false;
+	}
+	return true;
+}
+
+static bool decimal_token_is_safe(const char *s)
+{
+	if (!s || !s[0]) return false;
+	for (; *s; s++)
+	{
+		if (*s < '0' || *s > '9') return false;
+	}
+	return true;
+}
+
+static void read_launcher_command(launcher_command_t *cmd)
+{
+	snprintf(cmd->scene, sizeof(cmd->scene), "%s", s_launcher_scene);
+	snprintf(cmd->secs, sizeof(cmd->secs), "0");
+	cmd->bench = false;
+
+	FILE *f = fopen(s_bench_request_path, "r");
+	if (!f) return;
+
+	char line[160] = {};
+	if (!fgets(line, sizeof(line), f))
+	{
+		fclose(f);
+		return;
+	}
+	fclose(f);
+
+	char scene[64] = {};
+	char secs[16] = "0";
+	int n = sscanf(line, "%63s %15s", scene, secs);
+	if (n < 1 || !token_is_safe(scene) || !decimal_token_is_safe(secs))
+	{
+		log_msg("ignoring invalid bench request: %s", line);
+		analytics_event("bench_request_invalid", "line=%s", line);
+		return;
+	}
+
+	snprintf(cmd->scene, sizeof(cmd->scene), "%s", scene);
+	snprintf(cmd->secs, sizeof(cmd->secs), "%s", secs);
+	cmd->bench = true;
 }
 
 static void sanitize_detail(char *s)
@@ -410,37 +476,65 @@ static void stay_in_magik_mode(const char *reason)
 	analytics_state("stay_in_magik_mode", "reason=%s", reason ? reason : "unknown");
 }
 
-static bool write_launcher_script(void)
+static bool write_launcher_script(const launcher_command_t *launcher_cmd)
 {
-	static const char cmd[] =
-	    "#!/bin/bash\n"
-	    "export LC_ALL=en_US.UTF-8\n"
-	    "export HOME=/root\n"
-	    "export MISTER_MAGIK_PARENT=main-mister\n"
-	    "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
-	    "exec \"$MISTER_MAGIK_PATH\" ui \"$MISTER_MAGIK_SCENE\" 0\n";
-	static const char analytics_cmd[] =
-	    "#!/bin/bash\n"
-	    "export LC_ALL=en_US.UTF-8\n"
-	    "export HOME=/root\n"
-	    "export MISTER_MAGIK_PARENT=main-mister\n"
-	    "export MISTER_BOOT_ANALYTICS=1\n"
-	    "export MISTER_PROFILE=summary\n"
-	    "export MISTER_PROFILE_FILE=/tmp/mister-magik-frame-profile.tsv\n"
-	    "export MISTER_BOOT_FRAME_PROFILE_FILE=/tmp/mister-magik-launcher-frame-profile.tsv\n"
-	    "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
-	    "exec \"$MISTER_MAGIK_PATH\" ui \"$MISTER_MAGIK_SCENE\" 0 >/tmp/mister-magik-slint.log 2>&1\n";
+	char cmd[2048];
+	if (launcher_cmd->bench)
+	{
+		snprintf(cmd, sizeof(cmd),
+		         "#!/bin/bash\n"
+		         "export LC_ALL=en_US.UTF-8\n"
+		         "export HOME=/root\n"
+		         "export MISTER_MAGIK_PARENT=main-mister\n"
+		         "export MISTER_MAGIK_BENCH_BOOT=1\n"
+		         "export MISTER_CONSOLE_SCROLL_TRACE_FILE=/tmp/mister-magik-console-scroll-trace.tsv\n"
+		         "export MISTER_CONSOLE_SCROLL_TRACE_STEP=32\n"
+		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-bench-%s.log 2>&1\n",
+		         launcher_cmd->scene, launcher_cmd->secs, launcher_cmd->scene);
+	}
+	else if (analytics_enabled())
+	{
+		snprintf(cmd, sizeof(cmd),
+		         "#!/bin/bash\n"
+		         "export LC_ALL=en_US.UTF-8\n"
+		         "export HOME=/root\n"
+		         "export MISTER_MAGIK_PARENT=main-mister\n"
+		         "export MISTER_BOOT_ANALYTICS=1\n"
+		         "export MISTER_PROFILE=summary\n"
+		         "export MISTER_PROFILE_FILE=/tmp/mister-magik-frame-profile.tsv\n"
+		         "export MISTER_BOOT_FRAME_PROFILE_FILE=/tmp/mister-magik-launcher-frame-profile.tsv\n"
+		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-slint.log 2>&1\n",
+		         launcher_cmd->scene, launcher_cmd->secs);
+	}
+	else
+	{
+		snprintf(cmd, sizeof(cmd),
+		         "#!/bin/bash\n"
+		         "export LC_ALL=en_US.UTF-8\n"
+		         "export HOME=/root\n"
+		         "export MISTER_MAGIK_PARENT=main-mister\n"
+		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\"\n",
+		         launcher_cmd->scene, launcher_cmd->secs);
+	}
 
 	unlink(s_script_path);
-	const char *script = analytics_enabled() ? analytics_cmd : cmd;
-	bool ok = FileSave(s_script_path, (void*)script, strlen(script)) != 0;
-	analytics_event("write_script", "ok=%d analytics=%d path=%s", ok, analytics_enabled(), s_script_path);
+	bool ok = FileSave(s_script_path, (void*)cmd, strlen(cmd)) != 0;
+	analytics_event(
+	    "write_script",
+	    "ok=%d analytics=%d bench=%d scene=%s secs=%s path=%s",
+	    ok, analytics_enabled(), launcher_cmd->bench, launcher_cmd->scene,
+	    launcher_cmd->secs, s_script_path);
 	return ok;
 }
 
 static void spawn(void)
 {
 	analytics_state("spawn_start");
+	launcher_command_t launcher_cmd;
+	read_launcher_command(&launcher_cmd);
 	char path[2100];
 	strncpy(path, getFullPath(s_launcher_path), sizeof(path) - 1);
 	path[sizeof(path) - 1] = '\0';
@@ -453,7 +547,7 @@ static void spawn(void)
 		return;
 	}
 
-	if (!write_launcher_script())
+	if (!write_launcher_script(&launcher_cmd))
 	{
 		analytics_event("spawn_script_failed", "path=%s", s_script_path);
 		log_msg("spawn failed: unable to write %s", s_script_path);
@@ -477,7 +571,7 @@ static void spawn(void)
 	if (!s_pid)
 	{
 		setenv("MISTER_MAGIK_PATH", path, 1);
-		setenv("MISTER_MAGIK_SCENE", s_launcher_scene, 1);
+		setenv("MISTER_MAGIK_SCENE", launcher_cmd.scene, 1);
 		cpu_set_t set;
 		CPU_ZERO(&set);
 		CPU_SET(0, &set);
@@ -488,9 +582,12 @@ static void spawn(void)
 		_exit(1);
 	}
 
-	log_msg("spawned pid=%d path=%s scene=%s", s_pid, path, s_launcher_scene);
+	s_last_spawn_was_bench = launcher_cmd.bench;
+	log_msg("spawned pid=%d path=%s scene=%s secs=%s bench=%d",
+	        s_pid, path, launcher_cmd.scene, launcher_cmd.secs, launcher_cmd.bench);
 	mister_magik_status_write();
-	analytics_state("forked", "path=%s scene=%s", path, s_launcher_scene);
+	analytics_state("forked", "path=%s scene=%s secs=%s bench=%d",
+	                path, launcher_cmd.scene, launcher_cmd.secs, launcher_cmd.bench);
 	wait_launcher_tty_ready(s_pid);
 	analytics_state("tty_ready");
 	video_chvt(s_vt);
@@ -589,6 +686,14 @@ void mister_magik_launcher_poll(void)
 
 			if (escaped)
 			{
+				if (s_last_spawn_was_bench)
+				{
+					s_last_spawn_was_bench = false;
+					s_respawn_timer = 0;
+					s_gave_up = true;
+					analytics_state("bench_exit_no_respawn");
+					return;
+				}
 				s_respawn_timer = GetTimer(1000);
 				if (!s_respawn_timer) s_respawn_timer = 1;
 				analytics_state("respawn_scheduled_after_exit");
@@ -643,6 +748,7 @@ void mister_magik_launcher_shutdown(void)
 	s_init_pending = false;
 	s_gave_up = false;
 	s_escaped = false;
+	s_last_spawn_was_bench = false;
 	s_stock_menu_enabled = false;
 	user_io_osd_key_enable(0);
 	video_fb_enable(0);
@@ -661,6 +767,7 @@ void mister_magik_launcher_exit_to_menu(void)
 	s_respawn_timer = 0;
 	s_crash_count = 0;
 	s_init_pending = false;
+	s_last_spawn_was_bench = false;
 	log_msg("exit_to_menu_requested");
 	return_to_normal_mode();
 }

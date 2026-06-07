@@ -480,6 +480,36 @@ impl Display {
         (hash, nonzero)
     }
 
+    pub fn rect_sampled_signature(
+        &self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        step: usize,
+    ) -> (u64, u32) {
+        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
+        let x1 = x.saturating_add(w).min(self.w);
+        let y1 = y.saturating_add(h).min(self.h);
+        let step = step.max(1);
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut nonzero = 0u32;
+
+        for yy in (y..y1).step_by(step) {
+            let row = yy * self.w;
+            for xx in (x..x1).step_by(step) {
+                let p = pixels[row + xx].0 & 0x00ff_ffff;
+                if p != 0 {
+                    nonzero += 1;
+                }
+                hash ^= p as u64;
+                hash = hash.wrapping_mul(0x1000_0000_01b3);
+            }
+        }
+
+        (hash, nonzero)
+    }
+
     pub fn record_visual_sample(&self, label: &str) {
         if !boot_analytics::enabled() {
             return;
