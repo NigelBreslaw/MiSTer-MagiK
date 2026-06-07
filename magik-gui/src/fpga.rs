@@ -44,6 +44,72 @@ pub const FB_EN: u16 = 0x8000;
 pub const FB_DV_LBRD: i32 = 3;
 pub const FB_DV_UBRD: i32 = 2;
 
+#[derive(Clone, Copy, Debug)]
+pub struct VideoInfo {
+    pub raw_res: u16,
+    pub width: u32,
+    pub height: u32,
+    pub htime: u32,
+    pub vtime: u32,
+    pub ptime: u32,
+    pub vtimeh: u32,
+    pub ctime: u32,
+    pub pixrep: u16,
+    pub de_h: u16,
+    pub de_v: u16,
+    pub interlaced: bool,
+    pub rotated: bool,
+}
+
+impl VideoInfo {
+    pub fn log_line(self) -> String {
+        format!(
+            "uio_vres={}x{} raw=0x{:04x} pixrep={} de={}x{} htime={} vtime={} ptime={} vtimeh={} ctime={} interlaced={} rotated={}",
+            self.width,
+            self.height,
+            self.raw_res,
+            self.pixrep,
+            self.de_h,
+            self.de_v,
+            self.htime,
+            self.vtime,
+            self.ptime,
+            self.vtimeh,
+            self.ctime,
+            self.interlaced,
+            self.rotated
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FbParams {
+    pub crc: u8,
+    pub arx: u16,
+    pub ary: u16,
+    pub arxy: bool,
+    pub fb_fmt: u16,
+    pub fb_width: u16,
+    pub fb_height: u16,
+    pub fb_enabled: bool,
+}
+
+impl FbParams {
+    pub fn log_line(self) -> String {
+        format!(
+            "uio_fb_par={}x{} fmt=0x{:04x} enabled={} ar={}x{} arxy={} crc=0x{:02x}",
+            self.fb_width,
+            self.fb_height,
+            self.fb_fmt,
+            self.fb_enabled,
+            self.arx,
+            self.ary,
+            self.arxy,
+            self.crc
+        )
+    }
+}
+
 /// Timing of one MiSTer video mode (vmode_t.item[1..8]): hact, hfp, hs, hbp,
 /// vact, vfp, vs, vbp. We only need hact/hbp/vact/vbp for fb positioning.
 #[derive(Clone, Copy)]
@@ -211,6 +277,58 @@ impl Fpga {
     /// `send_volume()` path; `0` is max volume and bit 4 would mute.
     pub fn set_audio_volume(&mut self, attenuation: u8) {
         self.uio_cmd16(UIO_AUDVOL, attenuation as u16);
+    }
+
+    pub fn read_video_info(&mut self) -> VideoInfo {
+        let _ = self.cmd_capture(UIO_GET_VRES);
+        let word = |this: &mut Self| this.spi_capture(0).1;
+        let raw_res = word(self);
+        let width = word(self) as u32 | ((word(self) as u32) << 16);
+        let height = word(self) as u32 | ((word(self) as u32) << 16);
+        let htime = word(self) as u32 | ((word(self) as u32) << 16);
+        let vtime = word(self) as u32 | ((word(self) as u32) << 16);
+        let ptime = word(self) as u32 | ((word(self) as u32) << 16);
+        let vtimeh = word(self) as u32 | ((word(self) as u32) << 16);
+        let ctime = word(self) as u32 | ((word(self) as u32) << 16);
+        let pixrep = word(self);
+        let de_h = word(self);
+        let de_v = word(self);
+        self.disable_io();
+        VideoInfo {
+            raw_res,
+            width,
+            height,
+            htime,
+            vtime,
+            ptime,
+            vtimeh,
+            ctime,
+            pixrep,
+            de_h,
+            de_v,
+            interlaced: (raw_res & 0x100) != 0,
+            rotated: (raw_res & 0x200) != 0,
+        }
+    }
+
+    pub fn read_fb_params(&mut self) -> FbParams {
+        let (crc, _) = self.cmd_capture(UIO_GET_FB_PAR);
+        let arx_raw = self.spi_capture(0).1;
+        let ary_raw = self.spi_capture(0).1;
+        let fb_fmt = self.spi_capture(0).1;
+        let fb_width = self.spi_capture(0).1;
+        let fb_height = self.spi_capture(0).1;
+        self.disable_io();
+        FbParams {
+            crc: crc as u8,
+            arx: arx_raw & 0x0fff,
+            ary: ary_raw & 0x0fff,
+            arxy: (arx_raw & 0x1000) != 0,
+            fb_fmt,
+            fb_width,
+            fb_height,
+            fb_enabled: (fb_fmt & 0x40) != 0,
+        }
     }
 
     /// Port of `video_fb_enable(1, n)` for a `direct_video` system, replicating

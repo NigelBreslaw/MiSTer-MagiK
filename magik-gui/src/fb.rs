@@ -59,7 +59,40 @@ pub struct Display {
     map_len: usize,
     w: usize,
     h: usize,
+    info: FbInfo,
     fb0: std::fs::File,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FbInfo {
+    pub visible_w: usize,
+    pub visible_h: usize,
+    pub virtual_w: usize,
+    pub virtual_h: usize,
+    pub stride_bytes: usize,
+    pub bits_per_pixel: u32,
+    pub red_offset: u32,
+    pub green_offset: u32,
+    pub blue_offset: u32,
+    pub transp_offset: u32,
+}
+
+impl FbInfo {
+    pub fn log_line(self) -> String {
+        format!(
+            "fb0={}x{} virtual={}x{} stride={} bpp={} rgba_offsets={}/{}/{}/{}",
+            self.visible_w,
+            self.visible_h,
+            self.virtual_w,
+            self.virtual_h,
+            self.stride_bytes,
+            self.bits_per_pixel,
+            self.red_offset,
+            self.green_offset,
+            self.blue_offset,
+            self.transp_offset
+        )
+    }
 }
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -256,7 +289,8 @@ impl Display {
             capabilities: 0,
             reserved: [0; 3],
         };
-        if unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0 {
+        let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
+        if var_ok {
             let virt = (var.yres_virtual as usize).max(var.yres as usize);
             if var.xres > 0 && var.xres as usize != w {
                 return Err(io::Error::new(
@@ -288,7 +322,8 @@ impl Display {
                 ));
             }
         }
-        if unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0 {
+        let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
+        if fix_ok {
             let expected = w * 4;
             if fix.line_length != 0 && fix.line_length as usize != expected {
                 return Err(io::Error::new(
@@ -297,6 +332,42 @@ impl Display {
                 ));
             }
         }
+        let info = FbInfo {
+            visible_w: if var_ok && var.xres != 0 {
+                var.xres as usize
+            } else {
+                w
+            },
+            visible_h: if var_ok && var.yres != 0 {
+                var.yres as usize
+            } else {
+                h
+            },
+            virtual_w: if var_ok && var.xres_virtual != 0 {
+                var.xres_virtual as usize
+            } else {
+                w
+            },
+            virtual_h: if var_ok && var.yres_virtual != 0 {
+                var.yres_virtual as usize
+            } else {
+                h
+            },
+            stride_bytes: if fix_ok && fix.line_length != 0 {
+                fix.line_length as usize
+            } else {
+                w * 4
+            },
+            bits_per_pixel: if var_ok && var.bits_per_pixel != 0 {
+                var.bits_per_pixel
+            } else {
+                32
+            },
+            red_offset: var.red.offset,
+            green_offset: var.green.offset,
+            blue_offset: var.blue.offset,
+            transp_offset: var.transp.offset,
+        };
         let map_len = w * h * 4;
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
         let mem = unsafe {
@@ -317,8 +388,13 @@ impl Display {
             map_len,
             w,
             h,
+            info,
             fb0,
         })
+    }
+
+    pub fn info(&self) -> FbInfo {
+        self.info
     }
 
     /// The (single) on-screen buffer, as a mutable pixel slice.

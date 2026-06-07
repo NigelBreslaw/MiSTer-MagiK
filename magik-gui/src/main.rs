@@ -18,6 +18,7 @@ use std::ffi::CString;
 
 mod boot_analytics;
 mod cpu_profile;
+mod display_config;
 mod fb;
 mod fpga;
 mod frame_profile;

@@ -49,6 +49,7 @@ use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
+use crate::display_config::DisplayConfig;
 use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
@@ -349,6 +350,12 @@ pub fn run_ui(f: &mut Fpga) {
         }
     };
     disp.record_visual_sample("after_display_open_before_initial_route");
+    let display_config = DisplayConfig::detect(f, disp.info(), &ui);
+    println!("{}", display_config.log_line());
+    boot_analytics::event(
+        "display_config_detected",
+        display_config.boot_analytics_detail(),
+    );
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         println!("MiSTer_MagiK parent detected; Slint reasserting 1080p framebuffer route");
     }
