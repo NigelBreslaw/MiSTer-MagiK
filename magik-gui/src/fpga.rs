@@ -120,6 +120,17 @@ pub struct Mode {
     pub vbp: u16,
 }
 
+impl Mode {
+    pub fn framebuffer_sized(width: u16, height: u16) -> Self {
+        Self {
+            hact: width,
+            hbp: FB_DV_LBRD as u16,
+            vact: height,
+            vbp: FB_DV_UBRD as u16,
+        }
+    }
+}
+
 /// video_mode=8 → 1920x1080@60 (vmodes[8] = {1920,88,44,148,1080,4,5,36}).
 pub const MODE_1080P60: Mode = Mode {
     hact: 1920,
@@ -331,13 +342,11 @@ impl Fpga {
         }
     }
 
-    /// Port of `video_fb_enable(1, n)` for a `direct_video` system, replicating
-    /// the exact SET_FBUF sequence in video.cpp:3290-3321. Routes HPS buffer `n`
-    /// to the scan-out. `mode` is the active video mode (for positioning); the
-    /// fb itself is `fb_width`x`fb_height` (1920x1080 for us).
-    ///
-    /// Returns the SET_FBUF support flag (non-zero = core supports the HPS fb).
-    pub fn fb_enable_direct(
+    /// Port of `video_fb_enable(1, n)`, replicating the SET_FBUF sequence in
+    /// video.cpp:3290-3321. Routes HPS buffer `n` to scan-out. `mode` is the
+    /// active video mode (for positioning); the fb itself is
+    /// `fb_width`x`fb_height`.
+    pub fn fb_enable(
         &mut self,
         n: u32,
         fb_width: u16,
@@ -345,6 +354,7 @@ impl Fpga {
         mode: Mode,
         xoff_override: Option<i32>,
         yoff_override: Option<i32>,
+        set_vga_fb: bool,
     ) -> u16 {
         let fb_addr = FB_ADDR + (FB_SIZE_PX * 4 * n) + if n == 0 { 4096 } else { 0 };
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
@@ -377,10 +387,48 @@ impl Fpga {
         self.spi_w(bottom as u16); // scaled bottom
         self.spi_w(fb_width * 4); // stride (bytes)
         self.disable_io();
-        // MiSTer calls set_vga_fb(enable) here when cfg.direct_video; main= boot
-        // skips the rest of Main_MiSTer so we must do it ourselves.
-        self.set_vga_fb(true);
+        // MiSTer only toggles this mux when cfg.direct_video is enabled. In
+        // normal HDMI mode, SET_FBUF alone is the Main_MiSTer path.
+        if set_vga_fb {
+            self.set_vga_fb(true);
+        }
         flag
+    }
+
+    /// Historical helper for the direct-video path.
+    pub fn fb_enable_direct(
+        &mut self,
+        n: u32,
+        fb_width: u16,
+        fb_height: u16,
+        mode: Mode,
+        xoff_override: Option<i32>,
+        yoff_override: Option<i32>,
+    ) -> u16 {
+        self.fb_enable(
+            n,
+            fb_width,
+            fb_height,
+            mode,
+            xoff_override,
+            yoff_override,
+            true,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framebuffer_sized_mode_uses_requested_active_area() {
+        let mode = Mode::framebuffer_sized(960, 540);
+
+        assert_eq!(mode.hact, 960);
+        assert_eq!(mode.vact, 540);
+        assert_eq!(mode.hbp as i32 - FB_DV_LBRD, 0);
+        assert_eq!(mode.vbp as i32 - FB_DV_UBRD, 0);
     }
 }
 

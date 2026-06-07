@@ -6,6 +6,7 @@
 //!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!   scenes    list Slint scene names
 //!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
+//!   fb-current [secs] [normal|direct|none]  paint + optionally route current fb size
 //!   input     gamepad log / sniff / calibrate
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
@@ -71,6 +72,7 @@ fn main() {
         "read" => read_mode(&mut f),
         "route" => route_framebuffer(&mut f),
         "fb" => fb_test(&mut f),
+        "fb-current" => fb_current_probe(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "input" => run_input(),
@@ -199,10 +201,112 @@ fn fb_test(f: &mut Fpga) {
     println!("done (MiSTer will resume after this process exits)");
 }
 
+fn fb_current_probe(f: &mut Fpga) {
+    let _vt = vt::VtGraphicsGuard::enter_or_warn();
+    let secs = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60);
+    let route = std::env::args().nth(3).unwrap_or_else(|| "normal".into());
+    let mut disp = match Display::open_current() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("failed to open current display (/dev/fb0): {e}");
+            std::process::exit(1);
+        }
+    };
+    let w = disp.width();
+    let h = disp.height();
+    paint_pattern(disp.buffer_mut(), w, h);
+    println!("painted current {w}x{h} test pattern");
+
+    match route.as_str() {
+        "normal" => {
+            let flag = f.fb_enable(
+                0,
+                w as u16,
+                h as u16,
+                Mode::framebuffer_sized(w as u16, h as u16),
+                Some(0),
+                Some(0),
+                false,
+            );
+            println!("routed current fb via SET_FBUF only support_flag={flag}");
+        }
+        "direct" => {
+            let flag = f.fb_enable_direct(
+                0,
+                w as u16,
+                h as u16,
+                Mode::framebuffer_sized(w as u16, h as u16),
+                Some(0),
+                Some(0),
+            );
+            println!("routed current fb via SET_FBUF + set_vga_fb support_flag={flag}");
+        }
+        "none" => {
+            println!("route skipped; expecting another owner to scan /dev/fb0");
+        }
+        other => {
+            eprintln!("unknown fb-current route '{other}' (use normal|direct|none)");
+            std::process::exit(2);
+        }
+    }
+
+    let params = f.read_fb_params();
+    println!("after route: {}", params.log_line());
+    if secs == 0 {
+        println!("holding forever — stop this process or reboot when done");
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
+    println!("holding {secs}s — check HDMI for bordered colour test pattern...");
+    std::thread::sleep(std::time::Duration::from_secs(secs));
+}
+
 fn fill_rect(buf: &mut [Pixel], x0: usize, y0: usize, x1: usize, y1: usize, c: u32) {
     for y in y0..y1 {
         for x in x0..x1 {
             buf[y * W + x] = Pixel(c);
+        }
+    }
+}
+
+fn paint_pattern(buf: &mut [Pixel], w: usize, h: usize) {
+    const RED: u32 = 0x00FF_0000;
+    const GREEN: u32 = 0x0000_FF00;
+    const BLUE: u32 = 0x0000_00FF;
+    const YELLOW: u32 = 0x00FF_FF00;
+    const WHITE: u32 = 0x00FF_FFFF;
+    const BLACK: u32 = 0x0000_0000;
+    fill_rect_strided(buf, w, 0, 0, w, h, BLACK);
+    fill_rect_strided(buf, w, 0, 0, w / 2, h / 2, RED);
+    fill_rect_strided(buf, w, w / 2, 0, w, h / 2, GREEN);
+    fill_rect_strided(buf, w, 0, h / 2, w / 2, h, BLUE);
+    fill_rect_strided(buf, w, w / 2, h / 2, w, h, YELLOW);
+
+    let b = (w.min(h) / 90).clamp(2, 8);
+    fill_rect_strided(buf, w, 0, 0, w, b, WHITE);
+    fill_rect_strided(buf, w, 0, h.saturating_sub(b), w, h, WHITE);
+    fill_rect_strided(buf, w, 0, 0, b, h, WHITE);
+    fill_rect_strided(buf, w, w.saturating_sub(b), 0, w, h, WHITE);
+    fill_rect_strided(buf, w, 0, h / 2 - b / 2, w, h / 2 + b / 2, WHITE);
+    fill_rect_strided(buf, w, w / 2 - b / 2, 0, w / 2 + b / 2, h, WHITE);
+}
+
+fn fill_rect_strided(
+    buf: &mut [Pixel],
+    stride: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    c: u32,
+) {
+    for y in y0..y1 {
+        for x in x0..x1 {
+            buf[y * stride + x] = Pixel(c);
         }
     }
 }
