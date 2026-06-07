@@ -7,6 +7,7 @@
 //!   scenes    list Slint scene names
 //!   effects   list framebuffer effect benchmark names
 //!   effect-bench [effect|all] [secs] [raw|overlay|both] [WIDTHxHEIGHT]
+//!   vsync-probe [frames]  print per-frame vsync/fallback pacing diagnostics
 //!   fb [secs] [normal|direct|none]  paint + optionally route current fb size
 //!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
 //!   input     gamepad log / sniff / calibrate
@@ -41,7 +42,7 @@ pub use mister_magik_fb::{
     arcade_catalog, command_args, controller_db, input_repeat, library_bench,
 };
 
-use fb::{Display, Pixel};
+use fb::{Display, Pixel, VsyncPacer};
 use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
@@ -58,6 +59,11 @@ fn main() {
     let cmd = command_args::resolve_command(&args);
 
     println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+
+    if cmd == "vsync-probe" {
+        run_vsync_probe();
+        return;
+    }
 
     let mut f = match Fpga::open() {
         Ok(f) => f,
@@ -86,6 +92,39 @@ fn main() {
             );
             std::process::exit(2);
         }
+    }
+}
+
+fn run_vsync_probe() {
+    let frames = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(300);
+    let mut pacer = VsyncPacer::from_env();
+    println!("frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tmessage");
+    for frame in 0..frames {
+        let pace = pacer.wait();
+        println!(
+            "{frame}\t{}\t{}\t{}\t{:.2}\t{}\t{}",
+            pace.source.label(),
+            pace.wait_us,
+            pace.period_us,
+            1_000_000.0 / pace.period_us as f64,
+            pace.miss_streak,
+            pace.message.as_deref().unwrap_or("")
+        );
+    }
+    println!(
+        "vsync_probe_summary frames={frames} hits={} timeouts={} fallback_frames={} errors={} max_miss_streak={} inferred_hz={:.2}",
+        pacer.hits(),
+        pacer.timeouts(),
+        pacer.fallback_frames(),
+        pacer.errors(),
+        pacer.max_miss_streak(),
+        1_000_000.0 / pacer.period_us() as f64
+    );
+    if pacer.errors() > 0 {
+        std::process::exit(1);
     }
 }
 

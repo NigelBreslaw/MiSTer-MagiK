@@ -7,6 +7,8 @@ use std::fs::File;
 use std::io::Write;
 use std::time::Instant;
 
+use mister_magik_fb::vsync_pacer::VsyncPaceSource;
+
 const FRAME_BUDGET_US: u64 = 16_667; // 60 Hz
 
 #[derive(Clone, Copy, Debug)]
@@ -17,6 +19,9 @@ pub struct FrameSample {
     pub copy_us: u64,
     pub rows: u32,
     pub wall_us: u64,
+    pub vsync_source: VsyncPaceSource,
+    pub vsync_period_us: u64,
+    pub vsync_miss_streak: u32,
 }
 
 impl FrameSample {
@@ -84,6 +89,10 @@ pub struct FrameProfiler {
     window_vsync: u128,
     window_copy: u128,
     window_rows: u128,
+    window_vsync_hits: u64,
+    window_vsync_timeouts: u64,
+    window_fallback_frames: u64,
+    window_vsync_errors: u64,
 }
 
 impl FrameProfiler {
@@ -118,6 +127,10 @@ impl FrameProfiler {
             window_vsync: 0,
             window_copy: 0,
             window_rows: 0,
+            window_vsync_hits: 0,
+            window_vsync_timeouts: 0,
+            window_fallback_frames: 0,
+            window_vsync_errors: 0,
         }
     }
 
@@ -167,6 +180,18 @@ impl FrameProfiler {
         self.window_vsync += sample.vsync_us as u128;
         self.window_copy += sample.copy_us as u128;
         self.window_rows += sample.rows as u128;
+        match sample.vsync_source {
+            VsyncPaceSource::Vsync => self.window_vsync_hits += 1,
+            VsyncPaceSource::Timeout => {
+                self.window_vsync_timeouts += 1;
+                self.window_fallback_frames += 1;
+            }
+            VsyncPaceSource::Fallback => self.window_fallback_frames += 1,
+            VsyncPaceSource::Error => {
+                self.window_vsync_errors += 1;
+                self.window_fallback_frames += 1;
+            }
+        }
 
         if self.window_start.elapsed().as_millis() >= 1000 {
             self.flush_window();
@@ -176,13 +201,17 @@ impl FrameProfiler {
     fn flush_window(&mut self) {
         let nn = self.window_frames.max(1) as u128;
         println!(
-            "  fps ~ {}  | anim {}us  render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
+            "  fps ~ {}  | anim {}us  render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={}",
             self.window_frames,
             self.window_anim / nn,
             self.window_render / nn,
             self.window_vsync / nn,
             self.window_copy / nn,
-            self.window_rows / nn
+            self.window_rows / nn,
+            self.window_vsync_hits,
+            self.window_vsync_timeouts,
+            self.window_fallback_frames,
+            self.window_vsync_errors
         );
         self.window_frames = 0;
         self.window_anim = 0;
@@ -190,6 +219,10 @@ impl FrameProfiler {
         self.window_vsync = 0;
         self.window_copy = 0;
         self.window_rows = 0;
+        self.window_vsync_hits = 0;
+        self.window_vsync_timeouts = 0;
+        self.window_fallback_frames = 0;
+        self.window_vsync_errors = 0;
         self.window_start = Instant::now();
     }
 
@@ -221,12 +254,12 @@ impl FrameProfiler {
         let mut f = File::create(path)?;
         writeln!(
             f,
-            "frame\tanim_us\trender_us\tvsync_us\tcopy_us\tphases_us\twall_us\trows\tdominant"
+            "frame\tanim_us\trender_us\tvsync_us\tcopy_us\tphases_us\twall_us\trows\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
         )?;
         for (i, s) in self.frames.iter().enumerate() {
             writeln!(
                 f,
-                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 s.anim_us,
                 s.render_us,
                 s.vsync_us,
@@ -234,6 +267,9 @@ impl FrameProfiler {
                 s.phases_us(),
                 s.wall_us,
                 s.rows,
+                s.vsync_source.label(),
+                s.vsync_period_us,
+                s.vsync_miss_streak,
                 s.dominant_phase()
             )?;
         }
@@ -260,6 +296,42 @@ impl FrameProfiler {
         print_phase_stats("render", &col(&self.frames, |s| s.render_us));
         print_phase_stats("vsync", &col(&self.frames, |s| s.vsync_us));
         print_phase_stats("copy", &col(&self.frames, |s| s.copy_us));
+        let hits = self
+            .frames
+            .iter()
+            .filter(|s| s.vsync_source == VsyncPaceSource::Vsync)
+            .count();
+        let timeouts = self
+            .frames
+            .iter()
+            .filter(|s| s.vsync_source == VsyncPaceSource::Timeout)
+            .count();
+        let fallback = self
+            .frames
+            .iter()
+            .filter(|s| s.vsync_source == VsyncPaceSource::Fallback)
+            .count();
+        let errors = self
+            .frames
+            .iter()
+            .filter(|s| s.vsync_source == VsyncPaceSource::Error)
+            .count();
+        let max_miss_streak = self
+            .frames
+            .iter()
+            .map(|s| s.vsync_miss_streak)
+            .max()
+            .unwrap_or(0);
+        let inferred_hz = self
+            .frames
+            .iter()
+            .rev()
+            .find(|s| s.vsync_period_us > 0)
+            .map(|s| 1_000_000.0 / s.vsync_period_us as f64)
+            .unwrap_or(0.0);
+        println!(
+            "vsync: hits={hits} timeouts={timeouts} fallback_frames={fallback} errors={errors} max_miss_streak={max_miss_streak} inferred_hz={inferred_hz:.2}"
+        );
 
         println!(
             "frames >= {}us ({} Hz budget): {over} ({over_pct:.2}%)",

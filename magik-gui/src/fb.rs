@@ -10,6 +10,7 @@
 
 use crate::fpga::FB_SIZE_PX;
 use mister_magik_fb::framebuffer_copy;
+use mister_magik_fb::vsync_pacer::VsyncPaceSource;
 
 use crate::boot_analytics;
 use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
@@ -17,9 +18,47 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::OnceLock;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const FBIO_WAITFORVSYNC: libc::c_ulong = 0x4004_4620;
+const DEFAULT_VSYNC_FALLBACK_US: u64 = 16_667;
+const PAL_VSYNC_FALLBACK_US: u64 = 20_000;
+const VSYNC_GRACE_US: u64 = 1_500;
+const PERIOD_ALPHA_NUM: u64 = 1;
+const PERIOD_ALPHA_DEN: u64 = 8;
+
+#[derive(Clone, Debug)]
+pub enum VsyncWaitStatus {
+    Hit { wait_us: u64, at: Instant },
+    Timeout { wait_us: u64 },
+    Error { wait_us: u64, message: String },
+}
+
+#[derive(Clone, Debug)]
+pub struct VsyncPace {
+    pub source: VsyncPaceSource,
+    pub wait_us: u64,
+    pub period_us: u64,
+    pub miss_streak: u32,
+    pub message: Option<String>,
+}
+
+pub struct VsyncPacer {
+    rx: Receiver<VsyncWaitStatus>,
+    period_us: u64,
+    last_hit_at: Option<Instant>,
+    last_frame_at: Instant,
+    miss_streak: u32,
+    max_miss_streak: u32,
+    observed_max_miss_streak: u32,
+    hits: u64,
+    timeouts: u64,
+    errors: u64,
+    fallback_frames: u64,
+}
 
 /// Cutoff for glyph/text edges: coverage below this is transparent, at/above is
 /// fully opaque (crisp pixel font after 2× upscale). Tune via `MISTER_GLYPH_ALPHA_THRESHOLD`.
@@ -60,7 +99,220 @@ pub struct Display {
     w: usize,
     h: usize,
     info: FbInfo,
+    #[allow(dead_code)]
     fb0: std::fs::File,
+}
+
+fn wait_vsync_fd(fd: std::os::unix::io::RawFd) -> VsyncWaitStatus {
+    let arg: u32 = 0;
+    let start = Instant::now();
+    let rc = unsafe { libc::ioctl(fd, FBIO_WAITFORVSYNC, &arg as *const u32) };
+    let wait_us = start.elapsed().as_micros() as u64;
+    let at = Instant::now();
+    if rc == 0 {
+        return VsyncWaitStatus::Hit { wait_us, at };
+    }
+
+    let err = io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ETIMEDOUT) {
+        VsyncWaitStatus::Timeout { wait_us }
+    } else {
+        VsyncWaitStatus::Error {
+            wait_us,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl VsyncPacer {
+    pub fn from_env() -> Self {
+        let period_us = configured_fallback_period_us();
+        let max_miss_streak = std::env::var("MISTER_VSYNC_DEGRADED_MISSES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3);
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("mister-vsync".into())
+            .spawn(move || {
+                let fb0 = match OpenOptions::new().read(true).write(true).open("/dev/fb0") {
+                    Ok(f) => f,
+                    Err(e) => {
+                        let _ = tx.send(VsyncWaitStatus::Error {
+                            wait_us: 0,
+                            message: format!("open /dev/fb0: {e}"),
+                        });
+                        return;
+                    }
+                };
+                loop {
+                    if tx.send(wait_vsync_fd(fb0.as_raw_fd())).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn vsync worker");
+
+        Self {
+            rx,
+            period_us,
+            last_hit_at: None,
+            last_frame_at: Instant::now(),
+            miss_streak: 0,
+            max_miss_streak,
+            observed_max_miss_streak: 0,
+            hits: 0,
+            timeouts: 0,
+            errors: 0,
+            fallback_frames: 0,
+        }
+    }
+
+    pub fn period_us(&self) -> u64 {
+        self.period_us
+    }
+
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    pub fn timeouts(&self) -> u64 {
+        self.timeouts
+    }
+
+    pub fn errors(&self) -> u64 {
+        self.errors
+    }
+
+    pub fn fallback_frames(&self) -> u64 {
+        self.fallback_frames
+    }
+
+    pub fn max_miss_streak(&self) -> u32 {
+        self.observed_max_miss_streak
+    }
+
+    pub fn wait(&mut self) -> VsyncPace {
+        let deadline = Duration::from_micros(self.period_us + VSYNC_GRACE_US);
+        let status = self
+            .drain_ready()
+            .or_else(|| self.rx.recv_timeout(deadline).ok());
+
+        match status {
+            Some(VsyncWaitStatus::Hit { wait_us, at }) => {
+                self.record_hit(at);
+                self.last_frame_at = at;
+                VsyncPace {
+                    source: VsyncPaceSource::Vsync,
+                    wait_us,
+                    period_us: self.period_us,
+                    miss_streak: self.miss_streak,
+                    message: None,
+                }
+            }
+            Some(VsyncWaitStatus::Timeout { wait_us }) => {
+                self.timeouts += 1;
+                self.fallback_after_miss(VsyncPaceSource::Timeout, wait_us, None)
+            }
+            Some(VsyncWaitStatus::Error {
+                wait_us, message, ..
+            }) => {
+                self.errors += 1;
+                self.fallback_after_miss(VsyncPaceSource::Error, wait_us, Some(message))
+            }
+            None => self.fallback_after_miss(VsyncPaceSource::Fallback, self.period_us, None),
+        }
+    }
+
+    fn drain_ready(&mut self) -> Option<VsyncWaitStatus> {
+        let mut latest = None;
+        while let Ok(status) = self.rx.try_recv() {
+            latest = Some(status);
+        }
+        latest
+    }
+
+    fn record_hit(&mut self, at: Instant) {
+        self.hits += 1;
+        self.miss_streak = 0;
+        if let Some(prev) = self.last_hit_at {
+            let observed = at.saturating_duration_since(prev).as_micros() as u64;
+            if (8_000..=25_000).contains(&observed) {
+                self.period_us = ((self.period_us * (PERIOD_ALPHA_DEN - PERIOD_ALPHA_NUM))
+                    + observed * PERIOD_ALPHA_NUM)
+                    / PERIOD_ALPHA_DEN;
+            }
+        }
+        self.last_hit_at = Some(at);
+    }
+
+    fn fallback_after_miss(
+        &mut self,
+        source: VsyncPaceSource,
+        wait_us: u64,
+        message: Option<String>,
+    ) -> VsyncPace {
+        self.miss_streak += 1;
+        self.observed_max_miss_streak = self.observed_max_miss_streak.max(self.miss_streak);
+        self.fallback_frames += 1;
+
+        let target = self.last_frame_at + Duration::from_micros(self.period_us);
+        let now = Instant::now();
+        if target > now {
+            thread::sleep(target - now);
+        }
+        self.last_frame_at = Instant::now();
+
+        if self.miss_streak == self.max_miss_streak {
+            boot_analytics::event(
+                "vsync_degraded",
+                format!(
+                    "miss_streak={} period_us={} source={}",
+                    self.miss_streak,
+                    self.period_us,
+                    source.label()
+                ),
+            );
+        }
+
+        VsyncPace {
+            source,
+            wait_us,
+            period_us: self.period_us,
+            miss_streak: self.miss_streak,
+            message,
+        }
+    }
+}
+
+fn configured_fallback_period_us() -> u64 {
+    if let Some(period_us) = std::env::var("MISTER_VSYNC_FALLBACK_HZ")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|hz| *hz > 1.0)
+        .map(|hz| (1_000_000.0 / hz).round() as u64)
+    {
+        return period_us;
+    }
+
+    if mister_ini_menu_pal_enabled() {
+        PAL_VSYNC_FALLBACK_US
+    } else {
+        DEFAULT_VSYNC_FALLBACK_US
+    }
+}
+
+fn mister_ini_menu_pal_enabled() -> bool {
+    let Ok(ini) = std::fs::read_to_string("/media/fat/MiSTer.ini") else {
+        return false;
+    };
+    ini.lines().any(|line| {
+        let line = line.split(';').next().unwrap_or("").trim();
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        key.trim().eq_ignore_ascii_case("menu_pal") && value.trim() == "1"
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -748,17 +1000,21 @@ impl Display {
         );
     }
 
-    pub fn wait_vsync(&self) {
-        let arg: u32 = 0;
-        if unsafe { libc::ioctl(self.fb0.as_raw_fd(), FBIO_WAITFORVSYNC, &arg as *const u32) } < 0 {
+    #[allow(dead_code)]
+    pub fn wait_vsync_status(&self) -> VsyncWaitStatus {
+        wait_vsync_fd(self.fb0.as_raw_fd())
+    }
+
+    #[allow(dead_code)]
+    pub fn wait_vsync(&self) -> VsyncWaitStatus {
+        let status = self.wait_vsync_status();
+        if let VsyncWaitStatus::Error { message, .. } = &status {
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!(
-                    "warning: FBIO_WAITFORVSYNC failed: {}",
-                    io::Error::last_os_error()
-                );
+                eprintln!("warning: FBIO_WAITFORVSYNC failed: {message}");
             }
         }
+        status
     }
 
     /// Copy a dense source rectangle into the framebuffer at (x,y).
@@ -927,4 +1183,110 @@ fn boot_ms() -> u64 {
         return 0;
     };
     (secs * 1000.0).round() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_pacer(period_us: u64) -> VsyncPacer {
+        let (_tx, rx) = mpsc::channel();
+        VsyncPacer {
+            rx,
+            period_us,
+            last_hit_at: None,
+            last_frame_at: Instant::now() - Duration::from_micros(period_us),
+            miss_streak: 0,
+            max_miss_streak: 3,
+            observed_max_miss_streak: 0,
+            hits: 0,
+            timeouts: 0,
+            errors: 0,
+            fallback_frames: 0,
+        }
+    }
+
+    #[test]
+    fn learns_pal_50hz_from_successful_hits() {
+        let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
+        let mut at = Instant::now();
+        pacer.record_hit(at);
+        for _ in 0..48 {
+            at += Duration::from_micros(20_000);
+            pacer.record_hit(at);
+        }
+
+        let inferred_hz = 1_000_000.0 / pacer.period_us() as f64;
+        assert!(
+            (49.5..=50.5).contains(&inferred_hz),
+            "inferred_hz={inferred_hz}"
+        );
+    }
+
+    #[test]
+    fn stays_near_60hz_from_successful_hits() {
+        let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
+        let mut at = Instant::now();
+        pacer.record_hit(at);
+        for _ in 0..24 {
+            at += Duration::from_micros(16_667);
+            pacer.record_hit(at);
+        }
+
+        let inferred_hz = 1_000_000.0 / pacer.period_us() as f64;
+        assert!(
+            (59.5..=60.5).contains(&inferred_hz),
+            "inferred_hz={inferred_hz}"
+        );
+    }
+
+    #[test]
+    fn isolated_misses_create_one_fallback_frame_each_without_degraded_streak() {
+        let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
+        let mut at = Instant::now();
+        pacer.record_hit(at);
+
+        for _ in 0..10 {
+            pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
+            let pace = pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, None);
+            assert_eq!(pace.source, VsyncPaceSource::Timeout);
+            assert_eq!(pace.miss_streak, 1);
+            at += Duration::from_micros(16_667);
+            pacer.record_hit(at);
+        }
+
+        assert_eq!(pacer.timeouts(), 0);
+        assert_eq!(pacer.fallback_frames(), 10);
+        assert_eq!(pacer.max_miss_streak(), 1);
+        assert_eq!(pacer.miss_streak, 0);
+    }
+
+    #[test]
+    fn three_consecutive_misses_reach_degraded_threshold() {
+        let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
+        for expected in 1..=3 {
+            pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
+            let pace = pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, None);
+            assert_eq!(pace.miss_streak, expected);
+        }
+
+        assert_eq!(pacer.fallback_frames(), 3);
+        assert_eq!(pacer.max_miss_streak(), 3);
+    }
+
+    #[test]
+    fn successful_hit_recovers_after_degraded_streak() {
+        let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
+        for _ in 0..3 {
+            pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
+            pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, None);
+        }
+        assert_eq!(pacer.miss_streak, 3);
+
+        pacer.record_hit(Instant::now());
+
+        assert_eq!(pacer.miss_streak, 0);
+        assert_eq!(pacer.hits(), 1);
+        assert_eq!(pacer.max_miss_streak(), 3);
+    }
 }

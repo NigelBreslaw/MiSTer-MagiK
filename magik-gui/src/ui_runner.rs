@@ -1,8 +1,9 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 
-use crate::fb::{Display, Pixel};
+use crate::fb::{Display, Pixel, VsyncPacer};
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
+use mister_magik_fb::vsync_pacer::VsyncPaceSource;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 use slint::{
@@ -601,6 +602,7 @@ fn run_one_effect_bench(
     let mut totals = EffectBenchTotals::default();
     let mut live_start = Instant::now();
     let mut live_frames = 0u64;
+    let mut pacer = VsyncPacer::from_env();
 
     println!(
         "effect bench running {} mode={} fill={} internal={}x{} target={}x{}+{},{} scale={} secs={}...",
@@ -621,7 +623,7 @@ fn run_one_effect_bench(
         let t0 = Instant::now();
         state.render(frame, low);
         let t1 = Instant::now();
-        disp.wait_vsync();
+        let _pace = pacer.wait();
         let t2 = Instant::now();
         let mut slint_us = 0;
         let scale_copy_us;
@@ -691,11 +693,16 @@ fn run_one_effect_bench(
         if live_start.elapsed().as_millis() >= 1000 {
             let nn = live_frames.max(1) as u128;
             println!(
-                "  fps ~ {live_frames}  | effect {}us  slint {}us  scale-copy {}us  vsync-wait {}us",
+                "  fps ~ {live_frames}  | effect {}us  slint {}us  scale-copy {}us  vsync-wait {}us  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
                 totals.effect_us / totals.frames.max(1) as u128,
                 totals.slint_us / totals.frames.max(1) as u128,
                 totals.scale_copy_us / totals.frames.max(1) as u128,
-                totals.vsync_us / totals.frames.max(1) as u128
+                totals.vsync_us / totals.frames.max(1) as u128,
+                pacer.hits(),
+                pacer.timeouts(),
+                pacer.fallback_frames(),
+                pacer.errors(),
+                1_000_000.0 / pacer.period_us() as f64
             );
             let _ = nn;
             live_frames = 0;
@@ -726,11 +733,17 @@ fn run_one_effect_bench(
         EffectBenchTotals::avg(totals.wall_us, totals.frames)
     );
     println!(
-        "effect_bench_summary effect={} mode={} fill={} slow_frames={} elapsed={elapsed:.1}s",
+        "effect_bench_summary effect={} mode={} fill={} slow_frames={} elapsed={elapsed:.1}s vsync_hits={} vsync_timeouts={} fallback_frames={} vsync_errors={} max_miss_streak={} inferred_hz={:.2}",
         kind.name(),
         mode.label(),
         fill.label(),
-        totals.slow_frames
+        totals.slow_frames,
+        pacer.hits(),
+        pacer.timeouts(),
+        pacer.fallback_frames(),
+        pacer.errors(),
+        pacer.max_miss_streak(),
+        1_000_000.0 / pacer.period_us() as f64
     );
 }
 
@@ -1616,6 +1629,7 @@ fn run_bench_frame(
     mut cached: &mut [Pixel],
     frame_order: FrameOrder,
     animation_clock: &AnimationClock,
+    pacer: &mut VsyncPacer,
 ) -> FrameSample {
     let frame_start = Instant::now();
     let t0 = Instant::now();
@@ -1630,7 +1644,7 @@ fn run_bench_frame(
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t2 = Instant::now();
-            disp.wait_vsync();
+            let pace = pacer.wait();
             let t3 = Instant::now();
             let rows = if let Some(rect) = this_rect {
                 copy_cached_rect(disp, ui, cached, rect);
@@ -1646,10 +1660,13 @@ fn run_bench_frame(
                 copy_us: (t4 - t3).as_micros() as u64,
                 rows,
                 wall_us: frame_start.elapsed().as_micros() as u64,
+                vsync_source: pace.source,
+                vsync_period_us: pace.period_us,
+                vsync_miss_streak: pace.miss_streak,
             }
         }
         FrameOrder::VsyncThenRender => {
-            disp.wait_vsync();
+            let pace = pacer.wait();
             let t1 = Instant::now();
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
@@ -1672,6 +1689,9 @@ fn run_bench_frame(
                 copy_us: (t4 - t3).as_micros() as u64,
                 rows,
                 wall_us: frame_start.elapsed().as_micros() as u64,
+                vsync_source: pace.source,
+                vsync_period_us: pace.period_us,
+                vsync_miss_streak: pace.miss_streak,
             }
         }
     }
@@ -1699,6 +1719,7 @@ fn run_frame_loop(
     let mut copy_us = 0u128;
     let mut copy_rows_acc = 0u128;
     let frame_order = FrameOrder::from_env();
+    let mut pacer = VsyncPacer::from_env();
 
     let label = if secs == 0 {
         "forever".to_string()
@@ -1711,7 +1732,15 @@ fn run_frame_loop(
         animation_clock.label()
     );
     while secs == 0 || start.elapsed().as_secs() < secs {
-        let sample = run_bench_frame(ui, disp, window, &mut cached, frame_order, animation_clock);
+        let sample = run_bench_frame(
+            ui,
+            disp,
+            window,
+            &mut cached,
+            frame_order,
+            animation_clock,
+            &mut pacer,
+        );
         frames += 1;
 
         if profiler.enabled() {
@@ -1725,11 +1754,16 @@ fn run_frame_loop(
             if fps_window_start.elapsed().as_millis() >= 1000 {
                 let nn = fps_frames.max(1) as u128;
                 println!(
-                    "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)",
+                    "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
                     render_us / nn,
                     vsync_us / nn,
                     copy_us / nn,
-                    copy_rows_acc / nn
+                    copy_rows_acc / nn,
+                    pacer.hits(),
+                    pacer.timeouts(),
+                    pacer.fallback_frames(),
+                    pacer.errors(),
+                    1_000_000.0 / pacer.period_us() as f64
                 );
                 fps_frames = 0;
                 render_us = 0;
@@ -1788,6 +1822,7 @@ fn run_video_playback_loop(
     let cpu = cpu_profile::start();
     let profile_on = profiler.enabled();
     let frame_order = FrameOrder::from_env();
+    let mut pacer = VsyncPacer::from_env();
 
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
@@ -1857,7 +1892,7 @@ fn run_video_playback_loop(
                     this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
                 });
                 let t2 = Instant::now();
-                disp.wait_vsync();
+                let pace = pacer.wait();
                 let t3 = Instant::now();
                 let rows = if let Some(rect) = this_rect {
                     copy_cached_rect(disp, ui, &cached, rect);
@@ -1873,6 +1908,9 @@ fn run_video_playback_loop(
                     copy_us: (t4 - t3).as_micros() as u64,
                     rows,
                     wall_us: frame_start.elapsed().as_micros() as u64,
+                    vsync_source: pace.source,
+                    vsync_period_us: pace.period_us,
+                    vsync_miss_streak: pace.miss_streak,
                 };
                 record_video_sample(
                     sample,
@@ -1888,7 +1926,7 @@ fn run_video_playback_loop(
                 );
             }
             FrameOrder::VsyncThenRender => {
-                disp.wait_vsync();
+                let pace = pacer.wait();
                 let t1 = Instant::now();
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
@@ -1945,6 +1983,9 @@ fn run_video_playback_loop(
                     copy_us: (t4 - t3).as_micros() as u64,
                     rows,
                     wall_us: frame_start.elapsed().as_micros() as u64,
+                    vsync_source: pace.source,
+                    vsync_period_us: pace.period_us,
+                    vsync_miss_streak: pace.miss_streak,
                 };
                 record_video_sample(
                     sample,
@@ -2180,13 +2221,13 @@ fn run_console_scroll_loop(
     let mut surface_y = 0usize;
     let mut font = ConsoleFont::new(CONSOLE_FONT_PX);
     let mut trace = ConsoleScrollTrace::open(disp.height(), fb_y);
+    let mut pacer = VsyncPacer::from_env();
 
     window.request_redraw();
     update_slint_animations(animation_clock);
     window.draw_if_needed(|renderer| {
         let _ = renderer.render(&mut cached, ui.render_w());
     });
-    disp.wait_vsync();
     copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
     draw_console_virtual_strip(
         &mut surface,
@@ -2227,10 +2268,15 @@ fn run_console_scroll_loop(
             app.set_row_label(format!("top row {top_row:03}").into());
             window.request_redraw();
             println!(
-                "  fps ~ {fps_frames}  | ram-scroll {}us  exposed-strip {}us  fb-copy {}us  top-row {top_row}",
+                "  fps ~ {fps_frames}  | ram-scroll {}us  exposed-strip {}us  fb-copy {}us  top-row {top_row}  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
                 ram_scroll_us / nn,
                 strip_us / nn,
-                fb_copy_us / nn
+                fb_copy_us / nn,
+                pacer.hits(),
+                pacer.timeouts(),
+                pacer.fallback_frames(),
+                pacer.errors(),
+                1_000_000.0 / pacer.period_us() as f64
             );
             fps_frames = 0;
             ram_scroll_us = 0;
@@ -2261,7 +2307,7 @@ fn run_console_scroll_loop(
         let t2 = Instant::now();
 
         let t_wait_start = Instant::now();
-        disp.wait_vsync();
+        let _pace = pacer.wait();
         let t3 = Instant::now();
         copy_console_surface(disp, fb_x, fb_y, scale, &surface, surface_y);
         let t4 = Instant::now();
@@ -2587,6 +2633,7 @@ fn run_controller_loop(
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
+    let mut pacer = VsyncPacer::from_env();
     let label = if secs == 0 {
         "forever".to_string()
     } else {
@@ -2607,7 +2654,7 @@ fn run_controller_loop(
             let region = renderer.render(&mut cached, ui.render_w());
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
-        disp.wait_vsync();
+        let _pace = pacer.wait();
         if let Some(rect) = this_rect {
             copy_cached_rect(disp, ui, &cached, rect);
         }
@@ -2676,6 +2723,7 @@ fn run_launcher_loop(
         }
     }
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let mut pacer = VsyncPacer::from_env();
     let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
@@ -2742,6 +2790,7 @@ fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut first_copy_logged = false;
+    let mut first_visible_copy_done = false;
     let mut stable_frame_logged = false;
     while secs == 0 || start.elapsed().as_secs() < secs {
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
@@ -2916,7 +2965,7 @@ fn run_launcher_loop(
                                     let region = renderer.render(&mut cached, ui.render_w());
                                     let _ = region;
                                 });
-                                disp.wait_vsync();
+                                let _pace = pacer.wait();
                                 copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
@@ -2944,7 +2993,7 @@ fn run_launcher_loop(
                                     let region = renderer.render(&mut cached, ui.render_w());
                                     let _ = region;
                                 });
-                                disp.wait_vsync();
+                                let _pace = pacer.wait();
                                 copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
@@ -2972,7 +3021,7 @@ fn run_launcher_loop(
                                     let region = renderer.render(&mut cached, ui.render_w());
                                     let _ = region;
                                 });
-                                disp.wait_vsync();
+                                let _pace = pacer.wait();
                                 copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
@@ -3005,7 +3054,7 @@ fn run_launcher_loop(
                             let region = renderer.render(&mut cached, ui.render_w());
                             let _ = region;
                         });
-                        disp.wait_vsync();
+                        let _pace = pacer.wait();
                         copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
 
                         match launcher::execute_game_launch(&mra) {
@@ -3086,9 +3135,20 @@ fn run_launcher_loop(
                 format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
             );
         }
-        disp.wait_vsync();
-        let frame_t3 = Instant::now();
-        if !first_vsync_logged {
+        let pace = if first_visible_copy_done {
+            let pace = pacer.wait();
+            let frame_t3 = Instant::now();
+            (Some(pace), frame_t3)
+        } else {
+            (None, Instant::now())
+        };
+        let frame_t3 = pace.1;
+        if !first_vsync_logged
+            && pace
+                .0
+                .as_ref()
+                .is_some_and(|p| p.source == VsyncPaceSource::Vsync)
+        {
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
@@ -3104,13 +3164,20 @@ fn run_launcher_loop(
         if copied_rows > 0 && !first_copy_logged {
             first_copy_logged = true;
             boot_analytics::event(
-                "first_copy",
+                if first_visible_copy_done {
+                    "first_copy"
+                } else {
+                    "first_copy_immediate"
+                },
                 format!(
                     "frame={frames} rows={copied_rows} dirty_rect={}",
                     format_dirty_rect(this_rect)
                 ),
             );
             disp.record_visual_sample("after_first_copy");
+        }
+        if copied_rows > 0 {
+            first_visible_copy_done = true;
         }
         if frames == 30 && !stable_frame_logged {
             stable_frame_logged = true;
