@@ -1,7 +1,7 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 
 use crate::fb::{Display, Pixel};
-use crate::fpga::{Fpga, MODE_1080P60};
+use crate::fpga::{Fpga, Mode, MODE_1080P60};
 use crate::vt::VtGraphicsGuard;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -341,10 +341,8 @@ macro_rules! with_scene_app {
 
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
-    let ui = UiDisplay::from_env();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     println!("ui scene={scene} secs={secs}");
-    println!("{}", ui.log_line());
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
@@ -368,6 +366,8 @@ pub fn run_ui(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
+    let ui = UiDisplay::for_framebuffer(disp.width(), disp.height(), legacy_1080p);
+    println!("{}", ui.log_line());
     disp.record_visual_sample("after_display_open_before_initial_route");
     let display_config = DisplayConfig::detect(f, disp.info(), &ui);
     println!("{}", display_config.log_line());
@@ -376,23 +376,35 @@ pub fn run_ui(f: &mut Fpga) {
         display_config.boot_analytics_detail(),
     );
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
-        println!("MiSTer_MagiK parent detected; Slint reasserting 1080p framebuffer route");
+        println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
     }
+    let route_mode = if legacy_1080p {
+        MODE_1080P60
+    } else {
+        Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16)
+    };
+    let route_mode_label = if legacy_1080p {
+        "1080p60"
+    } else {
+        "framebuffer-sized"
+    };
+    let set_vga_fb = legacy_1080p || std::env::var_os("MISTER_DIRECT_VIDEO").is_some();
     boot_analytics::event(
         "initial_fb_enable_direct_attempt",
         format!(
-            "w={} h={} mode=1080p60 legacy_1080p={legacy_1080p}",
+            "w={} h={} mode={route_mode_label} legacy_1080p={legacy_1080p} set_vga_fb={set_vga_fb}",
             disp.width(),
             disp.height()
         ),
     );
-    let flag = f.fb_enable_direct(
+    let flag = f.fb_enable(
         0,
         disp.width() as u16,
         disp.height() as u16,
-        MODE_1080P60,
+        route_mode,
         Some(0),
         Some(0),
+        set_vga_fb,
     );
     boot_analytics::event(
         "initial_fb_enable_direct_done",
