@@ -179,13 +179,16 @@ On the device the binary lives at `/media/fat/mister-magik/mister-magik-fb`.
 
 Always use `scripts/mister` for device comms. It is the Rust SSH/status wrapper
 and keeps the password-auth behavior reliable without raw `ssh`/`scp`.
+The wrapper and workflow scripts default to `MISTER_IP=192.168.1.117` and
+`MISTER_PASS=1`, so run them without inline env assignments unless you are
+intentionally targeting a different MiSTer.
 
 ```bash
 # Build + deploy (default = release-device / A3, ~1.6 MB)
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
+scripts/deploy-rust.sh
 
 # Fast daily build + deploy (thin LTO, ~3 min clean)
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
+scripts/deploy-rust.sh --fast
 
 # Build only: magik-gui/build-arm.sh  |  magik-gui/build-arm.sh --device
 # Profiles: magik-gui/BUILD.md
@@ -196,27 +199,43 @@ scripts/dev-rust test
 scripts/dev-rust check
 
 # One-time: boot into MiSTer_MagiK through stock MiSTer main= handoff
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
+scripts/install-slint-boot.sh
 
 # Re-deploy binary + fork after code changes
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
+scripts/deploy-rust.sh --fast
 
 # Dev run (stop MiSTer so Slint owns gamepad — see §7)
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister run \
+scripts/mister run \
   'kill -9 $(pidof MiSTer) 2>/dev/null; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
 
 # Restore stock MiSTer menu boot
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
+scripts/restore-stock-boot.sh
 
 # Device comms
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister run "uname -a"
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister reboot
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister reboot-wait
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister wait
+scripts/mister run "uname -a"
+scripts/mister reboot
+scripts/mister reboot-wait
+scripts/mister wait
 
 # Toolchain A/B (host build + all ui/bench scenes on device) → history/toolchain-bench/results.tsv
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean --replace-label
+scripts/bench-toolchain.sh A0 --clean --replace-label
 ```
+
+### Agent sandbox / approval hygiene
+
+Codex sandbox approval matches the outer command prefix. Inline environment
+assignments (`MISTER_IP=... scripts/...`) and shell wrappers (`zsh -lc ...`) make
+otherwise-approved device commands look like new, unapproved commands. To avoid
+the common "Operation not permitted, rerunning with approval" loop:
+
+- Prefer direct commands such as `scripts/mister ...`,
+  `scripts/deploy-rust.sh --fast`, and `scripts/bench-toolchain.sh ...`.
+- When device/network work is required, request escalation on the direct workflow
+  command the first time, with a scoped prefix like `scripts/mister`,
+  `scripts/deploy-rust.sh`, `scripts/deploy-main-mister-experiment.sh`, or
+  `scripts/bench-toolchain.sh`.
+- Do not use raw `ssh`/`scp`, and avoid `/bin/zsh -lc` wrappers for normal MiSTer
+  operations.
 
 Bench scenes: `mister-magik-fb scenes` or `ui <scene> 20` — see `magik-gui/ui/bench/README.md`.
 Log: [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md).
