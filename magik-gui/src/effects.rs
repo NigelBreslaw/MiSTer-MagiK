@@ -1,5 +1,7 @@
 //! Host-testable retro framebuffer effects used by the device benchmark.
 
+use std::sync::OnceLock;
+
 pub const EFFECT_NAMES: &[&str] = &[
     "palette_cycle",
     "plasma",
@@ -121,6 +123,7 @@ pub struct EffectState {
     size: EffectSize,
     aux: Vec<u32>,
     heat: Vec<u8>,
+    scratch: Vec<i32>,
 }
 
 impl EffectState {
@@ -131,6 +134,7 @@ impl EffectState {
             size,
             aux: vec![0; len],
             heat: vec![0; len],
+            scratch: vec![0; size.w.max(size.h)],
         }
     }
 
@@ -145,7 +149,9 @@ impl EffectState {
             EffectKind::TileParallax => tile_parallax(self.size, frame, out),
             EffectKind::Mode7Floor => mode7_floor(self.size, frame, out),
             EffectKind::Afterimage => afterimage(self.size, frame, out, &mut self.aux),
-            EffectKind::DitherSpotlight => dither_spotlight(self.size, frame, out),
+            EffectKind::DitherSpotlight => {
+                dither_spotlight(self.size, frame, out, &mut self.scratch)
+            }
             EffectKind::WipeTransition => wipe_transition(self.size, frame, out),
             EffectKind::ChunkyDistortion => chunky_distortion(self.size, frame, out),
             EffectKind::FireHaze => fire_haze(self.size, frame, out, &mut self.heat),
@@ -168,30 +174,82 @@ fn wave(v: i32) -> u32 {
 }
 
 fn palette(i: u32) -> u32 {
-    let i = i & 255;
-    rgb(wave(i as i32), wave(i as i32 + 85), wave(i as i32 + 170))
+    palette_table()[(i & 255) as usize]
+}
+
+fn palette_table() -> &'static [u32; 256] {
+    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = [0; 256];
+        let mut i = 0;
+        while i < table.len() {
+            table[i] = rgb(wave(i as i32), wave(i as i32 + 85), wave(i as i32 + 170));
+            i += 1;
+        }
+        table
+    })
+}
+
+fn fire_palette_table() -> &'static [u32; 256] {
+    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = [0; 256];
+        let mut i = 0;
+        while i < table.len() {
+            let v = i as u32;
+            table[i] = if v < 85 {
+                rgb(v * 2, 0, 0)
+            } else if v < 170 {
+                rgb(170 + (v - 85), (v - 85) * 2, 0)
+            } else {
+                rgb(255, 170 + (v - 170), (v - 170) * 3)
+            };
+            i += 1;
+        }
+        table
+    })
+}
+
+fn avg3_table() -> &'static [u8; 766] {
+    static TABLE: OnceLock<[u8; 766]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = [0; 766];
+        let mut i = 0;
+        while i < table.len() {
+            table[i] = (i / 3) as u8;
+            i += 1;
+        }
+        table
+    })
 }
 
 fn palette_cycle(size: EffectSize, frame: u64, out: &mut [u32]) {
+    let colors = palette_table();
+    let f = (frame as usize * 4) & 255;
     for y in 0..size.h {
+        let mut v = (y * 5 + f) & 255;
+        let row = &mut out[y * size.w..(y + 1) * size.w];
         for x in 0..size.w {
-            let v = ((x * 3 + y * 5) as u64 + frame * 4) as u32;
-            out[y * size.w + x] = palette(v);
+            row[x] = colors[v];
+            v = (v + 3) & 255;
         }
     }
 }
 
 fn plasma(size: EffectSize, frame: u64, out: &mut [u32]) {
     let f = frame as i32;
+    let colors = palette_table();
     for y in 0..size.h {
+        let yi = y as i32;
+        let y_wave = wave(yi * 5 + f * 2);
+        let row = &mut out[y * size.w..(y + 1) * size.w];
         for x in 0..size.w {
             let xi = x as i32;
-            let yi = y as i32;
             let v = wave(xi * 4 + f * 3)
-                + wave(yi * 5 + f * 2)
+                + y_wave
                 + wave((xi + yi) * 3 + f * 4)
                 + wave((xi - yi) * 4 + f);
-            out[y * size.w + x] = palette(v / 4 + f as u32);
+            row[x] = colors[((v / 4 + f as u32) & 255) as usize];
         }
     }
 }
@@ -262,24 +320,28 @@ fn tile_parallax(size: EffectSize, frame: u64, out: &mut [u32]) {
 
 fn mode7_floor(size: EffectSize, frame: u64, out: &mut [u32]) {
     let f = frame as i32;
+    let horizon = size.h / 3;
+    let sky_den = horizon.max(1) as u32;
     for y in 0..size.h {
-        let horizon = size.h / 3;
-        for x in 0..size.w {
-            if y < horizon {
-                let v = 20 + (y as u32 * 80 / horizon.max(1) as u32);
-                out[y * size.w + x] = rgb(4, 8 + v / 2, 28 + v);
-                continue;
-            }
-            let dy = (y - horizon + 1) as i32;
-            let depth = 900 / dy;
-            let wx = (x as i32 - size.w as i32 / 2) * depth / 32 + f * 2;
-            let wy = depth * 12 + f * 5;
+        let row = &mut out[y * size.w..(y + 1) * size.w];
+        if y < horizon {
+            let v = 20 + (y as u32 * 80 / sky_den);
+            row.fill(rgb(4, 8 + v / 2, 28 + v));
+            continue;
+        }
+        let dy = (y - horizon + 1) as i32;
+        let depth = 900 / dy;
+        let wy = depth * 12 + f * 5;
+        let mut wx_fixed = (-(size.w as i32 / 2) * depth) + f * 64;
+        for dst in row.iter_mut() {
+            let wx = wx_fixed >> 5;
             let grid = ((wx >> 4) ^ (wy >> 4)) & 1;
-            out[y * size.w + x] = if grid == 0 {
+            *dst = if grid == 0 {
                 rgb(24, 94, 100)
             } else {
                 rgb(112, 44, 94)
             };
+            wx_fixed += depth;
         }
     }
 }
@@ -304,20 +366,27 @@ fn afterimage(size: EffectSize, frame: u64, out: &mut [u32], aux: &mut [u32]) {
     out.copy_from_slice(aux);
 }
 
-fn dither_spotlight(size: EffectSize, frame: u64, out: &mut [u32]) {
-    const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+fn dither_spotlight(size: EffectSize, frame: u64, out: &mut [u32], scratch: &mut [i32]) {
+    const BAYER: [[i32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    const BRIGHT: u32 = (210 << 16) | (168 << 8) | 105;
+    const DIM: u32 = (55 << 16) | (44 << 8) | 27;
     let cx = (size.w / 2) as i32 + ((wave(frame as i32 * 3) as i32 - 128) * size.w as i32 / 360);
     let cy =
         (size.h / 2) as i32 + ((wave(frame as i32 * 4 + 70) as i32 - 128) * size.h as i32 / 360);
     let max_d = (size.w.min(size.h) as i32 / 2).max(1);
+    for (x, dst) in scratch[..size.w].iter_mut().enumerate() {
+        let dx = x as i32 - cx;
+        *dst = dx * dx;
+    }
     for y in 0..size.h {
+        let dy = y as i32 - cy;
+        let dy2 = dy * dy;
+        let bayer = BAYER[y & 3];
+        let row = &mut out[y * size.w..(y + 1) * size.w];
         for x in 0..size.w {
-            let dx = x as i32 - cx;
-            let dy = y as i32 - cy;
-            let d = ((dx * dx + dy * dy) / max_d).min(255) as u32;
-            let threshold = BAYER[y & 3][x & 3] * 12;
-            let bright = if d < threshold + 80 { 210 } else { 55 };
-            out[y * size.w + x] = rgb(bright, bright * 4 / 5, bright / 2);
+            let d = ((scratch[x] + dy2) / max_d).min(255);
+            let threshold = bayer[x & 3] * 12 + 80;
+            row[x] = if d < threshold { BRIGHT } else { DIM };
         }
     }
 }
@@ -353,6 +422,7 @@ fn chunky_distortion(size: EffectSize, frame: u64, out: &mut [u32]) {
 fn fire_haze(size: EffectSize, frame: u64, out: &mut [u32], heat: &mut [u8]) {
     let w = size.w;
     let h = size.h;
+    let avg3 = avg3_table();
     for x in 0..w {
         heat[(h - 1) * w + x] = if ((x + frame as usize * 3) / 9) & 1 == 0 {
             255
@@ -361,23 +431,19 @@ fn fire_haze(size: EffectSize, frame: u64, out: &mut [u32], heat: &mut [u8]) {
         };
     }
     for y in (1..h).rev() {
+        let row = y * w;
+        let prev = (y - 1) * w;
         for x in 0..w {
-            let below = heat[y * w + x] as u16;
-            let left = heat[y * w + (x + w - 1) % w] as u16;
-            let right = heat[y * w + (x + 1) % w] as u16;
+            let below = heat[row + x] as usize;
+            let left = heat[row + if x == 0 { w - 1 } else { x - 1 }] as usize;
+            let right = heat[row + if x + 1 == w { 0 } else { x + 1 }] as usize;
             let decay = ((x + y + frame as usize) & 3) as u16;
-            heat[(y - 1) * w + x] = ((below + left + right) / 3).saturating_sub(decay) as u8;
+            heat[prev + x] = (avg3[below + left + right] as u16).saturating_sub(decay) as u8;
         }
     }
+    let colors = fire_palette_table();
     for (dst, &v) in out.iter_mut().zip(heat.iter()) {
-        let v = v as u32;
-        *dst = if v < 85 {
-            rgb(v * 2, 0, 0)
-        } else if v < 170 {
-            rgb(170 + (v - 85), (v - 85) * 2, 0)
-        } else {
-            rgb(255, 170 + (v - 170), (v - 170) * 3)
-        };
+        *dst = colors[v as usize];
     }
 }
 

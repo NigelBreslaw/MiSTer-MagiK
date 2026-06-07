@@ -1,4 +1,7 @@
 /// Copy a source rectangle into a destination buffer, nearest-neighbor scaled.
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+use std::sync::OnceLock;
+
 pub fn copy_rect_scaled_to<T: Copy>(
     dst: &mut [T],
     dst_w: usize,
@@ -141,6 +144,10 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
     let src_len = src.len();
     let packed_len = (dst.len() / 2).min(src.len());
     let mut i = 0;
+    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
+    if use_neon_2x_scaler() {
+        i = unsafe { copy_2x_u32_row_neon(dst, src, packed_len) };
+    }
     unsafe {
         let src = src.as_ptr();
         let dst = dst.as_mut_ptr();
@@ -171,6 +178,35 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
             dst.add(packed_len * 2).write(*src.add(packed_len));
         }
     }
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+fn use_neon_2x_scaler() -> bool {
+    static USE_NEON: OnceLock<bool> = OnceLock::new();
+    *USE_NEON.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_SCALE_2X").as_deref(),
+            Ok("scalar") | Ok("SCALAR") | Ok("off") | Ok("0")
+        )
+    })
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn copy_2x_u32_row_neon(dst: &mut [u32], src: &[u32], packed_len: usize) -> usize {
+    use core::arch::arm::{vld1q_u32, vst1q_u32, vzipq_u32};
+
+    let mut i = 0;
+    let src = src.as_ptr();
+    let dst = dst.as_mut_ptr();
+    while i + 4 <= packed_len {
+        let pixels = vld1q_u32(src.add(i));
+        let duplicated = vzipq_u32(pixels, pixels);
+        let d = dst.add(i * 2);
+        vst1q_u32(d, duplicated.0);
+        vst1q_u32(d.add(4), duplicated.1);
+        i += 4;
+    }
+    i
 }
 
 #[cfg(test)]
