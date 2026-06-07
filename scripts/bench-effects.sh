@@ -30,6 +30,7 @@ SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 EFFECTS=(
   palette_cycle plasma copper_bars starfield crt_pass tile_parallax
   mode7_floor afterimage dither_spotlight wipe_transition chunky_distortion fire_haze
+  vhs_glitch
 )
 SIZES=(320x180 480x270 640x360 960x540)
 

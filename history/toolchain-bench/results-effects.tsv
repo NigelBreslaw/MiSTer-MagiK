@@ -1,1 +1,16 @@
 label	effect	mode	fill	internal	scale	date	rustc	compile_sec	bytes	frames	fps	effect_us	slint_us	scale_copy_us	vsync_us	wall_us	cpu_mean	cpu_max	rss_kb	visual_ok	notes
+SIMD-8457248	palette_cycle	raw	half	480x270	2	2026-06-07T19:37:25Z	1.96.0		6887620	721	60.0	837	0	2156	13652	16654	17	20	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	plasma	raw	half	480x270	2	2026-06-07T19:37:48Z	1.96.0		6887620	720	60.0	3868	0	2128	10661	16666	33	39	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	copper_bars	raw	half	480x270	2	2026-06-07T19:38:12Z	1.96.0		6887620	721	60.1	438	0	2182	14014	16643	15	18	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	starfield	raw	half	480x270	2	2026-06-07T19:38:35Z	1.96.0		6887620	721	60.1	590	0	2067	13977	16643	15	19	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	crt_pass	raw	half	480x270	2	2026-06-07T19:38:58Z	1.96.0		6887620	720	60.0	7239	0	2216	7195	16661	53	60	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	tile_parallax	raw	half	480x270	2	2026-06-07T19:39:22Z	1.96.0		6887620	721	60.0	2988	0	2195	11463	16654	29	34	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	mode7_floor	raw	half	480x270	2	2026-06-07T19:39:45Z	1.96.0		6887620	720	60.0	964	0	2200	13487	16660	17	21	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	afterimage	raw	half	480x270	2	2026-06-07T19:40:09Z	1.96.0		6887620	720	60.0	5082	0	2225	9341	16658	41	48	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	dither_spotlight	raw	half	480x270	2	2026-06-07T19:40:32Z	1.96.0		6887620	705	58.7	12034	0	2172	2813	17028	78	89	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	wipe_transition	raw	half	480x270	2	2026-06-07T19:40:56Z	1.96.0		6887620	721	60.0	3320	0	2203	11116	16648	31	37	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	chunky_distortion	raw	half	480x270	2	2026-06-07T19:41:19Z	1.96.0		6887620	721	60.0	7803	0	2169	6673	16653	55	63	0	yes	profile=release; prep=kill-mister-ui
+SIMD-8457248	fire_haze	raw	half	480x270	2	2026-06-07T19:41:44Z	1.96.0		6887620	721	60.0	5107	0	2178	9354	16649	41	47	0	yes	profile=release; prep=kill-mister-ui
+VHS-GLITCH	vhs_glitch	raw	half	480x270	2	2026-06-07T19:52:11Z	1.96.0		6891740	360	30.0	18459	0	2142	12735	33344	57	67	0	yes	profile=release; prep=kill-mister-ui
+VHS-GLITCH-OPT	vhs_glitch	raw	half	480x270	2	2026-06-07T19:55:04Z	1.96.0		6895836	720	60.0	9359	0	2198	5092	16660	64	73	0	yes	profile=release; prep=kill-mister-ui
+VHS-GLITCH-2X	vhs_glitch	raw	half	480x270	2	2026-06-07T19:57:51Z	1.96.0		6895836	720	59.9	5539	0	2185	8941	16674	43	51	0	yes	profile=release; prep=kill-mister-ui
