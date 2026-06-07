@@ -15,6 +15,7 @@ pub const EFFECT_NAMES: &[&str] = &[
     "wipe_transition",
     "chunky_distortion",
     "fire_haze",
+    "vhs_glitch",
 ];
 
 pub const EFFECT_SIZES: &[(usize, usize)] = &[(320, 180), (480, 270), (640, 360), (960, 540)];
@@ -33,6 +34,7 @@ pub enum EffectKind {
     WipeTransition,
     ChunkyDistortion,
     FireHaze,
+    VhsGlitch,
 }
 
 impl EffectKind {
@@ -50,6 +52,7 @@ impl EffectKind {
             Self::WipeTransition,
             Self::ChunkyDistortion,
             Self::FireHaze,
+            Self::VhsGlitch,
         ]
     }
 
@@ -67,6 +70,7 @@ impl EffectKind {
             Self::WipeTransition => "wipe_transition",
             Self::ChunkyDistortion => "chunky_distortion",
             Self::FireHaze => "fire_haze",
+            Self::VhsGlitch => "vhs_glitch",
         }
     }
 
@@ -155,9 +159,16 @@ impl EffectState {
             EffectKind::WipeTransition => wipe_transition(self.size, frame, out),
             EffectKind::ChunkyDistortion => chunky_distortion(self.size, frame, out),
             EffectKind::FireHaze => fire_haze(self.size, frame, out, &mut self.heat),
+            EffectKind::VhsGlitch => vhs_glitch(self.size, frame, out, &mut self.scratch),
         }
         draw_label(self.size, self.kind.name(), out);
     }
+}
+
+struct SourceImage {
+    w: usize,
+    h: usize,
+    pixels: Vec<u32>,
 }
 
 fn rgb(r: u32, g: u32, b: u32) -> u32 {
@@ -221,6 +232,74 @@ fn avg3_table() -> &'static [u8; 766] {
         }
         table
     })
+}
+
+fn vhs_source_image() -> &'static SourceImage {
+    static IMAGE: OnceLock<SourceImage> = OnceLock::new();
+    IMAGE.get_or_init(|| {
+        decode_fixture_png(include_bytes!("../benches/png-fixtures/03-btime.png"))
+            .unwrap_or_else(|_| vhs_fallback_image())
+    })
+}
+
+fn decode_fixture_png(data: &[u8]) -> Result<SourceImage, String> {
+    use zune_png::zune_core::bytestream::ZCursor;
+    use zune_png::zune_core::colorspace::ColorSpace;
+    use zune_png::zune_core::options::DecoderOptions;
+    use zune_png::PngDecoder;
+
+    let options = DecoderOptions::default().png_set_strip_to_8bit(true);
+    let mut decoder = PngDecoder::new_with_options(ZCursor::new(data), options);
+    decoder
+        .decode_headers()
+        .map_err(|e| format!("zune png headers: {e}"))?;
+    let (w, h) = decoder
+        .dimensions()
+        .ok_or_else(|| "zune png missing dimensions".to_string())?;
+    let w = usize::try_from(w).map_err(|_| "zune png width too large".to_string())?;
+    let h = usize::try_from(h).map_err(|_| "zune png height too large".to_string())?;
+    let colorspace = decoder
+        .colorspace()
+        .ok_or_else(|| "zune png missing colorspace".to_string())?;
+    let buf = decoder
+        .decode_raw()
+        .map_err(|e| format!("zune png decode: {e}"))?;
+    let mut pixels = Vec::with_capacity(w * h);
+    match colorspace {
+        ColorSpace::RGB => {
+            for px in buf.chunks_exact(3) {
+                pixels.push(rgb(px[0] as u32, px[1] as u32, px[2] as u32));
+            }
+        }
+        ColorSpace::RGBA => {
+            for px in buf.chunks_exact(4) {
+                pixels.push(rgb(px[0] as u32, px[1] as u32, px[2] as u32));
+            }
+        }
+        other => return Err(format!("unsupported zune png colorspace: {other:?}")),
+    }
+    if pixels.len() != w * h {
+        return Err("zune png decoded length mismatch".to_string());
+    }
+    Ok(SourceImage { w, h, pixels })
+}
+
+fn vhs_fallback_image() -> SourceImage {
+    let w = 240;
+    let h = 240;
+    let mut pixels = vec![0; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let bars = ((x / 24) ^ (y / 24)) & 3;
+            pixels[y * w + x] = match bars {
+                0 => rgb(220, 60, 80),
+                1 => rgb(60, 200, 150),
+                2 => rgb(70, 100, 230),
+                _ => rgb(230, 210, 80),
+            };
+        }
+    }
+    SourceImage { w, h, pixels }
 }
 
 fn palette_cycle(size: EffectSize, frame: u64, out: &mut [u32]) {
@@ -444,6 +523,108 @@ fn fire_haze(size: EffectSize, frame: u64, out: &mut [u32], heat: &mut [u8]) {
     let colors = fire_palette_table();
     for (dst, &v) in out.iter_mut().zip(heat.iter()) {
         *dst = colors[v as usize];
+    }
+}
+
+fn vhs_glitch(size: EffectSize, frame: u64, out: &mut [u32], x_map: &mut [i32]) {
+    let src = vhs_source_image();
+    let f = frame as usize;
+    let aberr = 1 + ((f / 15) & 1);
+    for (x, dst) in x_map[..size.w].iter_mut().enumerate() {
+        *dst = (x * src.w / size.w) as i32;
+    }
+    for y in 0..size.h {
+        let band = ((y + f * 3) / 17) & 15;
+        let tear = if band == 0 || band == 11 {
+            (((f * 7 + y * 5) & 31) as isize) - 16
+        } else {
+            0
+        };
+        let wobble = (wave(y as i32 * 5 + frame as i32 * 9) as isize / 42) - 3;
+        let src_shift = ((tear + wobble) * src.w as isize / size.w as isize) as i32;
+        let sy = ((y * src.h / size.h) + ((f / 9) & 1)).min(src.h - 1);
+        let src_row = &src.pixels[sy * src.w..(sy + 1) * src.w];
+        let dst_row = &mut out[y * size.w..(y + 1) * size.w];
+        if size.w == src.w * 2 {
+            for (sx0, pair) in dst_row.chunks_exact_mut(2).enumerate() {
+                let sx = wrap_to_usize(sx0 as isize + src_shift as isize, src.w);
+                let sx_r = (sx + aberr).min(src.w - 1);
+                let sx_b = sx.saturating_sub(aberr);
+                let p = (src_row[sx_r] & 0x00ff0000)
+                    | (src_row[sx] & 0x0000ff00)
+                    | (src_row[sx_b] & 0x000000ff);
+                pair[0] = p;
+                pair[1] = p;
+            }
+        } else {
+            for (x, dst) in dst_row.iter_mut().enumerate() {
+                let sx = wrap_to_usize((x_map[x] + src_shift) as isize, src.w);
+                let sx_r = (sx + aberr).min(src.w - 1);
+                let sx_b = sx.saturating_sub(aberr);
+                *dst = (src_row[sx_r] & 0x00ff0000)
+                    | (src_row[sx] & 0x0000ff00)
+                    | (src_row[sx_b] & 0x000000ff);
+            }
+        }
+        let noise = (((f * 17 + y * 23) & 3) as u32) * 0x00010101;
+        vhs_postprocess_row(dst_row, y, noise);
+    }
+}
+
+fn wrap_to_usize(v: isize, limit: usize) -> usize {
+    v.rem_euclid(limit as isize) as usize
+}
+
+fn vhs_postprocess_row(row: &mut [u32], y: usize, noise: u32) {
+    if y & 1 == 0 {
+        vhs_dim_noise_row(row, noise);
+    } else if noise != 0 {
+        for p in row {
+            *p ^= noise;
+        }
+    }
+}
+
+fn vhs_dim_noise_row(row: &mut [u32], noise: u32) {
+    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
+    {
+        unsafe {
+            vhs_dim_noise_row_neon(row, noise);
+        }
+        return;
+    }
+    #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+    {
+        for p in row {
+            let half = (*p & 0x00fefefe) >> 1;
+            let quarter = (*p & 0x00fcfcfc) >> 2;
+            *p = (half + quarter) ^ noise;
+        }
+    }
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn vhs_dim_noise_row_neon(row: &mut [u32], noise: u32) {
+    use core::arch::arm::{
+        vaddq_u32, vandq_u32, vdupq_n_u32, veorq_u32, vld1q_u32, vshrq_n_u32, vst1q_u32,
+    };
+
+    let mask_half = vdupq_n_u32(0x00fefefe);
+    let mask_quarter = vdupq_n_u32(0x00fcfcfc);
+    let noise = vdupq_n_u32(noise);
+    let mut i = 0;
+    while i + 4 <= row.len() {
+        let p = vld1q_u32(row.as_ptr().add(i));
+        let half = vshrq_n_u32(vandq_u32(p, mask_half), 1);
+        let quarter = vshrq_n_u32(vandq_u32(p, mask_quarter), 2);
+        let dimmed = vaddq_u32(half, quarter);
+        vst1q_u32(row.as_mut_ptr().add(i), veorq_u32(dimmed, noise));
+        i += 4;
+    }
+    for p in &mut row[i..] {
+        let half = (*p & 0x00fefefe) >> 1;
+        let quarter = (*p & 0x00fcfcfc) >> 2;
+        *p = (half + quarter) ^ noise;
     }
 }
 
