@@ -55,8 +55,12 @@ static int s_visible_fb_height = 0;
 
 struct launcher_command_t
 {
+	char command[32];
 	char scene[64];
 	char secs[16];
+	char mode[16];
+	char size[16];
+	char fill[16];
 	bool bench;
 };
 
@@ -203,8 +207,12 @@ static bool decimal_token_is_safe(const char *s)
 
 static void read_launcher_command(launcher_command_t *cmd)
 {
+	snprintf(cmd->command, sizeof(cmd->command), "ui");
 	snprintf(cmd->scene, sizeof(cmd->scene), "%s", s_launcher_scene);
 	snprintf(cmd->secs, sizeof(cmd->secs), "0");
+	snprintf(cmd->mode, sizeof(cmd->mode), "both");
+	snprintf(cmd->size, sizeof(cmd->size), "480x270");
+	snprintf(cmd->fill, sizeof(cmd->fill), "half");
 	cmd->bench = false;
 
 	FILE *f = fopen(s_bench_request_path, "r");
@@ -218,10 +226,52 @@ static void read_launcher_command(launcher_command_t *cmd)
 	}
 	fclose(f);
 
+	char command[32] = "ui";
 	char scene[64] = {};
 	char secs[16] = "0";
-	int n = sscanf(line, "%63s %15s", scene, secs);
-	if (n < 1 || !token_is_safe(scene) || !decimal_token_is_safe(secs))
+	char mode[16] = "both";
+	char size[16] = "480x270";
+	char fill[16] = "half";
+	int n = sscanf(line, "%31s %63s %15s %15s %15s %15s", command, scene, secs, mode, size, fill);
+	if (n < 1 || !token_is_safe(command))
+	{
+		log_msg("ignoring invalid bench request: %s", line);
+		analytics_event("bench_request_invalid", "line=%s", line);
+		return;
+	}
+
+	if (strcmp(command, "effect-bench") == 0)
+	{
+		if (n < 2)
+			snprintf(scene, sizeof(scene), "all");
+		if (n < 3)
+			snprintf(secs, sizeof(secs), "10");
+		if (n < 4)
+			snprintf(mode, sizeof(mode), "raw");
+		if (n < 5)
+			snprintf(size, sizeof(size), "480x270");
+		if (n < 6)
+			snprintf(fill, sizeof(fill), "half");
+
+		if (!token_is_safe(scene) || !decimal_token_is_safe(secs) ||
+		    !token_is_safe(mode) || !token_is_safe(size) || !token_is_safe(fill))
+		{
+			log_msg("ignoring invalid effect bench request: %s", line);
+			analytics_event("bench_request_invalid", "line=%s", line);
+			return;
+		}
+
+		snprintf(cmd->command, sizeof(cmd->command), "effect-bench");
+		snprintf(cmd->scene, sizeof(cmd->scene), "%s", scene);
+		snprintf(cmd->secs, sizeof(cmd->secs), "%s", secs);
+		snprintf(cmd->mode, sizeof(cmd->mode), "%s", mode);
+		snprintf(cmd->size, sizeof(cmd->size), "%s", size);
+		snprintf(cmd->fill, sizeof(cmd->fill), "%s", fill);
+		cmd->bench = true;
+		return;
+	}
+
+	if (!token_is_safe(scene) || !decimal_token_is_safe(secs))
 	{
 		log_msg("ignoring invalid bench request: %s", line);
 		analytics_event("bench_request_invalid", "line=%s", line);
@@ -481,17 +531,34 @@ static bool write_launcher_script(const launcher_command_t *launcher_cmd)
 	char cmd[2048];
 	if (launcher_cmd->bench)
 	{
-		snprintf(cmd, sizeof(cmd),
-		         "#!/bin/bash\n"
-		         "export LC_ALL=en_US.UTF-8\n"
-		         "export HOME=/root\n"
-		         "export MISTER_MAGIK_PARENT=main-mister\n"
-		         "export MISTER_MAGIK_BENCH_BOOT=1\n"
-		         "export MISTER_CONSOLE_SCROLL_TRACE_FILE=/tmp/mister-magik-console-scroll-trace.tsv\n"
-		         "export MISTER_CONSOLE_SCROLL_TRACE_STEP=32\n"
-		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
-		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-bench-%s.log 2>&1\n",
-		         launcher_cmd->scene, launcher_cmd->secs, launcher_cmd->scene);
+		if (strcmp(launcher_cmd->command, "effect-bench") == 0)
+		{
+			snprintf(cmd, sizeof(cmd),
+			         "#!/bin/bash\n"
+			         "export LC_ALL=en_US.UTF-8\n"
+			         "export HOME=/root\n"
+			         "export MISTER_MAGIK_PARENT=main-mister\n"
+			         "export MISTER_MAGIK_BENCH_BOOT=1\n"
+			         "export MISTER_EFFECT_BENCH_LABEL=boot-visual-effects\n"
+			         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+			         "exec \"$MISTER_MAGIK_PATH\" effect-bench \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" >/tmp/mister-magik-bench-effects.log 2>&1\n",
+			         launcher_cmd->scene, launcher_cmd->secs, launcher_cmd->mode,
+			         launcher_cmd->size, launcher_cmd->fill);
+		}
+		else
+		{
+			snprintf(cmd, sizeof(cmd),
+			         "#!/bin/bash\n"
+			         "export LC_ALL=en_US.UTF-8\n"
+			         "export HOME=/root\n"
+			         "export MISTER_MAGIK_PARENT=main-mister\n"
+			         "export MISTER_MAGIK_BENCH_BOOT=1\n"
+			         "export MISTER_CONSOLE_SCROLL_TRACE_FILE=/tmp/mister-magik-console-scroll-trace.tsv\n"
+			         "export MISTER_CONSOLE_SCROLL_TRACE_STEP=32\n"
+			         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
+			         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-bench-%s.log 2>&1\n",
+			         launcher_cmd->scene, launcher_cmd->secs, launcher_cmd->scene);
+		}
 	}
 	else if (analytics_enabled())
 	{
@@ -516,7 +583,7 @@ static bool write_launcher_script(const launcher_command_t *launcher_cmd)
 		         "export HOME=/root\n"
 		         "export MISTER_MAGIK_PARENT=main-mister\n"
 		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
-		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\"\n",
+		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-slint.log 2>&1\n",
 		         launcher_cmd->scene, launcher_cmd->secs);
 	}
 

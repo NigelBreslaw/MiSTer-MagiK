@@ -5,6 +5,8 @@
 //!   route     route the current /dev/fb0 buffer 0 to HDMI
 //!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!   scenes    list Slint scene names
+//!   effects   list framebuffer effect benchmark names
+//!   effect-bench [effect|all] [secs] [raw|overlay|both] [WIDTHxHEIGHT]
 //!   fb [secs] [normal|direct|none]  paint + optionally route current fb size
 //!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
 //!   input     gamepad log / sniff / calibrate
@@ -72,6 +74,8 @@ fn main() {
         "fb-current" => fb_current_probe(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
+        "effects" => ui_runner::print_effects(),
+        "effect-bench" => ui_runner::run_effect_bench(&mut f),
         "input" => run_input(),
         "library-scan-bench" => library_bench::run_scan_bench(),
         "audio-tone" => run_audio_tone(&mut f),
