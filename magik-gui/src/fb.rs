@@ -132,6 +132,12 @@ struct FbVarScreeninfo {
     reserved: [u32; 4],
 }
 
+impl FbVarScreeninfo {
+    fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 #[repr(C)]
 struct FbBitfield {
     offset: u32,
@@ -157,6 +163,58 @@ struct FbFixScreeninfo {
     accel: u32,
     capabilities: u16,
     reserved: [u16; 3],
+}
+
+impl FbFixScreeninfo {
+    fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+fn fb_info_from(
+    var_ok: bool,
+    var: &FbVarScreeninfo,
+    fix_ok: bool,
+    fix: &FbFixScreeninfo,
+    fallback_w: usize,
+    fallback_h: usize,
+) -> FbInfo {
+    FbInfo {
+        visible_w: if var_ok && var.xres != 0 {
+            var.xres as usize
+        } else {
+            fallback_w
+        },
+        visible_h: if var_ok && var.yres != 0 {
+            var.yres as usize
+        } else {
+            fallback_h
+        },
+        virtual_w: if var_ok && var.xres_virtual != 0 {
+            var.xres_virtual as usize
+        } else {
+            fallback_w
+        },
+        virtual_h: if var_ok && var.yres_virtual != 0 {
+            var.yres_virtual as usize
+        } else {
+            fallback_h
+        },
+        stride_bytes: if fix_ok && fix.line_length != 0 {
+            fix.line_length as usize
+        } else {
+            fallback_w * 4
+        },
+        bits_per_pixel: if var_ok && var.bits_per_pixel != 0 {
+            var.bits_per_pixel
+        } else {
+            32
+        },
+        red_offset: var.red.offset,
+        green_offset: var.green.offset,
+        blue_offset: var.blue.offset,
+        transp_offset: var.transp.offset,
+    }
 }
 
 const MODE_1080P: &str = "8888 1 1920 1080 7680";
@@ -221,74 +279,86 @@ impl Display {
         Err(last_err)
     }
 
+    /// Open the framebuffer at its current kernel-reported size, without writing
+    /// `/sys/module/MiSTer_fb/parameters/mode`.
+    pub fn open_current_boot() -> io::Result<Self> {
+        const RETRIES: u32 = 30;
+        let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
+        for attempt in 0..RETRIES {
+            boot_analytics::event("display_open_current_attempt", format!("attempt={attempt}"));
+            std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
+                0
+            } else {
+                200
+            }));
+            match Self::open_current() {
+                Ok(d) => {
+                    let info = d.info();
+                    boot_analytics::event(
+                        "display_open_current_ok",
+                        format!(
+                            "attempt={attempt} w={} h={}",
+                            info.visible_w, info.virtual_h
+                        ),
+                    );
+                    if attempt > 0 {
+                        println!("display current open ok after {attempt} retries");
+                    }
+                    return Ok(d);
+                }
+                Err(e) => {
+                    boot_analytics::event(
+                        "display_open_current_failed",
+                        format!("attempt={attempt} error={e}"),
+                    );
+                    if attempt == 0 || attempt % 5 == 0 {
+                        eprintln!("display current open attempt {attempt}: {e}");
+                    }
+                    last_err = e;
+                }
+            }
+        }
+        Err(last_err)
+    }
+
+    pub fn open_current() -> io::Result<Self> {
+        let info = Self::read_fb_info()?;
+        let w = info.visible_w;
+        let h = info.virtual_h.max(info.visible_h);
+        if w == 0 || h == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fb0 reported invalid current size {w}x{h}"),
+            ));
+        }
+        if w * h > FB_SIZE_PX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fb0 current size {w}x{h} exceeds MiSTer buffer"),
+            ));
+        }
+        Self::open(w, h)
+    }
+
+    fn read_fb_info() -> io::Result<FbInfo> {
+        let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+        let fd = fb0.as_raw_fd();
+        let mut var = FbVarScreeninfo::zeroed();
+        let mut fix = FbFixScreeninfo::zeroed();
+        let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
+        let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
+        if !var_ok {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(fb_info_from(var_ok, &var, fix_ok, &fix, 0, 0))
+    }
+
     pub fn open(w: usize, h: usize) -> io::Result<Self> {
         assert!(w * h <= FB_SIZE_PX as usize);
         let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
-        let mut var = FbVarScreeninfo {
-            xres: 0,
-            yres: 0,
-            xres_virtual: 0,
-            yres_virtual: 0,
-            xoffset: 0,
-            yoffset: 0,
-            bits_per_pixel: 0,
-            grayscale: 0,
-            red: FbBitfield {
-                offset: 0,
-                length: 0,
-                msb_right: 0,
-            },
-            green: FbBitfield {
-                offset: 0,
-                length: 0,
-                msb_right: 0,
-            },
-            blue: FbBitfield {
-                offset: 0,
-                length: 0,
-                msb_right: 0,
-            },
-            transp: FbBitfield {
-                offset: 0,
-                length: 0,
-                msb_right: 0,
-            },
-            nonstd: 0,
-            activate: 0,
-            height: 0,
-            width: 0,
-            accel_flags: 0,
-            pixclock: 0,
-            left_margin: 0,
-            right_margin: 0,
-            upper_margin: 0,
-            lower_margin: 0,
-            hsync_len: 0,
-            vsync_len: 0,
-            sync: 0,
-            vmode: 0,
-            rotate: 0,
-            colorspace: 0,
-            reserved: [0; 4],
-        };
+        let mut var = FbVarScreeninfo::zeroed();
         let fd = fb0.as_raw_fd();
-        let mut fix = FbFixScreeninfo {
-            id: [0; 16],
-            smem_start: 0,
-            smem_len: 0,
-            type_: 0,
-            type_aux: 0,
-            visual: 0,
-            xpanstep: 0,
-            ypanstep: 0,
-            ywrapstep: 0,
-            line_length: 0,
-            mmio_start: 0,
-            mmio_len: 0,
-            accel: 0,
-            capabilities: 0,
-            reserved: [0; 3],
-        };
+        let mut fix = FbFixScreeninfo::zeroed();
         let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
         if var_ok {
             let virt = (var.yres_virtual as usize).max(var.yres as usize);
@@ -332,42 +402,7 @@ impl Display {
                 ));
             }
         }
-        let info = FbInfo {
-            visible_w: if var_ok && var.xres != 0 {
-                var.xres as usize
-            } else {
-                w
-            },
-            visible_h: if var_ok && var.yres != 0 {
-                var.yres as usize
-            } else {
-                h
-            },
-            virtual_w: if var_ok && var.xres_virtual != 0 {
-                var.xres_virtual as usize
-            } else {
-                w
-            },
-            virtual_h: if var_ok && var.yres_virtual != 0 {
-                var.yres_virtual as usize
-            } else {
-                h
-            },
-            stride_bytes: if fix_ok && fix.line_length != 0 {
-                fix.line_length as usize
-            } else {
-                w * 4
-            },
-            bits_per_pixel: if var_ok && var.bits_per_pixel != 0 {
-                var.bits_per_pixel
-            } else {
-                32
-            },
-            red_offset: var.red.offset,
-            green_offset: var.green.offset,
-            blue_offset: var.blue.offset,
-            transp_offset: var.transp.offset,
-        };
+        let info = fb_info_from(var_ok, &var, fix_ok, &fix, w, h);
         let map_len = w * h * 4;
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
         let mem = unsafe {
@@ -395,6 +430,14 @@ impl Display {
 
     pub fn info(&self) -> FbInfo {
         self.info
+    }
+
+    pub fn width(&self) -> usize {
+        self.w
+    }
+
+    pub fn height(&self) -> usize {
+        self.h
     }
 
     /// The (single) on-screen buffer, as a mutable pixel slice.

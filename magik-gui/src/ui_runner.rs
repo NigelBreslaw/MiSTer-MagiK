@@ -239,6 +239,10 @@ pub fn print_scenes() {
     }
 }
 
+fn uses_legacy_1080p_boot_path(scene: &str) -> bool {
+    matches!(scene, "launcher" | "controller_test")
+}
+
 #[derive(Clone, Copy, Debug)]
 struct DirtyRect {
     x0: usize,
@@ -342,7 +346,20 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    let mut disp = match Display::open_boot(FB_W, FB_H) {
+    let legacy_1080p = uses_legacy_1080p_boot_path(&scene);
+    println!(
+        "display-open-path={}",
+        if legacy_1080p {
+            "legacy-1080p-mode-write"
+        } else {
+            "current-fb-no-mode-write"
+        }
+    );
+    let mut disp = match if legacy_1080p {
+        Display::open_boot(FB_W, FB_H)
+    } else {
+        Display::open_current_boot()
+    } {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
@@ -361,9 +378,20 @@ pub fn run_ui(f: &mut Fpga) {
     }
     boot_analytics::event(
         "initial_fb_enable_direct_attempt",
-        format!("w={FB_W} h={FB_H} mode=1080p60"),
+        format!(
+            "w={} h={} mode=1080p60 legacy_1080p={legacy_1080p}",
+            disp.width(),
+            disp.height()
+        ),
     );
-    let flag = f.fb_enable_direct(0, FB_W as u16, FB_H as u16, MODE_1080P60, Some(0), Some(0));
+    let flag = f.fb_enable_direct(
+        0,
+        disp.width() as u16,
+        disp.height() as u16,
+        MODE_1080P60,
+        Some(0),
+        Some(0),
+    );
     boot_analytics::event(
         "initial_fb_enable_direct_done",
         format!("support_flag={flag}"),
