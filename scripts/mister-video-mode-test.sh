@@ -34,6 +34,8 @@ Usage:
   scripts/mister-video-mode-test.sh sweep-mode LABEL [SCENE]
   scripts/mister-video-mode-test.sh stock-ui-mode LABEL
   scripts/mister-video-mode-test.sh stock-ui-auto
+  scripts/mister-video-mode-test.sh crt-list
+  scripts/mister-video-mode-test.sh crt-smoke LABEL [stock|magik]
   scripts/mister-video-mode-test.sh stock-ui
   scripts/mister-video-mode-test.sh pattern [SECS] [normal|direct|none]
   scripts/mister-video-mode-test.sh run [SCENE] [SECS]
@@ -48,6 +50,8 @@ Examples:
   scripts/mister-video-mode-test.sh sweep-mode 720p static_ui
   scripts/mister-video-mode-test.sh stock-ui-mode high
   scripts/mister-video-mode-test.sh stock-ui-auto
+  scripts/mister-video-mode-test.sh crt-list
+  scripts/mister-video-mode-test.sh crt-smoke ntsc15 stock
   scripts/mister-video-mode-test.sh restore
 EOF
 }
@@ -102,6 +106,51 @@ hardware/timing unless stock MiSTer proves otherwise.
 Each run backs up MiSTer.ini, writes the mode, reboots through MiSTer_MagiK,
 starts the selected benchmark indefinitely, captures a PNG using detected fb
 dimensions, and leaves the scene on screen for visual verification.
+EOF
+}
+
+crt_params_for_label() {
+  case "$1" in
+    ntsc15|ntsc|240p)
+      printf '1\t0\t0\tNTSC 15 kHz direct-video timing (640x240)\n'
+      ;;
+    ntsc31|ntsc-vga|480p)
+      printf '1\t0\t1\tNTSC 31 kHz direct-video timing (640x480)\n'
+      ;;
+    pal15|pal|288p)
+      printf '1\t1\t0\tPAL 15 kHz direct-video timing (640x288)\n'
+      ;;
+    pal31|pal-vga|576p)
+      printf '1\t1\t1\tPAL 31 kHz direct-video timing (640x576)\n'
+      ;;
+    direct-auto|dac-auto)
+      printf '2\t0\t0\tDirect-video auto-detect for known HDMI DACs\n'
+      ;;
+    *)
+      echo "Unknown CRT/direct-video label: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+crt_list() {
+  cat <<EOF
+CRT/direct-video smoke labels:
+  ntsc15      -> direct_video=1 menu_pal=0 forced_scandoubler=0  (640x240, 15 kHz)
+  ntsc31      -> direct_video=1 menu_pal=0 forced_scandoubler=1  (640x480, 31 kHz)
+  pal15       -> direct_video=1 menu_pal=1 forced_scandoubler=0  (640x288, 15 kHz)
+  pal31       -> direct_video=1 menu_pal=1 forced_scandoubler=1  (640x576, 31 kHz)
+  direct-auto -> direct_video=2 menu_pal=0 forced_scandoubler=0  (known HDMI DAC auto-detect)
+
+Run only when the matching analog/direct-video output path is physically
+connected, or when you are intentionally testing stock MiSTer failure/recovery:
+  scripts/mister-video-mode-test.sh crt-smoke ntsc15 stock
+  scripts/mister-video-mode-test.sh crt-smoke ntsc31 magik
+
+Each smoke run backs up MiSTer.ini, writes only the MiSTer direct-video keys,
+reboots, records the resulting INI/fb/status logs, and leaves the display live
+for visual verification. Restore with:
+  scripts/mister-video-mode-test.sh restore
 EOF
 }
 
@@ -174,6 +223,68 @@ write_auto_no_reboot() {
     }
   ' "$before" >"$after"
   mister put "$after" "$REMOTE_INI"
+}
+
+write_crt_no_reboot() {
+  local label="$1"
+  local out_dir="$2"
+  mkdir -p "$WORK" "$out_dir"
+
+  local direct_video menu_pal forced_scandoubler description
+  IFS=$'\t' read -r direct_video menu_pal forced_scandoubler description < <(crt_params_for_label "$label")
+
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local before="$out_dir/MiSTer.ini.$stamp.bak"
+  local after="$out_dir/MiSTer.ini.$stamp.crt"
+
+  echo "==> Backing up $REMOTE_INI"
+  mister get "$REMOTE_INI" "$before"
+  cp "$before" "$WORK/MiSTer.ini.$stamp.bak"
+  mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
+
+  echo "==> Writing CRT/direct-video settings: $description"
+  awk \
+    -v direct_video="$direct_video" \
+    -v menu_pal="$menu_pal" \
+    -v forced_scandoubler="$forced_scandoubler" '
+    function flush_mister() {
+      if (!in_mister || flushed) return
+      if (!wrote_forced) print "forced_scandoubler=" forced_scandoubler
+      if (!wrote_menu_pal) print "menu_pal=" menu_pal
+      if (!wrote_direct) print "direct_video=" direct_video
+      flushed = 1
+    }
+    {
+      sub(/\r$/, "", $0)
+      if ($0 ~ /^\[/) {
+        flush_mister()
+        in_mister = (tolower($0) == "[mister]")
+      }
+      if (in_mister && $0 ~ /^[[:space:]]*forced_scandoubler[[:space:]]*=/) {
+        print "forced_scandoubler=" forced_scandoubler
+        wrote_forced = 1
+        next
+      }
+      if (in_mister && $0 ~ /^[[:space:]]*menu_pal[[:space:]]*=/) {
+        print "menu_pal=" menu_pal
+        wrote_menu_pal = 1
+        next
+      }
+      if (in_mister && $0 ~ /^[[:space:]]*direct_video[[:space:]]*=/) {
+        print "direct_video=" direct_video
+        wrote_direct = 1
+        next
+      }
+      print
+    }
+    END {
+      flush_mister()
+    }
+  ' "$before" >"$after"
+  mister put "$after" "$REMOTE_INI"
+  printf 'label=%s\ndirect_video=%s\nmenu_pal=%s\nforced_scandoubler=%s\ndescription=%s\n' \
+    "$label" "$direct_video" "$menu_pal" "$forced_scandoubler" "$description" >"$out_dir/crt.env"
 }
 
 restore_mode() {
@@ -511,6 +622,65 @@ stock_ui_auto_probe() {
   echo "==> Files: $dir"
 }
 
+comment_main_for_probe() {
+  local in_file="$1"
+  local out_file="$2"
+  awk '
+    {
+      sub(/\r$/, "", $0)
+      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock CRT/direct-video probe"
+      else print
+    }
+  ' "$in_file" >"$out_file"
+}
+
+crt_smoke() {
+  local label="${1:-}"
+  local owner="${2:-stock}"
+  [[ -n "$label" ]] || {
+    echo "crt-smoke needs a label; run crt-list" >&2
+    exit 2
+  }
+  case "$owner" in
+    stock|magik) ;;
+    *)
+      echo "crt-smoke owner must be stock or magik" >&2
+      exit 2
+      ;;
+  esac
+
+  local safe_label stamp dir stock_ini
+  safe_label="${label//[^A-Za-z0-9_.-]/_}"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dir="$WORK/crt/${stamp}-${safe_label}-${owner}"
+  mkdir -p "$dir"
+
+  echo "==> CRT/direct-video smoke label=$label owner=$owner"
+  write_crt_no_reboot "$label" "$dir"
+
+  if [[ "$owner" == "stock" ]]; then
+    stock_ini="$dir/MiSTer.ini.$stamp.stock-crt"
+    comment_main_for_probe "$dir"/MiSTer.ini.*.crt "$stock_ini"
+    mister put "$stock_ini" "$REMOTE_INI"
+  else
+    write_bench_request static_ui 0
+  fi
+
+  echo "==> Rebooting into CRT/direct-video smoke path"
+  mister reboot-wait
+  if [[ "$owner" == "magik" ]]; then
+    mister run "for i in \$(seq 1 30); do test -f '/tmp/mister-magik-bench-static_ui.log' && break; sleep 1; done; sleep 6"
+    mister get /tmp/mister-magik-bench-static_ui.log "$dir/static_ui.log" || true
+    mister get /tmp/mister-magik/main-status.json "$dir/main-status.json" || true
+  fi
+  mister run "awk 'BEGIN{s=\"global\"} /^\\[/ {s=\$0} /^[;[:space:]]*(main|video_mode|direct_video|menu_pal|forced_scandoubler|fb_size|fb_terminal)[[:space:]]*=/ {print s \" \" NR \":\" \$0}' '$REMOTE_INI'; echo -n 'fb_mode='; cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true; echo; cat /tmp/mister-magik/main-status.json 2>/dev/null || true" \
+    | tee "$dir/device-summary.txt"
+
+  echo "==> CRT/direct-video checkpoint is live."
+  echo "==> Verify the connected output if present, then restore with: scripts/mister-video-mode-test.sh restore"
+  echo "==> Results: $dir"
+}
+
 pause_stock_mister() {
   mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; if pidof MiSTer >/dev/null 2>&1; then kill -STOP \$(pidof MiSTer); fi"
 }
@@ -567,6 +737,13 @@ case "${1:-}" in
     ;;
   stock-ui-auto)
     stock_ui_auto_probe
+    ;;
+  crt-list)
+    crt_list
+    ;;
+  crt-smoke)
+    shift
+    crt_smoke "$@"
     ;;
   pattern)
     shift

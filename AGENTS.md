@@ -449,6 +449,14 @@ Important gotchas:
   `2560,1440,60`. For “whatever this display actually supports”, comment
   `[Menu] video_mode` and let MiSTer use EDID/native detection; on the current TV
   that selected stable `1920x1080`.
+- **CRT/direct-video menu timings ignore `[Menu] video_mode`.** In Main_MiSTer,
+  `direct_video=1` switches the menu path to `tvmodes[]`: `menu_pal=0/1` chooses
+  NTSC/PAL (`640x240` or `640x288`), and `forced_scandoubler=1` selects the 31 kHz
+  variant (`640x480` or `640x576`). `direct_video=2` is only auto-detect for known
+  HDMI DACs and resolves back to normal HDMI when the attached display is not a
+  known DAC. Use `scripts/mister-video-mode-test.sh crt-list` and `crt-smoke`
+  for opt-in smoke tests, and always restore the persistent INI backup after any
+  direct-video run.
 - **Boot flicker analytics found Main OSD still updates after Slint handoff.**
   The `2026-06-07` analytics run recorded repeated post-handoff
   `main-osd OsdUpdate dirty_lines=3 n=19 is_menu=1 osdset=0x70000` events while
