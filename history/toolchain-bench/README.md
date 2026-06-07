@@ -1,7 +1,7 @@
 # Toolchain benchmark log
 
-Compare cross-compile / release-profile options for `mister-magic-fb` on the MiSTer.
-Each run exercises **seven** Slint bench scenes (see [`rust/ui/bench/README.md`](../../rust/ui/bench/README.md)).
+Compare cross-compile / release-profile options for `mister-magik-fb` on the MiSTer.
+Each run exercises the Slint bench scenes (see [`magik-gui/ui/bench/README.md`](../../magik-gui/ui/bench/README.md)).
 
 ## Run
 
@@ -26,20 +26,35 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
 | `--replace-label` | Drop existing TSV rows for this label before appending (re-run A0) |
 | `--scene-secs N` | Seconds per scene (default **15**, ~105s device for 7 scenes) |
 
-Each on-device scene run **kills any running `mister-magic-fb` and MiSTer** before starting the bench UI (same as `scripts/bench-diagnose.sh visible`). Without this, vsync can sit at ~30 Hz and fps reads ~30 instead of ~60.
+Each on-device scene run **kills any running `mister-magik-fb` and MiSTer** before starting the bench UI (same as `scripts/bench-diagnose.sh visible`). Without this, vsync can sit at ~30 Hz and fps reads ~30 instead of ~60.
 
 ## Visual artifacts (gitignored)
 
 For label `A0` and scene `static_ui`:
 
 - `A0-static_ui-fb.png` — framebuffer snapshot **while the UI is still running** (~`scene_secs - 2` s into each scene, menu SIGSTOPped). Post-exit capture only shows fbcon `login:`.
-- `A0-static_ui-ui.log` — stdout from `mister-magic-fb ui static_ui N`
+- `A0-static_ui-ui.log` — stdout from `mister-magik-fb ui static_ui N`
 
 ## TSV columns
 
 One row **per scene**. Compare the same `scene` across toolchain labels (A0 vs A1).
 
 `static_ui` and `local_motion` usually show much lower `copy_us` / `rows_avg` than `full_motion`.
+
+The TSV schema stays stable for historical rows. Display-mode metadata is
+appended to the `notes` column for new runs:
+
+- `ini_mode`: relevant `MiSTer.ini` mode keys at run time.
+- `physical_mode`: `UIO_GET_VRES` active mode reported by the FPGA.
+- `fb_size`: Linux `/dev/fb0` visible size used for capture conversion.
+- `render_size`: Slint software-renderer surface size.
+- `fb_scale`: framebuffer copy scale (`2` for legacy 1080p pixel-doubled
+  benchmark path, `1` for native low/runtime-sized modes).
+- `pixel_repetition`: FPGA pixel-repetition value from `UIO_GET_VRES`.
+- `uio_fb`: `UIO_GET_FB_PAR` framebuffer size.
+
+Framebuffer PNG conversion now uses the detected `fb_size` instead of assuming
+1920x1080.
 
 ## Experiment matrix
 

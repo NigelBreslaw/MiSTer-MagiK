@@ -38,7 +38,7 @@ SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 
 usage() {
-  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
@@ -76,7 +76,8 @@ if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
   BENCH_SCENES+=(video_playback)
 fi
 
-# Label defaults: P2* → half-res render (960×540); A*/PS/LS → full-res (1920×1080).
+# Label defaults kept for historical A/P2 comparisons; runtime logs decide the
+# real render/framebuffer sizes recorded in notes and PNG conversion.
 if [[ -z "$RENDER_SCALE" ]]; then
   case "$LABEL" in
     P2*|p2*) RENDER_SCALE=1 ;;
@@ -166,6 +167,62 @@ END {
 ' "$ui_log"
 }
 
+parse_mode_notes() {
+  local ui_log="$1"
+  awk '
+function add_note(key, value) {
+  if (value == "") return
+  if (out != "") out = out "; "
+  out = out key "=" value
+}
+function value_after(line, key, rest) {
+  rest = line
+  if (index(rest, key) == 0) return ""
+  rest = substr(rest, index(rest, key) + length(key))
+  sub(/[ ;].*$/, "", rest)
+  return rest
+}
+/^slint-scale=/ {
+  render = value_after($0, "render=")
+  fb = value_after($0, "fb=")
+  fb_scale = value_after($0, "fb_scale=")
+  bench_render_scale = value_after($0, "bench_render_scale=")
+}
+/^display-config:/ {
+  fb0 = value_after($0, "fb0=")
+  physical = value_after($0, "uio_vres=")
+  pixel_repetition = value_after($0, "pixrep=")
+  uio_fb = value_after($0, "uio_fb_par=")
+}
+END {
+  add_note("physical_mode", physical)
+  add_note("fb_size", fb0 != "" ? fb0 : fb)
+  add_note("render_size", render)
+  add_note("fb_scale", fb_scale)
+  add_note("pixel_repetition", pixel_repetition)
+  add_note("uio_fb", uio_fb)
+  add_note("bench_render_scale", bench_render_scale)
+  print out
+}
+' "$ui_log"
+}
+
+capture_size_from_log() {
+  local ui_log="$1"
+  local size
+  size="$(sed -n 's/^slint-scale=.* fb=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$ui_log" | head -1)"
+  if [[ -z "$size" ]]; then
+    size="$(sed -n 's/^display-config: .*fb0=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$ui_log" | head -1)"
+  fi
+  echo "$size"
+}
+
+detect_ini_mode_notes() {
+  mister run "awk 'BEGIN{s=\"global\"} /^\\[/ {s=\$0; low=tolower(s)} low==\"[mister]\" || low==\"[menu]\" { if (\$0 ~ /^[[:space:]]*(video_mode|direct_video|menu_pal|forced_scandoubler|fb_size)[[:space:]]*=/) {gsub(/[ \t]+/, \"\", \$0); print s \":\" \$0} }' /media/fat/MiSTer.ini 2>/dev/null" \
+    | tr '\n' ',' \
+    | sed 's/,$//'
+}
+
 append_tsv_row() {
   local scene="$1" date_iso="$2"
   local render_us="$3" vsync_us="$4" copy_us="$5" rows_avg="$6" fps_val="$7"
@@ -214,7 +271,7 @@ i=0
 while [ \$i -lt $secs ]; do
   if kill -0 \$UI_PID 2>/dev/null; then
     if [ \$FB_CAPTURED -eq 0 ] && [ \$i -ge $capture_at ]; then
-      dd if=/dev/fb0 of=/tmp/bench-fb.raw bs=1M count=8 2>/dev/null && FB_CAPTURED=1
+      dd if=/dev/fb0 of=/tmp/bench-fb.raw bs=1M count=32 2>/dev/null && FB_CAPTURED=1
     fi
     t1=\$(jiffies \$UI_PID)
     sleep 1
@@ -264,12 +321,16 @@ cat /tmp/bench-ui.log
     rss_kb=$((rss_kb * 4))
   fi
 
-  local render_us="" vsync_us="" copy_us="" rows_avg="" fps_val="" visual_ok="no" notes=""
+  local render_us="" vsync_us="" copy_us="" rows_avg="" fps_val="" visual_ok="no" notes="" mode_notes=""
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
     read -r render_us vsync_us copy_us rows_avg fps_val _cnt <<<"$parse_stats"
   else
     notes="no-fps-lines"
+  fi
+  mode_notes="$(parse_mode_notes "$ui_log")"
+  if [[ -n "$mode_notes" ]]; then
+    notes="${notes:+$notes; }$mode_notes"
   fi
 
   if [[ "${ui_rc:-1}" == "0" ]] || grep -q '^done:' "$ui_log"; then
@@ -286,8 +347,17 @@ cat /tmp/bench-ui.log
   echo "==> Capture $png_out (mid-run snapshot at ~${capture_at}s)"
   mkdir -p "$HERE/build"
   local raw="$HERE/build/bench-fb.raw"
+  local capture_size capture_w capture_h
+  capture_size="$(capture_size_from_log "$ui_log")"
+  if [[ -n "$capture_size" ]]; then
+    read -r capture_w capture_h <<<"$capture_size"
+  else
+    capture_w=1920
+    capture_h=1080
+    notes="${notes:+$notes; }capture-size-fallback=1920x1080"
+  fi
   if [[ "$fb_captured" == "1" ]] && mister get /tmp/bench-fb.raw "$raw" >/dev/null 2>&1 \
-    && mister raw-to-png "$raw" 1920 1080 "$png_out" >/dev/null 2>&1; then
+    && mister raw-to-png "$raw" "$capture_w" "$capture_h" "$png_out" >/dev/null 2>&1; then
     :
   else
     visual_ok="no"
@@ -321,7 +391,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   if [[ "$RENDER_SCALE" == "2" ]]; then
     HOST_NOTES="${HOST_NOTES}; render_scale=2; design=960x540; render=1920x1080; font=PressStart2P"
   else
-    HOST_NOTES="${HOST_NOTES}; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P"
+    HOST_NOTES="${HOST_NOTES}; render_scale=1; design=runtime; render=runtime; font=PressStart2P"
   fi
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
@@ -330,7 +400,7 @@ else
   if [[ "$RENDER_SCALE" == "2" ]]; then
     HOST_NOTES="${HOST_NOTES}; render_scale=2; design=960x540; render=1920x1080; font=PressStart2P"
   else
-    HOST_NOTES="${HOST_NOTES}; render_scale=1; design=960x540; render=960x540; fb_scale=2; font=PressStart2P"
+    HOST_NOTES="${HOST_NOTES}; render_scale=1; design=runtime; render=runtime; font=PressStart2P"
   fi
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
@@ -356,6 +426,10 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
     mister put "$VIDEO_SRC" "$VIDEO_REMOTE"
   fi
   mister run "file $REMOTE && ldd $REMOTE 2>&1 | head -3" || HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ldd-fail"
+  ini_mode_notes="$(detect_ini_mode_notes || true)"
+  if [[ -n "$ini_mode_notes" ]]; then
+    HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ini_mode=$ini_mode_notes"
+  fi
 
   for scene in "${BENCH_SCENES[@]}"; do
     echo "==> Scene $scene (${SCENE_SECS}s)"

@@ -221,6 +221,12 @@ scripts/mister wait
 scripts/bench-toolchain.sh A0 --clean --replace-label
 ```
 
+`bench-toolchain.sh` keeps the historical TSV schema, but new rows append
+display metadata to `notes`: `ini_mode`, `physical_mode`, `fb_size`,
+`render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, and
+`bench_render_scale`. Display-mode visual sweep records live in
+`history/toolchain-bench/display-modes-20260607.md`.
+
 ### Agent sandbox / approval hygiene
 
 Codex sandbox approval matches the outer command prefix. Inline environment
