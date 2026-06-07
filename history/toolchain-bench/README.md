@@ -48,13 +48,14 @@ appended to the `notes` column for new runs:
 - `physical_mode`: `UIO_GET_VRES` active mode reported by the FPGA.
 - `fb_size`: Linux `/dev/fb0` visible size used for capture conversion.
 - `render_size`: Slint software-renderer surface size.
-- `fb_scale`: framebuffer copy scale (`2` for legacy 1080p pixel-doubled
-  benchmark path, `1` for native low/runtime-sized modes).
+- `fb_scale`: framebuffer copy scale reported by the runtime. The current
+  dynamic path renders and copies 1:1; historical rows may contain `2` from the
+  removed pixel-doubled benchmark path.
 - `pixel_repetition`: FPGA pixel-repetition value from `UIO_GET_VRES`.
 - `uio_fb`: `UIO_GET_FB_PAR` framebuffer size.
 
-Framebuffer PNG conversion now uses the detected `fb_size` instead of assuming
-1920x1080.
+Framebuffer PNG conversion uses the detected `fb_size` instead of a fixed
+capture size.
 
 ## Experiment matrix
 
