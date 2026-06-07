@@ -45,7 +45,7 @@ slint = { git = "https://github.com/slint-ui/slint", branch = "master" }
 slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
 
 [profile.release]
-# Daily dev / quick deploy: thin LTO, parallel codegen (~3 min clean cross-build; A0-class).
+# Daily dev / quick deploy: thin LTO, parallel codegen, Cortex-A9 via build-arm.sh.
 # See magik-gui/BUILD.md and `build-arm.sh --fast`.
 opt-level = 3
 lto = true
@@ -54,7 +54,7 @@ panic = "abort"
 
 [profile.release-device]
 # Full MiSTer release: fat LTO + single CGU (A3 bench winner on size; ~5 min clean).
-# NEON/VFP rustflags are applied by build-arm.sh for this profile only.
+# Cortex-A9 tuning is applied by build-arm.sh for every optimized ARM build.
 inherits = "release"
 lto = "fat"
 codegen-units = 1
