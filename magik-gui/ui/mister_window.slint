@@ -1,9 +1,12 @@
-// Runtime scale: 1 = 960×540, 2 = 1920×1080. Rust sets `MisterUi.scale` before show.
+// Rust sets the root window dimensions before show. Defaults preserve the
+// current launcher/benchmark design size when a caller does not override them.
 export global MisterUi {
     in-out property <int> scale: 1;
+    in-out property <int> window-width: 960;
+    in-out property <int> window-height: 540;
 }
 
 export component MisterWindow inherits Window {
-    width: 960px * MisterUi.scale;
-    height: 540px * MisterUi.scale;
+    width: MisterUi.window-width * 1px;
+    height: MisterUi.window-height * 1px;
 }

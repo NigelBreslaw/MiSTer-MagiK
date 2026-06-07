@@ -330,8 +330,10 @@ macro_rules! with_scene_app {
             "app_construct",
             format!("scene_type={} ok=1", stringify!($module::$ty)),
         );
-        $app.global::<slint_ui::$module::MisterUi>()
-            .set_scale(SLINT_UI_SCALE);
+        let mister_ui = $app.global::<slint_ui::$module::MisterUi>();
+        mister_ui.set_scale(SLINT_UI_SCALE);
+        mister_ui.set_window_width($ui.render_w() as i32);
+        mister_ui.set_window_height($ui.render_h() as i32);
         configure_window($ui, $window);
         $body
     }};
