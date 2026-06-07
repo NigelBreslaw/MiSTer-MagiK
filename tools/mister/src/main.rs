@@ -133,6 +133,14 @@ fn run_cli() -> Result<()> {
                 .ok_or("profile-summary needs <frame-profile.tsv>")?;
             profile_summary(Path::new(path))?;
         }
+        "raw-to-png" => {
+            if args.len() < 4 {
+                return Err("raw-to-png needs <raw> <width> <height> <out.png>".into());
+            }
+            let width = args[1].parse::<usize>()?;
+            let height = args[2].parse::<usize>()?;
+            raw_to_png(Path::new(&args[0]), width, height, Path::new(&args[3]))?;
+        }
         "recover" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             if !dry_run {
@@ -154,7 +162,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|profile-summary|recover> ..."
+        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|profile-summary|raw-to-png|recover> ..."
     );
 }
 
@@ -954,6 +962,23 @@ fn write_png_bgrx(raw: &[u8], w: usize, h: usize, path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn raw_to_png(raw_path: &Path, w: usize, h: usize, out_path: &Path) -> Result<()> {
+    let raw = fs::read(raw_path)?;
+    let expected = w
+        .checked_mul(h)
+        .and_then(|px| px.checked_mul(4))
+        .ok_or("raw dimensions overflow")?;
+    if raw.len() < expected {
+        return Err(format!(
+            "{} has {} bytes, expected at least {expected}",
+            raw_path.display(),
+            raw.len()
+        )
+        .into());
+    }
+    write_png_bgrx(&raw[..expected], w, h, out_path)
+}
+
 fn zlib_store(data: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01];
     let mut pos = 0;
@@ -1253,6 +1278,30 @@ H: Handlers=sysrq kbd event7
         assert!(png.windows(4).any(|w| w == b"IEND"));
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
         assert_eq!(adler32(b"Wikipedia"), 0x11e6_0398);
+    }
+
+    #[test]
+    fn raw_to_png_reads_bgrx_file_and_rejects_short_input() {
+        let raw_path = temp_path("tiny.raw");
+        let png_path = temp_path("tiny-from-raw.png");
+        fs::write(
+            &raw_path,
+            [
+                0x00, 0x00, 0xff, 0x00, // red in BGRX
+                0x00, 0xff, 0x00, 0x00, // green
+                0xff, 0x00, 0x00, 0x00, // blue
+                0xff, 0xff, 0xff, 0x00, // white
+            ],
+        )
+        .unwrap();
+        raw_to_png(&raw_path, 2, 2, &png_path).unwrap();
+        let png = fs::read(&png_path).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        let err = raw_to_png(&raw_path, 3, 3, &png_path).unwrap_err();
+        assert!(err.to_string().contains("expected at least 36"));
+        let _ = fs::remove_file(&raw_path);
+        let _ = fs::remove_file(&png_path);
     }
 
     #[test]

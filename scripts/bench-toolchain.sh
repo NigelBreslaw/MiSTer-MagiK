@@ -103,20 +103,9 @@ fi
 
 if [[ "$REPLACE_LABEL" -eq 1 ]]; then
   echo "==> Removing prior rows for label=$LABEL from $TSV"
-  LABEL="$LABEL" TSV="$TSV" python3 <<'PY'
-import os
-path = os.environ["TSV"]
-label = os.environ["LABEL"]
-with open(path, encoding="utf-8") as f:
-    lines = f.readlines()
-if not lines:
-    raise SystemExit(0)
-header = lines[0]
-rows = [ln for ln in lines[1:] if ln.strip() and not ln.startswith(label + "\t")]
-with open(path, "w", encoding="utf-8") as f:
-    f.write(header)
-    f.writelines(rows)
-PY
+  tmp_tsv="$(mktemp)"
+  awk -v label="$LABEL" 'NR == 1 || ($0 != "" && substr($0, 1, length(label) + 1) != label "\t")' "$TSV" >"$tmp_tsv"
+  mv "$tmp_tsv" "$TSV"
 fi
 
 mister() {
@@ -129,44 +118,52 @@ rustc_version() {
 
 parse_ui_log() {
   local ui_log="$1"
-  UI_LOG="$ui_log" python3 <<'PY'
-import os, re, sys
-path = os.environ["UI_LOG"]
-pat = re.compile(
-    r"fps ~ (\d+).*render (\d+)us.*vsync-wait (\d+)us.*copy (\d+)us.*\((\d+) (?:logical )?rows avg\)"
-)
-console_pat = re.compile(
-    r"fps ~ (\d+).*ram-scroll (\d+)us.*exposed-strip (\d+)us.*fb-copy (\d+)us"
-)
-rows = []
-with open(path, encoding="utf-8", errors="ignore") as f:
-    for line in f:
-        m = pat.search(line)
-        if m:
-            rows.append(tuple(int(m.group(i)) for i in range(1, 6)))
-            continue
-        m = console_pat.search(line)
-        if m:
-            rows.append((
-                int(m.group(1)),
-                int(m.group(2)),
-                int(m.group(3)),
-                int(m.group(4)),
-                0,
-            ))
-if len(rows) <= 3:
-    sys.exit(0)
-rows = rows[3:]
-n = len(rows)
-print(
-    sum(r[1] for r in rows) // n,
-    sum(r[2] for r in rows) // n,
-    sum(r[3] for r in rows) // n,
-    sum(r[4] for r in rows) // n,
-    sum(r[0] for r in rows) // n,
-    n,
-)
-PY
+  awk '
+function number_after(line, key, rest) {
+  rest = line
+  if (index(rest, key) == 0) return ""
+  rest = substr(rest, index(rest, key) + length(key))
+  sub(/^[^0-9]*/, "", rest)
+  sub(/[^0-9].*/, "", rest)
+  return rest + 0
+}
+function rows_avg(line, rest) {
+  rest = line
+  if (index(rest, "(") == 0 || index(rest, "rows avg") == 0) return 0
+  sub(/^.*\(/, "", rest)
+  sub(/ .*/, "", rest)
+  return rest + 0
+}
+/fps ~ / {
+  fps = number_after($0, "fps ~")
+  if (index($0, "ram-scroll ") > 0) {
+    render = number_after($0, "ram-scroll ")
+    vsync = number_after($0, "exposed-strip ")
+    copy = number_after($0, "fb-copy ")
+    rows = 0
+  } else if (index($0, "render ") > 0 && index($0, "vsync-wait ") > 0 && index($0, "copy ") > 0) {
+    render = number_after($0, "render ")
+    vsync = number_after($0, "vsync-wait ")
+    copy = number_after($0, "copy ")
+    rows = rows_avg($0)
+  } else {
+    next
+  }
+  count++
+  if (count <= 3) next
+  n++
+  render_sum += render
+  vsync_sum += vsync
+  copy_sum += copy
+  rows_sum += rows
+  fps_sum += fps
+}
+END {
+  if (n > 0) {
+    print int(render_sum / n), int(vsync_sum / n), int(copy_sum / n), int(rows_sum / n), int(fps_sum / n), n
+  }
+}
+' "$ui_log"
 }
 
 append_tsv_row() {
@@ -290,7 +287,7 @@ cat /tmp/bench-ui.log
   mkdir -p "$HERE/build"
   local raw="$HERE/build/bench-fb.raw"
   if [[ "$fb_captured" == "1" ]] && mister get /tmp/bench-fb.raw "$raw" >/dev/null 2>&1 \
-    && python3 "$HERE/scripts/raw_to_png.py" "$raw" 1920 1080 "$png_out" >/dev/null 2>&1; then
+    && mister raw-to-png "$raw" 1920 1080 "$png_out" >/dev/null 2>&1; then
     :
   else
     visual_ok="no"

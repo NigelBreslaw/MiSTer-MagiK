@@ -68,9 +68,9 @@ Stock `/media/fat/MiSTer` remains the canonical boot binary. It reads
 `main=` hook. This keeps `update_all` working normally and lets MiSTer MagiK
 become an update_all-managed add-on later.
 
-`scripts/restore-stock-boot.sh` returns boot to stock by removing
-`main=MiSTer_MagiK` from `[MiSTer]` and ensuring `inittab` still boots
-`/media/fat/MiSTer`.
+`scripts/restore-stock-boot.sh` returns boot to stock by restoring
+`/media/fat/MiSTer.ini.before-mister-magik-main` and ensuring `inittab` still
+boots `/media/fat/MiSTer`.
 
 `scripts/deploy-main-mister-experiment.sh` and `scripts/install-slint-boot.sh`
 upload `scripts/mister-magik/repair-boot-ini.awk` to the device before editing

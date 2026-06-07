@@ -30,15 +30,15 @@ scripts/
   deploy-main-mister-experiment.sh build + deploy Main-as-parent experiment
   install-slint-boot.sh       one-time: MiSTer.ini main= handoff to MiSTer_MagiK
   restore-stock-boot.sh       revert to stock MiSTer menu
-  mister_ssh.py               paramiko SSH helper
+  mister                      Rust SSH/status/snapshot wrapper
+tools/mister/                 Rust host-side MiSTer CLI
 history/                      experiment notes
 AGENTS.md                     operational guide (read this for MiSTer quirks)
 ```
 
 ## Build & deploy
 
-Requires [Docker](https://www.docker.com/), [Rust](https://rustup.rs/), and
-[uv](https://docs.astral.sh/uv/) (host SSH only).
+Requires [Docker](https://www.docker.com/) and [Rust](https://rustup.rs/).
 
 
 See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.
@@ -67,8 +67,8 @@ Or install the boot handoff after deploying binaries:
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 ```
 
-Restore stock menu by removing the `main=MiSTer_MagiK` handoff and ensuring
-`inittab` boots stock MiSTer:
+Restore stock menu by restoring `/media/fat/MiSTer.ini.before-mister-magik-main`
+and ensuring `inittab` boots stock MiSTer:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
@@ -79,7 +79,7 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
 Kill stock MiSTer so it releases the gamepad, then run the launcher:
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister run \
   'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
 ```
 
