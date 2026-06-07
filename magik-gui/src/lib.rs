@@ -13,3 +13,4 @@ pub mod input_info;
 pub mod input_repeat;
 pub mod library_bench;
 pub mod runtime_status;
+pub mod vsync_pacer;
