@@ -389,13 +389,26 @@ fn restore_menu_wallpaper() {
         .status();
 }
 
+fn write_mister_command(cmd: &str) -> Result<(), String> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(CMD_FIFO)
+        .and_then(|mut f| f.write_all(cmd.as_bytes()))
+        .map_err(|e| format!("failed to write {CMD_FIFO}: {e}"))
+}
+
 pub fn exit_to_mister() -> Result<(), String> {
-    std::fs::write("/tmp/mister-magik-stock-menu", b"1\n")
-        .map_err(|e| format!("failed to write stock-menu marker: {e}"))?;
     restore_menu_wallpaper();
-    if !mister_running() {
+
+    if mister_running() {
+        if !wait_for_fifo() {
+            return Err(format!("timed out waiting for {CMD_FIFO}"));
+        }
+        write_mister_command("mister_magik_exit_to_menu\n")?;
+    } else {
         spawn_mister()?;
     }
+
     Ok(())
 }
 
@@ -452,11 +465,7 @@ pub fn execute_game_launch(launch_ref: &str) -> Result<bool, String> {
         format!("load_core {launch_ref}\n")
     };
     println!("launch: {}", cmd.trim_end());
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(CMD_FIFO)
-        .and_then(|mut f| f.write_all(cmd.as_bytes()))
-        .map_err(|e| format!("failed to write {CMD_FIFO}: {e}"))?;
+    write_mister_command(&cmd)?;
 
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
     Ok(spawned)
