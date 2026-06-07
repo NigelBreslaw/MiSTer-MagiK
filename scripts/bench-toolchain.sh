@@ -17,7 +17,7 @@ TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
 
 # Slint scenes (see magik-gui/ui/bench/README.md)
-BENCH_SCENES=(demo full_motion static_ui local_motion text_heavy solid_fill list_scroll console_scroll dirty_band)
+BENCH_SCENES=(demo full_motion static_ui local_motion console_scroll)
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
 VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magik/mslug3.mov}"
 
@@ -198,7 +198,7 @@ run_scene_on_device() {
   fi
   mister run "
 set -e
-# Visible bench path: Slint owns SPI + HDMI at 60 Hz (see scripts/bench-diagnose.sh).
+# Visible bench path: Slint owns SPI + HDMI at 60 Hz.
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
@@ -271,9 +271,6 @@ cat /tmp/bench-ui.log
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
     read -r render_us vsync_us copy_us rows_avg fps_val _cnt <<<"$parse_stats"
-    if [[ "$scene" == "console_scroll" ]]; then
-      notes="${notes:+$notes; }console_scroll: render_us=ram-scroll; vsync_us=exposed-strip; copy_us=fb-copy"
-    fi
   else
     notes="no-fps-lines"
   fi

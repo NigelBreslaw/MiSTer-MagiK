@@ -7,13 +7,7 @@
 //!   scenes    list Slint scene names
 //!   fb        paint a geometry test pattern to /dev/fb0 and route buffer 0 to HDMI
 //!   input     gamepad log / sniff / calibrate
-//!   catalog-bench  benchmark arcade catalog pipeline phases
-//!   library-bench  benchmark whole MiSTer library indexing + archive TOCs
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
-//!   library-db-bench  benchmark cached SQLite library database open/query only
-//!   preview-bench  benchmark arcade preview image read/decode
-//!   capture-png [out] [w] [h]  capture /dev/fb0 to a PNG on the MiSTer
-//!   capture-raw [out] [w] [h]  capture /dev/fb0 to raw BGRX on the MiSTer
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
@@ -23,7 +17,6 @@
 use std::ffi::CString;
 
 mod boot_analytics;
-mod capture;
 mod cpu_profile;
 mod fb;
 mod fpga;
@@ -31,7 +24,6 @@ mod frame_profile;
 mod input;
 mod launcher;
 mod mr_audio;
-mod preview_bench;
 mod preview_worker;
 mod setup_nav;
 mod ui_display;
@@ -40,7 +32,9 @@ mod ui_runner;
 mod video_player;
 mod vt;
 
-pub use mister_magik_fb::{arcade_catalog, controller_db, input_repeat, library_bench};
+pub use mister_magik_fb::{
+    arcade_catalog, command_args, controller_db, input_repeat, library_bench,
+};
 
 use fb::{Display, Pixel};
 use fpga::{Fpga, Mode, MODE_1080P60, UIO_GET_FB_PAR, UIO_GET_VRES};
@@ -49,34 +43,17 @@ const W: usize = 1920;
 const H: usize = 1080;
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
-const COMMANDS: &[&str] = &[
-    "read",
-    "route",
-    "fb",
-    "ui",
-    "scenes",
-    "input",
-    "catalog-bench",
-    "library-bench",
-    "library-scan-bench",
-    "library-db-bench",
-    "preview-bench",
-    "capture-png",
-    "capture-raw",
-    "audio-tone",
-];
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     boot_analytics::event("process_start", format!("args={}", args.join(" ")));
 
     if args.len() >= 2 {
-        if should_handoff_to_mister(&args[1]) {
+        if command_args::should_handoff_to_mister(&args[1]) {
             exec_mister(&args);
         }
     }
 
-    let cmd = resolve_command(&args);
+    let cmd = command_args::resolve_command(&args);
 
     println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
 
@@ -95,51 +72,25 @@ fn main() {
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "input" => run_input(),
-        "catalog-bench" => run_catalog_bench(),
-        "library-bench" => library_bench::run(),
         "library-scan-bench" => library_bench::run_scan_bench(),
-        "library-db-bench" => library_bench::run_db_bench(),
-        "preview-bench" => preview_bench::run(),
-        "capture-png" => run_capture_png(),
-        "capture-raw" => run_capture_raw(),
         "audio-tone" => run_audio_tone(&mut f),
         other => {
-            eprintln!("unknown command '{other}' (use: {})", COMMANDS.join(" | "));
+            eprintln!(
+                "unknown command '{other}' (use: {})",
+                command_args::COMMANDS.join(" | ")
+            );
             std::process::exit(2);
         }
     }
 }
 
-/// Boot via `main=` in MiSTer.ini, or reset back to menu — run the Slint launcher.
-fn resolve_command(args: &[String]) -> String {
-    match args.get(1).map(|s| s.as_str()) {
-        None => "ui".into(),
-        Some("") => "ui".into(),
-        Some(arg1) if is_launcher_boot(arg1) => "ui".into(),
-        Some(arg1) => arg1.to_string(),
+fn run_audio_tone(f: &mut Fpga) {
+    f.set_audio_volume(0);
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if let Err(e) = mr_audio::run_tone_from_args(&args) {
+        eprintln!("audio-tone failed: {e}");
+        std::process::exit(1);
     }
-}
-
-fn is_launcher_boot(arg: &str) -> bool {
-    arg.ends_with("menu.rbf") || arg.ends_with("/menu.rbf")
-}
-
-/// Main re-exec'd us with a core path — hand off to MiSTer_MagiK so gameplay works.
-fn should_handoff_to_mister(arg: &str) -> bool {
-    if COMMANDS.contains(&arg) {
-        return false;
-    }
-    if arg.ends_with("menu.rbf") {
-        return false;
-    }
-    arg.ends_with(".rbf")
-        || arg.ends_with(".mra")
-        || arg.ends_with(".mgl")
-        || arg.ends_with(".zip")
-        || arg.ends_with(".7z")
-        || arg.ends_with(".lha")
-        || arg.ends_with(".lzh")
-        || arg.ends_with(".rar")
 }
 
 fn exec_mister(args: &[String]) {
@@ -334,54 +285,6 @@ fn run_input() {
             );
             std::process::exit(2);
         }
-    }
-}
-
-fn run_catalog_bench() {
-    let args: Vec<String> = std::env::args().collect();
-    let mut sample = 10usize;
-    if let Some(i) = args.iter().position(|a| a == "--sample-images") {
-        if let Some(n) = args.get(i + 1).and_then(|s| s.parse().ok()) {
-            sample = n;
-        }
-    }
-
-    let root = std::env::var("MISTER_ARCADE_ROOT")
-        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    println!("catalog-bench root={root} sample_images={sample}");
-    let (catalog, timings) = arcade_catalog::build_with_options(
-        &root,
-        arcade_catalog::BuildOptions {
-            sample_image_decodes: sample,
-        },
-        None,
-    );
-    timings.print_summary();
-    println!("games={}", catalog.len());
-}
-
-fn run_audio_tone(f: &mut Fpga) {
-    f.set_audio_volume(0);
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    if let Err(e) = mr_audio::run_tone_from_args(&args) {
-        eprintln!("audio-tone failed: {e}");
-        std::process::exit(1);
-    }
-}
-
-fn run_capture_png() {
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    if let Err(e) = capture::run_png(&args) {
-        eprintln!("capture-png failed: {e}");
-        std::process::exit(1);
-    }
-}
-
-fn run_capture_raw() {
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    if let Err(e) = capture::run_raw(&args) {
-        eprintln!("capture-raw failed: {e}");
-        std::process::exit(1);
     }
 }
 

@@ -10,38 +10,16 @@ kill -9 $(pidof MiSTer) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui full_motion 20
 ```
 
-Or use **`scripts/bench-diagnose.sh visible …`** (streams progress, no timeout).
-
-Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `text_heavy`, `solid_fill`, `list_scroll`, `console_scroll`, `dirty_band`.
+Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `console_scroll`.
 With a `--video` build, `video_playback` is also available. It expects
 `/media/fat/mister-magik/mslug3.mov` by default: H.264 baseline video plus
 48 kHz stereo `pcm_s16le` audio. Override with `MISTER_VIDEO_PATH`.
-
-### dirty_band — copy budget sweep
-
-Solid-color band scrolling vertically. Set band height (% of 540 logical rows) via env:
-
-```bash
-MISTER_DIRTY_BAND_PCT=50 /media/fat/mister-magik/mister-magik-fb ui dirty_band 15
-```
-
-Sweep 10–100% and print the ~60 fps cutoff:
-
-```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench_dirty_band.sh
-```
 
 Shared window: [`../mister_window.slint`](../mister_window.slint).
 
 ## Profiling (per-frame timings + CPU flamegraph)
 
-Build a symbols + pprof binary, deploy, run a scene, pull artifacts:
-
-```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/profile-scene.sh full_motion 30
-```
-
-On device manually:
+On device:
 
 ```bash
 MISTER_PROFILE=1 \
@@ -59,8 +37,6 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
 
 Phase breakdown each frame: **anim** (Slint timers) · **render** (software renderer) · **vsync** (`FBIO_WAITFORVSYNC`) · **copy** (dirty rect/rows → fb0, includes 2× upscale). **wall** = whole iteration.
-
-Host-side TSV rollup: `python3 scripts/analyze-frame-profile.py history/toolchain-bench/profile-*/mister-frame-*.tsv`
 
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 

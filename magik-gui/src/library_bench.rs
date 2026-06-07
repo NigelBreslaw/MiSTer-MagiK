@@ -4,7 +4,7 @@
 //! decompress full game libraries just to make the launcher searchable.
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -29,7 +29,6 @@ const DEFAULT_ROOTS: &[&str] = &[
 ];
 
 pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
-const LEGACY_BENCH_SQLITE_PATH: &str = "/media/fat/mister-magik/library-bench.sqlite3";
 
 const NORMAL_LAUNCH_EXTS: &[&str] = &[
     "mra", "mgl", "rbf", "rom", "bin", "cue", "iso", "img", "dsk", "vhd", "hdf", "adf", "ipf",
@@ -121,13 +120,8 @@ struct LibraryScan {
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
     discoveries: Vec<GameDiscovery>,
-    root_stats: HashMap<String, RootStats>,
-    format_stats: BTreeMap<ArchiveFormat, FormatStats>,
-    phase_stats: PhaseStats,
     discover_us: u64,
     classify_us: u64,
-    largest_archives: Vec<(u64, String)>,
-    slowest_archives: Vec<(u64, String)>,
 }
 
 pub struct LibraryCatalogLoad {
@@ -207,110 +201,12 @@ enum DiscoveryConfidence {
     CatalogMetadata,
 }
 
-#[derive(Clone, Debug, Default)]
-struct RootStats {
-    files: u64,
-    normal_launchables: u64,
-    archives: u64,
-    scan_us: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-struct FormatStats {
-    containers: u64,
-    entries: u64,
-    launchable_entries: u64,
-    scan_us: u64,
-    skipped: u64,
-    errors: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-struct PhaseStats {
-    mra: TimedCount,
-    mgl: TimedCount,
-    payload: TimedCount,
-    archive_toc: TimedCount,
-    optional_catalog: TimedCount,
-    optional_catalog_entries: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-struct TimedCount {
-    count: u64,
-    us: u64,
-}
-
-impl TimedCount {
-    fn add(&mut self, elapsed_us: u64) {
-        self.count += 1;
-        self.us += elapsed_us;
-    }
-}
-
 #[derive(Clone)]
 struct FoundFile {
     path: PathBuf,
-    root: String,
     ext: String,
     size: u64,
     mtime_secs: i64,
-}
-
-pub fn run() {
-    let cfg = BenchConfig::from_env();
-    let bench_start = Instant::now();
-    println!("library-bench roots={}", cfg.roots.join("|"));
-    println!("library-bench sqlite_path={}", cfg.sqlite_path.display());
-    println!("library-bench archive_toc=header-only no-decompress");
-    println!(
-        "library-bench optional_catalogs={}",
-        if cfg.optional_catalogs { "on" } else { "off" }
-    );
-
-    benchmark_sqlite_cached_open(&cfg.sqlite_path);
-
-    let scan = scan_library(&cfg);
-    println!(
-        "library_bench_initial_scan_tsv\troot_discovery\t{}\tfiles={}",
-        scan.discover_us,
-        scan.root_stats.values().map(|s| s.files).sum::<u64>()
-    );
-    println!(
-        "library_bench_initial_scan_tsv\tclassify_and_archive_toc\t{}\tnormal_files={}\tcontainers={}\tcontainer_entries={}",
-        scan.classify_us,
-        scan.normal_files.len(),
-        scan.containers.len(),
-        scan.entries.len()
-    );
-
-    print_root_stats("library_bench_initial_root_tsv", &scan.root_stats);
-    print_format_stats("library_bench_initial_archive_tsv", &scan.format_stats);
-    print_phase_stats("library_bench_initial_phase_tsv", &scan.phase_stats);
-    print_taxonomy_stats(&scan.discoveries);
-    print_unknown_stats(&scan.discoveries);
-    print_top("largest_archive", &mut scan.largest_archives.clone(), 10);
-    print_top(
-        "slowest_archive_toc",
-        &mut scan.slowest_archives.clone(),
-        10,
-    );
-
-    benchmark_memory_queries(&scan);
-    benchmark_sqlite_backend(&cfg.sqlite_path, &scan);
-    benchmark_second_scan(&cfg, &scan);
-
-    println!(
-        "library_bench_total_tsv\ttotal\t{}\tbackend=sqlite",
-        bench_start.elapsed().as_micros()
-    );
-}
-
-pub fn run_db_bench() {
-    let cfg = BenchConfig::from_env();
-    println!("library-db-bench sqlite_path={}", cfg.sqlite_path.display());
-    benchmark_sqlite_cached_open(&cfg.sqlite_path);
-    benchmark_sqlite_queries(&cfg.sqlite_path);
 }
 
 pub fn run_scan_bench() {
@@ -406,14 +302,6 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("failed to delete {}: {e}", path.display())),
-    }
-    let legacy = Path::new(LEGACY_BENCH_SQLITE_PATH);
-    if legacy != path {
-        match std::fs::remove_file(legacy) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("failed to delete {}: {e}", legacy.display())),
-        }
     }
     Ok(())
 }
@@ -623,11 +511,6 @@ fn scan_library_with_progress(
     let rx = discover_files_pipelined(cfg.roots.clone());
     let mut discover_us = 0;
     let mut file_fingerprints = FileFingerprint::new();
-    let mut root_stats = cfg
-        .roots
-        .iter()
-        .map(|root| (root.clone(), RootStats::default()))
-        .collect::<HashMap<_, _>>();
     let mut directory_manifest = DirectoryManifest::new();
     if let Some(report) = progress.as_mut() {
         report(
@@ -640,28 +523,17 @@ fn scan_library_with_progress(
     let mut containers = Vec::new();
     let mut entries = Vec::new();
     let mut discoveries = Vec::new();
-    let mut format_stats = BTreeMap::<ArchiveFormat, FormatStats>::new();
-    let mut phase_stats = PhaseStats::default();
-    let mut largest_archives = Vec::<(u64, String)>::new();
-    let mut slowest_archives = Vec::<(u64, String)>::new();
-
     let classify_t = Instant::now();
     let mut idx = 0usize;
     while let Ok(event) = rx.recv() {
         let f = match event {
             DiscoveryEvent::File(file) => file,
             DiscoveryEvent::Done {
-                stats,
                 manifest,
                 discover_us: us,
             } => {
                 discover_us = us;
                 directory_manifest = manifest;
-                for (root, discovered) in stats {
-                    let current = root_stats.entry(root).or_default();
-                    current.files = discovered.files;
-                    current.scan_us += discovered.scan_us;
-                }
                 break;
             }
         };
@@ -681,11 +553,6 @@ fn scan_library_with_progress(
         }
         idx += 1;
         if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-            if let Some(r) = root_stats.get_mut(&f.root) {
-                r.archives += 1;
-            }
-            largest_archives.push((f.size, f.path.display().to_string()));
-            let archive_phase_t = Instant::now();
             let scan = scan_archive_toc(&f, format);
             if containers.len() % 10 == 0 {
                 if let Some(report) = progress.as_mut() {
@@ -700,35 +567,13 @@ fn scan_library_with_progress(
                     );
                 }
             }
-            phase_stats
-                .archive_toc
-                .add(archive_phase_t.elapsed().as_micros() as u64);
-            slowest_archives.push((scan.container.scan_us, f.path.display().to_string()));
-            let stats = format_stats.entry(format).or_default();
-            stats.containers += 1;
-            stats.entries += scan.entries.len() as u64;
-            stats.launchable_entries += scan.entries.iter().filter(|e| e.launchable).count() as u64;
-            stats.scan_us += scan.container.scan_us;
-            match &scan.container.scan_status {
-                ArchiveScanStatus::Ok | ArchiveScanStatus::HeaderOnly => {}
-                ArchiveScanStatus::Unsupported => stats.skipped += 1,
-                ArchiveScanStatus::Error(_) => stats.errors += 1,
-            }
-            if let Some(r) = root_stats.get_mut(&f.root) {
-                r.scan_us += scan.container.scan_us;
-            }
             if format == ArchiveFormat::Chd {
                 discoveries.push(discovery_from_file(&f, DiscoverySourceKind::Container));
             } else if is_launchable_container(&f, format) {
                 discoveries.push(discovery_from_file(&f, DiscoverySourceKind::Container));
             }
             if cfg.optional_catalogs {
-                let catalog_t = Instant::now();
                 let catalog_discoveries = catalog_discoveries_from_container(&f, format);
-                phase_stats
-                    .optional_catalog
-                    .add(catalog_t.elapsed().as_micros() as u64);
-                phase_stats.optional_catalog_entries += catalog_discoveries.len() as u64;
                 discoveries.extend(catalog_discoveries);
             }
             if !archive_entries_are_rom_parts(&f, format) {
@@ -742,18 +587,8 @@ fn scan_library_with_progress(
             containers.push(scan.container);
             entries.extend(scan.entries);
         } else if is_normal_launchable(&f.ext) {
-            if let Some(r) = root_stats.get_mut(&f.root) {
-                r.normal_launchables += 1;
-            }
             normal_files.push(f.path.display().to_string());
-            let file_t = Instant::now();
             let discovery = discovery_from_file(&f, source_kind_for_ext(&f.ext));
-            let file_us = file_t.elapsed().as_micros() as u64;
-            match f.ext.as_str() {
-                "mra" => phase_stats.mra.add(file_us),
-                "mgl" => phase_stats.mgl.add(file_us),
-                _ => phase_stats.payload.add(file_us),
-            }
             discoveries.push(discovery);
         }
     }
@@ -767,17 +602,12 @@ fn scan_library_with_progress(
                 "Looking for gamelist.xml screenshots...",
             );
         }
-        let catalog_t = Instant::now();
         let imported = match progress.as_mut() {
             Some(report) => {
                 enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, Some(&mut **report))
             }
             None => enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, None),
         };
-        phase_stats
-            .optional_catalog
-            .add(catalog_t.elapsed().as_micros() as u64);
-        phase_stats.optional_catalog_entries += imported as u64;
         if let Some(report) = progress.as_mut() {
             report(
                 "Importing metadata",
@@ -795,13 +625,8 @@ fn scan_library_with_progress(
         containers,
         entries,
         discoveries,
-        root_stats,
-        format_stats,
-        phase_stats,
         discover_us,
         classify_us: classify_t.elapsed().as_micros() as u64,
-        largest_archives,
-        slowest_archives,
     }
 }
 
@@ -845,7 +670,6 @@ fn read_directory_metadata_signature(
 enum DiscoveryEvent {
     File(FoundFile),
     Done {
-        stats: HashMap<String, RootStats>,
         manifest: DirectoryManifest,
         discover_us: u64,
     },
@@ -857,9 +681,8 @@ fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent
         .name("library-walker".to_string())
         .spawn(move || {
             let t = Instant::now();
-            let (stats, manifest) = discover_files_streaming(&roots, &tx);
+            let manifest = discover_files_streaming(&roots, &tx);
             let _ = tx.send(DiscoveryEvent::Done {
-                stats,
                 manifest,
                 discover_us: t.elapsed().as_micros() as u64,
             });
@@ -929,12 +752,9 @@ fn manifest_child_hash(kind: &[u8], name: &[u8], size: u64, mtime_secs: i64) -> 
 fn discover_files_streaming(
     roots: &[String],
     tx: &mpsc::SyncSender<DiscoveryEvent>,
-) -> (HashMap<String, RootStats>, DirectoryManifest) {
-    let mut stats = HashMap::new();
+) -> DirectoryManifest {
     let mut manifest_builders = BTreeMap::<String, DirectorySignatureBuilder>::new();
     for root in roots {
-        let t = Instant::now();
-        let mut rs = RootStats::default();
         let path = Path::new(root);
         if path.is_dir() {
             let root_key = path.display().to_string();
@@ -1001,10 +821,8 @@ fn discover_files_streaming(
                     meta.len(),
                     mtime_secs,
                 );
-                rs.files += 1;
                 let file = FoundFile {
                     path: p.to_path_buf(),
-                    root: root.clone(),
                     ext,
                     size: meta.len(),
                     mtime_secs,
@@ -1014,14 +832,11 @@ fn discover_files_streaming(
                 }
             }
         }
-        rs.scan_us = t.elapsed().as_micros() as u64;
-        stats.insert(root.clone(), rs);
     }
-    let manifest = manifest_builders
+    manifest_builders
         .into_iter()
         .map(|(dir, sig)| (dir, sig.finish()))
-        .collect();
-    (stats, manifest)
+        .collect()
 }
 
 fn scan_archive_toc(file: &FoundFile, format: ArchiveFormat) -> ArchiveScan {
@@ -1972,245 +1787,6 @@ fn scan_zip_central_directory(file: &FoundFile) -> Result<Vec<LibraryContainerEn
     Ok(entries)
 }
 
-fn benchmark_memory_queries(scan: &LibraryScan) {
-    let query_t = Instant::now();
-    let first_page = scan.normal_files.iter().take(40).count()
-        + scan
-            .entries
-            .iter()
-            .filter(|e| e.launchable)
-            .take(40)
-            .count();
-    println!(
-        "library_bench_memory_query_tsv\tquery_first_page\t{}\trows={first_page}",
-        query_t.elapsed().as_micros()
-    );
-
-    let search_t = Instant::now();
-    let needle = "mario";
-    let normal_matches = scan
-        .normal_files
-        .iter()
-        .filter(|p| p.to_ascii_lowercase().contains(needle))
-        .count();
-    let archive_matches = scan
-        .entries
-        .iter()
-        .filter(|e| e.normalized_title.contains(needle))
-        .count();
-    println!(
-        "library_bench_memory_query_tsv\ttext_search_scan\t{}\tneedle={needle}\tmatches={}",
-        search_t.elapsed().as_micros(),
-        normal_matches + archive_matches
-    );
-
-    let taxonomy_t = Instant::now();
-    let unique: HashMap<String, &GameDiscovery> = scan
-        .discoveries
-        .iter()
-        .map(|d| (discovery_unique_key(d), d))
-        .collect();
-    let cps2_matches = unique
-        .values()
-        .copied()
-        .filter(|d| d.hardware_id == "capcom-cps2")
-        .count();
-    let saturn_matches = unique
-        .values()
-        .copied()
-        .filter(|d| d.platform_id == "saturn")
-        .count();
-    let unknown_matches = unique
-        .values()
-        .copied()
-        .filter(|d| d.platform_id == "unknown" || d.hardware_id == "unknown")
-        .count();
-    let raw_cps2_matches = scan
-        .discoveries
-        .iter()
-        .filter(|d| d.hardware_id == "capcom-cps2")
-        .count();
-    println!(
-        "library_bench_memory_query_tsv\ttaxonomy_query_scan\t{}\tcps2={cps2_matches}\traw_cps2={raw_cps2_matches}\tsaturn={saturn_matches}\tunknown={unknown_matches}",
-        taxonomy_t.elapsed().as_micros()
-    );
-}
-
-fn benchmark_sqlite_backend(path: &Path, scan: &LibraryScan) {
-    benchmark_sqlite_cached_open(path);
-
-    let import_t = Instant::now();
-    match save_sqlite_scan(path, scan) {
-        Ok(bytes) => println!(
-            "library_bench_sqlite_tsv\tfull_import\t{}\tbytes={bytes}\tnormal_files={}\tcontainers={}\tentries={}\traw_discoveries={}\tstored_discoveries={}",
-            import_t.elapsed().as_micros(),
-            scan.normal_files.len(),
-            scan.containers.len(),
-            scan.entries.len(),
-            scan.discoveries.len(),
-            count_sqlite_table(path, "discoveries").unwrap_or(0)
-        ),
-        Err(e) => {
-            println!(
-                "library_bench_sqlite_tsv\tfull_import_error\t{}\t{}",
-                import_t.elapsed().as_micros(),
-                e
-            );
-            return;
-        }
-    }
-
-    benchmark_sqlite_cached_open(path);
-    benchmark_sqlite_queries(path);
-    benchmark_sqlite_no_change(path, scan);
-    benchmark_sqlite_manifest_no_change(path, scan);
-}
-
-fn benchmark_sqlite_cached_open(path: &Path) {
-    let t = Instant::now();
-    match open_sqlite_counts(path) {
-        Ok((bytes, normal_files, containers, entries, discoveries)) => println!(
-            "library_bench_sqlite_tsv\tcached_open\t{}\tbytes={bytes}\tnormal_files={normal_files}\tcontainers={containers}\tentries={entries}\tdiscoveries={discoveries}",
-            t.elapsed().as_micros()
-        ),
-        Err(e) => println!(
-            "library_bench_sqlite_tsv\tcached_open_error\t{}\t{}",
-            t.elapsed().as_micros(),
-            e
-        ),
-    }
-}
-
-fn benchmark_sqlite_queries(path: &Path) {
-    let Ok(conn) = Connection::open(path) else {
-        println!("library_bench_sqlite_tsv\tquery_error\t0\topen failed");
-        return;
-    };
-    let _ = conn.execute_batch("PRAGMA query_only=ON;");
-
-    let first_page_t = Instant::now();
-    let first_page = conn
-        .query_row(
-            "SELECT COUNT(*) FROM (SELECT key FROM discoveries LIMIT 80)",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|n| n.max(0) as u64)
-        .unwrap_or(0);
-    println!(
-        "library_bench_sqlite_tsv\tquery_first_page\t{}\trows={first_page}",
-        first_page_t.elapsed().as_micros()
-    );
-
-    let search_t = Instant::now();
-    let needle = "mario";
-    let matches = conn
-        .query_row(
-            "SELECT COUNT(*) FROM discoveries_fts WHERE discoveries_fts MATCH ?1",
-            [needle],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|n| n.max(0) as u64)
-        .unwrap_or(0);
-    println!(
-        "library_bench_sqlite_tsv\ttext_search_fts\t{}\tneedle={needle}\tmatches={matches}",
-        search_t.elapsed().as_micros()
-    );
-
-    let get_t = Instant::now();
-    let found = conn
-        .query_row("SELECT key FROM discoveries LIMIT 1", [], |r| {
-            r.get::<_, String>(0)
-        })
-        .ok()
-        .and_then(|key| {
-            conn.query_row(
-                "SELECT 1 FROM discoveries WHERE key=?1",
-                [key.as_str()],
-                |r| r.get::<_, u8>(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-        })
-        .is_some();
-    println!(
-        "library_bench_sqlite_tsv\tpoint_lookup\t{}\tfound={found}",
-        get_t.elapsed().as_micros()
-    );
-}
-
-fn benchmark_sqlite_no_change(path: &Path, scan: &LibraryScan) {
-    let t = Instant::now();
-    let changed = read_sqlite_fingerprint(path)
-        .map(|fingerprint| fingerprint != db_fingerprint(scan))
-        .unwrap_or(true);
-    println!(
-        "library_bench_sqlite_tsv\tno_change_fingerprint\t{}\tchanged={changed}",
-        t.elapsed().as_micros()
-    );
-}
-
-fn benchmark_sqlite_manifest_no_change(path: &Path, scan: &LibraryScan) {
-    let t = Instant::now();
-    let changed = read_sqlite_fingerprint(path)
-        .and_then(|fingerprint| {
-            validate_or_rebuild_directory_manifest(
-                &scan.root_stats.keys().cloned().collect::<Vec<_>>(),
-                &fingerprint,
-            )
-            .map(|current| current != fingerprint.directory_manifest)
-        })
-        .unwrap_or(true);
-    println!(
-        "library_bench_sqlite_tsv\tno_change_directory_manifest\t{}\tchanged={changed}\tdirs={}",
-        t.elapsed().as_micros(),
-        scan.directory_manifest.len()
-    );
-}
-
-fn benchmark_second_scan(cfg: &BenchConfig, initial_scan: &LibraryScan) {
-    let scan = scan_library(cfg);
-    let fingerprint_t = Instant::now();
-    let changed = db_fingerprint(&scan) != db_fingerprint(initial_scan)
-        || read_sqlite_fingerprint(&cfg.sqlite_path)
-            .map(|fingerprint| fingerprint != db_fingerprint(&scan))
-            .unwrap_or(true);
-    println!(
-        "library_bench_second_scan_tsv\troot_discovery\t{}\tfiles={}",
-        scan.discover_us,
-        scan.root_stats.values().map(|s| s.files).sum::<u64>()
-    );
-    println!(
-        "library_bench_second_scan_tsv\tclassify_and_archive_toc\t{}\tnormal_files={}\tcontainers={}\tcontainer_entries={}",
-        scan.classify_us,
-        scan.normal_files.len(),
-        scan.containers.len(),
-        scan.entries.len()
-    );
-    println!(
-        "library_bench_second_scan_tsv\tno_change_fingerprint\t{}\tchanged={changed}",
-        fingerprint_t.elapsed().as_micros()
-    );
-    print_phase_stats("library_bench_second_phase_tsv", &scan.phase_stats);
-}
-
-fn db_fingerprint(scan: &LibraryScan) -> DbFingerprint {
-    DbFingerprint {
-        normal_files: scan.normal_files.len(),
-        containers: scan.containers.len(),
-        entries: scan.entries.len(),
-        discoveries: unique_discovery_count(&scan.discoveries),
-        file_fingerprints: scan.file_fingerprints.clone(),
-        container_fingerprints: scan
-            .containers
-            .iter()
-            .map(|c| (c.file_path.clone(), (c.size, c.mtime_secs)))
-            .collect(),
-        directory_manifest: scan.directory_manifest.clone(),
-    }
-}
-
 fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
     discoveries
         .iter()
@@ -2504,38 +2080,6 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
         .map_err(|e| format!("stat sqlite: {e}"))
 }
 
-fn open_sqlite_counts(path: &Path) -> Result<(u64, u64, u64, u64, u64), String> {
-    let bytes = std::fs::metadata(path)
-        .map_err(|e| format!("stat sqlite: {e}"))?
-        .len();
-    let fingerprint = read_sqlite_fingerprint(path).ok_or("read sqlite fingerprint failed")?;
-    Ok((
-        bytes,
-        fingerprint.normal_files as u64,
-        fingerprint.containers as u64,
-        fingerprint.entries as u64,
-        fingerprint.discoveries as u64,
-    ))
-}
-
-fn count_sqlite_table(path: &Path, table: &str) -> Option<u64> {
-    let conn = Connection::open(path).ok()?;
-    sqlite_count(&conn, table).ok()
-}
-
-fn sqlite_count(conn: &Connection, table: &str) -> Result<u64, String> {
-    let sql = match table {
-        "normal_files" => "SELECT COUNT(*) FROM normal_files",
-        "containers" => "SELECT COUNT(*) FROM containers",
-        "entries" => "SELECT COUNT(*) FROM entries",
-        "discoveries" => "SELECT COUNT(*) FROM discoveries",
-        _ => return Err(format!("unknown table: {table}")),
-    };
-    conn.query_row(sql, [], |r| r.get::<_, i64>(0))
-        .map(|n| n.max(0) as u64)
-        .map_err(|e| format!("count {table}: {e}"))
-}
-
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
     let conn = Connection::open(path).ok()?;
     if sqlite_meta_usize(&conn, "version")? != SCHEMA_VERSION as usize {
@@ -2620,95 +2164,6 @@ fn sqlite_meta_usize(conn: &Connection, key: &str) -> Option<usize> {
     })
     .ok()
     .map(|n| n.max(0) as usize)
-}
-
-fn print_root_stats(label: &str, stats: &HashMap<String, RootStats>) {
-    let mut rows: Vec<_> = stats.iter().collect();
-    rows.sort_by(|a, b| a.0.cmp(b.0));
-    for (root, s) in rows {
-        println!(
-            "{label}\t{root}\tfiles={}\tnormal_launchables={}\tarchives={}\tscan_us={}",
-            s.files, s.normal_launchables, s.archives, s.scan_us
-        );
-    }
-}
-
-fn print_format_stats(label: &str, stats: &BTreeMap<ArchiveFormat, FormatStats>) {
-    for (format, s) in stats {
-        println!(
-            "{label}\t{}\tcontainers={}\tentries={}\tlaunchable_entries={}\tscan_us={}\tskipped={}\terrors={}",
-            format.as_str(),
-            s.containers,
-            s.entries,
-            s.launchable_entries,
-            s.scan_us,
-            s.skipped,
-            s.errors
-        );
-    }
-}
-
-fn print_phase_stats(label: &str, stats: &PhaseStats) {
-    print_phase(label, "mra_parse", &stats.mra, "");
-    print_phase(label, "mgl_parse", &stats.mgl, "");
-    print_phase(label, "payload_classify", &stats.payload, "");
-    print_phase(label, "archive_toc", &stats.archive_toc, "");
-    print_phase(
-        label,
-        "optional_catalog_extract",
-        &stats.optional_catalog,
-        &format!("entries={}", stats.optional_catalog_entries),
-    );
-}
-
-fn print_phase(label: &str, name: &str, count: &TimedCount, extra: &str) {
-    let avg_us = if count.count == 0 {
-        0
-    } else {
-        count.us / count.count
-    };
-    if extra.is_empty() {
-        println!(
-            "{label}\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}",
-            count.count, count.us
-        );
-    } else {
-        println!(
-            "{label}\t{name}\tcount={}\tscan_us={}\tavg_us={avg_us}\t{extra}",
-            count.count, count.us
-        );
-    }
-}
-
-fn print_taxonomy_stats(discoveries: &[GameDiscovery]) {
-    let mut seen = HashSet::<String>::new();
-    let mut rows = BTreeMap::<(String, String, String, String), u64>::new();
-    for d in discoveries {
-        if !seen.insert(discovery_unique_key(d)) {
-            continue;
-        }
-        *rows
-            .entry((
-                d.category.clone(),
-                d.platform_id.clone(),
-                d.core_id.clone(),
-                d.hardware_id.clone(),
-            ))
-            .or_default() += 1;
-    }
-    let mut sorted: Vec<_> = rows.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    println!(
-        "library_bench_tsv\ttaxonomy_discovery\t0\traw_discoveries={}\tunique_discoveries={}\tgroups={}",
-        discoveries.len(),
-        seen.len(),
-        sorted.len()
-    );
-    for ((category, platform, core, hardware), count) in sorted.into_iter().take(80) {
-        println!(
-            "library_bench_taxonomy_tsv\t{category}\tplatform={platform}\tcore={core}\thardware={hardware}\tgames={count}"
-        );
-    }
 }
 
 fn discovery_unique_key(d: &GameDiscovery) -> String {
@@ -2850,41 +2305,6 @@ fn is_boot_helper_key(key: &str) -> bool {
             .unwrap_or(false)
 }
 
-fn print_unknown_stats(discoveries: &[GameDiscovery]) {
-    let mut seen = HashSet::<String>::new();
-    let mut buckets = BTreeMap::<String, (u64, String)>::new();
-    for d in discoveries {
-        if !seen.insert(discovery_unique_key(d)) {
-            continue;
-        }
-        if d.platform_id != "unknown" && d.hardware_id != "unknown" {
-            continue;
-        }
-        let bucket = unknown_bucket(d);
-        let entry = buckets
-            .entry(bucket)
-            .or_insert_with(|| (0, d.source_path.clone()));
-        entry.0 += 1;
-    }
-    let mut rows: Vec<_> = buckets.into_iter().collect();
-    rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0)));
-    for (bucket, (count, sample)) in rows.into_iter().take(30) {
-        println!("library_bench_unknown_tsv\t{bucket}\tcount={count}\tsample={sample}");
-    }
-}
-
-fn unknown_bucket(d: &GameDiscovery) -> String {
-    let ext = path_ext(&d.source_path).unwrap_or_else(|| "none".to_string());
-    let lower_path = d.source_path.to_ascii_lowercase();
-    let folder = games_folder(&lower_path)
-        .or_else(|| launcher_folder(&lower_path))
-        .unwrap_or("none");
-    format!(
-        "source={}\tfolder={folder}\text={ext}",
-        source_kind_str(d.source_kind)
-    )
-}
-
 fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
     match kind {
         DiscoverySourceKind::Mra => "mra",
@@ -2893,13 +2313,6 @@ fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
         DiscoverySourceKind::ArchiveEntry => "archive-entry",
         DiscoverySourceKind::Container => "container",
         DiscoverySourceKind::CatalogEntry => "catalog-entry",
-    }
-}
-
-fn print_top(label: &str, rows: &mut Vec<(u64, String)>, n: usize) {
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    for (value, path) in rows.iter().take(n) {
-        println!("library_bench_top_tsv\t{label}\t{value}\t{path}");
     }
 }
 
@@ -2970,11 +2383,6 @@ fn path_ext(path: &str) -> Option<String> {
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
-}
-
-fn launcher_folder(lower_path: &str) -> Option<&str> {
-    let rest = lower_path.split("/_games/").nth(1)?;
-    rest.split('/').next()
 }
 
 fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
@@ -3095,7 +2503,6 @@ mod tests {
         let meta = std::fs::metadata(&path).expect("stat mgl fixture");
         let file = FoundFile {
             path: path.clone(),
-            root: "/media/fat/_Console".to_string(),
             ext: "mgl".to_string(),
             size: meta.len(),
             mtime_secs: mtime_secs(&meta),

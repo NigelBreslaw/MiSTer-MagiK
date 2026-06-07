@@ -1,28 +1,21 @@
 //! Background arcade preview image loader.
 
-use crate::arcade_catalog::{self, DecodedImage, ImageLoadTiming};
+use crate::arcade_catalog::{self, DecodedImage};
 use std::sync::mpsc;
-use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub struct PreviewRequest {
     pub generation: u64,
-    pub selected: usize,
     pub title: String,
     pub image_path: String,
-    pub requested_at: Instant,
 }
 
 #[derive(Clone, Debug)]
 pub struct PreviewResult {
     pub generation: u64,
-    pub selected: usize,
     pub title: String,
     pub image_path: String,
     pub image: Option<DecodedImage>,
-    pub timing: ImageLoadTiming,
-    pub latency_us: u64,
-    pub error: Option<String>,
 }
 
 pub struct PreviewWorker {
@@ -46,15 +39,13 @@ impl PreviewWorker {
         }
     }
 
-    pub fn request(&mut self, selected: usize, title: String, image_path: String) -> u64 {
+    pub fn request(&mut self, title: String, image_path: String) -> u64 {
         let generation = self.next_generation;
         self.next_generation += 1;
         let _ = self.tx.send(PreviewRequest {
             generation,
-            selected,
             title,
             image_path,
-            requested_at: Instant::now(),
         });
         generation
     }
@@ -65,10 +56,6 @@ impl PreviewWorker {
             out.push(result);
         }
         out
-    }
-
-    pub fn recv(&self) -> Option<PreviewResult> {
-        self.rx.recv().ok()
     }
 }
 
@@ -89,23 +76,15 @@ fn load_preview(req: PreviewRequest) -> PreviewResult {
     match arcade_catalog::load_png_rgb8_timed(&req.image_path) {
         Ok(loaded) => PreviewResult {
             generation: req.generation,
-            selected: req.selected,
             title: req.title,
             image_path: req.image_path,
             image: Some(loaded.image),
-            timing: loaded.timing,
-            latency_us: req.requested_at.elapsed().as_micros() as u64,
-            error: None,
         },
-        Err(e) => PreviewResult {
+        Err(_) => PreviewResult {
             generation: req.generation,
-            selected: req.selected,
             title: req.title,
             image_path: req.image_path,
             image: None,
-            timing: ImageLoadTiming::default(),
-            latency_us: req.requested_at.elapsed().as_micros() as u64,
-            error: Some(e),
         },
     }
 }
