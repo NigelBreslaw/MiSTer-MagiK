@@ -5,6 +5,7 @@
 //! fast macOS host tests without compiling Slint/AppKit.
 
 pub mod arcade_catalog;
+pub mod command_args;
 pub mod controller_db;
 pub mod framebuffer_copy;
 pub mod input_info;

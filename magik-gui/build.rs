@@ -25,8 +25,6 @@ fn compile_ui() {
     let mut sources = vec![
         "ui/app.slint",
         "ui/controller_test.slint",
-        "ui/debug.slint",
-        "ui/green.slint",
         "ui/launcher.slint",
     ];
     if !launcher_only {
@@ -34,11 +32,7 @@ fn compile_ui() {
             "ui/bench/full_motion.slint",
             "ui/bench/static_ui.slint",
             "ui/bench/local_motion.slint",
-            "ui/bench/text_heavy.slint",
-            "ui/bench/solid_fill.slint",
-            "ui/bench/list_scroll.slint",
             "ui/bench/console_scroll.slint",
-            "ui/bench/dirty_band.slint",
         ]);
         if std::env::var_os("CARGO_FEATURE_VIDEO").is_some() {
             sources.push("ui/bench/video_playback.slint");

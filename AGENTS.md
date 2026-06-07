@@ -151,10 +151,8 @@ scripts/
   deploy-rust.sh            build + deploy Slint child binary
   install-slint-boot.sh     one-time MiSTer.ini main=MiSTer_MagiK handoff
   restore-stock-boot.sh     revert to stock MiSTer menu
-  mister-magik/boot.sh      legacy boot handoff script (not production)
   mister_ssh.py             paramiko helper — run/reboot/reboot-wait/wait/put/get
-  capture-fb.sh         grab /dev/fb0 → PNG (via mister_ssh + raw_to_png.py)
-  raw_to_png.py         stdlib-only BGRX dump → PNG
+  raw_to_png.py         stdlib-only BGRX dump → PNG (used by bench-toolchain)
   audit-mister.sh       device sanity check (+ Cortex-A9 / NEON cpuinfo for A1)
 reference/              READ-ONLY clones (gitignored) — see §6
 build/                  gitignored framebuffer PNG dumps
@@ -216,9 +214,6 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run "u
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py reboot-wait
 MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py wait
-
-# Capture framebuffer → PNG (only valid while `ui` is still running)
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/fb.png
 
 # Toolchain A/B (host build + all ui/bench scenes on device) → history/toolchain-bench/results.tsv
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean --replace-label

@@ -30,7 +30,6 @@ scripts/
   deploy-main-mister-experiment.sh build + deploy Main-as-parent experiment
   install-slint-boot.sh       one-time: MiSTer.ini main= handoff to MiSTer_MagiK
   restore-stock-boot.sh       revert to stock MiSTer menu
-  mister-magik/boot.sh        legacy boot handoff script; not production
   mister_ssh.py               paramiko SSH helper
 history/                      experiment notes
 AGENTS.md                     operational guide (read this for MiSTer quirks)
@@ -93,13 +92,8 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 uv run python scripts/mister_ssh.py run \
 | `read` | SPI video mode / fb diagnostics |
 | `fb` | geometry test pattern on HDMI |
 | `input log\|sniff\|calibrate` | gamepad debugging |
+| `audio-tone` | HDMI audio sanity check through `/dev/MrAudio` |
 | `scenes` | list bench scene names |
-
-## Verify framebuffer (SSH)
-
-```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/capture-fb.sh build/shot.png
-```
 
 ## References
 

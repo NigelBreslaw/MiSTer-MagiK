@@ -30,24 +30,8 @@ mod slint_ui {
         include!(concat!(env!("OUT_DIR"), "/local_motion.rs"));
     }
     #[cfg(not(mister_ui_scope_launcher))]
-    pub mod text_heavy {
-        include!(concat!(env!("OUT_DIR"), "/text_heavy.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod solid_fill {
-        include!(concat!(env!("OUT_DIR"), "/solid_fill.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod list_scroll {
-        include!(concat!(env!("OUT_DIR"), "/list_scroll.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
     pub mod console_scroll {
         include!(concat!(env!("OUT_DIR"), "/console_scroll.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod dirty_band {
-        include!(concat!(env!("OUT_DIR"), "/dirty_band.rs"));
     }
     #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
     pub mod video_playback {
@@ -55,12 +39,6 @@ mod slint_ui {
     }
     pub mod controller {
         include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
-    }
-    pub mod debug {
-        include!(concat!(env!("OUT_DIR"), "/debug.rs"));
-    }
-    pub mod green {
-        include!(concat!(env!("OUT_DIR"), "/green.rs"));
     }
     pub mod launcher {
         include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
@@ -77,8 +55,6 @@ use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_bench;
 use crate::preview_worker::PreviewWorker;
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-#[cfg(not(mister_ui_scope_launcher))]
-use crate::ui_display::dirty_band_pct_from_env;
 use crate::ui_display::{UiDisplay, FB_H, FB_W, SLINT_UI_SCALE};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
@@ -93,8 +69,6 @@ const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
-    "green",
-    "debug",
     "demo",
     "controller_test",
     #[cfg(not(mister_ui_scope_launcher))]
@@ -104,15 +78,7 @@ pub const UI_SCENES: &[&str] = &[
     #[cfg(not(mister_ui_scope_launcher))]
     "local_motion",
     #[cfg(not(mister_ui_scope_launcher))]
-    "text_heavy",
-    #[cfg(not(mister_ui_scope_launcher))]
-    "solid_fill",
-    #[cfg(not(mister_ui_scope_launcher))]
-    "list_scroll",
-    #[cfg(not(mister_ui_scope_launcher))]
     "console_scroll",
-    #[cfg(not(mister_ui_scope_launcher))]
-    "dirty_band",
     #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
     "video_playback",
 ];
@@ -429,41 +395,10 @@ pub fn run_ui(f: &mut Fpga) {
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
-        "text_heavy" => {
-            with_scene_app!(text_heavy::TextHeavy, &ui, &window, app, {
-                app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
-            });
-        }
-        #[cfg(not(mister_ui_scope_launcher))]
-        "solid_fill" => {
-            with_scene_app!(solid_fill::SolidFill, &ui, &window, app, {
-                app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
-            });
-        }
-        #[cfg(not(mister_ui_scope_launcher))]
-        "list_scroll" => {
-            with_scene_app!(list_scroll::ListScroll, &ui, &window, app, {
-                app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
-            });
-        }
-        #[cfg(not(mister_ui_scope_launcher))]
         "console_scroll" => {
             with_scene_app!(console_scroll::ConsoleScroll, &ui, &window, app, {
                 app.show().expect("show");
                 run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
-            });
-        }
-        #[cfg(not(mister_ui_scope_launcher))]
-        "dirty_band" => {
-            let pct = dirty_band_pct_from_env();
-            with_scene_app!(dirty_band::DirtyBand, &ui, &window, app, {
-                app.set_band_pct(pct);
-                println!("dirty_band band-pct={pct}% (MISTER_DIRTY_BAND_PCT)");
-                app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
             });
         }
         #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
@@ -481,20 +416,6 @@ pub fn run_ui(f: &mut Fpga) {
                 app.show().expect("show");
                 window.request_redraw();
                 run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
-            });
-        }
-        "debug" => {
-            with_scene_app!(debug::DebugUi, &ui, &window, app, {
-                app.show().expect("show");
-                window.request_redraw();
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
-            });
-        }
-        "green" => {
-            with_scene_app!(green::GreenProof, &ui, &window, app, {
-                app.show().expect("show");
-                window.request_redraw();
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
             });
         }
         "launcher" => {
@@ -754,10 +675,9 @@ fn request_arcade_preview(
             bridge.set_arcade_preview_status(PreviewStatus::Ready);
             return;
         }
-        preview.current_generation =
-            preview
-                .worker
-                .request(selected, game.title.clone(), game.image_path.clone());
+        preview.current_generation = preview
+            .worker
+            .request(game.title.clone(), game.image_path.clone());
         if !preview.has_visible_preview {
             bridge.set_arcade_preview_image(Image::default());
             bridge.set_arcade_preview_has_image(false);
