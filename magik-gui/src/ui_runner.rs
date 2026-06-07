@@ -249,7 +249,11 @@ pub fn print_effects() {
     println!("Supported internal sizes:");
     for &(w, h) in EFFECT_SIZES {
         let scale = EffectSize { w, h }.scale_to_1080p().unwrap_or(0);
-        println!("  {w}x{h} ({scale}x to 1920x1080)");
+        if scale > 0 {
+            println!("  {w}x{h} ({scale}x to 1920x1080)");
+        } else {
+            println!("  {w}x{h}");
+        }
     }
 }
 
@@ -304,6 +308,7 @@ impl EffectBenchMode {
 enum EffectFill {
     Full,
     Half,
+    Native,
 }
 
 impl EffectFill {
@@ -311,6 +316,7 @@ impl EffectFill {
         match self {
             Self::Full => "full",
             Self::Half => "half",
+            Self::Native => "native",
         }
     }
 
@@ -318,6 +324,7 @@ impl EffectFill {
         match s {
             "full" => Some(Self::Full),
             "half" => Some(Self::Half),
+            "native" => Some(Self::Native),
             _ => None,
         }
     }
@@ -339,6 +346,7 @@ impl EffectTarget {
         let (physical_w, physical_h, scale) = match fill {
             EffectFill::Full => (1920, 1080, size.scale_to_1080p()?),
             EffectFill::Half => (960, 540, size.scale_to_half_1080p()?),
+            EffectFill::Native => (size.w, size.h, 1),
         };
         if physical_w > ui.fb_w() || physical_h > ui.fb_h() {
             return None;
@@ -389,7 +397,7 @@ fn parse_effect_bench_args() -> (
         Some(s) => match EffectSize::parse(s) {
             Some(size) => size,
             None => {
-                eprintln!("unsupported effect size '{s}' (use 320x180|480x270|640x360|960x540)");
+                eprintln!("unsupported effect size '{s}' (use `effects` to list supported sizes)");
                 std::process::exit(2);
             }
         },
@@ -397,7 +405,7 @@ fn parse_effect_bench_args() -> (
     };
     let fill = match args.get(4).map(String::as_str) {
         Some(s) => EffectFill::parse(s).unwrap_or_else(|| {
-            eprintln!("unknown effect fill '{s}' (use full|half)");
+            eprintln!("unknown effect fill '{s}' (use full|half|native)");
             std::process::exit(2);
         }),
         None => EffectFill::Full,

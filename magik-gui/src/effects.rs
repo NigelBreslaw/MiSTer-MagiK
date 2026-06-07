@@ -18,7 +18,8 @@ pub const EFFECT_NAMES: &[&str] = &[
     "vhs_glitch",
 ];
 
-pub const EFFECT_SIZES: &[(usize, usize)] = &[(320, 180), (480, 270), (640, 360), (960, 540)];
+pub const EFFECT_SIZES: &[(usize, usize)] =
+    &[(320, 180), (320, 224), (480, 270), (640, 360), (960, 540)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectKind {
@@ -171,6 +172,20 @@ struct SourceImage {
     pixels: Vec<u32>,
 }
 
+struct CrtImage {
+    w: usize,
+    h: usize,
+    warped: Vec<u32>,
+    normal: Vec<u32>,
+    spans: Vec<RowSpan>,
+}
+
+#[derive(Clone, Copy)]
+struct RowSpan {
+    start: usize,
+    end: usize,
+}
+
 fn rgb(r: u32, g: u32, b: u32) -> u32 {
     ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)
 }
@@ -237,9 +252,28 @@ fn avg3_table() -> &'static [u8; 766] {
 fn vhs_source_image() -> &'static SourceImage {
     static IMAGE: OnceLock<SourceImage> = OnceLock::new();
     IMAGE.get_or_init(|| {
-        decode_fixture_png(include_bytes!("../benches/png-fixtures/03-btime.png"))
-            .unwrap_or_else(|_| vhs_fallback_image())
+        decode_fixture_png(include_bytes!(
+            "../benches/png-fixtures/04-metal-slug-super-vehicle-001.png"
+        ))
+        .unwrap_or_else(|_| vhs_fallback_image())
     })
+}
+
+fn crt_image_for_size(size: EffectSize) -> Option<&'static CrtImage> {
+    macro_rules! cached {
+        ($name:ident, $w:literal, $h:literal) => {{
+            static $name: OnceLock<CrtImage> = OnceLock::new();
+            Some($name.get_or_init(|| build_crt_image(EffectSize { w: $w, h: $h })))
+        }};
+    }
+    match (size.w, size.h) {
+        (320, 180) => cached!(CRT_320_180, 320, 180),
+        (320, 224) => cached!(CRT_320_224, 320, 224),
+        (480, 270) => cached!(CRT_480_270, 480, 270),
+        (640, 360) => cached!(CRT_640_360, 640, 360),
+        (960, 540) => cached!(CRT_960_540, 960, 540),
+        _ => None,
+    }
 }
 
 fn decode_fixture_png(data: &[u8]) -> Result<SourceImage, String> {
@@ -282,6 +316,82 @@ fn decode_fixture_png(data: &[u8]) -> Result<SourceImage, String> {
         return Err("zune png decoded length mismatch".to_string());
     }
     Ok(SourceImage { w, h, pixels })
+}
+
+fn build_crt_image(size: EffectSize) -> CrtImage {
+    let src = vhs_source_image();
+    let mut warped = barrel_warp_source_image(src, size.w, size.h);
+    let mut spans = Vec::with_capacity(size.h);
+    for y in 0..size.h {
+        spans.push(visible_span(&warped[y * size.w..(y + 1) * size.w]));
+    }
+    let normal = chroma_aberrate_image(size.w, size.h, &warped, 1);
+    CrtImage {
+        w: size.w,
+        h: size.h,
+        warped: std::mem::take(&mut warped),
+        normal,
+        spans,
+    }
+}
+
+fn barrel_warp_source_image(src: &SourceImage, dst_w: usize, dst_h: usize) -> Vec<u32> {
+    const BARREL: f32 = 0.18;
+    const ZOOM: f32 = 0.84;
+    let mut pixels = vec![0; dst_w * dst_h];
+    let dst_cx = (dst_w - 1) as f32 * 0.5;
+    let dst_cy = (dst_h - 1) as f32 * 0.5;
+    let src_cx = (src.w - 1) as f32 * 0.5;
+    let src_cy = (src.h - 1) as f32 * 0.5;
+    let inv_dst_cx = 1.0 / dst_cx.max(1.0);
+    let inv_dst_cy = 1.0 / dst_cy.max(1.0);
+
+    for y in 0..dst_h {
+        let ny = (y as f32 - dst_cy) * inv_dst_cy;
+        for x in 0..dst_w {
+            let nx = (x as f32 - dst_cx) * inv_dst_cx;
+            let r2 = nx * nx + ny * ny;
+            let warp = ZOOM * (1.0 + BARREL * r2);
+            let sx = nx * warp * src_cx + src_cx;
+            let sy = ny * warp * src_cy + src_cy;
+            pixels[y * dst_w + x] = sample_source_nearest(src, sx, sy);
+        }
+    }
+
+    pixels
+}
+
+fn visible_span(row: &[u32]) -> RowSpan {
+    let start = row.iter().position(|&p| p != 0).unwrap_or(0);
+    let end = row.iter().rposition(|&p| p != 0).map_or(0, |x| x + 1);
+    RowSpan { start, end }
+}
+
+fn chroma_aberrate_image(w: usize, h: usize, src: &[u32], aberr: usize) -> Vec<u32> {
+    let mut out = vec![0; w * h];
+    for y in 0..h {
+        let src_row = &src[y * w..(y + 1) * w];
+        let out_row = &mut out[y * w..(y + 1) * w];
+        for x in 0..w {
+            out_row[x] = chroma_pixel(src_row, x, aberr);
+        }
+    }
+    out
+}
+
+fn chroma_pixel(row: &[u32], x: usize, aberr: usize) -> u32 {
+    let sx_r = (x + aberr).min(row.len() - 1);
+    let sx_b = x.saturating_sub(aberr);
+    (row[sx_r] & 0x00ff0000) | (row[x] & 0x0000ff00) | (row[sx_b] & 0x000000ff)
+}
+
+fn sample_source_nearest(src: &SourceImage, x: f32, y: f32) -> u32 {
+    if x < 0.0 || y < 0.0 || x > (src.w - 1) as f32 || y > (src.h - 1) as f32 {
+        return 0;
+    }
+    let sx = (x + 0.5) as usize;
+    let sy = (y + 0.5) as usize;
+    src.pixels[sy.min(src.h - 1) * src.w + sx.min(src.w - 1)]
 }
 
 fn vhs_fallback_image() -> SourceImage {
@@ -526,106 +636,186 @@ fn fire_haze(size: EffectSize, frame: u64, out: &mut [u32], heat: &mut [u8]) {
     }
 }
 
-fn vhs_glitch(size: EffectSize, frame: u64, out: &mut [u32], x_map: &mut [i32]) {
-    let src = vhs_source_image();
-    let f = frame as usize;
-    let aberr = 1 + ((f / 15) & 1);
-    for (x, dst) in x_map[..size.w].iter_mut().enumerate() {
-        *dst = (x * src.w / size.w) as i32;
+fn vhs_glitch(size: EffectSize, frame: u64, out: &mut [u32], _x_map: &mut [i32]) {
+    if let Some(crt) = crt_image_for_size(size) {
+        render_crt_image(crt, frame as usize, out);
+    } else {
+        let crt = build_crt_image(size);
+        render_crt_image(&crt, frame as usize, out);
     }
-    for y in 0..size.h {
-        let band = ((y + f * 3) / 17) & 15;
-        let tear = if band == 0 || band == 11 {
-            (((f * 7 + y * 5) & 31) as isize) - 16
+}
+
+fn render_crt_image(crt: &CrtImage, frame: usize, out: &mut [u32]) {
+    debug_assert_eq!(out.len(), crt.w * crt.h);
+    let glitch = CrtGlitchFrame::new(crt.h, frame);
+    for y in 0..crt.h {
+        let row_range = y * crt.w..(y + 1) * crt.w;
+        let dst_row = &mut out[row_range.clone()];
+        let span = crt.spans[y];
+        if span.start > 0 {
+            dst_row[..span.start].fill(0);
+        }
+        if span.end < crt.w {
+            dst_row[span.end..].fill(0);
+        }
+        if span.end <= span.start {
+            continue;
+        }
+
+        let scan = crt_scanline_amount(y, frame);
+        if let Some(glitch) = glitch.for_row(y) {
+            render_crt_glitch_row(
+                &crt.warped[row_range],
+                &mut dst_row[span.start..span.end],
+                span.start,
+                scan,
+                glitch,
+            );
         } else {
-            0
+            render_crt_normal_row(
+                &crt.normal[row_range],
+                &mut dst_row[span.start..span.end],
+                span.start,
+                scan,
+            );
+        }
+    }
+}
+
+fn render_crt_normal_row(src_row: &[u32], dst: &mut [u32], x0: usize, scan: u32) {
+    for (i, dst) in dst.iter_mut().enumerate() {
+        *dst = scale_color_256(src_row[x0 + i], scan);
+    }
+}
+
+fn render_crt_glitch_row(
+    src_row: &[u32],
+    dst: &mut [u32],
+    x0: usize,
+    scan: u32,
+    glitch: CrtGlitch,
+) {
+    let w = src_row.len();
+    let scan = (scan * glitch.amount / 256).min(255);
+    let mut sx = wrap_shifted_x(x0, glitch.shift_px, w);
+    for dst in dst {
+        let p = chroma_pixel(src_row, sx, 3);
+        *dst = scale_color_256(p, scan) ^ glitch.noise;
+        sx += 1;
+        if sx == w {
+            sx = 0;
+        }
+    }
+}
+
+fn wrap_shifted_x(x: usize, shift: i32, w: usize) -> usize {
+    if shift >= 0 {
+        let mut sx = x + shift as usize;
+        if sx >= w {
+            sx -= w;
+        }
+        sx
+    } else {
+        let shift = (-shift) as usize % w;
+        if x >= shift {
+            x - shift
+        } else {
+            w + x - shift
+        }
+    }
+}
+
+struct CrtGlitch {
+    shift_px: i32,
+    amount: u32,
+    noise: u32,
+}
+
+#[derive(Clone, Copy)]
+struct CrtGlitchFrame {
+    y0: usize,
+    y1: usize,
+    center: isize,
+    active: bool,
+}
+
+impl CrtGlitchFrame {
+    fn new(h: usize, frame: usize) -> Self {
+        const PERIOD: usize = 360;
+        const DURATION: usize = 88;
+        let phase = (frame + 72) % PERIOD;
+        if phase >= DURATION {
+            return Self {
+                y0: 0,
+                y1: 0,
+                center: 0,
+                active: false,
+            };
+        }
+
+        let span = h as isize + 48;
+        let center = h as isize + 24 - (phase as isize * span / DURATION as isize);
+        let y0 = (center - 7).max(0) as usize;
+        let y1 = (center + 8).clamp(0, h as isize) as usize;
+        Self {
+            y0,
+            y1,
+            center,
+            active: y1 > y0,
+        }
+    }
+
+    fn for_row(self, y: usize) -> Option<CrtGlitch> {
+        if !self.active || y < self.y0 || y >= self.y1 {
+            return None;
+        }
+        let distance = (y as isize - self.center).unsigned_abs();
+        let seed = hash32(
+            (y as u32).wrapping_mul(0x45d9f3b)
+                ^ (self.center as i32 as u32).wrapping_mul(0x1f12bb5),
+        );
+        let strength = (8 - distance) as u32;
+        let direction = if seed & 1 == 0 { -1 } else { 1 };
+        let shift_px = direction * (3 + ((seed >> 8) & 7) as i32) * strength as i32 / 2;
+        let amount = if distance <= 2 {
+            318
+        } else {
+            190 + strength * 10
         };
-        let wobble = (wave(y as i32 * 5 + frame as i32 * 9) as isize / 42) - 3;
-        let src_shift = ((tear + wobble) * src.w as isize / size.w as isize) as i32;
-        let sy = ((y * src.h / size.h) + ((f / 9) & 1)).min(src.h - 1);
-        let src_row = &src.pixels[sy * src.w..(sy + 1) * src.w];
-        let dst_row = &mut out[y * size.w..(y + 1) * size.w];
-        if size.w == src.w * 2 {
-            for (sx0, pair) in dst_row.chunks_exact_mut(2).enumerate() {
-                let sx = wrap_to_usize(sx0 as isize + src_shift as isize, src.w);
-                let sx_r = (sx + aberr).min(src.w - 1);
-                let sx_b = sx.saturating_sub(aberr);
-                let p = (src_row[sx_r] & 0x00ff0000)
-                    | (src_row[sx] & 0x0000ff00)
-                    | (src_row[sx_b] & 0x000000ff);
-                pair[0] = p;
-                pair[1] = p;
-            }
-        } else {
-            for (x, dst) in dst_row.iter_mut().enumerate() {
-                let sx = wrap_to_usize((x_map[x] + src_shift) as isize, src.w);
-                let sx_r = (sx + aberr).min(src.w - 1);
-                let sx_b = sx.saturating_sub(aberr);
-                *dst = (src_row[sx_r] & 0x00ff0000)
-                    | (src_row[sx] & 0x0000ff00)
-                    | (src_row[sx_b] & 0x000000ff);
-            }
-        }
-        let noise = (((f * 17 + y * 23) & 3) as u32) * 0x00010101;
-        vhs_postprocess_row(dst_row, y, noise);
+        let noise = ((seed >> 24) & 3) * 0x00010101;
+        Some(CrtGlitch {
+            shift_px,
+            amount,
+            noise,
+        })
     }
 }
 
-fn wrap_to_usize(v: isize, limit: usize) -> usize {
-    v.rem_euclid(limit as isize) as usize
-}
-
-fn vhs_postprocess_row(row: &mut [u32], y: usize, noise: u32) {
+fn crt_scanline_amount(y: usize, frame: usize) -> u32 {
+    let seed =
+        hash32((y as u32).wrapping_mul(0x45d9f3b) ^ ((frame / 4) as u32).wrapping_mul(0x9e37));
+    let roll = (y.wrapping_add(frame * 2).wrapping_add((seed as usize) & 7)) % 41 == 0;
     if y & 1 == 0 {
-        vhs_dim_noise_row(row, noise);
-    } else if noise != 0 {
-        for p in row {
-            *p ^= noise;
-        }
+        138 + (seed & 23)
+    } else if roll {
+        220 + ((seed >> 5) & 11)
+    } else {
+        242 + ((seed >> 6) & 14)
     }
 }
 
-fn vhs_dim_noise_row(row: &mut [u32], noise: u32) {
-    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
-    {
-        unsafe {
-            vhs_dim_noise_row_neon(row, noise);
-        }
-        return;
-    }
-    #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
-    {
-        for p in row {
-            let half = (*p & 0x00fefefe) >> 1;
-            let quarter = (*p & 0x00fcfcfc) >> 2;
-            *p = (half + quarter) ^ noise;
-        }
-    }
+fn hash32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^ (x >> 16)
 }
 
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-unsafe fn vhs_dim_noise_row_neon(row: &mut [u32], noise: u32) {
-    use core::arch::arm::{
-        vaddq_u32, vandq_u32, vdupq_n_u32, veorq_u32, vld1q_u32, vshrq_n_u32, vst1q_u32,
-    };
-
-    let mask_half = vdupq_n_u32(0x00fefefe);
-    let mask_quarter = vdupq_n_u32(0x00fcfcfc);
-    let noise = vdupq_n_u32(noise);
-    let mut i = 0;
-    while i + 4 <= row.len() {
-        let p = vld1q_u32(row.as_ptr().add(i));
-        let half = vshrq_n_u32(vandq_u32(p, mask_half), 1);
-        let quarter = vshrq_n_u32(vandq_u32(p, mask_quarter), 2);
-        let dimmed = vaddq_u32(half, quarter);
-        vst1q_u32(row.as_mut_ptr().add(i), veorq_u32(dimmed, noise));
-        i += 4;
-    }
-    for p in &mut row[i..] {
-        let half = (*p & 0x00fefefe) >> 1;
-        let quarter = (*p & 0x00fcfcfc) >> 2;
-        *p = (half + quarter) ^ noise;
-    }
+fn scale_color_256(c: u32, amount: u32) -> u32 {
+    let rb = (((c & 0x00ff00ff) * amount) >> 8) & 0x00ff00ff;
+    let g = (((c & 0x0000ff00) * amount) >> 8) & 0x0000ff00;
+    rb | g
 }
 
 fn mul_color(c: u32, amount: u32) -> u32 {
