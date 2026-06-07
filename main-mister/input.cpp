@@ -6236,6 +6236,10 @@ int input_test(int getchar)
 						if(isXmlName(cmd)) xml_load(cmd + 10);
 						else fpga_load_rbf(cmd + 10);
 					}
+					else if (!strcmp(cmd, "mister_magik_exit_to_menu"))
+					{
+						mister_magik_launcher_exit_to_menu();
+					}
 					else if (!strncmp(cmd, "mister_magik_launch ", 20))
 					{
 						mister_magik_launcher_shutdown();
