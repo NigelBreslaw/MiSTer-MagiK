@@ -80,6 +80,51 @@ pub fn copy_rect_2x_to<T: Copy>(
     }
 }
 
+/// Copy a `u32` source rectangle into a destination buffer at 2x scale.
+///
+/// This is the hot framebuffer path. Keep stores as 32-bit words: the MiSTer
+/// framebuffer mapping is write-combined, and wider `u64` stores benchmarked
+/// slower on the Cortex-A9.
+pub fn copy_rect_2x_u32_to(
+    dst: &mut [u32],
+    dst_w: usize,
+    dst_h: usize,
+    dst_x: usize,
+    dst_y: usize,
+    src: &[u32],
+    src_w: usize,
+    src_x0: usize,
+    src_y0: usize,
+    src_x1: usize,
+    src_y1: usize,
+) {
+    if src_x1 <= src_x0 || src_y1 <= src_y0 || dst_x >= dst_w || dst_y >= dst_h {
+        return;
+    }
+
+    for sy in src_y0..src_y1 {
+        let py0 = dst_y + (sy - src_y0) * 2;
+        if py0 >= dst_h {
+            break;
+        }
+        let src_row = &src[sy * src_w + src_x0..sy * src_w + src_x1];
+        let copy_w = (src_row.len() * 2).min(dst_w.saturating_sub(dst_x));
+        if copy_w == 0 {
+            continue;
+        }
+        copy_2x_u32_row(
+            &mut dst[py0 * dst_w + dst_x..py0 * dst_w + dst_x + copy_w],
+            src_row,
+        );
+        if py0 + 1 < dst_h {
+            copy_2x_u32_row(
+                &mut dst[(py0 + 1) * dst_w + dst_x..(py0 + 1) * dst_w + dst_x + copy_w],
+                src_row,
+            );
+        }
+    }
+}
+
 fn copy_2x_row<T: Copy>(dst: &mut [T], src: &[T]) {
     for (sx, &color) in src.iter().enumerate() {
         let dx = sx * 2;
@@ -88,6 +133,43 @@ fn copy_2x_row<T: Copy>(dst: &mut [T], src: &[T]) {
         }
         dst[dx] = color;
         dst[dx + 1] = color;
+    }
+}
+
+fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
+    let dst_len = dst.len();
+    let src_len = src.len();
+    let packed_len = (dst.len() / 2).min(src.len());
+    let mut i = 0;
+    unsafe {
+        let src = src.as_ptr();
+        let dst = dst.as_mut_ptr();
+        while i + 4 <= packed_len {
+            let c0 = *src.add(i);
+            let c1 = *src.add(i + 1);
+            let c2 = *src.add(i + 2);
+            let c3 = *src.add(i + 3);
+            let d = dst.add(i * 2);
+            d.add(0).write(c0);
+            d.add(1).write(c0);
+            d.add(2).write(c1);
+            d.add(3).write(c1);
+            d.add(4).write(c2);
+            d.add(5).write(c2);
+            d.add(6).write(c3);
+            d.add(7).write(c3);
+            i += 4;
+        }
+        while i < packed_len {
+            let color = *src.add(i);
+            let d = dst.add(i * 2);
+            d.write(color);
+            d.add(1).write(color);
+            i += 1;
+        }
+        if dst_len % 2 != 0 && packed_len < src_len {
+            dst.add(packed_len * 2).write(*src.add(packed_len));
+        }
     }
 }
 
@@ -147,6 +229,24 @@ mod tests {
         copy_rect_scaled_to(&mut generic, 6, 4, 1, 0, 2, &src(), 4, 1, 0, 3, 2);
         copy_rect_2x_to(&mut specialized, 6, 4, 1, 0, &src(), 4, 1, 0, 3, 2);
         assert_eq!(specialized, generic);
+    }
+
+    #[test]
+    fn specialized_u32_2x_matches_generic_2x() {
+        let src = src().into_iter().map(u32::from).collect::<Vec<_>>();
+        let mut generic = vec![0; 24];
+        let mut specialized = vec![0; 24];
+        copy_rect_scaled_to(&mut generic, 6, 4, 1, 0, 2, &src, 4, 1, 0, 3, 2);
+        copy_rect_2x_u32_to(&mut specialized, 6, 4, 1, 0, &src, 4, 1, 0, 3, 2);
+        assert_eq!(specialized, generic);
+    }
+
+    #[test]
+    fn specialized_u32_handles_odd_right_clip() {
+        let src = vec![1u32, 2, 3];
+        let mut dst = vec![0; 5];
+        copy_rect_2x_u32_to(&mut dst, 5, 1, 0, 0, &src, 3, 0, 0, 3, 1);
+        assert_eq!(dst, vec![1, 1, 2, 2, 3]);
     }
 
     #[test]
