@@ -38,6 +38,7 @@ FRAME_ORDER="${MISTER_FRAME_ORDER:-render-then-vsync}"
 DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
 LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
 LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
+VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-slint-image}"
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -50,6 +51,7 @@ usage() {
   echo "         --dirty-rect-broad-pct N"
   echo "         --launcher-scenario idle|home-nav|list-scroll|preview-changes"
   echo "         --launcher-dirty-opt on|off"
+  echo "         --video-render-mode slint-image|direct-blit"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -77,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --dirty-rect-broad-pct) DIRTY_RECT_BROAD_PCT="${2:?}"; shift 2 ;;
     --launcher-scenario) LAUNCHER_SCENARIO="${2:?}"; shift 2 ;;
     --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
+    --video-render-mode) VIDEO_RENDER_MODE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
@@ -103,6 +106,10 @@ fi
 case "$LAUNCHER_DIRTY_OPT" in
   on|off|1|0|true|false) ;;
   *) echo "Unknown --launcher-dirty-opt: $LAUNCHER_DIRTY_OPT" >&2; exit 1 ;;
+esac
+case "$VIDEO_RENDER_MODE" in
+  slint-image|direct-blit) ;;
+  *) echo "Unknown --video-render-mode: $VIDEO_RENDER_MODE" >&2; exit 1 ;;
 esac
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
@@ -210,6 +217,10 @@ function value_after(line, key, rest) {
 /^video_playback running / {
   render_mode = "cached"
   frame_order = value_after($0, "frame-order=")
+  video_render_mode = value_after($0, "video-render-mode=")
+}
+/^video_render_mode=/ {
+  video_render_mode = value_after($0, "video_render_mode=")
 }
 /^display-config:/ {
   fb0 = value_after($0, "fb0=")
@@ -234,6 +245,7 @@ END {
   add_note("uio_fb", uio_fb)
   add_note("launcher_scenario", launcher_scenario)
   add_note("launcher_dirty_opt", launcher_dirty_opt)
+  add_note("video_render_mode", video_render_mode)
   print out
 }
 ' "$ui_log"
@@ -286,7 +298,7 @@ kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
-MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_RENDER_MODE=$VIDEO_RENDER_MODE $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0
