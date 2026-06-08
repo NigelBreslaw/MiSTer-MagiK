@@ -82,7 +82,7 @@ impl ArcadeNav {
         self.scroll_y = self.selected as i32 * ARCADE_ROW_HEIGHT;
     }
 
-    fn tick_velocity(&mut self, held_dir: i32, count: usize, now: Instant) {
+    fn tick_scroll(&mut self, held_dir: i32, count: usize, now: Instant) {
         if count == 0 {
             self.reset();
             return;
@@ -106,9 +106,15 @@ impl ArcadeNav {
         self.last_update_at = Some(now);
 
         if held_dir > 0 {
+            let committed = self.selected;
             self.visual_index += ARCADE_SCROLL_ROWS_PER_SEC * dt;
+            let live = self.visual_index.round().clamp(0.0, max_index) as usize;
+            self.selected = committed.max(live).min(count - 1);
         } else if held_dir < 0 {
+            let committed = self.selected;
             self.visual_index -= ARCADE_SCROLL_ROWS_PER_SEC * dt;
+            let live = self.visual_index.round().clamp(0.0, max_index) as usize;
+            self.selected = committed.min(live);
         } else {
             let target = self.selected as f32;
             let delta = target - self.visual_index;
@@ -122,14 +128,34 @@ impl ArcadeNav {
         }
 
         self.visual_index = self.visual_index.clamp(0.0, max_index);
-        self.selected = self.visual_index.round().clamp(0.0, max_index) as usize;
         self.scroll_y = (self.visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
 
-        if (held_dir < 0 && self.visual_index <= 0.0)
-            || (held_dir > 0 && self.visual_index >= max_index)
-        {
-            self.last_update_at = None;
+        if self.visual_index <= 0.0 && held_dir <= 0 {
+            self.selected = 0;
             self.snap_to_selected();
+        } else if self.visual_index >= max_index && held_dir >= 0 {
+            self.selected = count - 1;
+            self.snap_to_selected();
+        }
+    }
+
+    fn step_target(&mut self, dir: i32, count: usize, now: Instant) {
+        if count == 0 {
+            self.reset();
+            return;
+        }
+        let next = if dir > 0 {
+            self.selected.saturating_add(1).min(count - 1)
+        } else if dir < 0 {
+            self.selected.saturating_sub(1)
+        } else {
+            self.selected
+        };
+        if next != self.selected {
+            self.selected = next;
+            if self.last_update_at.is_none() {
+                self.last_update_at = Some(now);
+            }
         }
     }
 
@@ -275,8 +301,13 @@ impl LauncherNav {
         } else {
             0
         };
+        if rising(now.dpad_down, self.prev.dpad_down) && !now.dpad_up {
+            self.arcade.step_target(1, count, frame_now);
+        } else if rising(now.dpad_up, self.prev.dpad_up) && !now.dpad_down {
+            self.arcade.step_target(-1, count, frame_now);
+        }
         if held_dir != 0 || !self.arcade.is_settled() {
-            self.arcade.tick_velocity(held_dir, count, frame_now);
+            self.arcade.tick_scroll(held_dir, count, frame_now);
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
@@ -566,34 +597,53 @@ mod tests {
     fn arcade_velocity_scrolls_continuously() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_velocity(1, 10, t0);
-        nav.tick_velocity(1, 10, t0 + Duration::from_millis(125));
+        nav.tick_scroll(1, 10, t0);
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(50));
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(100));
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(125));
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
         assert_eq!(nav.scroll_y, ARCADE_ROW_HEIGHT);
     }
 
     #[test]
-    fn arcade_selected_tracks_center_crossing() {
+    fn arcade_single_press_commits_next_target() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_velocity(1, 10, t0);
-        nav.tick_velocity(1, 10, t0 + Duration::from_millis(62));
-        assert_eq!(nav.selected, 0);
-        nav.tick_velocity(1, 10, t0 + Duration::from_millis(63));
+        nav.step_target(1, 10, t0);
         assert_eq!(nav.selected, 1);
-        assert!(nav.visual_index > 0.5);
+        assert_eq!(nav.visual_index, 0.0);
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(20));
+        assert_eq!(nav.selected, 1);
+        assert!(nav.visual_index > 0.0);
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(70));
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(104));
+        assert_eq!(nav.selected, 1);
+        assert_eq!(nav.visual_index, 1.0);
+    }
+
+    #[test]
+    fn arcade_hold_continues_after_tap_target() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        nav.step_target(1, 10, t0);
+        for frame in 1..=8 {
+            nav.tick_scroll(1, 10, t0 + Duration::from_millis(frame * 50));
+        }
+        assert!(nav.visual_index > 1.0);
+        assert!(nav.selected > 1);
     }
 
     #[test]
     fn arcade_release_settles_to_selected_row() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_velocity(1, 10, t0);
-        nav.tick_velocity(1, 10, t0 + Duration::from_millis(80));
+        nav.tick_scroll(1, 10, t0);
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(50));
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(80));
         assert_eq!(nav.selected, 1);
         assert!(nav.visual_index > 0.5 && nav.visual_index < 1.0);
-        nav.tick_velocity(0, 10, t0 + Duration::from_millis(120));
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
     }
@@ -602,14 +652,14 @@ mod tests {
     fn arcade_scroll_clamps_at_edges() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_velocity(-1, 10, t0);
-        nav.tick_velocity(-1, 10, t0 + Duration::from_millis(250));
+        nav.tick_scroll(-1, 10, t0);
+        nav.tick_scroll(-1, 10, t0 + Duration::from_millis(250));
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.visual_index, 0.0);
         nav.selected = 9;
         nav.snap_to_selected();
-        nav.tick_velocity(1, 10, t0);
-        nav.tick_velocity(1, 10, t0 + Duration::from_millis(250));
+        nav.tick_scroll(1, 10, t0);
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(250));
         assert_eq!(nav.selected, 9);
         assert_eq!(nav.visual_index, 9.0);
     }
