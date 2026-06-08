@@ -1034,10 +1034,6 @@ fn copy_arcade_list_update(
             renderer.copy_layer_to_display(disp);
             rect.rows()
         }
-        ArcadeListUpdate::Scroll { .. } => {
-            renderer.copy_layer_to_display(disp);
-            ArcadeListRenderer::dirty_rect().rows()
-        }
     }
 }
 
@@ -3608,10 +3604,6 @@ struct ArcadeListDrawKey {
 
 enum ArcadeListUpdate {
     Full(DirtyRect),
-    Scroll {
-        delta_y: i32,
-        repairs: Vec<DirtyRect>,
-    },
 }
 
 impl ArcadeListRenderer {
@@ -3701,48 +3693,7 @@ impl ArcadeListRenderer {
         if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
-        Some(ArcadeListUpdate::Scroll {
-            delta_y: content_delta,
-            repairs: Self::scroll_repair_rects(content_delta),
-        })
-    }
-
-    fn scroll_repair_rects(delta_y: i32) -> Vec<DirtyRect> {
-        let mut rects = Vec::with_capacity(4);
-        let list = Self::dirty_rect();
-        let d = delta_y.unsigned_abs() as usize;
-        if d > 0 {
-            if delta_y > 0 {
-                rects.push(DirtyRect {
-                    x0: list.x0,
-                    y0: list.y0,
-                    x1: list.x1,
-                    y1: (list.y0 + d).min(list.y1),
-                });
-            } else {
-                rects.push(DirtyRect {
-                    x0: list.x0,
-                    y0: list.y1.saturating_sub(d),
-                    x1: list.x1,
-                    y1: list.y1,
-                });
-            }
-        }
-        let selector = Self::selection_rect();
-        rects.push(selector);
-        let shifted_y0 = selector.y0 as i32 + delta_y;
-        let shifted_y1 = selector.y1 as i32 + delta_y;
-        let shifted_y0 = shifted_y0.max(list.y0 as i32) as usize;
-        let shifted_y1 = shifted_y1.min(list.y1 as i32) as usize;
-        if shifted_y1 > shifted_y0 {
-            rects.push(DirtyRect {
-                x0: selector.x0,
-                y0: shifted_y0,
-                x1: selector.x1,
-                y1: shifted_y1,
-            });
-        }
-        rects
+        Some(ArcadeListUpdate::Full(Self::dirty_rect()))
     }
 
     fn selection_rect() -> DirtyRect {
@@ -4331,7 +4282,6 @@ fn run_arcade_page_loop(
         }
         let arcade_update_label = match arcade_list_rect.as_ref() {
             Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
-            Some(ArcadeListUpdate::Scroll { delta_y, .. }) => format!("scroll:{delta_y}"),
             None => "none".to_string(),
         };
         if let Some(update) = arcade_list_rect {
