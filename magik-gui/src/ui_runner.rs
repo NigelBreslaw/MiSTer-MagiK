@@ -1906,7 +1906,10 @@ enum LauncherBenchScenario {
     Idle,
     HomeNav,
     ListScroll,
+    QuickTap,
+    RapidTaps,
     HeldScroll,
+    TurboHold,
     PreviewChanges,
 }
 
@@ -1920,7 +1923,10 @@ impl LauncherBenchScenario {
             "idle" => Some(Self::Idle),
             "home-nav" | "home_nav" => Some(Self::HomeNav),
             "list-scroll" | "list_scroll" => Some(Self::ListScroll),
+            "quick-tap" | "quick_tap" => Some(Self::QuickTap),
+            "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
             "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
+            "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
             "preview" | "preview-changes" | "preview_changes" => Some(Self::PreviewChanges),
             _ => None,
         }
@@ -1931,7 +1937,10 @@ impl LauncherBenchScenario {
             Self::Idle => "idle",
             Self::HomeNav => "home-nav",
             Self::ListScroll => "list-scroll",
+            Self::QuickTap => "quick-tap",
+            Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
+            Self::TurboHold => "turbo-hold",
             Self::PreviewChanges => "preview-changes",
         }
     }
@@ -1941,7 +1950,7 @@ impl LauncherBenchScenario {
             Self::Idle => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
             Self::ListScroll => Duration::from_millis(120),
-            Self::HeldScroll => Duration::ZERO,
+            Self::QuickTap | Self::RapidTaps | Self::HeldScroll | Self::TurboHold => Duration::ZERO,
             Self::PreviewChanges => Duration::from_millis(500),
         }
     }
@@ -1998,7 +2007,67 @@ fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            nav.arcade.bench_hold_tick(1, count, now, step == 0);
+            let previous_dir = if step == 0 { 0 } else { 1 };
+            nav.arcade.bench_direction_tick(1, previous_dir, count, now);
+            true
+        }
+        LauncherBenchScenario::QuickTap => {
+            let Some(system) = catalog.systems.get(nav.selected) else {
+                return false;
+            };
+            let count = catalog.system_game_count(&system.id);
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Arcade;
+            let (dir, previous_dir) = match step {
+                0 => (1, 0),
+                1 => (0, 1),
+                _ => (0, 0),
+            };
+            nav.arcade
+                .bench_direction_tick(dir, previous_dir, count, now);
+            true
+        }
+        LauncherBenchScenario::RapidTaps => {
+            let Some(system) = catalog.systems.get(nav.selected) else {
+                return false;
+            };
+            let count = catalog.system_game_count(&system.id);
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Arcade;
+            let (dir, previous_dir) = if step < 10 {
+                if step % 2 == 0 {
+                    (1, 0)
+                } else {
+                    (0, 1)
+                }
+            } else {
+                (0, 0)
+            };
+            nav.arcade
+                .bench_direction_tick(dir, previous_dir, count, now);
+            true
+        }
+        LauncherBenchScenario::TurboHold => {
+            let Some(system) = catalog.systems.get(nav.selected) else {
+                return false;
+            };
+            let count = catalog.system_game_count(&system.id);
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Arcade;
+            let (dir, previous_dir) = match step {
+                0 => (1, 0),
+                1 => (0, 1),
+                2 => (1, 0),
+                _ => (1, 1),
+            };
+            nav.arcade
+                .bench_direction_tick(dir, previous_dir, count, now);
             true
         }
     }
