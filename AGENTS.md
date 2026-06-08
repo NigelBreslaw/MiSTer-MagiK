@@ -621,6 +621,10 @@ render ~0.9ms (cached RAM)  +  vsync-wait ~15.0ms  +  dirty copy ~0.7ms  ≈ 16.
   output scaling. In the `FPSCALE-CLEANUP-UI-SMOKE-20260608` demo run, normal UI
   copy time was ~0.7ms at 60fps with `fb_size=960x540`, `render_size=960x540`,
   and `fb_scale=1`.
+- Dirty framebuffer copies use rectangle copies for narrow/medium dirty boxes
+  and full-row copies for broad boxes. `MISTER_DIRTY_RECT_BROAD_PCT` defaults to
+  `85` after the `CACHED-RECT85-VIDEO-20260608` sweep: it kept demo/console
+  close to baseline while improving `video_playback` versus the old 75% cutoff.
 
 **Slint build notes (cross-compile, no system fonts):**
 
