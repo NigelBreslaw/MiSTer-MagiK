@@ -1026,34 +1026,17 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
 
 fn copy_arcade_list_update(
     disp: &mut Display,
-    ui: &UiDisplay,
-    cached: &[Pixel],
+    renderer: &ArcadeListRenderer,
     update: ArcadeListUpdate,
 ) -> u32 {
     match update {
         ArcadeListUpdate::Full(rect) => {
-            copy_cached_rect(disp, ui, cached, rect);
+            renderer.copy_layer_to_display(disp);
             rect.rows()
         }
-        ArcadeListUpdate::Scroll { delta_y, repairs } => {
-            if !arcade_fb_scroll_blit_enabled() {
-                let rect = ArcadeListRenderer::dirty_rect();
-                copy_cached_rect(disp, ui, cached, rect);
-                return rect.rows();
-            }
-            debug_assert_eq!(ui.fb_scale(), 1);
-            let mut rows = disp.scroll_rect_y(
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y,
-                ARCADE_LIST_W,
-                ARCADE_LIST_H,
-                delta_y,
-            );
-            for rect in repairs {
-                copy_cached_rect(disp, ui, cached, rect);
-                rows += rect.rows();
-            }
-            rows
+        ArcadeListUpdate::Scroll { .. } => {
+            renderer.copy_layer_to_display(disp);
+            ArcadeListRenderer::dirty_rect().rows()
         }
     }
 }
@@ -3545,8 +3528,6 @@ impl ArcadeListRenderer {
 
     fn draw(
         &mut self,
-        cached: &mut [Pixel],
-        render_w: usize,
         games: &[ArcadeGameEntry],
         visual_index: f32,
         force: bool,
@@ -3591,8 +3572,6 @@ impl ArcadeListRenderer {
             self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
             self.draw_content_band(games, visual_index, 0, d);
         }
-        self.copy_surface_to_cached(cached, render_w);
-        self.draw_selection_frame(cached, render_w);
         if force {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
@@ -3747,14 +3726,59 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn copy_surface_to_cached(&self, cached: &mut [Pixel], render_w: usize) {
-        for row in 0..ARCADE_LIST_H {
-            let src_y = (self.surface_y + row) % ARCADE_LIST_H;
-            let src = src_y * ARCADE_LIST_W;
-            let dst = (ARCADE_LIST_Y + row) * render_w + ARCADE_LIST_X;
-            cached[dst..dst + ARCADE_LIST_W]
-                .copy_from_slice(&self.surface[src..src + ARCADE_LIST_W]);
+    fn copy_layer_to_display(&self, disp: &mut Display) {
+        if self.surface_y == 0 {
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y,
+                ARCADE_LIST_W,
+                ARCADE_LIST_H,
+                &self.surface,
+            );
+        } else {
+            let top_h = ARCADE_LIST_H - self.surface_y;
+            let top = self.surface_y * ARCADE_LIST_W;
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y,
+                ARCADE_LIST_W,
+                top_h,
+                &self.surface[top..],
+            );
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y + top_h,
+                ARCADE_LIST_W,
+                self.surface_y,
+                &self.surface[..top],
+            );
         }
+        self.copy_selection_frame_to_display(disp);
+    }
+
+    fn copy_selection_frame_to_display(&self, disp: &mut Display) {
+        let rect = Self::selection_rect();
+        let color = Pixel(0x0006d6a0);
+        let thickness = 3usize;
+        let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
+        let horizontal = vec![color; ARCADE_LIST_W * thickness];
+        disp.copy_rect_from(rect.x0, rect.y0, ARCADE_LIST_W, thickness, &horizontal);
+        disp.copy_rect_from(
+            rect.x0,
+            rect.y1.saturating_sub(thickness),
+            ARCADE_LIST_W,
+            thickness,
+            &horizontal,
+        );
+        let vertical = vec![color; thickness * h];
+        disp.copy_rect_from(rect.x0, rect.y0, thickness, h, &vertical);
+        disp.copy_rect_from(
+            rect.x1.saturating_sub(thickness),
+            rect.y0,
+            thickness,
+            h,
+            &vertical,
+        );
     }
 
     fn render_row(&mut self, title: &str, idx: usize) -> Vec<Pixel> {
@@ -4062,13 +4086,8 @@ fn run_arcade_page_loop(
             rect.intersection(ArcadeListRenderer::dirty_rect())
                 .is_some()
         });
-        let arcade_list_rect = arcade_list_renderer.draw(
-            &mut cached,
-            ui.render_w(),
-            &games,
-            nav.arcade.visual_index,
-            force_arcade_redraw,
-        );
+        let arcade_list_rect =
+            arcade_list_renderer.draw(&games, nav.arcade.visual_index, force_arcade_redraw);
         let arcade_draw_done = Instant::now();
         let pace = pacer.wait();
         let frame_t3 = Instant::now();
@@ -4078,7 +4097,7 @@ fn run_arcade_page_loop(
             copy_cached_rect(disp, ui, &cached, rect);
         }
         if let Some(update) = arcade_list_rect {
-            copied_rows += copy_arcade_list_update(disp, ui, &cached, update);
+            copied_rows += copy_arcade_list_update(disp, &arcade_list_renderer, update);
         }
         let frame_t4 = Instant::now();
         let _ = pace;
@@ -4663,13 +4682,7 @@ fn run_launcher_loop(
                 rect.intersection(ArcadeListRenderer::dirty_rect())
                     .is_some()
             });
-            arcade_list_renderer.draw(
-                &mut cached,
-                ui.render_w(),
-                &games,
-                nav.arcade.visual_index,
-                force_arcade_redraw,
-            )
+            arcade_list_renderer.draw(&games, nav.arcade.visual_index, force_arcade_redraw)
         } else {
             None
         };
@@ -4706,7 +4719,7 @@ fn run_launcher_loop(
             copy_cached_rect(disp, ui, &cached, rect);
         }
         if let Some(update) = arcade_list_rect {
-            copied_rows += copy_arcade_list_update(disp, ui, &cached, update);
+            copied_rows += copy_arcade_list_update(disp, &arcade_list_renderer, update);
         }
         let frame_t4 = Instant::now();
         if copied_rows > 0 && !first_copy_logged {
