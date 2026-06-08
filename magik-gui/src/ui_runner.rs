@@ -4841,6 +4841,13 @@ fn run_launcher_loop(
         if launching {
             window.request_redraw();
         }
+        if !launching && nav.screen == Screen::Arcade {
+            let cache_key = (nav.selected, catalog.len());
+            if active_arcade_games_cache_key != Some(cache_key) {
+                active_arcade_games_cache = active_system_games(&catalog, &nav);
+                active_arcade_games_cache_key = Some(cache_key);
+            }
+        }
         let preview_paused =
             !launching && nav.screen == Screen::Arcade && nav.arcade.preview_should_pause();
         if preview_paused {
@@ -4852,7 +4859,7 @@ fn run_launcher_loop(
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if flush_scheduled_arcade_preview_for_game(
                 &bridge,
-                active_arcade_game(&catalog, &nav),
+                active_arcade_games_cache.get(nav.arcade.selected),
                 &mut preview,
             ) {
                 window.request_redraw();
@@ -4872,11 +4879,6 @@ fn run_launcher_loop(
         });
         let frame_t2 = Instant::now();
         let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
-            let cache_key = (nav.selected, catalog.len());
-            if active_arcade_games_cache_key != Some(cache_key) {
-                active_arcade_games_cache = active_system_games(&catalog, &nav);
-                active_arcade_games_cache_key = Some(cache_key);
-            }
             let force_arcade_redraw = this_rect.is_some_and(|rect| {
                 rect.intersection(ArcadeListRenderer::dirty_rect())
                     .is_some()
