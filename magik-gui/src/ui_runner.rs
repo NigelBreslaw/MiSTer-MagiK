@@ -3502,6 +3502,8 @@ struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
     row_cache: HashMap<String, Vec<Pixel>>,
+    surface: Vec<Pixel>,
+    surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
 }
 
@@ -3526,6 +3528,8 @@ impl ArcadeListRenderer {
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
             row_cache: HashMap::new(),
+            surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
+            surface_y: 0,
             last_draw: None,
         }
     }
@@ -3567,26 +3571,37 @@ impl ArcadeListRenderer {
             .as_ref()
             .is_some_and(|previous| previous.len == key.len);
         self.last_draw = Some(key);
-        fill_cached_rect(
-            cached,
-            render_w,
-            ARCADE_LIST_X,
-            ARCADE_LIST_Y,
-            ARCADE_LIST_W,
-            ARCADE_LIST_H,
-            Pixel(0x00120d1a),
-        );
-        self.draw_rows(cached, render_w, games, visual_index);
+        let content_delta = previous
+            .as_ref()
+            .map(|previous| previous.visual_px - visual_px)
+            .unwrap_or(0);
+        if force || previous.is_none() || !same_game_set || games.is_empty() {
+            self.surface_y = 0;
+            self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
+        } else if content_delta == 0 {
+        } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+            self.surface_y = 0;
+            self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
+        } else if content_delta < 0 {
+            let d = content_delta.unsigned_abs() as usize;
+            self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
+            self.draw_content_band(games, visual_index, ARCADE_LIST_H - d, d);
+        } else {
+            let d = content_delta as usize;
+            self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
+            self.draw_content_band(games, visual_index, 0, d);
+        }
+        self.copy_surface_to_cached(cached, render_w);
+        self.draw_selection_frame(cached, render_w);
         if force {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
-        let Some(previous) = previous else {
+        if previous.is_none() {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
-        };
+        }
         if !same_game_set {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
-        let content_delta = previous.visual_px - visual_px;
         if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
@@ -3644,25 +3659,31 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn draw_rows(
+    fn draw_content_band(
         &mut self,
-        cached: &mut [Pixel],
-        render_w: usize,
         games: &[ArcadeGameEntry],
         visual_index: f32,
+        band_y: usize,
+        band_h: usize,
     ) {
+        if band_h == 0 || band_y >= ARCADE_LIST_H {
+            return;
+        }
+        let band_h = band_h.min(ARCADE_LIST_H - band_y);
+        let mut band = vec![Pixel(0x00120d1a); ARCADE_LIST_W * band_h];
         if games.is_empty() {
             self.meta_font.draw_text_clipped(
-                cached,
-                render_w,
-                render_w,
-                ARCADE_LIST_Y,
-                ARCADE_LIST_H,
-                (ARCADE_LIST_X + 96) as isize,
-                (ARCADE_LIST_Y + ARCADE_LIST_H / 2) as isize,
+                &mut band,
+                ARCADE_LIST_W,
+                ARCADE_LIST_W,
+                0,
+                band_h,
+                96,
+                (ARCADE_LIST_H / 2).saturating_sub(band_y) as isize,
                 "NO GAMES",
                 Pixel(0x00706080),
             );
+            self.copy_band_to_surface(&band, band_y, band_h);
             return;
         }
         let row_h = ARCADE_ROW_HEIGHT as isize;
@@ -3673,18 +3694,21 @@ impl ArcadeListRenderer {
         for idx in first..=end {
             let y =
                 local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
-            if y >= ARCADE_LIST_H as isize || y + row_h <= 0 {
+            let clip_y0 = y.max(band_y as isize);
+            let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
+            if clip_y1 <= clip_y0 {
                 continue;
             }
-            self.blit_cached_row(cached, render_w, &games[idx].title, idx, y);
+            self.blit_cached_row_to_band(&mut band, band_h, band_y, &games[idx].title, idx, y);
         }
-        self.draw_selection_frame(cached, render_w);
+        self.copy_band_to_surface(&band, band_y, band_h);
     }
 
-    fn blit_cached_row(
+    fn blit_cached_row_to_band(
         &mut self,
-        cached: &mut [Pixel],
-        render_w: usize,
+        band: &mut [Pixel],
+        band_h: usize,
+        band_y: usize,
         title: &str,
         idx: usize,
         y: isize,
@@ -3698,13 +3722,38 @@ impl ArcadeListRenderer {
             self.row_cache.insert(key.clone(), row);
         }
         let row = self.row_cache.get(&key).expect("row cache insert");
-        let dst_y = y.max(0) as usize;
-        let src_y = (-y).max(0) as usize;
-        let copy_h = (ARCADE_ROW_HEIGHT as usize - src_y).min(ARCADE_LIST_H.saturating_sub(dst_y));
+        let row_h = ARCADE_ROW_HEIGHT as isize;
+        let clip_y0 = y.max(band_y as isize);
+        let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
+        if clip_y1 <= clip_y0 {
+            return;
+        }
+        let copy_h = (clip_y1 - clip_y0) as usize;
+        let src_y = (clip_y0 - y) as usize;
+        let dst_y = (clip_y0 as usize).saturating_sub(band_y);
         for row_y in 0..copy_h {
             let src = (src_y + row_y) * ARCADE_LIST_W;
-            let dst = (ARCADE_LIST_Y + dst_y + row_y) * render_w + ARCADE_LIST_X;
-            cached[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+            let dst = (dst_y + row_y) * ARCADE_LIST_W;
+            band[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+        }
+    }
+
+    fn copy_band_to_surface(&mut self, band: &[Pixel], band_y: usize, band_h: usize) {
+        for row in 0..band_h {
+            let src = row * ARCADE_LIST_W;
+            let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
+            let dst = dst_y * ARCADE_LIST_W;
+            self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&band[src..src + ARCADE_LIST_W]);
+        }
+    }
+
+    fn copy_surface_to_cached(&self, cached: &mut [Pixel], render_w: usize) {
+        for row in 0..ARCADE_LIST_H {
+            let src_y = (self.surface_y + row) % ARCADE_LIST_H;
+            let src = src_y * ARCADE_LIST_W;
+            let dst = (ARCADE_LIST_Y + row) * render_w + ARCADE_LIST_X;
+            cached[dst..dst + ARCADE_LIST_W]
+                .copy_from_slice(&self.surface[src..src + ARCADE_LIST_W]);
         }
     }
 
