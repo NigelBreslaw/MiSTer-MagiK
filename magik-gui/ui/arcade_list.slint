@@ -1,12 +1,11 @@
-import { ListView } from "std-widgets.slint";
 import { MisterUi } from "mister_window.slint";
 import { MisterBridge, PreviewStatus } from "mister_bridge.slint";
 
 export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
-    property <length> row-height: 48px * s;
     property <int> count: MisterBridge.arcade-games.length;
-    property <length> scroll-y: MisterBridge.arcade-scroll-y * 1px;
+    property <length> preview-display-width: MisterBridge.arcade-preview-display-width * 1px * s;
+    property <length> preview-display-height: MisterBridge.arcade-preview-display-height * 1px * s;
 
     background: #1a1424;
 
@@ -37,32 +36,16 @@ export component ArcadeListScreen inherits Rectangle {
                 font-size: 8px * s;
             }
 
-            arcade-list := ListView {
+            // Rust draws the animated game rows into this reserved viewport.
+            Rectangle {
                 x: 8px * s;
                 y: 64px * s;
                 width: parent.width - 16px * s;
                 height: parent.height - 72px * s;
-                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                viewport-height: count * row-height;
-                viewport-width: self.width;
-                viewport-y: -scroll-y;
-
-                for game[i] in MisterBridge.arcade-games: Rectangle {
-                    height: row-height;
-                    width: parent.width;
-                    background: i == MisterBridge.arcade-selected ? #2a2236 : transparent;
-                    border-width: i == MisterBridge.arcade-selected ? 2px : 0px;
-                    border-color: #06d6a0;
-
-                    Text {
-                        x: 8px * s;
-                        y: (root.row-height - self.height) / 2;
-                        text: game.title;
-                        font-size: 16px * s;
-                        color: i == MisterBridge.arcade-selected ? #06d6a0 : #e8e0f0;
-                    }
-                }
+                background: #120d1a;
+                border-width: 1px;
+                border-color: #352848;
+                clip: true;
             }
         }
 
@@ -82,10 +65,11 @@ export component ArcadeListScreen inherits Rectangle {
                 border-color: #5c4a72;
 
                 if MisterBridge.arcade-preview-has-image : Image {
-                    width: 100%;
-                    height: 100%;
+                    x: (parent.width - root.preview-display-width) / 2;
+                    y: (parent.height - root.preview-display-height) / 2;
+                    width: root.preview-display-width;
+                    height: root.preview-display-height;
                     source: MisterBridge.arcade-preview-image;
-                    image-fit: contain;
                 }
 
                 if !MisterBridge.arcade-preview-has-image : Text {
@@ -101,7 +85,7 @@ export component ArcadeListScreen inherits Rectangle {
 
             Text {
                 x: 12px * s;
-                y: parent.height - 72px * s;
+                y: parent.height - 84px * s;
                 width: parent.width - 24px * s;
                 text: MisterBridge.arcade-preview-title;
                 color: #e8e0f0;
@@ -111,7 +95,17 @@ export component ArcadeListScreen inherits Rectangle {
 
             Text {
                 x: 12px * s;
-                y: parent.height - 28px * s;
+                y: parent.height - 42px * s;
+                text: MisterBridge.arcade-preview-has-image
+                    ? "ORIGINAL: " + MisterBridge.arcade-preview-source-width + "x" + MisterBridge.arcade-preview-source-height
+                    : "";
+                color: #7dd3fc;
+                font-size: 8px * s;
+            }
+
+            Text {
+                x: 12px * s;
+                y: parent.height - 22px * s;
                 text: "D-pad: move  ·  A: launch  ·  B: back";
                 color: #706080;
                 font-size: 8px * s;
