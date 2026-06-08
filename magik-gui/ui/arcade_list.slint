@@ -92,7 +92,7 @@ export component ArcadeListScreen inherits Rectangle {
                     source: MisterBridge.arcade-preview-image;
                 }
 
-                if !MisterBridge.arcade-preview-has-image : Text {
+                if !MisterBridge.arcade-preview-has-image && MisterBridge.arcade-preview-placeholder-visible : Text {
                     width: 100%;
                     height: 100%;
                     text: MisterBridge.arcade-preview-status == PreviewStatus.loading ? "Loading screenshot" : "No screenshot";
