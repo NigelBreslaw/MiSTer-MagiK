@@ -16,8 +16,7 @@ use std::time::{Duration, Instant};
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
-const ARCADE_SCROLL_ROWS_PER_SEC: f32 = 8.0;
-const ARCADE_SETTLE_ROWS_PER_SEC: f32 = 12.0;
+const ARCADE_ROW_STEP_ROWS_PER_SEC: f32 = 8.0;
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
@@ -109,34 +108,32 @@ impl ArcadeNav {
             .as_secs_f32();
         self.last_update_at = Some(now);
 
+        if held_dir != 0 && self.is_settled() {
+            self.step_target(held_dir, count, now);
+        }
         if held_dir > 0 {
             self.last_motion_dir = 1;
-            let committed = self.selected;
-            self.visual_index += ARCADE_SCROLL_ROWS_PER_SEC * dt;
-            let live = self.visual_index.round().clamp(0.0, max_index) as usize;
-            self.selected = committed.max(live).min(count - 1);
         } else if held_dir < 0 {
             self.last_motion_dir = -1;
-            let committed = self.selected;
-            self.visual_index -= ARCADE_SCROLL_ROWS_PER_SEC * dt;
-            let live = self.visual_index.round().clamp(0.0, max_index) as usize;
-            self.selected = committed.min(live);
         } else {
             if self.last_motion_dir > 0 && self.visual_index > self.selected as f32 {
                 self.selected = (self.visual_index.ceil() as usize).min(count - 1);
             } else if self.last_motion_dir < 0 && self.visual_index < self.selected as f32 {
                 self.selected = self.visual_index.floor().max(0.0) as usize;
             }
-            let target = self.selected as f32;
-            let delta = target - self.visual_index;
-            let step = ARCADE_SETTLE_ROWS_PER_SEC * dt;
-            if delta.abs() <= step || step == 0.0 {
-                self.visual_index = target;
+        }
+
+        let target = self.selected as f32;
+        let delta = target - self.visual_index;
+        let step = ARCADE_ROW_STEP_ROWS_PER_SEC * dt;
+        if delta.abs() <= step || step == 0.0 {
+            self.visual_index = target;
+            if held_dir == 0 {
                 self.last_update_at = None;
                 self.last_motion_dir = 0;
-            } else {
-                self.visual_index += delta.signum() * step;
             }
+        } else {
+            self.visual_index += delta.signum() * step;
         }
 
         self.visual_index = self.visual_index.clamp(0.0, max_index);
