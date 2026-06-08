@@ -576,11 +576,11 @@ already generalized to every output timing.
 
 ### 9.7 Slint software renderer @ locked 60fps — smooth + tear-free (✅ done)
 
-`mister-magik-fb ui [secs]` runs Slint's **software renderer** directly on a
-960×540 framebuffer (no X/Wayland) at a **rock-steady 60fps, smooth and
-tear-free** (confirmed on HDMI). The FPGA scales the 960×540 source to 1080p, so
-the ARM no longer performs the full-framebuffer 2× expansion. Current demo smoke
-budget (2026-06-08):
+`mister-magik-fb ui [secs]` runs Slint's **software renderer** for a 960×540
+framebuffer (no X/Wayland) at a **rock-steady 60fps, smooth and tear-free**
+(confirmed on HDMI). The FPGA scales the 960×540 source to 1080p, so the ARM no
+longer performs the full-framebuffer 2× expansion. Current demo smoke budget
+(2026-06-08):
 
 ```
 render ~0.9ms (cached RAM)  +  vsync-wait ~15.0ms  +  dirty copy ~0.7ms  ≈ 16.6ms
@@ -595,6 +595,11 @@ render ~0.9ms (cached RAM)  +  vsync-wait ~15.0ms  +  dirty copy ~0.7ms  ≈ 16.
 - Render into a **cached** `Vec<Pixel>` (fast, ~0.9ms for the demo — Slint only
   redraws the dirty region). `render()` returns a `PhysicalRegion`; broad
   updates copy rows and narrow updates copy the reported rectangle.
+- Do **not** render Slint directly into the live `/dev/fb0` buffer for production
+  UI. The 2026-06-08 `direct-fb` trial removed the copy and improved CPU/frame
+  time, but visible HDMI flicker remained even with `vsync-first` and post-vsync
+  delay experiments. It is rejected unless we get a real non-live
+  write-combined backbuffer.
 - Before opening `/dev/fb0`, the UI path writes the MiSTer framebuffer mode as
   `8888 1 960 540 3840`, opens that small write-combined buffer, and routes it
   once via `fb_enable(0, 960, 540, Mode { hact: 1920, vact: 1080, hbp: 3, vbp:

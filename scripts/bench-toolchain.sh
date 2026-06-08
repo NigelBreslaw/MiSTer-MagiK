@@ -34,7 +34,7 @@ INCLUDE_VIDEO=0
 SCENE_FILTER=0
 SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
-UI_RENDER_MODE="${MISTER_UI_RENDER_MODE:-cached}"
+FRAME_ORDER="${MISTER_FRAME_ORDER:-render-then-vsync}"
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -43,7 +43,7 @@ usage() {
   echo ""
   echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
   echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
-  echo "         --ui-render-mode cached|direct-fb|line-fb"
+  echo "         --frame-order render-then-vsync|vsync-first"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -67,15 +67,15 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
-    --ui-render-mode) UI_RENDER_MODE="${2:?}"; shift 2 ;;
+    --frame-order) FRAME_ORDER="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
 done
 
-case "$UI_RENDER_MODE" in
-  cached|direct-fb|line-fb) ;;
-  *) echo "Unknown --ui-render-mode: $UI_RENDER_MODE (use cached|direct-fb|line-fb)" >&2; exit 1 ;;
+case "$FRAME_ORDER" in
+  render-then-vsync|vsync-first) ;;
+  *) echo "Unknown --frame-order: $FRAME_ORDER (use render-then-vsync|vsync-first)" >&2; exit 1 ;;
 esac
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
@@ -178,6 +178,11 @@ function value_after(line, key, rest) {
 }
 /^slint-render-mode=/ {
   render_mode = value_after($0, "slint-render-mode=")
+  frame_order = value_after($0, "frame-order=")
+}
+/^video_playback running / {
+  render_mode = "cached"
+  frame_order = value_after($0, "frame-order=")
 }
 /^display-config:/ {
   fb0 = value_after($0, "fb0=")
@@ -191,6 +196,7 @@ END {
   add_note("render_size", render)
   add_note("fb_scale", fb_scale)
   add_note("ui_render_mode", render_mode)
+  add_note("frame_order", frame_order)
   add_note("pixel_repetition", pixel_repetition)
   add_note("uio_fb", uio_fb)
   print out
@@ -244,7 +250,7 @@ kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
-MISTER_UI_RENDER_MODE=$UI_RENDER_MODE $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+MISTER_FRAME_ORDER=$FRAME_ORDER $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0

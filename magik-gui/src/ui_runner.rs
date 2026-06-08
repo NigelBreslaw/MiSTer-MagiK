@@ -4,9 +4,7 @@ use crate::fb::{Display, Pixel, VsyncPacer};
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
-use slint::platform::software_renderer::{
-    LineBufferProvider, MinimalSoftwareWindow, RepaintBufferType,
-};
+use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 use slint::{
     ComponentHandle, Image, ModelRc, PhysicalSize, Rgb8Pixel, SharedPixelBuffer, SharedString,
@@ -198,41 +196,6 @@ impl FrameOrder {
         match self {
             Self::RenderThenVsync => "render-then-vsync",
             Self::VsyncThenRender => "vsync-first",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UiRenderMode {
-    Cached,
-    DirectFb,
-    LineFb,
-}
-
-impl UiRenderMode {
-    fn from_env() -> Self {
-        match std::env::var("MISTER_UI_RENDER_MODE")
-            .ok()
-            .map(|s| s.to_ascii_lowercase().replace('_', "-"))
-            .as_deref()
-        {
-            None | Some("") | Some("cached") => Self::Cached,
-            Some("direct-fb") | Some("direct") => Self::DirectFb,
-            Some("line-fb") | Some("line") | Some("line-by-line") => Self::LineFb,
-            other => {
-                eprintln!(
-                    "ui: unknown MISTER_UI_RENDER_MODE={other:?}; use cached|direct-fb|line-fb"
-                );
-                Self::Cached
-            }
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Cached => "cached",
-            Self::DirectFb => "direct-fb",
-            Self::LineFb => "line-fb",
         }
     }
 }
@@ -1839,41 +1802,12 @@ fn sync_device_info_launcher(
     );
 }
 
-struct FbLineBuffer<'a> {
-    disp: &'a mut Display,
-    line: &'a mut [Pixel],
-    copy_us: &'a mut u64,
-}
-
-impl LineBufferProvider for FbLineBuffer<'_> {
-    type TargetPixel = Pixel;
-
-    fn process_line(
-        &mut self,
-        y: usize,
-        range: core::ops::Range<usize>,
-        render_fn: impl FnOnce(&mut [Self::TargetPixel]),
-    ) {
-        if range.is_empty() || range.end > self.line.len() {
-            return;
-        }
-        self.line[range.clone()].fill(Pixel(0));
-        render_fn(&mut self.line[range.clone()]);
-        let c0 = Instant::now();
-        self.disp
-            .copy_line_from(range.start, y, &self.line[range.clone()]);
-        *self.copy_us += c0.elapsed().as_micros() as u64;
-    }
-}
-
 fn run_bench_frame(
     ui: &UiDisplay,
     disp: &mut Display,
     window: &Rc<MinimalSoftwareWindow>,
-    mut cached: &mut [Pixel],
-    line: &mut [Pixel],
+    cached: &mut [Pixel],
     frame_order: FrameOrder,
-    render_mode: UiRenderMode,
     animation_clock: &AnimationClock,
     pacer: &mut VsyncPacer,
 ) -> FrameSample {
@@ -1885,45 +1819,26 @@ fn run_bench_frame(
         FrameOrder::RenderThenVsync => {
             update_slint_animations(animation_clock);
             let t1 = Instant::now();
-            let mut inline_copy_us = 0;
-            window.draw_if_needed(|renderer| match render_mode {
-                UiRenderMode::Cached => {
-                    let region = renderer.render(&mut cached, ui.render_w());
-                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                }
-                UiRenderMode::DirectFb => {
-                    let region = renderer.render(disp.buffer_mut(), ui.render_w());
-                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                }
-                UiRenderMode::LineFb => {
-                    let line_buffer = FbLineBuffer {
-                        disp,
-                        line,
-                        copy_us: &mut inline_copy_us,
-                    };
-                    let region = renderer.render_by_line(line_buffer);
-                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                }
+            window.draw_if_needed(|renderer| {
+                let region = renderer.render(cached, ui.render_w());
+                this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t2 = Instant::now();
-            let render_phase_us =
-                (t2 - t1).as_micros() as u64 - inline_copy_us.min((t2 - t1).as_micros() as u64);
             let pace = pacer.wait();
             let t3 = Instant::now();
-            let mut copy_us = inline_copy_us;
-            let rows = match (render_mode, this_rect) {
-                (UiRenderMode::Cached, Some(rect)) => {
+            let mut copy_us = 0;
+            let rows = match this_rect {
+                Some(rect) => {
                     let c0 = Instant::now();
                     copy_cached_rect(disp, ui, cached, rect);
                     copy_us += c0.elapsed().as_micros() as u64;
                     rect.rows()
                 }
-                (_, Some(rect)) => rect.rows(),
-                (_, None) => 0,
+                None => 0,
             };
             FrameSample {
                 anim_us: (t1 - t0).as_micros() as u64,
-                render_us: render_phase_us,
+                render_us: (t2 - t1).as_micros() as u64,
                 vsync_us: (t3 - t2).as_micros() as u64,
                 copy_us,
                 rows,
@@ -1938,43 +1853,24 @@ fn run_bench_frame(
             let t1 = Instant::now();
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
-            let mut inline_copy_us = 0;
-            window.draw_if_needed(|renderer| match render_mode {
-                UiRenderMode::Cached => {
-                    let region = renderer.render(&mut cached, ui.render_w());
-                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                }
-                UiRenderMode::DirectFb => {
-                    let region = renderer.render(disp.buffer_mut(), ui.render_w());
-                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                }
-                UiRenderMode::LineFb => {
-                    let line_buffer = FbLineBuffer {
-                        disp,
-                        line,
-                        copy_us: &mut inline_copy_us,
-                    };
-                    let region = renderer.render_by_line(line_buffer);
-                    this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                }
+            window.draw_if_needed(|renderer| {
+                let region = renderer.render(cached, ui.render_w());
+                this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t3 = Instant::now();
-            let render_phase_us =
-                (t3 - t2).as_micros() as u64 - inline_copy_us.min((t3 - t2).as_micros() as u64);
-            let mut copy_us = inline_copy_us;
-            let rows = match (render_mode, this_rect) {
-                (UiRenderMode::Cached, Some(rect)) => {
+            let mut copy_us = 0;
+            let rows = match this_rect {
+                Some(rect) => {
                     let c0 = Instant::now();
                     copy_cached_rect(disp, ui, cached, rect);
                     copy_us += c0.elapsed().as_micros() as u64;
                     rect.rows()
                 }
-                (_, Some(rect)) => rect.rows(),
-                (_, None) => 0,
+                None => 0,
             };
             FrameSample {
                 anim_us: (t2 - t1).as_micros() as u64,
-                render_us: render_phase_us,
+                render_us: (t3 - t2).as_micros() as u64,
                 vsync_us: (t1 - t0).as_micros() as u64,
                 copy_us,
                 rows,
@@ -1995,7 +1891,6 @@ fn run_frame_loop(
     animation_clock: &AnimationClock,
 ) {
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
-    let mut line = vec![Pixel(0); ui.render_w()];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut profiler = FrameProfiler::from_env();
@@ -2009,13 +1904,8 @@ fn run_frame_loop(
     let mut vsync_us = 0u128;
     let mut copy_us = 0u128;
     let mut copy_rows_acc = 0u128;
-    let render_mode = UiRenderMode::from_env();
     let configured_frame_order = FrameOrder::from_env();
-    let frame_order = if render_mode == UiRenderMode::DirectFb {
-        FrameOrder::VsyncThenRender
-    } else {
-        configured_frame_order
-    };
+    let frame_order = configured_frame_order;
     let mut pacer = VsyncPacer::from_env();
 
     let label = if secs == 0 {
@@ -2026,12 +1916,12 @@ fn run_frame_loop(
     println!(
         "bench scene running {label} (vsync-locked, dirty-row copy, frame-order={}, render-mode={}, animation-clock={})...",
         frame_order.label(),
-        render_mode.label(),
+        "cached",
         animation_clock.label()
     );
     println!(
         "slint-render-mode={} frame-order={} requested-frame-order={}",
-        render_mode.label(),
+        "cached",
         frame_order.label(),
         configured_frame_order.label()
     );
@@ -2041,9 +1931,7 @@ fn run_frame_loop(
             disp,
             window,
             &mut cached,
-            &mut line,
             frame_order,
-            render_mode,
             animation_clock,
             &mut pacer,
         );
