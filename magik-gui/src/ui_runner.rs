@@ -3477,12 +3477,12 @@ impl ConsoleFont {
 const ARCADE_LIST_X: usize = 8;
 const ARCADE_LIST_Y: usize = 56;
 const ARCADE_LIST_W: usize = 464;
-const ARCADE_LIST_H: usize = 432;
+const ARCADE_LIST_H: usize = 384;
 const ARCADE_LIST_FONT_PX: f32 = 16.0;
 const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 const ARCADE_LIST_FADE_H: usize = 48;
-const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 190;
-const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00120d1a);
+const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
+const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00000000);
 
 struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -3632,13 +3632,19 @@ impl ArcadeListRenderer {
     }
 
     fn selection_rect() -> DirtyRect {
-        let y = ((ARCADE_LIST_H as isize - ARCADE_ROW_HEIGHT as isize) / 2).max(0) as usize;
+        let y = Self::selection_y();
         DirtyRect {
             x0: ARCADE_LIST_X,
             y0: ARCADE_LIST_Y + y,
             x1: ARCADE_LIST_X + ARCADE_LIST_W,
             y1: ARCADE_LIST_Y + y + ARCADE_ROW_HEIGHT as usize,
         }
+    }
+
+    fn selection_y() -> usize {
+        let row_h = ARCADE_ROW_HEIGHT as usize;
+        let visible_rows = (ARCADE_LIST_H / row_h).max(1);
+        (visible_rows / 2) * row_h
     }
 
     fn draw_content_band(
@@ -3669,7 +3675,7 @@ impl ArcadeListRenderer {
             return;
         }
         let row_h = ARCADE_ROW_HEIGHT as isize;
-        let local_anchor_y = (ARCADE_LIST_H as isize - row_h) / 2;
+        let local_anchor_y = Self::selection_y() as isize;
         let first = ((visual_index.floor() as isize) - 7).max(0) as usize;
         let last = ((visual_index.ceil() as isize) + 8).max(0) as usize;
         let end = last.min(games.len().saturating_sub(1));
