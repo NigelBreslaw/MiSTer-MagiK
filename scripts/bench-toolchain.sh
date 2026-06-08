@@ -362,11 +362,11 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
   HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
-  HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P"
+  HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
-  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P"
+  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
 

@@ -1,42 +1,30 @@
 //! HDMI framebuffer vs Slint render buffer.
 //!
-//! Slint layouts stay at **`MisterUi.scale = 1`**. The framebuffer size is
-//! discovered at runtime; when the current framebuffer is exactly 1920x1080, we
-//! keep the 960x540 pixel-art render surface and copy it at 2x.
+//! Slint layouts stay at **`MisterUi.scale = 1`**. The normal UI path uses a
+//! small 960x540 framebuffer and lets the MiSTer FPGA scale it to HDMI.
 
 /// Slint global — always 1; layout math uses base units only.
 pub const SLINT_UI_SCALE: i32 = 1;
 
-const PIXEL_ART_W: usize = 960;
-const PIXEL_ART_H: usize = 540;
-const PIXEL_ART_SCALE: usize = 2;
+pub const UI_FB_W: usize = 960;
+pub const UI_FB_H: usize = 540;
+pub const UI_HDMI_W: u16 = 1920;
+pub const UI_HDMI_H: u16 = 1080;
 
 pub struct UiDisplay {
     fb_w: usize,
     fb_h: usize,
     render_w: usize,
     render_h: usize,
-    fb_scale: usize,
 }
 
 impl UiDisplay {
     pub fn for_framebuffer(fb_w: usize, fb_h: usize) -> Self {
-        if fb_w == PIXEL_ART_W * PIXEL_ART_SCALE && fb_h == PIXEL_ART_H * PIXEL_ART_SCALE {
-            return Self {
-                fb_w,
-                fb_h,
-                render_w: PIXEL_ART_W,
-                render_h: PIXEL_ART_H,
-                fb_scale: PIXEL_ART_SCALE,
-            };
-        }
-
         Self {
             fb_w,
             fb_h,
             render_w: fb_w,
             render_h: fb_h,
-            fb_scale: 1,
         }
     }
 
@@ -57,7 +45,7 @@ impl UiDisplay {
     }
 
     pub fn fb_scale(&self) -> usize {
-        self.fb_scale
+        1
     }
 
     pub fn log_line(&self) -> String {
@@ -77,11 +65,11 @@ mod tests {
     use super::UiDisplay;
 
     #[test]
-    fn pixel_doubles_at_1080p() {
+    fn uses_framebuffer_size_for_1080p_modes() {
         let ui = UiDisplay::for_framebuffer(1920, 1080);
-        assert_eq!(ui.render_w(), 960);
-        assert_eq!(ui.render_h(), 540);
-        assert_eq!(ui.fb_scale(), 2);
+        assert_eq!(ui.render_w(), 1920);
+        assert_eq!(ui.render_h(), 1080);
+        assert_eq!(ui.fb_scale(), 1);
     }
 
     #[test]

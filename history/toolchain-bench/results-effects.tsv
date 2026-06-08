@@ -21,3 +21,9 @@ CRT-MSLUG-BARREL-20260608	vhs_glitch	raw	half	480x270	2	2026-06-07T21:05:49Z	1.9
 CRT-MSLUG-NATIVE-OPT-20260608	vhs_glitch	raw	native	320x224	1	2026-06-07T21:16:27Z	1.96.0	85.36	6793652	1200	60.0	1878	0	403	14376	16665	14	16	0	yes	profile=release-device; prep=kill-mister-ui
 CRT-MSLUG-RERUN-20260608	vhs_glitch	raw	native	320x224	1	2026-06-07T21:21:42Z	1.96.0		6793652	1200	60.0	1841	0	390	14422	16661	13	18	0	yes	profile=release-device; prep=kill-mister-ui
 CRT-MSLUG-2X-480-RERUN-20260608	vhs_glitch	raw	half	480x270	2	2026-06-07T21:24:03Z	1.96.0		6793652	1200	60.0	3312	0	2224	11122	16667	32	40	0	yes	profile=release-device; prep=kill-mister-ui
+FPSCALE-BASE-VHS-NATIVE-20260608	vhs_glitch	raw	native	320x224	1	2026-06-08T06:31:04Z	1.96.0		6793652	1200	60.0	1843	0	395	14416	16661	13	17	0	yes	profile=release-device; prep=kill-mister-ui
+FPSCALE-BASE-VHS-2X-20260608	vhs_glitch	raw	half	480x270	2	2026-06-08T06:31:58Z	1.96.0		6793652	1199	59.9	3321	0	2175	11169	16674	32	37	0	yes	profile=release-device; prep=kill-mister-ui
+FPSCALE-SMOKE-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T06:39:20Z	1.96.0	83.21	6797756	240	59.9	3170	0	0	13500	16678	15	24	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270
+FPSCALE-AFTER-VHS-NATIVE-20260608	vhs_glitch	raw	native	320x224	1	2026-06-08T06:43:42Z	1.96.0		6797756	1200	60.0	1832	0	386	14435	16665	13	16	0	yes	profile=release-device; prep=kill-mister-ui
+FPSCALE-AFTER-VHS-2X-20260608	vhs_glitch	raw	half	480x270	2	2026-06-08T06:44:37Z	1.96.0		6797756	1199	59.9	3353	0	2235	11072	16676	33	40	0	yes	profile=release-device; prep=kill-mister-ui
+FPSCALE-AFTER-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T06:45:26Z	1.96.0		6797756	1200	60.0	3030	0	0	13632	16669	18	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270

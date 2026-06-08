@@ -39,7 +39,7 @@ usage() {
   echo ""
   echo "Options: --device  --skip-build  --skip-device  --replace-label"
   echo "         --scene-secs N  --effect NAME|all  --mode raw|overlay|both"
-  echo "         --size WIDTHxHEIGHT  --fill native|half|full  --matrix default|scale-sweep|full  -h"
+  echo "         --size WIDTHxHEIGHT  --fill native|half|full|fpga-half  --matrix default|scale-sweep|full  -h"
   exit "${1:-0}"
 }
 
@@ -126,6 +126,19 @@ append_row() {
     "$(rustc_version)" "${HOST_COMPILE_SEC:-}" "${HOST_BYTES:-}" "$frames" "$fps" \
     "$effect_us" "$slint_us" "$scale_copy_us" "$vsync_us" "$wall_us" \
     "$cpu_mean" "$cpu_max" "$rss_kb" "$visual_ok" "$notes" >>"$TSV"
+}
+
+capture_size_from_log() {
+  local ui_log="$1"
+  local size
+  size="$(sed -n 's/^slint-scale=.* fb=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$ui_log" | head -1)"
+  if [[ -z "$size" ]]; then
+    size="$(sed -n 's/^display-config: .*fb0=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$ui_log" | head -1)"
+  fi
+  if [[ -z "$size" ]]; then
+    size="1920 1080"
+  fi
+  echo "$size"
 }
 
 run_one() {
@@ -215,8 +228,9 @@ cat /tmp/effect-bench-ui.log
   raw="$HERE/build/effect-bench-fb.raw"
   png="$BENCH_DIR/${LABEL}-${effect}-${mode}-${size}-fb.png"
   mkdir -p "$HERE/build"
+  read -r capture_w capture_h < <(capture_size_from_log "$ui_log")
   if [[ "$fb_captured" == "1" ]] && mister get /tmp/effect-bench-fb.raw "$raw" >/dev/null 2>&1 \
-    && mister raw-to-png "$raw" 1920 1080 "$png" >/dev/null 2>&1; then
+    && mister raw-to-png "$raw" "$capture_w" "$capture_h" "$png" >/dev/null 2>&1; then
     :
   else
     visual_ok=no
@@ -226,6 +240,9 @@ cat /tmp/effect-bench-ui.log
   if [[ -n "$result" ]]; then
     local _tag result_label result_effect result_mode result_fill internal scale frames fps effect_us slint_us scale_copy_us vsync_us wall_us
     IFS=$'\t' read -r _tag result_label result_effect result_mode result_fill internal scale frames fps effect_us slint_us scale_copy_us vsync_us wall_us <<<"$result"
+    if [[ "$result_fill" == "fpga-half" ]]; then
+      notes="${notes:+$notes; }fpga-scale; capture=${capture_w}x${capture_h}"
+    fi
     append_row "$result_effect" "$result_mode" "$result_fill" "$internal" "$scale" "$frames" "$fps" \
       "$effect_us" "$slint_us" "$scale_copy_us" "$vsync_us" "$wall_us" \
       "${cpu_mean:-}" "${cpu_max:-}" "${rss_kb:-}" "$visual_ok" "$notes"
