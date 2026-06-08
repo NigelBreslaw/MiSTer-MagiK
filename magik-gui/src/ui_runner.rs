@@ -1034,27 +1034,9 @@ fn copy_arcade_list_update(
             renderer.copy_layer_to_display(disp);
             rect.rows()
         }
-        ArcadeListUpdate::Scroll { delta_y, repairs } => {
-            if arcade_fb_scroll_blit_enabled() {
-                let list = ArcadeListRenderer::dirty_rect();
-                let scrolled = disp.scroll_rect_y(
-                    list.x0,
-                    list.y0,
-                    list.x1 - list.x0,
-                    list.y1 - list.y0,
-                    delta_y,
-                );
-                let repairs = ArcadeListRenderer::merged_scroll_repair_rects(repairs);
-                let mut copied = scrolled;
-                for rect in repairs {
-                    renderer.copy_rect_to_display(disp, rect);
-                    copied += rect.rows();
-                }
-                copied
-            } else {
-                renderer.copy_layer_to_display(disp);
-                ArcadeListRenderer::dirty_rect().rows()
-            }
+        ArcadeListUpdate::Scroll { .. } => {
+            renderer.copy_layer_to_display(disp);
+            ArcadeListRenderer::dirty_rect().rows()
         }
     }
 }
@@ -3681,7 +3663,7 @@ impl ArcadeListRenderer {
     }
 
     fn scroll_repair_rects(delta_y: i32) -> Vec<DirtyRect> {
-        let mut rects = Vec::with_capacity(6);
+        let mut rects = Vec::with_capacity(4);
         let list = Self::dirty_rect();
         let d = delta_y.unsigned_abs() as usize;
         if d > 0 {
@@ -3701,7 +3683,6 @@ impl ArcadeListRenderer {
                 });
             }
         }
-        rects.extend(Self::fade_rects());
         let selector = Self::selection_rect();
         rects.push(selector);
         let shifted_y0 = selector.y0 as i32 + delta_y;
@@ -3717,45 +3698,6 @@ impl ArcadeListRenderer {
             });
         }
         rects
-    }
-
-    fn fade_rects() -> [DirtyRect; 2] {
-        let list = Self::dirty_rect();
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        [
-            DirtyRect {
-                x0: list.x0,
-                y0: list.y0,
-                x1: list.x1,
-                y1: list.y0 + fade_h,
-            },
-            DirtyRect {
-                x0: list.x0,
-                y0: list.y1 - fade_h,
-                x1: list.x1,
-                y1: list.y1,
-            },
-        ]
-    }
-
-    fn merged_scroll_repair_rects(rects: Vec<DirtyRect>) -> Vec<DirtyRect> {
-        let list = Self::dirty_rect();
-        let mut bands: Vec<DirtyRect> = rects
-            .into_iter()
-            .filter_map(|rect| rect.intersection(list))
-            .collect();
-        bands.sort_by_key(|rect| (rect.y0, rect.y1));
-        let mut merged: Vec<DirtyRect> = Vec::with_capacity(bands.len());
-        for rect in bands {
-            if let Some(last) = merged.last_mut() {
-                if rect.x0 == last.x0 && rect.x1 == last.x1 && rect.y0 <= last.y1 {
-                    last.y1 = last.y1.max(rect.y1);
-                    continue;
-                }
-            }
-            merged.push(rect);
-        }
-        merged
     }
 
     fn selection_rect() -> DirtyRect {
@@ -3893,76 +3835,10 @@ impl ArcadeListRenderer {
         self.copy_selection_frame_to_display(disp);
     }
 
-    fn copy_rect_to_display(&self, disp: &mut Display, rect: DirtyRect) {
-        let Some(rect) = rect.intersection(Self::dirty_rect()) else {
-            return;
-        };
-        let w = rect.x1 - rect.x0;
-        let h = rect.y1 - rect.y0;
-        if w == 0 || h == 0 {
-            return;
-        }
-        let mut pixels = vec![Pixel(0); w * h];
-        let local_x0 = rect.x0 - ARCADE_LIST_X;
-        let local_y0 = rect.y0 - ARCADE_LIST_Y;
-        for row in 0..h {
-            let viewport_y = local_y0 + row;
-            let src = &self.surface_row(viewport_y)[local_x0..local_x0 + w];
-            let dst = row * w;
-            pixels[dst..dst + w].copy_from_slice(src);
-        }
-        self.apply_fade_to_rect(&mut pixels, w, rect);
-        self.apply_selection_frame_to_rect(&mut pixels, w, rect);
-        disp.copy_rect_from(rect.x0, rect.y0, w, h, &pixels);
-    }
-
     fn surface_row(&self, viewport_y: usize) -> &[Pixel] {
         let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         let src = src_y * ARCADE_LIST_W;
         &self.surface[src..src + ARCADE_LIST_W]
-    }
-
-    fn apply_fade_to_rect(&self, pixels: &mut [Pixel], stride: usize, rect: DirtyRect) {
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        for row in 0..rect.y1.saturating_sub(rect.y0) {
-            let viewport_y = rect.y0 + row - ARCADE_LIST_Y;
-            let alpha = if viewport_y < fade_h {
-                fade_alpha(viewport_y, fade_h)
-            } else if viewport_y >= ARCADE_LIST_H - fade_h {
-                fade_alpha(ARCADE_LIST_H - 1 - viewport_y, fade_h)
-            } else {
-                0
-            };
-            if alpha == 0 {
-                continue;
-            }
-            let start = row * stride;
-            let end = start + stride;
-            let src = pixels[start..end].to_vec();
-            blend_row_towards(&src, &mut pixels[start..end], alpha, ARCADE_LIST_FADE_COLOR);
-        }
-    }
-
-    fn apply_selection_frame_to_rect(&self, pixels: &mut [Pixel], stride: usize, rect: DirtyRect) {
-        let selector = Self::selection_rect();
-        let Some(hit) = rect.intersection(selector) else {
-            return;
-        };
-        let color = Pixel(0x0006d6a0);
-        let thickness = 3usize;
-        let top_y1 = selector.y0 + thickness;
-        let bottom_y0 = selector.y1.saturating_sub(thickness);
-        for y in hit.y0..hit.y1 {
-            let is_horizontal = y < top_y1 || y >= bottom_y0;
-            for x in hit.x0..hit.x1 {
-                let is_vertical =
-                    x < selector.x0 + thickness || x >= selector.x1.saturating_sub(thickness);
-                if is_horizontal || is_vertical {
-                    let dst = (y - rect.y0) * stride + (x - rect.x0);
-                    pixels[dst] = color;
-                }
-            }
-        }
     }
 
     fn copy_fade_to_display(&self, disp: &mut Display) {
