@@ -18,8 +18,10 @@ Commands:
   host-tools  Run cheap host-side script/AWK/Python checks
   check-arm-lib      Cross-check host-testable library for ARM, without Slint/UI
   check-arm-ui       Cross-check launcher/controller Slint UI for ARM
+  check-arm-arcade-ui Cross-check standalone arcade page Slint UI for ARM
   check-arm-ui-full  Cross-check all Slint UI scenes for ARM
   build-arm-debug       Cross-build launcher/controller ARM debug binary
+  build-arm-arcade-debug Cross-build standalone arcade page ARM debug binary
   build-arm-debug-full  Cross-build all-scene ARM debug binary
   build-ui  Build the ARM Slint binary via magik-gui/build-arm.sh --fast
 EOF
@@ -83,6 +85,15 @@ case "$cmd" in
       --timings \
       --locked
     ;;
+  check-arm-arcade-ui)
+    cd "$RUST_DIR"
+    cross_env
+    MISTER_UI_BUILD_SCOPE=arcade cross check \
+      --target armv7-unknown-linux-gnueabihf \
+      --features ui \
+      --timings \
+      --locked
+    ;;
   check-arm-ui-full)
     cd "$RUST_DIR"
     cross_env
@@ -96,6 +107,15 @@ case "$cmd" in
     cd "$RUST_DIR"
     cross_env
     MISTER_UI_BUILD_SCOPE=launcher cross build \
+      --target armv7-unknown-linux-gnueabihf \
+      --features ui \
+      --timings \
+      --locked
+    ;;
+  build-arm-arcade-debug)
+    cd "$RUST_DIR"
+    cross_env
+    MISTER_UI_BUILD_SCOPE=arcade cross build \
       --target armv7-unknown-linux-gnueabihf \
       --features ui \
       --timings \

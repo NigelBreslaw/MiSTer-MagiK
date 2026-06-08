@@ -15,8 +15,8 @@ fn compile_ui() {
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
     let launcher_only = match scope.as_str() {
         "" | "all" => false,
-        "launcher" => true,
-        other => panic!("unknown MISTER_UI_BUILD_SCOPE={other:?}; use all|launcher"),
+        "launcher" | "arcade" => true,
+        other => panic!("unknown MISTER_UI_BUILD_SCOPE={other:?}; use all|launcher|arcade"),
     };
     if launcher_only {
         println!("cargo:rustc-cfg=mister_ui_scope_launcher");
@@ -26,6 +26,7 @@ fn compile_ui() {
         "ui/app.slint",
         "ui/controller_test.slint",
         "ui/launcher.slint",
+        "ui/arcade_page.slint",
     ];
     if !launcher_only {
         sources.extend([

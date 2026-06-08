@@ -159,6 +159,13 @@ impl ArcadeNav {
         }
     }
 
+    pub fn bench_hold_tick(&mut self, dir: i32, count: usize, now: Instant, first_tick: bool) {
+        if first_tick {
+            self.step_target(dir, count, now);
+        }
+        self.tick_scroll(dir, count, now);
+    }
+
     fn is_settled(&self) -> bool {
         (self.visual_index - self.selected as f32).abs() < 0.001
     }

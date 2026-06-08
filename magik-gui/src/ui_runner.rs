@@ -48,6 +48,9 @@ mod slint_ui {
     pub mod launcher {
         include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
     }
+    pub mod arcade_page {
+        include!(concat!(env!("OUT_DIR"), "/arcade_page.rs"));
+    }
 }
 
 use crate::arcade_catalog::{
@@ -97,6 +100,7 @@ fn screen_label(screen: Screen) -> &'static str {
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
+    "arcade_page",
     "demo",
     "controller_test",
     #[cfg(not(mister_ui_scope_launcher))]
@@ -1166,6 +1170,16 @@ pub fn run_ui(f: &mut Fpga) {
                 run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
+        "arcade_page" => {
+            let pad = open_pads();
+            with_scene_app!(arcade_page::ArcadePage, &ui, &window, app, {
+                boot_analytics::event("app_show_attempt", "scene=arcade_page");
+                app.show().expect("show");
+                boot_analytics::event("app_show", "scene=arcade_page ok=1");
+                window.request_redraw();
+                run_arcade_page_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+            });
+        }
         "launcher" => {
             let pad = open_pads();
             with_scene_app!(launcher::Launcher, &ui, &window, app, {
@@ -1865,6 +1879,7 @@ enum LauncherBenchScenario {
     Idle,
     HomeNav,
     ListScroll,
+    HeldScroll,
     PreviewChanges,
 }
 
@@ -1878,6 +1893,7 @@ impl LauncherBenchScenario {
             "idle" => Some(Self::Idle),
             "home-nav" | "home_nav" => Some(Self::HomeNav),
             "list-scroll" | "list_scroll" => Some(Self::ListScroll),
+            "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
             "preview" | "preview-changes" | "preview_changes" => Some(Self::PreviewChanges),
             _ => None,
         }
@@ -1888,6 +1904,7 @@ impl LauncherBenchScenario {
             Self::Idle => "idle",
             Self::HomeNav => "home-nav",
             Self::ListScroll => "list-scroll",
+            Self::HeldScroll => "held-scroll",
             Self::PreviewChanges => "preview-changes",
         }
     }
@@ -1897,6 +1914,7 @@ impl LauncherBenchScenario {
             Self::Idle => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
             Self::ListScroll => Duration::from_millis(120),
+            Self::HeldScroll => Duration::ZERO,
             Self::PreviewChanges => Duration::from_millis(500),
         }
     }
@@ -1907,6 +1925,7 @@ fn launcher_bench_step(
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
     step: usize,
+    now: Instant,
 ) -> bool {
     match scenario {
         LauncherBenchScenario::Idle => false,
@@ -1941,6 +1960,18 @@ fn launcher_bench_step(
             nav.arcade.selected = selected;
             nav.arcade.snap_to_selected();
             keep_bench_arcade_visible(&mut nav.arcade.scroll_y, nav.arcade.selected, count);
+            true
+        }
+        LauncherBenchScenario::HeldScroll => {
+            let Some(system) = catalog.systems.get(nav.selected) else {
+                return false;
+            };
+            let count = catalog.system_game_count(&system.id);
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Arcade;
+            nav.arcade.bench_hold_tick(1, count, now, step == 0);
             true
         }
     }
@@ -3433,9 +3464,8 @@ struct ArcadeListRenderer {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ArcadeListDrawKey {
     len: usize,
-    selected: usize,
     visual_px: i32,
-    selected_title: String,
+    anchor_title: String,
 }
 
 impl ArcadeListRenderer {
@@ -3462,17 +3492,18 @@ impl ArcadeListRenderer {
         cached: &mut [Pixel],
         render_w: usize,
         games: &[ArcadeGameEntry],
-        selected: usize,
         visual_index: f32,
         force: bool,
     ) -> Option<DirtyRect> {
         let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
+        let anchor = visual_index
+            .round()
+            .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
         let key = ArcadeListDrawKey {
             len: games.len(),
-            selected,
             visual_px,
-            selected_title: games
-                .get(selected)
+            anchor_title: games
+                .get(anchor)
                 .map(|game| game.title.clone())
                 .unwrap_or_default(),
         };
@@ -3489,7 +3520,7 @@ impl ArcadeListRenderer {
             ARCADE_LIST_H,
             Pixel(0x00120d1a),
         );
-        self.draw_rows(cached, render_w, games, selected, visual_index);
+        self.draw_rows(cached, render_w, games, visual_index);
         Some(Self::dirty_rect())
     }
 
@@ -3498,7 +3529,6 @@ impl ArcadeListRenderer {
         cached: &mut [Pixel],
         render_w: usize,
         games: &[ArcadeGameEntry],
-        selected: usize,
         visual_index: f32,
     ) {
         if games.is_empty() {
@@ -3526,10 +3556,9 @@ impl ArcadeListRenderer {
             if y >= ARCADE_LIST_H as isize || y + row_h <= 0 {
                 continue;
             }
-            let is_selected = idx == selected;
-            self.blit_cached_row(cached, render_w, &games[idx].title, idx, is_selected, y);
+            self.blit_cached_row(cached, render_w, &games[idx].title, idx, y);
         }
-        self.draw_center_line(cached, render_w);
+        self.draw_selection_frame(cached, render_w);
     }
 
     fn blit_cached_row(
@@ -3538,15 +3567,14 @@ impl ArcadeListRenderer {
         render_w: usize,
         title: &str,
         idx: usize,
-        selected: bool,
         y: isize,
     ) {
-        let key = format!("{idx}:{selected}:{title}");
+        let key = format!("{idx}:{title}");
         if !self.row_cache.contains_key(&key) {
             if self.row_cache.len() > 128 {
                 self.row_cache.clear();
             }
-            let row = self.render_row(title, idx, selected);
+            let row = self.render_row(title, idx);
             self.row_cache.insert(key.clone(), row);
         }
         let row = self.row_cache.get(&key).expect("row cache insert");
@@ -3560,9 +3588,9 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn render_row(&mut self, title: &str, idx: usize, selected: bool) -> Vec<Pixel> {
+    fn render_row(&mut self, title: &str, idx: usize) -> Vec<Pixel> {
         let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
-        draw_arcade_row_background(&mut row, idx, selected);
+        draw_arcade_row_background(&mut row, idx);
         let title = clipped_title(title, 30);
         self.title_font.draw_text_clipped(
             &mut row,
@@ -3573,11 +3601,7 @@ impl ArcadeListRenderer {
             12,
             30,
             &title,
-            if selected {
-                Pixel(0x0006d6a0)
-            } else {
-                Pixel(0x00e8e0f0)
-            },
+            Pixel(0x00e8e0f0),
         );
         let meta = format!("{:03}", idx + 1);
         self.meta_font.draw_text_clipped(
@@ -3589,40 +3613,44 @@ impl ArcadeListRenderer {
             ARCADE_LIST_W as isize - 42,
             30,
             &meta,
-            if selected {
-                Pixel(0x00f5d76e)
-            } else {
-                Pixel(0x00706080)
-            },
+            Pixel(0x00706080),
         );
         row
     }
 
-    fn draw_center_line(&mut self, cached: &mut [Pixel], render_w: usize) {
+    fn draw_selection_frame(&mut self, cached: &mut [Pixel], render_w: usize) {
         let y = ((ARCADE_LIST_H as isize - ARCADE_ROW_HEIGHT as isize) / 2).max(0) as usize;
-        if y < ARCADE_LIST_H {
-            let row_start = (ARCADE_LIST_Y + y) * render_w + ARCADE_LIST_X;
-            let row = &mut cached[row_start..row_start + ARCADE_LIST_W];
-            for x in (0..ARCADE_LIST_W).step_by(6) {
-                row[x] = Pixel(0x00f5d76e);
+        let color = Pixel(0x0006d6a0);
+        let thickness = 3usize;
+        let h = ARCADE_ROW_HEIGHT as usize;
+        for t in 0..thickness {
+            if y + t < ARCADE_LIST_H {
+                let top = (ARCADE_LIST_Y + y + t) * render_w + ARCADE_LIST_X;
+                cached[top..top + ARCADE_LIST_W].fill(color);
+            }
+            let bottom_y = y + h.saturating_sub(1 + t);
+            if bottom_y < ARCADE_LIST_H {
+                let bottom = (ARCADE_LIST_Y + bottom_y) * render_w + ARCADE_LIST_X;
+                cached[bottom..bottom + ARCADE_LIST_W].fill(color);
+            }
+        }
+        for row in 0..h.min(ARCADE_LIST_H.saturating_sub(y)) {
+            let start = (ARCADE_LIST_Y + y + row) * render_w + ARCADE_LIST_X;
+            for t in 0..thickness {
+                cached[start + t] = color;
+                cached[start + ARCADE_LIST_W - 1 - t] = color;
             }
         }
     }
 }
 
-fn draw_arcade_row_background(row: &mut [Pixel], idx: usize, selected: bool) {
-    let bg = if selected {
-        Pixel(0x002a2236)
-    } else if idx % 2 == 0 {
+fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
+    let bg = if idx % 2 == 0 {
         Pixel(0x001a1424)
     } else {
         Pixel(0x00150f20)
     };
-    let border = if selected {
-        Pixel(0x0006d6a0)
-    } else {
-        Pixel(0x00251c34)
-    };
+    let border = Pixel(0x00251c34);
     for row_y in 0..ARCADE_ROW_HEIGHT as isize {
         let dy = row_y as usize;
         let line = &mut row[dy * ARCADE_LIST_W..(dy + 1) * ARCADE_LIST_W];
@@ -3633,12 +3661,6 @@ fn draw_arcade_row_background(row: &mut [Pixel], idx: usize, selected: bool) {
             for px in line.iter_mut() {
                 *px = border;
             }
-        }
-        if selected {
-            line[0] = border;
-            line[1] = border;
-            line[ARCADE_LIST_W - 2] = border;
-            line[ARCADE_LIST_W - 1] = border;
         }
     }
 }
@@ -3729,6 +3751,196 @@ fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) 
         );
         *spawned_mister = false;
     }
+}
+
+fn slint_arcade_page_games(
+    games: &[ArcadeGameEntry],
+) -> ModelRc<slint_ui::arcade_page::ArcadeGame> {
+    let rows: Vec<slint_ui::arcade_page::ArcadeGame> = games
+        .iter()
+        .map(|g| slint_ui::arcade_page::ArcadeGame {
+            title: g.title.clone().into(),
+            mra_path: g.mra_path.clone().into(),
+            image_path: g.image_path.clone().into(),
+            has_image: g.has_image,
+            system_id: g.system_id.clone().into(),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+fn run_arcade_page_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    window: &Rc<MinimalSoftwareWindow>,
+    mut pad: PadPool,
+    app: slint_ui::arcade_page::ArcadePage,
+    animation_clock: &AnimationClock,
+) {
+    let start = Instant::now();
+    let mut frames = 0u64;
+    let mut nav = LauncherNav::new();
+    nav.screen = Screen::Arcade;
+    let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let mut bench_next_step = Instant::now();
+    let mut bench_step_idx = 0usize;
+    let dirty_opt = launcher_dirty_opt_enabled();
+    let label = if secs == 0 {
+        "forever".to_string()
+    } else {
+        format!("{secs}s")
+    };
+    println!(
+        "arcade_page running {label} — {} pad(s), D-pad up/down to move...",
+        pad.len()
+    );
+    if let Some(scenario) = launcher_bench_scenario {
+        println!("launcher_bench_scenario={}", scenario.label());
+    }
+    println!(
+        "launcher_dirty_opt={}",
+        if dirty_opt { "on" } else { "off" }
+    );
+
+    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
+        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    let catalog = library_bench::load_arcade_catalog_from_sqlite(&arcade_root)
+        .map(|loaded| loaded.catalog)
+        .unwrap_or_else(|e| {
+            eprintln!("arcade_page catalog cache load failed: {e}");
+            empty_arcade_catalog(&arcade_root)
+        });
+    let games = active_system_games(&catalog, &nav);
+    let active_title = active_system(&catalog, &nav)
+        .map(|system| system.title.clone())
+        .unwrap_or_else(|| "Arcade".to_string());
+
+    let bridge = app.global::<slint_ui::arcade_page::MisterBridge>();
+    bridge.set_screen_mode(Screen::Arcade as i32);
+    bridge.set_active_system_title(active_title.into());
+    bridge.set_arcade_games(slint_arcade_page_games(&games));
+    bridge.set_arcade_selected(0);
+    bridge.set_arcade_scroll_y(0);
+    bridge.set_arcade_preview_has_image(false);
+    bridge.set_arcade_preview_status(slint_ui::arcade_page::PreviewStatus::Empty);
+    bridge.set_arcade_preview_title("".into());
+    bridge.set_arcade_preview_image(Image::default());
+    bridge.set_arcade_preview_source_width(0);
+    bridge.set_arcade_preview_source_height(0);
+    bridge.set_arcade_preview_display_width(0);
+    bridge.set_arcade_preview_display_height(0);
+
+    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let mut pacer = VsyncPacer::from_env();
+    let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let mut fps_window_start = Instant::now();
+    let mut fps_frames = 0u64;
+    let mut render_us = 0u128;
+    let mut vsync_us = 0u128;
+    let mut copy_us = 0u128;
+    let mut rows = 0u128;
+    let mut last_arcade_selected = nav.arcade.selected;
+    let mut last_arcade_scroll_y = nav.arcade.scroll_y;
+    let mut last_arcade_visual_index = nav.arcade.visual_index;
+
+    while secs == 0 || start.elapsed().as_secs() < secs {
+        if let Some(scenario) = launcher_bench_scenario {
+            if bench_next_step.elapsed() >= scenario.period() {
+                let _ = launcher_bench_step(
+                    scenario,
+                    &mut nav,
+                    &catalog,
+                    bench_step_idx,
+                    Instant::now(),
+                );
+                bench_step_idx = bench_step_idx.wrapping_add(1);
+                bench_next_step = Instant::now();
+            }
+        } else {
+            let _pad_changed = pad.poll();
+            let mut state = pad.state().clone();
+            state.btn_a = false;
+            state.btn_b = false;
+            state.btn_home = false;
+            let _ = nav.handle_input(&state, Instant::now(), &catalog);
+            if nav.screen != Screen::Arcade {
+                nav.screen = Screen::Arcade;
+            }
+        }
+        if nav.arcade.selected != last_arcade_selected
+            || nav.arcade.scroll_y != last_arcade_scroll_y
+            || (nav.arcade.visual_index - last_arcade_visual_index).abs() > 0.001
+        {
+            bridge.set_arcade_selected(nav.arcade.selected as i32);
+            bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+            last_arcade_selected = nav.arcade.selected;
+            last_arcade_scroll_y = nav.arcade.scroll_y;
+            last_arcade_visual_index = nav.arcade.visual_index;
+        }
+
+        update_slint_animations(animation_clock);
+        let frame_t1 = Instant::now();
+        let mut this_rect: Option<DirtyRect> = None;
+        window.draw_if_needed(|renderer| {
+            let region = renderer.render(&mut cached, ui.render_w());
+            this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+        });
+        let frame_t2 = Instant::now();
+        let force_arcade_redraw = this_rect.is_some_and(|rect| {
+            rect.intersection(ArcadeListRenderer::dirty_rect())
+                .is_some()
+        });
+        let arcade_list_rect = arcade_list_renderer.draw(
+            &mut cached,
+            ui.render_w(),
+            &games,
+            nav.arcade.visual_index,
+            force_arcade_redraw,
+        );
+        let pace = pacer.wait();
+        let frame_t3 = Instant::now();
+        let mut copied_rows = 0u32;
+        if let Some(rect) = this_rect {
+            copied_rows = rect.rows();
+            copy_cached_rect(disp, ui, &cached, rect);
+        }
+        if let Some(rect) = arcade_list_rect {
+            copied_rows += rect.rows();
+            copy_cached_rect(disp, ui, &cached, rect);
+        }
+        let frame_t4 = Instant::now();
+        let _ = pace;
+
+        frames += 1;
+        fps_frames += 1;
+        render_us += (frame_t2 - frame_t1).as_micros();
+        vsync_us += (frame_t3 - frame_t2).as_micros();
+        copy_us += (frame_t4 - frame_t3).as_micros();
+        rows += copied_rows as u128;
+        if fps_window_start.elapsed() >= Duration::from_secs(1) {
+            let n = fps_frames.max(1) as u128;
+            println!(
+                "arcade_page fps ~ {} render {}us vsync-wait {}us copy {}us ({} rows avg)",
+                fps_frames,
+                render_us / n,
+                vsync_us / n,
+                copy_us / n,
+                rows / n
+            );
+            fps_window_start = Instant::now();
+            fps_frames = 0;
+            render_us = 0;
+            vsync_us = 0;
+            copy_us = 0;
+            rows = 0;
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
+        frames as f64 / elapsed
+    );
 }
 
 fn run_launcher_loop(
@@ -3976,7 +4188,13 @@ fn run_launcher_loop(
         if let Some(scenario) = launcher_bench_scenario {
             if catalog_ready && launcher_bench_next_step.elapsed() >= scenario.period() {
                 let before = LauncherBridgeKey::from_nav(&nav);
-                if launcher_bench_step(scenario, &mut nav, &catalog, launcher_bench_step_idx) {
+                if launcher_bench_step(
+                    scenario,
+                    &mut nav,
+                    &catalog,
+                    launcher_bench_step_idx,
+                    Instant::now(),
+                ) {
                     let after = LauncherBridgeKey::from_nav(&nav);
                     if before != after {
                         if !dirty_opt
@@ -4275,7 +4493,6 @@ fn run_launcher_loop(
                 &mut cached,
                 ui.render_w(),
                 &games,
-                nav.arcade.selected,
                 nav.arcade.visual_index,
                 force_arcade_redraw,
             )
