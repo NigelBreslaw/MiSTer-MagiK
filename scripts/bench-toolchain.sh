@@ -39,6 +39,7 @@ DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
 LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
 LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
 VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-slint-image}"
+UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -49,9 +50,10 @@ usage() {
   echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
-  echo "         --launcher-scenario idle|home-nav|list-scroll|preview-changes"
+  echo "         --launcher-scenario idle|home-nav|list-scroll|held-scroll|preview-changes"
   echo "         --launcher-dirty-opt on|off"
   echo "         --video-render-mode slint-image|direct-blit"
+  echo "         --ui-scope all|launcher|arcade"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -80,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --launcher-scenario) LAUNCHER_SCENARIO="${2:?}"; shift 2 ;;
     --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
     --video-render-mode) VIDEO_RENDER_MODE="${2:?}"; shift 2 ;;
+    --ui-scope) UI_SCOPE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
@@ -99,7 +102,7 @@ if [[ "$DIRTY_RECT_BROAD_PCT" -lt 1 || "$DIRTY_RECT_BROAD_PCT" -gt 100 ]]; then
 fi
 if [[ -n "$LAUNCHER_SCENARIO" ]]; then
   case "$LAUNCHER_SCENARIO" in
-    idle|home-nav|list-scroll|preview-changes) ;;
+    idle|home-nav|list-scroll|held-scroll|preview-changes) ;;
     *) echo "Unknown --launcher-scenario: $LAUNCHER_SCENARIO" >&2; exit 1 ;;
   esac
 fi
@@ -110,6 +113,10 @@ esac
 case "$VIDEO_RENDER_MODE" in
   slint-image|direct-blit) ;;
   *) echo "Unknown --video-render-mode: $VIDEO_RENDER_MODE" >&2; exit 1 ;;
+esac
+case "$UI_SCOPE" in
+  all|launcher|arcade) ;;
+  *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;
 esac
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
@@ -427,12 +434,12 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   fi
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
-  HOST_COMPILE_SEC="$( ( time -p "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
-  HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
+  HOST_COMPILE_SEC="$( ( time -p env MISTER_UI_BUILD_SCOPE="$UI_SCOPE" "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
+  HOST_NOTES="profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
-  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
+  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
 
