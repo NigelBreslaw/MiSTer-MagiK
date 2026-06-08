@@ -178,12 +178,12 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        let games = catalog
+        let system_id = catalog
             .systems
             .get(self.selected)
-            .map(|system| catalog.system_games(&system.id))
-            .unwrap_or_default();
-        let count = games.len();
+            .map(|system| system.id.as_str())
+            .unwrap_or("");
+        let count = catalog.system_game_count(system_id);
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Home;
@@ -197,22 +197,20 @@ impl LauncherNav {
 
         if self.repeat.tick_down(now.dpad_down, frame_now) && self.arcade.selected + 1 < count {
             self.arcade.selected += 1;
-            self.arcade.scroll_y =
-                (self.arcade.scroll_y + ARCADE_ROW_HEIGHT).clamp(0, arcade_max_scroll(count));
             keep_arcade_visible(&mut self.arcade, count);
         }
         if self.repeat.tick_up(now.dpad_up, frame_now) && self.arcade.selected > 0 {
             self.arcade.selected -= 1;
-            self.arcade.scroll_y =
-                (self.arcade.scroll_y - ARCADE_ROW_HEIGHT).clamp(0, arcade_max_scroll(count));
             keep_arcade_visible(&mut self.arcade, count);
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            return games.get(self.arcade.selected).map(|game| LauncherEvent {
-                action: LauncherAction::LaunchGame,
-                path: Some(game.mra_path.clone()),
-            });
+            return catalog
+                .system_game_at(system_id, self.arcade.selected)
+                .map(|game| LauncherEvent {
+                    action: LauncherAction::LaunchGame,
+                    path: Some(game.mra_path.clone()),
+                });
         }
 
         None
