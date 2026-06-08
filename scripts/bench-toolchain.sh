@@ -35,6 +35,7 @@ SCENE_FILTER=0
 SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 FRAME_ORDER="${MISTER_FRAME_ORDER:-render-then-vsync}"
+DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -44,6 +45,7 @@ usage() {
   echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
   echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
+  echo "         --dirty-rect-broad-pct N"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -68,6 +70,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
     --frame-order) FRAME_ORDER="${2:?}"; shift 2 ;;
+    --dirty-rect-broad-pct) DIRTY_RECT_BROAD_PCT="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
@@ -77,6 +80,14 @@ case "$FRAME_ORDER" in
   render-then-vsync|vsync-first) ;;
   *) echo "Unknown --frame-order: $FRAME_ORDER (use render-then-vsync|vsync-first)" >&2; exit 1 ;;
 esac
+case "$DIRTY_RECT_BROAD_PCT" in
+  ''|*[!0-9]*) echo "Invalid --dirty-rect-broad-pct: $DIRTY_RECT_BROAD_PCT" >&2; exit 1 ;;
+  *) ;;
+esac
+if [[ "$DIRTY_RECT_BROAD_PCT" -lt 1 || "$DIRTY_RECT_BROAD_PCT" -gt 100 ]]; then
+  echo "Invalid --dirty-rect-broad-pct: $DIRTY_RECT_BROAD_PCT (use 1..100)" >&2
+  exit 1
+fi
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
   BENCH_SCENES+=(video_playback)
@@ -227,6 +238,7 @@ append_tsv_row() {
   if [[ -n "${HOST_NOTES:-}" ]]; then
     notes="${HOST_NOTES}${notes:+; }${notes}"
   fi
+  notes="${notes:+$notes; }dirty_rect_broad_pct=$DIRTY_RECT_BROAD_PCT"
   notes="${notes//	/ }"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$LABEL" "$scene" "$date_iso" "$(rustc_version)" "${HOST_COMPILE_SEC:-}" "${HOST_BYTES:-}" \
@@ -250,7 +262,7 @@ kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
-MISTER_FRAME_ORDER=$FRAME_ORDER $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0

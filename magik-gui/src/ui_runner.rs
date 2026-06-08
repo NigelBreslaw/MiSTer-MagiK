@@ -78,6 +78,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
+const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
@@ -270,9 +271,28 @@ impl DirtyRect {
         (self.y1 - self.y0) as u32
     }
 
-    fn is_broad(self, render_w: usize) -> bool {
-        (self.x1 - self.x0) >= render_w * 3 / 4
+    fn width(self) -> usize {
+        self.x1 - self.x0
     }
+
+    fn is_full_width(self, render_w: usize) -> bool {
+        self.x0 == 0 && self.x1 >= render_w
+    }
+}
+
+fn dirty_rect_broad_pct() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_DIRTY_RECT_BROAD_PCT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.clamp(1, 100))
+            .unwrap_or(DEFAULT_DIRTY_RECT_BROAD_PCT)
+    })
+}
+
+fn dirty_rect_is_broad(rect: DirtyRect, render_w: usize) -> bool {
+    rect.width() * 100 >= render_w * dirty_rect_broad_pct()
 }
 
 fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
@@ -945,7 +965,7 @@ fn copy_cached_rows(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], y0: us
 }
 
 fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: DirtyRect) {
-    if rect.is_broad(ui.render_w()) {
+    if rect.is_full_width(ui.render_w()) || dirty_rect_is_broad(rect, ui.render_w()) {
         copy_cached_rows(disp, ui, cached, rect.y0, rect.y1);
         return;
     }
