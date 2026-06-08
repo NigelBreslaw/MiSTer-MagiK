@@ -62,7 +62,7 @@ use crate::library_bench;
 use crate::preview_worker::PreviewWorker;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
+use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
 use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
@@ -309,6 +309,7 @@ enum EffectFill {
     Full,
     Half,
     Native,
+    FpgaHalf,
 }
 
 impl EffectFill {
@@ -317,6 +318,7 @@ impl EffectFill {
             Self::Full => "full",
             Self::Half => "half",
             Self::Native => "native",
+            Self::FpgaHalf => "fpga-half",
         }
     }
 
@@ -325,8 +327,13 @@ impl EffectFill {
             "full" => Some(Self::Full),
             "half" => Some(Self::Half),
             "native" => Some(Self::Native),
+            "fpga-half" => Some(Self::FpgaHalf),
             _ => None,
         }
+    }
+
+    fn uses_fpga_scaler(self) -> bool {
+        matches!(self, Self::FpgaHalf)
     }
 }
 
@@ -347,19 +354,70 @@ impl EffectTarget {
             EffectFill::Full => (1920, 1080, size.scale_to_1080p()?),
             EffectFill::Half => (960, 540, size.scale_to_half_1080p()?),
             EffectFill::Native => (size.w, size.h, 1),
+            EffectFill::FpgaHalf => {
+                if size.w != 480 || size.h != 270 {
+                    return None;
+                }
+                (960, 540, 2)
+            }
         };
-        if physical_w > ui.fb_w() || physical_h > ui.fb_h() {
+        if !fill.uses_fpga_scaler() && (physical_w > ui.fb_w() || physical_h > ui.fb_h()) {
             return None;
         }
         Some(Self {
-            physical_x: (ui.fb_w() - physical_w) / 2,
-            physical_y: (ui.fb_h() - physical_h) / 2,
+            physical_x: if fill.uses_fpga_scaler() {
+                480
+            } else {
+                (ui.fb_w() - physical_w) / 2
+            },
+            physical_y: if fill.uses_fpga_scaler() {
+                270
+            } else {
+                (ui.fb_h() - physical_h) / 2
+            },
             physical_w,
             physical_h,
-            render_w: physical_w / ui.fb_scale(),
-            render_h: physical_h / ui.fb_scale(),
+            render_w: if fill.uses_fpga_scaler() {
+                size.w
+            } else {
+                physical_w / ui.fb_scale()
+            },
+            render_h: if fill.uses_fpga_scaler() {
+                size.h
+            } else {
+                physical_h / ui.fb_scale()
+            },
             scale,
         })
+    }
+}
+
+struct FbModeGuard {
+    previous: crate::fb::FbInfo,
+}
+
+impl FbModeGuard {
+    fn set_temporary(w: usize, h: usize) -> std::io::Result<Self> {
+        let previous = Display::current_info()?;
+        Display::write_mister_mode(w, h, w * 4)?;
+        Ok(Self { previous })
+    }
+}
+
+impl Drop for FbModeGuard {
+    fn drop(&mut self) {
+        if let Err(e) = Display::restore_mister_mode(self.previous) {
+            eprintln!("warning: failed to restore framebuffer mode: {e}");
+        }
+    }
+}
+
+fn ui_fpga_scaled_mode() -> Mode {
+    Mode {
+        hact: UI_HDMI_W,
+        hbp: 3,
+        vact: UI_HDMI_H,
+        vbp: 2,
     }
 }
 
@@ -405,11 +463,15 @@ fn parse_effect_bench_args() -> (
     };
     let fill = match args.get(4).map(String::as_str) {
         Some(s) => EffectFill::parse(s).unwrap_or_else(|| {
-            eprintln!("unknown effect fill '{s}' (use full|half|native)");
+            eprintln!("unknown effect fill '{s}' (use full|half|native|fpga-half)");
             std::process::exit(2);
         }),
         None => EffectFill::Full,
     };
+    if fill == EffectFill::FpgaHalf && modes.iter().any(|m| *m != EffectBenchMode::Raw) {
+        eprintln!("effect fill fpga-half supports raw mode only");
+        std::process::exit(2);
+    }
     (effects, secs, modes, size, fill)
 }
 
@@ -498,11 +560,33 @@ pub fn run_effect_bench(f: &mut Fpga) {
     );
 
     let _vt = VtGraphicsGuard::enter_or_warn();
-    let mut disp = match Display::open_current_boot() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("failed to open display (/dev/fb0): {e}");
-            std::process::exit(1);
+    let _fb_mode_guard = if fill == EffectFill::FpgaHalf {
+        println!("effect-bench-fb-mode=temporary 480x270 stride=1920 restore=on-drop");
+        match FbModeGuard::set_temporary(size.w, size.h) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                eprintln!("failed to set temporary framebuffer mode for fpga-half: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+    let mut disp = if fill == EffectFill::FpgaHalf {
+        match Display::open(size.w, size.h) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("failed to open temporary display (/dev/fb0): {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match Display::open_current_boot() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("failed to open display (/dev/fb0): {e}");
+                std::process::exit(1);
+            }
         }
     };
     let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
@@ -520,17 +604,38 @@ pub fn run_effect_bench(f: &mut Fpga) {
     println!("{}", ui.log_line());
     let display_config = DisplayConfig::detect(f, disp.info(), &ui);
     println!("{}", display_config.log_line());
+    let route_mode = if fill == EffectFill::FpgaHalf {
+        Mode {
+            hact: target.physical_w as u16,
+            hbp: 3,
+            vact: target.physical_h as u16,
+            vbp: 2,
+        }
+    } else {
+        Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16)
+    };
+    let (xoff, yoff) = if fill == EffectFill::FpgaHalf {
+        (
+            Some(target.physical_x as i32),
+            Some(target.physical_y as i32),
+        )
+    } else {
+        (Some(0), Some(0))
+    };
     let flag = f.fb_enable(
         0,
         disp.width() as u16,
         disp.height() as u16,
-        Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16),
-        Some(0),
-        Some(0),
+        route_mode,
+        xoff,
+        yoff,
         std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
     );
     f.set_audio_volume(0);
-    println!("fb routed (support_flag={flag}); native retro effect benchmark");
+    println!(
+        "fb routed (support_flag={flag}); native retro effect benchmark fpga_scale={}",
+        fill.uses_fpga_scaler()
+    );
 
     let needs_overlay = modes.contains(&EffectBenchMode::Overlay);
     let mut overlay_ctx = if needs_overlay {
@@ -575,6 +680,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
                 target,
                 secs,
                 &mut low,
+                fill == EffectFill::FpgaHalf,
             );
         }
     }
@@ -602,6 +708,7 @@ fn run_one_effect_bench(
     target: EffectTarget,
     secs: u64,
     low: &mut [u32],
+    direct_to_fb: bool,
 ) {
     let mut state = EffectState::new(kind, size);
     disp.clear(Pixel(0));
@@ -628,25 +735,41 @@ fn run_one_effect_bench(
     );
     while secs == 0 || start.elapsed().as_secs() < secs {
         let wall_start = Instant::now();
-        let t0 = Instant::now();
-        state.render(frame, low);
-        let t1 = Instant::now();
-        let _pace = pacer.wait();
-        let t2 = Instant::now();
+        let effect_us;
+        let vsync_us;
+        if direct_to_fb {
+            let v0 = Instant::now();
+            let _pace = pacer.wait();
+            vsync_us = v0.elapsed().as_micros() as u64;
+            let t0 = Instant::now();
+            state.render(frame, disp.buffer_u32_mut());
+            effect_us = t0.elapsed().as_micros() as u64;
+        } else {
+            let t0 = Instant::now();
+            state.render(frame, low);
+            effect_us = t0.elapsed().as_micros() as u64;
+            let v0 = Instant::now();
+            let _pace = pacer.wait();
+            vsync_us = v0.elapsed().as_micros() as u64;
+        }
         let mut slint_us = 0;
         let scale_copy_us;
         match mode {
             EffectBenchMode::Raw => {
-                let c0 = Instant::now();
-                disp.copy_u32_rect_scaled_at(
-                    target.physical_x,
-                    target.physical_y,
-                    target.scale,
-                    low,
-                    size.w,
-                    size.h,
-                );
-                scale_copy_us = c0.elapsed().as_micros() as u64;
+                if direct_to_fb {
+                    scale_copy_us = 0;
+                } else {
+                    let c0 = Instant::now();
+                    disp.copy_u32_rect_scaled_at(
+                        target.physical_x,
+                        target.physical_y,
+                        target.scale,
+                        low,
+                        size.w,
+                        size.h,
+                    );
+                    scale_copy_us = c0.elapsed().as_micros() as u64;
+                }
             }
             EffectBenchMode::Overlay => {
                 let Some((window, app, animation_clock, full)) = overlay_ctx.as_mut() else {
@@ -666,7 +789,7 @@ fn run_one_effect_bench(
                 app.set_effect_name(kind.name().into());
                 app.set_mode_label("overlay".into());
                 app.set_fps_label(format!("fps {live_frames}").into());
-                app.set_timing_label(format!("fx {}us", (t1 - t0).as_micros()).into());
+                app.set_timing_label(format!("fx {effect_us}us").into());
                 app.set_frame_phase((frame % 16) as i32);
                 update_slint_animations(animation_clock);
                 window.request_redraw();
@@ -689,13 +812,7 @@ fn run_one_effect_bench(
             }
         }
         let wall_us = wall_start.elapsed().as_micros() as u64;
-        totals.record(
-            (t1 - t0).as_micros() as u64,
-            slint_us,
-            scale_copy_us,
-            (t2 - t1).as_micros() as u64,
-            wall_us,
-        );
+        totals.record(effect_us, slint_us, scale_copy_us, vsync_us, wall_us);
         frame += 1;
         live_frames += 1;
         if live_start.elapsed().as_millis() >= 1000 {
@@ -773,7 +890,8 @@ fn dirty_rect(region: &PhysicalRegion, render_w: usize, render_h: usize) -> Opti
 }
 
 fn copy_cached_rows(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], y0: usize, y1: usize) {
-    disp.copy_rows_scaled(ui.fb_scale(), cached, ui.render_w(), y0, y1);
+    debug_assert_eq!(ui.fb_scale(), 1);
+    disp.copy_rows(cached, y0, y1);
 }
 
 fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: DirtyRect) {
@@ -781,15 +899,8 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
         copy_cached_rows(disp, ui, cached, rect.y0, rect.y1);
         return;
     }
-    disp.copy_rect_scaled(
-        ui.fb_scale(),
-        cached,
-        ui.render_w(),
-        rect.x0,
-        rect.y0,
-        rect.x1,
-        rect.y1,
-    );
+    debug_assert_eq!(ui.fb_scale(), 1);
+    disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
 }
 
 fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
@@ -826,8 +937,17 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    println!("display-open-path=current-fb-no-mode-write");
-    let mut disp = match Display::open_current_boot() {
+    println!("ui-fb-mode=temporary {UI_FB_W}x{UI_FB_H} fpga-scale=1920x1080 restore=on-drop");
+    let _fb_mode_guard = match FbModeGuard::set_temporary(UI_FB_W, UI_FB_H) {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("failed to set temporary framebuffer mode for FPGA-scaled UI: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("display-open-path=temporary-fb-fpga-scale");
+    let mut disp = match Display::open(UI_FB_W, UI_FB_H) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
@@ -846,8 +966,8 @@ pub fn run_ui(f: &mut Fpga) {
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
     }
-    let route_mode = Mode::framebuffer_sized(disp.width() as u16, disp.height() as u16);
-    let route_mode_label = "framebuffer-sized";
+    let route_mode = ui_fpga_scaled_mode();
+    let route_mode_label = "fpga-scale-1920x1080";
     let set_vga_fb = std::env::var_os("MISTER_DIRECT_VIDEO").is_some();
     boot_analytics::event(
         "initial_fb_enable_direct_attempt",
@@ -873,7 +993,9 @@ pub fn run_ui(f: &mut Fpga) {
     disp.record_visual_sample("after_initial_route_before_slint_draw");
     f.set_audio_volume(0);
     boot_analytics::event("set_audio_volume", "attenuation=0");
-    println!("fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy)");
+    println!(
+        "fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
+    );
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     let animation_clock = AnimationClock::from_env();
@@ -2682,7 +2804,7 @@ fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) 
             0,
             ui.fb_w() as u16,
             ui.fb_h() as u16,
-            Mode::framebuffer_sized(ui.fb_w() as u16, ui.fb_h() as u16),
+            ui_fpga_scaled_mode(),
             Some(0),
             Some(0),
             std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),

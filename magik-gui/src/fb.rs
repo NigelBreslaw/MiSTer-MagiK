@@ -345,6 +345,17 @@ impl FbInfo {
             self.transp_offset
         )
     }
+
+    pub fn mode_line(self) -> String {
+        let w = self.visible_w.max(1);
+        let h = self.visible_h.max(1);
+        let stride = if self.stride_bytes != 0 {
+            self.stride_bytes
+        } else {
+            w * 4
+        };
+        format!("8888 1 {w} {h} {stride}")
+    }
 }
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -478,6 +489,20 @@ fn pixels_as_u32_mut(dst: &mut [Pixel]) -> &mut [u32] {
 }
 
 impl Display {
+    pub fn write_mister_mode(w: usize, h: usize, stride_bytes: usize) -> io::Result<()> {
+        std::fs::write(
+            "/sys/module/MiSTer_fb/parameters/mode",
+            format!("8888 1 {w} {h} {stride_bytes}\n"),
+        )
+    }
+
+    pub fn restore_mister_mode(info: FbInfo) -> io::Result<()> {
+        std::fs::write(
+            "/sys/module/MiSTer_fb/parameters/mode",
+            format!("{}\n", info.mode_line()),
+        )
+    }
+
     /// Open the framebuffer at its current kernel-reported size, without writing
     /// `/sys/module/MiSTer_fb/parameters/mode`.
     pub fn open_current_boot() -> io::Result<Self> {
@@ -550,6 +575,10 @@ impl Display {
             return Err(io::Error::last_os_error());
         }
         Ok(fb_info_from(var_ok, &var, fix_ok, &fix, 0, 0))
+    }
+
+    pub fn current_info() -> io::Result<FbInfo> {
+        Self::read_fb_info()
     }
 
     pub fn open(w: usize, h: usize) -> io::Result<Self> {
@@ -642,6 +671,11 @@ impl Display {
     /// The (single) on-screen buffer, as a mutable pixel slice.
     pub fn buffer_mut(&mut self) -> &mut [Pixel] {
         unsafe { std::slice::from_raw_parts_mut(self.mem, self.w * self.h) }
+    }
+
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    pub fn buffer_u32_mut(&mut self) -> &mut [u32] {
+        pixels_as_u32_mut(self.buffer_mut())
     }
 
     #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
@@ -875,66 +909,11 @@ impl Display {
         }
     }
 
-    /// Copy logical rows [src_y0, src_y1) from `src` (stride `src_w`) into the fb.
-    /// When `scale == 1`, `src_w` must equal `self.w` and rows map 1:1.
-    /// When `scale > 1`, each source pixel becomes a `scale`×`scale` block (nearest).
-    pub fn copy_rows_scaled(
-        &mut self,
-        scale: usize,
-        src: &[Pixel],
-        src_w: usize,
-        src_y0: usize,
-        src_y1: usize,
-    ) {
-        if scale <= 1 {
-            debug_assert_eq!(src_w, self.w);
-            self.copy_rows(src, src_y0, src_y1);
-            return;
-        }
-        if scale == 2 {
-            let dst_w = self.w;
-            let dst_h = self.h;
-            let dst = self.buffer_mut();
-            framebuffer_copy::copy_rect_2x_u32_to(
-                pixels_as_u32_mut(dst),
-                dst_w,
-                dst_h,
-                0,
-                src_y0 * 2,
-                pixels_as_u32(src),
-                src_w,
-                0,
-                src_y0,
-                src_w,
-                src_y1,
-            );
-            return;
-        }
-        let dst_w = self.w;
-        let dst_h = self.h;
-        let dst = self.buffer_mut();
-        framebuffer_copy::copy_rect_scaled_to(
-            dst,
-            dst_w,
-            dst_h,
-            0,
-            src_y0 * scale,
-            scale,
-            src,
-            src_w,
-            0,
-            src_y0,
-            src_w,
-            src_y1,
-        );
-    }
-
     /// Copy logical rect [src_x0,src_x1) × [src_y0,src_y1) from `src` into the fb.
     /// This avoids copying full-width dirty rows when Slint reports a narrow
     /// bounding box.
-    pub fn copy_rect_scaled(
+    pub fn copy_rect(
         &mut self,
-        scale: usize,
         src: &[Pixel],
         src_w: usize,
         src_x0: usize,
@@ -945,59 +924,18 @@ impl Display {
         if src_x1 <= src_x0 || src_y1 <= src_y0 {
             return;
         }
-        let rect_w = src_x1 - src_x0;
-        if rect_w * scale >= self.w * 3 / 4 {
-            self.copy_rows_scaled(scale, src, src_w, src_y0, src_y1);
+        if src_x0 == 0 && src_x1 == self.w && src_w == self.w {
+            self.copy_rows(src, src_y0, src_y1);
             return;
         }
-        if scale <= 1 {
-            debug_assert_eq!(src_w, self.w);
-            let dst_w = self.w;
-            let dst = self.buffer_mut();
-            for sy in src_y0..src_y1 {
-                let a = sy * dst_w + src_x0;
-                let b = sy * dst_w + src_x1;
-                dst[a..b].copy_from_slice(&src[a..b]);
-            }
-            return;
-        }
-        if scale == 2 {
-            let dst_w = self.w;
-            let dst_h = self.h;
-            let dst = self.buffer_mut();
-            framebuffer_copy::copy_rect_2x_u32_to(
-                pixels_as_u32_mut(dst),
-                dst_w,
-                dst_h,
-                src_x0 * 2,
-                src_y0 * 2,
-                pixels_as_u32(src),
-                src_w,
-                src_x0,
-                src_y0,
-                src_x1,
-                src_y1,
-            );
-            return;
-        }
-
+        debug_assert_eq!(src_w, self.w);
         let dst_w = self.w;
-        let dst_h = self.h;
         let dst = self.buffer_mut();
-        framebuffer_copy::copy_rect_scaled_to(
-            dst,
-            dst_w,
-            dst_h,
-            src_x0 * scale,
-            src_y0 * scale,
-            scale,
-            src,
-            src_w,
-            src_x0,
-            src_y0,
-            src_x1,
-            src_y1,
-        );
+        for sy in src_y0..src_y1 {
+            let a = sy * dst_w + src_x0;
+            let b = sy * dst_w + src_x1;
+            dst[a..b].copy_from_slice(&src[a..b]);
+        }
     }
 
     #[allow(dead_code)]

@@ -15,13 +15,15 @@ displays a Linux UI, the tooling we built, and the concrete next steps.
 game/app front end. Long-term it should feel like a real frontend (own the
 screen, controller input).
 
-**Status (2026-06-06):**
+**Status (2026-06-08):**
 
 - ✅ **Native Rust frontend** — `mister-magik-fb ui` at locked 60fps, smooth +
   tear-free. See §9.7.
-- ✅ **Dynamic framebuffer path** — benchmarks and launcher open the current
-  MiSTer framebuffer and render Slint 1:1 at that size. The old fixed
-  960x540-to-1080p framebuffer path has been removed.
+- ✅ **FPGA-scaled small framebuffer UI path** — benchmarks and launcher
+  temporarily set `/dev/fb0` to 960×540, render Slint 1:1 into that
+  write-combined buffer, and let MiSTer's FPGA framebuffer scaler expand it to
+  1080p HDMI. The old ARM-side 960×540 → 1920×1080 framebuffer copy/scaler has
+  been removed from the normal UI path.
 - ✅ **Slint launcher** — 2×2 home grid, controller test; gamepad owned by Slint
   while UI runs. Games launch via fifo `load_core` (MiSTer spawned briefly).
 - ✅ **Production boot** — update_all-compatible handoff:
@@ -566,19 +568,22 @@ full-screen image from our own binary**:
   values are **`xoff=yoff=0`**. Confirmed clean on HDMI at `0,0`.
 
 **Resolution / CRT generality (answer to "will this cope with lower res / CRT?"):**
-Yes, but not by hardcoding. The current frontend opens the **live** framebuffer
-size and routes Slint 1:1 with runtime-sized geometry. CRT/`direct_video` smoke
-paths are opt-in tests; the normal HDMI path does not force a mode before
-opening `/dev/fb0`.
+The production HDMI UI path is intentionally optimized for the known stable
+1080p boot configuration: set `/dev/fb0` to 960×540, render Slint 1:1, and route
+that source through the FPGA scaler to 1920×1080. CRT/`direct_video` and other
+display modes remain opt-in smoke tests; do not assume the 960×540 UI path is
+already generalized to every output timing.
 
 ### 9.7 Slint software renderer @ locked 60fps — smooth + tear-free (✅ done)
 
-`mister-magik-fb ui [secs]` runs Slint's **software renderer** directly on the
-framebuffer (no X/Wayland) at a **rock-steady 60fps, smooth and tear-free**
-(confirmed on HDMI). Per-frame budget (1080p, animated demo UI):
+`mister-magik-fb ui [secs]` runs Slint's **software renderer** directly on a
+960×540 framebuffer (no X/Wayland) at a **rock-steady 60fps, smooth and
+tear-free** (confirmed on HDMI). The FPGA scales the 960×540 source to 1080p, so
+the ARM no longer performs the full-framebuffer 2× expansion. Current demo smoke
+budget (2026-06-08):
 
 ```
-render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 16.6ms
+render ~0.9ms (cached RAM)  +  vsync-wait ~15.0ms  +  dirty copy ~0.7ms  ≈ 16.6ms
 ```
 
 **Architecture (the bits that matter):**
@@ -587,11 +592,13 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
   (`RepaintBufferType::ReusedBuffer`), time from a monotonic `Instant`. We drive
   the loop ourselves (no `run_event_loop`), pacing each frame on
   `FBIO_WAITFORVSYNC`.
-- Render into a **cached** `Vec<Pixel>` (fast, ~2.3ms — Slint only redraws the
-  dirty region). `render()` returns a `PhysicalRegion`; we take its bounding-box
-  rows.
-- After `wait_vsync`, copy **only the dirty rows** into `/dev/fb0`. Single
-  buffer, routed once via `fb_enable_direct(0, …, 0, 0)`.
+- Render into a **cached** `Vec<Pixel>` (fast, ~0.9ms for the demo — Slint only
+  redraws the dirty region). `render()` returns a `PhysicalRegion`; broad
+  updates copy rows and narrow updates copy the reported rectangle.
+- Before opening `/dev/fb0`, the UI path writes the MiSTer framebuffer mode as
+  `8888 1 960 540 3840`, opens that small write-combined buffer, and routes it
+  once via `fb_enable(0, 960, 540, Mode { hact: 1920, vact: 1080, hbp: 3, vbp:
+  2 }, …)`.
 
 **THE key hardware finding — write-combining vs uncached:**
 
@@ -605,9 +612,10 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
   (`SwappedBuffers`) was ~15–17ms and unstable (dropped to 30fps under load).
   `/dev/fb0` only ever exposes **one** buffer (`virtual_size` = 1920×1080), so we
   can't get a second *write-combining* buffer to flip between.
-- The winning compromise: single write-combined buffer + dirty-row copy started
-  right after vblank. The copy (~8.7ms for 619 rows) stays just ahead of the scan
-  beam (which needs ~9.5ms for those rows), so it reads as tear-free in practice.
+- The winning compromise is now a single small write-combined buffer plus FPGA
+  output scaling. In the `FPSCALE-CLEANUP-UI-SMOKE-20260608` demo run, normal UI
+  copy time was ~0.7ms at 60fps with `fb_size=960x540`, `render_size=960x540`,
+  and `fb_scale=1`.
 
 **Slint build notes (cross-compile, no system fonts):**
 
@@ -626,10 +634,10 @@ render 2.3ms (cached RAM)  +  vsync-wait ~5.6ms  +  dirty-row copy ~8.7ms  ≈ 1
 - **Two release profiles** (`magik-gui/BUILD.md`): `release` (fast daily, thin LTO)
   and `release-device` (fat LTO + Cortex-A9, ship to MiSTer). `opt-level = 3` on both.
 
-**Known follow-ups for the real frontend:** the copy is still ~half the screen
-because the demo's gradient bar spans full width (full-width dirty rows). A real
-UI with localised motion will copy far less. Could also copy only the dirty
-*sub-rectangle* (x-range) instead of full-width rows for further savings.
+**Known follow-ups for the real frontend:** generalize the small-framebuffer
+route from the known-good 1080p HDMI mode to other output timings, and add an
+explicit HDMI capture path if visual correctness needs to be proven beyond the
+960×540 `/dev/fb0` PNG plus route logs.
 
 ---
 
