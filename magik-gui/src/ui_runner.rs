@@ -3805,34 +3805,31 @@ impl ArcadeListRenderer {
     }
 
     fn copy_layer_to_display(&self, disp: &mut Display) {
-        if self.surface_y == 0 {
-            disp.copy_rect_from(
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y,
-                ARCADE_LIST_W,
-                ARCADE_LIST_H,
-                &self.surface,
-            );
-        } else {
-            let top_h = ARCADE_LIST_H - self.surface_y;
-            let top = self.surface_y * ARCADE_LIST_W;
-            disp.copy_rect_from(
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y,
-                ARCADE_LIST_W,
-                top_h,
-                &self.surface[top..],
-            );
-            disp.copy_rect_from(
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y + top_h,
-                ARCADE_LIST_W,
-                self.surface_y,
-                &self.surface[..top],
-            );
-        }
+        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
         self.copy_fade_to_display(disp);
+        self.copy_viewport_band_to_display(disp, fade_h, ARCADE_LIST_H - fade_h * 2);
         self.copy_selection_frame_to_display(disp);
+    }
+
+    fn copy_viewport_band_to_display(&self, disp: &mut Display, viewport_y: usize, h: usize) {
+        if h == 0 || viewport_y >= ARCADE_LIST_H {
+            return;
+        }
+        let h = h.min(ARCADE_LIST_H - viewport_y);
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src = src_y * ARCADE_LIST_W;
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y + viewport_y + copied,
+                ARCADE_LIST_W,
+                copy_h,
+                &self.surface[src..src + copy_h * ARCADE_LIST_W],
+            );
+            copied += copy_h;
+        }
     }
 
     fn surface_row(&self, viewport_y: usize) -> &[Pixel] {
