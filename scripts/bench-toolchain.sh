@@ -50,7 +50,7 @@ usage() {
   echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
-  echo "         --launcher-scenario idle|home-nav|list-scroll|held-scroll|preview-changes"
+  echo "         --launcher-scenario idle|home-nav|list-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-changes"
   echo "         --launcher-dirty-opt on|off"
   echo "         --video-render-mode slint-image|direct-blit"
   echo "         --ui-scope all|launcher|arcade"
@@ -102,7 +102,7 @@ if [[ "$DIRTY_RECT_BROAD_PCT" -lt 1 || "$DIRTY_RECT_BROAD_PCT" -gt 100 ]]; then
 fi
 if [[ -n "$LAUNCHER_SCENARIO" ]]; then
   case "$LAUNCHER_SCENARIO" in
-    idle|home-nav|list-scroll|held-scroll|preview-changes) ;;
+    idle|home-nav|list-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-changes) ;;
     *) echo "Unknown --launcher-scenario: $LAUNCHER_SCENARIO" >&2; exit 1 ;;
   esac
 fi
