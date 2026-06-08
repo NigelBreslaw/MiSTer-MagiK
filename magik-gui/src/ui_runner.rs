@@ -3601,6 +3601,8 @@ struct ArcadeListRenderer {
 struct ArcadeListDrawKey {
     len: usize,
     visual_px: i32,
+    anchor_system_id: String,
+    anchor_mra_path: String,
     anchor_title: String,
 }
 
@@ -3647,6 +3649,14 @@ impl ArcadeListRenderer {
         let key = ArcadeListDrawKey {
             len: games.len(),
             visual_px,
+            anchor_system_id: games
+                .get(anchor)
+                .map(|game| game.system_id.clone())
+                .unwrap_or_default(),
+            anchor_mra_path: games
+                .get(anchor)
+                .map(|game| game.mra_path.clone())
+                .unwrap_or_default(),
             anchor_title: games
                 .get(anchor)
                 .map(|game| game.title.clone())
