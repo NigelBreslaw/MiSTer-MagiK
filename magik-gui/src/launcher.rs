@@ -16,8 +16,10 @@ use std::time::{Duration, Instant};
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
-const ARCADE_ROW_STEP_PX_PER_FRAME: i32 = 6;
-const ARCADE_HOLD_CONTINUOUS_DELAY: Duration = Duration::from_millis(180);
+const ARCADE_NORMAL_PX_PER_FRAME: i32 = 6;
+const ARCADE_TURBO_PX_PER_FRAME: i32 = 12;
+const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
+const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
@@ -56,10 +58,19 @@ pub struct ArcadeNav {
     pub selected: usize,
     pub scroll_y: i32,
     pub visual_index: f32,
-    last_update_at: Option<Instant>,
-    last_motion_dir: i32,
+    scroll: ArcadeScrollState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ArcadeScrollState {
+    visual_px: i32,
+    target_index: usize,
+    intent_queue: i32,
+    held_dir: i32,
     hold_started_at: Option<Instant>,
-    hold_dir: i32,
+    last_quick_tap_dir: i32,
+    last_quick_tap_released_at: Option<Instant>,
+    turbo_active: bool,
 }
 
 impl ArcadeNav {
@@ -68,10 +79,7 @@ impl ArcadeNav {
             selected: 0,
             scroll_y: 0,
             visual_index: 0.0,
-            last_update_at: None,
-            last_motion_dir: 0,
-            hold_started_at: None,
-            hold_dir: 0,
+            scroll: ArcadeScrollState::default(),
         }
     }
 
@@ -79,159 +87,156 @@ impl ArcadeNav {
         self.selected = 0;
         self.scroll_y = 0;
         self.visual_index = 0.0;
-        self.last_update_at = None;
-        self.last_motion_dir = 0;
-        self.hold_started_at = None;
-        self.hold_dir = 0;
+        self.scroll = ArcadeScrollState::default();
     }
 
     pub fn snap_to_selected(&mut self) {
-        self.visual_index = self.selected as f32;
-        self.last_update_at = None;
-        self.last_motion_dir = 0;
-        self.hold_started_at = None;
-        self.hold_dir = 0;
-        self.scroll_y = self.selected as i32 * ARCADE_ROW_HEIGHT;
+        self.scroll.target_index = self.selected;
+        self.scroll.intent_queue = 0;
+        self.scroll.visual_px = self.selected as i32 * ARCADE_ROW_HEIGHT;
+        self.sync_visual_from_px();
     }
 
     fn max_scroll_y(count: usize) -> i32 {
         count.saturating_sub(1) as i32 * ARCADE_ROW_HEIGHT
     }
 
-    fn set_visual_px(&mut self, px: i32, count: usize) {
-        let px = px.clamp(0, Self::max_scroll_y(count));
-        self.scroll_y = px;
-        self.visual_index = px as f32 / ARCADE_ROW_HEIGHT as f32;
-    }
-
-    fn continuous_hold_dir(&mut self, raw_dir: i32, now: Instant) -> i32 {
-        if raw_dir == 0 {
-            self.hold_started_at = None;
-            self.hold_dir = 0;
-            return 0;
-        }
-        let raw_dir = raw_dir.signum();
-        if self.hold_dir != raw_dir {
-            self.hold_dir = raw_dir;
-            self.hold_started_at = Some(now);
-            return 0;
-        }
-        let started = self.hold_started_at.unwrap_or(now);
-        self.hold_started_at = Some(started);
-        if now.saturating_duration_since(started) >= ARCADE_HOLD_CONTINUOUS_DELAY {
-            raw_dir
-        } else {
-            0
-        }
-    }
-
-    fn tick_scroll(&mut self, held_dir: i32, count: usize, now: Instant) {
+    pub fn handle_direction_input(
+        &mut self,
+        dir: i32,
+        previous_dir: i32,
+        now: Instant,
+        count: usize,
+    ) {
         if count == 0 {
             self.reset();
             return;
         }
-        let max_scroll_y = Self::max_scroll_y(count);
         if self.selected >= count {
             self.selected = count - 1;
             self.snap_to_selected();
-            self.last_update_at = Some(now);
             return;
         }
 
-        self.last_update_at = Some(now);
-
-        if held_dir != 0 {
-            self.last_motion_dir = held_dir.signum();
-            self.set_visual_px(
-                self.scroll_y + self.last_motion_dir * ARCADE_ROW_STEP_PX_PER_FRAME,
-                count,
-            );
-            self.selected = if self.last_motion_dir > 0 {
-                ((self.scroll_y + ARCADE_ROW_HEIGHT - 1) / ARCADE_ROW_HEIGHT) as usize
-            } else {
-                (self.scroll_y / ARCADE_ROW_HEIGHT) as usize
-            }
-            .min(count - 1);
-
-            if self.scroll_y <= 0 && held_dir < 0 {
-                self.selected = 0;
-                self.last_update_at = None;
-                self.last_motion_dir = 0;
-            } else if self.scroll_y >= max_scroll_y && held_dir > 0 {
-                self.selected = count - 1;
-                self.last_update_at = None;
-                self.last_motion_dir = 0;
-            }
+        let dir = dir.signum();
+        let previous_dir = previous_dir.signum();
+        if previous_dir != 0 && previous_dir != dir {
+            self.record_release(previous_dir, now);
+        }
+        if dir == 0 {
+            self.scroll.held_dir = 0;
+            self.scroll.hold_started_at = None;
+            self.scroll.turbo_active = false;
+            return;
+        }
+        if previous_dir != dir {
+            self.begin_press(dir, now);
+            self.enqueue_step(dir, count);
             return;
         }
 
-        if self.last_motion_dir > 0 && self.scroll_y < max_scroll_y {
-            self.selected = ((self.scroll_y + ARCADE_ROW_HEIGHT - 1) / ARCADE_ROW_HEIGHT) as usize;
-        } else if self.last_motion_dir < 0 && self.scroll_y > 0 {
-            self.selected = (self.scroll_y / ARCADE_ROW_HEIGHT) as usize;
-        }
-
-        let target_px = self.selected as i32 * ARCADE_ROW_HEIGHT;
-        let delta = target_px - self.scroll_y;
-        if delta.abs() <= ARCADE_ROW_STEP_PX_PER_FRAME {
-            self.set_visual_px(target_px, count);
-            self.last_update_at = None;
-            self.last_motion_dir = 0;
-        } else {
-            self.set_visual_px(
-                self.scroll_y + delta.signum() * ARCADE_ROW_STEP_PX_PER_FRAME,
-                count,
-            );
-        }
-
-        if self.scroll_y <= 0 {
-            self.selected = 0;
-            if self.last_motion_dir <= 0 {
-                self.last_update_at = None;
-                self.last_motion_dir = 0;
-            }
-        } else if self.scroll_y >= max_scroll_y {
-            self.selected = count - 1;
-            if self.last_motion_dir >= 0 {
-                self.last_update_at = None;
-                self.last_motion_dir = 0;
-            }
+        if self.scroll.hold_started_at.is_some() && self.is_settled() {
+            self.enqueue_step(dir, count);
         }
     }
 
-    fn step_target(&mut self, dir: i32, count: usize, now: Instant) {
+    pub fn tick(&mut self, count: usize) {
         if count == 0 {
             self.reset();
             return;
         }
-        let next = if dir > 0 {
-            self.selected.saturating_add(1).min(count - 1)
-        } else if dir < 0 {
-            self.selected.saturating_sub(1)
+        if self.selected >= count {
+            self.selected = count - 1;
+            self.snap_to_selected();
+            return;
+        }
+        let target_px = self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT;
+        let delta = target_px - self.scroll.visual_px;
+        if delta == 0 {
+            self.scroll.intent_queue = 0;
+            self.sync_visual_from_px();
+            return;
+        }
+        let step = if self.scroll.turbo_active {
+            ARCADE_TURBO_PX_PER_FRAME
         } else {
-            self.selected
+            ARCADE_NORMAL_PX_PER_FRAME
         };
-        if next != self.selected {
-            self.selected = next;
-            self.last_motion_dir = dir.signum();
-            if self.last_update_at.is_none() {
-                self.last_update_at = Some(now);
-            }
+        let movement = delta.signum() * step.min(delta.abs());
+        let before_row = self.scroll.visual_px.div_euclid(ARCADE_ROW_HEIGHT);
+        self.scroll.visual_px =
+            (self.scroll.visual_px + movement).clamp(0, Self::max_scroll_y(count));
+        let after_row = self.scroll.visual_px.div_euclid(ARCADE_ROW_HEIGHT);
+        if after_row != before_row && self.scroll.intent_queue != 0 {
+            self.scroll.intent_queue -= self.scroll.intent_queue.signum();
+        }
+        self.sync_visual_from_px();
+    }
+
+    pub fn bench_direction_tick(
+        &mut self,
+        dir: i32,
+        previous_dir: i32,
+        count: usize,
+        now: Instant,
+    ) {
+        self.handle_direction_input(dir, previous_dir, now, count);
+        self.tick(count);
+    }
+
+    fn begin_press(&mut self, dir: i32, now: Instant) {
+        self.scroll.held_dir = dir;
+        self.scroll.hold_started_at = Some(now);
+        self.scroll.turbo_active = self.scroll.last_quick_tap_dir == dir
+            && self
+                .scroll
+                .last_quick_tap_released_at
+                .is_some_and(|released| {
+                    now.saturating_duration_since(released) <= ARCADE_TURBO_REPRESS_WINDOW
+                });
+        if self.scroll.last_quick_tap_dir != dir {
+            self.scroll.last_quick_tap_released_at = None;
         }
     }
 
-    pub fn bench_hold_tick(&mut self, dir: i32, count: usize, now: Instant, first_tick: bool) {
-        if first_tick {
-            self.step_target(dir, count, now);
+    fn record_release(&mut self, dir: i32, now: Instant) {
+        if let Some(started) = self.scroll.hold_started_at {
+            if self.scroll.held_dir == dir
+                && now.saturating_duration_since(started) <= ARCADE_QUICK_TAP_MAX
+            {
+                self.scroll.last_quick_tap_dir = dir;
+                self.scroll.last_quick_tap_released_at = Some(now);
+            }
         }
-        let continuous_dir = self.continuous_hold_dir(dir, now);
-        if continuous_dir != 0 || !self.is_settled() {
-            self.tick_scroll(continuous_dir, count, now);
-        }
+        self.scroll.held_dir = 0;
+        self.scroll.hold_started_at = None;
+        self.scroll.turbo_active = false;
     }
 
     fn is_settled(&self) -> bool {
-        (self.visual_index - self.selected as f32).abs() < 0.001
+        self.scroll.visual_px == self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT
+    }
+
+    fn enqueue_step(&mut self, dir: i32, count: usize) {
+        if count == 0 || dir == 0 {
+            return;
+        }
+        let next = if dir > 0 {
+            self.scroll.target_index.saturating_add(1).min(count - 1)
+        } else {
+            self.scroll.target_index.saturating_sub(1)
+        };
+        if next == self.scroll.target_index {
+            return;
+        }
+        self.scroll.target_index = next;
+        self.selected = next;
+        self.scroll.intent_queue += dir.signum();
+    }
+
+    fn sync_visual_from_px(&mut self) {
+        self.scroll_y = self.scroll.visual_px;
+        self.visual_index = self.scroll.visual_px as f32 / ARCADE_ROW_HEIGHT as f32;
     }
 }
 
@@ -365,22 +370,11 @@ impl LauncherNav {
             self.arcade.snap_to_selected();
         }
 
-        let raw_held_dir = if now.dpad_down && !now.dpad_up {
-            1
-        } else if now.dpad_up && !now.dpad_down {
-            -1
-        } else {
-            0
-        };
-        if rising(now.dpad_down, self.prev.dpad_down) && !now.dpad_up {
-            self.arcade.step_target(1, count, frame_now);
-        } else if rising(now.dpad_up, self.prev.dpad_up) && !now.dpad_down {
-            self.arcade.step_target(-1, count, frame_now);
-        }
-        let continuous_dir = self.arcade.continuous_hold_dir(raw_held_dir, frame_now);
-        if continuous_dir != 0 || !self.arcade.is_settled() {
-            self.arcade.tick_scroll(continuous_dir, count, frame_now);
-        }
+        let dir = arcade_dpad_dir(now);
+        let previous_dir = arcade_dpad_dir(&self.prev);
+        self.arcade
+            .handle_direction_input(dir, previous_dir, frame_now, count);
+        self.arcade.tick(count);
 
         if rising(now.btn_a, self.prev.btn_a) {
             return catalog
@@ -484,6 +478,16 @@ fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
 
 fn rising(now: bool, prev: bool) -> bool {
     now && !prev
+}
+
+fn arcade_dpad_dir(state: &PadState) -> i32 {
+    if state.dpad_down && !state.dpad_up {
+        1
+    } else if state.dpad_up && !state.dpad_down {
+        -1
+    } else {
+        0
+    }
 }
 
 pub fn game_title(catalog: &ArcadeCatalog, mra_path: &str) -> String {
@@ -657,8 +661,24 @@ pub fn reboot_mister() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn input(nav: &mut ArcadeNav, dir: i32, previous_dir: i32, count: usize, now: Instant) {
+        nav.handle_direction_input(dir, previous_dir, now, count);
+        nav.tick(count);
+    }
+
+    fn settle(nav: &mut ArcadeNav, count: usize, start: Instant) {
+        for frame in 1..=64 {
+            nav.tick(count);
+            if nav.is_settled() {
+                return;
+            }
+            let _ = start + Duration::from_millis(frame * 16);
+        }
+        assert!(nav.is_settled(), "arcade nav did not settle");
+    }
+
     #[test]
-    fn arcade_opens_with_first_row_centered() {
+    fn arcade_opens_with_first_row_selected() {
         let nav = ArcadeNav::new();
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.visual_index, 0.0);
@@ -666,73 +686,45 @@ mod tests {
     }
 
     #[test]
-    fn arcade_velocity_scrolls_continuously() {
+    fn arcade_single_quick_down_press_moves_one() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_scroll(1, 10, t0);
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(50));
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(100));
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(125));
+        input(&mut nav, 1, 0, 10, t0);
+        assert_eq!(nav.selected, 1);
+        assert!(nav.visual_index > 0.0);
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(40));
+        settle(&mut nav, 10, t0);
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
         assert_eq!(nav.scroll_y, ARCADE_ROW_HEIGHT);
     }
 
     #[test]
-    fn arcade_single_press_commits_next_target() {
+    fn arcade_single_quick_up_press_moves_one() {
         let mut nav = ArcadeNav::new();
+        nav.selected = 5;
+        nav.snap_to_selected();
         let t0 = Instant::now();
-        nav.step_target(1, 10, t0);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.visual_index, 0.0);
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(20));
-        assert_eq!(nav.selected, 1);
-        assert!(nav.visual_index > 0.0);
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(70));
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(104));
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.visual_index, 1.0);
-    }
-
-    #[test]
-    fn arcade_hold_continues_after_tap_target() {
-        let mut nav = ArcadeNav::new();
-        let t0 = Instant::now();
-        nav.step_target(1, 10, t0);
-        for frame in 1..=8 {
-            nav.tick_scroll(1, 10, t0 + Duration::from_millis(frame * 50));
-        }
-        assert!(nav.visual_index > 1.0);
-        assert!(nav.selected > 1);
-    }
-
-    #[test]
-    fn arcade_release_settles_to_selected_row() {
-        let mut nav = ArcadeNav::new();
-        let t0 = Instant::now();
-        nav.tick_scroll(1, 10, t0);
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(50));
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(80));
-        assert_eq!(nav.selected, 1);
-        assert!(nav.visual_index > 0.5 && nav.visual_index < 1.0);
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.visual_index, 1.0);
+        input(&mut nav, -1, 0, 10, t0);
+        assert_eq!(nav.selected, 4);
+        assert!(nav.visual_index < 5.0);
+        input(&mut nav, 0, -1, 10, t0 + Duration::from_millis(40));
+        settle(&mut nav, 10, t0);
+        assert_eq!(nav.selected, 4);
+        assert_eq!(nav.visual_index, 4.0);
+        assert_eq!(nav.scroll_y, 4 * ARCADE_ROW_HEIGHT);
     }
 
     #[test]
     fn arcade_release_after_tiny_downward_motion_commits_forward() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_scroll(1, 10, t0);
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(10));
+        input(&mut nav, 1, 0, 10, t0);
         assert_eq!(nav.selected, 1);
         assert!(nav.visual_index > 0.0 && nav.visual_index < 0.5);
-
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(11));
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(11));
         assert_eq!(nav.selected, 1);
-
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
+        settle(&mut nav, 10, t0);
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
     }
@@ -743,72 +735,130 @@ mod tests {
         nav.selected = 5;
         nav.snap_to_selected();
         let t0 = Instant::now();
-        nav.tick_scroll(-1, 10, t0);
-        nav.tick_scroll(-1, 10, t0 + Duration::from_millis(10));
+        input(&mut nav, -1, 0, 10, t0);
         assert_eq!(nav.selected, 4);
         assert!(nav.visual_index > 4.5 && nav.visual_index < 5.0);
-
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(11));
+        input(&mut nav, 0, -1, 10, t0 + Duration::from_millis(11));
         assert_eq!(nav.selected, 4);
-
-        nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
+        settle(&mut nav, 10, t0);
         assert_eq!(nav.selected, 4);
         assert_eq!(nav.visual_index, 4.0);
     }
 
     #[test]
-    fn arcade_scroll_clamps_at_edges() {
+    fn arcade_long_hold_feeds_next_row_without_delay() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
-        nav.tick_scroll(-1, 10, t0);
-        nav.tick_scroll(-1, 10, t0 + Duration::from_millis(250));
-        assert_eq!(nav.selected, 0);
-        assert_eq!(nav.visual_index, 0.0);
-        nav.selected = 9;
-        nav.snap_to_selected();
-        nav.tick_scroll(1, 10, t0);
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(250));
-        assert_eq!(nav.selected, 9);
-        assert_eq!(nav.visual_index, 9.0);
-    }
-
-    #[test]
-    fn arcade_tap_does_not_continue_into_second_row_before_hold_delay() {
-        let mut nav = ArcadeNav::new();
-        let t0 = Instant::now();
-        nav.step_target(1, 10, t0);
-        for frame in 0..=17 {
-            let now = t0 + Duration::from_millis(frame * 10);
-            let dir = nav.continuous_hold_dir(1, now);
-            assert_eq!(dir, 0);
-            if dir != 0 || !nav.is_settled() {
-                nav.tick_scroll(dir, 10, now);
-            }
+        input(&mut nav, 1, 0, 10, t0);
+        assert_eq!(nav.selected, 1);
+        for frame in 1..=7 {
+            input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(frame * 16));
         }
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
-        assert_eq!(nav.scroll_y, ARCADE_ROW_HEIGHT);
-    }
-
-    #[test]
-    fn arcade_hold_becomes_continuous_after_delay() {
-        let mut nav = ArcadeNav::new();
-        let t0 = Instant::now();
-        nav.step_target(1, 10, t0);
-        for frame in 0..=17 {
-            let now = t0 + Duration::from_millis(frame * 10);
-            let dir = nav.continuous_hold_dir(1, now);
-            if dir != 0 || !nav.is_settled() {
-                nav.tick_scroll(dir, 10, now);
-            }
-        }
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.visual_index, 1.0);
-
-        let dir = nav.continuous_hold_dir(1, t0 + Duration::from_millis(210));
-        assert_eq!(dir, 1);
-        nav.tick_scroll(dir, 10, t0 + Duration::from_millis(210));
-        nav.tick_scroll(1, 10, t0 + Duration::from_millis(230));
+        input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(128));
+        assert_eq!(nav.selected, 2);
         assert!(nav.visual_index > 1.0);
+    }
+
+    #[test]
+    fn arcade_rapid_taps_queue_every_press() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        for tap in 0..5 {
+            let down_at = t0 + Duration::from_millis(tap * 30);
+            input(&mut nav, 1, 0, 10, down_at);
+            input(&mut nav, 0, 1, 10, down_at + Duration::from_millis(10));
+        }
+        assert_eq!(nav.selected, 5);
+        assert!(nav.visual_index < 5.0);
+        settle(&mut nav, 10, t0);
+        assert_eq!(nav.selected, 5);
+        assert_eq!(nav.visual_index, 5.0);
+    }
+
+    #[test]
+    fn arcade_rapid_taps_clamp_at_edges() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        for tap in 0..12 {
+            let down_at = t0 + Duration::from_millis(tap * 20);
+            input(&mut nav, 1, 0, 10, down_at);
+            input(&mut nav, 0, 1, 10, down_at + Duration::from_millis(5));
+        }
+        assert_eq!(nav.selected, 9);
+        settle(&mut nav, 10, t0);
+        assert_eq!(nav.visual_index, 9.0);
+
+        for tap in 0..12 {
+            let down_at = t0 + Duration::from_millis(400 + tap * 20);
+            input(&mut nav, -1, 0, 10, down_at);
+            input(&mut nav, 0, -1, 10, down_at + Duration::from_millis(5));
+        }
+        assert_eq!(nav.selected, 0);
+        settle(&mut nav, 10, t0);
+        assert_eq!(nav.visual_index, 0.0);
+    }
+
+    #[test]
+    fn arcade_opposite_direction_retargets_safely() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 10, t0);
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(20));
+        assert_eq!(nav.selected, 1);
+        assert!(nav.visual_index > 0.0);
+        input(&mut nav, -1, 0, 10, t0 + Duration::from_millis(40));
+        assert_eq!(nav.selected, 0);
+        settle(&mut nav, 10, t0);
+        assert_eq!(nav.visual_index, 0.0);
+    }
+
+    #[test]
+    fn arcade_turbo_repress_uses_12_px_steps() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 10, t0);
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
+        let visual_before_turbo = nav.scroll.visual_px;
+        input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(120));
+        assert!(nav.scroll.turbo_active);
+        assert_eq!(nav.selected, 2);
+        assert_eq!(
+            nav.scroll.visual_px,
+            visual_before_turbo + ARCADE_TURBO_PX_PER_FRAME
+        );
+    }
+
+    #[test]
+    fn arcade_late_repress_does_not_turbo() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 10, t0);
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
+        let visual_before_repress = nav.scroll.visual_px;
+        input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(450));
+        assert!(!nav.scroll.turbo_active);
+        assert_eq!(
+            nav.scroll.visual_px,
+            visual_before_repress + ARCADE_NORMAL_PX_PER_FRAME
+        );
+    }
+
+    #[test]
+    fn arcade_opposite_repress_does_not_turbo() {
+        let mut nav = ArcadeNav::new();
+        nav.selected = 5;
+        nav.snap_to_selected();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 10, t0);
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
+        let visual_before_repress = nav.scroll.visual_px;
+        input(&mut nav, -1, 0, 10, t0 + Duration::from_millis(120));
+        assert!(!nav.scroll.turbo_active);
+        assert_eq!(
+            nav.scroll.visual_px,
+            visual_before_repress - ARCADE_NORMAL_PX_PER_FRAME
+        );
     }
 }
