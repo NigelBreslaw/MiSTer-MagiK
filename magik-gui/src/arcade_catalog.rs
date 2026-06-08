@@ -94,6 +94,20 @@ impl ArcadeCatalog {
             .cloned()
             .collect()
     }
+
+    pub fn system_game_count(&self, system_id: &str) -> usize {
+        self.games
+            .iter()
+            .filter(|g| g.system_id == system_id)
+            .count()
+    }
+
+    pub fn system_game_at(&self, system_id: &str, index: usize) -> Option<&ArcadeGameEntry> {
+        self.games
+            .iter()
+            .filter(|g| g.system_id == system_id)
+            .nth(index)
+    }
 }
 
 #[derive(Clone, Debug, Default)]

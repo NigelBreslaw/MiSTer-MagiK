@@ -36,6 +36,8 @@ SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 FRAME_ORDER="${MISTER_FRAME_ORDER:-render-then-vsync}"
 DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
+LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
+LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -46,6 +48,8 @@ usage() {
   echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
+  echo "         --launcher-scenario idle|home-nav|list-scroll|preview-changes"
+  echo "         --launcher-dirty-opt on|off"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   exit "${1:-0}"
 }
@@ -71,6 +75,8 @@ while [[ $# -gt 0 ]]; do
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
     --frame-order) FRAME_ORDER="${2:?}"; shift 2 ;;
     --dirty-rect-broad-pct) DIRTY_RECT_BROAD_PCT="${2:?}"; shift 2 ;;
+    --launcher-scenario) LAUNCHER_SCENARIO="${2:?}"; shift 2 ;;
+    --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
@@ -88,6 +94,16 @@ if [[ "$DIRTY_RECT_BROAD_PCT" -lt 1 || "$DIRTY_RECT_BROAD_PCT" -gt 100 ]]; then
   echo "Invalid --dirty-rect-broad-pct: $DIRTY_RECT_BROAD_PCT (use 1..100)" >&2
   exit 1
 fi
+if [[ -n "$LAUNCHER_SCENARIO" ]]; then
+  case "$LAUNCHER_SCENARIO" in
+    idle|home-nav|list-scroll|preview-changes) ;;
+    *) echo "Unknown --launcher-scenario: $LAUNCHER_SCENARIO" >&2; exit 1 ;;
+  esac
+fi
+case "$LAUNCHER_DIRTY_OPT" in
+  on|off|1|0|true|false) ;;
+  *) echo "Unknown --launcher-dirty-opt: $LAUNCHER_DIRTY_OPT" >&2; exit 1 ;;
+esac
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
   BENCH_SCENES+=(video_playback)
@@ -201,6 +217,12 @@ function value_after(line, key, rest) {
   pixel_repetition = value_after($0, "pixrep=")
   uio_fb = value_after($0, "uio_fb_par=")
 }
+/^launcher_bench_scenario=/ {
+  launcher_scenario = value_after($0, "launcher_bench_scenario=")
+}
+/^launcher_dirty_opt=/ {
+  launcher_dirty_opt = value_after($0, "launcher_dirty_opt=")
+}
 END {
   add_note("physical_mode", physical)
   add_note("fb_size", fb0 != "" ? fb0 : fb)
@@ -210,6 +232,8 @@ END {
   add_note("frame_order", frame_order)
   add_note("pixel_repetition", pixel_repetition)
   add_note("uio_fb", uio_fb)
+  add_note("launcher_scenario", launcher_scenario)
+  add_note("launcher_dirty_opt", launcher_dirty_opt)
   print out
 }
 ' "$ui_log"
@@ -262,7 +286,7 @@ kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
-MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0
