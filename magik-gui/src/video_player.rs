@@ -10,7 +10,7 @@ use ffmpeg_the_third as ffmpeg;
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::path::Path;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
 const AUDIO_RATE: u32 = 48_000;
@@ -36,6 +36,7 @@ pub struct PlaybackFrame {
     pub audio: Vec<i16>,
     pub audio_requested_frames: usize,
     pub loop_count: u64,
+    pub decode_us: u64,
 }
 
 #[derive(Default)]
@@ -73,7 +74,14 @@ impl VideoFrameWorker {
                 loop {
                     let buffers = recycle_rx.try_recv().unwrap_or_default();
                     let audio_frames = audio_pacer.next_frames(frame_interval);
-                    let frame = player.next_frame_into(audio_frames, buffers.audio);
+                    let t0 = Instant::now();
+                    let frame =
+                        player
+                            .next_frame_into(audio_frames, buffers.audio)
+                            .map(|mut frame| {
+                                frame.decode_us = t0.elapsed().as_micros() as u64;
+                                frame
+                            });
                     let failed = frame.is_err();
                     if tx.send(frame).is_err() || failed {
                         break;
@@ -104,11 +112,9 @@ impl VideoFrameWorker {
         }
     }
 
-    pub fn recycle(&self, mut frame: PlaybackFrame) {
-        frame.audio.clear();
-        let _ = self
-            .recycle_tx
-            .try_send(RecycledFrame { audio: frame.audio });
+    pub fn recycle_audio(&self, mut audio: Vec<i16>) {
+        audio.clear();
+        let _ = self.recycle_tx.try_send(RecycledFrame { audio });
     }
 }
 
@@ -249,6 +255,7 @@ impl VideoPlayer {
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
+                decode_us: 0,
             }));
         }
 
@@ -269,6 +276,7 @@ impl VideoPlayer {
                         audio,
                         audio_requested_frames: audio_frames,
                         loop_count: self.loop_count,
+                        decode_us: 0,
                     }));
                 }
             } else if stream_index == self.audio_stream_index {
@@ -287,6 +295,7 @@ impl VideoPlayer {
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
+                decode_us: 0,
             }));
         }
         Ok(None)
