@@ -336,6 +336,16 @@ fn launcher_dirty_opt_enabled() -> bool {
     })
 }
 
+fn arcade_fb_scroll_blit_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_ARCADE_FB_SCROLL_BLIT").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -1012,6 +1022,40 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
     }
     debug_assert_eq!(ui.fb_scale(), 1);
     disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
+}
+
+fn copy_arcade_list_update(
+    disp: &mut Display,
+    ui: &UiDisplay,
+    cached: &[Pixel],
+    update: ArcadeListUpdate,
+) -> u32 {
+    match update {
+        ArcadeListUpdate::Full(rect) => {
+            copy_cached_rect(disp, ui, cached, rect);
+            rect.rows()
+        }
+        ArcadeListUpdate::Scroll { delta_y, repairs } => {
+            if !arcade_fb_scroll_blit_enabled() {
+                let rect = ArcadeListRenderer::dirty_rect();
+                copy_cached_rect(disp, ui, cached, rect);
+                return rect.rows();
+            }
+            debug_assert_eq!(ui.fb_scale(), 1);
+            let mut rows = disp.scroll_rect_y(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y,
+                ARCADE_LIST_W,
+                ARCADE_LIST_H,
+                delta_y,
+            );
+            for rect in repairs {
+                copy_cached_rect(disp, ui, cached, rect);
+                rows += rect.rows();
+            }
+            rows
+        }
+    }
 }
 
 fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow>) {
@@ -3468,6 +3512,14 @@ struct ArcadeListDrawKey {
     anchor_title: String,
 }
 
+enum ArcadeListUpdate {
+    Full(DirtyRect),
+    Scroll {
+        delta_y: i32,
+        repairs: Vec<DirtyRect>,
+    },
+}
+
 impl ArcadeListRenderer {
     fn new() -> Self {
         Self {
@@ -3494,11 +3546,12 @@ impl ArcadeListRenderer {
         games: &[ArcadeGameEntry],
         visual_index: f32,
         force: bool,
-    ) -> Option<DirtyRect> {
+    ) -> Option<ArcadeListUpdate> {
         let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
         let anchor = visual_index
             .round()
             .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
+        let previous = self.last_draw.clone();
         let key = ArcadeListDrawKey {
             len: games.len(),
             visual_px,
@@ -3510,6 +3563,9 @@ impl ArcadeListRenderer {
         if !force && self.last_draw.as_ref() == Some(&key) {
             return None;
         }
+        let same_game_set = previous
+            .as_ref()
+            .is_some_and(|previous| previous.len == key.len);
         self.last_draw = Some(key);
         fill_cached_rect(
             cached,
@@ -3521,7 +3577,71 @@ impl ArcadeListRenderer {
             Pixel(0x00120d1a),
         );
         self.draw_rows(cached, render_w, games, visual_index);
-        Some(Self::dirty_rect())
+        if force {
+            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+        }
+        let Some(previous) = previous else {
+            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+        };
+        if !same_game_set {
+            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+        }
+        let content_delta = previous.visual_px - visual_px;
+        if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+        }
+        Some(ArcadeListUpdate::Scroll {
+            delta_y: content_delta,
+            repairs: Self::scroll_repair_rects(content_delta),
+        })
+    }
+
+    fn scroll_repair_rects(delta_y: i32) -> Vec<DirtyRect> {
+        let mut rects = Vec::with_capacity(4);
+        let list = Self::dirty_rect();
+        let d = delta_y.unsigned_abs() as usize;
+        if d > 0 {
+            if delta_y > 0 {
+                rects.push(DirtyRect {
+                    x0: list.x0,
+                    y0: list.y0,
+                    x1: list.x1,
+                    y1: (list.y0 + d).min(list.y1),
+                });
+            } else {
+                rects.push(DirtyRect {
+                    x0: list.x0,
+                    y0: list.y1.saturating_sub(d),
+                    x1: list.x1,
+                    y1: list.y1,
+                });
+            }
+        }
+        let selector = Self::selection_rect();
+        rects.push(selector);
+        let shifted_y0 = selector.y0 as i32 + delta_y;
+        let shifted_y1 = selector.y1 as i32 + delta_y;
+        let shifted_y0 = shifted_y0.max(list.y0 as i32) as usize;
+        let shifted_y1 = shifted_y1.min(list.y1 as i32) as usize;
+        if shifted_y1 > shifted_y0 {
+            rects.push(DirtyRect {
+                x0: selector.x0,
+                y0: shifted_y0,
+                x1: selector.x1,
+                y1: shifted_y1,
+            });
+        }
+        rects
+    }
+
+    fn selection_rect() -> DirtyRect {
+        let y = ((ARCADE_LIST_H as isize - ARCADE_ROW_HEIGHT as isize) / 2).max(0) as usize;
+        DirtyRect {
+            x0: ARCADE_LIST_X,
+            y0: ARCADE_LIST_Y + y,
+            x1: ARCADE_LIST_X + ARCADE_LIST_W,
+            y1: ARCADE_LIST_Y + y + ARCADE_ROW_HEIGHT as usize,
+        }
     }
 
     fn draw_rows(
@@ -3619,7 +3739,7 @@ impl ArcadeListRenderer {
     }
 
     fn draw_selection_frame(&mut self, cached: &mut [Pixel], render_w: usize) {
-        let y = ((ARCADE_LIST_H as isize - ARCADE_ROW_HEIGHT as isize) / 2).max(0) as usize;
+        let y = Self::selection_rect().y0 - ARCADE_LIST_Y;
         let color = Pixel(0x0006d6a0);
         let thickness = 3usize;
         let h = ARCADE_ROW_HEIGHT as usize;
@@ -3837,6 +3957,7 @@ fn run_arcade_page_loop(
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
     let mut render_us = 0u128;
+    let mut arcade_draw_us = 0u128;
     let mut vsync_us = 0u128;
     let mut copy_us = 0u128;
     let mut rows = 0u128;
@@ -3887,6 +4008,7 @@ fn run_arcade_page_loop(
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
+        let arcade_draw_start = Instant::now();
         let force_arcade_redraw = this_rect.is_some_and(|rect| {
             rect.intersection(ArcadeListRenderer::dirty_rect())
                 .is_some()
@@ -3898,6 +4020,7 @@ fn run_arcade_page_loop(
             nav.arcade.visual_index,
             force_arcade_redraw,
         );
+        let arcade_draw_done = Instant::now();
         let pace = pacer.wait();
         let frame_t3 = Instant::now();
         let mut copied_rows = 0u32;
@@ -3905,9 +4028,8 @@ fn run_arcade_page_loop(
             copied_rows = rect.rows();
             copy_cached_rect(disp, ui, &cached, rect);
         }
-        if let Some(rect) = arcade_list_rect {
-            copied_rows += rect.rows();
-            copy_cached_rect(disp, ui, &cached, rect);
+        if let Some(update) = arcade_list_rect {
+            copied_rows += copy_arcade_list_update(disp, ui, &cached, update);
         }
         let frame_t4 = Instant::now();
         let _ = pace;
@@ -3915,15 +4037,17 @@ fn run_arcade_page_loop(
         frames += 1;
         fps_frames += 1;
         render_us += (frame_t2 - frame_t1).as_micros();
-        vsync_us += (frame_t3 - frame_t2).as_micros();
+        arcade_draw_us += (arcade_draw_done - arcade_draw_start).as_micros();
+        vsync_us += (frame_t3 - arcade_draw_done).as_micros();
         copy_us += (frame_t4 - frame_t3).as_micros();
         rows += copied_rows as u128;
         if fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = fps_frames.max(1) as u128;
             println!(
-                "arcade_page fps ~ {} render {}us vsync-wait {}us copy {}us ({} rows avg)",
+                "arcade_page fps ~ {} render {}us arcade-draw {}us vsync-wait {}us copy {}us ({} rows avg)",
                 fps_frames,
                 render_us / n,
+                arcade_draw_us / n,
                 vsync_us / n,
                 copy_us / n,
                 rows / n
@@ -3931,6 +4055,7 @@ fn run_arcade_page_loop(
             fps_window_start = Instant::now();
             fps_frames = 0;
             render_us = 0;
+            arcade_draw_us = 0;
             vsync_us = 0;
             copy_us = 0;
             rows = 0;
@@ -4531,9 +4656,8 @@ fn run_launcher_loop(
             copied_rows = rect.rows();
             copy_cached_rect(disp, ui, &cached, rect);
         }
-        if let Some(rect) = arcade_list_rect {
-            copied_rows += rect.rows();
-            copy_cached_rect(disp, ui, &cached, rect);
+        if let Some(update) = arcade_list_rect {
+            copied_rows += copy_arcade_list_update(disp, ui, &cached, update);
         }
         let frame_t4 = Instant::now();
         if copied_rows > 0 && !first_copy_logged {

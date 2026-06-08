@@ -938,6 +938,43 @@ impl Display {
         }
     }
 
+    /// Scroll an on-screen rectangle vertically in-place inside `/dev/fb0`.
+    ///
+    /// Positive `delta_y` moves pixels down; negative moves pixels up. The caller
+    /// is responsible for repainting the newly exposed band.
+    pub fn scroll_rect_y(&mut self, x: usize, y: usize, w: usize, h: usize, delta_y: i32) -> u32 {
+        if delta_y == 0 || w == 0 || h == 0 {
+            return 0;
+        }
+        let x1 = x.saturating_add(w).min(self.w);
+        let y1 = y.saturating_add(h).min(self.h);
+        if x >= x1 || y >= y1 {
+            return 0;
+        }
+        let rect_h = y1 - y;
+        let d = delta_y.unsigned_abs() as usize;
+        if d >= rect_h {
+            return 0;
+        }
+        let copy_h = rect_h - d;
+        let dst_w = self.w;
+        let fb = self.buffer_mut();
+        if delta_y > 0 {
+            for row in (0..copy_h).rev() {
+                let src = (y + row) * dst_w + x;
+                let dst = (y + row + d) * dst_w + x;
+                fb.copy_within(src..src + (x1 - x), dst);
+            }
+        } else {
+            for row in 0..copy_h {
+                let src = (y + row + d) * dst_w + x;
+                let dst = (y + row) * dst_w + x;
+                fb.copy_within(src..src + (x1 - x), dst);
+            }
+        }
+        copy_h as u32
+    }
+
     #[allow(dead_code)]
     pub fn wait_vsync_status(&self) -> VsyncWaitStatus {
         wait_vsync_fd(self.fb0.as_raw_fd())
