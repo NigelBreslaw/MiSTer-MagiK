@@ -3480,6 +3480,9 @@ const ARCADE_LIST_W: usize = 464;
 const ARCADE_LIST_H: usize = 468;
 const ARCADE_LIST_FONT_PX: f32 = 16.0;
 const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
+const ARCADE_LIST_FADE_H: usize = 48;
+const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 190;
+const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00120d1a);
 
 struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -3753,7 +3756,47 @@ impl ArcadeListRenderer {
                 &self.surface[..top],
             );
         }
+        self.copy_fade_to_display(disp);
         self.copy_selection_frame_to_display(disp);
+    }
+
+    fn surface_row(&self, viewport_y: usize) -> &[Pixel] {
+        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        let src = src_y * ARCADE_LIST_W;
+        &self.surface[src..src + ARCADE_LIST_W]
+    }
+
+    fn copy_fade_to_display(&self, disp: &mut Display) {
+        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+        let mut band = vec![Pixel(0); ARCADE_LIST_W * fade_h];
+        for row in 0..fade_h {
+            let alpha = fade_alpha(row, fade_h);
+            blend_row_towards(
+                self.surface_row(row),
+                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
+                alpha,
+                ARCADE_LIST_FADE_COLOR,
+            );
+        }
+        disp.copy_rect_from(ARCADE_LIST_X, ARCADE_LIST_Y, ARCADE_LIST_W, fade_h, &band);
+
+        for row in 0..fade_h {
+            let viewport_y = ARCADE_LIST_H - fade_h + row;
+            let alpha = fade_alpha(fade_h - 1 - row, fade_h);
+            blend_row_towards(
+                self.surface_row(viewport_y),
+                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
+                alpha,
+                ARCADE_LIST_FADE_COLOR,
+            );
+        }
+        disp.copy_rect_from(
+            ARCADE_LIST_X,
+            ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
+            ARCADE_LIST_W,
+            fade_h,
+            &band,
+        );
     }
 
     fn copy_selection_frame_to_display(&self, disp: &mut Display) {
@@ -3795,18 +3838,6 @@ impl ArcadeListRenderer {
             30,
             &title,
             Pixel(0x00e8e0f0),
-        );
-        let meta = format!("{:03}", idx + 1);
-        self.meta_font.draw_text_clipped(
-            &mut row,
-            ARCADE_LIST_W,
-            ARCADE_LIST_W,
-            0,
-            ARCADE_ROW_HEIGHT as usize,
-            ARCADE_LIST_W as isize - 42,
-            30,
-            &meta,
-            Pixel(0x00706080),
         );
         row
     }
@@ -3855,6 +3886,30 @@ fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
                 *px = border;
             }
         }
+    }
+}
+
+fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
+    if fade_h <= 1 {
+        return ARCADE_LIST_FADE_MAX_ALPHA;
+    }
+    let inv = (fade_h - 1 - row_from_edge) as u32;
+    (ARCADE_LIST_FADE_MAX_ALPHA * inv) / (fade_h - 1) as u32
+}
+
+fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], alpha: u32, color: Pixel) {
+    let inv = 256 - alpha;
+    let cr = (color.0 >> 16) & 0xff;
+    let cg = (color.0 >> 8) & 0xff;
+    let cb = color.0 & 0xff;
+    for (src, dst) in src.iter().zip(dst.iter_mut()) {
+        let sr = (src.0 >> 16) & 0xff;
+        let sg = (src.0 >> 8) & 0xff;
+        let sb = src.0 & 0xff;
+        let r = (sr * inv + cr * alpha) >> 8;
+        let g = (sg * inv + cg * alpha) >> 8;
+        let b = (sb * inv + cb * alpha) >> 8;
+        *dst = Pixel((r << 16) | (g << 8) | b);
     }
 }
 
