@@ -57,6 +57,7 @@ pub struct ArcadeNav {
     pub scroll_y: i32,
     pub visual_index: f32,
     last_update_at: Option<Instant>,
+    last_motion_dir: i32,
 }
 
 impl ArcadeNav {
@@ -66,6 +67,7 @@ impl ArcadeNav {
             scroll_y: 0,
             visual_index: 0.0,
             last_update_at: None,
+            last_motion_dir: 0,
         }
     }
 
@@ -74,11 +76,13 @@ impl ArcadeNav {
         self.scroll_y = 0;
         self.visual_index = 0.0;
         self.last_update_at = None;
+        self.last_motion_dir = 0;
     }
 
     pub fn snap_to_selected(&mut self) {
         self.visual_index = self.selected as f32;
         self.last_update_at = None;
+        self.last_motion_dir = 0;
         self.scroll_y = self.selected as i32 * ARCADE_ROW_HEIGHT;
     }
 
@@ -106,22 +110,30 @@ impl ArcadeNav {
         self.last_update_at = Some(now);
 
         if held_dir > 0 {
+            self.last_motion_dir = 1;
             let committed = self.selected;
             self.visual_index += ARCADE_SCROLL_ROWS_PER_SEC * dt;
             let live = self.visual_index.round().clamp(0.0, max_index) as usize;
             self.selected = committed.max(live).min(count - 1);
         } else if held_dir < 0 {
+            self.last_motion_dir = -1;
             let committed = self.selected;
             self.visual_index -= ARCADE_SCROLL_ROWS_PER_SEC * dt;
             let live = self.visual_index.round().clamp(0.0, max_index) as usize;
             self.selected = committed.min(live);
         } else {
+            if self.last_motion_dir > 0 && self.visual_index > self.selected as f32 {
+                self.selected = (self.visual_index.ceil() as usize).min(count - 1);
+            } else if self.last_motion_dir < 0 && self.visual_index < self.selected as f32 {
+                self.selected = self.visual_index.floor().max(0.0) as usize;
+            }
             let target = self.selected as f32;
             let delta = target - self.visual_index;
             let step = ARCADE_SETTLE_ROWS_PER_SEC * dt;
             if delta.abs() <= step || step == 0.0 {
                 self.visual_index = target;
                 self.last_update_at = None;
+                self.last_motion_dir = 0;
             } else {
                 self.visual_index += delta.signum() * step;
             }
@@ -153,6 +165,7 @@ impl ArcadeNav {
         };
         if next != self.selected {
             self.selected = next;
+            self.last_motion_dir = dir.signum();
             if self.last_update_at.is_none() {
                 self.last_update_at = Some(now);
             }
@@ -653,6 +666,42 @@ mod tests {
         nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
+    }
+
+    #[test]
+    fn arcade_release_after_tiny_downward_motion_commits_forward() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        nav.tick_scroll(1, 10, t0);
+        nav.tick_scroll(1, 10, t0 + Duration::from_millis(10));
+        assert_eq!(nav.selected, 0);
+        assert!(nav.visual_index > 0.0 && nav.visual_index < 0.5);
+
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(11));
+        assert_eq!(nav.selected, 1);
+
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
+        assert_eq!(nav.selected, 1);
+        assert_eq!(nav.visual_index, 1.0);
+    }
+
+    #[test]
+    fn arcade_release_after_tiny_upward_motion_commits_backward() {
+        let mut nav = ArcadeNav::new();
+        nav.selected = 5;
+        nav.snap_to_selected();
+        let t0 = Instant::now();
+        nav.tick_scroll(-1, 10, t0);
+        nav.tick_scroll(-1, 10, t0 + Duration::from_millis(10));
+        assert_eq!(nav.selected, 5);
+        assert!(nav.visual_index > 4.5 && nav.visual_index < 5.0);
+
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(11));
+        assert_eq!(nav.selected, 4);
+
+        nav.tick_scroll(0, 10, t0 + Duration::from_millis(120));
+        assert_eq!(nav.selected, 4);
+        assert_eq!(nav.visual_index, 4.0);
     }
 
     #[test]
