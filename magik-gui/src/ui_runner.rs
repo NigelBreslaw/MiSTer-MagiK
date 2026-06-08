@@ -86,6 +86,8 @@ const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 const PREVIEW_NAV_DEBOUNCE_MS: u64 = 180;
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
+const ARCADE_PREVIEW_BOX_X: usize = 12;
+const ARCADE_PREVIEW_BOX_Y: usize = 16;
 const ARCADE_PREVIEW_BOX_W: u32 = 456;
 const ARCADE_PREVIEW_BOX_H: u32 = 444;
 
@@ -300,15 +302,6 @@ impl DirtyRect {
             None
         }
     }
-
-    fn union(self, other: DirtyRect) -> DirtyRect {
-        DirtyRect {
-            x0: self.x0.min(other.x0),
-            y0: self.y0.min(other.y0),
-            x1: self.x1.max(other.x1),
-            y1: self.y1.max(other.y1),
-        }
-    }
 }
 
 fn dirty_rect_broad_pct() -> usize {
@@ -332,16 +325,6 @@ fn launcher_dirty_opt_enabled() -> bool {
         !matches!(
             std::env::var("MISTER_LAUNCHER_DIRTY_OPT").as_deref(),
             Ok("0") | Ok("off") | Ok("false") | Ok("no")
-        )
-    })
-}
-
-fn arcade_fb_scroll_blit_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_ARCADE_FB_SCROLL_BLIT").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     })
 }
@@ -1256,6 +1239,7 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_active_system_title("".into());
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
+    sync_launcher_arcade_geometry_bridge(&bridge);
     bridge.set_arcade_preview_has_image(false);
     bridge.set_arcade_preview_placeholder_visible(true);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -1271,6 +1255,28 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_setup_visible(false);
     bridge.set_setup_phase(0);
     sync_bridge_pad_launcher(&bridge, pad);
+}
+
+fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::MisterBridge) {
+    bridge.set_arcade_list_x(ARCADE_LIST_X as i32);
+    bridge.set_arcade_list_y(ARCADE_LIST_Y as i32);
+    bridge.set_arcade_list_width(ARCADE_LIST_W as i32);
+    bridge.set_arcade_list_height(ARCADE_LIST_H as i32);
+    bridge.set_arcade_preview_box_x(ARCADE_PREVIEW_BOX_X as i32);
+    bridge.set_arcade_preview_box_y(ARCADE_PREVIEW_BOX_Y as i32);
+    bridge.set_arcade_preview_box_width(ARCADE_PREVIEW_BOX_W as i32);
+    bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
+}
+
+fn sync_arcade_page_geometry_bridge(bridge: &slint_ui::arcade_page::MisterBridge) {
+    bridge.set_arcade_list_x(ARCADE_LIST_X as i32);
+    bridge.set_arcade_list_y(ARCADE_LIST_Y as i32);
+    bridge.set_arcade_list_width(ARCADE_LIST_W as i32);
+    bridge.set_arcade_list_height(ARCADE_LIST_H as i32);
+    bridge.set_arcade_preview_box_x(ARCADE_PREVIEW_BOX_X as i32);
+    bridge.set_arcade_preview_box_y(ARCADE_PREVIEW_BOX_Y as i32);
+    bridge.set_arcade_preview_box_width(ARCADE_PREVIEW_BOX_W as i32);
+    bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
 }
 
 fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
@@ -3909,31 +3915,6 @@ impl ArcadeListRenderer {
         );
         row
     }
-
-    fn draw_selection_frame(&mut self, cached: &mut [Pixel], render_w: usize) {
-        let y = Self::selection_rect().y0 - ARCADE_LIST_Y;
-        let color = Pixel(0x0006d6a0);
-        let thickness = 3usize;
-        let h = ARCADE_ROW_HEIGHT as usize;
-        for t in 0..thickness {
-            if y + t < ARCADE_LIST_H {
-                let top = (ARCADE_LIST_Y + y + t) * render_w + ARCADE_LIST_X;
-                cached[top..top + ARCADE_LIST_W].fill(color);
-            }
-            let bottom_y = y + h.saturating_sub(1 + t);
-            if bottom_y < ARCADE_LIST_H {
-                let bottom = (ARCADE_LIST_Y + bottom_y) * render_w + ARCADE_LIST_X;
-                cached[bottom..bottom + ARCADE_LIST_W].fill(color);
-            }
-        }
-        for row in 0..h.min(ARCADE_LIST_H.saturating_sub(y)) {
-            let start = (ARCADE_LIST_Y + y + row) * render_w + ARCADE_LIST_X;
-            for t in 0..thickness {
-                cached[start + t] = color;
-                cached[start + ARCADE_LIST_W - 1 - t] = color;
-            }
-        }
-    }
 }
 
 fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
@@ -4179,6 +4160,7 @@ fn run_arcade_page_loop(
 
     let bridge = app.global::<slint_ui::arcade_page::MisterBridge>();
     bridge.set_screen_mode(Screen::Arcade as i32);
+    sync_arcade_page_geometry_bridge(&bridge);
     bridge.set_active_system_title(active_title.into());
     bridge.set_arcade_games(slint_arcade_page_games(&games));
     bridge.set_arcade_selected(0);

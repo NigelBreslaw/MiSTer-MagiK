@@ -38,10 +38,10 @@ export component ArcadeListScreen inherits Rectangle {
 
             // Rust draws the animated game rows into this reserved viewport.
             Rectangle {
-                x: 8px * s;
-                y: 56px * s;
-                width: parent.width - 16px * s;
-                height: 384px * s;
+                x: MisterBridge.arcade-list-x * 1px * s;
+                y: MisterBridge.arcade-list-y * 1px * s;
+                width: MisterBridge.arcade-list-width * 1px * s;
+                height: MisterBridge.arcade-list-height * 1px * s;
                 background: #120d1a;
                 border-width: 1px;
                 border-color: #352848;
@@ -49,10 +49,10 @@ export component ArcadeListScreen inherits Rectangle {
             }
 
             Rectangle {
-                x: 8px * s;
-                y: 444px * s;
-                width: parent.width - 16px * s;
-                height: 88px * s;
+                x: MisterBridge.arcade-list-x * 1px * s;
+                y: (MisterBridge.arcade-list-y + MisterBridge.arcade-list-height + 4) * 1px * s;
+                width: MisterBridge.arcade-list-width * 1px * s;
+                height: parent.height - self.y - 8px * s;
                 background: #131018;
                 border-width: 1px;
                 border-color: #352848;
@@ -76,10 +76,10 @@ export component ArcadeListScreen inherits Rectangle {
             background: #131018;
 
             Rectangle {
-                x: 12px * s;
-                y: 16px * s;
-                width: parent.width - 24px * s;
-                height: parent.height - 96px * s;
+                x: MisterBridge.arcade-preview-box-x * 1px * s;
+                y: MisterBridge.arcade-preview-box-y * 1px * s;
+                width: MisterBridge.arcade-preview-box-width * 1px * s;
+                height: MisterBridge.arcade-preview-box-height * 1px * s;
                 background: #0e0c14;
                 border-width: 1px;
                 border-color: #5c4a72;
