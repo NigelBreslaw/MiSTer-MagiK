@@ -977,19 +977,6 @@ impl Display {
         }
     }
 
-    /// Copy one dense source line into the framebuffer at (x,y).
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
-    pub fn copy_line_from(&mut self, x: usize, y: usize, src: &[Pixel]) {
-        if src.is_empty() || y >= self.h || x >= self.w {
-            return;
-        }
-        let copy_w = src.len().min(self.w - x);
-        let dst_w = self.w;
-        let dst = self.buffer_mut();
-        let dst_a = y * dst_w + x;
-        dst[dst_a..dst_a + copy_w].copy_from_slice(&src[..copy_w]);
-    }
-
     /// Copy a logical source rectangle into an arbitrary framebuffer location,
     /// nearest-neighbour scaled by `scale`.
     #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
