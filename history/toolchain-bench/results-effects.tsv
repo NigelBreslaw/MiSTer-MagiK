@@ -27,3 +27,5 @@ FPSCALE-SMOKE-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-
 FPSCALE-AFTER-VHS-NATIVE-20260608	vhs_glitch	raw	native	320x224	1	2026-06-08T06:43:42Z	1.96.0		6797756	1200	60.0	1832	0	386	14435	16665	13	16	0	yes	profile=release-device; prep=kill-mister-ui
 FPSCALE-AFTER-VHS-2X-20260608	vhs_glitch	raw	half	480x270	2	2026-06-08T06:44:37Z	1.96.0		6797756	1199	59.9	3353	0	2235	11072	16676	33	40	0	yes	profile=release-device; prep=kill-mister-ui
 FPSCALE-AFTER-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T06:45:26Z	1.96.0		6797756	1200	60.0	3030	0	0	13632	16669	18	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270
+FPSCALE-FIX-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T07:18:25Z	1.96.0		6797756	300	59.9	3112	0	0	13572	16691	15	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270
+FPSCALE-FIX2-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T07:22:08Z	1.96.0		6797756	299	59.8	3086	0	0	13626	16719	15	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270

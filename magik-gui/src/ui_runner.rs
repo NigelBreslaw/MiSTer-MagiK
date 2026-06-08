@@ -75,7 +75,7 @@ use std::fs::File;
 #[cfg(not(mister_ui_scope_launcher))]
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, OnceLock};
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 
@@ -394,21 +394,64 @@ impl EffectTarget {
 
 struct FbModeGuard {
     previous: crate::fb::FbInfo,
+    active: bool,
 }
 
 impl FbModeGuard {
     fn set_temporary(w: usize, h: usize) -> std::io::Result<Self> {
         let previous = Display::current_info()?;
         Display::write_mister_mode(w, h, w * 4)?;
-        Ok(Self { previous })
+        remember_fb_mode_for_exit(previous);
+        Ok(Self {
+            previous,
+            active: true,
+        })
+    }
+
+    fn restore_now(&mut self) {
+        if !self.active {
+            return;
+        }
+        match Display::restore_mister_mode(self.previous) {
+            Ok(()) => {
+                clear_fb_mode_for_exit();
+                self.active = false;
+            }
+            Err(e) => {
+                eprintln!("warning: failed to restore framebuffer mode: {e}");
+            }
+        }
     }
 }
 
 impl Drop for FbModeGuard {
     fn drop(&mut self) {
-        if let Err(e) = Display::restore_mister_mode(self.previous) {
-            eprintln!("warning: failed to restore framebuffer mode: {e}");
-        }
+        self.restore_now();
+    }
+}
+
+static FB_MODE_RESTORE: Mutex<Option<crate::fb::FbInfo>> = Mutex::new(None);
+static FB_MODE_RESTORE_ATEXIT: OnceLock<()> = OnceLock::new();
+
+fn remember_fb_mode_for_exit(previous: crate::fb::FbInfo) {
+    FB_MODE_RESTORE_ATEXIT.get_or_init(|| unsafe {
+        libc::atexit(restore_fb_mode_at_exit);
+    });
+    if let Ok(mut slot) = FB_MODE_RESTORE.lock() {
+        *slot = Some(previous);
+    }
+}
+
+fn clear_fb_mode_for_exit() {
+    if let Ok(mut slot) = FB_MODE_RESTORE.lock() {
+        *slot = None;
+    }
+}
+
+extern "C" fn restore_fb_mode_at_exit() {
+    let previous = FB_MODE_RESTORE.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(previous) = previous {
+        let _ = Display::restore_mister_mode(previous);
     }
 }
 
@@ -560,6 +603,13 @@ pub fn run_effect_bench(f: &mut Fpga) {
     );
 
     let _vt = VtGraphicsGuard::enter_or_warn();
+    if fill == EffectFill::FpgaHalf && (size.w != 480 || size.h != 270) {
+        eprintln!(
+            "effect fill fpga-half supports only 480x270, got {}x{}",
+            size.w, size.h
+        );
+        std::process::exit(2);
+    }
     let _fb_mode_guard = if fill == EffectFill::FpgaHalf {
         println!("effect-bench-fb-mode=temporary 480x270 stride=1920 restore=on-drop");
         match FbModeGuard::set_temporary(size.w, size.h) {
