@@ -4037,8 +4037,24 @@ fn run_arcade_page_loop(
     let mut last_arcade_selected = nav.arcade.selected;
     let mut last_arcade_scroll_y = nav.arcade.scroll_y;
     let mut last_arcade_visual_index = nav.arcade.visual_index;
+    let mut frame_trace = std::env::var("MISTER_ARCADE_FRAME_TRACE")
+        .ok()
+        .and_then(|path| {
+            let mut file = std::fs::File::create(&path)
+                .map_err(|e| eprintln!("arcade frame trace: create {path} failed: {e}"))
+                .ok()?;
+            std::io::Write::write_all(
+                &mut file,
+                b"frame\telapsed_us\tselected\tvisual_index\tvisual_px\tscroll_y\tupdate\trows\trender_us\tarcade_draw_us\tvsync_us\tcopy_us\twall_us\n",
+            )
+            .map_err(|e| eprintln!("arcade frame trace: header write failed: {e}"))
+            .ok()?;
+            println!("arcade_frame_trace={path}");
+            Some(file)
+        });
 
     while secs == 0 || start.elapsed().as_secs() < secs {
+        let frame_start = Instant::now();
         if let Some(scenario) = launcher_bench_scenario {
             if bench_next_step.elapsed() >= scenario.period() {
                 let _ = launcher_bench_step(
@@ -4096,11 +4112,38 @@ fn run_arcade_page_loop(
             copied_rows = rect.rows();
             copy_cached_rect(disp, ui, &cached, rect);
         }
+        let arcade_update_label = match arcade_list_rect.as_ref() {
+            Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
+            Some(ArcadeListUpdate::Scroll { delta_y, .. }) => format!("scroll:{delta_y}"),
+            None => "none".to_string(),
+        };
         if let Some(update) = arcade_list_rect {
             copied_rows += copy_arcade_list_update(disp, &arcade_list_renderer, update);
         }
         let frame_t4 = Instant::now();
         let _ = pace;
+        if let Some(file) = frame_trace.as_mut() {
+            let visual_px = (nav.arcade.visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
+            let _ = std::io::Write::write_fmt(
+                file,
+                format_args!(
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    frames,
+                    frame_start.duration_since(start).as_micros(),
+                    nav.arcade.selected,
+                    nav.arcade.visual_index,
+                    visual_px,
+                    nav.arcade.scroll_y,
+                    arcade_update_label,
+                    copied_rows,
+                    (frame_t2 - frame_t1).as_micros(),
+                    (arcade_draw_done - arcade_draw_start).as_micros(),
+                    (frame_t3 - arcade_draw_done).as_micros(),
+                    (frame_t4 - frame_t3).as_micros(),
+                    (frame_t4 - frame_start).as_micros()
+                ),
+            );
+        }
 
         frames += 1;
         fps_frames += 1;
