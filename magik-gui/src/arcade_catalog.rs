@@ -6,7 +6,7 @@ use std::time::Instant;
 
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 
-/// Logical row height for arcade ListView (matches `arcade_list.slint`).
+/// Logical row height for the Rust-painted arcade list viewport.
 pub const ARCADE_ROW_HEIGHT: i32 = 48;
 /// Visible list height: 540 − 72 layout chrome (matches `arcade_list.slint` left pane).
 pub const ARCADE_LIST_VISIBLE_H: i32 = 468;

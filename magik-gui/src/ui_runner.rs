@@ -70,7 +70,6 @@ use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState, EFFECT_SIZES
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
-#[cfg(not(mister_ui_scope_launcher))]
 use std::collections::HashMap;
 use std::collections::VecDeque;
 #[cfg(not(mister_ui_scope_launcher))]
@@ -83,6 +82,9 @@ use std::sync::{mpsc, Mutex, OnceLock};
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 const PREVIEW_NAV_DEBOUNCE_MS: u64 = 180;
+const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
+const ARCADE_PREVIEW_BOX_W: u32 = 456;
+const ARCADE_PREVIEW_BOX_H: u32 = 444;
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
@@ -1221,6 +1223,10 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
     bridge.set_arcade_preview_image(Image::default());
+    bridge.set_arcade_preview_source_width(0);
+    bridge.set_arcade_preview_source_height(0);
+    bridge.set_arcade_preview_display_width(0);
+    bridge.set_arcade_preview_display_height(0);
     bridge.set_catalog_scan_visible(false);
     bridge.set_catalog_scan_title("".into());
     bridge.set_catalog_scan_detail("".into());
@@ -1363,13 +1369,22 @@ fn launcher_clock_text() -> String {
 
 const PREVIEW_IMAGE_CACHE_CAP: usize = 16;
 
+#[derive(Clone)]
+struct PreviewImage {
+    image: Image,
+    source_w: u32,
+    source_h: u32,
+    display_w: u32,
+    display_h: u32,
+}
+
 #[derive(Default)]
 struct PreviewImageCache {
-    entries: VecDeque<(String, Image)>,
+    entries: VecDeque<(String, PreviewImage)>,
 }
 
 impl PreviewImageCache {
-    fn get(&mut self, path: &str) -> Option<Image> {
+    fn get(&mut self, path: &str) -> Option<PreviewImage> {
         let idx = self.entries.iter().position(|(p, _)| p == path)?;
         let (_, image) = self.entries.remove(idx)?;
         let out = image.clone();
@@ -1377,7 +1392,7 @@ impl PreviewImageCache {
         Some(out)
     }
 
-    fn insert(&mut self, path: String, image: Image) {
+    fn insert(&mut self, path: String, image: PreviewImage) {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == &path) {
             self.entries.remove(idx);
         }
@@ -1386,6 +1401,73 @@ impl PreviewImageCache {
             self.entries.pop_front();
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreviewDisplaySize {
+    w: u32,
+    h: u32,
+}
+
+fn gcd_u32(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a.max(1)
+}
+
+fn preview_display_size(
+    source_w: u32,
+    source_h: u32,
+    pane_w: u32,
+    pane_h: u32,
+) -> PreviewDisplaySize {
+    if source_w == 0 || source_h == 0 || pane_w == 0 || pane_h == 0 {
+        return PreviewDisplaySize { w: 0, h: 0 };
+    }
+
+    let max_area = PREVIEW_MAX_AREA.min(pane_w.saturating_mul(pane_h)).max(1);
+    let g = gcd_u32(source_w, source_h);
+    let base_w = source_w / g;
+    let base_h = source_h / g;
+    let base_area = base_w.saturating_mul(base_h).max(1);
+    let by_w = pane_w / base_w.max(1);
+    let by_h = pane_h / base_h.max(1);
+    let by_area = ((max_area as f64) / (base_area as f64)).sqrt().floor() as u32;
+    let max_n = by_w.min(by_h).min(by_area).max(1);
+    let n = if max_n >= g {
+        ((max_n / g).max(1)) * g
+    } else {
+        max_n
+    };
+    PreviewDisplaySize {
+        w: base_w * n,
+        h: base_h * n,
+    }
+}
+
+fn apply_preview_image_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    preview_image: &PreviewImage,
+) {
+    bridge.set_arcade_preview_image(preview_image.image.clone());
+    bridge.set_arcade_preview_has_image(true);
+    bridge.set_arcade_preview_status(PreviewStatus::Ready);
+    bridge.set_arcade_preview_source_width(preview_image.source_w as i32);
+    bridge.set_arcade_preview_source_height(preview_image.source_h as i32);
+    bridge.set_arcade_preview_display_width(preview_image.display_w as i32);
+    bridge.set_arcade_preview_display_height(preview_image.display_h as i32);
+}
+
+fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
+    bridge.set_arcade_preview_image(Image::default());
+    bridge.set_arcade_preview_has_image(false);
+    bridge.set_arcade_preview_source_width(0);
+    bridge.set_arcade_preview_source_height(0);
+    bridge.set_arcade_preview_display_width(0);
+    bridge.set_arcade_preview_display_height(0);
 }
 
 struct PreviewState {
@@ -1426,7 +1508,7 @@ impl PreviewState {
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
-            bridge.set_arcade_preview_image(Image::default());
+            clear_preview_image_bridge(bridge);
         }
     }
 }
@@ -1451,10 +1533,9 @@ fn request_arcade_preview_for_game(
         preview.has_visible_preview = false;
         preview.visible_path.clear();
         preview.pending_preview_path = None;
-        bridge.set_arcade_preview_has_image(false);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
-        bridge.set_arcade_preview_image(Image::default());
+        clear_preview_image_bridge(bridge);
         return;
     };
     if preview.last_preview_path.as_deref() == Some(game.mra_path.as_str()) {
@@ -1469,18 +1550,17 @@ fn request_arcade_preview_for_game(
             preview.has_visible_preview = true;
             if preview.visible_path != game.image_path {
                 preview.visible_path = game.image_path.clone();
-                bridge.set_arcade_preview_image(image);
+                apply_preview_image_bridge(bridge, &image);
+            } else {
+                apply_preview_image_bridge(bridge, &image);
             }
-            bridge.set_arcade_preview_has_image(true);
-            bridge.set_arcade_preview_status(PreviewStatus::Ready);
             return;
         }
         preview.current_generation = preview
             .worker
             .request(game.title.clone(), game.image_path.clone());
         if !preview.has_visible_preview {
-            bridge.set_arcade_preview_image(Image::default());
-            bridge.set_arcade_preview_has_image(false);
+            clear_preview_image_bridge(bridge);
         }
         bridge.set_arcade_preview_status(PreviewStatus::Loading);
         return;
@@ -1488,8 +1568,7 @@ fn request_arcade_preview_for_game(
     preview.current_generation = 0;
     preview.has_visible_preview = false;
     preview.visible_path.clear();
-    bridge.set_arcade_preview_image(Image::default());
-    bridge.set_arcade_preview_has_image(false);
+    clear_preview_image_bridge(bridge);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
 }
 
@@ -1541,19 +1620,30 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
         }
         bridge.set_arcade_preview_title(result.title.into());
         if let Some(image) = result.image {
-            let image = png_to_slint_image(image.width, image.height, image.rgb);
+            let source_w = image.width;
+            let source_h = image.height;
+            let display = preview_display_size(
+                source_w,
+                source_h,
+                ARCADE_PREVIEW_BOX_W,
+                ARCADE_PREVIEW_BOX_H,
+            );
+            let image = PreviewImage {
+                image: png_to_slint_image(source_w, source_h, image.rgb),
+                source_w,
+                source_h,
+                display_w: display.w,
+                display_h: display.h,
+            };
             let image_path = result.image_path;
             preview.cache.insert(image_path.clone(), image.clone());
             preview.has_visible_preview = true;
             preview.visible_path = image_path;
-            bridge.set_arcade_preview_image(image);
-            bridge.set_arcade_preview_has_image(true);
-            bridge.set_arcade_preview_status(PreviewStatus::Ready);
+            apply_preview_image_bridge(&bridge, &image);
         } else {
             preview.has_visible_preview = false;
             preview.visible_path.clear();
-            bridge.set_arcade_preview_image(Image::default());
-            bridge.set_arcade_preview_has_image(false);
+            clear_preview_image_bridge(&bridge);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
         }
         dirty = true;
@@ -1849,6 +1939,7 @@ fn launcher_bench_step(
                 nav.arcade.scroll_y = 0;
             }
             nav.arcade.selected = selected;
+            nav.arcade.snap_to_selected();
             keep_bench_arcade_visible(&mut nav.arcade.scroll_y, nav.arcade.selected, count);
             true
         }
@@ -3213,7 +3304,6 @@ fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
     bg
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
 struct ConsoleGlyph {
     left: i32,
     top: i32,
@@ -3223,7 +3313,6 @@ struct ConsoleGlyph {
     data: Vec<u8>,
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
 struct ConsoleFont {
     font: swash::FontRef<'static>,
     scale_context: swash::scale::ScaleContext,
@@ -3232,7 +3321,6 @@ struct ConsoleFont {
     units_per_em: f32,
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
 impl ConsoleFont {
     fn new(pixel_size: f32) -> Self {
         let data = include_bytes!("../ui/fonts/PressStart2P-Regular.ttf");
@@ -3325,6 +3413,259 @@ impl ConsoleFont {
             }
             pen_x += glyph.advance as isize;
         }
+    }
+}
+
+const ARCADE_LIST_X: usize = 8;
+const ARCADE_LIST_Y: usize = 64;
+const ARCADE_LIST_W: usize = 464;
+const ARCADE_LIST_H: usize = 468;
+const ARCADE_LIST_FONT_PX: f32 = 16.0;
+const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
+
+struct ArcadeListRenderer {
+    title_font: ConsoleFont,
+    meta_font: ConsoleFont,
+    row_cache: HashMap<String, Vec<Pixel>>,
+    last_draw: Option<ArcadeListDrawKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArcadeListDrawKey {
+    len: usize,
+    selected: usize,
+    visual_px: i32,
+    selected_title: String,
+}
+
+impl ArcadeListRenderer {
+    fn new() -> Self {
+        Self {
+            title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
+            meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
+            row_cache: HashMap::new(),
+            last_draw: None,
+        }
+    }
+
+    fn dirty_rect() -> DirtyRect {
+        DirtyRect {
+            x0: ARCADE_LIST_X,
+            y0: ARCADE_LIST_Y,
+            x1: ARCADE_LIST_X + ARCADE_LIST_W,
+            y1: ARCADE_LIST_Y + ARCADE_LIST_H,
+        }
+    }
+
+    fn draw(
+        &mut self,
+        cached: &mut [Pixel],
+        render_w: usize,
+        games: &[ArcadeGameEntry],
+        selected: usize,
+        visual_index: f32,
+        force: bool,
+    ) -> Option<DirtyRect> {
+        let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
+        let key = ArcadeListDrawKey {
+            len: games.len(),
+            selected,
+            visual_px,
+            selected_title: games
+                .get(selected)
+                .map(|game| game.title.clone())
+                .unwrap_or_default(),
+        };
+        if !force && self.last_draw.as_ref() == Some(&key) {
+            return None;
+        }
+        self.last_draw = Some(key);
+        fill_cached_rect(
+            cached,
+            render_w,
+            ARCADE_LIST_X,
+            ARCADE_LIST_Y,
+            ARCADE_LIST_W,
+            ARCADE_LIST_H,
+            Pixel(0x00120d1a),
+        );
+        self.draw_rows(cached, render_w, games, selected, visual_index);
+        Some(Self::dirty_rect())
+    }
+
+    fn draw_rows(
+        &mut self,
+        cached: &mut [Pixel],
+        render_w: usize,
+        games: &[ArcadeGameEntry],
+        selected: usize,
+        visual_index: f32,
+    ) {
+        if games.is_empty() {
+            self.meta_font.draw_text_clipped(
+                cached,
+                render_w,
+                render_w,
+                ARCADE_LIST_Y,
+                ARCADE_LIST_H,
+                (ARCADE_LIST_X + 96) as isize,
+                (ARCADE_LIST_Y + ARCADE_LIST_H / 2) as isize,
+                "NO GAMES",
+                Pixel(0x00706080),
+            );
+            return;
+        }
+        let row_h = ARCADE_ROW_HEIGHT as isize;
+        let local_anchor_y = (ARCADE_LIST_H as isize - row_h) / 2;
+        let first = ((visual_index.floor() as isize) - 7).max(0) as usize;
+        let last = ((visual_index.ceil() as isize) + 8).max(0) as usize;
+        let end = last.min(games.len().saturating_sub(1));
+        for idx in first..=end {
+            let y =
+                local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
+            if y >= ARCADE_LIST_H as isize || y + row_h <= 0 {
+                continue;
+            }
+            let is_selected = idx == selected;
+            self.blit_cached_row(cached, render_w, &games[idx].title, idx, is_selected, y);
+        }
+        self.draw_center_line(cached, render_w);
+    }
+
+    fn blit_cached_row(
+        &mut self,
+        cached: &mut [Pixel],
+        render_w: usize,
+        title: &str,
+        idx: usize,
+        selected: bool,
+        y: isize,
+    ) {
+        let key = format!("{idx}:{selected}:{title}");
+        if !self.row_cache.contains_key(&key) {
+            if self.row_cache.len() > 128 {
+                self.row_cache.clear();
+            }
+            let row = self.render_row(title, idx, selected);
+            self.row_cache.insert(key.clone(), row);
+        }
+        let row = self.row_cache.get(&key).expect("row cache insert");
+        let dst_y = y.max(0) as usize;
+        let src_y = (-y).max(0) as usize;
+        let copy_h = (ARCADE_ROW_HEIGHT as usize - src_y).min(ARCADE_LIST_H.saturating_sub(dst_y));
+        for row_y in 0..copy_h {
+            let src = (src_y + row_y) * ARCADE_LIST_W;
+            let dst = (ARCADE_LIST_Y + dst_y + row_y) * render_w + ARCADE_LIST_X;
+            cached[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+        }
+    }
+
+    fn render_row(&mut self, title: &str, idx: usize, selected: bool) -> Vec<Pixel> {
+        let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
+        draw_arcade_row_background(&mut row, idx, selected);
+        let title = clipped_title(title, 30);
+        self.title_font.draw_text_clipped(
+            &mut row,
+            ARCADE_LIST_W,
+            ARCADE_LIST_W,
+            0,
+            ARCADE_ROW_HEIGHT as usize,
+            12,
+            30,
+            &title,
+            if selected {
+                Pixel(0x0006d6a0)
+            } else {
+                Pixel(0x00e8e0f0)
+            },
+        );
+        let meta = format!("{:03}", idx + 1);
+        self.meta_font.draw_text_clipped(
+            &mut row,
+            ARCADE_LIST_W,
+            ARCADE_LIST_W,
+            0,
+            ARCADE_ROW_HEIGHT as usize,
+            ARCADE_LIST_W as isize - 42,
+            30,
+            &meta,
+            if selected {
+                Pixel(0x00f5d76e)
+            } else {
+                Pixel(0x00706080)
+            },
+        );
+        row
+    }
+
+    fn draw_center_line(&mut self, cached: &mut [Pixel], render_w: usize) {
+        let y = ((ARCADE_LIST_H as isize - ARCADE_ROW_HEIGHT as isize) / 2).max(0) as usize;
+        if y < ARCADE_LIST_H {
+            let row_start = (ARCADE_LIST_Y + y) * render_w + ARCADE_LIST_X;
+            let row = &mut cached[row_start..row_start + ARCADE_LIST_W];
+            for x in (0..ARCADE_LIST_W).step_by(6) {
+                row[x] = Pixel(0x00f5d76e);
+            }
+        }
+    }
+}
+
+fn draw_arcade_row_background(row: &mut [Pixel], idx: usize, selected: bool) {
+    let bg = if selected {
+        Pixel(0x002a2236)
+    } else if idx % 2 == 0 {
+        Pixel(0x001a1424)
+    } else {
+        Pixel(0x00150f20)
+    };
+    let border = if selected {
+        Pixel(0x0006d6a0)
+    } else {
+        Pixel(0x00251c34)
+    };
+    for row_y in 0..ARCADE_ROW_HEIGHT as isize {
+        let dy = row_y as usize;
+        let line = &mut row[dy * ARCADE_LIST_W..(dy + 1) * ARCADE_LIST_W];
+        for px in line.iter_mut() {
+            *px = bg;
+        }
+        if row_y == 0 || row_y == ARCADE_ROW_HEIGHT as isize - 1 {
+            for px in line.iter_mut() {
+                *px = border;
+            }
+        }
+        if selected {
+            line[0] = border;
+            line[1] = border;
+            line[ARCADE_LIST_W - 2] = border;
+            line[ARCADE_LIST_W - 1] = border;
+        }
+    }
+}
+
+fn clipped_title(title: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for ch in title.chars().take(max_chars) {
+        out.push(ch);
+    }
+    if title.chars().count() > max_chars {
+        out.push_str("...");
+    }
+    out
+}
+
+fn fill_cached_rect(
+    cached: &mut [Pixel],
+    render_w: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: Pixel,
+) {
+    for row in 0..h {
+        let dst = (y + row) * render_w + x;
+        cached[dst..dst + w].fill(color);
     }
 }
 
@@ -3451,6 +3792,7 @@ fn run_launcher_loop(
     let mut pacer = VsyncPacer::from_env();
     let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
+    let mut arcade_list_renderer = ArcadeListRenderer::new();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let mut catalog = match library_bench::load_arcade_catalog_from_sqlite(&arcade_root) {
@@ -3923,6 +4265,23 @@ fn run_launcher_loop(
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
+        let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
+            let games = active_system_games(&catalog, &nav);
+            let force_arcade_redraw = this_rect.is_some_and(|rect| {
+                rect.intersection(ArcadeListRenderer::dirty_rect())
+                    .is_some()
+            });
+            arcade_list_renderer.draw(
+                &mut cached,
+                ui.render_w(),
+                &games,
+                nav.arcade.selected,
+                nav.arcade.visual_index,
+                force_arcade_redraw,
+            )
+        } else {
+            None
+        };
         if !first_render_logged {
             first_render_logged = true;
             boot_analytics::event(
@@ -3953,6 +4312,10 @@ fn run_launcher_loop(
             copied_rows = ui.render_h() as u32;
         } else if let Some(rect) = this_rect {
             copied_rows = rect.rows();
+            copy_cached_rect(disp, ui, &cached, rect);
+        }
+        if let Some(rect) = arcade_list_rect {
+            copied_rows += rect.rows();
             copy_cached_rect(disp, ui, &cached, rect);
         }
         let frame_t4 = Instant::now();
@@ -4080,4 +4443,45 @@ fn run_launcher_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_size_enlarges_only_by_integer_scale() {
+        let size = preview_display_size(100, 50, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
+        assert_eq!(size, PreviewDisplaySize { w: 400, h: 200 });
+        assert_eq!(size.w % 100, 0);
+        assert_eq!(size.h % 50, 0);
+        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
+    }
+
+    #[test]
+    fn preview_size_shrinks_large_images_without_changing_aspect() {
+        let size = preview_display_size(1920, 1080, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
+        assert_eq!(size, PreviewDisplaySize { w: 448, h: 252 });
+        assert_eq!(size.w as u64 * 1080, size.h as u64 * 1920);
+        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
+        assert!(size.w <= ARCADE_PREVIEW_BOX_W);
+        assert!(size.h <= ARCADE_PREVIEW_BOX_H);
+    }
+
+    #[test]
+    fn preview_size_keeps_odd_ratio_integer_dimensions() {
+        let size = preview_display_size(321, 225, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
+        assert_eq!(size, PreviewDisplaySize { w: 321, h: 225 });
+        assert_eq!(size.w as u64 * 225, size.h as u64 * 321);
+        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
+    }
+
+    #[test]
+    fn preview_size_respects_pane_bounds_and_area() {
+        let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
+        assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
+        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
+        assert!(size.w <= ARCADE_PREVIEW_BOX_W);
+        assert!(size.h <= ARCADE_PREVIEW_BOX_H);
+    }
 }
