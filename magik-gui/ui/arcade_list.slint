@@ -103,14 +103,21 @@ export component ArcadeListScreen inherits Rectangle {
                 }
             }
 
-            Text {
+            Rectangle {
                 x: 12px * s;
-                y: parent.height - 84px * s;
+                y: parent.height - 80px * s;
                 width: parent.width - 24px * s;
-                text: MisterBridge.arcade-preview-title;
-                color: #e8e0f0;
-                font-size: 16px * s;
-                wrap: word-wrap;
+                height: 32px * s;
+                background: transparent;
+                clip: true;
+
+                Text {
+                    width: 100%;
+                    text: MisterBridge.arcade-preview-title;
+                    color: #e8e0f0;
+                    font-size: 12px * s;
+                    wrap: word-wrap;
+                }
             }
 
             Text {
