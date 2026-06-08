@@ -3551,7 +3551,7 @@ const ARCADE_LIST_FONT_PX: f32 = 16.0;
 const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 const ARCADE_LIST_FADE_H: usize = 48;
 const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
-const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00000000);
+const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00120d1a);
 
 struct ArcadeListRenderer {
     title_font: ConsoleFont,

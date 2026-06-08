@@ -209,9 +209,12 @@ scripts/install-slint-boot.sh
 # Re-deploy binary + fork after code changes
 scripts/deploy-rust.sh --fast
 
-# Dev run (stop MiSTer so Slint owns gamepad — see §7)
-scripts/mister run \
-  'kill -9 $(pidof MiSTer) 2>/dev/null; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
+# Restart the already-deployed Rust UI with no build/copy
+scripts/run-rust.sh arcade_page 0
+scripts/run-rust.sh launcher 0
+
+# Prefer scripts/run-rust.sh for dev runs; it stops stale owners and starts the
+# already-deployed binary without rebuilding or copying.
 
 # Restore stock MiSTer menu boot
 scripts/restore-stock-boot.sh

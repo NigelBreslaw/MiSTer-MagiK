@@ -8,4 +8,13 @@ export MISTER_PASS="${MISTER_PASS:-1}"
 export RUSTC_WRAPPER=""
 
 cd "$HERE"
-exec cargo run --quiet --manifest-path tools/mister/Cargo.toml -- "$@"
+BIN="$HERE/tools/mister/target/debug/mister"
+MANIFEST="$HERE/tools/mister/Cargo.toml"
+LOCK="$HERE/tools/mister/Cargo.lock"
+SRC="$HERE/tools/mister/src/main.rs"
+
+if [ ! -x "$BIN" ] || [ "$MANIFEST" -nt "$BIN" ] || [ "$LOCK" -nt "$BIN" ] || [ "$SRC" -nt "$BIN" ]; then
+  cargo build --quiet --manifest-path "$MANIFEST"
+fi
+
+exec "$BIN" "$@"
