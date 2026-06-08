@@ -1009,7 +1009,7 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
 
 fn copy_arcade_list_update(
     disp: &mut Display,
-    renderer: &ArcadeListRenderer,
+    renderer: &mut ArcadeListRenderer,
     update: ArcadeListUpdate,
 ) -> u32 {
     match update {
@@ -3593,10 +3593,19 @@ const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00120d1a);
 struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
-    row_cache: HashMap<String, Vec<Pixel>>,
+    row_cache: HashMap<usize, CachedArcadeRow>,
     surface: Vec<Pixel>,
+    band_scratch: Vec<Pixel>,
+    fade_scratch: Vec<Pixel>,
+    selection_horizontal: Vec<Pixel>,
+    selection_vertical: Vec<Pixel>,
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
+}
+
+struct CachedArcadeRow {
+    title: String,
+    pixels: Vec<Pixel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3619,6 +3628,10 @@ impl ArcadeListRenderer {
             meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
             row_cache: HashMap::new(),
             surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
+            band_scratch: Vec::new(),
+            fade_scratch: Vec::new(),
+            selection_horizontal: Vec::new(),
+            selection_vertical: Vec::new(),
             surface_y: 0,
             last_draw: None,
         }
@@ -3729,7 +3742,9 @@ impl ArcadeListRenderer {
             return;
         }
         let band_h = band_h.min(ARCADE_LIST_H - band_y);
-        let mut band = vec![Pixel(0x00120d1a); ARCADE_LIST_W * band_h];
+        let mut band = std::mem::take(&mut self.band_scratch);
+        band.resize(ARCADE_LIST_W * band_h, Pixel(0x00120d1a));
+        band.fill(Pixel(0x00120d1a));
         if games.is_empty() {
             self.meta_font.draw_text_clipped(
                 &mut band,
@@ -3743,6 +3758,7 @@ impl ArcadeListRenderer {
                 Pixel(0x00706080),
             );
             self.copy_band_to_surface(&band, band_y, band_h);
+            self.band_scratch = band;
             return;
         }
         let row_h = ARCADE_ROW_HEIGHT as isize;
@@ -3761,6 +3777,7 @@ impl ArcadeListRenderer {
             self.blit_cached_row_to_band(&mut band, band_h, band_y, &games[idx].title, idx, y);
         }
         self.copy_band_to_surface(&band, band_y, band_h);
+        self.band_scratch = band;
     }
 
     fn blit_cached_row_to_band(
@@ -3772,15 +3789,24 @@ impl ArcadeListRenderer {
         idx: usize,
         y: isize,
     ) {
-        let key = format!("{idx}:{title}");
-        if !self.row_cache.contains_key(&key) {
+        let needs_render = self
+            .row_cache
+            .get(&idx)
+            .is_none_or(|cached| cached.title != title);
+        if needs_render {
             if self.row_cache.len() > 128 {
                 self.row_cache.clear();
             }
             let row = self.render_row(title, idx);
-            self.row_cache.insert(key.clone(), row);
+            self.row_cache.insert(
+                idx,
+                CachedArcadeRow {
+                    title: title.to_string(),
+                    pixels: row,
+                },
+            );
         }
-        let row = self.row_cache.get(&key).expect("row cache insert");
+        let row = &self.row_cache.get(&idx).expect("row cache insert").pixels;
         let row_h = ARCADE_ROW_HEIGHT as isize;
         let clip_y0 = y.max(band_y as isize);
         let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
@@ -3806,7 +3832,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn copy_layer_to_display(&self, disp: &mut Display) {
+    fn copy_layer_to_display(&mut self, disp: &mut Display) {
         let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
         self.copy_fade_to_display(disp);
         self.copy_viewport_band_to_display(disp, fade_h, ARCADE_LIST_H - fade_h * 2);
@@ -3840,9 +3866,10 @@ impl ArcadeListRenderer {
         &self.surface[src..src + ARCADE_LIST_W]
     }
 
-    fn copy_fade_to_display(&self, disp: &mut Display) {
+    fn copy_fade_to_display(&mut self, disp: &mut Display) {
         let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        let mut band = vec![Pixel(0); ARCADE_LIST_W * fade_h];
+        let mut band = std::mem::take(&mut self.fade_scratch);
+        band.resize(ARCADE_LIST_W * fade_h, Pixel(0));
         for row in 0..fade_h {
             let alpha = fade_alpha(row, fade_h);
             blend_row_towards(
@@ -3871,30 +3898,40 @@ impl ArcadeListRenderer {
             fade_h,
             &band,
         );
+        self.fade_scratch = band;
     }
 
-    fn copy_selection_frame_to_display(&self, disp: &mut Display) {
+    fn copy_selection_frame_to_display(&mut self, disp: &mut Display) {
         let rect = Self::selection_rect();
         let color = Pixel(0x0006d6a0);
         let thickness = 3usize;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
-        let horizontal = vec![color; ARCADE_LIST_W * thickness];
-        disp.copy_rect_from(rect.x0, rect.y0, ARCADE_LIST_W, thickness, &horizontal);
+        self.selection_horizontal
+            .resize(ARCADE_LIST_W * thickness, color);
+        self.selection_horizontal.fill(color);
+        disp.copy_rect_from(
+            rect.x0,
+            rect.y0,
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+        );
         disp.copy_rect_from(
             rect.x0,
             rect.y1.saturating_sub(thickness),
             ARCADE_LIST_W,
             thickness,
-            &horizontal,
+            &self.selection_horizontal,
         );
-        let vertical = vec![color; thickness * h];
-        disp.copy_rect_from(rect.x0, rect.y0, thickness, h, &vertical);
+        self.selection_vertical.resize(thickness * h, color);
+        self.selection_vertical.fill(color);
+        disp.copy_rect_from(rect.x0, rect.y0, thickness, h, &self.selection_vertical);
         disp.copy_rect_from(
             rect.x1.saturating_sub(thickness),
             rect.y0,
             thickness,
             h,
-            &vertical,
+            &self.selection_vertical,
         );
     }
 
@@ -4267,7 +4304,7 @@ fn run_arcade_page_loop(
             None => "none".to_string(),
         };
         if let Some(update) = arcade_list_rect {
-            copied_rows += copy_arcade_list_update(disp, &arcade_list_renderer, update);
+            copied_rows += copy_arcade_list_update(disp, &mut arcade_list_renderer, update);
         }
         let frame_t4 = Instant::now();
         let _ = pace;
@@ -4924,7 +4961,7 @@ fn run_launcher_loop(
             copy_cached_rect(disp, ui, &cached, rect);
         }
         if let Some(update) = arcade_list_rect {
-            copied_rows += copy_arcade_list_update(disp, &arcade_list_renderer, update);
+            copied_rows += copy_arcade_list_update(disp, &mut arcade_list_renderer, update);
         }
         let frame_t4 = Instant::now();
         if copied_rows > 0 && !first_copy_logged {
