@@ -3475,9 +3475,9 @@ impl ConsoleFont {
 }
 
 const ARCADE_LIST_X: usize = 8;
-const ARCADE_LIST_Y: usize = 64;
+const ARCADE_LIST_Y: usize = 56;
 const ARCADE_LIST_W: usize = 464;
-const ARCADE_LIST_H: usize = 468;
+const ARCADE_LIST_H: usize = 432;
 const ARCADE_LIST_FONT_PX: f32 = 16.0;
 const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 const ARCADE_LIST_FADE_H: usize = 48;
@@ -3898,11 +3898,16 @@ fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
 }
 
 fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], alpha: u32, color: Pixel) {
+    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
+    let processed = unsafe { blend_row_towards_neon(src, dst, alpha, color) };
+    #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+    let processed = 0usize;
+
     let inv = 256 - alpha;
     let cr = (color.0 >> 16) & 0xff;
     let cg = (color.0 >> 8) & 0xff;
     let cb = color.0 & 0xff;
-    for (src, dst) in src.iter().zip(dst.iter_mut()) {
+    for (src, dst) in src[processed..].iter().zip(dst[processed..].iter_mut()) {
         let sr = (src.0 >> 16) & 0xff;
         let sg = (src.0 >> 8) & 0xff;
         let sb = src.0 & 0xff;
@@ -3911,6 +3916,46 @@ fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], alpha: u32, color: Pixel)
         let b = (sb * inv + cb * alpha) >> 8;
         *dst = Pixel((r << 16) | (g << 8) | b);
     }
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn blend_row_towards_neon(
+    src: &[Pixel],
+    dst: &mut [Pixel],
+    alpha: u32,
+    color: Pixel,
+) -> usize {
+    use core::arch::arm::{
+        vaddq_u32, vandq_u32, vdupq_n_u32, vld1q_u32, vmulq_u32, vorrq_u32, vshrq_n_u32, vst1q_u32,
+    };
+
+    let len = src.len().min(dst.len());
+    let inv = 256 - alpha;
+    let rb_mask = vdupq_n_u32(0x00ff00ff);
+    let g_mask = vdupq_n_u32(0x0000ff00);
+    let inv_v = vdupq_n_u32(inv);
+    let alpha_v = vdupq_n_u32(alpha);
+    let color_v = vdupq_n_u32(color.0);
+    let color_rb = vmulq_u32(vandq_u32(color_v, rb_mask), alpha_v);
+    let color_g = vmulq_u32(vandq_u32(color_v, g_mask), alpha_v);
+    let src_ptr = src.as_ptr().cast::<u32>();
+    let dst_ptr = dst.as_mut_ptr().cast::<u32>();
+    let mut i = 0usize;
+    while i + 4 <= len {
+        let px = vld1q_u32(src_ptr.add(i));
+        let rb = vshrq_n_u32(
+            vaddq_u32(vmulq_u32(vandq_u32(px, rb_mask), inv_v), color_rb),
+            8,
+        );
+        let g = vshrq_n_u32(
+            vaddq_u32(vmulq_u32(vandq_u32(px, g_mask), inv_v), color_g),
+            8,
+        );
+        let out = vorrq_u32(vandq_u32(rb, rb_mask), vandq_u32(g, g_mask));
+        vst1q_u32(dst_ptr.add(i), out);
+        i += 4;
+    }
+    i
 }
 
 fn clipped_title(title: &str, max_chars: usize) -> String {
