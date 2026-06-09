@@ -16,6 +16,7 @@ then prints split phase timing summaries.
 
 VARIANT:
   baseline   real fade blend + fade/body/selection copies (default)
+  real-text  same fade/copy path, with cached text rows instead of synthetic rows
   copy-only  copy fade rows without blending, isolating framebuffer writes
   no-fade    copy only the moving body + selection frame
 
@@ -66,9 +67,9 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   exit 2
 fi
 case "$variant" in
-  baseline|copy-only|copy|no-fade|nofade|body-only) ;;
+  baseline|real-text|real_text|text|copy-only|copy|no-fade|nofade|body-only) ;;
   *)
-    echo "variant must be baseline, copy-only, or no-fade" >&2
+    echo "variant must be baseline, real-text, copy-only, or no-fade" >&2
     exit 2
     ;;
 esac
