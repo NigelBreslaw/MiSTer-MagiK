@@ -70,6 +70,7 @@ struct ArcadeScrollState {
     hold_started_at: Option<Instant>,
     last_quick_tap_dir: i32,
     last_quick_tap_released_at: Option<Instant>,
+    turbo_candidate: bool,
     turbo_active: bool,
 }
 
@@ -135,6 +136,8 @@ impl ArcadeNav {
             return;
         }
 
+        self.update_turbo(now);
+
         if self.scroll.hold_started_at.is_some() && self.is_settled() {
             self.enqueue_step(dir, count);
         }
@@ -187,29 +190,47 @@ impl ArcadeNav {
     fn begin_press(&mut self, dir: i32, now: Instant) {
         self.scroll.held_dir = dir;
         self.scroll.hold_started_at = Some(now);
-        self.scroll.turbo_active = self.scroll.last_quick_tap_dir == dir
+        self.scroll.turbo_candidate = self.scroll.last_quick_tap_dir == dir
             && self
                 .scroll
                 .last_quick_tap_released_at
                 .is_some_and(|released| {
                     now.saturating_duration_since(released) <= ARCADE_TURBO_REPRESS_WINDOW
                 });
+        self.scroll.turbo_active = false;
         if self.scroll.last_quick_tap_dir != dir {
             self.scroll.last_quick_tap_released_at = None;
         }
     }
 
+    fn update_turbo(&mut self, now: Instant) {
+        if self.scroll.turbo_active || !self.scroll.turbo_candidate {
+            return;
+        }
+        if self
+            .scroll
+            .hold_started_at
+            .is_some_and(|started| now.saturating_duration_since(started) > ARCADE_QUICK_TAP_MAX)
+        {
+            self.scroll.turbo_active = true;
+        }
+    }
+
     fn record_release(&mut self, dir: i32, now: Instant) {
         if let Some(started) = self.scroll.hold_started_at {
-            if self.scroll.held_dir == dir
-                && now.saturating_duration_since(started) <= ARCADE_QUICK_TAP_MAX
-            {
-                self.scroll.last_quick_tap_dir = dir;
-                self.scroll.last_quick_tap_released_at = Some(now);
+            if self.scroll.held_dir == dir {
+                if now.saturating_duration_since(started) <= ARCADE_QUICK_TAP_MAX {
+                    self.scroll.last_quick_tap_dir = dir;
+                    self.scroll.last_quick_tap_released_at = Some(now);
+                } else {
+                    self.scroll.last_quick_tap_dir = 0;
+                    self.scroll.last_quick_tap_released_at = None;
+                }
             }
         }
         self.scroll.held_dir = 0;
         self.scroll.hold_started_at = None;
+        self.scroll.turbo_candidate = false;
         self.scroll.turbo_active = false;
     }
 
@@ -768,7 +789,9 @@ mod tests {
         for tap in 0..5 {
             let down_at = t0 + Duration::from_millis(tap * 30);
             input(&mut nav, 1, 0, 10, down_at);
+            assert!(!nav.scroll.turbo_active);
             input(&mut nav, 0, 1, 10, down_at + Duration::from_millis(10));
+            assert!(!nav.scroll.turbo_active);
         }
         assert_eq!(nav.selected, 5);
         assert!(nav.visual_index < 5.0);
@@ -820,14 +843,37 @@ mod tests {
         let t0 = Instant::now();
         input(&mut nav, 1, 0, 10, t0);
         input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
-        let visual_before_turbo = nav.scroll.visual_px;
+
         input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(120));
-        assert!(nav.scroll.turbo_active);
+        assert!(!nav.scroll.turbo_active);
         assert_eq!(nav.selected, 2);
+
+        let visual_before_turbo = nav.scroll.visual_px;
+        input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(360));
+        assert!(nav.scroll.turbo_active);
         assert_eq!(
             nav.scroll.visual_px,
             visual_before_turbo + ARCADE_TURBO_PX_PER_FRAME
         );
+    }
+
+    #[test]
+    fn arcade_long_second_press_consumes_turbo_candidate() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 10, t0);
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
+        input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(120));
+        input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(360));
+        assert!(nav.scroll.turbo_active);
+
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(370));
+        assert_eq!(nav.scroll.last_quick_tap_dir, 0);
+        assert_eq!(nav.scroll.last_quick_tap_released_at, None);
+
+        input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(380));
+        assert!(!nav.scroll.turbo_candidate);
+        assert!(!nav.scroll.turbo_active);
     }
 
     #[test]
