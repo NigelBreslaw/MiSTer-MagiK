@@ -29,3 +29,6 @@ FPSCALE-AFTER-VHS-2X-20260608	vhs_glitch	raw	half	480x270	2	2026-06-08T06:44:37Z
 FPSCALE-AFTER-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T06:45:26Z	1.96.0		6797756	1200	60.0	3030	0	0	13632	16669	18	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270
 FPSCALE-FIX-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T07:18:25Z	1.96.0		6797756	300	59.9	3112	0	0	13572	16691	15	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270
 FPSCALE-FIX2-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-08T07:22:08Z	1.96.0		6797756	299	59.8	3086	0	0	13626	16719	15	21	0	yes	profile=release-device; prep=kill-mister-ui; fpga-scale; capture=480x270
+CRTIMAGE-VHS-20260609	vhs_glitch	raw	native	320x224	1	2026-06-09T15:48:37Z	1.96.0		6158828	600	60.0	1029	0	378	15253	16671	8	11	0	yes	profile=release; prep=kill-mister-ui
+CRTIMAGE-VHS-2X-20260609	vhs_glitch	raw	native	640x448	1	2026-06-09T15:53:02Z	1.96.0	76.53	6158828	154	15.3	63484	0	1672	8	65177	91	103	0	yes	profile=release; prep=kill-mister-ui
+CRTIMAGE-VHS-2XCOPY-20260609	vhs_glitch	raw	2x	320x224	2	2026-06-09T15:55:36Z	1.96.0	72.81	6158828	600	60.0	1028	0	1063	14558	16661	12	16	0	yes	profile=release; prep=kill-mister-ui

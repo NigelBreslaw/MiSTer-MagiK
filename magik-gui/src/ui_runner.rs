@@ -372,6 +372,7 @@ impl EffectBenchMode {
 enum EffectFill {
     Full,
     Half,
+    Double,
     Native,
     FpgaHalf,
 }
@@ -381,6 +382,7 @@ impl EffectFill {
         match self {
             Self::Full => "full",
             Self::Half => "half",
+            Self::Double => "2x",
             Self::Native => "native",
             Self::FpgaHalf => "fpga-half",
         }
@@ -390,6 +392,7 @@ impl EffectFill {
         match s {
             "full" => Some(Self::Full),
             "half" => Some(Self::Half),
+            "2x" | "double" => Some(Self::Double),
             "native" => Some(Self::Native),
             "fpga-half" => Some(Self::FpgaHalf),
             _ => None,
@@ -417,6 +420,7 @@ impl EffectTarget {
         let (physical_w, physical_h, scale) = match fill {
             EffectFill::Full => (1920, 1080, size.scale_to_1080p()?),
             EffectFill::Half => (960, 540, size.scale_to_half_1080p()?),
+            EffectFill::Double => (size.w.checked_mul(2)?, size.h.checked_mul(2)?, 2),
             EffectFill::Native => (size.w, size.h, 1),
             EffectFill::FpgaHalf => {
                 if size.w != 480 || size.h != 270 {

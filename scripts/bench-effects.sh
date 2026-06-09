@@ -32,14 +32,14 @@ EFFECTS=(
   mode7_floor afterimage dither_spotlight wipe_transition chunky_distortion fire_haze
   vhs_glitch
 )
-SIZES=(320x180 320x224 480x270 640x360 960x540)
+SIZES=(320x180 320x224 480x270 640x360 640x448 960x540)
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
   echo "Options: --device  --skip-build  --skip-device  --replace-label"
   echo "         --scene-secs N  --effect NAME|all  --mode raw|overlay|both"
-  echo "         --size WIDTHxHEIGHT  --fill native|half|full|fpga-half  --matrix default|scale-sweep|full  -h"
+  echo "         --size WIDTHxHEIGHT  --fill native|2x|half|full|fpga-half  --matrix default|scale-sweep|full  -h"
   exit "${1:-0}"
 }
 

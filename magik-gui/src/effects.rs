@@ -18,8 +18,14 @@ pub const EFFECT_NAMES: &[&str] = &[
     "vhs_glitch",
 ];
 
-pub const EFFECT_SIZES: &[(usize, usize)] =
-    &[(320, 180), (320, 224), (480, 270), (640, 360), (960, 540)];
+pub const EFFECT_SIZES: &[(usize, usize)] = &[
+    (320, 180),
+    (320, 224),
+    (480, 270),
+    (640, 360),
+    (640, 448),
+    (960, 540),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectKind {
@@ -909,9 +915,11 @@ mod tests {
         assert_eq!(integer_scale_to_1080p(640, 360), Some(3));
         assert_eq!(integer_scale_to_1080p(960, 540), Some(2));
         assert_eq!(integer_scale_to_1080p(512, 288), None);
+        assert_eq!(integer_scale_to_rect(320, 224, 640, 448), Some(2));
         assert_eq!(EffectSize { w: 320, h: 180 }.scale_to_half_1080p(), Some(3));
         assert_eq!(EffectSize { w: 480, h: 270 }.scale_to_half_1080p(), Some(2));
         assert_eq!(EffectSize { w: 640, h: 360 }.scale_to_half_1080p(), None);
+        assert_eq!(EffectSize { w: 640, h: 448 }.scale_to_half_1080p(), None);
         assert_eq!(EffectSize { w: 960, h: 540 }.scale_to_half_1080p(), Some(1));
     }
 
