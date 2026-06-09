@@ -12,6 +12,28 @@ use mister_magik_fb::vsync_pacer::VsyncPaceSource;
 const FRAME_BUDGET_US: u64 = 16_667; // 60 Hz
 
 #[derive(Clone, Copy, Debug)]
+pub struct FrameRect {
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+impl FrameRect {
+    fn width(self) -> u64 {
+        self.x1.saturating_sub(self.x0) as u64
+    }
+
+    fn height(self) -> u64 {
+        self.y1.saturating_sub(self.y0) as u64
+    }
+
+    fn pixels(self) -> u64 {
+        self.width() * self.height()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct FrameSample {
     pub prepare_us: u64,
     pub anim_us: u64,
@@ -22,6 +44,7 @@ pub struct FrameSample {
     pub cached_present_us: u64,
     pub overlay_present_us: u64,
     pub rows: u32,
+    pub present_rect: Option<FrameRect>,
     pub wall_us: u64,
     pub vsync_source: VsyncPaceSource,
     pub vsync_period_us: u64,
@@ -297,12 +320,16 @@ impl FrameProfiler {
         let mut f = File::create(path)?;
         writeln!(
             f,
-            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tphases_us\twall_us\trows\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
+            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
         )?;
         for (i, s) in self.frames.iter().enumerate() {
+            let (x0, y0, x1, y1, pixels) = s
+                .present_rect
+                .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1, rect.pixels()))
+                .unwrap_or((0, 0, 0, 0, 0));
             writeln!(
                 f,
-                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 s.prepare_us,
                 s.anim_us,
                 s.slint_render_us,
@@ -314,6 +341,12 @@ impl FrameProfiler {
                 s.phases_us(),
                 s.wall_us,
                 s.rows,
+                x0,
+                y0,
+                x1,
+                y1,
+                pixels,
+                pixels * 4,
                 s.vsync_source.label(),
                 s.vsync_period_us,
                 s.vsync_miss_streak,
