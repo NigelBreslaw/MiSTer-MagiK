@@ -34,7 +34,7 @@ Status: implemented as small profiling/reporting slices through 2026-06-09.
 | # | Option | Decision |
 |---|--------|----------|
 | 15 | Tools installable on MiSTer | Do not install packages for normal analysis. Capture low-overhead TSV/trace data on MiSTer and render reports on the host. |
-| 16 | Use Linux tools selectively | Use `pprof`/`perf_event_open` only for CPU attribution after frame phases identify a CPU-bound region. |
+| 16 | Use Linux tools selectively | Use `pprof` SIGPROF flamegraphs only for CPU attribution after frame phases identify a CPU-bound region. |
 | 17 | Flamegraph caveat | CPU flamegraphs can produce zero samples depending on MiSTer perf permissions; frame TSV/trace reports remain the primary path. |
 
 ## Typical Flow

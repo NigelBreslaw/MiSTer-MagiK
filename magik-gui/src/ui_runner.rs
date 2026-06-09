@@ -2522,7 +2522,9 @@ fn run_frame_loop(
     if profile_on {
         profiler.finish();
     }
-    cpu_profile::finish(cpu);
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
 }
 
 #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
@@ -3015,7 +3017,9 @@ fn run_video_playback_loop(
     if profile_on {
         profiler.finish();
     }
-    cpu_profile::finish(cpu);
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
 }
 
 #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]

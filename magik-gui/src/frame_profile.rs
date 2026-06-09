@@ -453,8 +453,14 @@ impl FrameProfiler {
         print_phase_stats("custom-draw", &col(&self.frames, |s| s.custom_draw_us));
         print_phase_stats("vsync", &col(&self.frames, |s| s.vsync_us));
         print_phase_stats("fb-present", &col(&self.frames, |s| s.fb_present_us));
-        print_phase_stats("cached-present", &col(&self.frames, |s| s.cached_present_us));
-        print_phase_stats("overlay-present", &col(&self.frames, |s| s.overlay_present_us));
+        print_phase_stats(
+            "cached-present",
+            &col(&self.frames, |s| s.cached_present_us),
+        );
+        print_phase_stats(
+            "overlay-present",
+            &col(&self.frames, |s| s.overlay_present_us),
+        );
         self.print_present_bandwidth();
         let hits = self
             .frames
@@ -518,7 +524,11 @@ impl FrameProfiler {
         );
 
         print_histogram("wall_ms", &totals, MS_BUCKETS);
-        print_histogram("fb_present_us", &col(&self.frames, |s| s.fb_present_us), US_BUCKETS);
+        print_histogram(
+            "fb_present_us",
+            &col(&self.frames, |s| s.fb_present_us),
+            US_BUCKETS,
+        );
 
         println!("worst 10 frames (by wall_us):");
         let mut indexed: Vec<(usize, u64)> = self
@@ -570,7 +580,8 @@ impl FrameProfiler {
             return;
         }
         let avg_bytes = total_bytes / presented_frames;
-        let mib_per_s = (total_bytes as f64 / 1_048_576.0) / (total_present_us as f64 / 1_000_000.0);
+        let mib_per_s =
+            (total_bytes as f64 / 1_048_576.0) / (total_present_us as f64 / 1_000_000.0);
         println!(
             "present-bandwidth: frames={presented_frames} avg_bytes={} max_bytes={} total_bytes={} active_copy_mib_s={mib_per_s:.1}",
             avg_bytes,

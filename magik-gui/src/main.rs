@@ -8,6 +8,7 @@
 //!   effects   list framebuffer effect benchmark names
 //!   effect-bench [effect|all] [secs] [raw|overlay|both] [WIDTHxHEIGHT]
 //!   vsync-probe [frames]  print per-frame vsync/fallback pacing diagnostics
+//!   cpu-profile-smoke [secs]  burn CPU and verify profiler SVG output
 //!   fb [secs] [normal|direct|none]  paint + optionally route current fb size
 //!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
 //!   input     gamepad log / sniff / calibrate
@@ -65,6 +66,11 @@ fn main() {
         return;
     }
 
+    if cmd == "cpu-profile-smoke" {
+        run_cpu_profile_smoke();
+        return;
+    }
+
     let mut f = match Fpga::open() {
         Ok(f) => f,
         Err(e) => {
@@ -91,6 +97,63 @@ fn main() {
                 command_args::COMMANDS.join(" | ")
             );
             std::process::exit(2);
+        }
+    }
+}
+
+fn run_cpu_profile_smoke() {
+    let secs = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(3);
+    if std::env::var("MISTER_PPROF").ok().as_deref() != Some("1") {
+        eprintln!("cpu-profile-smoke requires MISTER_PPROF=1");
+        std::process::exit(2);
+    }
+    println!("cpu_profile_smoke: burning CPU for {secs}s");
+    let cpu = cpu_profile::start();
+    if cpu.is_none() {
+        eprintln!("cpu_profile_smoke: profiler did not start");
+        std::process::exit(1);
+    }
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut state = 0x1234_5678_9abc_def0_u64;
+    let mut rounds = 0_u64;
+    while std::time::Instant::now() < until {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1)
+            .rotate_left((state & 31) as u32);
+        std::hint::black_box(state);
+        rounds = rounds.wrapping_add(1);
+    }
+    println!("cpu_profile_smoke: rounds={rounds} state={state:#018x}");
+    match cpu_profile::finish(cpu) {
+        Ok(Some(summary)) if summary.sample_hits > 0 && summary.bytes > 0 => {
+            println!(
+                "cpu_profile_smoke: ok samples={} stacks={} duration={:.1}s hz={} bytes={} out={}",
+                summary.sample_hits,
+                summary.sample_stacks,
+                summary.duration_secs,
+                summary.hz,
+                summary.bytes,
+                summary.out_path
+            );
+        }
+        Ok(Some(summary)) => {
+            eprintln!(
+                "cpu_profile_smoke: profiler produced unusable output samples={} bytes={}",
+                summary.sample_hits, summary.bytes
+            );
+            std::process::exit(1);
+        }
+        Ok(None) => {
+            eprintln!("cpu_profile_smoke: profiling feature is not enabled");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
         }
     }
 }

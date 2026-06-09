@@ -23,7 +23,7 @@ quick-xml = "0.40"
 zune-png = "0.5"
 miniz_oxide = "0.9"
 swash = { version = "0.2.7", features = ["scale", "render"] }
-pprof = { version = "0.15", optional = true, default-features = false, features = ["flamegraph"] }
+pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
 # Crate release is 5.0.0+ffmpeg-8.1; Cargo ignores semver build metadata in
 # version requirements, so pin the semver-visible part and keep the FFmpeg 8.1
