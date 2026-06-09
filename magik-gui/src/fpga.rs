@@ -142,6 +142,13 @@ pub struct Fpga {
 }
 
 impl Fpga {
+    fn spi_timeout(phase: &str, word: u16) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("FPGA SPI timeout waiting for ACK {phase} on word 0x{word:04x}"),
+        )
+    }
+
     pub fn open() -> io::Result<Self> {
         let file = OpenOptions::new().read(true).write(true).open("/dev/mem")?;
         let base = unsafe {
@@ -192,8 +199,8 @@ impl Fpga {
 
     /// One SPI word, faithful to `fpga_spi`: returns the GPI value captured as ACK
     /// drops (low 16 bits = response data).
-    pub fn spi(&mut self, word: u16) -> u16 {
-        self.spi_capture(word).1
+    pub fn spi(&mut self, word: u16) -> io::Result<u16> {
+        Ok(self.spi_capture(word)?.1)
     }
 
     /// Like `spi` but also returns the value captured while ACK is high. Some
@@ -201,12 +208,12 @@ impl Fpga {
     /// lets the first on-device run tell us which phase is authoritative at
     /// native speed (the Python spike was too slow to tell — AGENTS.md §9.5).
     /// Returns `(ack_high_data, ack_low_data)`.
-    pub fn spi_capture(&mut self, word: u16) -> (u16, u16) {
+    pub fn spi_capture(&mut self, word: u16) -> io::Result<(u16, u16)> {
         let gpo = (self.gpo & !(0xFFFF | STROBE)) | word as u32;
         self.wr(gpo);
         self.wr(gpo | STROBE);
 
-        let mut hi: u16 = 0;
+        let hi: u16;
         let mut n = 0;
         loop {
             let g = self.rd();
@@ -216,13 +223,14 @@ impl Fpga {
             }
             n += 1;
             if n >= SPIN_LIMIT {
-                break;
+                self.wr(gpo);
+                return Err(Self::spi_timeout("high", word));
             }
         }
 
         self.wr(gpo);
 
-        let mut lo: u16 = 0;
+        let lo: u16;
         n = 0;
         loop {
             let g = self.rd();
@@ -232,106 +240,128 @@ impl Fpga {
             }
             n += 1;
             if n >= SPIN_LIMIT {
-                break;
+                return Err(Self::spi_timeout("low", word));
             }
         }
-        (hi, lo)
+        Ok((hi, lo))
     }
 
     #[inline]
-    pub fn spi_w(&mut self, word: u16) -> u16 {
+    pub fn spi_w(&mut self, word: u16) -> io::Result<u16> {
         self.spi(word)
     }
 
     /// `spi_uio_cmd_cont`: EnableIO then send the command, leaving IO enabled so
     /// the caller can stream response/parameter words before `disable_io`.
     #[allow(dead_code)] // kept as a diagnostic primitive
-    pub fn cmd_cont(&mut self, cmd: u16) -> u16 {
+    pub fn cmd_cont(&mut self, cmd: u16) -> io::Result<u16> {
         self.enable_io();
-        self.spi(cmd)
+        match self.spi(cmd) {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                self.disable_io();
+                Err(e)
+            }
+        }
     }
 
     /// Like `cmd_cont` but captures both ACK phases of the command word.
-    pub fn cmd_capture(&mut self, cmd: u16) -> (u16, u16) {
+    pub fn cmd_capture(&mut self, cmd: u16) -> io::Result<(u16, u16)> {
         self.enable_io();
-        self.spi_capture(cmd)
+        match self.spi_capture(cmd) {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                self.disable_io();
+                Err(e)
+            }
+        }
     }
 
     /// `spi_uio_cmd16`: one command word + one parameter word.
-    pub fn uio_cmd16(&mut self, cmd: u16, parm: u16) -> u16 {
+    pub fn uio_cmd16(&mut self, cmd: u16, parm: u16) -> io::Result<u16> {
         self.enable_io();
-        self.spi_w(cmd);
-        let res = self.spi_w(parm);
+        let res = (|| {
+            self.spi_w(cmd)?;
+            self.spi_w(parm)
+        })();
         self.disable_io();
         res
     }
 
     /// Tail of `video_fb_enable` when `direct_video=1` — muxes HDMI to the HPS fb.
     /// Without this, SET_FBUF writes pixels but HDMI stays on the (blank) core path.
-    pub fn set_vga_fb(&mut self, enable: bool) {
+    pub fn set_vga_fb(&mut self, enable: bool) -> io::Result<()> {
         let mut map = CONF_VGA_SCALER | CONF_DIRECT_VIDEO;
         if enable {
             map |= CONF_VGA_FB;
         }
-        self.uio_cmd16(UIO_BUT_SW, map);
+        self.uio_cmd16(UIO_BUT_SW, map)?;
+        Ok(())
     }
 
     /// Set the FPGA digital audio attenuation. This mirrors Main_MiSTer's
     /// `send_volume()` path; `0` is max volume and bit 4 would mute.
-    pub fn set_audio_volume(&mut self, attenuation: u8) {
-        self.uio_cmd16(UIO_AUDVOL, attenuation as u16);
+    pub fn set_audio_volume(&mut self, attenuation: u8) -> io::Result<()> {
+        self.uio_cmd16(UIO_AUDVOL, attenuation as u16)?;
+        Ok(())
     }
 
-    pub fn read_video_info(&mut self) -> VideoInfo {
-        let _ = self.cmd_capture(UIO_GET_VRES);
-        let word = |this: &mut Self| this.spi_capture(0).1;
-        let raw_res = word(self);
-        let width = word(self) as u32 | ((word(self) as u32) << 16);
-        let height = word(self) as u32 | ((word(self) as u32) << 16);
-        let htime = word(self) as u32 | ((word(self) as u32) << 16);
-        let vtime = word(self) as u32 | ((word(self) as u32) << 16);
-        let ptime = word(self) as u32 | ((word(self) as u32) << 16);
-        let vtimeh = word(self) as u32 | ((word(self) as u32) << 16);
-        let ctime = word(self) as u32 | ((word(self) as u32) << 16);
-        let pixrep = word(self);
-        let de_h = word(self);
-        let de_v = word(self);
+    pub fn read_video_info(&mut self) -> io::Result<VideoInfo> {
+        let res = (|| {
+            let _ = self.cmd_capture(UIO_GET_VRES)?;
+            let word = |this: &mut Self| -> io::Result<u16> { Ok(this.spi_capture(0)?.1) };
+            let raw_res = word(self)?;
+            let width = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let height = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let htime = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let vtime = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let ptime = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let vtimeh = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let ctime = word(self)? as u32 | ((word(self)? as u32) << 16);
+            let pixrep = word(self)?;
+            let de_h = word(self)?;
+            let de_v = word(self)?;
+            Ok(VideoInfo {
+                raw_res,
+                width,
+                height,
+                htime,
+                vtime,
+                ptime,
+                vtimeh,
+                ctime,
+                pixrep,
+                de_h,
+                de_v,
+                interlaced: (raw_res & 0x100) != 0,
+                rotated: (raw_res & 0x200) != 0,
+            })
+        })();
         self.disable_io();
-        VideoInfo {
-            raw_res,
-            width,
-            height,
-            htime,
-            vtime,
-            ptime,
-            vtimeh,
-            ctime,
-            pixrep,
-            de_h,
-            de_v,
-            interlaced: (raw_res & 0x100) != 0,
-            rotated: (raw_res & 0x200) != 0,
-        }
+        res
     }
 
-    pub fn read_fb_params(&mut self) -> FbParams {
-        let (crc, _) = self.cmd_capture(UIO_GET_FB_PAR);
-        let arx_raw = self.spi_capture(0).1;
-        let ary_raw = self.spi_capture(0).1;
-        let fb_fmt = self.spi_capture(0).1;
-        let fb_width = self.spi_capture(0).1;
-        let fb_height = self.spi_capture(0).1;
+    pub fn read_fb_params(&mut self) -> io::Result<FbParams> {
+        let res = (|| {
+            let (crc, _) = self.cmd_capture(UIO_GET_FB_PAR)?;
+            let arx_raw = self.spi_capture(0)?.1;
+            let ary_raw = self.spi_capture(0)?.1;
+            let fb_fmt = self.spi_capture(0)?.1;
+            let fb_width = self.spi_capture(0)?.1;
+            let fb_height = self.spi_capture(0)?.1;
+            Ok(FbParams {
+                crc: crc as u8,
+                arx: arx_raw & 0x0fff,
+                ary: ary_raw & 0x0fff,
+                arxy: (arx_raw & 0x1000) != 0,
+                fb_fmt,
+                fb_width,
+                fb_height,
+                fb_enabled: (fb_fmt & 0x40) != 0,
+            })
+        })();
         self.disable_io();
-        FbParams {
-            crc: crc as u8,
-            arx: arx_raw & 0x0fff,
-            ary: ary_raw & 0x0fff,
-            arxy: (arx_raw & 0x1000) != 0,
-            fb_fmt,
-            fb_width,
-            fb_height,
-            fb_enabled: (fb_fmt & 0x40) != 0,
-        }
+        res
     }
 
     /// Port of `video_fb_enable(1, n)`, replicating the SET_FBUF sequence in
@@ -347,7 +377,7 @@ impl Fpga {
         xoff_override: Option<i32>,
         yoff_override: Option<i32>,
         set_vga_fb: bool,
-    ) -> u16 {
+    ) -> io::Result<u16> {
         let fb_addr = FB_ADDR + (FB_SIZE_PX * 4 * n) + if n == 0 { 4096 } else { 0 };
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
         let xoff = xoff_override.unwrap_or(mode.hbp as i32 - FB_DV_LBRD);
@@ -369,7 +399,7 @@ impl Fpga {
         // mid-transaction), then send the command and read its support flag from
         // the ACK-high phase.
         self.disable_io();
-        let (flag, _) = self.cmd_capture(UIO_SET_FBUF);
+        let (flag, _) = self.cmd_capture(UIO_SET_FBUF)?;
         crate::boot_analytics::event(
             "rust_fb_enable_direct_route",
             format!(
@@ -378,23 +408,27 @@ impl Fpga {
             ),
         );
 
-        self.spi_w(FB_EN | FB_FMT_RXB | FB_FMT_8888); // format + enable
-        self.spi_w(fb_addr as u16); // base addr low
-        self.spi_w((fb_addr >> 16) as u16); // base addr high
-        self.spi_w(fb_width); // frame width
-        self.spi_w(fb_height); // frame height
-        self.spi_w(xoff as u16); // scaled left
-        self.spi_w(right as u16); // scaled right
-        self.spi_w(yoff as u16); // scaled top
-        self.spi_w(bottom as u16); // scaled bottom
-        self.spi_w(fb_width * 4); // stride (bytes)
+        let stream_res = (|| {
+            self.spi_w(FB_EN | FB_FMT_RXB | FB_FMT_8888)?; // format + enable
+            self.spi_w(fb_addr as u16)?; // base addr low
+            self.spi_w((fb_addr >> 16) as u16)?; // base addr high
+            self.spi_w(fb_width)?; // frame width
+            self.spi_w(fb_height)?; // frame height
+            self.spi_w(xoff as u16)?; // scaled left
+            self.spi_w(right as u16)?; // scaled right
+            self.spi_w(yoff as u16)?; // scaled top
+            self.spi_w(bottom as u16)?; // scaled bottom
+            self.spi_w(fb_width * 4)?; // stride (bytes)
+            Ok(())
+        })();
         self.disable_io();
+        stream_res?;
         // MiSTer only toggles this mux when cfg.direct_video is enabled. In
         // normal HDMI mode, SET_FBUF alone is the Main_MiSTer path.
         if set_vga_fb {
-            self.set_vga_fb(true);
+            self.set_vga_fb(true)?;
         }
-        flag
+        Ok(flag)
     }
 
     /// Historical helper for the direct-video path.
@@ -406,7 +440,7 @@ impl Fpga {
         mode: Mode,
         xoff_override: Option<i32>,
         yoff_override: Option<i32>,
-    ) -> u16 {
+    ) -> io::Result<u16> {
         self.fb_enable(
             n,
             fb_width,
