@@ -69,7 +69,9 @@ use crate::preview_worker::PreviewWorker;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
-use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState, EFFECT_SIZES};
+#[cfg(not(mister_ui_scope_launcher))]
+use mister_magik_fb::effects::EffectState;
+use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
@@ -354,11 +356,13 @@ fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 enum EffectBenchMode {
     Raw,
     Overlay,
 }
 
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 impl EffectBenchMode {
     fn label(self) -> &'static str {
         match self {
@@ -369,6 +373,7 @@ impl EffectBenchMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 enum EffectFill {
     Full,
     Half,
@@ -377,6 +382,7 @@ enum EffectFill {
     FpgaHalf,
 }
 
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 impl EffectFill {
     fn label(self) -> &'static str {
         match self {
@@ -405,6 +411,7 @@ impl EffectFill {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 struct EffectTarget {
     physical_x: usize,
     physical_y: usize,
@@ -415,6 +422,7 @@ struct EffectTarget {
     scale: usize,
 }
 
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 impl EffectTarget {
     fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
         let (physical_w, physical_h, scale) = match fill {
@@ -532,6 +540,7 @@ fn ui_fpga_scaled_mode() -> Mode {
     }
 }
 
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 fn parse_effect_bench_args() -> (
     Vec<EffectKind>,
     u64,
@@ -587,6 +596,7 @@ fn parse_effect_bench_args() -> (
 }
 
 #[derive(Default)]
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 struct EffectBenchTotals {
     frames: u64,
     effect_us: u128,
@@ -597,6 +607,7 @@ struct EffectBenchTotals {
     slow_frames: u64,
 }
 
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 impl EffectBenchTotals {
     fn record(
         &mut self,
@@ -626,6 +637,7 @@ impl EffectBenchTotals {
     }
 }
 
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 fn scale_effect_to_pixels_fit(
     src: &[u32],
     src_w: usize,
@@ -4790,21 +4802,6 @@ fn clipped_title(title: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
-}
-
-fn fill_cached_rect(
-    cached: &mut [Pixel],
-    render_w: usize,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    color: Pixel,
-) {
-    for row in 0..h {
-        let dst = (y + row) * render_w + x;
-        cached[dst..dst + w].fill(color);
-    }
 }
 
 fn run_controller_loop(
