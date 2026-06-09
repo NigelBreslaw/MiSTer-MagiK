@@ -2360,6 +2360,7 @@ fn run_bench_frame(
                 None => 0,
             };
             FrameSample {
+                prepare_us: 0,
                 anim_us: (t1 - t0).as_micros() as u64,
                 slint_render_us: (t2 - t1).as_micros() as u64,
                 vsync_us: (t3 - t2).as_micros() as u64,
@@ -2394,6 +2395,7 @@ fn run_bench_frame(
                 None => 0,
             };
             FrameSample {
+                prepare_us: 0,
                 anim_us: (t2 - t1).as_micros() as u64,
                 slint_render_us: (t3 - t2).as_micros() as u64,
                 vsync_us: (t1 - t0).as_micros() as u64,
@@ -2838,6 +2840,7 @@ fn run_video_playback_loop(
                 }
                 let t4 = Instant::now();
                 let sample = FrameSample {
+                    prepare_us: 0,
                     anim_us: (t1 - t0).as_micros() as u64,
                     slint_render_us: (t2 - t1).as_micros() as u64,
                     vsync_us: (t3 - t2).as_micros() as u64,
@@ -2952,6 +2955,7 @@ fn run_video_playback_loop(
                 }
                 let t4 = Instant::now();
                 let sample = FrameSample {
+                    prepare_us: 0,
                     anim_us: (t2 - t1).as_micros() as u64,
                     slint_render_us: (t3 - t2).as_micros() as u64,
                     vsync_us: (t1 - t0).as_micros() as u64,
@@ -4224,6 +4228,7 @@ fn run_arcade_page_loop(
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
+    let mut prepare_us = 0u128;
     let mut render_us = 0u128;
     let mut arcade_draw_us = 0u128;
     let mut vsync_us = 0u128;
@@ -4242,7 +4247,7 @@ fn run_arcade_page_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tvisual_px\tscroll_y\tupdate\trows\tslint_render_us\tarcade_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tvisual_px\tscroll_y\tupdate\trows\tprepare_us\tslint_render_us\tarcade_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
             )
             .map_err(|e| eprintln!("arcade frame trace: header write failed: {e}"))
             .ok()?;
@@ -4286,6 +4291,7 @@ fn run_arcade_page_loop(
             last_arcade_visual_index = nav.arcade.visual_index;
         }
 
+        let prepare_done = Instant::now();
         update_slint_animations(animation_clock);
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
@@ -4329,7 +4335,7 @@ fn run_arcade_page_loop(
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     frame_start.duration_since(start).as_micros(),
                     nav.arcade.selected,
@@ -4338,6 +4344,7 @@ fn run_arcade_page_loop(
                     nav.arcade.scroll_y,
                     arcade_update_label,
                     copied_rows,
+                    (prepare_done - frame_start).as_micros(),
                     (frame_t2 - frame_t1).as_micros(),
                     (arcade_draw_done - arcade_draw_start).as_micros(),
                     (frame_t3 - arcade_draw_done).as_micros(),
@@ -4351,6 +4358,7 @@ fn run_arcade_page_loop(
 
         frames += 1;
         fps_frames += 1;
+        prepare_us += (prepare_done - frame_start).as_micros();
         render_us += (frame_t2 - frame_t1).as_micros();
         arcade_draw_us += (arcade_draw_done - arcade_draw_start).as_micros();
         vsync_us += (frame_t3 - arcade_draw_done).as_micros();
@@ -4361,8 +4369,9 @@ fn run_arcade_page_loop(
         if fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = fps_frames.max(1) as u128;
             println!(
-                "arcade_page fps ~ {} slint-render {}us arcade-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
+                "arcade_page fps ~ {} prepare {}us slint-render {}us arcade-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
                 fps_frames,
+                prepare_us / n,
                 render_us / n,
                 arcade_draw_us / n,
                 vsync_us / n,
@@ -4373,6 +4382,7 @@ fn run_arcade_page_loop(
             );
             fps_window_start = Instant::now();
             fps_frames = 0;
+            prepare_us = 0;
             render_us = 0;
             arcade_draw_us = 0;
             vsync_us = 0;
@@ -4414,6 +4424,7 @@ fn run_launcher_loop(
     let mut launcher_bench_step_idx = 0usize;
     let mut launcher_fps_window_start = Instant::now();
     let mut launcher_fps_frames = 0u64;
+    let mut launcher_prepare_us = 0u128;
     let mut launcher_render_us = 0u128;
     let mut launcher_vsync_us = 0u128;
     let mut launcher_copy_us = 0u128;
@@ -4522,6 +4533,7 @@ fn run_launcher_loop(
     let mut first_visible_copy_done = false;
     let mut stable_frame_logged = false;
     while secs == 0 || start.elapsed().as_secs() < secs {
+        let loop_start = Instant::now();
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
@@ -4933,6 +4945,7 @@ fn run_launcher_loop(
         }
 
         let frame_t0 = Instant::now();
+        let prepare_us = (frame_t0 - loop_start).as_micros();
         update_slint_animations(animation_clock);
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
@@ -5017,6 +5030,7 @@ fn run_launcher_loop(
             first_visible_copy_done = true;
         }
         launcher_fps_frames += 1;
+        launcher_prepare_us += prepare_us;
         launcher_render_us += (frame_t2 - frame_t1).as_micros();
         launcher_vsync_us += (frame_t3 - frame_t2).as_micros();
         launcher_copy_us += (frame_t4 - frame_t3).as_micros();
@@ -5026,8 +5040,9 @@ fn run_launcher_loop(
         if launcher_fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = launcher_fps_frames.max(1) as u128;
             println!(
-                "launcher fps ~ {} slint-render {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
+                "launcher fps ~ {} prepare {}us slint-render {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
                 launcher_fps_frames,
+                launcher_prepare_us / n,
                 launcher_render_us / n,
                 launcher_vsync_us / n,
                 launcher_copy_us / n,
@@ -5037,6 +5052,7 @@ fn run_launcher_loop(
             );
             launcher_fps_window_start = Instant::now();
             launcher_fps_frames = 0;
+            launcher_prepare_us = 0;
             launcher_render_us = 0;
             launcher_vsync_us = 0;
             launcher_copy_us = 0;
