@@ -2735,6 +2735,7 @@ struct BlendVelocityBench {
     row_cache: HashMap<usize, CachedArcadeRow>,
     surface: Vec<Pixel>,
     fade_scratch: Vec<Pixel>,
+    fade_constants: Vec<FadeBlendConstants>,
     selection_horizontal: Vec<Pixel>,
     selection_vertical: Vec<Pixel>,
     surface_y: usize,
@@ -2750,6 +2751,7 @@ impl BlendVelocityBench {
             row_cache: HashMap::new(),
             surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
             fade_scratch: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_FADE_H],
+            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             surface_y: 0,
@@ -2922,28 +2924,25 @@ impl BlendVelocityBench {
         let surface = &self.surface;
         let surface_y = self.surface_y;
         let fade_scratch = &mut self.fade_scratch;
+        let fade_constants = &self.fade_constants;
         for row in 0..fade_h {
-            let alpha = fade_alpha(row, fade_h);
             let src_y = (surface_y + row) % ARCADE_LIST_H;
             let src = src_y * ARCADE_LIST_W;
             blend_row_towards(
                 &surface[src..src + ARCADE_LIST_W],
                 &mut fade_scratch[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                alpha,
-                ARCADE_LIST_FADE_COLOR,
+                fade_constants[row],
             );
         }
         for row in 0..fade_h {
             let viewport_y = ARCADE_LIST_H - fade_h + row;
-            let alpha = fade_alpha(fade_h - 1 - row, fade_h);
             let dst_row = fade_h + row;
             let src_y = (surface_y + viewport_y) % ARCADE_LIST_H;
             let src = src_y * ARCADE_LIST_W;
             blend_row_towards(
                 &surface[src..src + ARCADE_LIST_W],
                 &mut fade_scratch[dst_row * ARCADE_LIST_W..(dst_row + 1) * ARCADE_LIST_W],
-                alpha,
-                ARCADE_LIST_FADE_COLOR,
+                fade_constants[fade_h - 1 - row],
             );
         }
         start.elapsed().as_micros() as u64
@@ -4252,6 +4251,7 @@ struct ArcadeListRenderer {
     surface: Vec<Pixel>,
     band_scratch: Vec<Pixel>,
     fade_scratch: Vec<Pixel>,
+    fade_constants: Vec<FadeBlendConstants>,
     selection_horizontal: Vec<Pixel>,
     selection_vertical: Vec<Pixel>,
     surface_y: usize,
@@ -4285,6 +4285,7 @@ impl ArcadeListRenderer {
             surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
             fade_scratch: Vec::new(),
+            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             surface_y: 0,
@@ -4545,12 +4546,10 @@ impl ArcadeListRenderer {
         let mut band = std::mem::take(&mut self.fade_scratch);
         band.resize(ARCADE_LIST_W * fade_h, Pixel(0));
         for row in 0..fade_h {
-            let alpha = fade_alpha(row, fade_h);
             blend_row_towards(
                 self.surface_row(row),
                 &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                alpha,
-                ARCADE_LIST_FADE_COLOR,
+                self.fade_constants[row],
             );
         }
         target.copy_rect_from(
@@ -4565,12 +4564,10 @@ impl ArcadeListRenderer {
 
         for row in 0..fade_h {
             let viewport_y = ARCADE_LIST_H - fade_h + row;
-            let alpha = fade_alpha(fade_h - 1 - row, fade_h);
             blend_row_towards(
                 self.surface_row(viewport_y),
                 &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                alpha,
-                ARCADE_LIST_FADE_COLOR,
+                self.fade_constants[fade_h - 1 - row],
             );
         }
         target.copy_rect_from(
@@ -4686,36 +4683,48 @@ fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
     (ARCADE_LIST_FADE_MAX_ALPHA * inv) / (fade_h - 1) as u32
 }
 
-fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], alpha: u32, color: Pixel) {
-    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
-    let processed = unsafe { blend_row_towards_neon(src, dst, alpha, color) };
-    #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
-    let processed = 0usize;
+#[derive(Clone, Copy)]
+struct FadeBlendConstants {
+    inv: u32,
+    cr_alpha: u32,
+    cg_alpha: u32,
+    cb_alpha: u32,
+}
 
-    let inv = 256 - alpha;
-    let cr = (color.0 >> 16) & 0xff;
-    let cg = (color.0 >> 8) & 0xff;
-    let cb = color.0 & 0xff;
-    for (src, dst) in src[processed..].iter().zip(dst[processed..].iter_mut()) {
+impl FadeBlendConstants {
+    fn new(alpha: u32, color: Pixel) -> Self {
+        let cr = (color.0 >> 16) & 0xff;
+        let cg = (color.0 >> 8) & 0xff;
+        let cb = color.0 & 0xff;
+        Self {
+            inv: 256 - alpha,
+            cr_alpha: cr * alpha,
+            cg_alpha: cg * alpha,
+            cb_alpha: cb * alpha,
+        }
+    }
+}
+
+fn fade_blend_constants(fade_h: usize, color: Pixel) -> Vec<FadeBlendConstants> {
+    (0..fade_h)
+        .map(|row| FadeBlendConstants::new(fade_alpha(row, fade_h), color))
+        .collect()
+}
+
+fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], constants: FadeBlendConstants) {
+    for (src, dst) in src.iter().zip(dst.iter_mut()) {
         let sr = (src.0 >> 16) & 0xff;
         let sg = (src.0 >> 8) & 0xff;
         let sb = src.0 & 0xff;
-        let r = (sr * inv + cr * alpha) >> 8;
-        let g = (sg * inv + cg * alpha) >> 8;
-        let b = (sb * inv + cb * alpha) >> 8;
+        let r = (sr * constants.inv + constants.cr_alpha) >> 8;
+        let g = (sg * constants.inv + constants.cg_alpha) >> 8;
+        let b = (sb * constants.inv + constants.cb_alpha) >> 8;
         *dst = Pixel((r << 16) | (g << 8) | b);
     }
 }
 
 fn blend_backend_label() -> &'static str {
-    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
-    {
-        "neon-u32x4"
-    }
-    #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
-    {
-        "scalar"
-    }
+    "scalar"
 }
 
 fn blend_velocity_title(idx: usize) -> String {
@@ -4734,46 +4743,6 @@ fn blend_velocity_title(idx: usize) -> String {
         "RAIDEN II",
     ];
     format!("{} {:03}", TITLES[idx % TITLES.len()], idx)
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-unsafe fn blend_row_towards_neon(
-    src: &[Pixel],
-    dst: &mut [Pixel],
-    alpha: u32,
-    color: Pixel,
-) -> usize {
-    use core::arch::arm::{
-        vaddq_u32, vandq_u32, vdupq_n_u32, vld1q_u32, vmulq_u32, vorrq_u32, vshrq_n_u32, vst1q_u32,
-    };
-
-    let len = src.len().min(dst.len());
-    let inv = 256 - alpha;
-    let rb_mask = vdupq_n_u32(0x00ff00ff);
-    let g_mask = vdupq_n_u32(0x0000ff00);
-    let inv_v = vdupq_n_u32(inv);
-    let alpha_v = vdupq_n_u32(alpha);
-    let color_v = vdupq_n_u32(color.0);
-    let color_rb = vmulq_u32(vandq_u32(color_v, rb_mask), alpha_v);
-    let color_g = vmulq_u32(vandq_u32(color_v, g_mask), alpha_v);
-    let src_ptr = src.as_ptr().cast::<u32>();
-    let dst_ptr = dst.as_mut_ptr().cast::<u32>();
-    let mut i = 0usize;
-    while i + 4 <= len {
-        let px = vld1q_u32(src_ptr.add(i));
-        let rb = vshrq_n_u32(
-            vaddq_u32(vmulq_u32(vandq_u32(px, rb_mask), inv_v), color_rb),
-            8,
-        );
-        let g = vshrq_n_u32(
-            vaddq_u32(vmulq_u32(vandq_u32(px, g_mask), inv_v), color_g),
-            8,
-        );
-        let out = vorrq_u32(vandq_u32(rb, rb_mask), vandq_u32(g, g_mask));
-        vst1q_u32(dst_ptr.add(i), out);
-        i += 4;
-    }
-    i
 }
 
 fn clipped_title(title: &str, max_chars: usize) -> String {
