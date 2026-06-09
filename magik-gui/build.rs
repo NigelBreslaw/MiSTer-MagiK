@@ -9,7 +9,7 @@ fn compile_ui() {
 
     // Press Start 2P at all app design sizes used by the 960×540 UI.
     if std::env::var("SLINT_FONT_SIZES").is_err() {
-        std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32,48");
+        std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32");
     }
 
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
