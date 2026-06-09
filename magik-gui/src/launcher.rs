@@ -217,10 +217,6 @@ impl ArcadeNav {
         self.scroll.visual_px == self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT
     }
 
-    pub fn preview_should_pause(&self) -> bool {
-        self.scroll.held_dir != 0 || self.scroll.intent_queue != 0 || !self.is_settled()
-    }
-
     fn enqueue_step(&mut self, dir: i32, count: usize) {
         if count == 0 || dir == 0 {
             return;
