@@ -720,7 +720,13 @@ pub fn run_effect_bench(f: &mut Fpga) {
         std::process::exit(2);
     });
     println!("{}", ui.log_line());
-    let display_config = DisplayConfig::detect(f, disp.info(), &ui);
+    let display_config = match DisplayConfig::detect(f, disp.info(), &ui) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("failed to read display configuration from FPGA: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("{}", display_config.log_line());
     let route_mode = if fill == EffectFill::FpgaHalf {
         Mode {
@@ -740,7 +746,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
     } else {
         (Some(0), Some(0))
     };
-    let flag = f.fb_enable(
+    let flag = match f.fb_enable(
         0,
         disp.width() as u16,
         disp.height() as u16,
@@ -748,8 +754,16 @@ pub fn run_effect_bench(f: &mut Fpga) {
         xoff,
         yoff,
         std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-    );
-    f.set_audio_volume(0);
+    ) {
+        Ok(flag) => flag,
+        Err(e) => {
+            eprintln!("failed to route framebuffer for effect benchmark: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = f.set_audio_volume(0) {
+        eprintln!("warning: failed to set FPGA audio volume: {e}");
+    }
     println!(
         "fb routed (support_flag={flag}); native retro effect benchmark fpga_scale={}",
         fill.uses_fpga_scaler()
@@ -1164,7 +1178,13 @@ pub fn run_ui(f: &mut Fpga) {
     let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
     println!("{}", ui.log_line());
     disp.record_visual_sample("after_display_open_before_initial_route");
-    let display_config = DisplayConfig::detect(f, disp.info(), &ui);
+    let display_config = match DisplayConfig::detect(f, disp.info(), &ui) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("failed to read display configuration from FPGA: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("{}", display_config.log_line());
     boot_analytics::event(
         "display_config_detected",
@@ -1184,7 +1204,7 @@ pub fn run_ui(f: &mut Fpga) {
             disp.height()
         ),
     );
-    let flag = f.fb_enable(
+    let flag = match f.fb_enable(
         0,
         disp.width() as u16,
         disp.height() as u16,
@@ -1192,14 +1212,25 @@ pub fn run_ui(f: &mut Fpga) {
         Some(0),
         Some(0),
         set_vga_fb,
-    );
+    ) {
+        Ok(flag) => flag,
+        Err(e) => {
+            eprintln!("failed to route framebuffer for Slint UI: {e}");
+            std::process::exit(1);
+        }
+    };
     boot_analytics::event(
         "initial_fb_enable_direct_done",
         format!("support_flag={flag}"),
     );
     disp.record_visual_sample("after_initial_route_before_slint_draw");
-    f.set_audio_volume(0);
-    boot_analytics::event("set_audio_volume", "attenuation=0");
+    match f.set_audio_volume(0) {
+        Ok(()) => boot_analytics::event("set_audio_volume", "attenuation=0"),
+        Err(e) => {
+            eprintln!("warning: failed to set FPGA audio volume: {e}");
+            boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
+        }
+    }
     println!(
         "fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
     );
@@ -4839,7 +4870,7 @@ fn run_controller_loop(
 fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
-        f.fb_enable(
+        if let Err(e) = f.fb_enable(
             0,
             ui.fb_w() as u16,
             ui.fb_h() as u16,
@@ -4847,7 +4878,9 @@ fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) 
             Some(0),
             Some(0),
             std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-        );
+        ) {
+            eprintln!("failed to recover Slint framebuffer route after launch failure: {e}");
+        }
         *spawned_mister = false;
     }
 }
