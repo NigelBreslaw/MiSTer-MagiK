@@ -3,8 +3,9 @@
  * MiSTer MagiK write-combined framebuffer sidecar.
  *
  * This does not replace MiSTer_fb. It exposes the MiSTer hidden HPS framebuffer
- * slot used by SET_FBUF buffer 1 through a small misc device so userspace can
- * test whether a non-live write-combined backbuffer fixes direct-render flicker.
+ * slots used by SET_FBUF buffers 1 and 2 through a small misc device so
+ * userspace can test whether non-live write-combined backbuffers fix
+ * direct-render flicker.
  */
 
 #include <linux/fs.h>
@@ -18,9 +19,10 @@
 #define FB_ADDR 0x22000000UL
 #define FB_SIZE_PX (1920UL * 1080UL)
 #define FB_SLOT_BYTES (FB_SIZE_PX * 4UL)
-#define FBWC_BUFFER_INDEX 1UL
-#define FBWC_PHYS_ADDR (FB_ADDR + (FB_SLOT_BYTES * FBWC_BUFFER_INDEX))
-#define FBWC_MAP_BYTES FB_SLOT_BYTES
+#define FBWC_FIRST_BUFFER_INDEX 1UL
+#define FBWC_BUFFER_COUNT 2UL
+#define FBWC_PHYS_ADDR (FB_ADDR + (FB_SLOT_BYTES * FBWC_FIRST_BUFFER_INDEX))
+#define FBWC_MAP_BYTES (FB_SLOT_BYTES * FBWC_BUFFER_COUNT)
 #define FBWC_EXPECTED_KERNEL "5.15.1-MiSTer"
 
 static atomic_t open_count = ATOMIC_INIT(0);
@@ -77,10 +79,11 @@ static ssize_t fbwc_read(struct file *file, char __user *buf, size_t len,
 	int n;
 
 	n = scnprintf(tmp, sizeof(tmp),
-		      "name=%s\nversion=1\nexpected_kernel=%s\nphys=0x%08lx\nmap_bytes=%lu\nbuffer_index=%lu\nslot_bytes=%lu\nopen_count=%d\nmmap_count=%d\n",
+		      "name=%s\nversion=2\nexpected_kernel=%s\nphys=0x%08lx\nmap_bytes=%lu\nbuffer_index=%lu\nbuffer_count=%lu\nslot_bytes=%lu\nopen_count=%d\nmmap_count=%d\n",
 		      DEVICE_NAME, FBWC_EXPECTED_KERNEL, FBWC_PHYS_ADDR,
-		      FBWC_MAP_BYTES, FBWC_BUFFER_INDEX, FB_SLOT_BYTES,
-		      atomic_read(&open_count), atomic_read(&mmap_count));
+		      FBWC_MAP_BYTES, FBWC_FIRST_BUFFER_INDEX, FBWC_BUFFER_COUNT,
+		      FB_SLOT_BYTES, atomic_read(&open_count),
+		      atomic_read(&mmap_count));
 
 	return simple_read_from_buffer(buf, len, ppos, tmp, n);
 }
@@ -108,8 +111,9 @@ static int __init fbwc_init(void)
 	if (ret)
 		return ret;
 
-	pr_info("mister_magik_fbwc: /dev/%s maps buffer %lu at phys 0x%08lx (%lu bytes)\n",
-		DEVICE_NAME, FBWC_BUFFER_INDEX, FBWC_PHYS_ADDR,
+	pr_info("mister_magik_fbwc: /dev/%s maps buffers %lu..%lu at phys 0x%08lx (%lu bytes)\n",
+		DEVICE_NAME, FBWC_FIRST_BUFFER_INDEX,
+		FBWC_FIRST_BUFFER_INDEX + FBWC_BUFFER_COUNT - 1, FBWC_PHYS_ADDR,
 		FBWC_MAP_BYTES);
 	return 0;
 }
