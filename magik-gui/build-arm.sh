@@ -37,7 +37,7 @@ for arg in "$@"; do
 done
 
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
-export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32,48}"
+export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}"
 export RUSTC_WRAPPER=""
 
 if ! command -v docker >/dev/null 2>&1; then
