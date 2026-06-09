@@ -505,6 +505,7 @@ impl Display {
 
     /// Open the framebuffer at its current kernel-reported size, without writing
     /// `/sys/module/MiSTer_fb/parameters/mode`.
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
     pub fn open_current_boot() -> io::Result<Self> {
         const RETRIES: u32 = 30;
         let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
@@ -718,6 +719,7 @@ impl Display {
         (hash, nonzero)
     }
 
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
     pub fn rect_sampled_signature(
         &self,
         x: usize,
