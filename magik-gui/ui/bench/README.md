@@ -94,6 +94,8 @@ Useful env:
 - `MISTER_BLEND_BENCH_TRACE=/tmp/blend.tsv` writes per-frame split timings.
 - `MISTER_BLEND_BENCH_VARIANT=baseline|real-text|copy-only|no-fade` chooses the variant.
 - `MISTER_BLEND_BENCH_PX_PER_FRAME=6` changes synthetic scroll velocity.
+- `MISTER_BLEND_BENCH_FADE_H=48` changes the benchmark fade-band height; this is
+  for measuring design tradeoffs and does not change the production arcade fade.
 
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 

@@ -14,6 +14,9 @@ Usage: scripts/profile-blend-velocity.sh [SECS] [LABEL] [VARIANT] [--skip-build|
 Runs `ui blend_velocity` with `MISTER_BLEND_BENCH_TRACE`, pulls the raw TSV/log,
 then prints split phase timing summaries.
 
+Optional host env:
+  MISTER_BLEND_BENCH_FADE_H=<px>  override fade band height for this run
+
 VARIANT:
   baseline   real fade blend + fade/body/selection copies (default)
   real-text  same fade/copy path, with cached text rows instead of synthetic rows
@@ -73,6 +76,14 @@ case "$variant" in
     exit 2
     ;;
 esac
+fade_env=""
+if [[ -n "${MISTER_BLEND_BENCH_FADE_H:-}" ]]; then
+  if [[ ! "$MISTER_BLEND_BENCH_FADE_H" =~ ^[0-9]+$ ]] || [[ "$MISTER_BLEND_BENCH_FADE_H" -eq 0 ]]; then
+    echo "MISTER_BLEND_BENCH_FADE_H must be a positive integer" >&2
+    exit 2
+  fi
+  fade_env="MISTER_BLEND_BENCH_FADE_H=$MISTER_BLEND_BENCH_FADE_H "
+fi
 
 mkdir -p "$OUT_DIR"
 remote_tsv="/tmp/${label}-blend-velocity.tsv"
@@ -87,7 +98,7 @@ case "$deploy" in
 esac
 
 echo "==> Capture blend_velocity secs=$secs label=$label variant=$variant deploy=$deploy"
-if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true; kill -9 \$(pidof MiSTer) 2>/dev/null || true; rm -f $remote_tsv $remote_log; sleep 5; MISTER_BLEND_BENCH_VARIANT=$variant MISTER_BLEND_BENCH_TRACE=$remote_tsv $REMOTE ui blend_velocity $secs >$remote_log 2>&1; status=\$?; grep -E 'blend_velocity|done:' $remote_log || true; test -s $remote_tsv || status=1; exit \$status"; then
+if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true; kill -9 \$(pidof MiSTer) 2>/dev/null || true; rm -f $remote_tsv $remote_log; sleep 5; ${fade_env}MISTER_BLEND_BENCH_VARIANT=$variant MISTER_BLEND_BENCH_TRACE=$remote_tsv $REMOTE ui blend_velocity $secs >$remote_log 2>&1; status=\$?; grep -E 'blend_velocity|done:' $remote_log || true; test -s $remote_tsv || status=1; exit \$status"; then
   "$MISTER" get "$remote_log" "$local_log" || true
   echo "blend velocity profile failed; see $local_log" >&2
   exit 1
