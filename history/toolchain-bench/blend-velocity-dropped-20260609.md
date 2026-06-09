@@ -32,3 +32,38 @@ Decision:
 - Future NEON experiments should use stable-friendly approaches: scalar loop
   shapes that autovectorize better, assembly inspection, or a separate carefully
   gated assembly/C helper if the benchmark still justifies it.
+
+## PR 5 Candidate: Cache Fully Blended Fade Rows
+
+Rejected after benchmark.
+
+Baseline: PR4 precomputed fade constants:
+
+- Label: `BLEND-PR4-FINAL`
+- `fade_blend_us` p50/p95: `653` / `686`
+- `fade_copy_us` p50/p95: `227` / `266`
+- `body_copy_us` p50/p95: `768` / `796`
+
+Attempt:
+
+- Added a small in-memory ring cache for blended fade rows in the standalone
+  `blend_velocity` benchmark.
+- Cache key included physical source row, source row version, and fade alpha
+  index.
+- Instrumented per-frame cache hits and misses.
+
+Result:
+
+- Label: `BLEND-PR5-CACHE`
+- `fade_blend_us` p50/p95 regressed to `1078` / `1148`.
+- `fade_copy_us` p50/p95 regressed to `242` / `287`.
+- Cache hit rate was `0 / 96` rows per frame; every fade row missed.
+- Binary size grew by about `8 KiB`.
+
+Decision:
+
+- Drop the fully blended row cache for 6 px/frame velocity scrolling.
+- The source row plus alpha combination does not repeat under this motion pattern,
+  so cache lookup and storage only add overhead.
+- Future caching should only target a more stable identity, such as rendered text
+  spans or background bands, not fully blended moving rows.
