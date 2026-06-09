@@ -118,6 +118,7 @@ pub struct FrameProfiler {
     mode: ProfileMode,
     slow_threshold_us: u64,
     out_path: Option<String>,
+    trace_path: Option<String>,
     frames: Vec<FrameSample>,
     // rolling 1s window for live line (same format as before)
     window_start: Instant,
@@ -147,13 +148,20 @@ impl FrameProfiler {
         let out_path = std::env::var("MISTER_PROFILE_FILE")
             .ok()
             .filter(|s| !s.is_empty());
+        let trace_path = std::env::var("MISTER_TRACE_FILE")
+            .ok()
+            .filter(|s| !s.is_empty());
         if mode != ProfileMode::Off {
             println!(
-                "frame_profile: mode={:?} slow_threshold_us={slow_threshold_us}{}",
+                "frame_profile: mode={:?} slow_threshold_us={slow_threshold_us}{}{}",
                 mode,
                 out_path
                     .as_ref()
                     .map(|p| format!(" file={p}"))
+                    .unwrap_or_default(),
+                trace_path
+                    .as_ref()
+                    .map(|p| format!(" trace={p}"))
                     .unwrap_or_default()
             );
         }
@@ -161,6 +169,7 @@ impl FrameProfiler {
             mode,
             slow_threshold_us,
             out_path,
+            trace_path,
             frames: Vec::new(),
             window_start: Instant::now(),
             window_frames: 0,
@@ -313,6 +322,16 @@ impl FrameProfiler {
                 );
             }
         }
+        if let Some(path) = &self.trace_path {
+            if let Err(e) = self.write_trace(path) {
+                eprintln!("frame_profile: failed to write trace {path}: {e}");
+            } else {
+                println!(
+                    "frame_profile: wrote Chrome trace for {} frames to {path}",
+                    self.frames.len()
+                );
+            }
+        }
         self.print_summary();
     }
 
@@ -353,6 +372,56 @@ impl FrameProfiler {
                 s.dominant_phase()
             )?;
         }
+        Ok(())
+    }
+
+    fn write_trace(&self, path: &str) -> std::io::Result<()> {
+        let mut f = File::create(path)?;
+        writeln!(f, "{{\"traceEvents\":[")?;
+        let mut first = true;
+        let mut frame_ts = 0u64;
+        for (i, s) in self.frames.iter().enumerate() {
+            write_trace_event(&mut f, &mut first, "frame", i, frame_ts, s.wall_us, Some(s))?;
+            let mut phase_ts = frame_ts;
+            for (name, dur) in [
+                ("prepare", s.prepare_us),
+                ("anim", s.anim_us),
+                ("slint-render", s.slint_render_us),
+                ("custom-draw", s.custom_draw_us),
+                ("vsync-wait", s.vsync_us),
+                ("fb-present", s.fb_present_us),
+            ] {
+                if dur > 0 {
+                    write_trace_event(&mut f, &mut first, name, i, phase_ts, dur, Some(s))?;
+                }
+                phase_ts = phase_ts.saturating_add(dur);
+            }
+            let present_ts = phase_ts.saturating_sub(s.fb_present_us);
+            if s.cached_present_us > 0 {
+                write_trace_event(
+                    &mut f,
+                    &mut first,
+                    "cached-present",
+                    i,
+                    present_ts,
+                    s.cached_present_us,
+                    Some(s),
+                )?;
+            }
+            if s.overlay_present_us > 0 {
+                write_trace_event(
+                    &mut f,
+                    &mut first,
+                    "overlay-present",
+                    i,
+                    present_ts.saturating_add(s.cached_present_us),
+                    s.overlay_present_us,
+                    Some(s),
+                )?;
+            }
+            frame_ts = frame_ts.saturating_add(s.wall_us);
+        }
+        writeln!(f, "\n]}}")?;
         Ok(())
     }
 
@@ -476,6 +545,33 @@ fn col<F: Fn(&FrameSample) -> u64>(frames: &[FrameSample], f: F) -> Vec<u64> {
     let mut v: Vec<u64> = frames.iter().map(f).collect();
     v.sort_unstable();
     v
+}
+
+fn write_trace_event(
+    f: &mut File,
+    first: &mut bool,
+    name: &str,
+    frame: usize,
+    ts: u64,
+    dur: u64,
+    sample: Option<&FrameSample>,
+) -> std::io::Result<()> {
+    if !*first {
+        writeln!(f, ",")?;
+    }
+    *first = false;
+    let (pixels, bytes) = sample
+        .and_then(|s| s.present_rect.map(|rect| rect.pixels()))
+        .map(|pixels| (pixels, pixels * 4))
+        .unwrap_or((0, 0));
+    let (rows, dominant) = sample
+        .map(|s| (s.rows, s.dominant_phase()))
+        .unwrap_or((0, ""));
+    write!(
+        f,
+        "{{\"name\":\"{}\",\"cat\":\"frame\",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"pid\":1,\"tid\":{},\"args\":{{\"frame\":{},\"rows\":{},\"present_pixels\":{},\"present_bytes\":{},\"dominant\":\"{}\"}}}}",
+        name, ts, dur, frame, frame, rows, pixels, bytes, dominant
+    )
 }
 
 fn percentile(sorted: &[u64], pct: f64) -> u64 {
