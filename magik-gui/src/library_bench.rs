@@ -329,7 +329,10 @@ pub fn load_arcade_catalog_from_sqlite(
                       WHEN category='Arcade' THEN 'arcade'
                       WHEN platform_id='' THEN 'unknown'
                       ELSE platform_id
-                    END
+                    END,
+                    source_kind,
+                    COALESCE(setname,''),
+                    COALESCE(parent,'')
              FROM discoveries
              WHERE launch_ref != ''
              ORDER BY lower(title)
@@ -338,22 +341,28 @@ pub fn load_arcade_catalog_from_sqlite(
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(ArcadeGameEntry {
-                title: row.get::<_, String>(0)?,
-                mra_path: row.get::<_, String>(1)?,
-                image_path: row.get::<_, String>(2)?,
-                has_image: row.get::<_, i64>(3)? != 0,
-                system_id: row.get::<_, String>(4)?,
+            Ok(CatalogRow {
+                game: ArcadeGameEntry {
+                    title: row.get::<_, String>(0)?,
+                    mra_path: row.get::<_, String>(1)?,
+                    image_path: row.get::<_, String>(2)?,
+                    has_image: row.get::<_, i64>(3)? != 0,
+                    system_id: row.get::<_, String>(4)?,
+                },
+                source_kind: row.get::<_, String>(5)?,
+                setname: row.get::<_, String>(6)?,
+                parent: row.get::<_, String>(7)?,
             })
         })
         .map_err(|e| format!("query arcade catalog: {e}"))?;
-    let mut games = Vec::new();
+    let mut rows_out = Vec::new();
     for row in rows {
-        games.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
+        rows_out.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
-    games.retain(|game| {
-        is_launcher_launch_ref(&game.mra_path) && !is_support_file_path(&game.mra_path)
+    rows_out.retain(|row| {
+        is_launcher_launch_ref(&row.game.mra_path) && !is_support_file_path(&row.game.mra_path)
     });
+    let games = collapse_catalog_variants(rows_out);
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
@@ -365,6 +374,126 @@ pub fn load_arcade_catalog_from_sqlite(
         us: t.elapsed().as_micros() as u64,
         rows,
     })
+}
+
+#[derive(Clone, Debug)]
+struct CatalogRow {
+    game: ArcadeGameEntry,
+    source_kind: String,
+    setname: String,
+    parent: String,
+}
+
+fn collapse_catalog_variants(rows: Vec<CatalogRow>) -> Vec<ArcadeGameEntry> {
+    let mut best_idx: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<CatalogRow> = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let key = catalog_variant_group_key(&row);
+        if let Some(&idx) = best_idx.get(&key) {
+            if prefer_catalog_variant(&row, &out[idx]) {
+                out[idx] = row;
+            }
+        } else {
+            best_idx.insert(key, out.len());
+            out.push(row);
+        }
+    }
+
+    out.into_iter().map(|row| row.game).collect()
+}
+
+fn catalog_variant_group_key(row: &CatalogRow) -> String {
+    if row.source_kind == "mra" {
+        if !row.setname.trim().is_empty() {
+            let parent = row.parent.trim();
+            let group = if parent.is_empty() {
+                row.setname.as_str()
+            } else {
+                parent
+            };
+            return format!("mra:set:{}", normalize_id(group));
+        }
+        return format!("mra:title:{}", canonical_variant_title(&row.game.title));
+    }
+    format!("{}:{}", row.source_kind, row.game.mra_path)
+}
+
+fn prefer_catalog_variant(a: &CatalogRow, b: &CatalogRow) -> bool {
+    let a_score = catalog_variant_score(a);
+    let b_score = catalog_variant_score(b);
+    if a_score != b_score {
+        return a_score > b_score;
+    }
+    if a.game.has_image != b.game.has_image {
+        return a.game.has_image;
+    }
+    a.game.mra_path < b.game.mra_path
+}
+
+fn catalog_variant_score(row: &CatalogRow) -> i32 {
+    let haystack = format!(
+        "{} {} {} {}",
+        row.game.title, row.game.mra_path, row.setname, row.parent
+    )
+    .to_ascii_lowercase();
+
+    let mut score = 0;
+    if contains_any(
+        &haystack,
+        &[
+            "(usa", "(us,", "(us)", "(u)", "/_usa/", " america", "american",
+        ],
+    ) {
+        score += 1000;
+    } else if contains_any(&haystack, &["(japan", "(jp", "(j)", "/_japan/"]) {
+        score += 900;
+    } else if contains_any(&haystack, &["(world", "(w,", "(w)", "/_world/"]) {
+        score += 800;
+    } else if contains_any(&haystack, &["(europe", "(eu", "(e)", "/_europe/"]) {
+        score += 700;
+    }
+
+    for bad in [
+        "prototype",
+        "bootleg",
+        "[hack",
+        " hack",
+        "hbmame",
+        "homebrew",
+        "[hb]",
+        "training",
+        "unlocked",
+        "free play",
+        "low lag",
+        "fix",
+        "patched",
+        "beta",
+        "sample",
+    ] {
+        if haystack.contains(bad) {
+            score -= 300;
+        }
+    }
+
+    score
+}
+
+fn canonical_variant_title(title: &str) -> String {
+    let mut out = String::new();
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    for ch in title.chars() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            _ if paren_depth == 0 && bracket_depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    normalize_id(out.trim_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == ','))
 }
 
 pub fn refresh_default_sqlite_database(
@@ -2758,6 +2887,47 @@ mod tests {
         assert!(is_playable_discovery(&discovery));
     }
 
+    #[test]
+    fn catalog_variants_group_by_parent_and_prefer_us_release() {
+        let rows = vec![
+            catalog_row(
+                "Moon Patrol (Japan)",
+                "/media/fat/_Arcade/Moon Patrol (Japan).mra",
+                "mpatrolj",
+                "mpatrol",
+            ),
+            catalog_row(
+                "Moon Patrol (prototype)",
+                "/media/fat/_Arcade/Moon Patrol (prototype).mra",
+                "mpatrolp",
+                "mpatrol",
+            ),
+            catalog_row(
+                "Moon Patrol (US)",
+                "/media/fat/_Arcade/Moon Patrol (US).mra",
+                "mpatrol",
+                "",
+            ),
+        ];
+
+        let games = collapse_catalog_variants(rows);
+
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].title, "Moon Patrol (US)");
+    }
+
+    #[test]
+    fn catalog_variants_keep_non_mra_launchers_separate() {
+        let rows = vec![
+            catalog_launcher_row("Amiga", "/media/fat/_Computer/Amiga.mgl"),
+            catalog_launcher_row("Amiga 500", "/media/fat/_Computer/Amiga 500.mgl"),
+        ];
+
+        let games = collapse_catalog_variants(rows);
+
+        assert_eq!(games.len(), 2);
+    }
+
     fn payload(path: &str) -> GameDiscovery {
         let ext = path_ext(path).unwrap_or_default();
         let taxonomy = taxonomy_from_path(path, &ext);
@@ -2778,6 +2948,36 @@ mod tests {
             image_path: None,
             has_image: false,
             confidence: DiscoveryConfidence::PayloadPath,
+        }
+    }
+
+    fn catalog_row(title: &str, path: &str, setname: &str, parent: &str) -> CatalogRow {
+        CatalogRow {
+            game: ArcadeGameEntry {
+                title: title.to_string(),
+                mra_path: path.to_string(),
+                image_path: String::new(),
+                has_image: false,
+                system_id: "arcade".to_string(),
+            },
+            source_kind: "mra".to_string(),
+            setname: setname.to_string(),
+            parent: parent.to_string(),
+        }
+    }
+
+    fn catalog_launcher_row(title: &str, path: &str) -> CatalogRow {
+        CatalogRow {
+            game: ArcadeGameEntry {
+                title: title.to_string(),
+                mra_path: path.to_string(),
+                image_path: String::new(),
+                has_image: false,
+                system_id: "unknown".to_string(),
+            },
+            source_kind: "mgl".to_string(),
+            setname: String::new(),
+            parent: String::new(),
         }
     }
 
