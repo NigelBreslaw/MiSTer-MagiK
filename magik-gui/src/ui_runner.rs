@@ -61,7 +61,7 @@ use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::display_config::DisplayConfig;
-use crate::frame_profile::{FrameProfiler, FrameSample};
+use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_bench;
@@ -1017,6 +1017,15 @@ fn copy_arcade_list_update(
             renderer.copy_layer_to_display(disp);
             rect.rows()
         }
+    }
+}
+
+fn frame_rect(rect: DirtyRect) -> FrameRect {
+    FrameRect {
+        x0: rect.x0 as u32,
+        y0: rect.y0 as u32,
+        x1: rect.x1 as u32,
+        y1: rect.y1 as u32,
     }
 }
 
@@ -2350,11 +2359,13 @@ fn run_bench_frame(
             let pace = pacer.wait();
             let t3 = Instant::now();
             let mut copy_us = 0;
+            let mut present_rect = None;
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
                     copy_cached_rect(disp, ui, cached, rect);
                     copy_us += c0.elapsed().as_micros() as u64;
+                    present_rect = Some(frame_rect(rect));
                     rect.rows()
                 }
                 None => 0,
@@ -2369,6 +2380,7 @@ fn run_bench_frame(
                 cached_present_us: copy_us,
                 overlay_present_us: 0,
                 rows,
+                present_rect,
                 wall_us: frame_start.elapsed().as_micros() as u64,
                 vsync_source: pace.source,
                 vsync_period_us: pace.period_us,
@@ -2386,11 +2398,13 @@ fn run_bench_frame(
             });
             let t3 = Instant::now();
             let mut copy_us = 0;
+            let mut present_rect = None;
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
                     copy_cached_rect(disp, ui, cached, rect);
                     copy_us += c0.elapsed().as_micros() as u64;
+                    present_rect = Some(frame_rect(rect));
                     rect.rows()
                 }
                 None => 0,
@@ -2405,6 +2419,7 @@ fn run_bench_frame(
                 cached_present_us: copy_us,
                 overlay_present_us: 0,
                 rows,
+                present_rect,
                 wall_us: frame_start.elapsed().as_micros() as u64,
                 vsync_source: pace.source,
                 vsync_period_us: pace.period_us,
@@ -2851,6 +2866,7 @@ fn run_video_playback_loop(
                     cached_present_us: (t4 - t3).as_micros() as u64,
                     overlay_present_us: 0,
                     rows,
+                    present_rect: copied_rect.map(frame_rect),
                     wall_us: frame_start.elapsed().as_micros() as u64,
                     vsync_source: pace.source,
                     vsync_period_us: pace.period_us,
@@ -2967,6 +2983,7 @@ fn run_video_playback_loop(
                     cached_present_us: (t4 - t3).as_micros() as u64,
                     overlay_present_us: 0,
                     rows,
+                    present_rect: copied_rect.map(frame_rect),
                     wall_us: frame_start.elapsed().as_micros() as u64,
                     vsync_source: pace.source,
                     vsync_period_us: pace.period_us,
