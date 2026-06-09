@@ -4251,6 +4251,7 @@ fn run_arcade_page_loop(
     let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let mut pacer = VsyncPacer::from_env();
     let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let cpu = cpu_profile::start();
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
     let mut prepare_us = 0u128;
@@ -4422,6 +4423,9 @@ fn run_arcade_page_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
 }
 
 fn run_launcher_loop(
