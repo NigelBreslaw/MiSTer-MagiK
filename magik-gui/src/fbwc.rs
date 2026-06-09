@@ -80,6 +80,42 @@ impl FbwcBuffer {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.pixels) }
     }
 
+    pub fn buffer(&self) -> &[Pixel] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.pixels) }
+    }
+
+    pub fn clear(&mut self, color: Pixel) {
+        self.buffer_mut().fill(color);
+    }
+
+    pub fn copy_rect_from(
+        &mut self,
+        dst_w: usize,
+        dst_h: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Pixel],
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let x1 = (x + w).min(dst_w);
+        let y1 = (y + h).min(dst_h);
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        let copy_w = x1 - x;
+        let copy_h = y1 - y;
+        let dst = self.buffer_mut();
+        for row in 0..copy_h {
+            let src_a = row * w;
+            let dst_a = (y + row) * dst_w + x;
+            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+        }
+    }
+
     pub fn status(&mut self) -> io::Result<String> {
         let mut s = String::new();
         self.file.read_to_string(&mut s)?;
