@@ -8,6 +8,7 @@ pub const COMMANDS: &[&str] = &[
     "effects",
     "effect-bench",
     "vsync-probe",
+    "cpu-profile-smoke",
     "input",
     "library-scan-bench",
     "audio-tone",

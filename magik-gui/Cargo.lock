@@ -3462,8 +3462,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38a01da47675efa7673b032bf8efd8214f1917d89685e07e395ab125ea42b187"
+source = "git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi#54c0c32488e98390092b0059f27f6948afe8f6f0"
 dependencies = [
  "aligned-vec",
  "backtrace",

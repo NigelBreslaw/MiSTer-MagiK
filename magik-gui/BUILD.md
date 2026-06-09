@@ -59,7 +59,7 @@ magik-gui/build-arm.sh --device
 # Profiling build (symbols, pprof feature — do not ship)
 magik-gui/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magik-fb
-# Run on device: scripts/profile-scene.sh full_motion 30
+# Run on device: scripts/cpu-flamegraph-scene.sh full_motion 10 FM-CPU
 
 # Video/audio benchmark build
 magik-gui/build-arm.sh --fast --video
@@ -94,6 +94,27 @@ Reports are written to `build/binary-size-analysis/`:
   SQLite/catalog, PNG/preview, launcher/input/fb, other.
 - `top-symbols.tsv` — largest symbols.
 - `nm-symbols.tsv` — raw symbol-size listing.
+
+## CPU flamegraphs
+
+`scripts/cpu-flamegraph-scene.sh SCENE [SECS] [LABEL]` builds the profiling
+binary, deploys it, runs a deterministic `cpu-profile-smoke 3` check, then runs
+the requested scene with `MISTER_PPROF=1`.
+
+Artifacts are written to `build/cpu-flamegraphs/`:
+
+- `<label>-cpu-smoke.log` / `<label>-cpu-smoke.svg` — profiler smoke proof.
+- `<label>-cpu-profile.log` / `<label>-cpu.svg` — scene run and flamegraph.
+
+This path uses in-process `SIGPROF` / `ITIMER_PROF` sampling through `pprof`; it
+does not require a MiSTer-side `perf` binary, and `perf_event_paranoid` is not the
+primary control. If the log says `0 sample hits`, the sampling timer did not
+produce usable profiler interrupts; run the smoke command directly on the MiSTer:
+
+```bash
+MISTER_PPROF=1 MISTER_PPROF_OUT=/tmp/smoke.svg \
+  /media/fat/mister-magik/mister-magik-fb cpu-profile-smoke 3
+```
 
 ## Minimal FFmpeg
 
