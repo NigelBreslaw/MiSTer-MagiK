@@ -304,6 +304,15 @@ impl DirtyRect {
             None
         }
     }
+
+    fn union(self, other: DirtyRect) -> DirtyRect {
+        DirtyRect {
+            x0: self.x0.min(other.x0),
+            y0: self.y0.min(other.y0),
+            x1: self.x1.max(other.x1),
+            y1: self.y1.max(other.y1),
+        }
+    }
 }
 
 fn dirty_rect_broad_pct() -> usize {
