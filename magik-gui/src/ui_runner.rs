@@ -2736,6 +2736,7 @@ struct BlendVelocityBench {
     surface: Vec<Pixel>,
     fade_scratch: Vec<Pixel>,
     fade_constants: Vec<FadeBlendConstants>,
+    fade_h: usize,
     selection_horizontal: Vec<Pixel>,
     selection_vertical: Vec<Pixel>,
     surface_y: usize,
@@ -2750,8 +2751,9 @@ impl BlendVelocityBench {
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             row_cache: HashMap::new(),
             surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
-            fade_scratch: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_FADE_H],
-            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR),
+            fade_scratch: Vec::new(),
+            fade_constants: Vec::new(),
+            fade_h: blend_velocity_fade_h_from_env(),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             surface_y: 0,
@@ -2762,6 +2764,8 @@ impl BlendVelocityBench {
                 .filter(|v| *v > 0)
                 .unwrap_or(6),
         };
+        this.fade_scratch = vec![Pixel(0); ARCADE_LIST_W * this.fade_h];
+        this.fade_constants = fade_blend_constants(this.fade_h, ARCADE_LIST_FADE_COLOR);
         this.draw_full_surface();
         this
     }
@@ -2792,7 +2796,7 @@ impl BlendVelocityBench {
         let fade_copy_start = Instant::now();
         let mut fade_copy_us = 0u64;
         if self.variant != BlendVelocityVariant::NoFade {
-            let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+            let fade_h = self.fade_h;
             let top_px = self.copy_top_fade_to_display(disp, fade_h);
             let bottom_px = self.copy_bottom_fade_to_display(disp, fade_h);
             rows += (fade_h * 2) as u32;
@@ -2801,7 +2805,7 @@ impl BlendVelocityBench {
         }
 
         let body_copy_start = Instant::now();
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+        let fade_h = self.fade_h;
         let body_y = if self.variant == BlendVelocityVariant::NoFade {
             0
         } else {
@@ -2918,7 +2922,7 @@ impl BlendVelocityBench {
 
     fn prepare_fade_bands(&mut self) -> u64 {
         let start = Instant::now();
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+        let fade_h = self.fade_h;
         self.fade_scratch
             .resize(ARCADE_LIST_W * fade_h * 2, Pixel(0));
         let surface = &self.surface;
@@ -3052,7 +3056,7 @@ fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
             .ok()?;
         std::io::Write::write_all(
             &mut file,
-            b"frame\telapsed_us\tvariant\tvisual_px\tpx_per_frame\tsurface_us\tfade_blend_us\tfade_copy_us\tbody_copy_us\tselection_copy_us\tvsync_us\twall_us\trows\tpx\n",
+            b"frame\telapsed_us\tvariant\tvisual_px\tpx_per_frame\tfade_h\tsurface_us\tfade_blend_us\tfade_copy_us\tbody_copy_us\tselection_copy_us\tvsync_us\twall_us\trows\tpx\n",
         )
         .map_err(|e| eprintln!("blend_velocity trace: header write failed: {e}"))
         .ok()?;
@@ -3061,9 +3065,10 @@ fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
     });
 
     println!(
-        "blend_velocity running variant={} px_per_frame={} fade_target=#{:06x} blend_backend={} trace={} secs={}",
+        "blend_velocity running variant={} px_per_frame={} fade_h={} fade_target=#{:06x} blend_backend={} trace={} secs={}",
         variant.label(),
         bench.px_per_frame,
+        bench.fade_h,
         ARCADE_LIST_FADE_COLOR.0 & 0x00ff_ffff,
         blend_backend_label(),
         trace_path.as_deref().unwrap_or("off"),
@@ -3079,12 +3084,13 @@ fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     start.elapsed().as_micros(),
                     variant.label(),
                     bench.visual_px,
                     bench.px_per_frame,
+                    bench.fade_h,
                     sample.surface_us,
                     sample.fade_blend_us,
                     sample.fade_copy_us,
@@ -4681,6 +4687,15 @@ fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
     }
     let inv = (fade_h - 1 - row_from_edge) as u32;
     (ARCADE_LIST_FADE_MAX_ALPHA * inv) / (fade_h - 1) as u32
+}
+
+fn blend_velocity_fade_h_from_env() -> usize {
+    std::env::var("MISTER_BLEND_BENCH_FADE_H")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|h| *h > 0)
+        .unwrap_or(ARCADE_LIST_FADE_H)
+        .min(ARCADE_LIST_H / 2)
 }
 
 #[derive(Clone, Copy)]
