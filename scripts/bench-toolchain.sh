@@ -173,11 +173,15 @@ function rows_avg(line, rest) {
     copy = number_after($0, "fb-copy ")
     rows = 0
   } else if ((index($0, "slint-render ") > 0 || index($0, "render ") > 0) && index($0, "vsync-wait ") > 0 && (index($0, "fb-present ") > 0 || index($0, "copy ") > 0)) {
+    prepare = number_after($0, "prepare ")
     if (index($0, "slint-render ") > 0) render = number_after($0, "slint-render ")
     else render = number_after($0, "render ")
+    custom_draw = number_after($0, "custom-draw ")
     vsync = number_after($0, "vsync-wait ")
     if (index($0, "fb-present ") > 0) copy = number_after($0, "fb-present ")
     else copy = number_after($0, "copy ")
+    cached_present = number_after($0, "cached-present ")
+    overlay_present = number_after($0, "overlay-present ")
     rows = rows_avg($0)
   } else {
     next
@@ -185,15 +189,19 @@ function rows_avg(line, rest) {
   count++
   if (count <= 3) next
   n++
+  prepare_sum += prepare
   render_sum += render
+  custom_draw_sum += custom_draw
   vsync_sum += vsync
   copy_sum += copy
+  cached_present_sum += cached_present
+  overlay_present_sum += overlay_present
   rows_sum += rows
   fps_sum += fps
 }
 END {
   if (n > 0) {
-    print int(render_sum / n), int(vsync_sum / n), int(copy_sum / n), int(rows_sum / n), int(fps_sum / n), n
+    print int(render_sum / n), int(vsync_sum / n), int(copy_sum / n), int(rows_sum / n), int(fps_sum / n), n, int(prepare_sum / n), int(custom_draw_sum / n), int(cached_present_sum / n), int(overlay_present_sum / n)
   }
 }
 ' "$ui_log"
@@ -372,9 +380,11 @@ cat /tmp/bench-ui.log
   fi
 
   local render_us="" vsync_us="" copy_us="" rows_avg="" fps_val="" visual_ok="no" notes="" mode_notes=""
+  local prepare_us="" custom_draw_us="" cached_present_us="" overlay_present_us=""
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
-    read -r render_us vsync_us copy_us rows_avg fps_val _cnt <<<"$parse_stats"
+    read -r render_us vsync_us copy_us rows_avg fps_val _cnt prepare_us custom_draw_us cached_present_us overlay_present_us <<<"$parse_stats"
+    notes="${notes:+$notes; }prepare_us=${prepare_us:-0}; custom_draw_us=${custom_draw_us:-0}; cached_present_us=${cached_present_us:-0}; overlay_present_us=${overlay_present_us:-0}"
   else
     notes="no-fps-lines"
   fi
