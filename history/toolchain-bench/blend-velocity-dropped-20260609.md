@@ -67,3 +67,37 @@ Decision:
   so cache lookup and storage only add overhead.
 - Future caching should only target a more stable identity, such as rendered text
   spans or background bands, not fully blended moving rows.
+
+## PR 6 Candidate: Split Fade Into Background Fill Plus Text Overlay
+
+Rejected after benchmark.
+
+Baseline: PR4 precomputed fade constants:
+
+- Label: `BLEND-PR4-FINAL`
+- `fade_blend_us` p50/p95: `653` / `686`
+- `fade_copy_us` p50/p95: `227` / `266`
+- `body_copy_us` p50/p95: `768` / `796`
+
+Attempt:
+
+- In `blend_velocity real-text`, filled each fade row with a pre-blended
+  background or border color.
+- Scanned the source row and blended only pixels whose packed color differed
+  from the row base color.
+- Left the baseline synthetic variant on the normal PR4 blend path.
+
+Result:
+
+- Label: `BLEND-PR6-SPLIT`
+- `fade_blend_us` p50/p95 regressed to `681` / `728`.
+- `fade_copy_us` p50/p95 was `226` / `268`, essentially unchanged.
+- `body_copy_us` p50/p95 was `761` / `793`.
+
+Decision:
+
+- Drop this split path. It avoids many pixel multiplies, but the extra branch,
+  base-color derivation, fill, and sparse overlay scan cost more than the saved
+  blend work on Cortex-A9.
+- A future split strategy would need row/span metadata from the renderer, not
+  per-pixel color classification after the row has already been rasterized.
