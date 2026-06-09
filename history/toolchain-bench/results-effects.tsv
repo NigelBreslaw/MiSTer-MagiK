@@ -32,3 +32,9 @@ FPSCALE-FIX2-VHS-FPGA-HALF-20260608	vhs_glitch	raw	fpga-half	480x270	2	2026-06-0
 CRTIMAGE-VHS-20260609	vhs_glitch	raw	native	320x224	1	2026-06-09T15:48:37Z	1.96.0		6158828	600	60.0	1029	0	378	15253	16671	8	11	0	yes	profile=release; prep=kill-mister-ui
 CRTIMAGE-VHS-2X-20260609	vhs_glitch	raw	native	640x448	1	2026-06-09T15:53:02Z	1.96.0	76.53	6158828	154	15.3	63484	0	1672	8	65177	91	103	0	yes	profile=release; prep=kill-mister-ui
 CRTIMAGE-VHS-2XCOPY-20260609	vhs_glitch	raw	2x	320x224	2	2026-06-09T15:55:36Z	1.96.0	72.81	6158828	600	60.0	1028	0	1063	14558	16661	12	16	0	yes	profile=release; prep=kill-mister-ui
+NEONRUST-BASE-VHS-NATIVE	vhs_glitch	raw	native	320x224	1	2026-06-09T17:03:45Z	1.96.0		6158828	900	60.0	1016	0	376	15266	16667	8	10	0	yes	profile=release; prep=kill-mister-ui
+NEONRUST-BASE-VHS-2X	vhs_glitch	raw	2x	320x224	2	2026-06-09T17:04:32Z	1.96.0		6158828	900	60.0	1021	0	1064	14566	16661	12	15	0	yes	profile=release; prep=kill-mister-ui
+NEONRUST-BASE-VHS-640	vhs_glitch	raw	native	640x448	1	2026-06-09T17:05:14Z	1.96.0		6158828	162	16.2	60258	0	1609	7	61887	92	103	0	yes	profile=release; prep=kill-mister-ui
+NEONRUST-AFTER-VHS-NATIVE	vhs_glitch	raw	native	320x224	1	2026-06-09T17:20:36Z	1.98.0-nightly		6121980	901	60.0	1040	0	383	15219	16653	8	12	0	yes	profile=release; prep=kill-mister-ui
+NEONRUST-AFTER-VHS-2X	vhs_glitch	raw	2x	320x224	2	2026-06-09T17:21:28Z	1.98.0-nightly		6121980	901	60.0	1038	0	1101	14503	16654	12	15	0	yes	profile=release; prep=kill-mister-ui
+NEONRUST-AFTER-VHS-640	vhs_glitch	raw	native	640x448	1	2026-06-09T17:22:18Z	1.98.0-nightly		6121980	154	15.3	63544	0	1657	7	65221	91	102	0	yes	profile=release; prep=kill-mister-ui
