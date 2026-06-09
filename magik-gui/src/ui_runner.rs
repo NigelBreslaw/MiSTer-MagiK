@@ -3062,9 +3062,10 @@ fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
     });
 
     println!(
-        "blend_velocity running variant={} px_per_frame={} trace={} secs={}",
+        "blend_velocity running variant={} px_per_frame={} fade_target=#{:06x} trace={} secs={}",
         variant.label(),
         bench.px_per_frame,
+        ARCADE_LIST_FADE_COLOR.0 & 0x00ff_ffff,
         trace_path.as_deref().unwrap_or("off"),
         secs
     );
