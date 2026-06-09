@@ -1061,6 +1061,21 @@ pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     println!("ui scene={scene} secs={secs}");
+    if crate::fbwc::requested_direct_mode() {
+        let probe = crate::fbwc::support_probe();
+        println!("{}", probe.log_line());
+        if !probe.ok {
+            eprintln!(
+                "fbwc-direct requested but unsupported; falling back to cached /dev/fb0 path"
+            );
+        } else {
+            println!(
+                "fbwc-direct requested but Slint integration remains gated behind fbwc-flip-test; using cached /dev/fb0 path"
+            );
+        }
+    } else {
+        println!("ui_render_mode=cached");
+    }
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
@@ -5232,6 +5247,7 @@ fn run_launcher_loop(
                     if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
                         match event.action {
                             LauncherAction::ExitToMister => {
+                                crate::fbwc::unload_or_warn();
                                 loading_title = "Exit to Mister".to_string();
                                 sync_bridge_launcher(
                                     &app,
@@ -5260,6 +5276,7 @@ fn run_launcher_loop(
                                 }
                             }
                             LauncherAction::ResetDatabase => {
+                                crate::fbwc::unload_or_warn();
                                 loading_title = "Resetting database…".to_string();
                                 sync_bridge_launcher(
                                     &app,
@@ -5288,6 +5305,7 @@ fn run_launcher_loop(
                                 }
                             }
                             LauncherAction::Restart => {
+                                crate::fbwc::unload_or_warn();
                                 loading_title = "Restarting MiSTer…".to_string();
                                 sync_bridge_launcher(
                                     &app,
@@ -5343,10 +5361,12 @@ fn run_launcher_loop(
 
                         match launcher::execute_game_launch(&mra) {
                             Ok(spawned) => {
+                                crate::fbwc::unload_or_warn();
                                 launch_started = Instant::now();
                                 launch_spawned_mister = spawned;
                             }
                             Err(e) => {
+                                crate::fbwc::unload_or_warn();
                                 eprintln!("game launch failed: {e}");
                                 loading_title.clear();
                                 launcher::reset_launch();
