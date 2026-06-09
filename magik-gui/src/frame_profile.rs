@@ -455,6 +455,7 @@ impl FrameProfiler {
         print_phase_stats("fb-present", &col(&self.frames, |s| s.fb_present_us));
         print_phase_stats("cached-present", &col(&self.frames, |s| s.cached_present_us));
         print_phase_stats("overlay-present", &col(&self.frames, |s| s.overlay_present_us));
+        self.print_present_bandwidth();
         let hits = self
             .frames
             .iter()
@@ -544,6 +545,38 @@ impl FrameProfiler {
                 s.dominant_phase()
             );
         }
+    }
+
+    fn print_present_bandwidth(&self) {
+        let mut presented_frames = 0u64;
+        let mut total_bytes = 0u64;
+        let mut total_present_us = 0u64;
+        let mut max_bytes = 0u64;
+        for s in &self.frames {
+            let Some(rect) = s.present_rect else {
+                continue;
+            };
+            let bytes = rect.pixels() * 4;
+            if bytes == 0 {
+                continue;
+            }
+            presented_frames += 1;
+            total_bytes += bytes;
+            total_present_us += s.fb_present_us;
+            max_bytes = max_bytes.max(bytes);
+        }
+        if presented_frames == 0 || total_present_us == 0 {
+            println!("present-bandwidth: no presented rects");
+            return;
+        }
+        let avg_bytes = total_bytes / presented_frames;
+        let mib_per_s = (total_bytes as f64 / 1_048_576.0) / (total_present_us as f64 / 1_000_000.0);
+        println!(
+            "present-bandwidth: frames={presented_frames} avg_bytes={} max_bytes={} total_bytes={} active_copy_mib_s={mib_per_s:.1}",
+            avg_bytes,
+            max_bytes,
+            total_bytes
+        );
     }
 }
 
