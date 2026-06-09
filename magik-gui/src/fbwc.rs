@@ -334,16 +334,27 @@ fn bench_fill(label: &str, buf: &mut [Pixel], pixels: usize, iters: usize) {
 
 fn draw_flip_pattern(buf: &mut [Pixel], w: usize, h: usize, frame: usize) {
     let bar_w = 48;
-    let moving = (frame * 7) % (w + bar_w);
+    let moving_region_x = w / 2;
+    let moving_w = w - moving_region_x;
+    let moving = (frame * 7) % (moving_w + bar_w);
     for y in 0..h {
         let row = &mut buf[y * w..(y + 1) * w];
         for (x, px) in row.iter_mut().enumerate() {
-            let checker = (((x / 24) ^ (y / 24) ^ (frame / 8)) & 1) != 0;
-            let in_bar = x + bar_w >= moving && x < moving;
             let edge = x < 4 || y < 4 || x >= w - 4 || y >= h - 4;
-            *px = if edge {
-                Pixel(0x00ff_ffff)
-            } else if in_bar {
+            let split = x >= moving_region_x.saturating_sub(2) && x < moving_region_x + 2;
+            if edge || split {
+                *px = Pixel(0x00ff_ffff);
+                continue;
+            }
+            if x < moving_region_x {
+                *px = Pixel(0x0000_8040);
+                continue;
+            }
+
+            let local_x = x - moving_region_x;
+            let checker = (((local_x / 24) ^ (y / 24) ^ (frame / 8)) & 1) != 0;
+            let in_bar = local_x + bar_w >= moving && local_x < moving;
+            *px = if in_bar {
                 Pixel(0x00ff_0000)
             } else if checker {
                 Pixel(0x0000_3050)
