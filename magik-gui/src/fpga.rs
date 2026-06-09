@@ -408,7 +408,7 @@ impl Fpga {
             ),
         );
 
-        let stream_res = (|| {
+        let stream_res: io::Result<()> = (|| {
             self.spi_w(FB_EN | FB_FMT_RXB | FB_FMT_8888)?; // format + enable
             self.spi_w(fb_addr as u16)?; // base addr low
             self.spi_w((fb_addr >> 16) as u16)?; // base addr high
