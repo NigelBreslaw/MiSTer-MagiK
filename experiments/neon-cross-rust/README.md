@@ -1,14 +1,15 @@
 # NEON Cross Rust Experiment
 
-Small standalone proof that Rust can call NEON code in a MiSTer-compatible
+Small standalone proof that Rust can compile NEON code in a MiSTer-compatible
 `armv7-unknown-linux-gnueabihf` binary without compiling the main frontend.
 
-This intentionally avoids `core::arch::arm` because stable Rust currently
-rejects the direct ARM NEON intrinsics used in earlier experiments. Instead,
-`build.rs` compiles one C file with `<arm_neon.h>` using the cross container's
-ARM GCC, archives it into a static library, and links it into a Rust binary.
-The C helper is compiled with `-mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard`,
-matching the MiSTer's ARM core.
+This intentionally uses Rust's `core::arch::arm` intrinsics directly. It does
+not compile or link any C helper. ARM NEON intrinsics are still behind
+`#![feature(stdarch_arm_neon_intrinsics)]`, so this experiment uses the repo's
+nightly toolchain instead of stable Rust.
+
+`build.sh` sets `-C target-cpu=cortex-a9 -C target-feature=+neon`, matching the
+MiSTer's ARM core.
 
 ```bash
 cd experiments/neon-cross-rust
@@ -18,7 +19,6 @@ cd experiments/neon-cross-rust
 Expected output includes:
 
 ```text
-Compiling C NEON probe with arm-linux-gnueabihf-gcc
 Finished `dev` profile ...
 ```
 
