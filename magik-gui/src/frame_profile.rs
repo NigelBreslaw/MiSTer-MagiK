@@ -91,6 +91,7 @@ pub enum ProfileMode {
     Summary,
     Slow,
     Full,
+    Trace,
 }
 
 impl ProfileMode {
@@ -104,9 +105,10 @@ impl ProfileMode {
             Some("1") | Some("true") | Some("summary") => Self::Summary,
             Some("slow") => Self::Slow,
             Some("full") => Self::Full,
+            Some("trace") => Self::Trace,
             other => {
                 eprintln!(
-                    "frame_profile: unknown MISTER_PROFILE={other:?}; use 1|summary|slow|full"
+                    "frame_profile: unknown MISTER_PROFILE={other:?}; use 1|summary|slow|full|trace"
                 );
                 Self::Summary
             }
@@ -150,7 +152,10 @@ impl FrameProfiler {
             .filter(|s| !s.is_empty());
         let trace_path = std::env::var("MISTER_TRACE_FILE")
             .ok()
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                (mode == ProfileMode::Trace).then(|| "/tmp/mister-frame-trace.json".to_string())
+            });
         if mode != ProfileMode::Off {
             println!(
                 "frame_profile: mode={:?} slow_threshold_us={slow_threshold_us}{}{}",
@@ -233,6 +238,7 @@ impl FrameProfiler {
                     sample.rows
                 );
             }
+            ProfileMode::Trace => {}
             _ => {}
         }
 
