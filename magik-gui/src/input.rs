@@ -4,6 +4,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 pub use mister_magik_fb::input_info::PadInfo;
 
@@ -14,6 +16,7 @@ const JS_EVENT_INIT: u8 = 0x80;
 
 const AXIS_MAX: f32 = 32767.0;
 const STICK_DEADZONE: f32 = 8000.0;
+const PAD_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Best-guess D-Input map for Retro-bit 2563:0575 (A2 receiver).
 /// D-pad on axes 4/5 confirmed on device; buttons from LEGACY16 manual.
@@ -104,6 +107,7 @@ pub struct PadPool {
     merged: PadState,
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
+    last_rescan: Instant,
 }
 
 impl PadPool {
@@ -123,17 +127,16 @@ impl PadPool {
             }
         }
         if pads.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "no joystick device found",
-            ));
+            eprintln!("pad: no joystick device found; waiting for hotplug");
+        } else {
+            eprintln!("pad: listening on {} device(s)", pads.len());
         }
-        eprintln!("pad: listening on {} device(s)", pads.len());
         Ok(Self {
             pads,
             merged: PadState::default(),
             active_idx: 0,
             db,
+            last_rescan: Instant::now(),
         })
     }
 
@@ -151,20 +154,27 @@ impl PadPool {
 
     /// Info for the pad that most recently sent input.
     pub fn info(&self) -> &PadInfo {
-        &self.pads[self.active_idx].info
+        self.active_pad()
+            .map(|pad| &pad.info)
+            .unwrap_or_else(no_pad_info)
     }
 
     pub fn path(&self) -> &str {
-        &self.pads[self.active_idx].path
+        self.active_pad()
+            .map(|pad| pad.path.as_str())
+            .unwrap_or("(no controller)")
     }
 
     /// Index of the pad that most recently sent input.
     pub fn active_idx(&self) -> usize {
-        self.active_idx
+        self.clamped_active_idx()
     }
 
     pub fn info_at(&self, idx: usize) -> &PadInfo {
-        &self.pads[idx].info
+        self.pads
+            .get(idx)
+            .map(|pad| &pad.info)
+            .unwrap_or_else(no_pad_info)
     }
 
     /// First connected pad that has not completed setup (`setup_complete`).
@@ -173,33 +183,51 @@ impl PadPool {
     }
 
     pub fn path_at(&self, idx: usize) -> &str {
-        &self.pads[idx].path
+        self.pads
+            .get(idx)
+            .map(|pad| pad.path.as_str())
+            .unwrap_or("(no controller)")
     }
 
     pub fn state_at(&self, idx: usize) -> &PadState {
-        &self.pads[idx].state
+        self.pads
+            .get(idx)
+            .map(|pad| &pad.state)
+            .unwrap_or_else(no_pad_state)
     }
 
     /// Save a new default registry entry for a pad (does not mark setup complete).
     pub fn register_new_at(&mut self, idx: usize) -> io::Result<()> {
-        let info = self.pads[idx].info.clone();
+        let info = self
+            .pads
+            .get(idx)
+            .map(|pad| pad.info.clone())
+            .ok_or_else(|| pad_index_error(idx))?;
         let entry = crate::controller_db::ControllerDb::default_entry(&info);
         self.db.upsert(&info, entry);
         self.db.save()?;
-        self.pads[idx].refresh_layout();
+        if let Some(pad) = self.pads.get_mut(idx) {
+            pad.refresh_layout();
+        }
         Ok(())
     }
 
     /// Bind a pad to an existing registry entry (USB port change).
     pub fn claim_existing_at(&mut self, idx: usize, list_index: usize) -> io::Result<()> {
-        let info = self.pads[idx].info.clone();
+        let info = self
+            .pads
+            .get(idx)
+            .map(|pad| pad.info.clone())
+            .ok_or_else(|| pad_index_error(idx))?;
         let items = self.db.list_entries();
         let item = items.get(list_index).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "list index out of range")
         })?;
         self.db.claim_existing(&info, &item.id)?;
         self.db.save()?;
-        self.pads[idx].refresh_layout();
+        if let Some(pad) = self.pads.get_mut(idx) {
+            pad.refresh_layout();
+        }
         Ok(())
     }
 
@@ -210,7 +238,11 @@ impl PadPool {
         label: String,
         kind: crate::controller_db::ControllerKind,
     ) -> io::Result<()> {
-        let info = self.pads[idx].info.clone();
+        let info = self
+            .pads
+            .get(idx)
+            .map(|pad| pad.info.clone())
+            .ok_or_else(|| pad_index_error(idx))?;
         self.db.finish_setup(&info, label, kind);
         self.db.save()?;
         Ok(())
@@ -219,20 +251,78 @@ impl PadPool {
     /// Drain all pads; returns true if merged state changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        for (i, pad) in self.pads.iter_mut().enumerate() {
-            if pad.poll() {
-                self.active_idx = i;
-                changed = true;
+
+        if self.last_rescan.elapsed() >= PAD_RESCAN_INTERVAL {
+            changed |= self.rescan();
+            self.last_rescan = Instant::now();
+        }
+
+        let mut i = 0;
+        while i < self.pads.len() {
+            match self.pads[i].poll() {
+                Ok(true) => {
+                    self.active_idx = i;
+                    changed = true;
+                    i += 1;
+                }
+                Ok(false) => {
+                    i += 1;
+                }
+                Err(e) => {
+                    let path = self.pads[i].path.clone();
+                    eprintln!("pad: disconnected {path}: {e}");
+                    self.pads.remove(i);
+                    changed = true;
+                    if self.active_idx >= self.pads.len() {
+                        self.active_idx = self.pads.len().saturating_sub(1);
+                    }
+                }
             }
         }
         if changed {
-            let states: Vec<&PadState> = self.pads.iter().map(|p| p.state()).collect();
-            self.merged = merge_pad_states(&states);
-            let active = &self.pads[self.active_idx].state;
-            self.merged.last_raw = active.last_raw.clone();
-            self.merged.last_event_label = active.last_event_label.clone();
+            self.rebuild_merged_state();
         }
         changed
+    }
+
+    fn active_pad(&self) -> Option<&PadReader> {
+        self.pads.get(self.clamped_active_idx())
+    }
+
+    fn clamped_active_idx(&self) -> usize {
+        if self.pads.is_empty() {
+            0
+        } else {
+            self.active_idx.min(self.pads.len() - 1)
+        }
+    }
+
+    fn rescan(&mut self) -> bool {
+        let mut changed = false;
+        for path in discover_js_devices() {
+            if self.pads.iter().any(|pad| pad.path == path) {
+                continue;
+            }
+            match PadReader::open_path_with_db(&path, &self.db) {
+                Ok(reader) => {
+                    self.db.note_sighting(reader.info());
+                    self.pads.push(reader);
+                    eprintln!("pad: hotplug added {path} ({} device(s))", self.pads.len());
+                    changed = true;
+                }
+                Err(e) => eprintln!("pad: hotplug skip {path}: {e}"),
+            }
+        }
+        changed
+    }
+
+    fn rebuild_merged_state(&mut self) {
+        let states: Vec<&PadState> = self.pads.iter().map(|p| p.state()).collect();
+        self.merged = merge_pad_states(&states);
+        if let Some(active) = self.active_pad() {
+            self.merged.last_raw = active.state.last_raw.clone();
+            self.merged.last_event_label = active.state.last_event_label.clone();
+        }
     }
 }
 
@@ -290,7 +380,7 @@ impl PadReader {
     }
 
     /// Drain pending events; returns true if state changed.
-    pub fn poll(&mut self) -> bool {
+    pub fn poll(&mut self) -> io::Result<bool> {
         let mut buf = [0u8; JS_EVENT_SIZE];
         let mut changed = false;
         loop {
@@ -309,14 +399,31 @@ impl PadReader {
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) => {
-                    eprintln!("pad read error: {e}");
-                    break;
-                }
+                Err(e) => return Err(e),
             }
         }
-        changed
+        Ok(changed)
     }
+}
+
+fn no_pad_info() -> &'static PadInfo {
+    static INFO: OnceLock<PadInfo> = OnceLock::new();
+    INFO.get_or_init(|| PadInfo {
+        name: "No controller".to_string(),
+        ..PadInfo::default()
+    })
+}
+
+fn no_pad_state() -> &'static PadState {
+    static STATE: OnceLock<PadState> = OnceLock::new();
+    STATE.get_or_init(PadState::default)
+}
+
+fn pad_index_error(idx: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("pad index {idx} out of range"),
+    )
 }
 
 impl PadState {
@@ -1204,5 +1311,57 @@ fn read_one_event(
             state.apply_event(layout, event_type, number, value)
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_pool() -> PadPool {
+        PadPool {
+            pads: Vec::new(),
+            merged: PadState::default(),
+            active_idx: 0,
+            db: crate::controller_db::ControllerDb::load(),
+            last_rescan: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn empty_pool_accessors_are_safe() {
+        let pool = empty_pool();
+
+        assert_eq!(pool.len(), 0);
+        assert_eq!(pool.active_idx(), 0);
+        assert_eq!(pool.path(), "(no controller)");
+        assert_eq!(pool.path_at(3), "(no controller)");
+        assert_eq!(pool.info().name, "No controller");
+        assert_eq!(pool.info_at(3).name, "No controller");
+        assert!(!pool.state_at(3).btn_a);
+    }
+
+    #[test]
+    fn empty_pool_setup_mutations_return_errors() {
+        let mut pool = empty_pool();
+
+        assert_eq!(
+            pool.register_new_at(0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            pool.claim_existing_at(0, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            pool.finish_setup_at(
+                0,
+                "Pad".to_string(),
+                crate::controller_db::ControllerKind::Gamepad,
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 }

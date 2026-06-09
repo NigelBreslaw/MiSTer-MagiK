@@ -1344,24 +1344,10 @@ pub fn run_ui(f: &mut Fpga) {
 }
 
 fn open_pads() -> PadPool {
-    for attempt in 0..60 {
-        match PadPool::open_all() {
-            Ok(p) => {
-                if attempt > 0 {
-                    println!("gamepad open ok after {attempt} retries");
-                }
-                return p;
-            }
-            Err(e) => {
-                if attempt == 0 || attempt % 10 == 0 {
-                    eprintln!("gamepad open attempt {attempt}: {e}");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-        }
-    }
-    eprintln!("failed to open gamepad after 30s");
-    std::process::exit(1);
+    PadPool::open_all().unwrap_or_else(|e| {
+        eprintln!("failed to initialize gamepad input: {e}");
+        std::process::exit(1);
+    })
 }
 
 fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
@@ -5395,7 +5381,16 @@ fn run_launcher_loop(
             let active_idx = pad.active_idx();
             let info = pad.info();
 
-            if launcher_bench_scenario.is_none() && setup_active {
+            if setup_active && setup.target_pad_idx >= pad.len() {
+                eprintln!(
+                    "controller setup: pad {} disappeared; closing setup flow",
+                    setup.target_pad_idx
+                );
+                setup.advance_to_next_pad(&pad);
+                full_bridge_dirty = true;
+            }
+
+            if launcher_bench_scenario.is_none() && setup.is_active() {
                 let setup_before = SetupBridgeKey::from_setup(&setup);
                 let setup_info = pad.info_at(setup.target_pad_idx);
                 match setup.handle_input(&state, frame_now, setup_info, pad.db()) {
