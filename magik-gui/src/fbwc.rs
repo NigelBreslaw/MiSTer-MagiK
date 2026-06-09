@@ -19,6 +19,7 @@ pub const MODULE_NAME: &str = "mister_magik_fbwc";
 pub const MODULE_PATH: &str = "/media/fat/mister-magik/mister_magik_fbwc.ko";
 pub const SUPPORTED_KERNEL: &str = "5.15.1-MiSTer";
 const FBWC_MAP_PIXELS: usize = FB_SIZE_PX as usize;
+const FBWC_SLOT_BYTES: usize = FBWC_MAP_PIXELS * std::mem::size_of::<Pixel>();
 const EXPECTED_FB_PHYS: &str = "0x22000000";
 const EXPECTED_FB_SIZE: &str = "0x800000";
 
@@ -45,12 +46,24 @@ pub struct FbwcBuffer {
     ptr: *mut Pixel,
     pixels: usize,
     map_len: usize,
+    index: usize,
 }
 
 impl FbwcBuffer {
     pub fn open_pixels(pixels: usize) -> io::Result<Self> {
+        Self::open_pixels_at(1, pixels)
+    }
+
+    pub fn open_pixels_at(index: usize, pixels: usize) -> io::Result<Self> {
+        if !(1..=2).contains(&index) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported fbwc buffer index {index}"),
+            ));
+        }
         let pixels = pixels.clamp(1, FBWC_MAP_PIXELS);
         let map_len = pixels * std::mem::size_of::<Pixel>();
+        let offset = ((index - 1) * FBWC_SLOT_BYTES) as libc::off_t;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -62,7 +75,7 @@ impl FbwcBuffer {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 file.as_raw_fd(),
-                0,
+                offset,
             )
         };
         if ptr == libc::MAP_FAILED {
@@ -73,7 +86,12 @@ impl FbwcBuffer {
             ptr: ptr.cast(),
             pixels,
             map_len,
+            index,
         })
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
     }
 
     pub fn buffer_mut(&mut self) -> &mut [Pixel] {
@@ -134,7 +152,14 @@ impl Drop for FbwcBuffer {
 pub fn requested_direct_mode() -> bool {
     std::env::var("MISTER_UI_RENDER_MODE")
         .ok()
-        .map(|s| s.eq_ignore_ascii_case("fbwc-direct"))
+        .map(|s| s.eq_ignore_ascii_case("fbwc-direct") || s.eq_ignore_ascii_case("fbwc-double"))
+        .unwrap_or(false)
+}
+
+pub fn requested_double_buffer_mode() -> bool {
+    std::env::var("MISTER_UI_RENDER_MODE")
+        .ok()
+        .map(|s| s.eq_ignore_ascii_case("fbwc-double"))
         .unwrap_or(false)
 }
 
