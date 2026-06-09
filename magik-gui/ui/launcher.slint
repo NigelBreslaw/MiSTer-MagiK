@@ -40,36 +40,25 @@ component LauncherTile inherits Rectangle {
     }
 }
 
-component CogIcon inherits Rectangle {
+component CogIcon inherits Image {
     in property <bool> focused;
 
-    background: transparent;
-
-    Rectangle { x: 14px; y: 0px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 14px; y: 28px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 0px; y: 14px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 28px; y: 14px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 6px; y: 6px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 22px; y: 6px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 6px; y: 22px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 22px; y: 22px; width: 8px; height: 8px; background: focused ? #06d6a0 : #9080a8; }
-    Rectangle { x: 10px; y: 10px; width: 16px; height: 16px; background: #1e1828; border-width: 4px; border-color: focused ? #06d6a0 : #e8e0f0; }
+    source: @image-url("icons/settings.svg");
+    colorize: focused ? #06d6a0 : #9080a8;
 }
 
 component SettingsButton inherits Rectangle {
     in property <bool> focused;
 
-    width: 72px;
+    width: 56px;
     height: 56px;
     background: focused ? #2a2236 : #1e1828;
     border-width: focused ? 2px : 1px;
     border-color: focused ? #06d6a0 : #5c4a72;
 
     CogIcon {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 36px;
-        height: 36px;
+        width: 24px;
+        height: 24px;
         focused: parent.focused;
     }
 }
@@ -125,6 +114,7 @@ component HomeGrid inherits Rectangle {
                     padding-left: 14px * s;
                     padding-right: 10px * s;
                     spacing: 12px * s;
+                    cross-axis-alignment: center;
 
                     Text {
                         text: "Magik";
@@ -144,7 +134,7 @@ component HomeGrid inherits Rectangle {
                     }
 
                     SettingsButton {
-                        width: 44px * s;
+                        width: 34px * s;
                         height: 34px * s;
                         focused: MisterBridge.settings-focused;
                     }
