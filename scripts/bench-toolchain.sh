@@ -40,6 +40,12 @@ LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
 LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
 VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-slint-image}"
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
+MIN_FPS="${MISTER_BENCH_MIN_FPS:-55}"
+MAX_VSYNC_FALLBACK="${MISTER_BENCH_MAX_VSYNC_FALLBACK:-0}"
+MAX_VSYNC_ERRORS="${MISTER_BENCH_MAX_VSYNC_ERRORS:-0}"
+MAX_RENDER_US="${MISTER_BENCH_MAX_RENDER_US:-}"
+MAX_COPY_US="${MISTER_BENCH_MAX_COPY_US:-}"
+BENCH_FAILURES=0
 
 usage() {
   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
@@ -55,6 +61,10 @@ usage() {
   echo "         --video-render-mode slint-image|direct-blit"
   echo "         --ui-scope all|launcher|arcade"
   echo "  (--ui-secs N is an alias for --scene-secs)"
+  echo ""
+  echo "Gate env: MISTER_BENCH_MIN_FPS=$MIN_FPS, MISTER_BENCH_MAX_VSYNC_FALLBACK=$MAX_VSYNC_FALLBACK,"
+  echo "          MISTER_BENCH_MAX_VSYNC_ERRORS=$MAX_VSYNC_ERRORS,"
+  echo "          optional MISTER_BENCH_MAX_RENDER_US / MISTER_BENCH_MAX_COPY_US"
   exit "${1:-0}"
 }
 
@@ -118,6 +128,21 @@ case "$UI_SCOPE" in
   all|launcher|arcade) ;;
   *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;
 esac
+for numeric_var in MIN_FPS MAX_VSYNC_FALLBACK MAX_VSYNC_ERRORS; do
+  numeric_value="${!numeric_var}"
+  case "$numeric_value" in
+    ''|*[!0-9]*) echo "Invalid $numeric_var: $numeric_value" >&2; exit 1 ;;
+    *) ;;
+  esac
+done
+for optional_numeric_var in MAX_RENDER_US MAX_COPY_US; do
+  optional_numeric_value="${!optional_numeric_var}"
+  case "$optional_numeric_value" in
+    '') ;;
+    *[!0-9]*) echo "Invalid $optional_numeric_var: $optional_numeric_value" >&2; exit 1 ;;
+    *) ;;
+  esac
+done
 
 if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
   BENCH_SCENES+=(video_playback)
@@ -203,6 +228,29 @@ END {
   if (n > 0) {
     print int(render_sum / n), int(vsync_sum / n), int(copy_sum / n), int(rows_sum / n), int(fps_sum / n), n, int(prepare_sum / n), int(custom_draw_sum / n), int(cached_present_sum / n), int(overlay_present_sum / n)
   }
+}
+' "$ui_log"
+}
+
+parse_vsync_counters() {
+  local ui_log="$1"
+  awk '
+function number_after(line, key, rest) {
+  rest = line
+  if (index(rest, key) == 0) return 0
+  rest = substr(rest, index(rest, key) + length(key))
+  sub(/^[^0-9]*/, "", rest)
+  sub(/[^0-9].*/, "", rest)
+  return rest + 0
+}
+/fallback=/ {
+  fallback += number_after($0, "fallback=")
+}
+/errors=/ {
+  errors += number_after($0, "errors=")
+}
+END {
+  print fallback + 0, errors + 0
 }
 ' "$ui_log"
 }
@@ -299,6 +347,12 @@ append_tsv_row() {
     "${cpu_mean:-}" "${cpu_max:-}" "${rss_kb:-}" "$visual_ok" "$notes" >>"$TSV"
 }
 
+add_scene_failure() {
+  local scene="$1" reason="$2"
+  BENCH_FAILURES=$((BENCH_FAILURES + 1))
+  echo "    [$scene] BENCH FAIL: $reason" >&2
+}
+
 run_scene_on_device() {
   local scene="$1" secs="$2"
   local ui_log ui_full
@@ -381,16 +435,25 @@ cat /tmp/bench-ui.log
 
   local render_us="" vsync_us="" copy_us="" rows_avg="" fps_val="" visual_ok="no" notes="" mode_notes=""
   local prepare_us="" custom_draw_us="" cached_present_us="" overlay_present_us=""
+  local scene_failures=""
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
     read -r render_us vsync_us copy_us rows_avg fps_val _cnt prepare_us custom_draw_us cached_present_us overlay_present_us <<<"$parse_stats"
     notes="${notes:+$notes; }prepare_us=${prepare_us:-0}; custom_draw_us=${custom_draw_us:-0}; cached_present_us=${cached_present_us:-0}; overlay_present_us=${overlay_present_us:-0}"
   else
     notes="no-fps-lines"
+    scene_failures="${scene_failures:+$scene_failures,}no-fps-lines"
   fi
   mode_notes="$(parse_mode_notes "$ui_log")"
   if [[ -n "$mode_notes" ]]; then
     notes="${notes:+$notes; }$mode_notes"
+  fi
+
+  local vsync_fallback="" vsync_errors="" vsync_stats=""
+  vsync_stats="$(parse_vsync_counters "$ui_log")" || true
+  if [[ -n "$vsync_stats" ]]; then
+    read -r vsync_fallback vsync_errors <<<"$vsync_stats"
+    notes="${notes:+$notes; }vsync_fallback=${vsync_fallback:-0}; vsync_errors=${vsync_errors:-0}"
   fi
 
   if [[ "${ui_rc:-1}" == "0" ]] || grep -q '^done:' "$ui_log"; then
@@ -398,6 +461,23 @@ cat /tmp/bench-ui.log
   else
     visual_ok="no"
     notes="${notes:+$notes; }ui-rc=${ui_rc:-?}"
+    scene_failures="${scene_failures:+$scene_failures,}ui-rc=${ui_rc:-?}"
+  fi
+
+  if [[ -n "$fps_val" && "$fps_val" =~ ^[0-9]+$ && "$fps_val" -lt "$MIN_FPS" ]]; then
+    scene_failures="${scene_failures:+$scene_failures,}fps=${fps_val}<${MIN_FPS}"
+  fi
+  if [[ -n "$vsync_fallback" && "$vsync_fallback" =~ ^[0-9]+$ && "$vsync_fallback" -gt "$MAX_VSYNC_FALLBACK" ]]; then
+    scene_failures="${scene_failures:+$scene_failures,}vsync-fallback=${vsync_fallback}>${MAX_VSYNC_FALLBACK}"
+  fi
+  if [[ -n "$vsync_errors" && "$vsync_errors" =~ ^[0-9]+$ && "$vsync_errors" -gt "$MAX_VSYNC_ERRORS" ]]; then
+    scene_failures="${scene_failures:+$scene_failures,}vsync-errors=${vsync_errors}>${MAX_VSYNC_ERRORS}"
+  fi
+  if [[ -n "$MAX_RENDER_US" && -n "$render_us" && "$render_us" =~ ^[0-9]+$ && "$render_us" -gt "$MAX_RENDER_US" ]]; then
+    scene_failures="${scene_failures:+$scene_failures,}render_us=${render_us}>${MAX_RENDER_US}"
+  fi
+  if [[ -n "$MAX_COPY_US" && -n "$copy_us" && "$copy_us" =~ ^[0-9]+$ && "$copy_us" -gt "$MAX_COPY_US" ]]; then
+    scene_failures="${scene_failures:+$scene_failures,}copy_us=${copy_us}>${MAX_COPY_US}"
   fi
 
   echo "    [$scene] slint-render=${render_us:-?}us fb-present=${copy_us:-?}us rows=${rows_avg:-?} cpu_mean=${cpu_mean:-?}%"
@@ -422,7 +502,16 @@ cat /tmp/bench-ui.log
   else
     visual_ok="no"
     notes="${notes:+$notes; }capture-fail"
+    scene_failures="${scene_failures:+$scene_failures,}capture-fail"
     echo "    capture failed (fb_captured=${fb_captured:-?})" >&2
+  fi
+
+  if [[ "$visual_ok" != "yes" ]]; then
+    scene_failures="${scene_failures:+$scene_failures,}visual_ok=$visual_ok"
+  fi
+  if [[ -n "$scene_failures" ]]; then
+    notes="${notes:+$notes; }bench_failures=$scene_failures"
+    add_scene_failure "$scene" "$scene_failures"
   fi
 
   append_tsv_row "$scene" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -495,3 +584,8 @@ fi
 echo "==> Results: $TSV"
 echo ""
 column -t -s $'\t' "$TSV" 2>/dev/null || cat "$TSV"
+
+if [[ "$BENCH_FAILURES" -gt 0 ]]; then
+  echo "==> Benchmark gate failed: $BENCH_FAILURES scene(s) exceeded thresholds" >&2
+  exit 1
+fi
