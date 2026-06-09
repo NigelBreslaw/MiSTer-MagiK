@@ -1008,14 +1008,185 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
     disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
 }
 
+struct DirectBackbuffer {
+    buffer: crate::fbwc::FbwcBuffer,
+    routed: bool,
+}
+
+struct UiFrameTarget {
+    cached: Vec<Pixel>,
+    direct: Option<DirectBackbuffer>,
+}
+
+impl UiFrameTarget {
+    fn cached(ui: &UiDisplay) -> Self {
+        Self {
+            cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
+            direct: None,
+        }
+    }
+
+    fn open(ui: &UiDisplay) -> Self {
+        if !crate::fbwc::requested_direct_mode() {
+            println!("slint-render-target=cached");
+            return Self::cached(ui);
+        }
+
+        match Self::open_direct(ui) {
+            Ok(direct) => {
+                println!("slint-render-target=fbwc-direct");
+                Self {
+                    cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
+                    direct: Some(direct),
+                }
+            }
+            Err(e) => {
+                eprintln!("fbwc-direct unavailable: {e}; using cached /dev/fb0 path");
+                println!("slint-render-target=cached fallback=fbwc-direct");
+                Self::cached(ui)
+            }
+        }
+    }
+
+    fn open_direct(ui: &UiDisplay) -> Result<DirectBackbuffer, String> {
+        crate::fbwc::ensure_loaded()?;
+        let mut buffer = crate::fbwc::FbwcBuffer::open_pixels(ui.render_w() * ui.render_h())
+            .map_err(|e| format!("mmap {}: {e}", crate::fbwc::DEVICE_PATH))?;
+        buffer.clear(Pixel(0));
+        Ok(DirectBackbuffer {
+            buffer,
+            routed: false,
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        match self.direct {
+            Some(_) => "fbwc-direct",
+            None => "cached",
+        }
+    }
+
+    fn render_buffer_mut(&mut self) -> &mut [Pixel] {
+        match self.direct.as_mut() {
+            Some(direct) => direct.buffer.buffer_mut(),
+            None => &mut self.cached,
+        }
+    }
+
+    fn present_rect(
+        &mut self,
+        f: &mut Fpga,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        rect: DirtyRect,
+    ) -> u32 {
+        match self.direct.as_mut() {
+            Some(direct) => {
+                route_direct_backbuffer(f, ui, direct);
+                rect.rows()
+            }
+            None => {
+                copy_cached_rect(disp, ui, &self.cached, rect);
+                rect.rows()
+            }
+        }
+    }
+
+    fn present_rows(
+        &mut self,
+        f: &mut Fpga,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        y0: usize,
+        y1: usize,
+    ) -> u32 {
+        match self.direct.as_mut() {
+            Some(direct) => {
+                route_direct_backbuffer(f, ui, direct);
+                y1.saturating_sub(y0) as u32
+            }
+            None => {
+                copy_cached_rows(disp, ui, &self.cached, y0, y1);
+                y1.saturating_sub(y0) as u32
+            }
+        }
+    }
+
+    fn copy_rect_from(
+        &mut self,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Pixel],
+    ) {
+        match self.direct.as_mut() {
+            Some(direct) => {
+                direct
+                    .buffer
+                    .copy_rect_from(ui.render_w(), ui.render_h(), x, y, w, h, src);
+            }
+            None => disp.copy_rect_from(x, y, w, h, src),
+        }
+    }
+
+    fn route_if_direct(&mut self, f: &mut Fpga, ui: &UiDisplay) {
+        if let Some(direct) = self.direct.as_mut() {
+            route_direct_backbuffer(f, ui, direct);
+        }
+    }
+
+    fn shutdown_direct(&mut self, f: &mut Fpga, disp: &mut Display, ui: &UiDisplay) {
+        let Some(direct) = self.direct.take() else {
+            return;
+        };
+        let copy_len = self.cached.len().min(direct.buffer.buffer().len());
+        self.cached[..copy_len].copy_from_slice(&direct.buffer.buffer()[..copy_len]);
+        let flag = f.fb_enable(
+            0,
+            ui.fb_w() as u16,
+            ui.fb_h() as u16,
+            ui_fpga_scaled_mode(),
+            Some(0),
+            Some(0),
+            std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+        );
+        println!("fbwc-direct restored fb0 route support_flag={flag}");
+        copy_cached_rows(disp, ui, &self.cached, 0, ui.render_h());
+        drop(direct);
+        crate::fbwc::unload_or_warn();
+    }
+}
+
+fn route_direct_backbuffer(f: &mut Fpga, ui: &UiDisplay, direct: &mut DirectBackbuffer) {
+    if direct.routed {
+        return;
+    }
+    let flag = f.fb_enable(
+        1,
+        ui.fb_w() as u16,
+        ui.fb_h() as u16,
+        ui_fpga_scaled_mode(),
+        Some(0),
+        Some(0),
+        std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+    );
+    println!("fbwc-direct routed buffer 1 support_flag={flag}");
+    direct.routed = true;
+}
+
 fn copy_arcade_list_update(
+    target: &mut UiFrameTarget,
     disp: &mut Display,
+    ui: &UiDisplay,
     renderer: &mut ArcadeListRenderer,
     update: ArcadeListUpdate,
 ) -> u32 {
     match update {
         ArcadeListUpdate::Full(rect) => {
-            renderer.copy_layer_to_display(disp);
+            renderer.copy_layer_to_target(target, disp, ui);
             rect.rows()
         }
     }
@@ -1069,9 +1240,7 @@ pub fn run_ui(f: &mut Fpga) {
                 "fbwc-direct requested but unsupported; falling back to cached /dev/fb0 path"
             );
         } else {
-            println!(
-                "fbwc-direct requested but Slint integration remains gated behind fbwc-flip-test; using cached /dev/fb0 path"
-            );
+            println!("fbwc-direct requested; target will load after display init");
         }
     } else {
         println!("ui_render_mode=cached");
@@ -1158,28 +1327,68 @@ pub fn run_ui(f: &mut Fpga) {
         "demo" => {
             with_scene_app!(app::AppWindow, &ui, &window, app, {
                 app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+                let mut target = UiFrameTarget::open(&ui);
+                run_frame_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    &mut target,
+                    &animation_clock,
+                );
+                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "full_motion" => {
             with_scene_app!(full_motion::FullMotion, &ui, &window, app, {
                 app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+                let mut target = UiFrameTarget::open(&ui);
+                run_frame_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    &mut target,
+                    &animation_clock,
+                );
+                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "static_ui" => {
             with_scene_app!(static_ui::StaticUi, &ui, &window, app, {
                 app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+                let mut target = UiFrameTarget::open(&ui);
+                run_frame_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    &mut target,
+                    &animation_clock,
+                );
+                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
         "local_motion" => {
             with_scene_app!(local_motion::LocalMotion, &ui, &window, app, {
                 app.show().expect("show");
-                run_frame_loop(secs, &ui, &mut disp, &window, &animation_clock);
+                let mut target = UiFrameTarget::open(&ui);
+                run_frame_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    &mut target,
+                    &animation_clock,
+                );
+                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -1213,7 +1422,7 @@ pub fn run_ui(f: &mut Fpga) {
                 app.show().expect("show");
                 boot_analytics::event("app_show", "scene=arcade_page ok=1");
                 window.request_redraw();
-                run_arcade_page_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+                run_arcade_page_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
             });
         }
         "launcher" => {
@@ -1224,7 +1433,19 @@ pub fn run_ui(f: &mut Fpga) {
                 app.show().expect("show");
                 boot_analytics::event("app_show", "scene=launcher ok=1");
                 window.request_redraw();
-                run_launcher_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
+                let mut target = UiFrameTarget::open(&ui);
+                run_launcher_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    &mut target,
+                    pad,
+                    app,
+                    &animation_clock,
+                );
+                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         _ => unreachable!(),
@@ -2371,8 +2592,9 @@ fn sync_device_info_launcher(
 fn run_bench_frame(
     ui: &UiDisplay,
     disp: &mut Display,
+    f: &mut Fpga,
+    target: &mut UiFrameTarget,
     window: &Rc<MinimalSoftwareWindow>,
-    cached: &mut [Pixel],
     frame_order: FrameOrder,
     animation_clock: &AnimationClock,
     pacer: &mut VsyncPacer,
@@ -2386,7 +2608,7 @@ fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t1 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = renderer.render(cached, ui.render_w());
+                let region = renderer.render(target.render_buffer_mut(), ui.render_w());
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t2 = Instant::now();
@@ -2397,10 +2619,10 @@ fn run_bench_frame(
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
-                    copy_cached_rect(disp, ui, cached, rect);
+                    let rows = target.present_rect(f, disp, ui, rect);
                     copy_us += c0.elapsed().as_micros() as u64;
                     present_rect = Some(frame_rect(rect));
-                    rect.rows()
+                    rows
                 }
                 None => 0,
             };
@@ -2427,7 +2649,7 @@ fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = renderer.render(cached, ui.render_w());
+                let region = renderer.render(target.render_buffer_mut(), ui.render_w());
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t3 = Instant::now();
@@ -2436,10 +2658,10 @@ fn run_bench_frame(
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
-                    copy_cached_rect(disp, ui, cached, rect);
+                    let rows = target.present_rect(f, disp, ui, rect);
                     copy_us += c0.elapsed().as_micros() as u64;
                     present_rect = Some(frame_rect(rect));
-                    rect.rows()
+                    rows
                 }
                 None => 0,
             };
@@ -2467,10 +2689,11 @@ fn run_frame_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut Display,
+    f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
+    target: &mut UiFrameTarget,
     animation_clock: &AnimationClock,
 ) {
-    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut profiler = FrameProfiler::from_env();
@@ -2496,12 +2719,12 @@ fn run_frame_loop(
     println!(
         "bench scene running {label} (vsync-locked, dirty-row copy, frame-order={}, render-mode={}, animation-clock={})...",
         frame_order.label(),
-        "cached",
+        target.label(),
         animation_clock.label()
     );
     println!(
         "slint-render-mode={} frame-order={} requested-frame-order={}",
-        "cached",
+        target.label(),
         frame_order.label(),
         configured_frame_order.label()
     );
@@ -2509,8 +2732,9 @@ fn run_frame_loop(
         let sample = run_bench_frame(
             ui,
             disp,
+            f,
+            target,
             window,
-            &mut cached,
             frame_order,
             animation_clock,
             &mut pacer,
@@ -4358,14 +4582,26 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn copy_layer_to_display(&mut self, disp: &mut Display) {
+    fn copy_layer_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+    ) {
         let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        self.copy_fade_to_display(disp);
-        self.copy_viewport_band_to_display(disp, fade_h, ARCADE_LIST_H - fade_h * 2);
-        self.copy_selection_frame_to_display(disp);
+        self.copy_fade_to_target(target, disp, ui);
+        self.copy_viewport_band_to_target(target, disp, ui, fade_h, ARCADE_LIST_H - fade_h * 2);
+        self.copy_selection_frame_to_target(target, disp, ui);
     }
 
-    fn copy_viewport_band_to_display(&self, disp: &mut Display, viewport_y: usize, h: usize) {
+    fn copy_viewport_band_to_target(
+        &self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        viewport_y: usize,
+        h: usize,
+    ) {
         if h == 0 || viewport_y >= ARCADE_LIST_H {
             return;
         }
@@ -4375,7 +4611,9 @@ impl ArcadeListRenderer {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
             let src = src_y * ARCADE_LIST_W;
-            disp.copy_rect_from(
+            target.copy_rect_from(
+                disp,
+                ui,
                 ARCADE_LIST_X,
                 ARCADE_LIST_Y + viewport_y + copied,
                 ARCADE_LIST_W,
@@ -4392,7 +4630,12 @@ impl ArcadeListRenderer {
         &self.surface[src..src + ARCADE_LIST_W]
     }
 
-    fn copy_fade_to_display(&mut self, disp: &mut Display) {
+    fn copy_fade_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+    ) {
         let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
         let mut band = std::mem::take(&mut self.fade_scratch);
         band.resize(ARCADE_LIST_W * fade_h, Pixel(0));
@@ -4405,7 +4648,15 @@ impl ArcadeListRenderer {
                 ARCADE_LIST_FADE_COLOR,
             );
         }
-        disp.copy_rect_from(ARCADE_LIST_X, ARCADE_LIST_Y, ARCADE_LIST_W, fade_h, &band);
+        target.copy_rect_from(
+            disp,
+            ui,
+            ARCADE_LIST_X,
+            ARCADE_LIST_Y,
+            ARCADE_LIST_W,
+            fade_h,
+            &band,
+        );
 
         for row in 0..fade_h {
             let viewport_y = ARCADE_LIST_H - fade_h + row;
@@ -4417,7 +4668,9 @@ impl ArcadeListRenderer {
                 ARCADE_LIST_FADE_COLOR,
             );
         }
-        disp.copy_rect_from(
+        target.copy_rect_from(
+            disp,
+            ui,
             ARCADE_LIST_X,
             ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
             ARCADE_LIST_W,
@@ -4427,7 +4680,12 @@ impl ArcadeListRenderer {
         self.fade_scratch = band;
     }
 
-    fn copy_selection_frame_to_display(&mut self, disp: &mut Display) {
+    fn copy_selection_frame_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+    ) {
         let rect = Self::selection_rect();
         let color = Pixel(0x0006d6a0);
         let thickness = 3usize;
@@ -4435,14 +4693,18 @@ impl ArcadeListRenderer {
         self.selection_horizontal
             .resize(ARCADE_LIST_W * thickness, color);
         self.selection_horizontal.fill(color);
-        disp.copy_rect_from(
+        target.copy_rect_from(
+            disp,
+            ui,
             rect.x0,
             rect.y0,
             ARCADE_LIST_W,
             thickness,
             &self.selection_horizontal,
         );
-        disp.copy_rect_from(
+        target.copy_rect_from(
+            disp,
+            ui,
             rect.x0,
             rect.y1.saturating_sub(thickness),
             ARCADE_LIST_W,
@@ -4451,8 +4713,18 @@ impl ArcadeListRenderer {
         );
         self.selection_vertical.resize(thickness * h, color);
         self.selection_vertical.fill(color);
-        disp.copy_rect_from(rect.x0, rect.y0, thickness, h, &self.selection_vertical);
-        disp.copy_rect_from(
+        target.copy_rect_from(
+            disp,
+            ui,
+            rect.x0,
+            rect.y0,
+            thickness,
+            h,
+            &self.selection_vertical,
+        );
+        target.copy_rect_from(
+            disp,
+            ui,
             rect.x1.saturating_sub(thickness),
             rect.y0,
             thickness,
@@ -4678,6 +4950,7 @@ fn run_arcade_page_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut Display,
+    f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadPool,
     app: slint_ui::arcade_page::ArcadePage,
@@ -4737,8 +5010,8 @@ fn run_arcade_page_loop(
     bridge.set_arcade_preview_display_width(0);
     bridge.set_arcade_preview_display_height(0);
 
-    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let mut pacer = VsyncPacer::from_env();
+    let mut target = UiFrameTarget::cached(ui);
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let cpu = cpu_profile::start();
     let mut fps_window_start = Instant::now();
@@ -4812,7 +5085,7 @@ fn run_arcade_page_loop(
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, ui.render_w());
+            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
@@ -4830,8 +5103,7 @@ fn run_arcade_page_loop(
         let mut cached_present_frame_us = 0u128;
         if let Some(rect) = this_rect {
             let cached_copy_start = Instant::now();
-            copied_rows = rect.rows();
-            copy_cached_rect(disp, ui, &cached, rect);
+            copied_rows = target.present_rect(f, disp, ui, rect);
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
         }
         let arcade_update_label = match arcade_list_rect.as_ref() {
@@ -4841,7 +5113,8 @@ fn run_arcade_page_loop(
         let mut overlay_present_frame_us = 0u128;
         if let Some(update) = arcade_list_rect {
             let overlay_copy_start = Instant::now();
-            copied_rows += copy_arcade_list_update(disp, &mut arcade_list_renderer, update);
+            copied_rows +=
+                copy_arcade_list_update(&mut target, disp, ui, &mut arcade_list_renderer, update);
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
         let frame_t4 = Instant::now();
@@ -4924,6 +5197,7 @@ fn run_launcher_loop(
     disp: &mut Display,
     f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
+    target: &mut UiFrameTarget,
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
@@ -4979,7 +5253,6 @@ fn run_launcher_loop(
             setup.open_for(status, idx);
         }
     }
-    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
     let mut pacer = VsyncPacer::from_env();
     let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
@@ -5247,7 +5520,6 @@ fn run_launcher_loop(
                     if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
                         match event.action {
                             LauncherAction::ExitToMister => {
-                                crate::fbwc::unload_or_warn();
                                 loading_title = "Exit to Mister".to_string();
                                 sync_bridge_launcher(
                                     &app,
@@ -5262,11 +5534,13 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region = renderer.render(&mut cached, ui.render_w());
+                                    let region =
+                                        renderer.render(target.render_buffer_mut(), ui.render_w());
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                                target.present_rows(f, disp, ui, 0, ui.render_h());
+                                target.shutdown_direct(f, disp, ui);
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
                                     Err(e) => {
@@ -5276,7 +5550,6 @@ fn run_launcher_loop(
                                 }
                             }
                             LauncherAction::ResetDatabase => {
-                                crate::fbwc::unload_or_warn();
                                 loading_title = "Resetting database…".to_string();
                                 sync_bridge_launcher(
                                     &app,
@@ -5291,11 +5564,13 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region = renderer.render(&mut cached, ui.render_w());
+                                    let region =
+                                        renderer.render(target.render_buffer_mut(), ui.render_w());
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                                target.present_rows(f, disp, ui, 0, ui.render_h());
+                                target.shutdown_direct(f, disp, ui);
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
                                     Err(e) => {
@@ -5305,7 +5580,6 @@ fn run_launcher_loop(
                                 }
                             }
                             LauncherAction::Restart => {
-                                crate::fbwc::unload_or_warn();
                                 loading_title = "Restarting MiSTer…".to_string();
                                 sync_bridge_launcher(
                                     &app,
@@ -5320,11 +5594,13 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region = renderer.render(&mut cached, ui.render_w());
+                                    let region =
+                                        renderer.render(target.render_buffer_mut(), ui.render_w());
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                                target.present_rows(f, disp, ui, 0, ui.render_h());
+                                target.shutdown_direct(f, disp, ui);
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
                                     Err(e) => {
@@ -5353,20 +5629,19 @@ fn run_launcher_loop(
                         window.request_redraw();
                         update_slint_animations(animation_clock);
                         window.draw_if_needed(|renderer| {
-                            let region = renderer.render(&mut cached, ui.render_w());
+                            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
                             let _ = region;
                         });
                         let _pace = pacer.wait();
-                        copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
+                        target.present_rows(f, disp, ui, 0, ui.render_h());
+                        target.shutdown_direct(f, disp, ui);
 
                         match launcher::execute_game_launch(&mra) {
                             Ok(spawned) => {
-                                crate::fbwc::unload_or_warn();
                                 launch_started = Instant::now();
                                 launch_spawned_mister = spawned;
                             }
                             Err(e) => {
-                                crate::fbwc::unload_or_warn();
                                 eprintln!("game launch failed: {e}");
                                 loading_title.clear();
                                 launcher::reset_launch();
@@ -5476,7 +5751,7 @@ fn run_launcher_loop(
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(&mut cached, ui.render_w());
+            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
@@ -5523,19 +5798,19 @@ fn run_launcher_loop(
         let mut cached_present_frame_us = 0u128;
         if launching {
             let cached_copy_start = Instant::now();
-            copy_cached_rows(disp, ui, &cached, 0, ui.render_h());
-            copied_rows = ui.render_h() as u32;
+            copied_rows = target.present_rows(f, disp, ui, 0, ui.render_h());
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
         } else if let Some(rect) = this_rect {
             let cached_copy_start = Instant::now();
-            copied_rows = rect.rows();
-            copy_cached_rect(disp, ui, &cached, rect);
+            copied_rows = target.present_rect(f, disp, ui, rect);
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
         }
         let mut overlay_present_frame_us = 0u128;
         if let Some(update) = arcade_list_rect {
             let overlay_copy_start = Instant::now();
-            copied_rows += copy_arcade_list_update(disp, &mut arcade_list_renderer, update);
+            copied_rows +=
+                copy_arcade_list_update(target, disp, ui, &mut arcade_list_renderer, update);
+            target.route_if_direct(f, ui);
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
         let frame_t4 = Instant::now();
