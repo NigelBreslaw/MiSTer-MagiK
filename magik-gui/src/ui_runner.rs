@@ -2006,6 +2006,7 @@ fn launcher_bench_step(
     scenario: LauncherBenchScenario,
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
+    active_game_count: Option<usize>,
     step: usize,
     now: Instant,
 ) -> bool {
@@ -2027,10 +2028,10 @@ fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::ListScroll | LauncherBenchScenario::PreviewChanges => {
-            let Some(system) = catalog.systems.get(nav.selected) else {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
                 return false;
             };
-            let count = catalog.system_game_count(&system.id);
             if count == 0 {
                 return false;
             }
@@ -2045,10 +2046,10 @@ fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::HeldScroll => {
-            let Some(system) = catalog.systems.get(nav.selected) else {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
                 return false;
             };
-            let count = catalog.system_game_count(&system.id);
             if count == 0 {
                 return false;
             }
@@ -2058,10 +2059,10 @@ fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::QuickTap => {
-            let Some(system) = catalog.systems.get(nav.selected) else {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
                 return false;
             };
-            let count = catalog.system_game_count(&system.id);
             if count == 0 {
                 return false;
             }
@@ -2076,10 +2077,10 @@ fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::RapidTaps => {
-            let Some(system) = catalog.systems.get(nav.selected) else {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
                 return false;
             };
-            let count = catalog.system_game_count(&system.id);
             if count == 0 {
                 return false;
             }
@@ -2098,10 +2099,10 @@ fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::TurboHold => {
-            let Some(system) = catalog.systems.get(nav.selected) else {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
                 return false;
             };
-            let count = catalog.system_game_count(&system.id);
             if count == 0 {
                 return false;
             }
@@ -2117,6 +2118,18 @@ fn launcher_bench_step(
             true
         }
     }
+}
+
+fn launcher_bench_active_game_count(
+    catalog: &ArcadeCatalog,
+    nav: &LauncherNav,
+    active_game_count: Option<usize>,
+) -> Option<usize> {
+    if let Some(count) = active_game_count {
+        return Some(count);
+    }
+    let system = catalog.systems.get(nav.selected)?;
+    Some(catalog.system_game_count(&system.id))
 }
 
 fn keep_bench_home_visible(scroll_x: &mut i32, selected: usize, count: usize) {
@@ -4289,6 +4302,7 @@ fn run_arcade_page_loop(
                     scenario,
                     &mut nav,
                     &catalog,
+                    Some(games.len()),
                     bench_step_idx,
                     Instant::now(),
                 );
@@ -4685,6 +4699,7 @@ fn run_launcher_loop(
                     scenario,
                     &mut nav,
                     &catalog,
+                    None,
                     launcher_bench_step_idx,
                     Instant::now(),
                 ) {
