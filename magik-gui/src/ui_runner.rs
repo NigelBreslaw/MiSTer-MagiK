@@ -2363,6 +2363,7 @@ fn run_bench_frame(
                 prepare_us: 0,
                 anim_us: (t1 - t0).as_micros() as u64,
                 slint_render_us: (t2 - t1).as_micros() as u64,
+                custom_draw_us: 0,
                 vsync_us: (t3 - t2).as_micros() as u64,
                 fb_present_us: copy_us,
                 cached_present_us: copy_us,
@@ -2398,6 +2399,7 @@ fn run_bench_frame(
                 prepare_us: 0,
                 anim_us: (t2 - t1).as_micros() as u64,
                 slint_render_us: (t3 - t2).as_micros() as u64,
+                custom_draw_us: 0,
                 vsync_us: (t1 - t0).as_micros() as u64,
                 fb_present_us: copy_us,
                 cached_present_us: copy_us,
@@ -2843,6 +2845,7 @@ fn run_video_playback_loop(
                     prepare_us: 0,
                     anim_us: (t1 - t0).as_micros() as u64,
                     slint_render_us: (t2 - t1).as_micros() as u64,
+                    custom_draw_us: 0,
                     vsync_us: (t3 - t2).as_micros() as u64,
                     fb_present_us: (t4 - t3).as_micros() as u64,
                     cached_present_us: (t4 - t3).as_micros() as u64,
@@ -2958,6 +2961,7 @@ fn run_video_playback_loop(
                     prepare_us: 0,
                     anim_us: (t2 - t1).as_micros() as u64,
                     slint_render_us: (t3 - t2).as_micros() as u64,
+                    custom_draw_us: 0,
                     vsync_us: (t1 - t0).as_micros() as u64,
                     fb_present_us: (t4 - t3).as_micros() as u64,
                     cached_present_us: (t4 - t3).as_micros() as u64,
@@ -4426,6 +4430,7 @@ fn run_launcher_loop(
     let mut launcher_fps_frames = 0u64;
     let mut launcher_prepare_us = 0u128;
     let mut launcher_render_us = 0u128;
+    let mut launcher_custom_draw_us = 0u128;
     let mut launcher_vsync_us = 0u128;
     let mut launcher_copy_us = 0u128;
     let mut launcher_cached_present_us = 0u128;
@@ -4954,6 +4959,7 @@ fn run_launcher_loop(
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
+        let custom_draw_start = Instant::now();
         let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
             let force_arcade_redraw = this_rect.is_some_and(|rect| {
                 rect.intersection(ArcadeListRenderer::dirty_rect())
@@ -4967,6 +4973,7 @@ fn run_launcher_loop(
         } else {
             None
         };
+        let custom_draw_done = Instant::now();
         if !first_render_logged {
             first_render_logged = true;
             boot_analytics::event(
@@ -5032,7 +5039,8 @@ fn run_launcher_loop(
         launcher_fps_frames += 1;
         launcher_prepare_us += prepare_us;
         launcher_render_us += (frame_t2 - frame_t1).as_micros();
-        launcher_vsync_us += (frame_t3 - frame_t2).as_micros();
+        launcher_custom_draw_us += (custom_draw_done - custom_draw_start).as_micros();
+        launcher_vsync_us += (frame_t3 - custom_draw_done).as_micros();
         launcher_copy_us += (frame_t4 - frame_t3).as_micros();
         launcher_cached_present_us += cached_present_frame_us;
         launcher_overlay_present_us += overlay_present_frame_us;
@@ -5040,10 +5048,11 @@ fn run_launcher_loop(
         if launcher_fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = launcher_fps_frames.max(1) as u128;
             println!(
-                "launcher fps ~ {} prepare {}us slint-render {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
+                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
                 launcher_fps_frames,
                 launcher_prepare_us / n,
                 launcher_render_us / n,
+                launcher_custom_draw_us / n,
                 launcher_vsync_us / n,
                 launcher_copy_us / n,
                 launcher_cached_present_us / n,
@@ -5054,6 +5063,7 @@ fn run_launcher_loop(
             launcher_fps_frames = 0;
             launcher_prepare_us = 0;
             launcher_render_us = 0;
+            launcher_custom_draw_us = 0;
             launcher_vsync_us = 0;
             launcher_copy_us = 0;
             launcher_cached_present_us = 0;
