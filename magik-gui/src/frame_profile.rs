@@ -1,6 +1,6 @@
 //! Per-frame render-loop instrumentation (env `MISTER_PROFILE`).
 //!
-//! Records anim / slint-render / vsync / fb-present timings every frame and prints a factual
+//! Records prepare / anim / slint-render / vsync / fb-present timings every frame and prints a factual
 //! summary at exit — percentiles, histogram, slow-frame breakdown by phase.
 
 use std::fs::File;
@@ -13,6 +13,7 @@ const FRAME_BUDGET_US: u64 = 16_667; // 60 Hz
 
 #[derive(Clone, Copy, Debug)]
 pub struct FrameSample {
+    pub prepare_us: u64,
     pub anim_us: u64,
     pub slint_render_us: u64,
     pub vsync_us: u64,
@@ -28,12 +29,13 @@ pub struct FrameSample {
 
 impl FrameSample {
     pub fn phases_us(self) -> u64 {
-        self.anim_us + self.slint_render_us + self.vsync_us + self.fb_present_us
+        self.prepare_us + self.anim_us + self.slint_render_us + self.vsync_us + self.fb_present_us
     }
 
     fn dominant_phase(self) -> &'static str {
         let m = self
-            .anim_us
+            .prepare_us
+            .max(self.anim_us)
             .max(self.slint_render_us)
             .max(self.vsync_us)
             .max(self.fb_present_us);
@@ -43,8 +45,10 @@ impl FrameSample {
             "slint-render"
         } else if m == self.vsync_us {
             "vsync"
-        } else {
+        } else if m == self.anim_us {
             "anim"
+        } else {
+            "prepare"
         }
     }
 }
@@ -86,6 +90,7 @@ pub struct FrameProfiler {
     // rolling 1s window for live line (same format as before)
     window_start: Instant,
     window_frames: u64,
+    window_prepare: u128,
     window_anim: u128,
     window_slint_render: u128,
     window_vsync: u128,
@@ -126,6 +131,7 @@ impl FrameProfiler {
             frames: Vec::new(),
             window_start: Instant::now(),
             window_frames: 0,
+            window_prepare: 0,
             window_anim: 0,
             window_slint_render: 0,
             window_vsync: 0,
@@ -153,9 +159,10 @@ impl FrameProfiler {
         match self.mode {
             ProfileMode::Slow if total >= self.slow_threshold_us => {
                 println!(
-                    "  SLOW frame {}: wall={total}us phases={} anim={} slint-render={} vsync={} fb-present={} cached-present={} overlay-present={} rows={} dominant={}",
+                    "  SLOW frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} vsync={} fb-present={} cached-present={} overlay-present={} rows={} dominant={}",
                     self.frames.len(),
                     sample.phases_us(),
+                    sample.prepare_us,
                     sample.anim_us,
                     sample.slint_render_us,
                     sample.vsync_us,
@@ -168,9 +175,10 @@ impl FrameProfiler {
             }
             ProfileMode::Full => {
                 println!(
-                    "  frame {}: wall={total}us phases={} anim={} slint-render={} vsync={} fb-present={} cached-present={} overlay-present={} rows={}",
+                    "  frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} vsync={} fb-present={} cached-present={} overlay-present={} rows={}",
                     self.frames.len(),
                     sample.phases_us(),
+                    sample.prepare_us,
                     sample.anim_us,
                     sample.slint_render_us,
                     sample.vsync_us,
@@ -185,6 +193,7 @@ impl FrameProfiler {
 
         self.frames.push(sample);
         self.window_frames += 1;
+        self.window_prepare += sample.prepare_us as u128;
         self.window_anim += sample.anim_us as u128;
         self.window_slint_render += sample.slint_render_us as u128;
         self.window_vsync += sample.vsync_us as u128;
@@ -213,8 +222,9 @@ impl FrameProfiler {
     fn flush_window(&mut self) {
         let nn = self.window_frames.max(1) as u128;
         println!(
-            "  fps ~ {}  | anim {}us  slint-render {}us  vsync-wait {}us  fb-present {}us cached-present {}us overlay-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={}",
+            "  fps ~ {}  | prepare {}us  anim {}us  slint-render {}us  vsync-wait {}us  fb-present {}us cached-present {}us overlay-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={}",
             self.window_frames,
+            self.window_prepare / nn,
             self.window_anim / nn,
             self.window_slint_render / nn,
             self.window_vsync / nn,
@@ -228,6 +238,7 @@ impl FrameProfiler {
             self.window_vsync_errors
         );
         self.window_frames = 0;
+        self.window_prepare = 0;
         self.window_anim = 0;
         self.window_slint_render = 0;
         self.window_vsync = 0;
@@ -270,12 +281,13 @@ impl FrameProfiler {
         let mut f = File::create(path)?;
         writeln!(
             f,
-            "frame\tanim_us\tslint_render_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tphases_us\twall_us\trows\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
+            "frame\tprepare_us\tanim_us\tslint_render_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tphases_us\twall_us\trows\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
         )?;
         for (i, s) in self.frames.iter().enumerate() {
             writeln!(
                 f,
-                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                s.prepare_us,
                 s.anim_us,
                 s.slint_render_us,
                 s.vsync_us,
@@ -310,6 +322,7 @@ impl FrameProfiler {
         println!("=== frame profile summary ({n} frames) ===");
         print_phase_stats("wall", &totals);
         print_phase_stats("phases_sum", &phases);
+        print_phase_stats("prepare", &col(&self.frames, |s| s.prepare_us));
         print_phase_stats("anim", &col(&self.frames, |s| s.anim_us));
         print_phase_stats("slint-render", &col(&self.frames, |s| s.slint_render_us));
         print_phase_stats("vsync", &col(&self.frames, |s| s.vsync_us));
@@ -363,16 +376,16 @@ impl FrameProfiler {
         for s in &self.frames {
             if s.wall_us >= self.slow_threshold_us {
                 match s.dominant_phase() {
-                    "anim" => slow_by_phase[0] += 1,
-                    "slint-render" => slow_by_phase[1] += 1,
-                    "vsync" => slow_by_phase[2] += 1,
-                    "fb-present" => slow_by_phase[3] += 1,
+                    "prepare" => slow_by_phase[0] += 1,
+                    "anim" => slow_by_phase[1] += 1,
+                    "slint-render" => slow_by_phase[2] += 1,
+                    "vsync" | "fb-present" => slow_by_phase[3] += 1,
                     _ => {}
                 }
             }
         }
         println!(
-            "slow-frame dominant phase: anim={} slint-render={} vsync={} fb-present={}",
+            "slow-frame dominant phase: prepare={} anim={} slint-render={} vsync-or-fb-present={}",
             slow_by_phase[0], slow_by_phase[1], slow_by_phase[2], slow_by_phase[3]
         );
 
@@ -390,8 +403,9 @@ impl FrameProfiler {
         for (i, total) in indexed.into_iter().take(10) {
             let s = self.frames[i];
             println!(
-                "  #{i} wall={total}us phases={} anim={} slint-render={} vsync={} fb-present={} cached-present={} overlay-present={} rows={} dominant={}",
+                "  #{i} wall={total}us phases={} prepare={} anim={} slint-render={} vsync={} fb-present={} cached-present={} overlay-present={} rows={} dominant={}",
                 s.phases_us(),
+                s.prepare_us,
                 s.anim_us,
                 s.slint_render_us,
                 s.vsync_us,
