@@ -192,7 +192,9 @@ fn run_vsync_probe() {
 }
 
 fn run_audio_tone(f: &mut Fpga) {
-    f.set_audio_volume(0);
+    if let Err(e) = f.set_audio_volume(0) {
+        eprintln!("warning: failed to set FPGA audio volume: {e}");
+    }
     let args: Vec<String> = std::env::args().skip(2).collect();
     if let Err(e) = mr_audio::run_tone_from_args(&args) {
         eprintln!("audio-tone failed: {e}");
@@ -230,7 +232,7 @@ fn route_framebuffer(f: &mut Fpga) {
     };
     let w = disp.width();
     let h = disp.height();
-    let flag = f.fb_enable(
+    let flag = match f.fb_enable(
         0,
         w as u16,
         h as u16,
@@ -238,7 +240,13 @@ fn route_framebuffer(f: &mut Fpga) {
         Some(0),
         Some(0),
         std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-    );
+    ) {
+        Ok(flag) => flag,
+        Err(e) => {
+            eprintln!("failed to route current fb to HDMI: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("route: fb0 {w}x{h} -> HDMI support_flag={flag}");
 }
 
@@ -263,7 +271,7 @@ fn fb_current_probe(f: &mut Fpga) {
 
     match route.as_str() {
         "normal" => {
-            let flag = f.fb_enable(
+            let flag = match f.fb_enable(
                 0,
                 w as u16,
                 h as u16,
@@ -271,18 +279,30 @@ fn fb_current_probe(f: &mut Fpga) {
                 Some(0),
                 Some(0),
                 false,
-            );
+            ) {
+                Ok(flag) => flag,
+                Err(e) => {
+                    eprintln!("failed to route current fb via SET_FBUF: {e}");
+                    std::process::exit(1);
+                }
+            };
             println!("routed current fb via SET_FBUF only support_flag={flag}");
         }
         "direct" => {
-            let flag = f.fb_enable_direct(
+            let flag = match f.fb_enable_direct(
                 0,
                 w as u16,
                 h as u16,
                 Mode::framebuffer_sized(w as u16, h as u16),
                 Some(0),
                 Some(0),
-            );
+            ) {
+                Ok(flag) => flag,
+                Err(e) => {
+                    eprintln!("failed to route current fb via SET_FBUF + set_vga_fb: {e}");
+                    std::process::exit(1);
+                }
+            };
             println!("routed current fb via SET_FBUF + set_vga_fb support_flag={flag}");
         }
         "none" => {
@@ -294,7 +314,13 @@ fn fb_current_probe(f: &mut Fpga) {
         }
     }
 
-    let params = f.read_fb_params();
+    let params = match f.read_fb_params() {
+        Ok(params) => params,
+        Err(e) => {
+            eprintln!("failed to read framebuffer params after route: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("after route: {}", params.log_line());
     if secs == 0 {
         println!("holding forever — stop this process or reboot when done");
@@ -346,11 +372,24 @@ fn fill_rect_strided(
 
 fn read_mode(f: &mut Fpga) {
     println!("\n=== UIO_GET_VRES (0x23) ===");
-    let cmd = f.cmd_capture(UIO_GET_VRES);
+    let cmd = match f.cmd_capture(UIO_GET_VRES) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            eprintln!("failed to issue UIO_GET_VRES: {e}");
+            std::process::exit(1);
+        }
+    };
     print_word("  cmd", cmd);
     let mut vres = [(0u16, 0u16); 16];
     for w in vres.iter_mut() {
-        *w = f.spi_capture(0);
+        *w = match f.spi_capture(0) {
+            Ok(w) => w,
+            Err(e) => {
+                f.disable_io();
+                eprintln!("failed to read UIO_GET_VRES word: {e}");
+                std::process::exit(1);
+            }
+        };
     }
     f.disable_io();
     for (i, w) in vres.iter().enumerate() {
@@ -364,11 +403,24 @@ fn read_mode(f: &mut Fpga) {
     );
 
     println!("\n=== UIO_GET_FB_PAR (0x40) ===");
-    let cmd = f.cmd_capture(UIO_GET_FB_PAR);
+    let cmd = match f.cmd_capture(UIO_GET_FB_PAR) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            eprintln!("failed to issue UIO_GET_FB_PAR: {e}");
+            std::process::exit(1);
+        }
+    };
     print_word("  cmd(crc)", cmd);
     let mut fbp = [(0u16, 0u16); 6];
     for w in fbp.iter_mut() {
-        *w = f.spi_capture(0);
+        *w = match f.spi_capture(0) {
+            Ok(w) => w,
+            Err(e) => {
+                f.disable_io();
+                eprintln!("failed to read UIO_GET_FB_PAR word: {e}");
+                std::process::exit(1);
+            }
+        };
     }
     f.disable_io();
     for (i, w) in fbp.iter().enumerate() {

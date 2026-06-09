@@ -1,6 +1,7 @@
 use crate::fb::FbInfo;
 use crate::fpga::{FbParams, Fpga, VideoInfo};
 use crate::ui_display::UiDisplay;
+use std::io;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayConfig {
@@ -13,15 +14,15 @@ pub struct DisplayConfig {
 }
 
 impl DisplayConfig {
-    pub fn detect(f: &mut Fpga, fb: FbInfo, ui: &UiDisplay) -> Self {
-        Self {
+    pub fn detect(f: &mut Fpga, fb: FbInfo, ui: &UiDisplay) -> io::Result<Self> {
+        Ok(Self {
             fb,
-            video: f.read_video_info(),
-            fpga_fb: f.read_fb_params(),
+            video: f.read_video_info()?,
+            fpga_fb: f.read_fb_params()?,
             render_w: ui.render_w(),
             render_h: ui.render_h(),
             fb_scale: ui.fb_scale(),
-        }
+        })
     }
 
     pub fn log_line(self) -> String {
