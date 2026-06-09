@@ -62,3 +62,26 @@ Adding another row render cache would duplicate existing behavior. The remaining
 RAM and copying it into the circular list surface, not from repeatedly rendering
 glyphs for every visible row. A future draw optimization should target band
 composition, row-copy volume, or surface updates rather than row glyph caching.
+
+## PR 5: Fade/Blend Optimization
+
+Deferred.
+
+The PR plan gated fade/blend work on PR 3 proving that a smaller incremental
+present path still left fade/blend as a meaningful remaining cost. PR 3 failed
+that gate: the attempted framebuffer-scroll present path made overlay present
+slower and was dropped.
+
+Current raw traces still show `overlay_present_us` as a major full-frame cost,
+but that number combines:
+
+- top and bottom fade blending
+- middle list body copy
+- selection frame copy
+- final writes to `/dev/fb0`
+
+Without a successful smaller present path or finer-grained overlay trace fields,
+changing `blend_row_towards` would be speculative. The next useful step is to
+split overlay tracing into fade/body/selection timings before trying a fade
+optimization, or to redesign the present path so fewer rows need final
+framebuffer writes.
