@@ -92,7 +92,7 @@ Variants:
 Useful env:
 
 - `MISTER_BLEND_BENCH_TRACE=/tmp/blend.tsv` writes per-frame split timings.
-- `MISTER_BLEND_BENCH_VARIANT=baseline|copy-only|no-fade` chooses the variant.
+- `MISTER_BLEND_BENCH_VARIANT=baseline|real-text|copy-only|no-fade` chooses the variant.
 - `MISTER_BLEND_BENCH_PX_PER_FRAME=6` changes synthetic scroll velocity.
 
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
