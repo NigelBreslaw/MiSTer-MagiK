@@ -3062,10 +3062,11 @@ fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
     });
 
     println!(
-        "blend_velocity running variant={} px_per_frame={} fade_target=#{:06x} trace={} secs={}",
+        "blend_velocity running variant={} px_per_frame={} fade_target=#{:06x} blend_backend={} trace={} secs={}",
         variant.label(),
         bench.px_per_frame,
         ARCADE_LIST_FADE_COLOR.0 & 0x00ff_ffff,
+        blend_backend_label(),
         trace_path.as_deref().unwrap_or("off"),
         secs
     );
@@ -4703,6 +4704,17 @@ fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], alpha: u32, color: Pixel)
         let g = (sg * inv + cg * alpha) >> 8;
         let b = (sb * inv + cb * alpha) >> 8;
         *dst = Pixel((r << 16) | (g << 8) | b);
+    }
+}
+
+fn blend_backend_label() -> &'static str {
+    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
+    {
+        "neon-u32x4"
+    }
+    #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+    {
+        "scalar"
     }
 }
 
