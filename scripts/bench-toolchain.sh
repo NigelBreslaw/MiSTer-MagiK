@@ -172,10 +172,12 @@ function rows_avg(line, rest) {
     vsync = number_after($0, "exposed-strip ")
     copy = number_after($0, "fb-copy ")
     rows = 0
-  } else if (index($0, "render ") > 0 && index($0, "vsync-wait ") > 0 && index($0, "copy ") > 0) {
-    render = number_after($0, "render ")
+  } else if ((index($0, "slint-render ") > 0 || index($0, "render ") > 0) && index($0, "vsync-wait ") > 0 && (index($0, "fb-present ") > 0 || index($0, "copy ") > 0)) {
+    if (index($0, "slint-render ") > 0) render = number_after($0, "slint-render ")
+    else render = number_after($0, "render ")
     vsync = number_after($0, "vsync-wait ")
-    copy = number_after($0, "copy ")
+    if (index($0, "fb-present ") > 0) copy = number_after($0, "fb-present ")
+    else copy = number_after($0, "copy ")
     rows = rows_avg($0)
   } else {
     next
@@ -388,7 +390,7 @@ cat /tmp/bench-ui.log
     notes="${notes:+$notes; }ui-rc=${ui_rc:-?}"
   fi
 
-  echo "    [$scene] render=${render_us:-?}us copy=${copy_us:-?}us rows=${rows_avg:-?} cpu_mean=${cpu_mean:-?}%"
+  echo "    [$scene] slint-render=${render_us:-?}us fb-present=${copy_us:-?}us rows=${rows_avg:-?} cpu_mean=${cpu_mean:-?}%"
 
   local fb_captured png_out="$BENCH_DIR/${LABEL}-${scene}-fb.png"
   fb_captured="$(sed -n '/___BENCH_FB_CAPTURED___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
