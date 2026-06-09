@@ -50,6 +50,12 @@ jobs:
         working-directory: magik-gui
         run: cargo check --lib --no-default-features
 
+      - name: Check host tools
+        run: scripts/dev-rust host-tools
+
+      - name: Clippy host tools
+        run: cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
+
   arm-build:
     name: ${{ matrix.name }}
     runs-on: ubuntu-22.04
