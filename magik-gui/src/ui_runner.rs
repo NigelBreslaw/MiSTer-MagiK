@@ -4252,7 +4252,7 @@ const ARCADE_LIST_FONT_PX: f32 = 16.0;
 const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 const ARCADE_LIST_FADE_H: usize = 48;
 const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
-const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x00120d1a);
+const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x001a1424);
 
 struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -4409,8 +4409,8 @@ impl ArcadeListRenderer {
         }
         let band_h = band_h.min(ARCADE_LIST_H - band_y);
         let mut band = std::mem::take(&mut self.band_scratch);
-        band.resize(ARCADE_LIST_W * band_h, Pixel(0x00120d1a));
-        band.fill(Pixel(0x00120d1a));
+        band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_FADE_COLOR);
+        band.fill(ARCADE_LIST_FADE_COLOR);
         if games.is_empty() {
             self.meta_font.draw_text_clipped(
                 &mut band,
