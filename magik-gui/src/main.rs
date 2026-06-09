@@ -11,9 +11,6 @@
 //!   cpu-profile-smoke [secs]  burn CPU and verify profiler SVG output
 //!   fb [secs] [normal|direct|none]  paint + optionally route current fb size
 //!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
-//!   fbwc-probe  report sidecar module support/loading status
-//!   fbwc-bench  mmap hidden WC buffer and measure write bandwidth
-//!   fbwc-flip-test [secs] [--unload]  non-Slint hidden-buffer HDMI flip test
 //!   input     gamepad log / sniff / calibrate
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
@@ -28,7 +25,6 @@ mod boot_analytics;
 mod cpu_profile;
 mod display_config;
 mod fb;
-mod fbwc;
 mod fpga;
 mod frame_profile;
 mod input;
@@ -88,9 +84,6 @@ fn main() {
         "route" => route_framebuffer(&mut f),
         "fb" => fb_current_probe(&mut f),
         "fb-current" => fb_current_probe(&mut f),
-        "fbwc-probe" => fbwc::print_probe(),
-        "fbwc-bench" => fbwc::run_bench(),
-        "fbwc-flip-test" => fbwc::run_flip_test(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "effects" => ui_runner::print_effects(),

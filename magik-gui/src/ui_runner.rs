@@ -1017,329 +1017,28 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
     disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
 }
 
-enum DirectBackbuffer {
-    Single {
-        buffer: crate::fbwc::FbwcBuffer,
-        routed: bool,
-    },
-    Double {
-        buffers: [crate::fbwc::FbwcBuffer; 2],
-        render_slot: usize,
-        visible_slot: Option<usize>,
-        prepared_slot: Option<usize>,
-        routed_index: Option<usize>,
-        announced_mask: u8,
-    },
-    Shadow {
-        buffers: [crate::fbwc::FbwcBuffer; 2],
-        render_slot: usize,
-        visible_slot: Option<usize>,
-        routed_index: Option<usize>,
-        announced_mask: u8,
-        pending: bool,
-    },
-}
-
-impl DirectBackbuffer {
-    fn label(&self) -> &'static str {
-        match self {
-            DirectBackbuffer::Single { .. } => "fbwc-direct",
-            DirectBackbuffer::Double { .. } => "fbwc-double",
-            DirectBackbuffer::Shadow { .. } => "fbwc-shadow",
-        }
-    }
-
-    fn is_shadow(&self) -> bool {
-        matches!(self, DirectBackbuffer::Shadow { .. })
-    }
-
-    fn prepare_render_slot(&mut self) {
-        let DirectBackbuffer::Double {
-            buffers,
-            render_slot,
-            visible_slot,
-            prepared_slot,
-            ..
-        } = self
-        else {
-            return;
-        };
-        if *prepared_slot == Some(*render_slot) {
-            return;
-        }
-        if let Some(visible) = *visible_slot {
-            if visible != *render_slot {
-                let (src, dst) = two_mut(buffers, visible, *render_slot);
-                dst.buffer_mut().copy_from_slice(src.buffer());
-            }
-        }
-        *prepared_slot = Some(*render_slot);
-    }
-
-    fn render_buffer_mut(&mut self) -> &mut [Pixel] {
-        match self {
-            DirectBackbuffer::Single { buffer, .. } => buffer.buffer_mut(),
-            DirectBackbuffer::Shadow { .. } => unreachable!("shadow target renders to cached RAM"),
-            DirectBackbuffer::Double { .. } => {
-                self.prepare_render_slot();
-                let DirectBackbuffer::Double {
-                    buffers,
-                    render_slot,
-                    ..
-                } = self
-                else {
-                    unreachable!();
-                };
-                buffers[*render_slot].buffer_mut()
-            }
-        }
-    }
-
-    fn copy_rect_from(
-        &mut self,
-        dst_w: usize,
-        dst_h: usize,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Pixel],
-    ) {
-        match self {
-            DirectBackbuffer::Single { buffer, .. } => {
-                buffer.copy_rect_from(dst_w, dst_h, x, y, w, h, src);
-            }
-            DirectBackbuffer::Double { .. } => {
-                self.prepare_render_slot();
-                let DirectBackbuffer::Double {
-                    buffers,
-                    render_slot,
-                    ..
-                } = self
-                else {
-                    unreachable!();
-                };
-                buffers[*render_slot].copy_rect_from(dst_w, dst_h, x, y, w, h, src);
-            }
-            DirectBackbuffer::Shadow {
-                buffers, pending, ..
-            } => {
-                for buffer in buffers {
-                    buffer.copy_rect_from(dst_w, dst_h, x, y, w, h, src);
-                }
-                *pending = true;
-            }
-        }
-    }
-
-    fn copy_rect_from_full_source(
-        &mut self,
-        dst_w: usize,
-        dst_h: usize,
-        rect: DirtyRect,
-        src: &[Pixel],
-    ) {
-        let x1 = rect.x1.min(dst_w);
-        let y1 = rect.y1.min(dst_h);
-        if rect.x0 >= x1 || rect.y0 >= y1 {
-            return;
-        }
-        let w = x1 - rect.x0;
-        for y in rect.y0..y1 {
-            let start = y * dst_w + rect.x0;
-            self.copy_rect_from(dst_w, dst_h, rect.x0, y, w, 1, &src[start..start + w]);
-        }
-    }
-
-    fn present_buffer_index(&mut self) -> usize {
-        match self {
-            DirectBackbuffer::Single { buffer, .. } => buffer.index(),
-            DirectBackbuffer::Double {
-                buffers,
-                render_slot,
-                visible_slot,
-                prepared_slot,
-                ..
-            } => {
-                let slot = *render_slot;
-                *visible_slot = Some(slot);
-                *render_slot = 1 - slot;
-                *prepared_slot = None;
-                buffers[slot].index()
-            }
-            DirectBackbuffer::Shadow {
-                buffers,
-                render_slot,
-                visible_slot,
-                pending,
-                ..
-            } => {
-                let slot = *render_slot;
-                *visible_slot = Some(slot);
-                *render_slot = 1 - slot;
-                *pending = false;
-                buffers[slot].index()
-            }
-        }
-    }
-
-    fn routed_index(&self) -> Option<usize> {
-        match self {
-            DirectBackbuffer::Single { routed, buffer } => routed.then_some(buffer.index()),
-            DirectBackbuffer::Double { routed_index, .. } => *routed_index,
-            DirectBackbuffer::Shadow { routed_index, .. } => *routed_index,
-        }
-    }
-
-    fn should_route_now(&self) -> bool {
-        match self {
-            DirectBackbuffer::Shadow { pending, .. } => *pending,
-            _ => true,
-        }
-    }
-
-    fn should_announce_route(&mut self, index: usize) -> bool {
-        match self {
-            DirectBackbuffer::Single { routed, .. } => !*routed,
-            DirectBackbuffer::Double { announced_mask, .. }
-            | DirectBackbuffer::Shadow { announced_mask, .. } => {
-                let bit = 1u8 << index.min(7);
-                if *announced_mask & bit != 0 {
-                    false
-                } else {
-                    *announced_mask |= bit;
-                    true
-                }
-            }
-        }
-    }
-
-    fn mark_routed(&mut self, index: usize) {
-        match self {
-            DirectBackbuffer::Single { routed, .. } => *routed = true,
-            DirectBackbuffer::Double { routed_index, .. } => *routed_index = Some(index),
-            DirectBackbuffer::Shadow { routed_index, .. } => *routed_index = Some(index),
-        }
-    }
-
-    fn visible_buffer(&self) -> &[Pixel] {
-        match self {
-            DirectBackbuffer::Single { buffer, .. } => buffer.buffer(),
-            DirectBackbuffer::Double {
-                buffers,
-                visible_slot,
-                ..
-            }
-            | DirectBackbuffer::Shadow {
-                buffers,
-                visible_slot,
-                ..
-            } => buffers[visible_slot.unwrap_or(0)].buffer(),
-        }
-    }
-}
-
-fn two_mut<T>(items: &mut [T; 2], a: usize, b: usize) -> (&mut T, &mut T) {
-    debug_assert!(a < 2 && b < 2 && a != b);
-    if a == 0 {
-        let (left, right) = items.split_at_mut(1);
-        (&mut left[0], &mut right[0])
-    } else {
-        let (left, right) = items.split_at_mut(1);
-        (&mut right[0], &mut left[0])
-    }
-}
-
 struct UiFrameTarget {
     cached: Vec<Pixel>,
-    direct: Option<DirectBackbuffer>,
 }
 
 impl UiFrameTarget {
     fn cached(ui: &UiDisplay) -> Self {
         Self {
             cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
-            direct: None,
         }
     }
 
     fn open(ui: &UiDisplay) -> Self {
-        if !crate::fbwc::requested_direct_mode() {
-            println!("slint-render-target=cached");
-            return Self::cached(ui);
-        }
-
-        match Self::open_direct(ui) {
-            Ok(direct) => {
-                println!("slint-render-target={}", direct.label());
-                Self {
-                    cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
-                    direct: Some(direct),
-                }
-            }
-            Err(e) => {
-                eprintln!("fbwc-direct unavailable: {e}; using cached /dev/fb0 path");
-                println!("slint-render-target=cached fallback=fbwc-direct");
-                Self::cached(ui)
-            }
-        }
-    }
-
-    fn open_direct(ui: &UiDisplay) -> Result<DirectBackbuffer, String> {
-        crate::fbwc::ensure_loaded()?;
-        let pixels = ui.render_w() * ui.render_h();
-        if crate::fbwc::requested_double_buffer_mode()
-            || crate::fbwc::requested_shadow_buffer_mode()
-        {
-            let mut a = crate::fbwc::FbwcBuffer::open_pixels_at(1, pixels)
-                .map_err(|e| format!("mmap {} buffer 1: {e}", crate::fbwc::DEVICE_PATH))?;
-            let mut b = crate::fbwc::FbwcBuffer::open_pixels_at(2, pixels)
-                .map_err(|e| format!("mmap {} buffer 2: {e}", crate::fbwc::DEVICE_PATH))?;
-            a.clear(Pixel(0));
-            b.clear(Pixel(0));
-            if crate::fbwc::requested_shadow_buffer_mode() {
-                Ok(DirectBackbuffer::Shadow {
-                    buffers: [a, b],
-                    render_slot: 0,
-                    visible_slot: None,
-                    routed_index: None,
-                    announced_mask: 0,
-                    pending: false,
-                })
-            } else {
-                Ok(DirectBackbuffer::Double {
-                    buffers: [a, b],
-                    render_slot: 0,
-                    visible_slot: None,
-                    prepared_slot: Some(0),
-                    routed_index: None,
-                    announced_mask: 0,
-                })
-            }
-        } else {
-            let mut buffer = crate::fbwc::FbwcBuffer::open_pixels_at(1, pixels)
-                .map_err(|e| format!("mmap {} buffer 1: {e}", crate::fbwc::DEVICE_PATH))?;
-            buffer.clear(Pixel(0));
-            Ok(DirectBackbuffer::Single {
-                buffer,
-                routed: false,
-            })
-        }
+        println!("slint-render-target=cached");
+        Self::cached(ui)
     }
 
     fn label(&self) -> &'static str {
-        match self.direct {
-            Some(ref direct) => direct.label(),
-            None => "cached",
-        }
+        "cached"
     }
 
     fn render_buffer_mut(&mut self) -> &mut [Pixel] {
-        match self.direct.as_mut() {
-            Some(direct) if direct.is_shadow() => &mut self.cached,
-            Some(direct) => direct.render_buffer_mut(),
-            None => &mut self.cached,
-        }
+        &mut self.cached
     }
 
     fn present_rect(
@@ -1349,20 +1048,9 @@ impl UiFrameTarget {
         ui: &UiDisplay,
         rect: DirtyRect,
     ) -> u32 {
-        match self.direct.as_mut() {
-            Some(direct) if direct.is_shadow() => {
-                direct.copy_rect_from_full_source(ui.render_w(), ui.render_h(), rect, &self.cached);
-                rect.rows()
-            }
-            Some(direct) => {
-                route_direct_backbuffer(f, ui, direct);
-                rect.rows()
-            }
-            None => {
-                copy_cached_rect(disp, ui, &self.cached, rect);
-                rect.rows()
-            }
-        }
+        let _ = f;
+        copy_cached_rect(disp, ui, &self.cached, rect);
+        rect.rows()
     }
 
     fn present_rows(
@@ -1373,26 +1061,9 @@ impl UiFrameTarget {
         y0: usize,
         y1: usize,
     ) -> u32 {
-        match self.direct.as_mut() {
-            Some(direct) if direct.is_shadow() => {
-                let rect = DirtyRect {
-                    x0: 0,
-                    y0,
-                    x1: ui.render_w(),
-                    y1,
-                };
-                direct.copy_rect_from_full_source(ui.render_w(), ui.render_h(), rect, &self.cached);
-                y1.saturating_sub(y0) as u32
-            }
-            Some(direct) => {
-                route_direct_backbuffer(f, ui, direct);
-                y1.saturating_sub(y0) as u32
-            }
-            None => {
-                copy_cached_rows(disp, ui, &self.cached, y0, y1);
-                y1.saturating_sub(y0) as u32
-            }
-        }
+        let _ = f;
+        copy_cached_rows(disp, ui, &self.cached, y0, y1);
+        y1.saturating_sub(y0) as u32
     }
 
     fn copy_rect_from(
@@ -1405,107 +1076,8 @@ impl UiFrameTarget {
         h: usize,
         src: &[Pixel],
     ) {
-        match self.direct.as_mut() {
-            Some(direct) if direct.is_shadow() => {
-                copy_shadow_rect(
-                    &mut self.cached,
-                    ui.render_w(),
-                    ui.render_h(),
-                    x,
-                    y,
-                    w,
-                    h,
-                    src,
-                );
-                direct.copy_rect_from(ui.render_w(), ui.render_h(), x, y, w, h, src);
-            }
-            Some(direct) => {
-                direct.copy_rect_from(ui.render_w(), ui.render_h(), x, y, w, h, src);
-            }
-            None => disp.copy_rect_from(x, y, w, h, src),
-        }
-    }
-
-    fn route_if_direct(&mut self, f: &mut Fpga, ui: &UiDisplay) {
-        if let Some(direct) = self.direct.as_mut() {
-            route_direct_backbuffer(f, ui, direct);
-        }
-    }
-
-    fn shutdown_direct(&mut self, f: &mut Fpga, disp: &mut Display, ui: &UiDisplay) {
-        let Some(direct) = self.direct.take() else {
-            return;
-        };
-        let source = direct.visible_buffer();
-        let copy_len = self.cached.len().min(source.len());
-        self.cached[..copy_len].copy_from_slice(&source[..copy_len]);
-        let flag = f.fb_enable(
-            0,
-            ui.fb_w() as u16,
-            ui.fb_h() as u16,
-            ui_fpga_scaled_mode(),
-            Some(0),
-            Some(0),
-            std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-        );
-        println!("fbwc-direct restored fb0 route support_flag={flag}");
-        copy_cached_rows(disp, ui, &self.cached, 0, ui.render_h());
-        drop(direct);
-        crate::fbwc::unload_or_warn();
-    }
-}
-
-fn route_direct_backbuffer(f: &mut Fpga, ui: &UiDisplay, direct: &mut DirectBackbuffer) {
-    if !direct.should_route_now() {
-        return;
-    }
-    let buffer_index = direct.present_buffer_index();
-    if direct.routed_index() == Some(buffer_index) {
-        return;
-    }
-    let flag = f.fb_enable(
-        buffer_index as u32,
-        ui.fb_w() as u16,
-        ui.fb_h() as u16,
-        ui_fpga_scaled_mode(),
-        Some(0),
-        Some(0),
-        std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-    );
-    if direct.should_announce_route(buffer_index) {
-        println!(
-            "{} routed buffer {} support_flag={flag}",
-            direct.label(),
-            buffer_index
-        );
-    }
-    direct.mark_routed(buffer_index);
-}
-
-fn copy_shadow_rect(
-    cached: &mut [Pixel],
-    dst_w: usize,
-    dst_h: usize,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    src: &[Pixel],
-) {
-    if w == 0 || h == 0 {
-        return;
-    }
-    let x1 = (x + w).min(dst_w);
-    let y1 = (y + h).min(dst_h);
-    if x >= x1 || y >= y1 {
-        return;
-    }
-    let copy_w = x1 - x;
-    let copy_h = y1 - y;
-    for row in 0..copy_h {
-        let src_start = row * w;
-        let dst_start = (y + row) * dst_w + x;
-        cached[dst_start..dst_start + copy_w].copy_from_slice(&src[src_start..src_start + copy_w]);
+        let _ = ui;
+        disp.copy_rect_from(x, y, w, h, src);
     }
 }
 
@@ -1564,19 +1136,7 @@ pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     println!("ui scene={scene} secs={secs}");
-    if crate::fbwc::requested_direct_mode() {
-        let probe = crate::fbwc::support_probe();
-        println!("{}", probe.log_line());
-        if !probe.ok {
-            eprintln!(
-                "fbwc-direct requested but unsupported; falling back to cached /dev/fb0 path"
-            );
-        } else {
-            println!("fbwc-direct requested; target will load after display init");
-        }
-    } else {
-        println!("ui_render_mode=cached");
-    }
+    println!("ui_render_mode=cached");
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
@@ -1669,7 +1229,6 @@ pub fn run_ui(f: &mut Fpga) {
                     &mut target,
                     &animation_clock,
                 );
-                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -1686,7 +1245,6 @@ pub fn run_ui(f: &mut Fpga) {
                     &mut target,
                     &animation_clock,
                 );
-                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -1703,7 +1261,6 @@ pub fn run_ui(f: &mut Fpga) {
                     &mut target,
                     &animation_clock,
                 );
-                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -1720,7 +1277,6 @@ pub fn run_ui(f: &mut Fpga) {
                     &mut target,
                     &animation_clock,
                 );
-                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -1777,7 +1333,6 @@ pub fn run_ui(f: &mut Fpga) {
                     app,
                     &animation_clock,
                 );
-                target.shutdown_direct(f, &mut disp, &ui);
             });
         }
         _ => unreachable!(),
@@ -2928,7 +2483,6 @@ fn run_bench_frame(
                 }
                 None => 0,
             };
-            target.route_if_direct(f, ui);
             FrameSample {
                 prepare_us: 0,
                 anim_us: (t1 - t0).as_micros() as u64,
@@ -2968,7 +2522,6 @@ fn run_bench_frame(
                 }
                 None => 0,
             };
-            target.route_if_direct(f, ui);
             FrameSample {
                 prepare_us: 0,
                 anim_us: (t2 - t1).as_micros() as u64,
@@ -5844,7 +5397,6 @@ fn run_launcher_loop(
                                 });
                                 let _pace = pacer.wait();
                                 target.present_rows(f, disp, ui, 0, ui.render_h());
-                                target.shutdown_direct(f, disp, ui);
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
                                     Err(e) => {
@@ -5874,7 +5426,6 @@ fn run_launcher_loop(
                                 });
                                 let _pace = pacer.wait();
                                 target.present_rows(f, disp, ui, 0, ui.render_h());
-                                target.shutdown_direct(f, disp, ui);
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
                                     Err(e) => {
@@ -5904,7 +5455,6 @@ fn run_launcher_loop(
                                 });
                                 let _pace = pacer.wait();
                                 target.present_rows(f, disp, ui, 0, ui.render_h());
-                                target.shutdown_direct(f, disp, ui);
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
                                     Err(e) => {
@@ -5938,8 +5488,6 @@ fn run_launcher_loop(
                         });
                         let _pace = pacer.wait();
                         target.present_rows(f, disp, ui, 0, ui.render_h());
-                        target.shutdown_direct(f, disp, ui);
-
                         match launcher::execute_game_launch(&mra) {
                             Ok(spawned) => {
                                 launch_started = Instant::now();
@@ -6109,7 +5657,6 @@ fn run_launcher_loop(
                 copy_arcade_list_update(target, disp, ui, &mut arcade_list_renderer, update);
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
-        target.route_if_direct(f, ui);
         let frame_t4 = Instant::now();
         if copied_rows > 0 && !first_copy_logged {
             first_copy_logged = true;

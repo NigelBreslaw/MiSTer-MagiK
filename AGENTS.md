@@ -601,8 +601,11 @@ render ~0.9ms (cached RAM)  +  vsync-wait ~15.0ms  +  dirty copy ~0.7ms  ≈ 16.
 - Do **not** render Slint directly into the live `/dev/fb0` buffer for production
   UI. The 2026-06-08 `direct-fb` trial removed the copy and improved CPU/frame
   time, but visible HDMI flicker remained even with `vsync-first` and post-vsync
-  delay experiments. It is rejected unless we get a real non-live
-  write-combined backbuffer.
+  delay experiments. The 2026-06-09 sidecar-module attempt exposed non-live
+  write-combined backbuffers, but real Slint UI still showed visual glitches and
+  worse CPU cost than the cached path. Keep the production path cached and
+  optimize there; see
+  `history/2026-6-9/direct-framebuffer-sidecar-retrospective.md`.
 - Before opening `/dev/fb0`, the UI path writes the MiSTer framebuffer mode as
   `8888 1 960 540 3840`, opens that small write-combined buffer, and routes it
   once via `fb_enable(0, 960, 540, Mode { hact: 1920, vact: 1080, hbp: 3, vbp:
