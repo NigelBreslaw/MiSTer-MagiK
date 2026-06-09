@@ -103,6 +103,7 @@ fn screen_label(screen: Screen) -> &'static str {
 pub const UI_SCENES: &[&str] = &[
     "launcher",
     "arcade_page",
+    "blend_velocity",
     "demo",
     "controller_test",
     #[cfg(not(mister_ui_scope_launcher))]
@@ -1122,6 +1123,11 @@ pub fn run_ui(f: &mut Fpga) {
     println!(
         "fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
     );
+
+    if scene == "blend_velocity" {
+        run_blend_velocity_loop(secs, &mut disp);
+        return;
+    }
 
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     let animation_clock = AnimationClock::from_env();
@@ -2535,6 +2541,461 @@ fn run_frame_loop(
     if profile_on {
         profiler.finish();
     }
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlendVelocityVariant {
+    Baseline,
+    CopyOnly,
+    NoFade,
+}
+
+impl BlendVelocityVariant {
+    fn from_env() -> Self {
+        match std::env::var("MISTER_BLEND_BENCH_VARIANT")
+            .unwrap_or_else(|_| "baseline".into())
+            .to_ascii_lowercase()
+            .replace('_', "-")
+            .as_str()
+        {
+            "copy-only" | "copy" => Self::CopyOnly,
+            "no-fade" | "nofade" | "body-only" => Self::NoFade,
+            _ => Self::Baseline,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::CopyOnly => "copy-only",
+            Self::NoFade => "no-fade",
+        }
+    }
+}
+
+#[derive(Default)]
+struct BlendVelocityTotals {
+    frames: u64,
+    surface_us: u128,
+    fade_blend_us: u128,
+    fade_copy_us: u128,
+    body_copy_us: u128,
+    selection_copy_us: u128,
+    vsync_us: u128,
+    wall_us: u128,
+    rows: u128,
+    px: u128,
+}
+
+impl BlendVelocityTotals {
+    fn record(&mut self, sample: BlendVelocitySample) {
+        self.frames += 1;
+        self.surface_us += sample.surface_us as u128;
+        self.fade_blend_us += sample.fade_blend_us as u128;
+        self.fade_copy_us += sample.fade_copy_us as u128;
+        self.body_copy_us += sample.body_copy_us as u128;
+        self.selection_copy_us += sample.selection_copy_us as u128;
+        self.vsync_us += sample.vsync_us as u128;
+        self.wall_us += sample.wall_us as u128;
+        self.rows += sample.rows as u128;
+        self.px += sample.px as u128;
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn avg(value: u128, frames: u64) -> u128 {
+        if frames == 0 {
+            0
+        } else {
+            value / frames as u128
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BlendVelocitySample {
+    surface_us: u64,
+    fade_blend_us: u64,
+    fade_copy_us: u64,
+    body_copy_us: u64,
+    selection_copy_us: u64,
+    vsync_us: u64,
+    wall_us: u64,
+    rows: u32,
+    px: u32,
+}
+
+struct BlendVelocityBench {
+    variant: BlendVelocityVariant,
+    surface: Vec<Pixel>,
+    fade_scratch: Vec<Pixel>,
+    selection_horizontal: Vec<Pixel>,
+    selection_vertical: Vec<Pixel>,
+    surface_y: usize,
+    visual_px: i32,
+    px_per_frame: i32,
+}
+
+impl BlendVelocityBench {
+    fn new(variant: BlendVelocityVariant) -> Self {
+        let mut this = Self {
+            variant,
+            surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
+            fade_scratch: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_FADE_H],
+            selection_horizontal: Vec::new(),
+            selection_vertical: Vec::new(),
+            surface_y: 0,
+            visual_px: 0,
+            px_per_frame: std::env::var("MISTER_BLEND_BENCH_PX_PER_FRAME")
+                .ok()
+                .and_then(|s| s.parse::<i32>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(6),
+        };
+        this.draw_full_surface();
+        this
+    }
+
+    fn run_frame(&mut self, disp: &mut Display, pacer: &mut VsyncPacer) -> BlendVelocitySample {
+        let frame_start = Instant::now();
+        let surface_start = Instant::now();
+        self.advance_surface();
+        let surface_us = surface_start.elapsed().as_micros() as u64;
+
+        let pace = pacer.wait();
+        let vsync_us = pace.wait_us;
+
+        let mut rows = 0u32;
+        let mut px = 0u32;
+
+        let fade_blend_start = Instant::now();
+        let fade_blend_us = if self.variant == BlendVelocityVariant::Baseline {
+            self.prepare_fade_bands()
+        } else {
+            0
+        };
+        let measured_fade_blend_us = fade_blend_start.elapsed().as_micros() as u64;
+        let fade_blend_us = fade_blend_us.max(measured_fade_blend_us);
+
+        let fade_copy_start = Instant::now();
+        let mut fade_copy_us = 0u64;
+        if self.variant != BlendVelocityVariant::NoFade {
+            let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+            let top_px = self.copy_top_fade_to_display(disp, fade_h);
+            let bottom_px = self.copy_bottom_fade_to_display(disp, fade_h);
+            rows += (fade_h * 2) as u32;
+            px += top_px + bottom_px;
+            fade_copy_us = fade_copy_start.elapsed().as_micros() as u64;
+        }
+
+        let body_copy_start = Instant::now();
+        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+        let body_y = if self.variant == BlendVelocityVariant::NoFade {
+            0
+        } else {
+            fade_h
+        };
+        let body_h = if self.variant == BlendVelocityVariant::NoFade {
+            ARCADE_LIST_H
+        } else {
+            ARCADE_LIST_H - fade_h * 2
+        };
+        self.copy_viewport_band_to_display(disp, body_y, body_h);
+        let body_copy_us = body_copy_start.elapsed().as_micros() as u64;
+        rows += body_h as u32;
+        px += (ARCADE_LIST_W * body_h) as u32;
+
+        let selection_copy_start = Instant::now();
+        self.copy_selection_frame_to_display(disp);
+        let selection_copy_us = selection_copy_start.elapsed().as_micros() as u64;
+        rows += (ARCADE_ROW_HEIGHT as u32) + 6;
+        px += (ARCADE_LIST_W * 6 + ARCADE_ROW_HEIGHT as usize * 6) as u32;
+
+        let wall_us = frame_start.elapsed().as_micros() as u64;
+        BlendVelocitySample {
+            surface_us,
+            fade_blend_us,
+            fade_copy_us,
+            body_copy_us,
+            selection_copy_us,
+            vsync_us,
+            wall_us,
+            rows,
+            px,
+        }
+    }
+
+    fn advance_surface(&mut self) {
+        let d = self.px_per_frame as usize;
+        self.visual_px += self.px_per_frame;
+        self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
+        self.draw_band(ARCADE_LIST_H - d.min(ARCADE_LIST_H), d.min(ARCADE_LIST_H));
+    }
+
+    fn draw_full_surface(&mut self) {
+        self.surface_y = 0;
+        self.draw_band(0, ARCADE_LIST_H);
+    }
+
+    fn draw_band(&mut self, band_y: usize, band_h: usize) {
+        if band_h == 0 {
+            return;
+        }
+        let band_h = band_h.min(ARCADE_LIST_H - band_y);
+        for row in 0..band_h {
+            let viewport_y = band_y + row;
+            let world_y = self.visual_px + viewport_y as i32;
+            let row_idx = world_y.div_euclid(ARCADE_ROW_HEIGHT);
+            let src_y = (world_y.rem_euclid(ARCADE_ROW_HEIGHT)) as usize;
+            let bg = if row_idx % 2 == 0 {
+                Pixel(0x001a1424)
+            } else {
+                Pixel(0x00150f20)
+            };
+            let border = Pixel(0x00251c34);
+            let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+            let line = &mut self.surface[dst_y * ARCADE_LIST_W..(dst_y + 1) * ARCADE_LIST_W];
+            line.fill(bg);
+            if src_y == 0 || src_y == ARCADE_ROW_HEIGHT as usize - 1 {
+                line.fill(border);
+            }
+            for x in 12..ARCADE_LIST_W.min(320) {
+                if (x + row_idx as usize * 17 + src_y) % 37 == 0 {
+                    line[x] = Pixel(0x00e8e0f0);
+                }
+            }
+        }
+    }
+
+    fn prepare_fade_bands(&mut self) -> u64 {
+        let start = Instant::now();
+        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+        self.fade_scratch
+            .resize(ARCADE_LIST_W * fade_h * 2, Pixel(0));
+        let surface = &self.surface;
+        let surface_y = self.surface_y;
+        let fade_scratch = &mut self.fade_scratch;
+        for row in 0..fade_h {
+            let alpha = fade_alpha(row, fade_h);
+            let src_y = (surface_y + row) % ARCADE_LIST_H;
+            let src = src_y * ARCADE_LIST_W;
+            blend_row_towards(
+                &surface[src..src + ARCADE_LIST_W],
+                &mut fade_scratch[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
+                alpha,
+                ARCADE_LIST_FADE_COLOR,
+            );
+        }
+        for row in 0..fade_h {
+            let viewport_y = ARCADE_LIST_H - fade_h + row;
+            let alpha = fade_alpha(fade_h - 1 - row, fade_h);
+            let dst_row = fade_h + row;
+            let src_y = (surface_y + viewport_y) % ARCADE_LIST_H;
+            let src = src_y * ARCADE_LIST_W;
+            blend_row_towards(
+                &surface[src..src + ARCADE_LIST_W],
+                &mut fade_scratch[dst_row * ARCADE_LIST_W..(dst_row + 1) * ARCADE_LIST_W],
+                alpha,
+                ARCADE_LIST_FADE_COLOR,
+            );
+        }
+        start.elapsed().as_micros() as u64
+    }
+
+    fn copy_top_fade_to_display(&mut self, disp: &mut Display, fade_h: usize) -> u32 {
+        if self.variant == BlendVelocityVariant::CopyOnly {
+            self.copy_viewport_band_to_display(disp, 0, fade_h);
+        } else {
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y,
+                ARCADE_LIST_W,
+                fade_h,
+                &self.fade_scratch[..ARCADE_LIST_W * fade_h],
+            );
+        }
+        (ARCADE_LIST_W * fade_h) as u32
+    }
+
+    fn copy_bottom_fade_to_display(&mut self, disp: &mut Display, fade_h: usize) -> u32 {
+        if self.variant == BlendVelocityVariant::CopyOnly {
+            self.copy_viewport_band_to_display(disp, ARCADE_LIST_H - fade_h, fade_h);
+        } else {
+            let offset = ARCADE_LIST_W * fade_h;
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
+                ARCADE_LIST_W,
+                fade_h,
+                &self.fade_scratch[offset..offset + ARCADE_LIST_W * fade_h],
+            );
+        }
+        (ARCADE_LIST_W * fade_h) as u32
+    }
+
+    fn copy_viewport_band_to_display(&self, disp: &mut Display, viewport_y: usize, h: usize) {
+        if h == 0 || viewport_y >= ARCADE_LIST_H {
+            return;
+        }
+        let h = h.min(ARCADE_LIST_H - viewport_y);
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let src = src_y * ARCADE_LIST_W;
+            disp.copy_rect_from(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y + viewport_y + copied,
+                ARCADE_LIST_W,
+                copy_h,
+                &self.surface[src..src + copy_h * ARCADE_LIST_W],
+            );
+            copied += copy_h;
+        }
+    }
+
+    fn copy_selection_frame_to_display(&mut self, disp: &mut Display) {
+        let rect = ArcadeListRenderer::selection_rect();
+        let color = Pixel(0x0006d6a0);
+        let thickness = 3usize;
+        let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
+        self.selection_horizontal
+            .resize(ARCADE_LIST_W * thickness, color);
+        self.selection_horizontal.fill(color);
+        disp.copy_rect_from(
+            rect.x0,
+            rect.y0,
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+        );
+        disp.copy_rect_from(
+            rect.x0,
+            rect.y1.saturating_sub(thickness),
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+        );
+        self.selection_vertical.resize(thickness * h, color);
+        self.selection_vertical.fill(color);
+        disp.copy_rect_from(rect.x0, rect.y0, thickness, h, &self.selection_vertical);
+        disp.copy_rect_from(
+            rect.x1.saturating_sub(thickness),
+            rect.y0,
+            thickness,
+            h,
+            &self.selection_vertical,
+        );
+    }
+}
+
+fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
+    let variant = BlendVelocityVariant::from_env();
+    let mut bench = BlendVelocityBench::new(variant);
+    let mut pacer = VsyncPacer::from_env();
+    let cpu = cpu_profile::start();
+    let start = Instant::now();
+    let mut frames = 0u64;
+    let mut totals = BlendVelocityTotals::default();
+    let mut window_totals = BlendVelocityTotals::default();
+    let mut fps_window_start = Instant::now();
+    let trace_path = std::env::var("MISTER_BLEND_BENCH_TRACE").ok();
+    let mut trace = trace_path.as_ref().and_then(|path| {
+        let mut file = std::fs::File::create(path)
+            .map_err(|e| eprintln!("blend_velocity trace: create {path} failed: {e}"))
+            .ok()?;
+        std::io::Write::write_all(
+            &mut file,
+            b"frame\telapsed_us\tvariant\tvisual_px\tpx_per_frame\tsurface_us\tfade_blend_us\tfade_copy_us\tbody_copy_us\tselection_copy_us\tvsync_us\twall_us\trows\tpx\n",
+        )
+        .map_err(|e| eprintln!("blend_velocity trace: header write failed: {e}"))
+        .ok()?;
+        println!("blend_velocity_trace={path}");
+        Some(file)
+    });
+
+    println!(
+        "blend_velocity running variant={} px_per_frame={} trace={} secs={}",
+        variant.label(),
+        bench.px_per_frame,
+        trace_path.as_deref().unwrap_or("off"),
+        secs
+    );
+
+    while secs == 0 || start.elapsed().as_secs() < secs {
+        let sample = bench.run_frame(disp, &mut pacer);
+        frames += 1;
+        totals.record(sample);
+        window_totals.record(sample);
+        if let Some(file) = trace.as_mut() {
+            let _ = std::io::Write::write_fmt(
+                file,
+                format_args!(
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    frames,
+                    start.elapsed().as_micros(),
+                    variant.label(),
+                    bench.visual_px,
+                    bench.px_per_frame,
+                    sample.surface_us,
+                    sample.fade_blend_us,
+                    sample.fade_copy_us,
+                    sample.body_copy_us,
+                    sample.selection_copy_us,
+                    sample.vsync_us,
+                    sample.wall_us,
+                    sample.rows,
+                    sample.px
+                ),
+            );
+        }
+
+        if fps_window_start.elapsed().as_millis() >= 1000 {
+            let n = window_totals.frames.max(1);
+            println!(
+                "blend_velocity fps ~ {} variant={} surface {}us fade-blend {}us fade-copy {}us body-copy {}us selection-copy {}us vsync {}us wall {}us rows {} px {}",
+                window_totals.frames,
+                variant.label(),
+                BlendVelocityTotals::avg(window_totals.surface_us, n),
+                BlendVelocityTotals::avg(window_totals.fade_blend_us, n),
+                BlendVelocityTotals::avg(window_totals.fade_copy_us, n),
+                BlendVelocityTotals::avg(window_totals.body_copy_us, n),
+                BlendVelocityTotals::avg(window_totals.selection_copy_us, n),
+                BlendVelocityTotals::avg(window_totals.vsync_us, n),
+                BlendVelocityTotals::avg(window_totals.wall_us, n),
+                BlendVelocityTotals::avg(window_totals.rows, n),
+                BlendVelocityTotals::avg(window_totals.px, n),
+            );
+            window_totals.reset();
+            fps_window_start = Instant::now();
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let n = totals.frames.max(1);
+    println!(
+        "blend_velocity_result variant={} frames={} elapsed={elapsed:.1}s fps={:.1} surface_us={} fade_blend_us={} fade_copy_us={} body_copy_us={} selection_copy_us={} vsync_us={} wall_us={} rows={} px={}",
+        variant.label(),
+        frames,
+        frames as f64 / elapsed,
+        BlendVelocityTotals::avg(totals.surface_us, n),
+        BlendVelocityTotals::avg(totals.fade_blend_us, n),
+        BlendVelocityTotals::avg(totals.fade_copy_us, n),
+        BlendVelocityTotals::avg(totals.body_copy_us, n),
+        BlendVelocityTotals::avg(totals.selection_copy_us, n),
+        BlendVelocityTotals::avg(totals.vsync_us, n),
+        BlendVelocityTotals::avg(totals.wall_us, n),
+        BlendVelocityTotals::avg(totals.rows, n),
+        BlendVelocityTotals::avg(totals.px, n),
+    );
+    println!(
+        "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
+        frames as f64 / elapsed
+    );
     if let Err(e) = cpu_profile::finish(cpu) {
         eprintln!("{e}");
     }
