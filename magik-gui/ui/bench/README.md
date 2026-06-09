@@ -74,6 +74,7 @@ fade blend, fade copy, body copy, selection copy, vsync, and wall time.
 
 ```bash
 scripts/profile-blend-velocity.sh 15 BLENDVEL baseline --deploy-fast
+scripts/profile-blend-velocity.sh 15 BLENDVEL-TEXT real-text --skip-build
 scripts/profile-blend-velocity.sh 15 BLENDVEL-COPY copy-only --skip-build
 scripts/profile-blend-velocity.sh 15 BLENDVEL-NOFADE no-fade --skip-build
 ```
@@ -81,6 +82,8 @@ scripts/profile-blend-velocity.sh 15 BLENDVEL-NOFADE no-fade --skip-build
 Variants:
 
 - `baseline`: blend the top/bottom fades, copy fades, copy body, copy selection.
+- `real-text`: same fade/copy path, but the moving surface uses cached title rows
+  rendered with the arcade list font/background path.
 - `copy-only`: copy the fade rows without blending, isolating framebuffer writes.
 - `no-fade`: copy the moving body plus selection frame only.
 

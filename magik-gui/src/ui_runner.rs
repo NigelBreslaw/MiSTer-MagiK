@@ -2647,6 +2647,7 @@ enum BlendVelocityVariant {
     Baseline,
     CopyOnly,
     NoFade,
+    RealText,
 }
 
 impl BlendVelocityVariant {
@@ -2659,6 +2660,7 @@ impl BlendVelocityVariant {
         {
             "copy-only" | "copy" => Self::CopyOnly,
             "no-fade" | "nofade" | "body-only" => Self::NoFade,
+            "real-text" | "real_text" | "text" => Self::RealText,
             _ => Self::Baseline,
         }
     }
@@ -2668,6 +2670,7 @@ impl BlendVelocityVariant {
             Self::Baseline => "baseline",
             Self::CopyOnly => "copy-only",
             Self::NoFade => "no-fade",
+            Self::RealText => "real-text",
         }
     }
 }
@@ -2728,6 +2731,8 @@ struct BlendVelocitySample {
 
 struct BlendVelocityBench {
     variant: BlendVelocityVariant,
+    title_font: ConsoleFont,
+    row_cache: HashMap<usize, CachedArcadeRow>,
     surface: Vec<Pixel>,
     fade_scratch: Vec<Pixel>,
     selection_horizontal: Vec<Pixel>,
@@ -2741,6 +2746,8 @@ impl BlendVelocityBench {
     fn new(variant: BlendVelocityVariant) -> Self {
         let mut this = Self {
             variant,
+            title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
+            row_cache: HashMap::new(),
             surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
             fade_scratch: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_FADE_H],
             selection_horizontal: Vec::new(),
@@ -2770,7 +2777,9 @@ impl BlendVelocityBench {
         let mut px = 0u32;
 
         let fade_blend_start = Instant::now();
-        let fade_blend_us = if self.variant == BlendVelocityVariant::Baseline {
+        let fade_blend_us = if self.variant == BlendVelocityVariant::Baseline
+            || self.variant == BlendVelocityVariant::RealText
+        {
             self.prepare_fade_bands()
         } else {
             0
@@ -2848,6 +2857,10 @@ impl BlendVelocityBench {
             let world_y = self.visual_px + viewport_y as i32;
             let row_idx = world_y.div_euclid(ARCADE_ROW_HEIGHT);
             let src_y = (world_y.rem_euclid(ARCADE_ROW_HEIGHT)) as usize;
+            if self.variant == BlendVelocityVariant::RealText {
+                self.copy_real_text_row_to_surface(row_idx.max(0) as usize, src_y, viewport_y);
+                continue;
+            }
             let bg = if row_idx % 2 == 0 {
                 Pixel(0x001a1424)
             } else {
@@ -2866,6 +2879,39 @@ impl BlendVelocityBench {
                 }
             }
         }
+    }
+
+    fn copy_real_text_row_to_surface(&mut self, idx: usize, src_y: usize, viewport_y: usize) {
+        let needs_render = self
+            .row_cache
+            .get(&idx)
+            .is_none_or(|cached| cached.title != blend_velocity_title(idx));
+        if needs_render {
+            if self.row_cache.len() > 128 {
+                self.row_cache.clear();
+            }
+            let title = blend_velocity_title(idx);
+            let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
+            draw_arcade_row_background(&mut row, idx);
+            self.title_font.draw_text_clipped(
+                &mut row,
+                ARCADE_LIST_W,
+                ARCADE_LIST_W,
+                0,
+                ARCADE_ROW_HEIGHT as usize,
+                12,
+                30,
+                &title,
+                Pixel(0x00e8e0f0),
+            );
+            self.row_cache
+                .insert(idx, CachedArcadeRow { title, pixels: row });
+        }
+        let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        let dst = dst_y * ARCADE_LIST_W;
+        let src = src_y * ARCADE_LIST_W;
+        let row = &self.row_cache.get(&idx).expect("row cache insert").pixels;
+        self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
     }
 
     fn prepare_fade_bands(&mut self) -> u64 {
@@ -4657,6 +4703,24 @@ fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], alpha: u32, color: Pixel)
         let b = (sb * inv + cb * alpha) >> 8;
         *dst = Pixel((r << 16) | (g << 8) | b);
     }
+}
+
+fn blend_velocity_title(idx: usize) -> String {
+    const TITLES: &[&str] = &[
+        "METAL SLUG",
+        "STREET FIGHTER II",
+        "DODONPACHI",
+        "GAROU MARK OF THE WOLVES",
+        "OUT RUN",
+        "R-TYPE",
+        "ALIEN VS PREDATOR",
+        "BUBBLE BOBBLE",
+        "FINAL FIGHT",
+        "ESP RA.DE.",
+        "THE KING OF FIGHTERS",
+        "RAIDEN II",
+    ];
+    format!("{} {:03}", TITLES[idx % TITLES.len()], idx)
 }
 
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
