@@ -27,6 +27,7 @@ On device:
 ```bash
 MISTER_PROFILE=1 \
 MISTER_PROFILE_FILE=/tmp/frames.tsv \
+MISTER_TRACE_FILE=/tmp/frames.json \
 MISTER_PPROF=1 \
 MISTER_PPROF_OUT=/tmp/cpu.svg \
 /media/fat/mister-magik/mister-magik-fb ui full_motion 30
@@ -36,10 +37,32 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 |-----|--------|
 | `MISTER_PROFILE=1` | Per-frame stats + summary (p50/p95/p99, histogram, worst frames) |
 | `MISTER_PROFILE=slow` | Also log each frame over 16.667 ms |
+| `MISTER_PROFILE=trace` | Summary + Chrome/Perfetto trace at `/tmp/mister-frame-trace.json` |
 | `MISTER_PROFILE_FILE=…` | Write per-frame TSV |
+| `MISTER_TRACE_FILE=…` | Write Chrome/Perfetto trace JSON |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
 
-Phase breakdown each frame: **anim** (Slint timers) · **render** (software renderer) · **vsync** (`FBIO_WAITFORVSYNC`) · **copy** (dirty rect/rows → fb0). **wall** = whole iteration.
+Phase breakdown each frame: **prepare** (input/catalog/bridge work before Slint
+timers) · **anim** (Slint timers) · **slint-render** (software renderer) ·
+**custom-draw** (project-owned drawing such as arcade list layers) · **vsync**
+(`FBIO_WAITFORVSYNC`) · **fb-present** (dirty rect/rows → fb0). `fb-present` is
+also split into **cached-present** and **overlay-present** where applicable.
+**wall** = whole iteration.
+
+Host-side profile reports (no MiSTer packages required):
+
+```bash
+scripts/frame-profile-chart.py /tmp/frames.tsv /tmp/frames.svg
+scripts/frame-profile-histogram.py /tmp/frames.tsv
+scripts/frame-profile-slow-frames.py /tmp/frames.tsv --limit 12
+scripts/frame-profile-heatmap.py /tmp/frames.tsv /tmp/dirty-heatmap.svg
+scripts/frame-profile-report.py /tmp/frames.tsv /tmp/profile-report.html --trace /tmp/frames.json
+```
+
+Use the frame TSV/reports first. Use the CPU flamegraph only when a phase is
+clearly CPU-bound and function attribution is needed; `pprof` depends on
+`perf_event_open` permissions on the MiSTer and can legitimately collect zero
+samples on some boots/configurations.
 
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 
