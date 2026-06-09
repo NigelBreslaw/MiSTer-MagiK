@@ -1030,6 +1030,14 @@ enum DirectBackbuffer {
         routed_index: Option<usize>,
         announced_mask: u8,
     },
+    Shadow {
+        buffers: [crate::fbwc::FbwcBuffer; 2],
+        render_slot: usize,
+        visible_slot: Option<usize>,
+        routed_index: Option<usize>,
+        announced_mask: u8,
+        pending: bool,
+    },
 }
 
 impl DirectBackbuffer {
@@ -1037,7 +1045,12 @@ impl DirectBackbuffer {
         match self {
             DirectBackbuffer::Single { .. } => "fbwc-direct",
             DirectBackbuffer::Double { .. } => "fbwc-double",
+            DirectBackbuffer::Shadow { .. } => "fbwc-shadow",
         }
+    }
+
+    fn is_shadow(&self) -> bool {
+        matches!(self, DirectBackbuffer::Shadow { .. })
     }
 
     fn prepare_render_slot(&mut self) {
@@ -1066,6 +1079,7 @@ impl DirectBackbuffer {
     fn render_buffer_mut(&mut self) -> &mut [Pixel] {
         match self {
             DirectBackbuffer::Single { buffer, .. } => buffer.buffer_mut(),
+            DirectBackbuffer::Shadow { .. } => unreachable!("shadow target renders to cached RAM"),
             DirectBackbuffer::Double { .. } => {
                 self.prepare_render_slot();
                 let DirectBackbuffer::Double {
@@ -1107,6 +1121,33 @@ impl DirectBackbuffer {
                 };
                 buffers[*render_slot].copy_rect_from(dst_w, dst_h, x, y, w, h, src);
             }
+            DirectBackbuffer::Shadow {
+                buffers, pending, ..
+            } => {
+                for buffer in buffers {
+                    buffer.copy_rect_from(dst_w, dst_h, x, y, w, h, src);
+                }
+                *pending = true;
+            }
+        }
+    }
+
+    fn copy_rect_from_full_source(
+        &mut self,
+        dst_w: usize,
+        dst_h: usize,
+        rect: DirtyRect,
+        src: &[Pixel],
+    ) {
+        let x1 = rect.x1.min(dst_w);
+        let y1 = rect.y1.min(dst_h);
+        if rect.x0 >= x1 || rect.y0 >= y1 {
+            return;
+        }
+        let w = x1 - rect.x0;
+        for y in rect.y0..y1 {
+            let start = y * dst_w + rect.x0;
+            self.copy_rect_from(dst_w, dst_h, rect.x0, y, w, 1, &src[start..start + w]);
         }
     }
 
@@ -1126,6 +1167,19 @@ impl DirectBackbuffer {
                 *prepared_slot = None;
                 buffers[slot].index()
             }
+            DirectBackbuffer::Shadow {
+                buffers,
+                render_slot,
+                visible_slot,
+                pending,
+                ..
+            } => {
+                let slot = *render_slot;
+                *visible_slot = Some(slot);
+                *render_slot = 1 - slot;
+                *pending = false;
+                buffers[slot].index()
+            }
         }
     }
 
@@ -1133,13 +1187,22 @@ impl DirectBackbuffer {
         match self {
             DirectBackbuffer::Single { routed, buffer } => routed.then_some(buffer.index()),
             DirectBackbuffer::Double { routed_index, .. } => *routed_index,
+            DirectBackbuffer::Shadow { routed_index, .. } => *routed_index,
+        }
+    }
+
+    fn should_route_now(&self) -> bool {
+        match self {
+            DirectBackbuffer::Shadow { pending, .. } => *pending,
+            _ => true,
         }
     }
 
     fn should_announce_route(&mut self, index: usize) -> bool {
         match self {
             DirectBackbuffer::Single { routed, .. } => !*routed,
-            DirectBackbuffer::Double { announced_mask, .. } => {
+            DirectBackbuffer::Double { announced_mask, .. }
+            | DirectBackbuffer::Shadow { announced_mask, .. } => {
                 let bit = 1u8 << index.min(7);
                 if *announced_mask & bit != 0 {
                     false
@@ -1155,6 +1218,7 @@ impl DirectBackbuffer {
         match self {
             DirectBackbuffer::Single { routed, .. } => *routed = true,
             DirectBackbuffer::Double { routed_index, .. } => *routed_index = Some(index),
+            DirectBackbuffer::Shadow { routed_index, .. } => *routed_index = Some(index),
         }
     }
 
@@ -1162,6 +1226,11 @@ impl DirectBackbuffer {
         match self {
             DirectBackbuffer::Single { buffer, .. } => buffer.buffer(),
             DirectBackbuffer::Double {
+                buffers,
+                visible_slot,
+                ..
+            }
+            | DirectBackbuffer::Shadow {
                 buffers,
                 visible_slot,
                 ..
@@ -1219,21 +1288,34 @@ impl UiFrameTarget {
     fn open_direct(ui: &UiDisplay) -> Result<DirectBackbuffer, String> {
         crate::fbwc::ensure_loaded()?;
         let pixels = ui.render_w() * ui.render_h();
-        if crate::fbwc::requested_double_buffer_mode() {
+        if crate::fbwc::requested_double_buffer_mode()
+            || crate::fbwc::requested_shadow_buffer_mode()
+        {
             let mut a = crate::fbwc::FbwcBuffer::open_pixels_at(1, pixels)
                 .map_err(|e| format!("mmap {} buffer 1: {e}", crate::fbwc::DEVICE_PATH))?;
             let mut b = crate::fbwc::FbwcBuffer::open_pixels_at(2, pixels)
                 .map_err(|e| format!("mmap {} buffer 2: {e}", crate::fbwc::DEVICE_PATH))?;
             a.clear(Pixel(0));
             b.clear(Pixel(0));
-            Ok(DirectBackbuffer::Double {
-                buffers: [a, b],
-                render_slot: 0,
-                visible_slot: None,
-                prepared_slot: Some(0),
-                routed_index: None,
-                announced_mask: 0,
-            })
+            if crate::fbwc::requested_shadow_buffer_mode() {
+                Ok(DirectBackbuffer::Shadow {
+                    buffers: [a, b],
+                    render_slot: 0,
+                    visible_slot: None,
+                    routed_index: None,
+                    announced_mask: 0,
+                    pending: false,
+                })
+            } else {
+                Ok(DirectBackbuffer::Double {
+                    buffers: [a, b],
+                    render_slot: 0,
+                    visible_slot: None,
+                    prepared_slot: Some(0),
+                    routed_index: None,
+                    announced_mask: 0,
+                })
+            }
         } else {
             let mut buffer = crate::fbwc::FbwcBuffer::open_pixels_at(1, pixels)
                 .map_err(|e| format!("mmap {} buffer 1: {e}", crate::fbwc::DEVICE_PATH))?;
@@ -1254,6 +1336,7 @@ impl UiFrameTarget {
 
     fn render_buffer_mut(&mut self) -> &mut [Pixel] {
         match self.direct.as_mut() {
+            Some(direct) if direct.is_shadow() => &mut self.cached,
             Some(direct) => direct.render_buffer_mut(),
             None => &mut self.cached,
         }
@@ -1267,6 +1350,10 @@ impl UiFrameTarget {
         rect: DirtyRect,
     ) -> u32 {
         match self.direct.as_mut() {
+            Some(direct) if direct.is_shadow() => {
+                direct.copy_rect_from_full_source(ui.render_w(), ui.render_h(), rect, &self.cached);
+                rect.rows()
+            }
             Some(direct) => {
                 route_direct_backbuffer(f, ui, direct);
                 rect.rows()
@@ -1287,6 +1374,16 @@ impl UiFrameTarget {
         y1: usize,
     ) -> u32 {
         match self.direct.as_mut() {
+            Some(direct) if direct.is_shadow() => {
+                let rect = DirtyRect {
+                    x0: 0,
+                    y0,
+                    x1: ui.render_w(),
+                    y1,
+                };
+                direct.copy_rect_from_full_source(ui.render_w(), ui.render_h(), rect, &self.cached);
+                y1.saturating_sub(y0) as u32
+            }
             Some(direct) => {
                 route_direct_backbuffer(f, ui, direct);
                 y1.saturating_sub(y0) as u32
@@ -1309,6 +1406,19 @@ impl UiFrameTarget {
         src: &[Pixel],
     ) {
         match self.direct.as_mut() {
+            Some(direct) if direct.is_shadow() => {
+                copy_shadow_rect(
+                    &mut self.cached,
+                    ui.render_w(),
+                    ui.render_h(),
+                    x,
+                    y,
+                    w,
+                    h,
+                    src,
+                );
+                direct.copy_rect_from(ui.render_w(), ui.render_h(), x, y, w, h, src);
+            }
             Some(direct) => {
                 direct.copy_rect_from(ui.render_w(), ui.render_h(), x, y, w, h, src);
             }
@@ -1346,6 +1456,9 @@ impl UiFrameTarget {
 }
 
 fn route_direct_backbuffer(f: &mut Fpga, ui: &UiDisplay, direct: &mut DirectBackbuffer) {
+    if !direct.should_route_now() {
+        return;
+    }
     let buffer_index = direct.present_buffer_index();
     if direct.routed_index() == Some(buffer_index) {
         return;
@@ -1367,6 +1480,33 @@ fn route_direct_backbuffer(f: &mut Fpga, ui: &UiDisplay, direct: &mut DirectBack
         );
     }
     direct.mark_routed(buffer_index);
+}
+
+fn copy_shadow_rect(
+    cached: &mut [Pixel],
+    dst_w: usize,
+    dst_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    src: &[Pixel],
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let x1 = (x + w).min(dst_w);
+    let y1 = (y + h).min(dst_h);
+    if x >= x1 || y >= y1 {
+        return;
+    }
+    let copy_w = x1 - x;
+    let copy_h = y1 - y;
+    for row in 0..copy_h {
+        let src_start = row * w;
+        let dst_start = (y + row) * dst_w + x;
+        cached[dst_start..dst_start + copy_w].copy_from_slice(&src[src_start..src_start + copy_w]);
+    }
 }
 
 fn copy_arcade_list_update(
@@ -2788,6 +2928,7 @@ fn run_bench_frame(
                 }
                 None => 0,
             };
+            target.route_if_direct(f, ui);
             FrameSample {
                 prepare_us: 0,
                 anim_us: (t1 - t0).as_micros() as u64,
@@ -2827,6 +2968,7 @@ fn run_bench_frame(
                 }
                 None => 0,
             };
+            target.route_if_direct(f, ui);
             FrameSample {
                 prepare_us: 0,
                 anim_us: (t2 - t1).as_micros() as u64,
@@ -5965,9 +6107,9 @@ fn run_launcher_loop(
             let overlay_copy_start = Instant::now();
             copied_rows +=
                 copy_arcade_list_update(target, disp, ui, &mut arcade_list_renderer, update);
-            target.route_if_direct(f, ui);
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
+        target.route_if_direct(f, ui);
         let frame_t4 = Instant::now();
         if copied_rows > 0 && !first_copy_logged {
             first_copy_logged = true;

@@ -152,7 +152,11 @@ impl Drop for FbwcBuffer {
 pub fn requested_direct_mode() -> bool {
     std::env::var("MISTER_UI_RENDER_MODE")
         .ok()
-        .map(|s| s.eq_ignore_ascii_case("fbwc-direct") || s.eq_ignore_ascii_case("fbwc-double"))
+        .map(|s| {
+            s.eq_ignore_ascii_case("fbwc-direct")
+                || s.eq_ignore_ascii_case("fbwc-double")
+                || s.eq_ignore_ascii_case("fbwc-shadow")
+        })
         .unwrap_or(false)
 }
 
@@ -160,6 +164,13 @@ pub fn requested_double_buffer_mode() -> bool {
     std::env::var("MISTER_UI_RENDER_MODE")
         .ok()
         .map(|s| s.eq_ignore_ascii_case("fbwc-double"))
+        .unwrap_or(false)
+}
+
+pub fn requested_shadow_buffer_mode() -> bool {
+    std::env::var("MISTER_UI_RENDER_MODE")
+        .ok()
+        .map(|s| s.eq_ignore_ascii_case("fbwc-shadow"))
         .unwrap_or(false)
 }
 
