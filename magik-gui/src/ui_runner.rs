@@ -2361,9 +2361,9 @@ fn run_bench_frame(
             };
             FrameSample {
                 anim_us: (t1 - t0).as_micros() as u64,
-                render_us: (t2 - t1).as_micros() as u64,
+                slint_render_us: (t2 - t1).as_micros() as u64,
                 vsync_us: (t3 - t2).as_micros() as u64,
-                copy_us,
+                fb_present_us: copy_us,
                 rows,
                 wall_us: frame_start.elapsed().as_micros() as u64,
                 vsync_source: pace.source,
@@ -2393,9 +2393,9 @@ fn run_bench_frame(
             };
             FrameSample {
                 anim_us: (t2 - t1).as_micros() as u64,
-                render_us: (t3 - t2).as_micros() as u64,
+                slint_render_us: (t3 - t2).as_micros() as u64,
                 vsync_us: (t1 - t0).as_micros() as u64,
-                copy_us,
+                fb_present_us: copy_us,
                 rows,
                 wall_us: frame_start.elapsed().as_micros() as u64,
                 vsync_source: pace.source,
@@ -2464,14 +2464,14 @@ fn run_frame_loop(
             profiler.record(sample);
         } else {
             fps_frames += 1;
-            render_us += sample.render_us as u128;
+            render_us += sample.slint_render_us as u128;
             vsync_us += sample.vsync_us as u128;
-            copy_us += sample.copy_us as u128;
+            copy_us += sample.fb_present_us as u128;
             copy_rows_acc += sample.rows as u128;
             if fps_window_start.elapsed().as_millis() >= 1000 {
                 let nn = fps_frames.max(1) as u128;
                 println!(
-                    "  fps ~ {fps_frames}  | render {}us  vsync-wait {}us  copy {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
+                    "  fps ~ {fps_frames}  | slint-render {}us  vsync-wait {}us  fb-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
                     render_us / nn,
                     vsync_us / nn,
                     copy_us / nn,
@@ -2555,9 +2555,9 @@ impl VideoWindowTotals {
         self.image_us += phases.image_us as u128;
         self.blit_us += phases.blit_us as u128;
         self.audio_us += phases.audio_us as u128;
-        self.render_us += sample.render_us as u128;
+        self.render_us += sample.slint_render_us as u128;
         self.vsync_us += sample.vsync_us as u128;
-        self.copy_us += sample.copy_us as u128;
+        self.copy_us += sample.fb_present_us as u128;
         self.copy_rows += sample.rows as u128;
         if let Some(rect) = copy_rect {
             self.copy_px += rect.width() as u128 * rect.rows() as u128;
@@ -2835,9 +2835,9 @@ fn run_video_playback_loop(
                 let t4 = Instant::now();
                 let sample = FrameSample {
                     anim_us: (t1 - t0).as_micros() as u64,
-                    render_us: (t2 - t1).as_micros() as u64,
+                    slint_render_us: (t2 - t1).as_micros() as u64,
                     vsync_us: (t3 - t2).as_micros() as u64,
-                    copy_us: (t4 - t3).as_micros() as u64,
+                    fb_present_us: (t4 - t3).as_micros() as u64,
                     rows,
                     wall_us: frame_start.elapsed().as_micros() as u64,
                     vsync_source: pace.source,
@@ -2947,9 +2947,9 @@ fn run_video_playback_loop(
                 let t4 = Instant::now();
                 let sample = FrameSample {
                     anim_us: (t2 - t1).as_micros() as u64,
-                    render_us: (t3 - t2).as_micros() as u64,
+                    slint_render_us: (t3 - t2).as_micros() as u64,
                     vsync_us: (t1 - t0).as_micros() as u64,
-                    copy_us: (t4 - t3).as_micros() as u64,
+                    fb_present_us: (t4 - t3).as_micros() as u64,
                     rows,
                     wall_us: frame_start.elapsed().as_micros() as u64,
                     vsync_source: pace.source,
@@ -3040,7 +3040,7 @@ fn record_video_sample(
     if fps_window_start.elapsed().as_millis() >= 1000 {
         let video_nn = totals.video_frames.max(1);
         println!(
-            "  fps ~ {}  | video-frames {} recv {}us decode-worker {}us/frame image-update {}us/frame blit {}us/frame render {}us vsync-wait {}us copy {}us ({} logical rows avg, {} px avg) audio-write {}us/frame audio {}/{}f underruns {} loops {}",
+            "  fps ~ {}  | video-frames {} recv {}us decode-worker {}us/frame image-update {}us/frame blit {}us/frame slint-render {}us vsync-wait {}us fb-present {}us ({} logical rows avg, {} px avg) audio-write {}us/frame audio {}/{}f underruns {} loops {}",
             *fps_frames,
             totals.video_frames,
             VideoWindowTotals::avg_per_frame(totals.recv_us, *fps_frames),
@@ -4232,7 +4232,7 @@ fn run_arcade_page_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tvisual_px\tscroll_y\tupdate\trows\trender_us\tarcade_draw_us\tvsync_us\tcopy_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tvisual_px\tscroll_y\tupdate\trows\tslint_render_us\tarcade_draw_us\tvsync_us\tfb_present_us\twall_us\n",
             )
             .map_err(|e| eprintln!("arcade frame trace: header write failed: {e}"))
             .ok()?;
@@ -4341,7 +4341,7 @@ fn run_arcade_page_loop(
         if fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = fps_frames.max(1) as u128;
             println!(
-                "arcade_page fps ~ {} render {}us arcade-draw {}us vsync-wait {}us copy {}us ({} rows avg)",
+                "arcade_page fps ~ {} slint-render {}us arcade-draw {}us vsync-wait {}us fb-present {}us ({} rows avg)",
                 fps_frames,
                 render_us / n,
                 arcade_draw_us / n,
@@ -4990,7 +4990,7 @@ fn run_launcher_loop(
         if launcher_fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = launcher_fps_frames.max(1) as u128;
             println!(
-                "launcher fps ~ {} render {}us vsync-wait {}us copy {}us ({} rows avg)",
+                "launcher fps ~ {} slint-render {}us vsync-wait {}us fb-present {}us ({} rows avg)",
                 launcher_fps_frames,
                 launcher_render_us / n,
                 launcher_vsync_us / n,
