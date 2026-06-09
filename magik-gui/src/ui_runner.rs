@@ -84,7 +84,6 @@ use std::sync::{mpsc, Mutex, OnceLock};
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
-const PREVIEW_NAV_DEBOUNCE_MS: u64 = 180;
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
 const ARCADE_PREVIEW_BOX_X: usize = 12;
 const ARCADE_PREVIEW_BOX_Y: usize = 16;
@@ -326,6 +325,16 @@ fn launcher_dirty_opt_enabled() -> bool {
         !matches!(
             std::env::var("MISTER_LAUNCHER_DIRTY_OPT").as_deref(),
             Ok("0") | Ok("off") | Ok("false") | Ok("no")
+        )
+    })
+}
+
+fn preview_trace_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_PREVIEW_TRACE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     })
 }
@@ -1772,9 +1781,6 @@ struct PreviewState {
     cache: PreviewImageCache,
     has_visible_preview: bool,
     visible_path: String,
-    pending_preview_path: Option<String>,
-    pending_since: Instant,
-    suppressed: bool,
 }
 
 impl PreviewState {
@@ -1786,51 +1792,24 @@ impl PreviewState {
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
             visible_path: String::new(),
-            pending_preview_path: None,
-            pending_since: Instant::now(),
-            suppressed: false,
         }
     }
 
     fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
         if self.last_preview_path.is_some()
             || self.current_generation != 0
-            || self.pending_preview_path.is_some()
-            || self.suppressed
+            || self.has_visible_preview
         {
             self.last_preview_path = None;
             self.current_generation = 0;
             self.has_visible_preview = false;
             self.visible_path.clear();
-            self.pending_preview_path = None;
-            self.suppressed = false;
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
             clear_preview_image_bridge(bridge);
         }
-    }
-
-    fn suppress_for_scroll(&mut self, bridge: &slint_ui::launcher::MisterBridge) -> bool {
-        let changed = !self.suppressed
-            || self.has_visible_preview
-            || self.last_preview_path.is_some()
-            || self.current_generation != 0
-            || self.pending_preview_path.is_some();
-        self.last_preview_path = None;
-        self.current_generation = 0;
-        self.has_visible_preview = false;
-        self.visible_path.clear();
-        self.pending_preview_path = None;
-        self.suppressed = true;
-        bridge.set_arcade_preview_has_image(false);
-        bridge.set_arcade_preview_placeholder_visible(false);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        bridge.set_arcade_preview_title("".into());
-        clear_preview_image_bridge(bridge);
-        let _ = self.worker.drain();
-        changed
     }
 }
 
@@ -1853,15 +1832,12 @@ fn request_arcade_preview_for_game(
         preview.current_generation = 0;
         preview.has_visible_preview = false;
         preview.visible_path.clear();
-        preview.pending_preview_path = None;
-        preview.suppressed = false;
         bridge.set_arcade_preview_placeholder_visible(true);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
         clear_preview_image_bridge(bridge);
         return;
     };
-    preview.suppressed = false;
     bridge.set_arcade_preview_placeholder_visible(true);
     if preview.last_preview_path.as_deref() == Some(game.mra_path.as_str()) {
         return;
@@ -1873,6 +1849,12 @@ fn request_arcade_preview_for_game(
         if let Some(image) = preview.cache.get(&game.image_path) {
             preview.current_generation = 0;
             preview.has_visible_preview = true;
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace cache_hit title={} path={}",
+                    game.title, game.image_path
+                );
+            }
             if preview.visible_path != game.image_path {
                 preview.visible_path = game.image_path.clone();
                 apply_preview_image_bridge(bridge, &image);
@@ -1884,6 +1866,12 @@ fn request_arcade_preview_for_game(
         preview.current_generation = preview
             .worker
             .request(game.title.clone(), game.image_path.clone());
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace requested generation={} title={} path={}",
+                preview.current_generation, game.title, game.image_path
+            );
+        }
         if !preview.has_visible_preview {
             clear_preview_image_bridge(bridge);
         }
@@ -1893,7 +1881,6 @@ fn request_arcade_preview_for_game(
     preview.current_generation = 0;
     preview.has_visible_preview = false;
     preview.visible_path.clear();
-    preview.suppressed = false;
     bridge.set_arcade_preview_placeholder_visible(true);
     clear_preview_image_bridge(bridge);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -1909,48 +1896,40 @@ fn schedule_arcade_preview_for_game(
         return true;
     };
     if preview.last_preview_path.as_deref() == Some(game.mra_path.as_str()) {
-        preview.pending_preview_path = None;
         return false;
     }
-    if preview.pending_preview_path.as_deref() != Some(game.mra_path.as_str()) {
-        preview.pending_preview_path = Some(game.mra_path.clone());
-        preview.pending_since = Instant::now();
-    }
-    flush_scheduled_arcade_preview_for_game(bridge, Some(game), preview)
-}
-
-fn flush_scheduled_arcade_preview_for_game(
-    bridge: &slint_ui::launcher::MisterBridge,
-    game: Option<&ArcadeGameEntry>,
-    preview: &mut PreviewState,
-) -> bool {
-    let Some(game) = game else {
-        preview.clear(bridge);
-        return true;
-    };
-    if preview.pending_preview_path.as_deref() != Some(game.mra_path.as_str())
-        || preview.pending_since.elapsed() < Duration::from_millis(PREVIEW_NAV_DEBOUNCE_MS)
-    {
-        return false;
-    }
-    preview.pending_preview_path = None;
     request_arcade_preview_for_game(bridge, Some(game), preview);
     true
 }
 
 fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    if preview.suppressed {
-        let _ = preview.worker.drain();
-        return false;
-    }
     let mut dirty = false;
     for result in preview.worker.drain() {
         if result.generation != preview.current_generation {
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace stale_result generation={} current_generation={} path={}",
+                    result.generation, preview.current_generation, result.image_path
+                );
+            }
             continue;
         }
         bridge.set_arcade_preview_title(result.title.into());
         if let Some(image) = result.image {
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace apply generation={} age_us={} total_us={} read_us={} decode_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    result.generation,
+                    result.request_age_us,
+                    result.total_us,
+                    result.read_us,
+                    result.decode_us,
+                    result.encoded_bytes,
+                    result.decoded_bytes,
+                    result.image_path
+                );
+            }
             let source_w = image.width;
             let source_h = image.height;
             let display = preview_display_size(
@@ -5724,16 +5703,9 @@ fn run_launcher_loop(
                 active_arcade_games_cache_key = Some(cache_key);
             }
         }
-        let preview_paused =
-            !launching && nav.screen == Screen::Arcade && nav.arcade.preview_should_pause();
-        if preview_paused {
+        if dirty_opt && !launching && nav.screen == Screen::Arcade {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-            if preview.suppress_for_scroll(&bridge) {
-                window.request_redraw();
-            }
-        } else if dirty_opt && !launching && nav.screen == Screen::Arcade {
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-            if flush_scheduled_arcade_preview_for_game(
+            if schedule_arcade_preview_for_game(
                 &bridge,
                 active_arcade_games_cache.get(nav.arcade.selected),
                 &mut preview,
@@ -5741,7 +5713,7 @@ fn run_launcher_loop(
                 window.request_redraw();
             }
         }
-        if !launching && !preview_paused && apply_ready_preview(&app, &mut preview) {
+        if !launching && apply_ready_preview(&app, &mut preview) {
             window.request_redraw();
         }
 
