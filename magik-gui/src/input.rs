@@ -154,9 +154,10 @@ impl PadPool {
 
     /// Info for the pad that most recently sent input.
     pub fn info(&self) -> &PadInfo {
-        self.active_pad()
-            .map(|pad| &pad.info)
-            .unwrap_or_else(no_pad_info)
+        match self.active_pad() {
+            Some(pad) => &pad.info,
+            None => no_pad_info(),
+        }
     }
 
     pub fn path(&self) -> &str {
@@ -171,10 +172,10 @@ impl PadPool {
     }
 
     pub fn info_at(&self, idx: usize) -> &PadInfo {
-        self.pads
-            .get(idx)
-            .map(|pad| &pad.info)
-            .unwrap_or_else(no_pad_info)
+        match self.pads.get(idx) {
+            Some(pad) => &pad.info,
+            None => no_pad_info(),
+        }
     }
 
     /// First connected pad that has not completed setup (`setup_complete`).
@@ -190,10 +191,10 @@ impl PadPool {
     }
 
     pub fn state_at(&self, idx: usize) -> &PadState {
-        self.pads
-            .get(idx)
-            .map(|pad| &pad.state)
-            .unwrap_or_else(no_pad_state)
+        match self.pads.get(idx) {
+            Some(pad) => &pad.state,
+            None => no_pad_state(),
+        }
     }
 
     /// Save a new default registry entry for a pad (does not mark setup complete).
@@ -318,10 +319,21 @@ impl PadPool {
 
     fn rebuild_merged_state(&mut self) {
         let states: Vec<&PadState> = self.pads.iter().map(|p| p.state()).collect();
+        let active_idx = self.clamped_active_idx();
+        let active_raw = self
+            .pads
+            .get(active_idx)
+            .map(|pad| pad.state.last_raw.clone());
+        let active_label = self
+            .pads
+            .get(active_idx)
+            .map(|pad| pad.state.last_event_label.clone());
         self.merged = merge_pad_states(&states);
-        if let Some(active) = self.active_pad() {
-            self.merged.last_raw = active.state.last_raw.clone();
-            self.merged.last_event_label = active.state.last_event_label.clone();
+        if let Some(last_raw) = active_raw {
+            self.merged.last_raw = last_raw;
+        }
+        if let Some(last_event_label) = active_label {
+            self.merged.last_event_label = last_event_label;
         }
     }
 }

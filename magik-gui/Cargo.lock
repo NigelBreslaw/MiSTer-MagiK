@@ -677,7 +677,7 @@ dependencies = [
 [[package]]
 name = "const-field-offset"
 version = "0.2.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "const-field-offset-macro",
  "field-offset",
@@ -686,7 +686,7 @@ dependencies = [
 [[package]]
 name = "const-field-offset-macro"
 version = "0.2.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1261,7 +1261,7 @@ dependencies = [
  "objc2-core-text",
  "objc2-foundation 0.3.2",
  "parlance",
- "read-fonts 0.39.2",
+ "read-fonts",
  "roxmltree",
  "smallvec",
  "windows",
@@ -1551,7 +1551,7 @@ checksum = "d12c7c642d4ce8c2e784b4751a6634bd89583912265add4a679a8882d123fbcd"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
- "read-fonts 0.39.2",
+ "read-fonts",
  "smallvec",
 ]
 
@@ -1623,7 +1623,7 @@ checksum = "48ce8546b993eaf241d69ded33b1be6d205dd9857ec879d9d18bd05d3676e144"
 [[package]]
 name = "i-slint-backend-linuxkms"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "bytemuck",
  "calloop 0.14.4",
@@ -1641,7 +1641,7 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-selector"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "cfg-if",
  "i-slint-backend-linuxkms",
@@ -1654,7 +1654,7 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-winit"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -1695,7 +1695,7 @@ dependencies = [
 [[package]]
 name = "i-slint-common"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "derive_more",
  "fontique",
@@ -1704,13 +1704,13 @@ dependencies = [
  "icu_locale_core",
  "icu_provider",
  "pulldown-cmark",
- "skrifa 0.42.1",
+ "skrifa",
 ]
 
 [[package]]
 name = "i-slint-compiler"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "annotate-snippets",
  "by_address",
@@ -1730,7 +1730,7 @@ dependencies = [
  "resvg",
  "rowan",
  "rspolib",
- "skrifa 0.42.1",
+ "skrifa",
  "smol_str 0.3.6",
  "strum",
  "swash",
@@ -1742,7 +1742,7 @@ dependencies = [
 [[package]]
 name = "i-slint-core"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "async-channel",
  "auto_enums",
@@ -1775,7 +1775,7 @@ dependencies = [
  "resvg",
  "rgb",
  "scopeguard",
- "skrifa 0.42.1",
+ "skrifa",
  "slab",
  "strum",
  "swash",
@@ -1794,7 +1794,7 @@ dependencies = [
 [[package]]
 name = "i-slint-core-macros"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "quote",
  "serde_json",
@@ -1804,7 +1804,7 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-skia"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -1827,7 +1827,7 @@ dependencies = [
  "pin-weak",
  "raw-window-handle",
  "raw-window-metal",
- "read-fonts 0.39.2",
+ "read-fonts",
  "scoped-tls-hkt",
  "skia-safe",
  "softbuffer",
@@ -1840,7 +1840,7 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-software"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "bytemuck",
  "clru",
@@ -1851,7 +1851,7 @@ dependencies = [
  "integer-sqrt",
  "lyon_path",
  "num-traits",
- "skrifa 0.42.1",
+ "skrifa",
  "swash",
  "zeno",
 ]
@@ -2118,9 +2118,9 @@ checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
 name = "imgref"
-version = "1.12.1"
+version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40fac9d56ed6437b198fddba683305e8e2d651aa42647f00f5ae542e7f5c94a2"
+checksum = "89194689a993ab15268672e99e7b0e19da2da3268ac682e8f02d29d4d1434cd7"
 
 [[package]]
 name = "indexmap"
@@ -2307,13 +2307,12 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.99"
+version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "142bc4740e452c1e57ade0cbc129f139c9093e354346f0872ef985f4f5cf5f11"
+checksum = "f2025f20d7a4fa7785846e7b63d10a76d3f1cee98ee5cb79ea59703f95e42162"
 dependencies = [
  "cfg-if",
  "futures-util",
- "once_cell",
  "wasm-bindgen",
 ]
 
@@ -3287,7 +3286,7 @@ dependencies = [
  "linebender_resource_handle",
  "parlance",
  "parley_data",
- "skrifa 0.42.1",
+ "skrifa",
 ]
 
 [[package]]
@@ -3734,22 +3733,12 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b634fabf032fab15307ffd272149b622260f55974d9fad689292a5d33df02e5"
-dependencies = [
- "bytemuck",
- "core_maths",
- "font-types",
-]
-
-[[package]]
-name = "read-fonts"
 version = "0.39.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4ed38b89c2c77ff968c524145ad65fb010f38af5c7a224b53b81d47ac2daa81"
 dependencies = [
  "bytemuck",
+ "core_maths",
  "font-types",
 ]
 
@@ -3782,9 +3771,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.12.3"
+version = "1.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
+checksum = "f1292b7759ae1cb9ec195452d1390a074f0cd8541ab7a5a8c31cd6db45d4a6ba"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -3805,9 +3794,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.10"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "resvg"
@@ -4147,23 +4136,13 @@ dependencies = [
 
 [[package]]
 name = "skrifa"
-version = "0.40.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fbdfe3d2475fbd7ddd1f3e5cf8288a30eb3e5f95832829570cd88115a7434ac"
-dependencies = [
- "bytemuck",
- "core_maths",
- "read-fonts 0.37.0",
-]
-
-[[package]]
-name = "skrifa"
 version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c34617370ae968efb7161bb2beb517d9084659aae19e24b89e3db25b46e4564"
 dependencies = [
  "bytemuck",
- "read-fonts 0.39.2",
+ "core_maths",
+ "read-fonts",
 ]
 
 [[package]]
@@ -4175,7 +4154,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "slint"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "const-field-offset",
  "i-slint-backend-selector",
@@ -4194,7 +4173,7 @@ dependencies = [
 [[package]]
 name = "slint-build"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "derive_more",
  "fontique",
@@ -4206,7 +4185,7 @@ dependencies = [
 [[package]]
 name = "slint-macros"
 version = "1.17.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "i-slint-compiler",
  "proc-macro2",
@@ -4363,12 +4342,12 @@ dependencies = [
 
 [[package]]
 name = "swash"
-version = "0.2.7"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "842f3cd369c2ba38966204f983eaa5e54a8e84a7d7159ed36ade2b6c335aae64"
+checksum = "d1804632b66a35ca2b1d277eb0a138e10f46cb365b9a6d297e876b69ef79de43"
 dependencies = [
  "core_maths",
- "skrifa 0.40.0",
+ "skrifa",
  "yazi",
  "zeno",
 ]
@@ -4829,9 +4808,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.23.2"
+version = "1.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
+checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
 dependencies = [
  "js-sys",
  "serde_core",
@@ -4864,7 +4843,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vtable"
 version = "0.4.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "const-field-offset",
  "portable-atomic",
@@ -4875,7 +4854,7 @@ dependencies = [
 [[package]]
 name = "vtable-macro"
 version = "0.4.0"
-source = "git+https://github.com/slint-ui/slint?branch=master#24318cebc2b3feed4f7187e237915f52715ce285"
+source = "git+https://github.com/slint-ui/slint?branch=master#9eb3a2b4b1aed52cf6e80930b941530ee5c4eeab"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4912,9 +4891,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.122"
+version = "0.2.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ed04576f974d2b2fba0f38c51dbc5518011e38c36bf1143164be765528fd409"
+checksum = "a254a4b10c19a76f09a27640e7ffbf9bc30bf67e16a3bf28aaefa4920fe81563"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -4925,9 +4904,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.72"
+version = "0.4.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9473dbd2991ae90b6291c3c32c30c6187ac49aa32f9905d1cce280ec1e110b0f"
+checksum = "54568702fabf5d4849ce2b90fadfa64168a097eaf4b351ce9df8b687a0086aaf"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -4935,9 +4914,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.122"
+version = "0.2.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "916151b09da36bd82f6615cbf3a419e2f0ba23a03c6160e8e92eb6bd4aa1dec6"
+checksum = "24a40fc75b0ec6f3746ceb10d36f53a93dcd68a93b11b6445983945d79eba0dc"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -4945,9 +4924,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.122"
+version = "0.2.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "299047362ccbfce148b67ab7e73349f77748e00c8296f9542adfad2ad82c5c5e"
+checksum = "908f34bd9b9ce3d4caf07b72dfab63d61504d156856c6bd3cd87fa350cf3985b"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -4958,9 +4937,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.122"
+version = "0.2.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a929b2c61f11ba3e9bc35b50c1f25cb38e0e892c0c231ae2b8cf78d5dad4437"
+checksum = "7acbf7616c27b194bbb550bf77ed0c2c3e5b7fd1260a93082b95fb7f47959b92"
 dependencies = [
  "unicode-ident",
 ]
@@ -5001,9 +4980,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.99"
+version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d621441cfc37b84979402712047321980c178f299193a3589d05b99e8763436"
+checksum = "6e0871acf327f283dc6da28a1696cdc64fb355ba9f935d052021fa77f35cce69"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -5566,7 +5545,7 @@ dependencies = [
  "indexmap",
  "kurbo",
  "log",
- "read-fonts 0.39.2",
+ "read-fonts",
 ]
 
 [[package]]
@@ -5745,18 +5724,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.50"
+version = "0.8.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b065d4f0e55f82fae73202e189638116a87c55ab6b8e6c2721e13dd9d854ad1"
+checksum = "2e5361301a1d9e5dd94c524eb99365fbaed5b237e831d7f45e2ddea11ffe8627"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.50"
+version = "0.8.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b631b19d36a892ab55420c92dbc83ccd79274f25be714855d3074aa71cab639"
+checksum = "422033a2245cb4b6ff8def11b2dfaf184a2ab2573f5af28082a163a68889af0e"
 dependencies = [
  "proc-macro2",
  "quote",
