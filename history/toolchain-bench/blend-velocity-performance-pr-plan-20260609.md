@@ -27,6 +27,14 @@ Conclusion: the procedural baseline is fair for raw fade blending. `real-text`
 is close enough to use as the acceptance benchmark for production-like text
 content. The main target is `fade_blend_us`, currently about 1.39-1.42 ms/frame.
 
+Design constraint:
+
+- Fade toward the arcade/list background color, not an assumed pure black.
+- Current code uses `ARCADE_LIST_FADE_COLOR` (`0x00120d1a`), a dark background
+  tone, so optimizations should keep supporting an arbitrary constant fade color.
+- A black-only special case is acceptable only as a later optional path if the
+  visual design actually chooses black and the benchmark proves it matters.
+
 ## PR 1: Make Real-Text Blend Velocity First-Class
 
 Status: implemented in the benchmark scene.
@@ -79,6 +87,7 @@ Work:
 - Precompute `alpha`, `inv`, and color products for the 48 top and 48 bottom
   fade rows.
 - Thread those constants into `blend_row_towards`.
+- Preserve support for a non-black constant fade color.
 - Keep the output byte-for-byte equivalent if practical.
 
 Gate:
@@ -118,13 +127,15 @@ Drop if:
 
 Hypothesis:
 
-Most list pixels are background. Instead of blending every pixel, precompute or
-fill faded background bands and blend/copy only text/border pixels on top.
+Most list pixels are background. Instead of blending every pixel toward black,
+precompute or fill faded background-color bands and blend/copy only text/border
+pixels on top.
 
 Work:
 
 - Prototype in `blend_velocity real-text` first.
 - Represent row text/border mask or sparse spans.
+- Use the configured/list background fade target, not a hardcoded black target.
 - Preserve current visual look.
 
 Gate:

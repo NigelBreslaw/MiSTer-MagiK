@@ -71,6 +71,8 @@ scene SVG.
 under velocity-scroll-like conditions. It synthesizes the moving arcade list
 surface at 6 px/frame by default and reports split timings for surface update,
 fade blend, fade copy, body copy, selection copy, vsync, and wall time.
+The fade target is the same constant arcade/list background color used by the
+real renderer, not pure black.
 
 ```bash
 scripts/profile-blend-velocity.sh 15 BLENDVEL baseline --deploy-fast
