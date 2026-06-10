@@ -73,14 +73,18 @@ export component ArcadeListScreen inherits Rectangle {
                 y: (parent.height - root.cabinet-height) / 2;
                 width: root.cabinet-width;
                 height: root.cabinet-height;
-                background: transparent;
+
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: @image-url("art/arcade-cabinet-square.png");
+                }
 
                 Rectangle {
                     x: root.cabinet-screen-x;
                     y: root.cabinet-screen-y;
                     width: root.cabinet-screen-width;
                     height: root.cabinet-screen-height;
-                    background: #05070a;
                     clip: true;
 
                     if MisterBridge.arcade-preview-has-image : Image {
@@ -91,13 +95,6 @@ export component ArcadeListScreen inherits Rectangle {
                         source: MisterBridge.arcade-preview-image;
                     }
                 }
-
-                Image {
-                    width: parent.width;
-                    height: parent.height;
-                    source: @image-url("art/arcade-cabinet-square.png");
-                }
-
             }
         }
     }
