@@ -117,7 +117,11 @@ fi
 if [[ -n "$preview_format" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_FORMAT=$preview_format"
 fi
-run_label="${preview_format:-png} ${preview_resize_filter:-off} resize ${preview_resize_max:-320x320}"
+if [[ -z "$preview_format" && -z "$preview_resize_filter" && -z "$preview_resize_max" ]]; then
+  run_label="default derived-png nearest 320x320"
+else
+  run_label="${preview_format:-app-default} ${preview_resize_filter:-app-default} resize ${preview_resize_max:-320x320}"
+fi
 remote_extra_env="$remote_extra_env MISTER_PREVIEW_RUN_LABEL='${run_label}'"
 
 case "$deploy" in
@@ -134,7 +138,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-off} preview_resize_max=${preview_resize_max:-default} preview_format=${preview_format:-png}"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
