@@ -103,7 +103,7 @@ impl PreviewResizeSpec {
             .or_else(|_| std::env::var("MISTER_PREVIEW_RESIZE"))
             .ok()
             .map(|s| PreviewResizeFilter::from_label(&s))
-            .unwrap_or(PreviewResizeFilter::Off);
+            .unwrap_or(PreviewResizeFilter::Nearest);
         if filter == PreviewResizeFilter::Off {
             return Self::off();
         }
@@ -149,7 +149,7 @@ impl PreviewStorageFormat {
 
     fn from_env() -> Self {
         match std::env::var("MISTER_PREVIEW_FORMAT")
-            .unwrap_or_else(|_| "png".into())
+            .unwrap_or_else(|_| "derived-png".into())
             .as_str()
         {
             label => Self::from_label(label),
