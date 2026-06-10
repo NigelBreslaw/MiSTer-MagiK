@@ -26,11 +26,11 @@ mod cpu_profile;
 mod display_config;
 mod fb;
 mod fpga;
+#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 mod frame_profile;
 mod input;
 mod launcher;
 mod mr_audio;
-mod preview_worker;
 mod runtime_status;
 mod setup_nav;
 mod ui_display;
@@ -40,7 +40,8 @@ mod video_player;
 mod vt;
 
 pub use mister_magik_fb::{
-    arcade_catalog, command_args, controller_db, input_repeat, library_bench,
+    arcade_catalog, command_args, controller_db, input_repeat, input_state, library_bench,
+    preview_worker,
 };
 
 use fb::{Display, Pixel, VsyncPacer};

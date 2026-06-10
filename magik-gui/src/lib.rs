@@ -4,13 +4,14 @@
 //! target behind the `ui` feature. This library keeps pure logic available for
 //! fast macOS host tests without compiling Slint/AppKit.
 
-pub mod arcade_catalog;
 pub mod command_args;
 pub mod controller_db;
 pub mod effects;
 pub mod framebuffer_copy;
 pub mod input_info;
 pub mod input_repeat;
-pub mod library_bench;
+pub mod input_state;
 pub mod runtime_status;
 pub mod vsync_pacer;
+
+pub use mister_magik_catalog::{arcade_catalog, library_bench, preview_worker};

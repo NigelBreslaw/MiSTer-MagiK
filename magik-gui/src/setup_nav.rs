@@ -1,9 +1,8 @@
 //! Controller setup flow — detect unknown / moved pads and offer rebinding.
 
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
-use crate::input::PadPool;
-use crate::input::{layout_profile_name, PadInfo, PadState};
 use crate::input_repeat::RepeatNav;
+use crate::input_state::{layout_profile_name, PadInfo, PadState};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +50,12 @@ pub enum SetupAction {
     },
     /// Pad already complete — close this flow (e.g. after USB rebind).
     Done,
+}
+
+pub trait SetupPadSource {
+    fn index_needing_setup(&self) -> Option<usize>;
+    fn db(&self) -> &ControllerDb;
+    fn info_at(&self, idx: usize) -> &PadInfo;
 }
 
 impl SetupNav {
@@ -150,7 +155,7 @@ impl SetupNav {
     }
 
     /// After saving or skipping, open the next pad that still needs setup.
-    pub fn advance_to_next_pad(&mut self, pad: &PadPool) {
+    pub fn advance_to_next_pad(&mut self, pad: &impl SetupPadSource) {
         self.phase = SetupPhase::None;
         if let Some(idx) = pad.index_needing_setup() {
             let status = pad.db().registry_status(pad.info_at(idx));

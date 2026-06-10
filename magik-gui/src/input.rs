@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-pub use mister_magik_fb::input_info::PadInfo;
+use crate::input_state::PadLayout;
+pub use crate::input_state::{PadInfo, PadState};
 
 const JS_EVENT_SIZE: usize = 8;
 const JS_EVENT_BUTTON: u8 = 0x01;
@@ -17,81 +18,6 @@ const JS_EVENT_INIT: u8 = 0x80;
 const AXIS_MAX: f32 = 32767.0;
 const STICK_DEADZONE: f32 = 8000.0;
 const PAD_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Best-guess D-Input map for Retro-bit 2563:0575 (A2 receiver).
-/// D-pad on axes 4/5 confirmed on device; buttons from LEGACY16 manual.
-#[derive(Debug, Clone, Default)]
-pub struct PadState {
-    pub dpad_up: bool,
-    pub dpad_down: bool,
-    pub dpad_left: bool,
-    pub dpad_right: bool,
-    pub btn_a: bool,
-    pub btn_b: bool,
-    pub btn_x: bool,
-    pub btn_y: bool,
-    pub btn_l: bool,
-    pub btn_r: bool,
-    pub btn_zl: bool,
-    pub btn_zr: bool,
-    pub btn_select: bool,
-    pub btn_start: bool,
-    pub btn_l3: bool,
-    pub btn_r3: bool,
-    pub btn_home: bool,
-    pub btn_capture: bool,
-    pub left_x: f32,
-    pub left_y: f32,
-    pub right_x: f32,
-    pub right_y: f32,
-    pub last_raw: String,
-    /// Human-readable list of everything currently held.
-    pub pressed_now: String,
-    /// Friendly label for the most recent event (for mapping debug).
-    pub last_event_label: String,
-}
-
-/// How raw js button/axis indices map onto [`PadState`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PadLayout {
-    /// D-pad reported on axes 4/5 (common on some 2.4 GHz dongles).
-    DpadAxes45,
-    /// Fallback: hat 6/7, d-pad 4/5, stick-as-dpad, common btn order.
-    Generic,
-}
-
-impl PadLayout {
-    /// Best-effort profile until the setup wizard saves a per-controller map.
-    fn guess(info: &PadInfo) -> Self {
-        match (
-            strip_hex_prefix(&info.vendor_id).as_str(),
-            strip_hex_prefix(&info.product_id).as_str(),
-        ) {
-            ("2563", "0575") | ("0079", "0011") => Self::DpadAxes45,
-            _ => Self::Generic,
-        }
-    }
-
-    pub fn profile_name(self) -> &'static str {
-        match self {
-            Self::DpadAxes45 => "dpad_axes_4_5",
-            Self::Generic => "generic",
-        }
-    }
-}
-
-/// Name of the input profile used to decode js events for this pad.
-pub fn layout_profile_name(info: &PadInfo) -> &'static str {
-    PadLayout::guess(info).profile_name()
-}
-
-fn strip_hex_prefix(raw: &str) -> String {
-    raw.trim()
-        .strip_prefix("0x")
-        .or_else(|| raw.trim().strip_prefix("0X"))
-        .unwrap_or(raw.trim())
-        .to_ascii_lowercase()
-}
 
 pub struct PadReader {
     file: File,
@@ -338,6 +264,20 @@ impl PadPool {
     }
 }
 
+impl crate::setup_nav::SetupPadSource for PadPool {
+    fn index_needing_setup(&self) -> Option<usize> {
+        self.index_needing_setup()
+    }
+
+    fn db(&self) -> &crate::controller_db::ControllerDb {
+        self.db()
+    }
+
+    fn info_at(&self, idx: usize) -> &PadInfo {
+        self.info_at(idx)
+    }
+}
+
 impl PadReader {
     /// Open the first available js device (for debug subcommands).
     pub fn open() -> io::Result<Self> {
@@ -438,7 +378,18 @@ fn pad_index_error(idx: usize) -> io::Error {
     )
 }
 
-impl PadState {
+trait PadStateEventExt {
+    fn apply_event(&mut self, layout: PadLayout, event_type: u8, number: u8, value: i16) -> bool;
+    fn apply_event_dpad_axes_45(&mut self, event_type: u8, number: u8, value: i16) -> bool;
+    fn apply_event_generic(&mut self, event_type: u8, number: u8, value: i16) -> bool;
+    fn apply_dpad_x(&mut self, v: f32, label: &'static str) -> &'static str;
+    fn apply_dpad_y(&mut self, v: f32, label: &'static str) -> &'static str;
+    fn apply_hat_x(&mut self, v: f32);
+    fn apply_hat_y(&mut self, v: f32);
+    fn rebuild_pressed_now(&mut self);
+}
+
+impl PadStateEventExt for PadState {
     fn apply_event(&mut self, layout: PadLayout, event_type: u8, number: u8, value: i16) -> bool {
         match layout {
             PadLayout::DpadAxes45 => self.apply_event_dpad_axes_45(event_type, number, value),

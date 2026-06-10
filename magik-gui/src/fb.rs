@@ -480,10 +480,12 @@ fn fb_info_from(
     }
 }
 
+#[allow(dead_code)]
 fn pixels_as_u32(src: &[Pixel]) -> &[u32] {
     unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u32>(), src.len()) }
 }
 
+#[allow(dead_code)]
 fn pixels_as_u32_mut(dst: &mut [Pixel]) -> &mut [u32] {
     unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u32>(), dst.len()) }
 }
@@ -505,7 +507,7 @@ impl Display {
 
     /// Open the framebuffer at its current kernel-reported size, without writing
     /// `/sys/module/MiSTer_fb/parameters/mode`.
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(dead_code)]
     pub fn open_current_boot() -> io::Result<Self> {
         const RETRIES: u32 = 30;
         let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
@@ -674,12 +676,12 @@ impl Display {
         unsafe { std::slice::from_raw_parts_mut(self.mem, self.w * self.h) }
     }
 
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(dead_code)]
     pub fn buffer_u32_mut(&mut self) -> &mut [u32] {
         pixels_as_u32_mut(self.buffer_mut())
     }
 
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(dead_code)]
     pub fn clear(&mut self, color: Pixel) {
         self.buffer_mut().fill(color);
     }
@@ -719,7 +721,7 @@ impl Display {
         (hash, nonzero)
     }
 
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(dead_code)]
     pub fn rect_sampled_signature(
         &self,
         x: usize,
@@ -981,7 +983,7 @@ impl Display {
 
     /// Copy a logical source rectangle into an arbitrary framebuffer location,
     /// nearest-neighbour scaled by `scale`.
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(dead_code)]
     pub fn copy_rect_scaled_at(
         &mut self,
         dst_x: usize,
@@ -1022,7 +1024,7 @@ impl Display {
         );
     }
 
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(dead_code)]
     pub fn copy_u32_rect_scaled_at(
         &mut self,
         dst_x: usize,
