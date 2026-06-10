@@ -4139,6 +4139,9 @@ fn run_console_scroll_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
 }
 
 #[cfg(mister_bench_scenes)]
@@ -5323,6 +5326,7 @@ fn run_preview_scroll_bench_loop(
     request_arcade_preview(&bridge, &games, nav.arcade.selected, &mut preview);
     window.request_redraw();
 
+    let cpu = cpu_profile::start();
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;
     let mut prepare_us = 0u128;
@@ -5486,6 +5490,9 @@ fn run_preview_scroll_bench_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
 }
 
 fn run_launcher_loop(
@@ -5554,6 +5561,7 @@ fn run_launcher_loop(
     let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
     let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let cpu = cpu_profile::start();
     let mut active_arcade_games_cache: Vec<ArcadeGameEntry> = Vec::new();
     let mut active_arcade_games_cache_key: Option<(usize, usize)> = None;
     let mut preview_scroll_trace = std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
@@ -6307,6 +6315,9 @@ fn run_launcher_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
+    if let Err(e) = cpu_profile::finish(cpu) {
+        eprintln!("{e}");
+    }
 }
 
 #[cfg(test)]
