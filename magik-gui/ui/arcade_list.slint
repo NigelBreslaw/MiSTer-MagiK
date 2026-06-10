@@ -6,12 +6,12 @@ export component ArcadeListScreen inherits Rectangle {
     property <int> count: MisterBridge.arcade-games.length;
     property <length> preview-display-width: MisterBridge.arcade-preview-display-width * 1px * s;
     property <length> preview-display-height: MisterBridge.arcade-preview-display-height * 1px * s;
-    property <length> cabinet-width: 336px * s;
+    property <length> cabinet-width: 300px * s;
     property <length> cabinet-height: 520px * s;
-    property <length> cabinet-screen-x: 8px * s;
-    property <length> cabinet-screen-y: 92px * s;
-    property <length> cabinet-screen-width: 320px * s;
-    property <length> cabinet-screen-height: 320px * s;
+    property <length> cabinet-screen-x: 38px * s;
+    property <length> cabinet-screen-y: 130px * s;
+    property <length> cabinet-screen-width: 224px * s;
+    property <length> cabinet-screen-height: 168px * s;
 
     background: #1a1424;
 
@@ -77,7 +77,7 @@ export component ArcadeListScreen inherits Rectangle {
                 Image {
                     width: parent.width;
                     height: parent.height;
-                    source: @image-url("art/arcade-cabinet-square.png");
+                    source: @image-url("art/arcade-cabinet-preview.png");
                 }
 
                 Rectangle {

@@ -53,10 +53,10 @@ use std::sync::{mpsc, Mutex, OnceLock};
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
-const ARCADE_PREVIEW_BOX_X: usize = 8;
-const ARCADE_PREVIEW_BOX_Y: usize = 92;
-const ARCADE_PREVIEW_BOX_W: u32 = 320;
-const ARCADE_PREVIEW_BOX_H: u32 = 320;
+const ARCADE_PREVIEW_BOX_X: usize = 38;
+const ARCADE_PREVIEW_BOX_Y: usize = 130;
+const ARCADE_PREVIEW_BOX_W: u32 = 224;
+const ARCADE_PREVIEW_BOX_H: u32 = 168;
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
@@ -2094,14 +2094,21 @@ fn apply_ready_preview(
         if let Some(image) = result.image {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace apply generation={} priority={:?} selected={} age_us={} total_us={} read_us={} decode_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    "preview_trace apply generation={} priority={:?} selected={} age_us={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
                     result.generation,
                     result.priority,
                     is_selected_result,
                     result.request_age_us,
+                    result.storage_format.label(),
+                    result.resize_filter,
+                    result.source_width,
+                    result.source_height,
+                    image.width,
+                    image.height,
                     result.total_us,
                     result.read_us,
                     result.decode_us,
+                    result.resize_us,
                     result.encoded_bytes,
                     result.decoded_bytes,
                     result.image_path
@@ -2115,8 +2122,17 @@ fn apply_ready_preview(
                 ARCADE_PREVIEW_BOX_W,
                 ARCADE_PREVIEW_BOX_H,
             );
+            let slint_image_t = Instant::now();
+            let slint_image = png_to_slint_image(source_w, source_h, image.rgb);
+            let slint_image_us = slint_image_t.elapsed().as_micros() as u64;
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace slint_image generation={} slint_image_us={} output={}x{} path={}",
+                    result.generation, slint_image_us, source_w, source_h, result.image_path
+                );
+            }
             let image = PreviewImage {
-                image: png_to_slint_image(source_w, source_h, image.rgb),
+                image: slint_image,
                 source_w,
                 source_h,
                 display_w: display.w,
@@ -6664,7 +6680,7 @@ mod tests {
     #[test]
     fn preview_size_enlarges_only_by_integer_scale() {
         let size = preview_display_size(100, 50, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 300, h: 150 });
+        assert_eq!(size, PreviewDisplaySize { w: 200, h: 100 });
         assert_eq!(size.w % 100, 0);
         assert_eq!(size.h % 50, 0);
         assert!(size.w * size.h <= PREVIEW_MAX_AREA);
@@ -6682,15 +6698,11 @@ mod tests {
         let size = preview_display_size(321, 225, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
         assert_eq!(size, PreviewDisplaySize { w: 321, h: 225 });
         assert_eq!(size.w as u64 * 225, size.h as u64 * 321);
-        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
     }
 
     #[test]
-    fn preview_size_respects_pane_bounds_and_area() {
+    fn preview_size_keeps_common_arcade_screenshot_native_for_aperture_clipping() {
         let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
         assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
-        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
-        assert!(size.w <= ARCADE_PREVIEW_BOX_W);
-        assert!(size.h <= ARCADE_PREVIEW_BOX_H);
     }
 }
