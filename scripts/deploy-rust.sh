@@ -3,6 +3,12 @@
 #
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 #   MISTER_IP=... scripts/deploy-rust.sh --fast    # thin LTO, quicker build
+#   MISTER_IP=... scripts/deploy-rust.sh --fast-dev
+#   MISTER_IP=... scripts/deploy-rust.sh --opt2
+#   MISTER_IP=... scripts/deploy-rust.sh --opts
+#   MISTER_IP=... scripts/deploy-rust.sh --incr
+#   MISTER_IP=... scripts/deploy-rust.sh --fast --all-scenes
+#   MISTER_IP=... scripts/deploy-rust.sh --fast --ui-scope arcade
 #   MISTER_IP=... scripts/deploy-rust.sh --fast --video
 #
 # Default installs the release-device (A3) binary — use --fast for daily iteration.
@@ -25,11 +31,27 @@ VIDEO_REMOTE="/media/fat/mister-magik/mslug3.mov"
 PROFILE=release-device
 BUILD_FLAG=(--device)
 DEPLOY_VIDEO=0
-for arg in "$@"; do
+ARGS=("$@")
+for ((i = 0; i < ${#ARGS[@]}; i++)); do
+  arg="${ARGS[$i]}"
   case "$arg" in
     --fast) PROFILE=release; BUILD_FLAG=(--fast) ;;
+    --fast-dev) PROFILE=release-fast-dev; BUILD_FLAG=(--fast-dev) ;;
+    --opt2) PROFILE=release-opt2; BUILD_FLAG=(--opt2) ;;
+    --opts) PROFILE=release-opts; BUILD_FLAG=(--opts) ;;
+    --incr) PROFILE=release-incr; BUILD_FLAG=(--incr) ;;
     --device) PROFILE=release-device; BUILD_FLAG=(--device) ;;
     --video) DEPLOY_VIDEO=1; BUILD_FLAG+=(--video) ;;
+    --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
+    --ui-scope=*) BUILD_FLAG+=("$arg") ;;
+    --ui-scope)
+      i=$((i + 1))
+      if [ "$i" -ge "${#ARGS[@]}" ]; then
+        echo "ERROR: --ui-scope requires one of: launcher, arcade, all" >&2
+        exit 2
+      fi
+      BUILD_FLAG+=(--ui-scope "${ARGS[$i]}")
+      ;;
     -h|--help)
       sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
