@@ -52,16 +52,6 @@ export component ArcadeListScreen inherits Rectangle {
                 background: #131018;
                 border-width: 1px;
                 border-color: #352848;
-
-                Text {
-                    x: 12px * s;
-                    y: 13px * s;
-                    text: MisterBridge.arcade-games.length > 0
-                        ? (MisterBridge.arcade-selected + 1) + " / " + MisterBridge.arcade-games.length
-                        : "0 / 0";
-                    color: #706080;
-                    font-size: 8px * s;
-                }
             }
         }
 
