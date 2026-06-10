@@ -351,6 +351,16 @@ fn arcade_scroll_present_enabled() -> bool {
     })
 }
 
+fn arcade_fade_lut_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_ARCADE_FADE_LUT").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -4489,6 +4499,7 @@ struct ArcadeListRenderer {
     band_scratch: Vec<Pixel>,
     fade_scratch: Vec<Pixel>,
     fade_constants: Vec<FadeBlendConstants>,
+    fade_tables: Option<Vec<FadeBlendTable>>,
     selection_horizontal: Vec<Pixel>,
     selection_vertical: Vec<Pixel>,
     surface_y: usize,
@@ -4516,6 +4527,8 @@ enum ArcadeListUpdate {
 
 impl ArcadeListRenderer {
     fn new() -> Self {
+        let fade_constants = fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR);
+        let fade_tables = arcade_fade_lut_enabled().then(|| fade_blend_tables(&fade_constants));
         Self {
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
@@ -4523,7 +4536,8 @@ impl ArcadeListRenderer {
             surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
             fade_scratch: Vec::new(),
-            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR),
+            fade_constants,
+            fade_tables,
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             surface_y: 0,
@@ -4872,12 +4886,14 @@ impl ArcadeListRenderer {
         let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
         let mut band = std::mem::take(&mut self.fade_scratch);
         band.resize(ARCADE_LIST_W * fade_h, Pixel(0));
+        let fade_tables = self.fade_tables.as_ref();
         for row in 0..fade_h {
-            blend_row_towards(
-                self.surface_row(row),
-                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                self.fade_constants[row],
-            );
+            let dst = &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W];
+            if let Some(tables) = fade_tables {
+                blend_row_towards_table(self.surface_row(row), dst, &tables[row]);
+            } else {
+                blend_row_towards(self.surface_row(row), dst, self.fade_constants[row]);
+            }
         }
         target.copy_rect_from(
             disp,
@@ -4891,11 +4907,17 @@ impl ArcadeListRenderer {
 
         for row in 0..fade_h {
             let viewport_y = ARCADE_LIST_H - fade_h + row;
-            blend_row_towards(
-                self.surface_row(viewport_y),
-                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                self.fade_constants[fade_h - 1 - row],
-            );
+            let fade_row = fade_h - 1 - row;
+            let dst = &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W];
+            if let Some(tables) = fade_tables {
+                blend_row_towards_table(self.surface_row(viewport_y), dst, &tables[fade_row]);
+            } else {
+                blend_row_towards(
+                    self.surface_row(viewport_y),
+                    dst,
+                    self.fade_constants[fade_row],
+                );
+            }
         }
         target.copy_rect_from(
             disp,
@@ -5041,10 +5063,35 @@ impl FadeBlendConstants {
     }
 }
 
+struct FadeBlendTable {
+    r: [u8; 256],
+    g: [u8; 256],
+    b: [u8; 256],
+}
+
+impl FadeBlendTable {
+    fn new(constants: FadeBlendConstants) -> Self {
+        let mut r = [0u8; 256];
+        let mut g = [0u8; 256];
+        let mut b = [0u8; 256];
+        for v in 0..=255u32 {
+            let idx = v as usize;
+            r[idx] = ((v * constants.inv + constants.cr_alpha) >> 8) as u8;
+            g[idx] = ((v * constants.inv + constants.cg_alpha) >> 8) as u8;
+            b[idx] = ((v * constants.inv + constants.cb_alpha) >> 8) as u8;
+        }
+        Self { r, g, b }
+    }
+}
+
 fn fade_blend_constants(fade_h: usize, color: Pixel) -> Vec<FadeBlendConstants> {
     (0..fade_h)
         .map(|row| FadeBlendConstants::new(fade_alpha(row, fade_h), color))
         .collect()
+}
+
+fn fade_blend_tables(constants: &[FadeBlendConstants]) -> Vec<FadeBlendTable> {
+    constants.iter().copied().map(FadeBlendTable::new).collect()
 }
 
 fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], constants: FadeBlendConstants) {
@@ -5056,6 +5103,16 @@ fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], constants: FadeBlendConst
         let g = (sg * constants.inv + constants.cg_alpha) >> 8;
         let b = (sb * constants.inv + constants.cb_alpha) >> 8;
         *dst = Pixel((r << 16) | (g << 8) | b);
+    }
+}
+
+fn blend_row_towards_table(src: &[Pixel], dst: &mut [Pixel], table: &FadeBlendTable) {
+    for (src, dst) in src.iter().zip(dst.iter_mut()) {
+        let sr = ((src.0 >> 16) & 0xff) as usize;
+        let sg = ((src.0 >> 8) & 0xff) as usize;
+        let sb = (src.0 & 0xff) as usize;
+        *dst =
+            Pixel(((table.r[sr] as u32) << 16) | ((table.g[sg] as u32) << 8) | table.b[sb] as u32);
     }
 }
 
