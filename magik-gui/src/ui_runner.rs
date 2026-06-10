@@ -4144,6 +4144,7 @@ fn run_console_scroll_loop(
     let mut font = ConsoleFont::new(CONSOLE_FONT_PX);
     let mut trace = ConsoleScrollTrace::open(disp.height(), fb_y);
     let mut pacer = VsyncPacer::from_env();
+    let cpu = cpu_profile::start();
 
     window.request_redraw();
     update_slint_animations(animation_clock);

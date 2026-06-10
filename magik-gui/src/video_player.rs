@@ -6,7 +6,7 @@ use ffmpeg::media;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
 use ffmpeg::util::frame::video::Video;
-use ffmpeg_the_third as ffmpeg;
+use ffmpeg_next as ffmpeg;
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::path::Path;
 use std::sync::mpsc;
@@ -186,9 +186,7 @@ impl VideoPlayer {
             .map_err(|e| format!("open video decoder: {e}"))?;
 
         let audio_parameters = audio_stream.parameters();
-        validate_audio_parameters(&path, &audio_parameters)?;
-        let audio_rate = audio_parameters.sample_rate();
-        let audio_channels = audio_parameters.ch_layout().channels();
+        let (audio_rate, audio_channels) = validate_audio_parameters(&path, &audio_parameters)?;
 
         let scaler = ScalingContext::get(
             video_decoder.format(),
@@ -260,7 +258,7 @@ impl VideoPlayer {
         }
 
         for item in self.input.packets() {
-            let (stream, packet) = item.map_err(|e| format!("read video packet: {e}"))?;
+            let (stream, packet) = item;
             let stream_index = stream.index();
             if stream_index == self.video_stream_index {
                 self.video_decoder
@@ -308,7 +306,7 @@ impl VideoPlayer {
         }
 
         for item in self.input.packets() {
-            let (stream, packet) = item.map_err(|e| format!("read audio packet: {e}"))?;
+            let (stream, packet) = item;
             let stream_index = stream.index();
             if stream_index == self.audio_stream_index {
                 append_pcm_audio_packet(&packet, self.audio_channels, &mut self.queued_audio)?;
@@ -396,28 +394,35 @@ fn append_pcm_audio_packet(
 
 fn validate_audio_parameters(
     path: &str,
-    parameters: &ffmpeg::codec::ParametersRef<'_>,
-) -> Result<(), String> {
+    parameters: &ffmpeg::codec::Parameters,
+) -> Result<(u32, u32), String> {
     if parameters.id() != ffmpeg::codec::Id::PCM_S16LE {
         return Err(format!(
             "{path}: audio must be pcm_s16le, got {:?}",
             parameters.id()
         ));
     }
-    if parameters.sample_rate() != AUDIO_RATE {
+    let (sample_rate, channels) = audio_parameter_shape(parameters);
+    if sample_rate != AUDIO_RATE {
         return Err(format!(
             "{path}: audio must be {AUDIO_RATE}Hz PCM, got {}Hz",
-            parameters.sample_rate()
+            sample_rate
         ));
     }
-    let channels = parameters.ch_layout().channels();
     if channels != 1 && channels != 2 {
         return Err(format!(
             "{path}: audio must be mono or stereo PCM, got {} channels",
             channels
         ));
     }
-    Ok(())
+    Ok((sample_rate, channels as u32))
+}
+
+fn audio_parameter_shape(parameters: &ffmpeg::codec::Parameters) -> (u32, i32) {
+    unsafe {
+        let raw = parameters.as_ptr();
+        ((*raw).sample_rate as u32, (*raw).ch_layout.nb_channels)
+    }
 }
 
 fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {
