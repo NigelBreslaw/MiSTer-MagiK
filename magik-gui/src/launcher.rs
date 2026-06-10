@@ -3,8 +3,8 @@
 use crate::arcade_catalog::{
     ArcadeCatalog, ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
 };
-use crate::input::PadState;
 use crate::input_repeat::RepeatNav;
+use crate::input_state::PadState;
 use crate::library_bench;
 use std::io::Write;
 use std::path::Path;

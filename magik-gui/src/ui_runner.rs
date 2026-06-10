@@ -1,4 +1,5 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
+#![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
 use crate::fb::{Display, Pixel, VsyncPacer};
 use crate::fpga::{Fpga, Mode};
@@ -13,45 +14,7 @@ use slint::{
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-mod slint_ui {
-    #![allow(clippy::all, unused_imports)]
-    pub mod app {
-        include!(concat!(env!("OUT_DIR"), "/app.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod full_motion {
-        include!(concat!(env!("OUT_DIR"), "/full_motion.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod static_ui {
-        include!(concat!(env!("OUT_DIR"), "/static_ui.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod local_motion {
-        include!(concat!(env!("OUT_DIR"), "/local_motion.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod console_scroll {
-        include!(concat!(env!("OUT_DIR"), "/console_scroll.rs"));
-    }
-    #[cfg(not(mister_ui_scope_launcher))]
-    pub mod effect_hud {
-        include!(concat!(env!("OUT_DIR"), "/effect_hud.rs"));
-    }
-    #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
-    pub mod video_playback {
-        include!(concat!(env!("OUT_DIR"), "/video_playback.rs"));
-    }
-    pub mod controller {
-        include!(concat!(env!("OUT_DIR"), "/controller_test.rs"));
-    }
-    pub mod launcher {
-        include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
-    }
-    pub mod arcade_page {
-        include!(concat!(env!("OUT_DIR"), "/arcade_page.rs"));
-    }
-}
+use mister_magik_ui as slint_ui;
 
 use crate::arcade_catalog::{
     self, ArcadeCatalog, ArcadeGameEntry, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
@@ -69,7 +32,7 @@ use crate::preview_worker::PreviewWorker;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 use mister_magik_fb::effects::EffectState;
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
@@ -77,9 +40,9 @@ use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 use std::fs::File;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -103,19 +66,21 @@ fn screen_label(screen: Screen) -> &'static str {
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
+    #[cfg(not(mister_ui_scope_launcher))]
     "arcade_page",
     "blend_velocity",
+    #[cfg(not(mister_ui_scope_launcher))]
     "demo",
     "controller_test",
-    #[cfg(not(mister_ui_scope_launcher))]
+    #[cfg(mister_bench_scenes)]
     "full_motion",
-    #[cfg(not(mister_ui_scope_launcher))]
+    #[cfg(mister_bench_scenes)]
     "static_ui",
-    #[cfg(not(mister_ui_scope_launcher))]
+    #[cfg(mister_bench_scenes)]
     "local_motion",
-    #[cfg(not(mister_ui_scope_launcher))]
+    #[cfg(mister_bench_scenes)]
     "console_scroll",
-    #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+    #[cfg(all(feature = "video", mister_bench_scenes))]
     "video_playback",
 ];
 
@@ -305,6 +270,7 @@ impl DirtyRect {
         }
     }
 
+    #[cfg_attr(not(feature = "video"), allow(dead_code))]
     fn union(self, other: DirtyRect) -> DirtyRect {
         DirtyRect {
             x0: self.x0.min(other.x0),
@@ -365,13 +331,13 @@ fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 enum EffectBenchMode {
     Raw,
     Overlay,
 }
 
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 impl EffectBenchMode {
     fn label(self) -> &'static str {
         match self {
@@ -382,7 +348,7 @@ impl EffectBenchMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 enum EffectFill {
     Full,
     Half,
@@ -391,7 +357,7 @@ enum EffectFill {
     FpgaHalf,
 }
 
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 impl EffectFill {
     fn label(self) -> &'static str {
         match self {
@@ -420,7 +386,7 @@ impl EffectFill {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 struct EffectTarget {
     physical_x: usize,
     physical_y: usize,
@@ -431,7 +397,7 @@ struct EffectTarget {
     scale: usize,
 }
 
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 impl EffectTarget {
     fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
         let (physical_w, physical_h, scale) = match fill {
@@ -549,7 +515,7 @@ fn ui_fpga_scaled_mode() -> Mode {
     }
 }
 
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 fn parse_effect_bench_args() -> (
     Vec<EffectKind>,
     u64,
@@ -605,7 +571,7 @@ fn parse_effect_bench_args() -> (
 }
 
 #[derive(Default)]
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 struct EffectBenchTotals {
     frames: u64,
     effect_us: u128,
@@ -616,7 +582,7 @@ struct EffectBenchTotals {
     slow_frames: u64,
 }
 
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 impl EffectBenchTotals {
     fn record(
         &mut self,
@@ -646,7 +612,7 @@ impl EffectBenchTotals {
     }
 }
 
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 fn scale_effect_to_pixels_fit(
     src: &[u32],
     src_w: usize,
@@ -670,7 +636,7 @@ fn scale_effect_to_pixels_fit(
     }
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 pub fn run_effect_bench(f: &mut Fpga) {
     let (effects, secs, modes, size, fill) = parse_effect_bench_args();
     println!(
@@ -839,13 +805,13 @@ pub fn run_effect_bench(f: &mut Fpga) {
     }
 }
 
-#[cfg(mister_ui_scope_launcher)]
+#[cfg(not(mister_bench_scenes))]
 pub fn run_effect_bench(_f: &mut Fpga) {
     eprintln!("effect-bench is unavailable in launcher-only UI builds");
     std::process::exit(2);
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 fn run_one_effect_bench(
     disp: &mut Display,
     overlay_ctx: &mut Option<(
@@ -1272,6 +1238,7 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
+        #[cfg(not(mister_ui_scope_launcher))]
         "demo" => {
             with_scene_app!(app::AppWindow, &ui, &window, app, {
                 app.show().expect("show");
@@ -1287,7 +1254,7 @@ pub fn run_ui(f: &mut Fpga) {
                 );
             });
         }
-        #[cfg(not(mister_ui_scope_launcher))]
+        #[cfg(mister_bench_scenes)]
         "full_motion" => {
             with_scene_app!(full_motion::FullMotion, &ui, &window, app, {
                 app.show().expect("show");
@@ -1303,7 +1270,7 @@ pub fn run_ui(f: &mut Fpga) {
                 );
             });
         }
-        #[cfg(not(mister_ui_scope_launcher))]
+        #[cfg(mister_bench_scenes)]
         "static_ui" => {
             with_scene_app!(static_ui::StaticUi, &ui, &window, app, {
                 app.show().expect("show");
@@ -1319,7 +1286,7 @@ pub fn run_ui(f: &mut Fpga) {
                 );
             });
         }
-        #[cfg(not(mister_ui_scope_launcher))]
+        #[cfg(mister_bench_scenes)]
         "local_motion" => {
             with_scene_app!(local_motion::LocalMotion, &ui, &window, app, {
                 app.show().expect("show");
@@ -1335,14 +1302,14 @@ pub fn run_ui(f: &mut Fpga) {
                 );
             });
         }
-        #[cfg(not(mister_ui_scope_launcher))]
+        #[cfg(mister_bench_scenes)]
         "console_scroll" => {
             with_scene_app!(console_scroll::ConsoleScroll, &ui, &window, app, {
                 app.show().expect("show");
                 run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
             });
         }
-        #[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+        #[cfg(all(feature = "video", mister_bench_scenes))]
         "video_playback" => {
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
                 app.show().expect("show");
@@ -1359,6 +1326,7 @@ pub fn run_ui(f: &mut Fpga) {
                 run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "arcade_page" => {
             let pad = open_pads();
             with_scene_app!(arcade_page::ArcadePage, &ui, &window, app, {
@@ -1448,6 +1416,7 @@ fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::MisterBridg
     bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn sync_arcade_page_geometry_bridge(bridge: &slint_ui::arcade_page::MisterBridge) {
     bridge.set_arcade_list_x(ARCADE_LIST_X as i32);
     bridge.set_arcade_list_y(ARCADE_LIST_Y as i32);
@@ -3192,7 +3161,7 @@ fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
     x0: 40,
     y0: 158,
@@ -3200,7 +3169,7 @@ const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
     y1: 382,
 };
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[derive(Default)]
 struct VideoFramePhases {
     frame_updated: bool,
@@ -3211,7 +3180,7 @@ struct VideoFramePhases {
     audio_us: u64,
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[derive(Default)]
 struct VideoWindowTotals {
     frames: u64,
@@ -3228,7 +3197,7 @@ struct VideoWindowTotals {
     copy_px: u128,
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 impl VideoWindowTotals {
     fn record(
         &mut self,
@@ -3275,14 +3244,14 @@ impl VideoWindowTotals {
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VideoRenderMode {
     SlintImage,
     DirectBlit,
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 impl VideoRenderMode {
     fn from_env() -> Self {
         match std::env::var("MISTER_VIDEO_RENDER_MODE")
@@ -3303,7 +3272,7 @@ impl VideoRenderMode {
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 fn video_copy_rect(
     dirty: DirtyRect,
     video_dirty_clip_ready: bool,
@@ -3316,7 +3285,7 @@ fn video_copy_rect(
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 fn direct_video_copy_rect(dirty: Option<DirtyRect>, video_dirty_clip_ready: bool) -> DirtyRect {
     let Some(dirty) = dirty else {
         return VIDEO_IMAGE_RECT;
@@ -3329,7 +3298,7 @@ fn direct_video_copy_rect(dirty: Option<DirtyRect>, video_dirty_clip_ready: bool
         .unwrap_or(dirty.union(VIDEO_IMAGE_RECT))
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 fn blit_video_frame_to_cached(
     frame: &SharedPixelBuffer<Rgb8Pixel>,
     cached: &mut [Pixel],
@@ -3359,7 +3328,7 @@ fn blit_video_frame_to_cached(
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -3687,7 +3656,7 @@ fn run_video_playback_loop(
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[derive(Default)]
 struct AudioWindowStats {
     write_us: u128,
@@ -3697,7 +3666,7 @@ struct AudioWindowStats {
     loop_count: u64,
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 impl AudioWindowStats {
     fn add(
         &mut self,
@@ -3720,7 +3689,7 @@ impl AudioWindowStats {
     }
 }
 
-#[cfg(all(feature = "video", not(mister_ui_scope_launcher)))]
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[allow(clippy::too_many_arguments)]
 fn record_video_sample(
     phases: VideoFramePhases,
@@ -3767,22 +3736,22 @@ fn record_video_sample(
     }
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_LIST_X: usize = 40;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_LIST_Y: usize = 116;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_LIST_W: usize = 880;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_LIST_H: usize = 356;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_ROW_H: usize = 44;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_FONT_PX: f32 = 16.0;
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 const CONSOLE_TRACE_DEFAULT_PATH: &str = "/tmp/mister-magik-console-scroll-trace.tsv";
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 struct ConsoleScrollTrace {
     file: File,
     start: Instant,
@@ -3791,7 +3760,7 @@ struct ConsoleScrollTrace {
     copy_budget_us: u64,
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 struct ConsoleScrollTraceSample {
     virtual_y: usize,
     slint_us: u64,
@@ -3807,7 +3776,7 @@ struct ConsoleScrollTraceSample {
     fb_nonzero: u32,
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 impl ConsoleScrollTrace {
     fn open(display_h: usize, list_y: usize) -> Option<Self> {
         let path = std::env::var("MISTER_CONSOLE_SCROLL_TRACE_FILE").ok()?;
@@ -3867,7 +3836,7 @@ impl ConsoleScrollTrace {
     }
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 fn run_console_scroll_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -4019,7 +3988,7 @@ fn run_console_scroll_loop(
     );
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 fn copy_console_surface(
     disp: &mut Display,
     fb_x: usize,
@@ -4052,7 +4021,7 @@ fn copy_console_surface(
     );
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 fn draw_console_virtual_strip_wrapped(
     dst: &mut [Pixel],
     stride: usize,
@@ -4085,7 +4054,7 @@ fn draw_console_virtual_strip_wrapped(
     }
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 fn draw_console_virtual_strip(
     dst: &mut [Pixel],
     stride: usize,
@@ -4147,7 +4116,7 @@ fn draw_console_virtual_strip(
     }
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(mister_bench_scenes)]
 fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
     let selected = row % 11 == 5;
     let bg = if selected {
@@ -4877,6 +4846,7 @@ fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) 
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn slint_arcade_page_games(
     games: &[ArcadeGameEntry],
 ) -> ModelRc<slint_ui::arcade_page::ArcadeGame> {
@@ -4893,6 +4863,7 @@ fn slint_arcade_page_games(
     ModelRc::new(VecModel::from(rows))
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 fn run_arcade_page_loop(
     secs: u64,
     ui: &UiDisplay,
