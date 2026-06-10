@@ -9,9 +9,36 @@ DIST="$WORK/dist"
 STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-pcm-s16le-cortex-a9-o3"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 
-if [ -f "$STAMP" ] && [ -f "$DIST/lib/libavcodec.a" ]; then
+REQUIRED_DIST_FILES=(
+  "$STAMP"
+  "$DIST/include/libavcodec/avcodec.h"
+  "$DIST/include/libavcodec/version_major.h"
+  "$DIST/include/libavformat/avformat.h"
+  "$DIST/include/libavutil/avutil.h"
+  "$DIST/include/libswscale/swscale.h"
+  "$DIST/lib/libavcodec.a"
+  "$DIST/lib/libavformat.a"
+  "$DIST/lib/libavutil.a"
+  "$DIST/lib/libswscale.a"
+  "$DIST/lib/pkgconfig/libavcodec.pc"
+)
+
+dist_is_complete() {
+  local file
+  for file in "${REQUIRED_DIST_FILES[@]}"; do
+    if [ ! -f "$file" ]; then
+      return 1
+    fi
+  done
+}
+
+if dist_is_complete; then
   echo "==> minimal FFmpeg already built: $DIST"
   exit 0
+fi
+if [ -e "$DIST" ]; then
+  echo "==> minimal FFmpeg cache is incomplete; rebuilding: $DIST"
+  rm -rf "$DIST"
 fi
 
 export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"

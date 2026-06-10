@@ -208,7 +208,7 @@ jobs:
 
       - name: Start Apple container services
         run: |
-          container system start
+          container system start --enable-kernel-install
           container builder start --cpus 3 --memory 5g
 
       - name: Build ARM binary with native Apple container
