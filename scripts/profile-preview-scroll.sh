@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present] [--preview-visual-pct N]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs both:
@@ -23,6 +23,9 @@ worker so list-renderer changes can be measured without preview/catalog noise.
 present path. Default keeps the normal full arcade-list present path.
 --preview-visual-pct scales screenshot display area. 100 is the current size;
 50 renders screenshots at half the current visual area.
+--preview-resize-filter enables runtime resize before Slint image creation.
+--preview-resize-max sets the resize target box; default runtime code uses 320x320.
+--preview-format selects original PNG, derived resized PNG, or raw RGB cache.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -36,6 +39,9 @@ deploy="skip"
 list_only="0"
 scroll_present="0"
 preview_visual_pct=""
+preview_resize_filter=""
+preview_resize_max=""
+preview_format=""
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -46,6 +52,9 @@ while [[ $# -gt 0 ]]; do
     --list-only) list_only="1"; shift ;;
     --scroll-present) scroll_present="1"; shift ;;
     --preview-visual-pct) preview_visual_pct="${2:-}"; shift 2 ;;
+    --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
+    --preview-resize-max) preview_resize_max="${2:-}"; shift 2 ;;
+    --preview-format) preview_format="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) positionals+=("$1"); shift ;;
   esac
@@ -80,15 +89,18 @@ fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ -n "$preview_visual_pct" && ! "$preview_visual_pct" =~ ^[0-9]+$ ]]; then echo "--preview-visual-pct must be an integer" >&2; exit 2; fi
+case "$preview_resize_filter" in ""|off|nearest|box|lanczos) ;; *) echo "--preview-resize-filter must be off, nearest, box, or lanczos" >&2; exit 2 ;; esac
+if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ ]]; then echo "--preview-resize-max must look like 320x320" >&2; exit 2; fi
+case "$preview_format" in ""|png|derived-png|raw-rgb) ;; *) echo "--preview-format must be png, derived-png, or raw-rgb" >&2; exit 2 ;; esac
 
 mkdir -p "$OUT_DIR"
 
-remote_extra_env=""
+remote_extra_env="MISTER_CATALOG_REFRESH=off"
 if [[ "$list_only" == "1" ]]; then
   remote_extra_env="MISTER_PREVIEW_LOADING=off MISTER_CATALOG_REFRESH=off"
 fi
 if [[ "$preview_stress" == "1" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_STRESS=1 MISTER_PREVIEW_APPLY_WHILE_SCROLL=1 MISTER_CATALOG_REFRESH=off"
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_STRESS=1 MISTER_CATALOG_REFRESH=off"
 fi
 if [[ "$scroll_present" == "1" ]]; then
   remote_extra_env="$remote_extra_env MISTER_ARCADE_SCROLL_PRESENT=1"
@@ -96,6 +108,17 @@ fi
 if [[ -n "$preview_visual_pct" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_VISUAL_PCT=$preview_visual_pct"
 fi
+if [[ -n "$preview_resize_filter" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_RESIZE_FILTER=$preview_resize_filter"
+fi
+if [[ -n "$preview_resize_max" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_RESIZE_MAX=$preview_resize_max"
+fi
+if [[ -n "$preview_format" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_FORMAT=$preview_format"
+fi
+run_label="${preview_format:-png} ${preview_resize_filter:-off} resize ${preview_resize_max:-320x320}"
+remote_extra_env="$remote_extra_env MISTER_PREVIEW_RUN_LABEL='${run_label}'"
 
 case "$deploy" in
   fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
@@ -111,7 +134,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100}"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-off} preview_resize_max=${preview_resize_max:-default} preview_format=${preview_format:-png}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -122,13 +145,21 @@ sleep 5
 $remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO='$remote_scenario' MISTER_PREVIEW_TRACE=1 MISTER_PREVIEW_SCROLL_TRACE='$remote_tsv' '$REMOTE' ui '$scene' '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
+TICKS=0
+MAX_TICKS=$((secs + 15))
 while kill -0 \$UI_PID 2>/dev/null; do
   RSS=\$(awk '/^VmHWM:/{print \$2}' /proc/\$UI_PID/status 2>/dev/null || echo 0)
   case \"\$RSS\" in ''|*[!0-9]*) RSS=0 ;; esac
   [ \"\$RSS\" -gt \"\$RSS_MAX\" ] && RSS_MAX=\$RSS
   sleep 1
+  TICKS=\$((TICKS + 1))
+  if [ \"\$TICKS\" -ge \"\$MAX_TICKS\" ]; then
+    echo bench_timeout_after_ticks=\$TICKS >>'$remote_log'
+    kill -9 \$UI_PID 2>/dev/null || true
+    break
+  fi
 done
-wait \$UI_PID
+wait \$UI_PID 2>/dev/null || true
 echo rss_hwm_kb=\$RSS_MAX >>'$remote_log'
 test -s '$remote_tsv'
 " || {
