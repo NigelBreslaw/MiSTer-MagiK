@@ -1,9 +1,0 @@
-/.Module.symvers.cmd
-/.mister_magik_fbwc.*.cmd
-/.modules.order.cmd
-/Module.symvers
-/modules.order
-/*.ko
-/*.mod
-/*.mod.c
-/*.o
