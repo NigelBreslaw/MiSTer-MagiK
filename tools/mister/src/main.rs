@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const FB_W: usize = 1920;
-const FB_H: usize = 1080;
-const FB_BYTES: usize = FB_W * FB_H * 4;
+const DEFAULT_FB_W: usize = 1920;
+const DEFAULT_FB_H: usize = 1080;
+const DEFAULT_FB_BPP: usize = 32;
+const DEFAULT_FB_STRIDE: usize = DEFAULT_FB_W * DEFAULT_FB_BPP / 8;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -556,15 +557,75 @@ done
 }
 
 fn fb_visual_sample(sess: &Session) -> Result<Value> {
-    let raw = capture_fb_raw(sess, "status")?;
-    Ok(classify_fb(&raw))
+    let capture = capture_fb(sess, "status")?;
+    Ok(classify_fb(&capture.raw, &capture.geometry))
 }
 
-fn capture_fb_raw(sess: &Session, label: &str) -> Result<Vec<u8>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FbGeometry {
+    width: usize,
+    height: usize,
+    stride: usize,
+    bpp: usize,
+}
+
+impl FbGeometry {
+    fn bytes(self) -> Result<usize> {
+        self.stride
+            .checked_mul(self.height)
+            .ok_or_else(|| "framebuffer byte size overflow".into())
+    }
+}
+
+struct FbCapture {
+    raw: Vec<u8>,
+    geometry: FbGeometry,
+}
+
+fn framebuffer_geometry(sess: &Session) -> Result<FbGeometry> {
+    let virtual_size = remote_trim(sess, "/sys/class/graphics/fb0/virtual_size")
+        .unwrap_or_else(|| format!("{DEFAULT_FB_W},{DEFAULT_FB_H}"));
+    let (width, height) = parse_virtual_size(&virtual_size).unwrap_or((DEFAULT_FB_W, DEFAULT_FB_H));
+    let bpp = remote_trim(sess, "/sys/class/graphics/fb0/bits_per_pixel")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_FB_BPP);
+    let bytes_per_pixel = bpp
+        .checked_div(8)
+        .filter(|v| *v > 0)
+        .ok_or_else(|| format!("unsupported framebuffer bpp: {bpp}"))?;
+    let packed_stride = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or("framebuffer stride overflow")?;
+    let stride = remote_trim(sess, "/sys/class/graphics/fb0/stride")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(packed_stride);
+    if stride < packed_stride {
+        return Err(format!(
+            "framebuffer stride {stride} is smaller than packed row {packed_stride}"
+        )
+        .into());
+    }
+    Ok(FbGeometry {
+        width,
+        height,
+        stride,
+        bpp,
+    })
+}
+
+fn parse_virtual_size(text: &str) -> Option<(usize, usize)> {
+    let (w, h) = text.trim().split_once(',')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
+}
+
+fn capture_fb(sess: &Session, label: &str) -> Result<FbCapture> {
+    let geometry = framebuffer_geometry(sess)?;
+    let expected = geometry.bytes()?;
     let remote = format!("/tmp/mister-magik-{label}-{}.raw", unix_secs());
     let cmd = format!(
-        "dd if=/dev/fb0 of={} bs=1M count=8 2>/dev/null && wc -c {}",
+        "dd if=/dev/fb0 of={} bs={} count=1 2>/dev/null && wc -c {}",
         sh(&remote),
+        expected,
         sh(&remote)
     );
     let out = exec(sess, &cmd, true)?;
@@ -573,17 +634,25 @@ fn capture_fb_raw(sess: &Session, label: &str) -> Result<Vec<u8>> {
     }
     let sftp = sess.sftp()?;
     let mut file = sftp.open(Path::new(&remote))?;
-    let mut raw = Vec::with_capacity(FB_BYTES);
+    let mut raw = Vec::with_capacity(expected);
     file.read_to_end(&mut raw)?;
     let _ = sftp.unlink(Path::new(&remote));
-    if raw.len() < FB_BYTES {
-        return Err(format!("fb0 raw had {} bytes, expected {FB_BYTES}", raw.len()).into());
+    if raw.len() < expected {
+        return Err(format!(
+            "fb0 raw had {} bytes, expected {expected} for {}x{} stride={} bpp={}",
+            raw.len(),
+            geometry.width,
+            geometry.height,
+            geometry.stride,
+            geometry.bpp
+        )
+        .into());
     }
-    raw.truncate(FB_BYTES);
-    Ok(raw)
+    raw.truncate(expected);
+    Ok(FbCapture { raw, geometry })
 }
 
-fn classify_fb(raw: &[u8]) -> Value {
+fn classify_fb(raw: &[u8], geometry: &FbGeometry) -> Value {
     let mut samples = 0u32;
     let mut nonzero = 0u32;
     let mut blackish = 0u32;
@@ -592,9 +661,13 @@ fn classify_fb(raw: &[u8]) -> Value {
     let mut color_max = 0u32;
     let mut prev = None;
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for y in (0..FB_H).step_by(16) {
-        for x in (0..FB_W).step_by(16) {
-            let i = (y * FB_W + x) * 4;
+    let bytes_per_pixel = geometry.bpp / 8;
+    for y in (0..geometry.height).step_by(16) {
+        for x in (0..geometry.width).step_by(16) {
+            let i = y * geometry.stride + x * bytes_per_pixel;
+            if i + 2 >= raw.len() {
+                continue;
+            }
             let b = raw[i] as u32;
             let g = raw[i + 1] as u32;
             let r = raw[i + 2] as u32;
@@ -628,8 +701,10 @@ fn classify_fb(raw: &[u8]) -> Value {
     };
     json!({
         "ok": true,
-        "width": FB_W,
-        "height": FB_H,
+        "width": geometry.width,
+        "height": geometry.height,
+        "stride": geometry.stride,
+        "bpp": geometry.bpp,
         "step": 16,
         "samples": samples,
         "nonzero": nonzero,
@@ -806,11 +881,11 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
 fn snapshot(sess: &Session, out_dir: Option<PathBuf>) -> Result<()> {
     let dir = out_dir.unwrap_or_else(|| PathBuf::from("build/device-snapshots").join(timestamp()));
     fs::create_dir_all(&dir)?;
-    let raw = capture_fb_raw(sess, "snapshot")?;
+    let capture = capture_fb(sess, "snapshot")?;
     let status = collect_status(sess)?;
     fs::write(dir.join("status.json"), serde_json::to_vec_pretty(&status)?)?;
-    fs::write(dir.join("fb0.raw"), &raw)?;
-    write_png_bgrx(&raw, FB_W, FB_H, &dir.join("fb0.png"))?;
+    fs::write(dir.join("fb0.raw"), &capture.raw)?;
+    write_png_bgrx_stride(&capture.raw, &capture.geometry, &dir.join("fb0.png"))?;
     println!("snapshot: {}", dir.display());
     println!("png: {}", dir.join("fb0.png").display());
     Ok(())
@@ -938,11 +1013,38 @@ fn profile_summary_text(path: &Path) -> Result<String> {
 }
 
 fn write_png_bgrx(raw: &[u8], w: usize, h: usize, path: &Path) -> Result<()> {
+    let geometry = FbGeometry {
+        width: w,
+        height: h,
+        stride: w.checked_mul(4).ok_or("raw dimensions overflow")?,
+        bpp: 32,
+    };
+    write_png_bgrx_stride(raw, &geometry, path)
+}
+
+fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Result<()> {
+    if geometry.bpp != 32 {
+        return Err(format!(
+            "PNG capture only supports 32bpp framebuffer, got {}",
+            geometry.bpp
+        )
+        .into());
+    }
+    let expected = geometry.bytes()?;
+    if raw.len() < expected {
+        return Err(format!(
+            "raw framebuffer has {} bytes, expected at least {expected}",
+            raw.len()
+        )
+        .into());
+    }
+    let w = geometry.width;
+    let h = geometry.height;
     let mut rgba = Vec::with_capacity((w * 4 + 1) * h);
     for y in 0..h {
         rgba.push(0);
         for x in 0..w {
-            let i = (y * w + x) * 4;
+            let i = y * geometry.stride + x * 4;
             rgba.push(raw[i + 2]);
             rgba.push(raw[i + 1]);
             rgba.push(raw[i]);
@@ -1091,11 +1193,27 @@ mod tests {
     where
         F: FnMut(usize, usize) -> (u8, u8, u8),
     {
-        let mut raw = vec![0; FB_BYTES];
-        for y in 0..FB_H {
-            for x in 0..FB_W {
+        raw_frame_with_geometry(default_fb_geometry(), |x, y| f(x, y))
+    }
+
+    fn default_fb_geometry() -> FbGeometry {
+        FbGeometry {
+            width: DEFAULT_FB_W,
+            height: DEFAULT_FB_H,
+            stride: DEFAULT_FB_STRIDE,
+            bpp: DEFAULT_FB_BPP,
+        }
+    }
+
+    fn raw_frame_with_geometry<F>(geometry: FbGeometry, mut f: F) -> Vec<u8>
+    where
+        F: FnMut(usize, usize) -> (u8, u8, u8),
+    {
+        let mut raw = vec![0; geometry.bytes().unwrap()];
+        for y in 0..geometry.height {
+            for x in 0..geometry.width {
                 let (r, g, b) = f(x, y);
-                let i = (y * FB_W + x) * 4;
+                let i = y * geometry.stride + x * 4;
                 raw[i] = b;
                 raw[i + 1] = g;
                 raw[i + 2] = r;
@@ -1175,17 +1293,18 @@ H: Handlers=sysrq kbd event7
 
     #[test]
     fn classifies_black_slint_and_static_like_framebuffers() {
-        let black = vec![0; FB_BYTES];
-        assert_eq!(classify_fb(&black)["class"], "mostly_black");
+        let geometry = default_fb_geometry();
+        let black = vec![0; geometry.bytes().unwrap()];
+        assert_eq!(classify_fb(&black, &geometry)["class"], "mostly_black");
 
         let slint = raw_frame_with(|x, _| {
-            if x < FB_W / 2 {
+            if x < DEFAULT_FB_W / 2 {
                 (0x06, 0xd6, 0xa0)
             } else {
                 (0xe8, 0xe0, 0xf0)
             }
         });
-        assert_eq!(classify_fb(&slint)["class"], "slint_like");
+        assert_eq!(classify_fb(&slint, &geometry)["class"], "slint_like");
 
         let static_like = raw_frame_with(|x, y| {
             if (x / 16 + y / 16) % 2 == 0 {
@@ -1194,7 +1313,36 @@ H: Handlers=sysrq kbd event7
                 (0x10, 0x10, 0x10)
             }
         });
-        assert_eq!(classify_fb(&static_like)["class"], "static_like");
+        assert_eq!(classify_fb(&static_like, &geometry)["class"], "static_like");
+    }
+
+    #[test]
+    fn parses_virtual_size() {
+        assert_eq!(parse_virtual_size("960,540"), Some((960, 540)));
+        assert_eq!(parse_virtual_size(" 1920,1080\n"), Some((1920, 1080)));
+        assert_eq!(parse_virtual_size("bad"), None);
+    }
+
+    #[test]
+    fn classifies_strided_960x540_framebuffer() {
+        let geometry = FbGeometry {
+            width: 960,
+            height: 540,
+            stride: 4096,
+            bpp: 32,
+        };
+        let raw = raw_frame_with_geometry(geometry, |x, _| {
+            if x < 480 {
+                (0x06, 0xd6, 0xa0)
+            } else {
+                (0xe8, 0xe0, 0xf0)
+            }
+        });
+        assert_eq!(raw.len(), 4096 * 540);
+        assert_eq!(classify_fb(&raw, &geometry)["width"], 960);
+        assert_eq!(classify_fb(&raw, &geometry)["height"], 540);
+        assert_eq!(classify_fb(&raw, &geometry)["stride"], 4096);
+        assert_eq!(classify_fb(&raw, &geometry)["class"], "slint_like");
     }
 
     #[test]
