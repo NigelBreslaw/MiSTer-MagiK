@@ -331,6 +331,16 @@ fn preview_loading_enabled() -> bool {
     })
 }
 
+fn preview_apply_while_scroll_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_PREVIEW_APPLY_WHILE_SCROLL").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 fn catalog_refresh_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -1577,7 +1587,13 @@ fn sync_bridge_launcher(
         let games = catalog
             .map(|catalog| active_system_games(catalog, nav))
             .unwrap_or_default();
-        request_arcade_preview(&bridge, &games, nav.arcade.selected, preview);
+        let _ = request_arcade_preview_window(
+            &bridge,
+            &games,
+            nav.arcade.selected,
+            preview,
+            arcade_preview_bridge_apply_allowed(nav),
+        );
     } else {
         preview.clear(&bridge);
     }
@@ -1619,7 +1635,13 @@ fn sync_bridge_launcher_light(
             games = active_system_games(catalog, nav);
             &games
         };
-        schedule_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
+        schedule_arcade_preview_window(
+            &bridge,
+            games,
+            nav.arcade.selected,
+            preview,
+            arcade_preview_bridge_apply_allowed(nav),
+        );
     } else {
         preview.clear(&bridge);
     }
@@ -1657,9 +1679,12 @@ struct PreviewImage {
 #[derive(Default)]
 struct PreviewImageCache {
     entries: VecDeque<(String, PreviewImage)>,
+    failed_paths: VecDeque<String>,
 }
 
 impl PreviewImageCache {
+    const FAILED_CAP: usize = 128;
+
     fn get(&mut self, path: &str) -> Option<PreviewImage> {
         let idx = self.entries.iter().position(|(p, _)| p == path)?;
         let (_, image) = self.entries.remove(idx)?;
@@ -1676,6 +1701,16 @@ impl PreviewImageCache {
         self.retain_window(window_paths);
     }
 
+    fn insert_failed(&mut self, path: String) {
+        if let Some(idx) = self.failed_paths.iter().position(|p| p == &path) {
+            self.failed_paths.remove(idx);
+        }
+        self.failed_paths.push_back(path);
+        while self.failed_paths.len() > Self::FAILED_CAP {
+            self.failed_paths.pop_front();
+        }
+    }
+
     fn retain_window(&mut self, window_paths: &[String]) {
         if !window_paths.is_empty() {
             self.entries
@@ -1688,6 +1723,10 @@ impl PreviewImageCache {
 
     fn contains(&self, path: &str) -> bool {
         self.entries.iter().any(|(p, _)| p == path)
+    }
+
+    fn contains_failed(&self, path: &str) -> bool {
+        self.failed_paths.iter().any(|p| p == path)
     }
 }
 
@@ -1812,7 +1851,7 @@ fn request_arcade_preview(
     selected: usize,
     preview: &mut PreviewState,
 ) {
-    request_arcade_preview_window(bridge, games, selected, preview);
+    let _ = request_arcade_preview_window(bridge, games, selected, preview, true);
 }
 
 fn request_arcade_preview_window(
@@ -1820,11 +1859,13 @@ fn request_arcade_preview_window(
     games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
-) {
+    allow_bridge_apply: bool,
+) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
-        return;
+        return false;
     }
+    let allow_bridge_apply = allow_bridge_apply || !preview.has_visible_preview;
     let game = games.get(selected);
     let Some(game) = game else {
         preview.selected_mra_path = None;
@@ -1838,9 +1879,11 @@ fn request_arcade_preview_window(
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
         clear_preview_image_bridge(bridge);
-        return;
+        return true;
     };
-    bridge.set_arcade_preview_placeholder_visible(true);
+    if allow_bridge_apply {
+        bridge.set_arcade_preview_placeholder_visible(true);
+    }
 
     preview.window_paths = preview_window_paths(games, selected, DEFAULT_PREVIEW_RADIUS, |game| {
         game.has_image.then_some(game.image_path.as_str())
@@ -1855,31 +1898,66 @@ fn request_arcade_preview_window(
         .as_deref()
         .is_some_and(|path| path == game.mra_path)
     {
+        if allow_bridge_apply {
+            if let Some(path) = preview.selected_image_path.clone() {
+                if preview.visible_path != path {
+                    if let Some(image) = preview.cache.get(&path) {
+                        bridge.set_arcade_preview_title(game.title.clone().into());
+                        preview.current_generation = 0;
+                        preview.has_visible_preview = true;
+                        preview.visible_path = path;
+                        apply_preview_image_bridge(bridge, &image);
+                        request_preview_prefetches(games, selected, preview);
+                        return true;
+                    }
+                    if preview.cache.contains_failed(&path) {
+                        preview.current_generation = 0;
+                        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+                        request_preview_prefetches(games, selected, preview);
+                        return true;
+                    }
+                }
+            }
+        }
         request_preview_prefetches(games, selected, preview);
-        return;
+        return false;
     }
     preview.selected_mra_path = Some(game.mra_path.clone());
 
-    bridge.set_arcade_preview_title(game.title.clone().into());
+    if allow_bridge_apply {
+        bridge.set_arcade_preview_title(game.title.clone().into());
+    }
     if game.has_image {
         preview.selected_image_path = Some(game.image_path.clone());
+        if preview.cache.contains_failed(&game.image_path) {
+            preview.current_generation = 0;
+            if allow_bridge_apply {
+                bridge.set_arcade_preview_status(PreviewStatus::Empty);
+            }
+            request_preview_prefetches(games, selected, preview);
+            return allow_bridge_apply;
+        }
         if let Some(image) = preview.cache.get(&game.image_path) {
             preview.current_generation = 0;
-            preview.has_visible_preview = true;
+            if allow_bridge_apply {
+                preview.has_visible_preview = true;
+            }
             if preview_trace_enabled() {
                 eprintln!(
                     "preview_trace cache_hit title={} path={}",
                     game.title, game.image_path
                 );
             }
-            if preview.visible_path != game.image_path {
-                preview.visible_path = game.image_path.clone();
-                apply_preview_image_bridge(bridge, &image);
-            } else {
-                apply_preview_image_bridge(bridge, &image);
+            if allow_bridge_apply {
+                if preview.visible_path != game.image_path {
+                    preview.visible_path = game.image_path.clone();
+                    apply_preview_image_bridge(bridge, &image);
+                } else {
+                    apply_preview_image_bridge(bridge, &image);
+                }
             }
             request_preview_prefetches(games, selected, preview);
-            return;
+            return allow_bridge_apply;
         }
         preview.current_generation = preview
             .worker
@@ -1890,20 +1968,30 @@ fn request_arcade_preview_window(
                 preview.current_generation, game.title, game.image_path
             );
         }
-        if !preview.has_visible_preview {
+        if allow_bridge_apply && !preview.has_visible_preview {
             clear_preview_image_bridge(bridge);
         }
-        bridge.set_arcade_preview_status(PreviewStatus::Loading);
+        if allow_bridge_apply {
+            bridge.set_arcade_preview_status(PreviewStatus::Loading);
+        }
         request_preview_prefetches(games, selected, preview);
-        return;
+        return allow_bridge_apply;
     }
     preview.current_generation = 0;
     preview.selected_image_path = None;
-    preview.has_visible_preview = false;
-    preview.visible_path.clear();
-    bridge.set_arcade_preview_placeholder_visible(true);
-    clear_preview_image_bridge(bridge);
-    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+    if allow_bridge_apply {
+        preview.has_visible_preview = false;
+        preview.visible_path.clear();
+        bridge.set_arcade_preview_placeholder_visible(true);
+        clear_preview_image_bridge(bridge);
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+    }
+    allow_bridge_apply
+}
+
+fn arcade_preview_bridge_apply_allowed(nav: &LauncherNav) -> bool {
+    preview_apply_while_scroll_enabled()
+        || (nav.arcade.visual_index - nav.arcade.selected as f32).abs() < 0.01
 }
 
 fn request_preview_prefetches(
@@ -1920,6 +2008,7 @@ fn request_preview_prefetches(
         };
         if !game.has_image
             || preview.cache.contains(&game.image_path)
+            || preview.cache.contains_failed(&game.image_path)
             || preview.pending_prefetch_paths.contains(&game.image_path)
         {
             continue;
@@ -1945,6 +2034,7 @@ fn schedule_arcade_preview_window(
     games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
+    allow_bridge_apply: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
@@ -1962,15 +2052,19 @@ fn schedule_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return false;
     }
-    request_arcade_preview_window(bridge, games, selected, preview);
-    true
+    request_arcade_preview_window(bridge, games, selected, preview, allow_bridge_apply)
 }
 
-fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
+fn apply_ready_preview(
+    app: &slint_ui::launcher::Launcher,
+    preview: &mut PreviewState,
+    allow_bridge_apply: bool,
+) -> bool {
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
         return false;
     }
+    let allow_bridge_apply = allow_bridge_apply || !preview.has_visible_preview;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
     for result in preview.worker.drain() {
@@ -2025,19 +2119,33 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
                 .cache
                 .insert(image_path.clone(), image.clone(), &preview.window_paths);
             if is_selected_result {
-                bridge.set_arcade_preview_title(result.title.into());
                 preview.current_generation = 0;
-                preview.has_visible_preview = true;
-                preview.visible_path = image_path;
-                apply_preview_image_bridge(&bridge, &image);
-                dirty = true;
+                if allow_bridge_apply {
+                    bridge.set_arcade_preview_title(result.title.into());
+                    preview.has_visible_preview = true;
+                    preview.visible_path = image_path;
+                    apply_preview_image_bridge(&bridge, &image);
+                    dirty = true;
+                }
             }
-        } else if is_selected_result {
-            preview.has_visible_preview = false;
-            preview.visible_path.clear();
-            clear_preview_image_bridge(&bridge);
-            bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            dirty = true;
+        } else {
+            preview.cache.insert_failed(result.image_path.clone());
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace cache_failed priority={:?} selected={} path={}",
+                    result.priority, is_selected_result, result.image_path
+                );
+            }
+            if is_selected_result {
+                preview.current_generation = 0;
+                if allow_bridge_apply {
+                    preview.has_visible_preview = false;
+                    preview.visible_path.clear();
+                    clear_preview_image_bridge(&bridge);
+                    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+                    dirty = true;
+                }
+            }
         }
     }
     dirty
@@ -5525,10 +5633,17 @@ fn run_preview_scroll_bench_loop(
         nav.screen = Screen::Arcade;
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
-        if schedule_arcade_preview_window(&bridge, &games, nav.arcade.selected, &mut preview) {
+        let allow_preview_apply = arcade_preview_bridge_apply_allowed(&nav);
+        if schedule_arcade_preview_window(
+            &bridge,
+            &games,
+            nav.arcade.selected,
+            &mut preview,
+            allow_preview_apply,
+        ) {
             window.request_redraw();
         }
-        if apply_ready_preview(&app, &mut preview) {
+        if apply_ready_preview(&app, &mut preview, allow_preview_apply) {
             window.request_redraw();
         }
 
@@ -6244,11 +6359,18 @@ fn run_launcher_loop(
                 &active_arcade_games_cache,
                 nav.arcade.selected,
                 &mut preview,
+                arcade_preview_bridge_apply_allowed(&nav),
             ) {
                 window.request_redraw();
             }
         }
-        if !launching && apply_ready_preview(&app, &mut preview) {
+        if !launching
+            && apply_ready_preview(
+                &app,
+                &mut preview,
+                arcade_preview_bridge_apply_allowed(&nav),
+            )
+        {
             window.request_redraw();
         }
 
