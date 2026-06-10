@@ -234,7 +234,7 @@ The matrix covers the local build modes that matter:
 - `magik-gui/build-arm.sh --fast`
 - `magik-gui/build-arm.sh --device`
 - `magik-gui/build-arm.sh --fast --video`
-- `magik-gui/build-arm.sh --device --video`
+- `magik-gui/build-arm.sh --device --all-scenes --video`
 
 Each job installs pinned `cross` 0.2.5, uses `magik-gui/Dockerfile.cross-armv7` via
 `magik-gui/Cross.toml`, caches Cargo registry/git data, caches the minimal FFmpeg tree
@@ -245,6 +245,18 @@ plus size TSV as artifacts.
 The shared-library check intentionally fails if any `libav*`, `libswscale`, or
 `libswresample` dependency appears. FFmpeg must stay statically linked from the
 project-local minimal build.
+
+CI also has a non-blocking `macos-26` Apple Silicon probe for the native ARM64
+container path:
+
+```bash
+magik-gui/build-arm64-apple-container.sh --fast
+```
+
+That job uses Apple's `container` tool with a `linux/arm64` image, a
+`stable-aarch64-unknown-linux-gnu` Rust toolchain, and no `cross` or
+`DOCKER_DEFAULT_PLATFORM=linux/amd64` path. It is deliberately non-blocking
+while hosted-runner virtualization support is proven.
 
 ## Config files
 

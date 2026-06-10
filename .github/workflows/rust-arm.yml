@@ -11,6 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  APPLE_CONTAINER_VERSION: 1.0.0
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
@@ -76,8 +77,8 @@ jobs:
             args: --fast --video
             profile: release
             features: video
-          - name: device-video
-            args: --device --video
+          - name: device-video-full
+            args: --device --all-scenes --video
             profile: release-device
             features: video
 
@@ -137,4 +138,85 @@ jobs:
         with:
           name: binary-size-${{ matrix.name }}
           path: build/binary-size.tsv
+          if-no-files-found: error
+
+  macos-arm64-native-container:
+    name: macos-arm64-native-container
+    runs-on: macos-26
+    continue-on-error: true
+    timeout-minutes: 90
+    env:
+      DOCKER_DEFAULT_PLATFORM: ""
+      MISTER_APPLE_CONTAINER_TARGET_DIR: /private/tmp/mister-magik-apple-container-target
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify native macOS ARM runner
+        run: |
+          echo "host arch: $(uname -m)"
+          test "$(uname -m)" = "arm64"
+          if command -v cross >/dev/null 2>&1; then
+            echo "cross is present on PATH but this job will not call it"
+          fi
+          if command -v docker >/dev/null 2>&1; then
+            echo "Docker is present on PATH but this job will not call it"
+          fi
+
+      - name: Install Rust toolchain
+        working-directory: magik-gui
+        run: |
+          rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
+          rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-apple-container-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
+          restore-keys: |
+            cargo-apple-container-${{ runner.os }}-
+
+      - name: Cache Apple-container target
+        uses: actions/cache@v4
+        with:
+          path: /private/tmp/mister-magik-apple-container-target
+          key: apple-container-target-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'magik-gui/Dockerfile.cross-armv7') }}
+          restore-keys: |
+            apple-container-target-${{ runner.os }}-
+
+      - name: Install Apple container
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if command -v container >/dev/null 2>&1; then
+            container --version
+            exit 0
+          fi
+          mkdir -p /tmp/apple-container
+          gh release download "$APPLE_CONTAINER_VERSION" \
+            --repo apple/container \
+            --pattern '*.pkg' \
+            --dir /tmp/apple-container
+          ls -la /tmp/apple-container
+          pkg="$(find /tmp/apple-container -maxdepth 1 -name '*.pkg' | head -n 1)"
+          test -n "$pkg"
+          sudo installer -pkg "$pkg" -target /
+          container --version
+
+      - name: Start Apple container services
+        run: |
+          container system start
+          container builder start --cpus 3 --memory 5g
+
+      - name: Build ARM binary with native Apple container
+        run: magik-gui/build-arm64-apple-container.sh --fast
+
+      - name: Upload macOS ARM-native binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mister-magik-fb-macos-arm64-native
+          path: /private/tmp/mister-magik-apple-container-target/armv7-unknown-linux-gnueabihf/release/mister-magik-fb
           if-no-files-found: error
