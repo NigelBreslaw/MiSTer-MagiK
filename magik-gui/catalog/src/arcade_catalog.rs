@@ -825,9 +825,12 @@ pub struct DecodedImage {
 pub struct ImageLoadTiming {
     pub read_us: u64,
     pub decode_us: u64,
+    pub resize_us: u64,
     pub total_us: u64,
     pub encoded_bytes: usize,
     pub decoded_bytes: usize,
+    pub source_width: u32,
+    pub source_height: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -846,14 +849,19 @@ pub fn load_png_rgb8_timed(path: &str) -> Result<LoadedImage, String> {
     let image = decode_png_rgb8_bytes(&data)?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
     let total_us = total_t.elapsed().as_micros() as u64;
+    let source_width = image.width;
+    let source_height = image.height;
 
     Ok(LoadedImage {
         timing: ImageLoadTiming {
             read_us,
             decode_us,
+            resize_us: 0,
             total_us,
             encoded_bytes: data.len(),
             decoded_bytes: image.rgb.len(),
+            source_width,
+            source_height,
         },
         image,
     })
