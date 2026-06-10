@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present] [--fade-lut]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold
 Runs both:
@@ -21,7 +21,6 @@ with matching MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 worker so list-renderer changes can be measured without preview/catalog noise.
 --scroll-present enables the experimental live-framebuffer scroll/patched-band
 present path. Default keeps the normal full arcade-list present path.
---fade-lut enables the experimental precomputed fade lookup-table backend.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -34,7 +33,6 @@ label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 list_only="0"
 scroll_present="0"
-fade_lut="0"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -44,7 +42,6 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="device"; shift ;;
     --list-only) list_only="1"; shift ;;
     --scroll-present) scroll_present="1"; shift ;;
-    --fade-lut) fade_lut="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) positionals+=("$1"); shift ;;
   esac
@@ -81,9 +78,6 @@ fi
 if [[ "$scroll_present" == "1" ]]; then
   remote_extra_env="$remote_extra_env MISTER_ARCADE_SCROLL_PRESENT=1"
 fi
-if [[ "$fade_lut" == "1" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_ARCADE_FADE_LUT=1"
-fi
 
 case "$deploy" in
   fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
@@ -99,7 +93,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present fade_lut=$fade_lut"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
