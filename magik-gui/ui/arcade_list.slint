@@ -6,6 +6,12 @@ export component ArcadeListScreen inherits Rectangle {
     property <int> count: MisterBridge.arcade-games.length;
     property <length> preview-display-width: MisterBridge.arcade-preview-display-width * 1px * s;
     property <length> preview-display-height: MisterBridge.arcade-preview-display-height * 1px * s;
+    property <length> cabinet-width: 336px * s;
+    property <length> cabinet-height: 520px * s;
+    property <length> cabinet-screen-x: 8px * s;
+    property <length> cabinet-screen-y: 92px * s;
+    property <length> cabinet-screen-width: 320px * s;
+    property <length> cabinet-screen-height: 320px * s;
 
     background: #1a1424;
 
@@ -63,20 +69,33 @@ export component ArcadeListScreen inherits Rectangle {
             background: #131018;
 
             Rectangle {
-                x: MisterBridge.arcade-preview-box-x * 1px * s;
-                y: MisterBridge.arcade-preview-box-y * 1px * s;
-                width: MisterBridge.arcade-preview-box-width * 1px * s;
-                height: MisterBridge.arcade-preview-box-height * 1px * s;
-                background: #0e0c14;
-                border-width: 1px;
-                border-color: #5c4a72;
+                x: (parent.width - root.cabinet-width) / 2;
+                y: (parent.height - root.cabinet-height) / 2;
+                width: root.cabinet-width;
+                height: root.cabinet-height;
+                background: transparent;
 
-                if MisterBridge.arcade-preview-has-image : Image {
-                    x: (parent.width - root.preview-display-width) / 2;
-                    y: (parent.height - root.preview-display-height) / 2;
-                    width: root.preview-display-width;
-                    height: root.preview-display-height;
-                    source: MisterBridge.arcade-preview-image;
+                Rectangle {
+                    x: root.cabinet-screen-x;
+                    y: root.cabinet-screen-y;
+                    width: root.cabinet-screen-width;
+                    height: root.cabinet-screen-height;
+                    background: #05070a;
+                    clip: true;
+
+                    if MisterBridge.arcade-preview-has-image : Image {
+                        x: (parent.width - root.preview-display-width) / 2;
+                        y: (parent.height - root.preview-display-height) / 2;
+                        width: root.preview-display-width;
+                        height: root.preview-display-height;
+                        source: MisterBridge.arcade-preview-image;
+                    }
+                }
+
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: @image-url("art/arcade-cabinet-square.png");
                 }
 
             }

@@ -53,10 +53,10 @@ use std::sync::{mpsc, Mutex, OnceLock};
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
-const ARCADE_PREVIEW_BOX_X: usize = 12;
-const ARCADE_PREVIEW_BOX_Y: usize = 16;
-const ARCADE_PREVIEW_BOX_W: u32 = 456;
-const ARCADE_PREVIEW_BOX_H: u32 = 444;
+const ARCADE_PREVIEW_BOX_X: usize = 8;
+const ARCADE_PREVIEW_BOX_Y: usize = 92;
+const ARCADE_PREVIEW_BOX_W: u32 = 320;
+const ARCADE_PREVIEW_BOX_H: u32 = 320;
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
@@ -1758,15 +1758,6 @@ struct PreviewDisplaySize {
     h: u32,
 }
 
-fn gcd_u32(mut a: u32, mut b: u32) -> u32 {
-    while b != 0 {
-        let r = a % b;
-        a = b;
-        b = r;
-    }
-    a.max(1)
-}
-
 fn preview_display_size(
     source_w: u32,
     source_h: u32,
@@ -1779,22 +1770,15 @@ fn preview_display_size(
 
     let max_area = PREVIEW_MAX_AREA.min(pane_w.saturating_mul(pane_h)).max(1);
     let max_area = (max_area.saturating_mul(preview_visual_pct()) / 100).max(1);
-    let g = gcd_u32(source_w, source_h);
-    let base_w = source_w / g;
-    let base_h = source_h / g;
-    let base_area = base_w.saturating_mul(base_h).max(1);
-    let by_w = pane_w / base_w.max(1);
-    let by_h = pane_h / base_h.max(1);
-    let by_area = ((max_area as f64) / (base_area as f64)).sqrt().floor() as u32;
-    let max_n = by_w.min(by_h).min(by_area).max(1);
-    let n = if max_n >= g {
-        ((max_n / g).max(1)) * g
-    } else {
-        max_n
-    };
+
+    let integer_upscale = (pane_w / source_w).min(pane_h / source_h).max(1);
+    let area_upscale = ((max_area as f64) / (source_w.saturating_mul(source_h).max(1) as f64))
+        .sqrt()
+        .floor() as u32;
+    let scale = integer_upscale.min(area_upscale.max(1)).max(1);
     PreviewDisplaySize {
-        w: base_w * n,
-        h: base_h * n,
+        w: source_w.saturating_mul(scale),
+        h: source_h.saturating_mul(scale),
     }
 }
 
@@ -6680,20 +6664,17 @@ mod tests {
     #[test]
     fn preview_size_enlarges_only_by_integer_scale() {
         let size = preview_display_size(100, 50, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 400, h: 200 });
+        assert_eq!(size, PreviewDisplaySize { w: 300, h: 150 });
         assert_eq!(size.w % 100, 0);
         assert_eq!(size.h % 50, 0);
         assert!(size.w * size.h <= PREVIEW_MAX_AREA);
     }
 
     #[test]
-    fn preview_size_shrinks_large_images_without_changing_aspect() {
+    fn preview_size_keeps_large_images_native_for_aperture_clipping() {
         let size = preview_display_size(1920, 1080, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 448, h: 252 });
+        assert_eq!(size, PreviewDisplaySize { w: 1920, h: 1080 });
         assert_eq!(size.w as u64 * 1080, size.h as u64 * 1920);
-        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
-        assert!(size.w <= ARCADE_PREVIEW_BOX_W);
-        assert!(size.h <= ARCADE_PREVIEW_BOX_H);
     }
 
     #[test]
