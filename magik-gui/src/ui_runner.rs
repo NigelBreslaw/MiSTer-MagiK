@@ -1566,7 +1566,7 @@ fn sync_bridge_launcher(
         let title = active_system(catalog, nav)
             .map(|system| system.title.clone())
             .unwrap_or_else(|| "Games".to_string());
-        bridge.set_game_systems(slint_game_systems(&catalog.systems));
+        bridge.set_game_systems(slint_game_systems(catalog));
         bridge.set_active_system_title(title.into());
         bridge.set_arcade_games(slint_arcade_games(&games));
     }
@@ -2134,15 +2134,14 @@ fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::
     ModelRc::new(VecModel::from(rows))
 }
 
-fn slint_game_systems(
-    systems: &[arcade_catalog::GameSystemEntry],
-) -> ModelRc<slint_ui::launcher::GameSystem> {
-    let rows: Vec<slint_ui::launcher::GameSystem> = systems
+fn slint_game_systems(catalog: &ArcadeCatalog) -> ModelRc<slint_ui::launcher::GameSystem> {
+    let rows: Vec<slint_ui::launcher::GameSystem> = catalog
+        .systems
         .iter()
         .map(|system| slint_ui::launcher::GameSystem {
             id: system.id.clone().into(),
             title: system.title.clone().into(),
-            count: system.count as i32,
+            count: catalog.system_preview_game_count(&system.id) as i32,
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
@@ -5890,7 +5889,7 @@ fn run_launcher_loop(
     };
     let mut catalog_refresh_done = !catalog_refresh;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    bridge.set_game_systems(slint_game_systems(&catalog.systems));
+    bridge.set_game_systems(slint_game_systems(&catalog));
     bridge.set_catalog_scan_visible(!catalog_ready);
     bridge.set_catalog_scan_title(if catalog_ready {
         if catalog_refresh {
