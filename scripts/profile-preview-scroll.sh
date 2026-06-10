@@ -9,13 +9,18 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold
 Runs both:
   ui preview_scroll_bench
   ui launcher
 with matching MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
+
+--list-only disables screenshot loading and the real launcher's catalog refresh
+worker so list-renderer changes can be measured without preview/catalog noise.
+--scroll-present enables the experimental live-framebuffer scroll/patched-band
+present path. Default keeps the normal full arcade-list present path.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -26,6 +31,8 @@ secs="30"
 scenario="velocity-scroll"
 label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
+list_only="0"
+scroll_present="0"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -33,6 +40,8 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
+    --list-only) list_only="1"; shift ;;
+    --scroll-present) scroll_present="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) positionals+=("$1"); shift ;;
   esac
@@ -62,6 +71,14 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 
 mkdir -p "$OUT_DIR"
 
+remote_extra_env=""
+if [[ "$list_only" == "1" ]]; then
+  remote_extra_env="MISTER_PREVIEW_LOADING=off MISTER_CATALOG_REFRESH=off"
+fi
+if [[ "$scroll_present" == "1" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_ARCADE_SCROLL_PRESENT=1"
+fi
+
 case "$deploy" in
   fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
@@ -76,7 +93,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -84,7 +101,7 @@ kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
-MISTER_LAUNCHER_BENCH_SCENARIO='$remote_scenario' MISTER_PREVIEW_TRACE=1 MISTER_PREVIEW_SCROLL_TRACE='$remote_tsv' '$REMOTE' ui '$scene' '$secs' >'$remote_log' 2>&1 &
+$remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO='$remote_scenario' MISTER_PREVIEW_TRACE=1 MISTER_PREVIEW_SCROLL_TRACE='$remote_tsv' '$REMOTE' ui '$scene' '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
 while kill -0 \$UI_PID 2>/dev/null; do

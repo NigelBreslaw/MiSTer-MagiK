@@ -981,6 +981,44 @@ impl Display {
         }
     }
 
+    /// Scroll a framebuffer rectangle vertically in-place.
+    ///
+    /// Positive `dy` moves pixels down; negative `dy` moves pixels up. Newly
+    /// exposed rows are intentionally left untouched so the caller can patch
+    /// them from its authoritative cached surface.
+    pub fn scroll_rect_y(&mut self, x: usize, y: usize, w: usize, h: usize, dy: isize) {
+        if w == 0 || h == 0 || dy == 0 {
+            return;
+        }
+        let dst_w = self.w;
+        let x1 = (x + w).min(self.w);
+        let y1 = (y + h).min(self.h);
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        let copy_w = x1 - x;
+        let copy_h = y1 - y;
+        let d = dy.unsigned_abs().min(copy_h);
+        if d == 0 || d >= copy_h {
+            return;
+        }
+        let moving_h = copy_h - d;
+        let dst = self.buffer_mut();
+        if dy < 0 {
+            for row in 0..moving_h {
+                let src_a = (y + d + row) * dst_w + x;
+                let dst_a = (y + row) * dst_w + x;
+                dst.copy_within(src_a..src_a + copy_w, dst_a);
+            }
+        } else {
+            for row in (0..moving_h).rev() {
+                let src_a = (y + row) * dst_w + x;
+                let dst_a = (y + d + row) * dst_w + x;
+                dst.copy_within(src_a..src_a + copy_w, dst_a);
+            }
+        }
+    }
+
     /// Copy a logical source rectangle into an arbitrary framebuffer location,
     /// nearest-neighbour scaled by `scale`.
     #[allow(dead_code)]

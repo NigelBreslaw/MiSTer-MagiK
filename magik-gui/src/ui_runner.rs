@@ -321,6 +321,36 @@ fn preview_trace_enabled() -> bool {
     })
 }
 
+fn preview_loading_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_PREVIEW_LOADING").as_deref(),
+            Ok("0") | Ok("off") | Ok("false") | Ok("no")
+        )
+    })
+}
+
+fn catalog_refresh_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_CATALOG_REFRESH").as_deref(),
+            Ok("0") | Ok("off") | Ok("false") | Ok("no")
+        )
+    })
+}
+
+fn arcade_scroll_present_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_ARCADE_SCROLL_PRESENT").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -1089,6 +1119,20 @@ impl UiFrameTarget {
         let _ = ui;
         disp.copy_rect_from(x, y, w, h, src);
     }
+
+    fn scroll_rect_y(
+        &mut self,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        dy: isize,
+    ) {
+        let _ = ui;
+        disp.scroll_rect_y(x, y, w, h, dy);
+    }
 }
 
 fn copy_arcade_list_update(
@@ -1102,6 +1146,14 @@ fn copy_arcade_list_update(
         ArcadeListUpdate::Full(rect) => {
             renderer.copy_layer_to_target(target, disp, ui);
             rect.rows()
+        }
+        ArcadeListUpdate::Scroll { delta_y } => {
+            if arcade_scroll_present_enabled() {
+                renderer.copy_scrolled_layer_to_target(target, disp, ui, delta_y)
+            } else {
+                renderer.copy_layer_to_target(target, disp, ui);
+                ArcadeListRenderer::dirty_rect().rows()
+            }
         }
     }
 }
@@ -1769,6 +1821,10 @@ fn request_arcade_preview_window(
     selected: usize,
     preview: &mut PreviewState,
 ) {
+    if !preview_loading_enabled() {
+        preview.clear(bridge);
+        return;
+    }
     let game = games.get(selected);
     let Some(game) = game else {
         preview.selected_mra_path = None;
@@ -1890,6 +1946,10 @@ fn schedule_arcade_preview_window(
     selected: usize,
     preview: &mut PreviewState,
 ) -> bool {
+    if !preview_loading_enabled() {
+        preview.clear(bridge);
+        return false;
+    }
     let Some(game) = games.get(selected) else {
         preview.clear(bridge);
         return true;
@@ -1907,6 +1967,10 @@ fn schedule_arcade_preview_window(
 }
 
 fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
+    if !preview_loading_enabled() {
+        for _ in preview.worker.drain() {}
+        return false;
+    }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
     for result in preview.worker.drain() {
@@ -4447,6 +4511,7 @@ struct ArcadeListDrawKey {
 
 enum ArcadeListUpdate {
     Full(DirtyRect),
+    Scroll { delta_y: isize },
 }
 
 impl ArcadeListRenderer {
@@ -4541,7 +4606,9 @@ impl ArcadeListRenderer {
         if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
-        Some(ArcadeListUpdate::Full(Self::dirty_rect()))
+        Some(ArcadeListUpdate::Scroll {
+            delta_y: content_delta as isize,
+        })
     }
 
     fn selection_rect() -> DirtyRect {
@@ -4671,6 +4738,93 @@ impl ArcadeListRenderer {
         self.copy_fade_to_target(target, disp, ui);
         self.copy_viewport_band_to_target(target, disp, ui, fade_h, ARCADE_LIST_H - fade_h * 2);
         self.copy_selection_frame_to_target(target, disp, ui);
+    }
+
+    fn copy_scrolled_layer_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        delta_y: isize,
+    ) -> u32 {
+        if delta_y == 0 {
+            return 0;
+        }
+        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
+        let body_y = fade_h;
+        let body_bottom = ARCADE_LIST_H.saturating_sub(fade_h);
+        let selection_y = Self::selection_y();
+        let selection_h = ARCADE_ROW_HEIGHT as usize;
+        let selection_bottom = (selection_y + selection_h).min(body_bottom);
+        let thickness = 3usize;
+        let mut touched_rows = 0u32;
+
+        self.copy_fade_to_target(target, disp, ui);
+        touched_rows += (fade_h * 2) as u32;
+
+        touched_rows += self.scroll_and_patch_viewport_segment(
+            target,
+            disp,
+            ui,
+            body_y,
+            selection_y.saturating_sub(body_y),
+            delta_y,
+        );
+        touched_rows += self.scroll_and_patch_viewport_segment(
+            target,
+            disp,
+            ui,
+            (selection_y + thickness).min(body_bottom),
+            selection_bottom.saturating_sub(selection_y + thickness * 2),
+            delta_y,
+        );
+        touched_rows += self.scroll_and_patch_viewport_segment(
+            target,
+            disp,
+            ui,
+            selection_bottom,
+            body_bottom.saturating_sub(selection_bottom),
+            delta_y,
+        );
+
+        self.copy_selection_frame_to_target(target, disp, ui);
+        touched_rows + selection_h as u32
+    }
+
+    fn scroll_and_patch_viewport_segment(
+        &self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        viewport_y: usize,
+        h: usize,
+        delta_y: isize,
+    ) -> u32 {
+        if h == 0 || viewport_y >= ARCADE_LIST_H || delta_y == 0 {
+            return 0;
+        }
+        let h = h.min(ARCADE_LIST_H - viewport_y);
+        let d = delta_y.unsigned_abs().min(h);
+        if d == 0 {
+            return 0;
+        }
+        if d < h {
+            target.scroll_rect_y(
+                disp,
+                ui,
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y + viewport_y,
+                ARCADE_LIST_W,
+                h,
+                delta_y,
+            );
+        }
+        if delta_y < 0 {
+            self.copy_viewport_band_to_target(target, disp, ui, viewport_y + h - d, d);
+        } else {
+            self.copy_viewport_band_to_target(target, disp, ui, viewport_y, d);
+        }
+        (h + d) as u32
     }
 
     fn copy_viewport_band_to_target(
@@ -5182,6 +5336,7 @@ fn run_arcade_page_loop(
         }
         let arcade_update_label = match arcade_list_rect.as_ref() {
             Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
+            Some(ArcadeListUpdate::Scroll { delta_y }) => format!("scroll:{delta_y}"),
             None => "none".to_string(),
         };
         let mut overlay_present_frame_us = 0u128;
@@ -5345,7 +5500,7 @@ fn run_preview_scroll_bench_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
@@ -5403,6 +5558,11 @@ fn run_preview_scroll_bench_loop(
             copied_rows = target.present_rect(f, disp, ui, rect);
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
         }
+        let arcade_update_label = match arcade_list_rect.as_ref() {
+            Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
+            Some(ArcadeListUpdate::Scroll { delta_y }) => format!("scroll:{delta_y}"),
+            None => "none".to_string(),
+        };
         let mut overlay_present_frame_us = 0u128;
         if let Some(update) = arcade_list_rect {
             let overlay_copy_start = Instant::now();
@@ -5430,12 +5590,13 @@ fn run_preview_scroll_bench_loop(
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     frame_start.duration_since(start).as_micros(),
                     nav.arcade.selected,
                     nav.arcade.visual_index,
                     cache_state,
+                    arcade_update_label,
                     copied_rows,
                     (prepare_done - frame_start).as_micros(),
                     (frame_t2 - frame_t1).as_micros(),
@@ -5572,7 +5733,7 @@ fn run_launcher_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
@@ -5612,14 +5773,31 @@ fn run_launcher_loop(
         }
     };
     let mut catalog_ready = !catalog.games.is_empty();
-    print_startup_event(start, "catalog_worker_start", &arcade_root);
-    let catalog_rx = start_library_catalog_worker(arcade_root.clone(), catalog_ready);
-    let mut catalog_refresh_done = false;
+    let catalog_refresh = catalog_refresh_enabled();
+    let catalog_rx = if catalog_refresh {
+        print_startup_event(start, "catalog_worker_start", &arcade_root);
+        Some(start_library_catalog_worker(
+            arcade_root.clone(),
+            catalog_ready,
+        ))
+    } else {
+        print_startup_event(
+            start,
+            "catalog_worker_skipped",
+            "MISTER_CATALOG_REFRESH=off",
+        );
+        None
+    };
+    let mut catalog_refresh_done = !catalog_refresh;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_game_systems(slint_game_systems(&catalog.systems));
     bridge.set_catalog_scan_visible(!catalog_ready);
     bridge.set_catalog_scan_title(if catalog_ready {
-        "Refreshing library".into()
+        if catalog_refresh {
+            "Refreshing library".into()
+        } else {
+            "".into()
+        }
     } else {
         "Indexing library".into()
     });
@@ -5670,7 +5848,7 @@ fn run_launcher_loop(
         }
 
         if !catalog_refresh_done {
-            while let Ok(message) = catalog_rx.try_recv() {
+            while let Some(message) = catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 match message {
                     CatalogWorkerMessage::Progress { title, detail } => {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -6134,6 +6312,11 @@ fn run_launcher_loop(
             copied_rows = target.present_rect(f, disp, ui, rect);
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
         }
+        let arcade_update_label = match arcade_list_rect.as_ref() {
+            Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
+            Some(ArcadeListUpdate::Scroll { delta_y }) => format!("scroll:{delta_y}"),
+            None => "none".to_string(),
+        };
         let mut overlay_present_frame_us = 0u128;
         if let Some(update) = arcade_list_rect {
             let overlay_copy_start = Instant::now();
@@ -6161,12 +6344,13 @@ fn run_launcher_loop(
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     loop_start.duration_since(start).as_micros(),
                     nav.arcade.selected,
                     nav.arcade.visual_index,
                     cache_state,
+                    arcade_update_label,
                     copied_rows,
                     prepare_us,
                     (frame_t2 - frame_t1).as_micros(),
