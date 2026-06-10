@@ -11,7 +11,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
-const DEFAULT_FB_STRIDE: usize = DEFAULT_FB_W * DEFAULT_FB_BPP / 8;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -1189,18 +1188,18 @@ mod tests {
         })
     }
 
-    fn raw_frame_with<F>(mut f: F) -> Vec<u8>
+    fn raw_frame_with<F>(f: F) -> Vec<u8>
     where
         F: FnMut(usize, usize) -> (u8, u8, u8),
     {
-        raw_frame_with_geometry(default_fb_geometry(), |x, y| f(x, y))
+        raw_frame_with_geometry(default_fb_geometry(), f)
     }
 
     fn default_fb_geometry() -> FbGeometry {
         FbGeometry {
             width: DEFAULT_FB_W,
             height: DEFAULT_FB_H,
-            stride: DEFAULT_FB_STRIDE,
+            stride: DEFAULT_FB_W * DEFAULT_FB_BPP / 8,
             bpp: DEFAULT_FB_BPP,
         }
     }

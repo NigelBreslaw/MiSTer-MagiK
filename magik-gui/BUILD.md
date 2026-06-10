@@ -212,9 +212,9 @@ MISTER_PPROF=1 MISTER_PPROF_OUT=/tmp/smoke.svg \
 
 ## Minimal FFmpeg
 
-`--video` builds do not use the broad `ffmpeg-the-third` FFmpeg builder. Instead,
+`--video` builds do not use a crate-managed broad FFmpeg builder. Instead,
 `build-arm.sh` runs `magik-gui/scripts/build-minimal-ffmpeg.sh`, then passes
-`FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist` into `cross`.
+`FFMPEG_DIR=/target/ffmpeg-minimal/armv7/dist` into `cross`.
 
 The minimal FFmpeg build enables only H.264-in-MOV/MP4 playback plus software
 scaling and PCM stream discovery: `avcodec`, `avformat`, `avutil`, `swscale`,

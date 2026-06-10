@@ -140,9 +140,12 @@ fi
 
 if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
   "$PWD/scripts/build-minimal-ffmpeg.sh"
-  export FFMPEG_DIR="/project/target/ffmpeg-minimal/armv7/dist"
-  export PKG_CONFIG_PATH="/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
+  export FFMPEG_DIR="/target/ffmpeg-minimal/armv7/dist"
+  export PKG_CONFIG_PATH="/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
   export PKG_CONFIG_ALLOW_CROSS=1
+  export CFLAGS="${CFLAGS:+$CFLAGS }-I/target/ffmpeg-minimal/armv7/dist/include"
+  export HOST_CFLAGS="${HOST_CFLAGS:+$HOST_CFLAGS }-I/target/ffmpeg-minimal/armv7/dist/include"
+  export CFLAGS_x86_64_unknown_linux_gnu="${CFLAGS_x86_64_unknown_linux_gnu:+$CFLAGS_x86_64_unknown_linux_gnu }-I/target/ffmpeg-minimal/armv7/dist/include"
   echo "==> using minimal FFmpeg: $FFMPEG_DIR"
 fi
 

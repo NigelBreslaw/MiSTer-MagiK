@@ -5,6 +5,9 @@ rustc-wrapper = "sccache"
 [build.env]
 passthrough = [
     "FFMPEG_DIR",
+    "CFLAGS",
+    "HOST_CFLAGS",
+    "CFLAGS_x86_64_unknown_linux_gnu",
     "MISTER_UI_BUILD_SCOPE",
     "PKG_CONFIG_PATH",
     "PKG_CONFIG_ALLOW_CROSS",
