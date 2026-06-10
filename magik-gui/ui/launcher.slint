@@ -348,22 +348,13 @@ export component Launcher inherits MisterWindow {
     title: "MiSTer MagiK Launcher";
     background: #1a1424;
 
-    if MisterBridge.screen-mode == 0 : HomeGrid {
-        width: 100%;
-        height: 100%;
-    }
+    if MisterBridge.screen-mode == 0 : HomeGrid { }
 
     if MisterBridge.screen-mode == 1 : ControllerPanel { }
 
-    if MisterBridge.screen-mode == 2 : ArcadeListScreen {
-        width: 100%;
-        height: 100%;
-    }
+    if MisterBridge.screen-mode == 2 : ArcadeListScreen { }
 
-    if MisterBridge.screen-mode == 3 : SettingsScreen {
-        width: 100%;
-        height: 100%;
-    }
+    if MisterBridge.screen-mode == 3 : SettingsScreen { }
 
     if MisterBridge.setup-visible : SetupOverlay {
         phase: MisterBridge.setup-phase;
@@ -378,15 +369,10 @@ export component Launcher inherits MisterWindow {
     }
 
     if MisterBridge.catalog-scan-visible : CatalogScanPopup {
-        width: 100%;
-        height: 100%;
         s: MisterUi.scale;
     }
 
-    if MisterBridge.confirm-visible : ConfirmDialog {
-        width: 100%;
-        height: 100%;
-    }
+    if MisterBridge.confirm-visible : ConfirmDialog { }
 
     if MisterBridge.loading-message != "": Rectangle {
         background: #1a1424;
