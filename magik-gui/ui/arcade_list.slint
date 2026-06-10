@@ -1,5 +1,5 @@
 import { MisterUi } from "mister_window.slint";
-import { MisterBridge, PreviewStatus } from "mister_bridge.slint";
+import { MisterBridge } from "mister_bridge.slint";
 
 export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
@@ -15,6 +15,7 @@ export component ArcadeListScreen inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
+            visible: MisterBridge.arcade-list-visible;
 
             Text {
                 x: 16px * s;
@@ -78,40 +79,6 @@ export component ArcadeListScreen inherits Rectangle {
                     source: MisterBridge.arcade-preview-image;
                 }
 
-                if !MisterBridge.arcade-preview-has-image && MisterBridge.arcade-preview-placeholder-visible : Text {
-                    width: 100%;
-                    height: 100%;
-                    text: MisterBridge.arcade-preview-status == PreviewStatus.loading ? "Loading screenshot" : "No screenshot";
-                    color: #706080;
-                    font-size: 8px * s;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            Rectangle {
-                x: 12px * s;
-                y: parent.height - 80px * s;
-                width: parent.width - 24px * s;
-                height: 32px * s;
-                background: transparent;
-                clip: true;
-
-                Text {
-                    width: 100%;
-                    text: MisterBridge.arcade-preview-title;
-                    color: #e8e0f0;
-                    font-size: 16px * s;
-                    wrap: word-wrap;
-                }
-            }
-
-            Text {
-                x: 12px * s;
-                y: parent.height - 22px * s;
-                text: "D-pad: move  ·  A: launch  ·  B: back";
-                color: #706080;
-                font-size: 8px * s;
             }
         }
     }

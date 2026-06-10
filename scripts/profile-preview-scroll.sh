@@ -9,9 +9,9 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present] [--preview-visual-pct N]
 
-Scenarios: velocity-scroll | held-scroll | turbo-hold
+Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs both:
   ui preview_scroll_bench
   ui launcher
@@ -21,6 +21,8 @@ with matching MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 worker so list-renderer changes can be measured without preview/catalog noise.
 --scroll-present enables the experimental live-framebuffer scroll/patched-band
 present path. Default keeps the normal full arcade-list present path.
+--preview-visual-pct scales screenshot display area. 100 is the current size;
+50 renders screenshots at half the current visual area.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -33,6 +35,7 @@ label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 list_only="0"
 scroll_present="0"
+preview_visual_pct=""
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -42,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="device"; shift ;;
     --list-only) list_only="1"; shift ;;
     --scroll-present) scroll_present="1"; shift ;;
+    --preview-visual-pct) preview_visual_pct="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) positionals+=("$1"); shift ;;
   esac
@@ -52,8 +56,12 @@ if [[ "${#positionals[@]}" -ge 2 ]]; then scenario="${positionals[1]}"; fi
 if [[ "${#positionals[@]}" -ge 3 ]]; then label="${positionals[2]}"; fi
 if [[ "${#positionals[@]}" -gt 3 ]]; then usage >&2; exit 2; fi
 
+preview_stress="0"
 case "$scenario" in
   velocity-scroll|held-scroll|turbo-hold) ;;
+  screenshot-stress|screenshot_stress|preview-stress|preview_stress)
+    preview_stress="1"
+    ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview-changes)
     echo "row-step/jump scenario '$scenario' is not valid for preview scroll benchmarking; use velocity-scroll or turbo-hold" >&2
     exit 2
@@ -66,8 +74,12 @@ if [[ "$remote_scenario" == "velocity-scroll" ]]; then
   # understood by both old and new deployed binaries.
   remote_scenario="held-scroll"
 fi
+if [[ "$preview_stress" == "1" ]]; then
+  remote_scenario="stress-scroll"
+fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
+if [[ -n "$preview_visual_pct" && ! "$preview_visual_pct" =~ ^[0-9]+$ ]]; then echo "--preview-visual-pct must be an integer" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
 
@@ -75,8 +87,14 @@ remote_extra_env=""
 if [[ "$list_only" == "1" ]]; then
   remote_extra_env="MISTER_PREVIEW_LOADING=off MISTER_CATALOG_REFRESH=off"
 fi
+if [[ "$preview_stress" == "1" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_STRESS=1 MISTER_PREVIEW_APPLY_WHILE_SCROLL=1 MISTER_CATALOG_REFRESH=off"
+fi
 if [[ "$scroll_present" == "1" ]]; then
   remote_extra_env="$remote_extra_env MISTER_ARCADE_SCROLL_PRESENT=1"
+fi
+if [[ -n "$preview_visual_pct" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_VISUAL_PCT=$preview_visual_pct"
 fi
 
 case "$deploy" in
@@ -93,7 +111,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -217,8 +235,13 @@ summarize_trace real "$real_tsv" "$real_log"
 
 echo
 echo $'motion_check\tframes\tfractional_visual_index_frames\tmoving_frames'
-check_velocity_motion standalone "$standalone_tsv"
-check_velocity_motion real "$real_tsv"
+if [[ "$preview_stress" == "1" ]]; then
+  check_velocity_motion standalone "$standalone_tsv" || true
+  check_velocity_motion real "$real_tsv" || true
+else
+  check_velocity_motion standalone "$standalone_tsv"
+  check_velocity_motion real "$real_tsv"
+fi
 
 echo
 echo "preview trace counts:"
