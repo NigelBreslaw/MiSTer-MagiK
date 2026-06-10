@@ -380,17 +380,30 @@ pub fn load_preview_image(
             Ok(loaded)
         }
         PreviewStorageFormat::DerivedPng => {
-            load_derived_png_timed(image_path, resize).or_else(|_| {
+            load_derived_png_timed(image_path, resize).or_else(|e| {
+                trace_preview_fallback(image_path, PreviewStorageFormat::DerivedPng, &e);
                 let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
                 apply_resize(&mut loaded, resize);
                 Ok(loaded)
             })
         }
-        PreviewStorageFormat::RawRgb => load_raw_preview_timed(image_path, resize).or_else(|_| {
+        PreviewStorageFormat::RawRgb => load_raw_preview_timed(image_path, resize).or_else(|e| {
+            trace_preview_fallback(image_path, PreviewStorageFormat::RawRgb, &e);
             let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
             apply_resize(&mut loaded, resize);
             Ok(loaded)
         }),
+    }
+}
+
+fn trace_preview_fallback(image_path: &str, storage: PreviewStorageFormat, reason: &str) {
+    if preview_trace_enabled() {
+        eprintln!(
+            "preview_trace fallback storage={} path={} reason={}",
+            storage.label(),
+            image_path,
+            reason
+        );
     }
 }
 
