@@ -374,7 +374,7 @@ impl LauncherNav {
             .get(self.selected)
             .map(|system| system.id.as_str())
             .unwrap_or("");
-        let count = catalog.system_game_count(system_id);
+        let count = catalog.system_preview_game_count(system_id);
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Home;
@@ -399,7 +399,7 @@ impl LauncherNav {
 
         if rising(now.btn_a, self.prev.btn_a) {
             return catalog
-                .system_game_at(system_id, self.arcade.selected)
+                .system_preview_game_at(system_id, self.arcade.selected)
                 .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
                     path: Some(game.mra_path.clone()),

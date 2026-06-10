@@ -1,6 +1,6 @@
 //! Arcade catalog helpers: recursive `.mra` scan + optional `gamelist.xml` metadata.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -108,6 +108,81 @@ impl ArcadeCatalog {
             .filter(|g| g.system_id == system_id)
             .nth(index)
     }
+
+    pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
+        preview_games(
+            self.games
+                .iter()
+                .filter(|game| game.system_id == system_id),
+        )
+    }
+
+    pub fn system_preview_game_count(&self, system_id: &str) -> usize {
+        let mut seen = HashSet::new();
+        self.games
+            .iter()
+            .filter(|game| game.system_id == system_id && has_preview_image(game))
+            .filter(|game| seen.insert(preview_dedupe_key(&game.title)))
+            .count()
+    }
+
+    pub fn system_preview_game_at(&self, system_id: &str, index: usize) -> Option<ArcadeGameEntry> {
+        self.system_preview_games(system_id).into_iter().nth(index)
+    }
+}
+
+fn preview_games<'a>(games: impl Iterator<Item = &'a ArcadeGameEntry>) -> Vec<ArcadeGameEntry> {
+    let mut best_idx: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<ArcadeGameEntry> = Vec::new();
+
+    for game in games {
+        if !has_preview_image(game) {
+            continue;
+        }
+        let key = preview_dedupe_key(&game.title);
+        if let Some(&idx) = best_idx.get(&key) {
+            if prefer_preview_game(game, &out[idx]) {
+                out[idx] = game.clone();
+            }
+        } else {
+            best_idx.insert(key, out.len());
+            out.push(game.clone());
+        }
+    }
+
+    out
+}
+
+fn preview_dedupe_key(title: &str) -> String {
+    let base = title
+        .split_once('(')
+        .map(|(before, _)| before.trim())
+        .filter(|before| !before.is_empty())
+        .unwrap_or(title);
+    base.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn prefer_preview_game(a: &ArcadeGameEntry, b: &ArcadeGameEntry) -> bool {
+    let a_exact = !a.title.contains('(');
+    let b_exact = !b.title.contains('(');
+    if a_exact != b_exact {
+        return a_exact;
+    }
+    if a.title.len() != b.title.len() {
+        return a.title.len() < b.title.len();
+    }
+    a.mra_path < b.mra_path
+}
+
+fn has_preview_image(game: &ArcadeGameEntry) -> bool {
+    game.has_image
+        && Path::new(&game.image_path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -898,6 +973,21 @@ fn decode_png_rgb8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
             }
             out
         }
+        ColorSpace::Luma => {
+            let mut out = Vec::with_capacity(buf.len() * 3);
+            for luma in buf {
+                out.extend_from_slice(&[luma, luma, luma]);
+            }
+            out
+        }
+        ColorSpace::LumaA => {
+            let mut out = Vec::with_capacity(buf.len() / 2 * 3);
+            for px in buf.chunks_exact(2) {
+                let luma = px[0];
+                out.extend_from_slice(&[luma, luma, luma]);
+            }
+            out
+        }
         other => return Err(format!("unsupported zune png colorspace: {other:?}")),
     };
     Ok(DecodedImage { width, height, rgb })
@@ -944,5 +1034,81 @@ mod tests {
         let out = dedupe_by_title(games);
         assert_eq!(out.len(), 1);
         assert!(out[0].has_image);
+    }
+
+    #[test]
+    fn preview_games_require_images_and_collapse_parenthetical_clones() {
+        let catalog = ArcadeCatalog {
+            root: PathBuf::from("/media/fat/_Arcade"),
+            systems: vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 5,
+            }],
+            games: vec![
+                ArcadeGameEntry {
+                    title: "1941: Counter Attack (Japan)".into(),
+                    mra_path: "/media/fat/_Arcade/1941 Japan.mra".into(),
+                    image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
+                    has_image: true,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "1941: Counter Attack (World)".into(),
+                    mra_path: "/media/fat/_Arcade/1941 World.mra".into(),
+                    image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
+                    has_image: true,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "1942".into(),
+                    mra_path: "/media/fat/_Arcade/1942.mra".into(),
+                    image_path: String::new(),
+                    has_image: false,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "1943".into(),
+                    mra_path: "/media/fat/_Arcade/1943.mra".into(),
+                    image_path: "/media/fat/_Arcade/media/screenshot/1943.png".into(),
+                    has_image: true,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "Astra SuperStars".into(),
+                    mra_path: "/media/fat/_Arcade/Astra SuperStars.mra".into(),
+                    image_path: "/media/fat/_Arcade/media/screenshot/astrass.jpg".into(),
+                    has_image: true,
+                    system_id: "arcade".into(),
+                },
+            ],
+        };
+
+        let games = catalog.system_preview_games("arcade");
+        assert_eq!(games.len(), 2);
+        assert_eq!(catalog.system_preview_game_count("arcade"), 2);
+        assert_eq!(games[0].title, "1941: Counter Attack (Japan)");
+        assert_eq!(games[1].title, "1943");
+        assert_eq!(
+            catalog.system_preview_game_at("arcade", 1).map(|game| game.title),
+            Some("1943".into())
+        );
+    }
+
+    #[test]
+    fn decode_png_rgb8_accepts_grayscale_cache_pngs() {
+        let mut data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut data, 2, 1);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[0x22, 0xcc]).unwrap();
+        }
+
+        let decoded = decode_png_rgb8_bytes(&data).unwrap();
+        assert_eq!(decoded.width, 2);
+        assert_eq!(decoded.height, 1);
+        assert_eq!(decoded.rgb, vec![0x22, 0x22, 0x22, 0xcc, 0xcc, 0xcc]);
     }
 }

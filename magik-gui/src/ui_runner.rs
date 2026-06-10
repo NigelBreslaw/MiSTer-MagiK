@@ -2165,7 +2165,7 @@ fn active_system<'a>(
 
 fn active_system_games(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<ArcadeGameEntry> {
     active_system(catalog, nav)
-        .map(|system| catalog.system_games(&system.id))
+        .map(|system| catalog.system_preview_games(&system.id))
         .unwrap_or_default()
 }
 
@@ -2533,7 +2533,7 @@ fn launcher_bench_active_game_count(
         return Some(count);
     }
     let system = catalog.systems.get(nav.selected)?;
-    Some(catalog.system_game_count(&system.id))
+    Some(catalog.system_preview_game_count(&system.id))
 }
 
 fn keep_bench_home_visible(scroll_x: &mut i32, selected: usize, count: usize) {
