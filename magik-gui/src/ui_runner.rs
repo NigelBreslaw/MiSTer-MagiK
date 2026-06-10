@@ -341,6 +341,27 @@ fn preview_apply_while_scroll_enabled() -> bool {
     })
 }
 
+fn preview_stress_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_PREVIEW_STRESS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
+fn preview_visual_pct() -> u32 {
+    static VALUE: OnceLock<u32> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_PREVIEW_VISUAL_PCT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(100)
+            .clamp(10, 100)
+    })
+}
+
 fn catalog_refresh_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -1497,6 +1518,7 @@ fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::MisterBridg
     bridge.set_arcade_list_y(ARCADE_LIST_Y as i32);
     bridge.set_arcade_list_width(ARCADE_LIST_W as i32);
     bridge.set_arcade_list_height(ARCADE_LIST_H as i32);
+    bridge.set_arcade_list_visible(!preview_stress_enabled());
     bridge.set_arcade_preview_box_x(ARCADE_PREVIEW_BOX_X as i32);
     bridge.set_arcade_preview_box_y(ARCADE_PREVIEW_BOX_Y as i32);
     bridge.set_arcade_preview_box_width(ARCADE_PREVIEW_BOX_W as i32);
@@ -1756,6 +1778,7 @@ fn preview_display_size(
     }
 
     let max_area = PREVIEW_MAX_AREA.min(pane_w.saturating_mul(pane_h)).max(1);
+    let max_area = (max_area.saturating_mul(preview_visual_pct()) / 100).max(1);
     let g = gcd_u32(source_w, source_h);
     let base_w = source_w / g;
     let base_h = source_h / g;
@@ -1991,6 +2014,7 @@ fn request_arcade_preview_window(
 
 fn arcade_preview_bridge_apply_allowed(nav: &LauncherNav) -> bool {
     preview_apply_while_scroll_enabled()
+        || preview_stress_enabled()
         || (nav.arcade.visual_index - nav.arcade.selected as f32).abs() < 0.01
 }
 
@@ -5542,7 +5566,12 @@ fn run_preview_scroll_bench_loop(
     let mut frames = 0u64;
     let mut nav = LauncherNav::new();
     nav.screen = Screen::Arcade;
-    let scenario = LauncherBenchScenario::from_env().unwrap_or(LauncherBenchScenario::HeldScroll);
+    let preview_stress = preview_stress_enabled();
+    let scenario = LauncherBenchScenario::from_env().unwrap_or(if preview_stress {
+        LauncherBenchScenario::StressScroll
+    } else {
+        LauncherBenchScenario::HeldScroll
+    });
     let mut bench_next_step = Instant::now();
     let mut bench_step_idx = 0usize;
     let label = if secs == 0 {
@@ -5552,6 +5581,11 @@ fn run_preview_scroll_bench_loop(
     };
     println!("preview_scroll_bench running {label}");
     println!("launcher_bench_scenario={}", scenario.label());
+    println!(
+        "preview_stress={} preview_visual_pct={}",
+        if preview_stress { "on" } else { "off" },
+        preview_visual_pct()
+    );
 
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
@@ -5562,9 +5596,13 @@ fn run_preview_scroll_bench_loop(
             empty_arcade_catalog(&arcade_root)
         });
     let games = active_system_games(&catalog, &nav);
-    let active_title = active_system(&catalog, &nav)
-        .map(|system| system.title.clone())
-        .unwrap_or_else(|| "Arcade".to_string());
+    let active_title = if preview_stress {
+        "Screenshot stress".to_string()
+    } else {
+        active_system(&catalog, &nav)
+            .map(|system| system.title.clone())
+            .unwrap_or_else(|| "Arcade".to_string())
+    };
 
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(Screen::Arcade as i32);
@@ -5657,12 +5695,15 @@ fn run_preview_scroll_bench_loop(
         });
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
-        let force_arcade_redraw = this_rect.is_some_and(|rect| {
-            rect.intersection(ArcadeListRenderer::dirty_rect())
-                .is_some()
-        });
-        let arcade_list_rect =
-            arcade_list_renderer.draw(&games, nav.arcade.visual_index, force_arcade_redraw);
+        let arcade_list_rect = if preview_stress {
+            None
+        } else {
+            let force_arcade_redraw = this_rect.is_some_and(|rect| {
+                rect.intersection(ArcadeListRenderer::dirty_rect())
+                    .is_some()
+            });
+            arcade_list_renderer.draw(&games, nav.arcade.visual_index, force_arcade_redraw)
+        };
         let custom_draw_done = Instant::now();
         let _pace = pacer.wait();
         let frame_t3 = Instant::now();
@@ -5857,6 +5898,12 @@ fn run_launcher_loop(
         });
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    let preview_stress = preview_stress_enabled();
+    println!(
+        "preview_stress={} preview_visual_pct={}",
+        if preview_stress { "on" } else { "off" },
+        preview_visual_pct()
+    );
     let mut catalog = match library_bench::load_arcade_catalog_from_sqlite(&arcade_root) {
         Ok(loaded) => {
             print_startup_event(
@@ -6385,7 +6432,7 @@ fn run_launcher_loop(
         });
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
-        let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
+        let arcade_list_rect = if !preview_stress && !launching && nav.screen == Screen::Arcade {
             let force_arcade_redraw = this_rect.is_some_and(|rect| {
                 rect.intersection(ArcadeListRenderer::dirty_rect())
                     .is_some()
