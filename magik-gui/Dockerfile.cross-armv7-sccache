@@ -1,0 +1,31 @@
+FROM ubuntu:20.04
+
+ARG SCCACHE_VERSION=0.15.0
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        curl \
+        file \
+        g++ \
+        g++-arm-linux-gnueabihf \
+        gcc \
+        gcc-arm-linux-gnueabihf \
+        git \
+        libc6-dev-armhf-cross \
+        libclang-dev \
+        make \
+        pkg-config \
+        tar \
+    && curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+        | tar -xz --strip-components=1 -C /usr/local/bin "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" \
+    && chmod +x /usr/local/bin/sccache \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
+ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV LIBCLANG_PATH=/usr/lib/llvm-10/lib
+ENV BINDGEN_EXTRA_CLANG_ARGS="--target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf -I/usr/arm-linux-gnueabihf/include"

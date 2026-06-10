@@ -10,7 +10,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release
-BUILD_FLAG=()
+# Toolchain benchmarks need the Slint bench scene set even though ordinary UI
+# builds now omit it for faster local iteration.
+BUILD_FLAG=(--all-scenes)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
