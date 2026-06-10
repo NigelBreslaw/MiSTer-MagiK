@@ -11,6 +11,7 @@ pub const COMMANDS: &[&str] = &[
     "cpu-profile-smoke",
     "input",
     "library-scan-bench",
+    "preview-cache",
     "audio-tone",
 ];
 

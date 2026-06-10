@@ -53,10 +53,10 @@ use std::sync::{mpsc, Mutex, OnceLock};
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
-const ARCADE_PREVIEW_BOX_X: usize = 38;
-const ARCADE_PREVIEW_BOX_Y: usize = 130;
-const ARCADE_PREVIEW_BOX_W: u32 = 224;
-const ARCADE_PREVIEW_BOX_H: u32 = 168;
+const ARCADE_PREVIEW_BOX_X: usize = 8;
+const ARCADE_PREVIEW_BOX_Y: usize = 92;
+const ARCADE_PREVIEW_BOX_W: u32 = 320;
+const ARCADE_PREVIEW_BOX_H: u32 = 320;
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
@@ -331,16 +331,6 @@ fn preview_loading_enabled() -> bool {
     })
 }
 
-fn preview_apply_while_scroll_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_PREVIEW_APPLY_WHILE_SCROLL").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    })
-}
-
 fn preview_stress_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -349,6 +339,10 @@ fn preview_stress_enabled() -> bool {
             Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     })
+}
+
+fn preview_run_label() -> String {
+    std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
 }
 
 fn preview_visual_pct() -> u32 {
@@ -362,12 +356,12 @@ fn preview_visual_pct() -> u32 {
     })
 }
 
-fn catalog_refresh_enabled() -> bool {
+fn catalog_refresh_requested() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        !matches!(
+        matches!(
             std::env::var("MISTER_CATALOG_REFRESH").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     })
 }
@@ -1500,6 +1494,7 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_arcade_preview_placeholder_visible(true);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
+    bridge.set_arcade_preview_run_label(preview_run_label().into());
     bridge.set_arcade_preview_image(Image::default());
     bridge.set_arcade_preview_source_width(0);
     bridge.set_arcade_preview_source_height(0);
@@ -1609,13 +1604,7 @@ fn sync_bridge_launcher(
         let games = catalog
             .map(|catalog| active_system_games(catalog, nav))
             .unwrap_or_default();
-        let _ = request_arcade_preview_window(
-            &bridge,
-            &games,
-            nav.arcade.selected,
-            preview,
-            arcade_preview_bridge_apply_allowed(nav),
-        );
+        let _ = request_arcade_preview_window(&bridge, &games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
     }
@@ -1657,13 +1646,7 @@ fn sync_bridge_launcher_light(
             games = active_system_games(catalog, nav);
             &games
         };
-        schedule_arcade_preview_window(
-            &bridge,
-            games,
-            nav.arcade.selected,
-            preview,
-            arcade_preview_bridge_apply_allowed(nav),
-        );
+        schedule_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
     }
@@ -1858,7 +1841,7 @@ fn request_arcade_preview(
     selected: usize,
     preview: &mut PreviewState,
 ) {
-    let _ = request_arcade_preview_window(bridge, games, selected, preview, true);
+    let _ = request_arcade_preview_window(bridge, games, selected, preview);
 }
 
 fn request_arcade_preview_window(
@@ -1866,13 +1849,11 @@ fn request_arcade_preview_window(
     games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
-    allow_bridge_apply: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
         return false;
     }
-    let allow_bridge_apply = allow_bridge_apply || !preview.has_visible_preview;
     let game = games.get(selected);
     let Some(game) = game else {
         preview.selected_mra_path = None;
@@ -1888,9 +1869,7 @@ fn request_arcade_preview_window(
         clear_preview_image_bridge(bridge);
         return true;
     };
-    if allow_bridge_apply {
-        bridge.set_arcade_preview_placeholder_visible(true);
-    }
+    bridge.set_arcade_preview_placeholder_visible(true);
 
     preview.window_paths = preview_window_paths(games, selected, DEFAULT_PREVIEW_RADIUS, |game| {
         game.has_image.then_some(game.image_path.as_str())
@@ -1905,24 +1884,22 @@ fn request_arcade_preview_window(
         .as_deref()
         .is_some_and(|path| path == game.mra_path)
     {
-        if allow_bridge_apply {
-            if let Some(path) = preview.selected_image_path.clone() {
-                if preview.visible_path != path {
-                    if let Some(image) = preview.cache.get(&path) {
-                        bridge.set_arcade_preview_title(game.title.clone().into());
-                        preview.current_generation = 0;
-                        preview.has_visible_preview = true;
-                        preview.visible_path = path;
-                        apply_preview_image_bridge(bridge, &image);
-                        request_preview_prefetches(games, selected, preview);
-                        return true;
-                    }
-                    if preview.cache.contains_failed(&path) {
-                        preview.current_generation = 0;
-                        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-                        request_preview_prefetches(games, selected, preview);
-                        return true;
-                    }
+        if let Some(path) = preview.selected_image_path.clone() {
+            if preview.visible_path != path {
+                if let Some(image) = preview.cache.get(&path) {
+                    bridge.set_arcade_preview_title(game.title.clone().into());
+                    preview.current_generation = 0;
+                    preview.has_visible_preview = true;
+                    preview.visible_path = path;
+                    apply_preview_image_bridge(bridge, &image);
+                    request_preview_prefetches(games, selected, preview);
+                    return true;
+                }
+                if preview.cache.contains_failed(&path) {
+                    preview.current_generation = 0;
+                    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+                    request_preview_prefetches(games, selected, preview);
+                    return true;
                 }
             }
         }
@@ -1931,40 +1908,28 @@ fn request_arcade_preview_window(
     }
     preview.selected_mra_path = Some(game.mra_path.clone());
 
-    if allow_bridge_apply {
-        bridge.set_arcade_preview_title(game.title.clone().into());
-    }
+    bridge.set_arcade_preview_title(game.title.clone().into());
     if game.has_image {
         preview.selected_image_path = Some(game.image_path.clone());
         if preview.cache.contains_failed(&game.image_path) {
             preview.current_generation = 0;
-            if allow_bridge_apply {
-                bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            }
+            bridge.set_arcade_preview_status(PreviewStatus::Empty);
             request_preview_prefetches(games, selected, preview);
-            return allow_bridge_apply;
+            return true;
         }
         if let Some(image) = preview.cache.get(&game.image_path) {
             preview.current_generation = 0;
-            if allow_bridge_apply {
-                preview.has_visible_preview = true;
-            }
+            preview.has_visible_preview = true;
             if preview_trace_enabled() {
                 eprintln!(
                     "preview_trace cache_hit title={} path={}",
                     game.title, game.image_path
                 );
             }
-            if allow_bridge_apply {
-                if preview.visible_path != game.image_path {
-                    preview.visible_path = game.image_path.clone();
-                    apply_preview_image_bridge(bridge, &image);
-                } else {
-                    apply_preview_image_bridge(bridge, &image);
-                }
-            }
+            preview.visible_path = game.image_path.clone();
+            apply_preview_image_bridge(bridge, &image);
             request_preview_prefetches(games, selected, preview);
-            return allow_bridge_apply;
+            return true;
         }
         preview.current_generation = preview
             .worker
@@ -1975,31 +1940,21 @@ fn request_arcade_preview_window(
                 preview.current_generation, game.title, game.image_path
             );
         }
-        if allow_bridge_apply && !preview.has_visible_preview {
+        if !preview.has_visible_preview {
             clear_preview_image_bridge(bridge);
         }
-        if allow_bridge_apply {
-            bridge.set_arcade_preview_status(PreviewStatus::Loading);
-        }
+        bridge.set_arcade_preview_status(PreviewStatus::Loading);
         request_preview_prefetches(games, selected, preview);
-        return allow_bridge_apply;
+        return true;
     }
     preview.current_generation = 0;
     preview.selected_image_path = None;
-    if allow_bridge_apply {
-        preview.has_visible_preview = false;
-        preview.visible_path.clear();
-        bridge.set_arcade_preview_placeholder_visible(true);
-        clear_preview_image_bridge(bridge);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-    }
-    allow_bridge_apply
-}
-
-fn arcade_preview_bridge_apply_allowed(nav: &LauncherNav) -> bool {
-    preview_apply_while_scroll_enabled()
-        || preview_stress_enabled()
-        || (nav.arcade.visual_index - nav.arcade.selected as f32).abs() < 0.01
+    preview.has_visible_preview = false;
+    preview.visible_path.clear();
+    bridge.set_arcade_preview_placeholder_visible(true);
+    clear_preview_image_bridge(bridge);
+    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+    true
 }
 
 fn request_preview_prefetches(
@@ -2042,7 +1997,6 @@ fn schedule_arcade_preview_window(
     games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
-    allow_bridge_apply: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
@@ -2060,19 +2014,14 @@ fn schedule_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return false;
     }
-    request_arcade_preview_window(bridge, games, selected, preview, allow_bridge_apply)
+    request_arcade_preview_window(bridge, games, selected, preview)
 }
 
-fn apply_ready_preview(
-    app: &slint_ui::launcher::Launcher,
-    preview: &mut PreviewState,
-    allow_bridge_apply: bool,
-) -> bool {
+fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
         return false;
     }
-    let allow_bridge_apply = allow_bridge_apply || !preview.has_visible_preview;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
     for result in preview.worker.drain() {
@@ -2144,13 +2093,11 @@ fn apply_ready_preview(
                 .insert(image_path.clone(), image.clone(), &preview.window_paths);
             if is_selected_result {
                 preview.current_generation = 0;
-                if allow_bridge_apply {
-                    bridge.set_arcade_preview_title(result.title.into());
-                    preview.has_visible_preview = true;
-                    preview.visible_path = image_path;
-                    apply_preview_image_bridge(&bridge, &image);
-                    dirty = true;
-                }
+                bridge.set_arcade_preview_title(result.title.into());
+                preview.has_visible_preview = true;
+                preview.visible_path = image_path;
+                apply_preview_image_bridge(&bridge, &image);
+                dirty = true;
             }
         } else {
             preview.cache.insert_failed(result.image_path.clone());
@@ -2162,13 +2109,11 @@ fn apply_ready_preview(
             }
             if is_selected_result {
                 preview.current_generation = 0;
-                if allow_bridge_apply {
-                    preview.has_visible_preview = false;
-                    preview.visible_path.clear();
-                    clear_preview_image_bridge(&bridge);
-                    bridge.set_arcade_preview_status(PreviewStatus::Empty);
-                    dirty = true;
-                }
+                preview.has_visible_preview = false;
+                preview.visible_path.clear();
+                clear_preview_image_bridge(&bridge);
+                bridge.set_arcade_preview_status(PreviewStatus::Empty);
+                dirty = true;
             }
         }
     }
@@ -5671,17 +5616,10 @@ fn run_preview_scroll_bench_loop(
         nav.screen = Screen::Arcade;
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
-        let allow_preview_apply = arcade_preview_bridge_apply_allowed(&nav);
-        if schedule_arcade_preview_window(
-            &bridge,
-            &games,
-            nav.arcade.selected,
-            &mut preview,
-            allow_preview_apply,
-        ) {
+        if schedule_arcade_preview_window(&bridge, &games, nav.arcade.selected, &mut preview) {
             window.request_redraw();
         }
-        if apply_ready_preview(&app, &mut preview, allow_preview_apply) {
+        if apply_ready_preview(&app, &mut preview) {
             window.request_redraw();
         }
 
@@ -5935,7 +5873,7 @@ fn run_launcher_loop(
         }
     };
     let mut catalog_ready = !catalog.games.is_empty();
-    let catalog_refresh = catalog_refresh_enabled();
+    let catalog_refresh = !catalog_ready || catalog_refresh_requested();
     let catalog_rx = if catalog_refresh {
         print_startup_event(start, "catalog_worker_start", &arcade_root);
         Some(start_library_catalog_worker(
@@ -5946,7 +5884,7 @@ fn run_launcher_loop(
         print_startup_event(
             start,
             "catalog_worker_skipped",
-            "MISTER_CATALOG_REFRESH=off",
+            "cached catalog ready; set MISTER_CATALOG_REFRESH=1 to rescan",
         );
         None
     };
@@ -6406,18 +6344,11 @@ fn run_launcher_loop(
                 &active_arcade_games_cache,
                 nav.arcade.selected,
                 &mut preview,
-                arcade_preview_bridge_apply_allowed(&nav),
             ) {
                 window.request_redraw();
             }
         }
-        if !launching
-            && apply_ready_preview(
-                &app,
-                &mut preview,
-                arcade_preview_bridge_apply_allowed(&nav),
-            )
-        {
+        if !launching && apply_ready_preview(&app, &mut preview) {
             window.request_redraw();
         }
 
@@ -6680,7 +6611,7 @@ mod tests {
     #[test]
     fn preview_size_enlarges_only_by_integer_scale() {
         let size = preview_display_size(100, 50, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 200, h: 100 });
+        assert_eq!(size, PreviewDisplaySize { w: 300, h: 150 });
         assert_eq!(size.w % 100, 0);
         assert_eq!(size.h % 50, 0);
         assert!(size.w * size.h <= PREVIEW_MAX_AREA);
@@ -6701,7 +6632,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_size_keeps_common_arcade_screenshot_native_for_aperture_clipping() {
+    fn preview_size_keeps_common_arcade_screenshot_native_when_resize_is_off() {
         let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
         assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
     }

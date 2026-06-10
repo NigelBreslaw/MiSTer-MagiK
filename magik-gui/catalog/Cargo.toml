@@ -6,6 +6,7 @@ description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK
 
 [dependencies]
 libc = "0.2"
+png = "0.18.1"
 quick-xml = "0.40"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
 walkdir = "2"

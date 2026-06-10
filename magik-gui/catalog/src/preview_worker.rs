@@ -72,7 +72,7 @@ impl PreviewResizeFilter {
         }
     }
 
-    fn from_label(label: &str) -> Self {
+    pub fn from_label(label: &str) -> Self {
         match label.to_ascii_lowercase().replace('_', "-").as_str() {
             "nearest" | "nearest-neighbor" => Self::Nearest,
             "box" | "area" | "box-area" => Self::Box,
@@ -110,7 +110,7 @@ impl PreviewResizeSpec {
         let (max_w, max_h) = std::env::var("MISTER_PREVIEW_RESIZE_MAX")
             .ok()
             .and_then(|s| parse_size(&s))
-            .unwrap_or((320, 240));
+            .unwrap_or((320, 320));
         Self {
             filter,
             max_w: max_w.max(1),
@@ -126,6 +126,7 @@ impl PreviewResizeSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewStorageFormat {
     Png,
+    DerivedPng,
     RawRgb,
 }
 
@@ -133,19 +134,25 @@ impl PreviewStorageFormat {
     pub fn label(self) -> &'static str {
         match self {
             Self::Png => "png",
+            Self::DerivedPng => "derived-png",
             Self::RawRgb => "raw-rgb",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Self {
+        match label.to_ascii_lowercase().replace('_', "-").as_str() {
+            "derived-png" | "resized-png" | "cache-png" => Self::DerivedPng,
+            "raw" | "rgb" | "raw-rgb" => Self::RawRgb,
+            _ => Self::Png,
         }
     }
 
     fn from_env() -> Self {
         match std::env::var("MISTER_PREVIEW_FORMAT")
             .unwrap_or_else(|_| "png".into())
-            .to_ascii_lowercase()
-            .replace('_', "-")
             .as_str()
         {
-            "raw" | "rgb" | "raw-rgb" => Self::RawRgb,
-            _ => Self::Png,
+            label => Self::from_label(label),
         }
     }
 }
@@ -372,6 +379,13 @@ pub fn load_preview_image(
             apply_resize(&mut loaded, resize);
             Ok(loaded)
         }
+        PreviewStorageFormat::DerivedPng => {
+            load_derived_png_timed(image_path, resize).or_else(|_| {
+                let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
+                apply_resize(&mut loaded, resize);
+                Ok(loaded)
+            })
+        }
         PreviewStorageFormat::RawRgb => load_raw_preview_timed(image_path, resize).or_else(|_| {
             let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
             apply_resize(&mut loaded, resize);
@@ -380,37 +394,85 @@ pub fn load_preview_image(
     }
 }
 
-pub fn raw_preview_cache_path(image_path: &str, resize: PreviewResizeSpec) -> PathBuf {
+pub fn preview_cache_path(
+    image_path: &str,
+    storage: PreviewStorageFormat,
+    resize: PreviewResizeSpec,
+) -> PathBuf {
     let source = Path::new(image_path);
     let filename = source
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("preview.png");
     let stem = filename.strip_suffix(".png").unwrap_or(filename);
+    let (dir_prefix, ext) = match storage {
+        PreviewStorageFormat::Png | PreviewStorageFormat::DerivedPng => ("png", "png"),
+        PreviewStorageFormat::RawRgb => ("raw", "rgb"),
+    };
+    let cache_dir = format!("{dir_prefix}-{}", resize.cache_label());
     if let Ok(root) = std::env::var("MISTER_PREVIEW_CACHE_DIR") {
-        return Path::new(&root)
-            .join(format!("raw-{}", resize.cache_label()))
-            .join(format!("{stem}.rgb"));
+        return Path::new(&root).join(cache_dir).join(format!("{stem}.{ext}"));
     }
     if let Some(parent) = source.parent() {
         if parent.file_name().and_then(|s| s.to_str()) == Some("screenshot") {
             if let Some(media) = parent.parent() {
                 return media
                     .join("screenshot-magik")
-                    .join(format!("raw-{}", resize.cache_label()))
-                    .join(format!("{stem}.rgb"));
+                    .join(cache_dir)
+                    .join(format!("{stem}.{ext}"));
             }
         }
         return parent
             .join("screenshot-magik")
-            .join(format!("raw-{}", resize.cache_label()))
-            .join(format!("{stem}.rgb"));
+            .join(cache_dir)
+            .join(format!("{stem}.{ext}"));
     }
-    PathBuf::from(format!("{stem}.rgb"))
+    PathBuf::from(format!("{stem}.{ext}"))
 }
 
-pub fn write_raw_preview_cache(image_path: &str, resize: PreviewResizeSpec) -> Result<PathBuf, String> {
+pub fn raw_preview_cache_path(image_path: &str, resize: PreviewResizeSpec) -> PathBuf {
+    preview_cache_path(image_path, PreviewStorageFormat::RawRgb, resize)
+}
+
+#[derive(Clone, Debug)]
+pub struct PreviewCacheBuildResult {
+    pub input_path: String,
+    pub output_path: PathBuf,
+    pub storage_format: PreviewStorageFormat,
+    pub resize_filter: PreviewResizeFilter,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub read_us: u64,
+    pub decode_us: u64,
+    pub resize_us: u64,
+    pub encode_write_us: u64,
+    pub total_us: u64,
+    pub input_bytes: usize,
+    pub output_bytes: usize,
+}
+
+pub fn write_preview_cache(
+    image_path: &str,
+    storage: PreviewStorageFormat,
+    resize: PreviewResizeSpec,
+) -> Result<PreviewCacheBuildResult, String> {
+    match storage {
+        PreviewStorageFormat::Png => Err("preview cache format must be derived-png or raw-rgb".into()),
+        PreviewStorageFormat::DerivedPng => write_derived_png_preview_cache(image_path, resize),
+        PreviewStorageFormat::RawRgb => write_raw_preview_cache(image_path, resize),
+    }
+}
+
+pub fn write_raw_preview_cache(
+    image_path: &str,
+    resize: PreviewResizeSpec,
+) -> Result<PreviewCacheBuildResult, String> {
+    let total_t = Instant::now();
     let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
+    let source_width = loaded.timing.source_width;
+    let source_height = loaded.timing.source_height;
     apply_resize(&mut loaded, resize);
     let out = raw_preview_cache_path(image_path, resize);
     if let Some(parent) = out.parent() {
@@ -421,8 +483,68 @@ pub fn write_raw_preview_cache(image_path: &str, resize: PreviewResizeSpec) -> R
     bytes.extend_from_slice(&loaded.image.width.to_le_bytes());
     bytes.extend_from_slice(&loaded.image.height.to_le_bytes());
     bytes.extend_from_slice(&loaded.image.rgb);
+    let write_t = Instant::now();
     std::fs::write(&out, bytes).map_err(|e| format!("write {}: {e}", out.display()))?;
-    Ok(out)
+    let encode_write_us = write_t.elapsed().as_micros() as u64;
+    let output_bytes = std::fs::metadata(&out)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    Ok(PreviewCacheBuildResult {
+        input_path: image_path.to_string(),
+        output_path: out,
+        storage_format: PreviewStorageFormat::RawRgb,
+        resize_filter: resize.filter,
+        source_width,
+        source_height,
+        output_width: loaded.image.width,
+        output_height: loaded.image.height,
+        read_us: loaded.timing.read_us,
+        decode_us: loaded.timing.decode_us,
+        resize_us: loaded.timing.resize_us,
+        encode_write_us,
+        total_us: total_t.elapsed().as_micros() as u64,
+        input_bytes: loaded.timing.encoded_bytes,
+        output_bytes,
+    })
+}
+
+fn write_derived_png_preview_cache(
+    image_path: &str,
+    resize: PreviewResizeSpec,
+) -> Result<PreviewCacheBuildResult, String> {
+    let total_t = Instant::now();
+    let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
+    let source_width = loaded.timing.source_width;
+    let source_height = loaded.timing.source_height;
+    apply_resize(&mut loaded, resize);
+    let out = preview_cache_path(image_path, PreviewStorageFormat::DerivedPng, resize);
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let write_t = Instant::now();
+    let png = encode_png_rgb8(&loaded.image)?;
+    std::fs::write(&out, png).map_err(|e| format!("write {}: {e}", out.display()))?;
+    let encode_write_us = write_t.elapsed().as_micros() as u64;
+    let output_bytes = std::fs::metadata(&out)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    Ok(PreviewCacheBuildResult {
+        input_path: image_path.to_string(),
+        output_path: out,
+        storage_format: PreviewStorageFormat::DerivedPng,
+        resize_filter: resize.filter,
+        source_width,
+        source_height,
+        output_width: loaded.image.width,
+        output_height: loaded.image.height,
+        read_us: loaded.timing.read_us,
+        decode_us: loaded.timing.decode_us,
+        resize_us: loaded.timing.resize_us,
+        encode_write_us,
+        total_us: total_t.elapsed().as_micros() as u64,
+        input_bytes: loaded.timing.encoded_bytes,
+        output_bytes,
+    })
 }
 
 fn load_raw_preview_timed(image_path: &str, resize: PreviewResizeSpec) -> Result<LoadedImage, String> {
@@ -448,6 +570,30 @@ fn load_raw_preview_timed(image_path: &str, resize: PreviewResizeSpec) -> Result
         },
         image,
     })
+}
+
+fn load_derived_png_timed(image_path: &str, resize: PreviewResizeSpec) -> Result<LoadedImage, String> {
+    let path = preview_cache_path(image_path, PreviewStorageFormat::DerivedPng, resize);
+    arcade_catalog::load_png_rgb8_timed(
+        path.to_str()
+            .ok_or_else(|| format!("non-utf8 derived png path {}", path.display()))?,
+    )
+}
+
+fn encode_png_rgb8(image: &DecodedImage) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, image.width, image.height);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| format!("png encode header: {e}"))?;
+        writer
+            .write_image_data(&image.rgb)
+            .map_err(|e| format!("png encode data: {e}"))?;
+    }
+    Ok(out)
 }
 
 fn decode_raw_preview_bytes(data: &[u8]) -> Result<DecodedImage, String> {
@@ -498,9 +644,6 @@ fn apply_resize(loaded: &mut LoadedImage, resize: PreviewResizeSpec) {
 }
 
 fn resize_target(width: u32, height: u32, max_w: u32, max_h: u32) -> Option<(u32, u32)> {
-    if width <= max_w && height <= max_h {
-        return None;
-    }
     let scale = (max_w as f64 / width as f64).min(max_h as f64 / height as f64);
     let target_w = ((width as f64 * scale).round() as u32).max(1);
     let target_h = ((height as f64 * scale).round() as u32).max(1);
@@ -662,6 +805,7 @@ fn lower_thread_priority() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn preview_window_orders_selected_then_nearby() {
@@ -689,5 +833,90 @@ mod tests {
         ];
         let paths = preview_window_paths(&items, 2, 3, |p| *p);
         assert_eq!(paths, vec!["b", "a", "c", "d"]);
+    }
+
+    #[test]
+    fn resize_target_fits_every_image_into_square() {
+        assert_eq!(resize_target(224, 256, 320, 320), Some((280, 320)));
+        assert_eq!(resize_target(384, 224, 320, 320), Some((320, 187)));
+        assert_eq!(resize_target(640, 480, 320, 320), Some((320, 240)));
+        assert_eq!(resize_target(224, 384, 320, 320), Some((187, 320)));
+        assert_eq!(resize_target(320, 240, 320, 320), None);
+    }
+
+    #[test]
+    fn cache_path_lives_outside_original_screenshot_dir() {
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Lanczos,
+            max_w: 320,
+            max_h: 320,
+        };
+        let original = "/media/fat/_Arcade/media/screenshot/1941u.png";
+        let raw = preview_cache_path(original, PreviewStorageFormat::RawRgb, resize);
+        let derived = preview_cache_path(original, PreviewStorageFormat::DerivedPng, resize);
+        assert_eq!(
+            raw,
+            PathBuf::from(
+                "/media/fat/_Arcade/media/screenshot-magik/raw-lanczos-320x320/1941u.rgb"
+            )
+        );
+        assert_eq!(
+            derived,
+            PathBuf::from(
+                "/media/fat/_Arcade/media/screenshot-magik/png-lanczos-320x320/1941u.png"
+            )
+        );
+        assert_ne!(raw, PathBuf::from(original));
+        assert_ne!(derived, PathBuf::from(original));
+    }
+
+    #[test]
+    fn raw_preview_header_round_trips_rgb() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MMRGB01\0");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        let decoded = decode_raw_preview_bytes(&bytes).unwrap();
+        assert_eq!(decoded.width, 2);
+        assert_eq!(decoded.height, 1);
+        assert_eq!(decoded.rgb, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn missing_raw_cache_falls_back_to_original_png() {
+        let dir = std::env::temp_dir().join(format!(
+            "mister-magik-preview-worker-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("media/screenshot")).unwrap();
+        let png_path = dir.join("media/screenshot/tiny.png");
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            rgb: vec![255, 0, 0, 0, 255, 0],
+        };
+        std::fs::write(&png_path, encode_png_rgb8(&image).unwrap()).unwrap();
+
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Nearest,
+            max_w: 4,
+            max_h: 4,
+        };
+        let loaded = load_preview_image(
+            png_path.to_str().unwrap(),
+            PreviewStorageFormat::RawRgb,
+            resize,
+        )
+        .unwrap();
+        assert_eq!(loaded.image.width, 4);
+        assert_eq!(loaded.image.height, 2);
+        assert_eq!(loaded.timing.source_width, 2);
+        assert_eq!(loaded.timing.source_height, 1);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -6,12 +6,12 @@ export component ArcadeListScreen inherits Rectangle {
     property <int> count: MisterBridge.arcade-games.length;
     property <length> preview-display-width: MisterBridge.arcade-preview-display-width * 1px * s;
     property <length> preview-display-height: MisterBridge.arcade-preview-display-height * 1px * s;
-    property <length> cabinet-width: 300px * s;
+    property <length> cabinet-width: 336px * s;
     property <length> cabinet-height: 520px * s;
-    property <length> cabinet-screen-x: 38px * s;
-    property <length> cabinet-screen-y: 130px * s;
-    property <length> cabinet-screen-width: 224px * s;
-    property <length> cabinet-screen-height: 168px * s;
+    property <length> cabinet-screen-x: 8px * s;
+    property <length> cabinet-screen-y: 92px * s;
+    property <length> cabinet-screen-width: 320px * s;
+    property <length> cabinet-screen-height: 320px * s;
 
     background: #1a1424;
 
@@ -95,6 +95,19 @@ export component ArcadeListScreen inherits Rectangle {
                         source: MisterBridge.arcade-preview-image;
                     }
                 }
+            }
+
+            Text {
+                x: 8px * s;
+                y: parent.height - 22px * s;
+                width: parent.width - 16px * s;
+                height: 14px * s;
+                visible: MisterBridge.arcade-preview-run-label != "";
+                text: MisterBridge.arcade-preview-run-label;
+                color: #d8d0e8;
+                font-size: 8px * s;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
     }

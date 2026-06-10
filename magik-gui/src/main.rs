@@ -13,6 +13,7 @@
 //!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
 //!   input     gamepad log / sniff / calibrate
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
+//!   preview-cache build --filter nearest|box|lanczos --format derived-png|raw-rgb --max 320x320
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
@@ -72,6 +73,11 @@ fn main() {
         return;
     }
 
+    if cmd == "preview-cache" {
+        run_preview_cache();
+        return;
+    }
+
     let mut f = match Fpga::open() {
         Ok(f) => f,
         Err(e) => {
@@ -91,6 +97,7 @@ fn main() {
         "effect-bench" => ui_runner::run_effect_bench(&mut f),
         "input" => run_input(),
         "library-scan-bench" => library_bench::run_scan_bench(),
+        "preview-cache" => run_preview_cache(),
         "audio-tone" => run_audio_tone(&mut f),
         other => {
             eprintln!(
@@ -157,6 +164,198 @@ fn run_cpu_profile_smoke() {
             std::process::exit(1);
         }
     }
+}
+
+fn run_preview_cache() {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let sub = args.first().map(String::as_str).unwrap_or("help");
+    if sub != "build" {
+        eprintln!(
+            "usage: preview-cache build [--filter nearest|box|lanczos] [--format derived-png|raw-rgb] [--max 320x320] [--root /media/fat/_Arcade] [--limit N]"
+        );
+        std::process::exit(2);
+    }
+
+    let mut filter = preview_worker::PreviewResizeFilter::Lanczos;
+    let mut format = preview_worker::PreviewStorageFormat::RawRgb;
+    let mut max_w = 320u32;
+    let mut max_h = 320u32;
+    let mut root = std::path::PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT);
+    let mut limit: Option<usize> = None;
+
+    let mut i = 1usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--filter" => {
+                let Some(value) = args.get(i + 1) else {
+                    eprintln!("preview-cache: --filter needs a value");
+                    std::process::exit(2);
+                };
+                filter = preview_worker::PreviewResizeFilter::from_label(value);
+                if filter == preview_worker::PreviewResizeFilter::Off {
+                    eprintln!("preview-cache: filter must be nearest, box, or lanczos");
+                    std::process::exit(2);
+                }
+                i += 2;
+            }
+            "--format" => {
+                let Some(value) = args.get(i + 1) else {
+                    eprintln!("preview-cache: --format needs a value");
+                    std::process::exit(2);
+                };
+                format = preview_worker::PreviewStorageFormat::from_label(value);
+                if format == preview_worker::PreviewStorageFormat::Png {
+                    eprintln!("preview-cache: format must be derived-png or raw-rgb");
+                    std::process::exit(2);
+                }
+                i += 2;
+            }
+            "--max" => {
+                let Some(value) = args.get(i + 1) else {
+                    eprintln!("preview-cache: --max needs a value");
+                    std::process::exit(2);
+                };
+                let Some((w, h)) = parse_size_arg(value) else {
+                    eprintln!("preview-cache: --max must look like 320x320");
+                    std::process::exit(2);
+                };
+                max_w = w.max(1);
+                max_h = h.max(1);
+                i += 2;
+            }
+            "--root" => {
+                let Some(value) = args.get(i + 1) else {
+                    eprintln!("preview-cache: --root needs a value");
+                    std::process::exit(2);
+                };
+                root = std::path::PathBuf::from(value);
+                i += 2;
+            }
+            "--limit" => {
+                let Some(value) = args.get(i + 1) else {
+                    eprintln!("preview-cache: --limit needs a value");
+                    std::process::exit(2);
+                };
+                limit = value.parse::<usize>().ok();
+                if limit.is_none() {
+                    eprintln!("preview-cache: --limit must be an integer");
+                    std::process::exit(2);
+                }
+                i += 2;
+            }
+            other => {
+                eprintln!("preview-cache: unknown argument {other:?}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    let resize = preview_worker::PreviewResizeSpec {
+        filter,
+        max_w,
+        max_h,
+    };
+    let screenshot_dir = if root.file_name().and_then(|s| s.to_str()) == Some("screenshot") {
+        root
+    } else {
+        root.join("media").join("screenshot")
+    };
+    let mut paths: Vec<_> = match std::fs::read_dir(&screenshot_dir) {
+        Ok(read_dir) => read_dir
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().and_then(|s| s.to_str()) == Some("png")
+                    && !path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|name| name.starts_with("._"))
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("preview-cache: read {}: {e}", screenshot_dir.display());
+            std::process::exit(1);
+        }
+    };
+    paths.sort();
+    if let Some(limit) = limit {
+        paths.truncate(limit);
+    }
+
+    println!(
+        "preview_cache_build format={} filter={} max={}x{} input_dir={} count={}",
+        format.label(),
+        filter.label(),
+        max_w,
+        max_h,
+        screenshot_dir.display(),
+        paths.len()
+    );
+    println!(
+        "file\tsource_w\tsource_h\toutput_w\toutput_h\tread_us\tdecode_us\tresize_us\tencode_write_us\ttotal_us\tinput_bytes\toutput_bytes\tout"
+    );
+
+    let total_t = std::time::Instant::now();
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+    let mut output_bytes = 0usize;
+    let mut read_us = 0u128;
+    let mut decode_us = 0u128;
+    let mut resize_us = 0u128;
+    let mut write_us = 0u128;
+    for path in paths {
+        let path_str = path.to_string_lossy().into_owned();
+        match preview_worker::write_preview_cache(&path_str, format, resize) {
+            Ok(result) => {
+                ok += 1;
+                output_bytes += result.output_bytes;
+                read_us += result.read_us as u128;
+                decode_us += result.decode_us as u128;
+                resize_us += result.resize_us as u128;
+                write_us += result.encode_write_us as u128;
+                println!(
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    std::path::Path::new(&result.input_path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&result.input_path),
+                    result.source_width,
+                    result.source_height,
+                    result.output_width,
+                    result.output_height,
+                    result.read_us,
+                    result.decode_us,
+                    result.resize_us,
+                    result.encode_write_us,
+                    result.total_us,
+                    result.input_bytes,
+                    result.output_bytes,
+                    result.output_path.display()
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("preview-cache: {path_str}: {e}");
+            }
+        }
+    }
+    let n = ok.max(1) as u128;
+    println!(
+        "preview_cache_summary ok={} failed={} elapsed_ms={} output_bytes={} avg_read_us={} avg_decode_us={} avg_resize_us={} avg_encode_write_us={}",
+        ok,
+        failed,
+        total_t.elapsed().as_millis(),
+        output_bytes,
+        read_us / n,
+        decode_us / n,
+        resize_us / n,
+        write_us / n
+    );
+}
+
+fn parse_size_arg(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once('x').or_else(|| s.split_once('X'))?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 fn run_vsync_probe() {

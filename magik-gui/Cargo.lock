@@ -2611,6 +2611,7 @@ name = "mister-magik-catalog"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "png 0.18.1",
  "quick-xml 0.40.1",
  "rusqlite",
  "walkdir",
