@@ -254,6 +254,14 @@ the common "Operation not permitted, rerunning with approval" loop:
 Bench scenes: `mister-magik-fb scenes` or `ui <scene> 20` — see `magik-gui/ui/bench/README.md`.
 Log: [`history/toolchain-bench/README.md`](history/toolchain-bench/README.md).
 
+**Arcade benchmark hygiene:** do **not** use row-by-row/stepwise list scenarios
+(`list-scroll`, old `smooth-scroll`, or manual selected-index jumps) for arcade
+performance conclusions. They do not reproduce the real visual workload and keep
+leading us to the wrong optimizations. Use velocity-scroll scenarios instead:
+`held-scroll` for normal continuous motion, `turbo-hold` for fast continuous
+motion, and `scripts/profile-preview-scroll.sh` / `scripts/profile-arcade-scroll.sh`
+for preview/list benchmark work. `velocity-scroll` is an alias for `held-scroll`.
+
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and
 the dump is useless. `bench-toolchain.sh` snapshots at ~`scene_secs - 2` s mid-run.

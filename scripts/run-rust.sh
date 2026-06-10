@@ -16,7 +16,7 @@ SECS="${2:-0}"
 LOG="/tmp/mister-magik-${SCENE}.log"
 
 case "$SCENE" in
-  demo|full_motion|static_ui|local_motion|console_scroll|launcher|controller_test|arcade_page|blend_velocity|video_playback|solid_fill|dirty_band) ;;
+  demo|full_motion|static_ui|local_motion|console_scroll|launcher|controller_test|arcade_page|preview_scroll_bench|blend_velocity|video_playback|solid_fill|dirty_band) ;;
   -h|--help)
     sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
     exit 0

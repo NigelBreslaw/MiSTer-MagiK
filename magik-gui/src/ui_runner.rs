@@ -28,7 +28,10 @@ use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_bench;
-use crate::preview_worker::PreviewWorker;
+use crate::preview_worker::{
+    preview_window_indices, preview_window_paths, PreviewPriority, PreviewWorker,
+    DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
+};
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
@@ -38,8 +41,8 @@ use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 #[cfg(mister_bench_scenes)]
 use std::fs::File;
 #[cfg(mister_bench_scenes)]
@@ -68,6 +71,8 @@ pub const UI_SCENES: &[&str] = &[
     "launcher",
     #[cfg(not(mister_ui_scope_launcher))]
     "arcade_page",
+    #[cfg(not(mister_ui_scope_launcher))]
+    "preview_scroll_bench",
     "blend_velocity",
     #[cfg(not(mister_ui_scope_launcher))]
     "demo",
@@ -1337,6 +1342,26 @@ pub fn run_ui(f: &mut Fpga) {
                 run_arcade_page_loop(secs, &ui, &mut disp, f, &window, pad, app, &animation_clock);
             });
         }
+        #[cfg(not(mister_ui_scope_launcher))]
+        "preview_scroll_bench" => {
+            let pad = open_pads();
+            with_scene_app!(launcher::Launcher, &ui, &window, app, {
+                init_launcher_bridge(&app, &pad);
+                boot_analytics::event("app_show_attempt", "scene=preview_scroll_bench");
+                app.show().expect("show");
+                boot_analytics::event("app_show", "scene=preview_scroll_bench ok=1");
+                window.request_redraw();
+                run_preview_scroll_bench_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    app,
+                    &animation_clock,
+                );
+            });
+        }
         "launcher" => {
             let pad = open_pads();
             with_scene_app!(launcher::Launcher, &ui, &window, app, {
@@ -1514,6 +1539,7 @@ fn sync_bridge_launcher_light(
     loading_message: &str,
     loading_detail: &str,
     catalog: &ArcadeCatalog,
+    active_arcade_games: Option<&[ArcadeGameEntry]>,
     preview: &mut PreviewState,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -1534,7 +1560,14 @@ fn sync_bridge_launcher_light(
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
-        schedule_arcade_preview_for_game(&bridge, active_arcade_game(catalog, nav), preview);
+        let games;
+        let games = if let Some(games) = active_arcade_games {
+            games
+        } else {
+            games = active_system_games(catalog, nav);
+            &games
+        };
+        schedule_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
     }
@@ -1560,8 +1593,6 @@ fn launcher_clock_text() -> String {
     }
 }
 
-const PREVIEW_IMAGE_CACHE_CAP: usize = 16;
-
 #[derive(Clone)]
 struct PreviewImage {
     image: Image,
@@ -1585,14 +1616,26 @@ impl PreviewImageCache {
         Some(out)
     }
 
-    fn insert(&mut self, path: String, image: PreviewImage) {
+    fn insert(&mut self, path: String, image: PreviewImage, window_paths: &[String]) {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == &path) {
             self.entries.remove(idx);
         }
         self.entries.push_back((path, image));
-        while self.entries.len() > PREVIEW_IMAGE_CACHE_CAP {
+        self.retain_window(window_paths);
+    }
+
+    fn retain_window(&mut self, window_paths: &[String]) {
+        if !window_paths.is_empty() {
+            self.entries
+                .retain(|(path, _)| window_paths.iter().any(|keep| keep == path));
+        }
+        while self.entries.len() > DEFAULT_PREVIEW_CACHE_CAP {
             self.entries.pop_front();
         }
+    }
+
+    fn contains(&self, path: &str) -> bool {
+        self.entries.iter().any(|(p, _)| p == path)
     }
 }
 
@@ -1665,34 +1708,43 @@ fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
 
 struct PreviewState {
     worker: PreviewWorker,
-    last_preview_path: Option<String>,
+    selected_mra_path: Option<String>,
+    selected_image_path: Option<String>,
     current_generation: u64,
     cache: PreviewImageCache,
     has_visible_preview: bool,
     visible_path: String,
+    window_paths: Vec<String>,
+    pending_prefetch_paths: HashSet<String>,
 }
 
 impl PreviewState {
     fn new() -> Self {
         Self {
             worker: PreviewWorker::new(),
-            last_preview_path: None,
+            selected_mra_path: None,
+            selected_image_path: None,
             current_generation: 0,
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
             visible_path: String::new(),
+            window_paths: Vec::new(),
+            pending_prefetch_paths: HashSet::new(),
         }
     }
 
     fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
-        if self.last_preview_path.is_some()
+        if self.selected_mra_path.is_some()
             || self.current_generation != 0
             || self.has_visible_preview
         {
-            self.last_preview_path = None;
+            self.selected_mra_path = None;
+            self.selected_image_path = None;
             self.current_generation = 0;
             self.has_visible_preview = false;
             self.visible_path.clear();
+            self.window_paths.clear();
+            self.pending_prefetch_paths.clear();
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -1708,19 +1760,24 @@ fn request_arcade_preview(
     selected: usize,
     preview: &mut PreviewState,
 ) {
-    request_arcade_preview_for_game(bridge, games.get(selected), preview);
+    request_arcade_preview_window(bridge, games, selected, preview);
 }
 
-fn request_arcade_preview_for_game(
+fn request_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
-    game: Option<&ArcadeGameEntry>,
+    games: &[ArcadeGameEntry],
+    selected: usize,
     preview: &mut PreviewState,
 ) {
+    let game = games.get(selected);
     let Some(game) = game else {
-        preview.last_preview_path = None;
+        preview.selected_mra_path = None;
+        preview.selected_image_path = None;
         preview.current_generation = 0;
         preview.has_visible_preview = false;
         preview.visible_path.clear();
+        preview.window_paths.clear();
+        preview.pending_prefetch_paths.clear();
         bridge.set_arcade_preview_placeholder_visible(true);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
@@ -1728,13 +1785,28 @@ fn request_arcade_preview_for_game(
         return;
     };
     bridge.set_arcade_preview_placeholder_visible(true);
-    if preview.last_preview_path.as_deref() == Some(game.mra_path.as_str()) {
+
+    preview.window_paths = preview_window_paths(games, selected, DEFAULT_PREVIEW_RADIUS, |game| {
+        game.has_image.then_some(game.image_path.as_str())
+    })
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    preview.cache.retain_window(&preview.window_paths);
+
+    if preview
+        .selected_mra_path
+        .as_deref()
+        .is_some_and(|path| path == game.mra_path)
+    {
+        request_preview_prefetches(games, selected, preview);
         return;
     }
-    preview.last_preview_path = Some(game.mra_path.clone());
+    preview.selected_mra_path = Some(game.mra_path.clone());
 
     bridge.set_arcade_preview_title(game.title.clone().into());
     if game.has_image {
+        preview.selected_image_path = Some(game.image_path.clone());
         if let Some(image) = preview.cache.get(&game.image_path) {
             preview.current_generation = 0;
             preview.has_visible_preview = true;
@@ -1750,11 +1822,12 @@ fn request_arcade_preview_for_game(
             } else {
                 apply_preview_image_bridge(bridge, &image);
             }
+            request_preview_prefetches(games, selected, preview);
             return;
         }
         preview.current_generation = preview
             .worker
-            .request(game.title.clone(), game.image_path.clone());
+            .request_selected(game.title.clone(), game.image_path.clone());
         if preview_trace_enabled() {
             eprintln!(
                 "preview_trace requested generation={} title={} path={}",
@@ -1765,9 +1838,11 @@ fn request_arcade_preview_for_game(
             clear_preview_image_bridge(bridge);
         }
         bridge.set_arcade_preview_status(PreviewStatus::Loading);
+        request_preview_prefetches(games, selected, preview);
         return;
     }
     preview.current_generation = 0;
+    preview.selected_image_path = None;
     preview.has_visible_preview = false;
     preview.visible_path.clear();
     bridge.set_arcade_preview_placeholder_visible(true);
@@ -1775,19 +1850,59 @@ fn request_arcade_preview_for_game(
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
 }
 
-fn schedule_arcade_preview_for_game(
+fn request_preview_prefetches(
+    games: &[ArcadeGameEntry],
+    selected: usize,
+    preview: &mut PreviewState,
+) {
+    for idx in preview_window_indices(games.len(), selected, DEFAULT_PREVIEW_RADIUS) {
+        if idx == selected {
+            continue;
+        }
+        let Some(game) = games.get(idx) else {
+            continue;
+        };
+        if !game.has_image
+            || preview.cache.contains(&game.image_path)
+            || preview.pending_prefetch_paths.contains(&game.image_path)
+        {
+            continue;
+        }
+        let distance = idx.abs_diff(selected);
+        preview
+            .pending_prefetch_paths
+            .insert(game.image_path.clone());
+        preview
+            .worker
+            .request_prefetch(game.title.clone(), game.image_path.clone(), distance);
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace prefetch distance={} title={} path={}",
+                distance, game.title, game.image_path
+            );
+        }
+    }
+}
+
+fn schedule_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
-    game: Option<&ArcadeGameEntry>,
+    games: &[ArcadeGameEntry],
+    selected: usize,
     preview: &mut PreviewState,
 ) -> bool {
-    let Some(game) = game else {
+    let Some(game) = games.get(selected) else {
         preview.clear(bridge);
         return true;
     };
-    if preview.last_preview_path.as_deref() == Some(game.mra_path.as_str()) {
+    if preview
+        .selected_mra_path
+        .as_deref()
+        .is_some_and(|path| path == game.mra_path)
+    {
+        request_preview_prefetches(games, selected, preview);
         return false;
     }
-    request_arcade_preview_for_game(bridge, Some(game), preview);
+    request_arcade_preview_window(bridge, games, selected, preview);
     true
 }
 
@@ -1795,7 +1910,13 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
     for result in preview.worker.drain() {
-        if result.generation != preview.current_generation {
+        preview.pending_prefetch_paths.remove(&result.image_path);
+        let is_selected_result = result.generation == preview.current_generation
+            && preview
+                .selected_image_path
+                .as_deref()
+                .is_some_and(|path| path == result.image_path);
+        if !is_selected_result && matches!(result.priority, PreviewPriority::Selected) {
             if preview_trace_enabled() {
                 eprintln!(
                     "preview_trace stale_result generation={} current_generation={} path={}",
@@ -1804,12 +1925,13 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
             }
             continue;
         }
-        bridge.set_arcade_preview_title(result.title.into());
         if let Some(image) = result.image {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace apply generation={} age_us={} total_us={} read_us={} decode_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    "preview_trace apply generation={} priority={:?} selected={} age_us={} total_us={} read_us={} decode_us={} encoded_bytes={} decoded_bytes={} path={}",
                     result.generation,
+                    result.priority,
+                    is_selected_result,
                     result.request_age_us,
                     result.total_us,
                     result.read_us,
@@ -1835,17 +1957,24 @@ fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut Preview
                 display_h: display.h,
             };
             let image_path = result.image_path;
-            preview.cache.insert(image_path.clone(), image.clone());
-            preview.has_visible_preview = true;
-            preview.visible_path = image_path;
-            apply_preview_image_bridge(&bridge, &image);
-        } else {
+            preview
+                .cache
+                .insert(image_path.clone(), image.clone(), &preview.window_paths);
+            if is_selected_result {
+                bridge.set_arcade_preview_title(result.title.into());
+                preview.current_generation = 0;
+                preview.has_visible_preview = true;
+                preview.visible_path = image_path;
+                apply_preview_image_bridge(&bridge, &image);
+                dirty = true;
+            }
+        } else if is_selected_result {
             preview.has_visible_preview = false;
             preview.visible_path.clear();
             clear_preview_image_bridge(&bridge);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
+            dirty = true;
         }
-        dirty = true;
     }
     dirty
 }
@@ -1897,14 +2026,6 @@ fn active_system_games(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<Arcade
     active_system(catalog, nav)
         .map(|system| catalog.system_games(&system.id))
         .unwrap_or_default()
-}
-
-fn active_arcade_game<'a>(
-    catalog: &'a ArcadeCatalog,
-    nav: &LauncherNav,
-) -> Option<&'a ArcadeGameEntry> {
-    let system = active_system(catalog, nav)?;
-    catalog.system_game_at(&system.id, nav.arcade.selected)
 }
 
 fn start_library_catalog_worker(
@@ -2062,6 +2183,9 @@ enum LauncherBenchScenario {
     Idle,
     HomeNav,
     ListScroll,
+    SelectedFirst,
+    StressScroll,
+    CacheWarm,
     QuickTap,
     RapidTaps,
     HeldScroll,
@@ -2079,6 +2203,12 @@ impl LauncherBenchScenario {
             "idle" => Some(Self::Idle),
             "home-nav" | "home_nav" => Some(Self::HomeNav),
             "list-scroll" | "list_scroll" => Some(Self::ListScroll),
+            "selected-first" | "selected_first" => Some(Self::SelectedFirst),
+            "velocity-scroll" | "velocity_scroll" | "smooth-scroll" | "smooth_scroll" => {
+                Some(Self::HeldScroll)
+            }
+            "stress-scroll" | "stress_scroll" => Some(Self::StressScroll),
+            "cache-warm" | "cache_warm" => Some(Self::CacheWarm),
             "quick-tap" | "quick_tap" => Some(Self::QuickTap),
             "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
             "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
@@ -2093,6 +2223,9 @@ impl LauncherBenchScenario {
             Self::Idle => "idle",
             Self::HomeNav => "home-nav",
             Self::ListScroll => "list-scroll",
+            Self::SelectedFirst => "selected-first",
+            Self::StressScroll => "stress-scroll",
+            Self::CacheWarm => "cache-warm",
             Self::QuickTap => "quick-tap",
             Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
@@ -2106,6 +2239,9 @@ impl LauncherBenchScenario {
             Self::Idle => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
             Self::ListScroll => Duration::from_millis(120),
+            Self::SelectedFirst => Duration::from_millis(700),
+            Self::StressScroll => Duration::from_millis(60),
+            Self::CacheWarm => Duration::from_millis(120),
             Self::QuickTap | Self::RapidTaps | Self::HeldScroll | Self::TurboHold => Duration::ZERO,
             Self::PreviewChanges => Duration::from_millis(500),
         }
@@ -2137,7 +2273,11 @@ fn launcher_bench_step(
             keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             true
         }
-        LauncherBenchScenario::ListScroll | LauncherBenchScenario::PreviewChanges => {
+        LauncherBenchScenario::ListScroll
+        | LauncherBenchScenario::PreviewChanges
+        | LauncherBenchScenario::SelectedFirst
+        | LauncherBenchScenario::StressScroll
+        | LauncherBenchScenario::CacheWarm => {
             let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
             else {
                 return false;
@@ -2146,7 +2286,20 @@ fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            let selected = step % count;
+            let selected = match scenario {
+                LauncherBenchScenario::SelectedFirst => (step.saturating_mul(7)) % count,
+                LauncherBenchScenario::CacheWarm => {
+                    let span = count.min(DEFAULT_PREVIEW_CACHE_CAP * 3).max(1);
+                    let cycle = span.saturating_mul(2).saturating_sub(2).max(1);
+                    let pos = step % cycle;
+                    if pos < span {
+                        pos
+                    } else {
+                        cycle - pos
+                    }
+                }
+                _ => step % count,
+            };
             if selected < nav.arcade.selected {
                 nav.arcade.scroll_y = 0;
             }
@@ -5109,6 +5262,232 @@ fn run_arcade_page_loop(
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
+fn run_preview_scroll_bench_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    f: &mut Fpga,
+    window: &Rc<MinimalSoftwareWindow>,
+    app: slint_ui::launcher::Launcher,
+    animation_clock: &AnimationClock,
+) {
+    let start = Instant::now();
+    let mut frames = 0u64;
+    let mut nav = LauncherNav::new();
+    nav.screen = Screen::Arcade;
+    let scenario = LauncherBenchScenario::from_env().unwrap_or(LauncherBenchScenario::HeldScroll);
+    let mut bench_next_step = Instant::now();
+    let mut bench_step_idx = 0usize;
+    let label = if secs == 0 {
+        "forever".to_string()
+    } else {
+        format!("{secs}s")
+    };
+    println!("preview_scroll_bench running {label}");
+    println!("launcher_bench_scenario={}", scenario.label());
+
+    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
+        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    let catalog = library_bench::load_arcade_catalog_from_sqlite(&arcade_root)
+        .map(|loaded| loaded.catalog)
+        .unwrap_or_else(|e| {
+            eprintln!("preview_scroll_bench catalog cache load failed: {e}");
+            empty_arcade_catalog(&arcade_root)
+        });
+    let games = active_system_games(&catalog, &nav);
+    let active_title = active_system(&catalog, &nav)
+        .map(|system| system.title.clone())
+        .unwrap_or_else(|| "Arcade".to_string());
+
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    bridge.set_screen_mode(Screen::Arcade as i32);
+    sync_launcher_arcade_geometry_bridge(&bridge);
+    bridge.set_active_system_title(active_title.into());
+    bridge.set_arcade_games(slint_arcade_games(&games));
+    bridge.set_arcade_selected(0);
+    bridge.set_arcade_scroll_y(0);
+    bridge.set_arcade_preview_has_image(false);
+    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+    bridge.set_arcade_preview_title("".into());
+    bridge.set_arcade_preview_image(Image::default());
+    bridge.set_arcade_preview_source_width(0);
+    bridge.set_arcade_preview_source_height(0);
+    bridge.set_arcade_preview_display_width(0);
+    bridge.set_arcade_preview_display_height(0);
+
+    let mut pacer = VsyncPacer::from_env();
+    let mut target = UiFrameTarget::cached(ui);
+    let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let mut preview = PreviewState::new();
+    request_arcade_preview(&bridge, &games, nav.arcade.selected, &mut preview);
+    window.request_redraw();
+
+    let mut fps_window_start = Instant::now();
+    let mut fps_frames = 0u64;
+    let mut prepare_us = 0u128;
+    let mut render_us = 0u128;
+    let mut custom_draw_us = 0u128;
+    let mut vsync_us = 0u128;
+    let mut copy_us = 0u128;
+    let mut cached_present_us = 0u128;
+    let mut overlay_present_us = 0u128;
+    let mut rows = 0u128;
+    let mut frame_trace = std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
+        .ok()
+        .and_then(|path| {
+            let mut file = std::fs::File::create(&path)
+                .map_err(|e| eprintln!("preview scroll trace: create {path} failed: {e}"))
+                .ok()?;
+            std::io::Write::write_all(
+                &mut file,
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+            )
+            .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
+            .ok()?;
+            println!("preview_scroll_trace={path}");
+            Some(file)
+        });
+
+    while secs == 0 || start.elapsed().as_secs() < secs {
+        let frame_start = Instant::now();
+        if bench_next_step.elapsed() >= scenario.period() {
+            let _ = launcher_bench_step(
+                scenario,
+                &mut nav,
+                &catalog,
+                Some(games.len()),
+                bench_step_idx,
+                Instant::now(),
+            );
+            bench_step_idx = bench_step_idx.wrapping_add(1);
+            bench_next_step = Instant::now();
+        }
+        nav.screen = Screen::Arcade;
+        bridge.set_arcade_selected(nav.arcade.selected as i32);
+        bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+        if schedule_arcade_preview_window(&bridge, &games, nav.arcade.selected, &mut preview) {
+            window.request_redraw();
+        }
+        if apply_ready_preview(&app, &mut preview) {
+            window.request_redraw();
+        }
+
+        let prepare_done = Instant::now();
+        update_slint_animations(animation_clock);
+        let frame_t1 = Instant::now();
+        let mut this_rect: Option<DirtyRect> = None;
+        window.draw_if_needed(|renderer| {
+            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+            this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
+        });
+        let frame_t2 = Instant::now();
+        let custom_draw_start = Instant::now();
+        let force_arcade_redraw = this_rect.is_some_and(|rect| {
+            rect.intersection(ArcadeListRenderer::dirty_rect())
+                .is_some()
+        });
+        let arcade_list_rect =
+            arcade_list_renderer.draw(&games, nav.arcade.visual_index, force_arcade_redraw);
+        let custom_draw_done = Instant::now();
+        let _pace = pacer.wait();
+        let frame_t3 = Instant::now();
+        let mut copied_rows = 0u32;
+        let mut cached_present_frame_us = 0u128;
+        if let Some(rect) = this_rect {
+            let cached_copy_start = Instant::now();
+            copied_rows = target.present_rect(f, disp, ui, rect);
+            cached_present_frame_us = cached_copy_start.elapsed().as_micros();
+        }
+        let mut overlay_present_frame_us = 0u128;
+        if let Some(update) = arcade_list_rect {
+            let overlay_copy_start = Instant::now();
+            copied_rows +=
+                copy_arcade_list_update(&mut target, disp, ui, &mut arcade_list_renderer, update);
+            overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
+        }
+        let frame_t4 = Instant::now();
+        if let Some(file) = frame_trace.as_mut() {
+            let cache_state = preview
+                .selected_image_path
+                .as_deref()
+                .map(|path| {
+                    if preview.visible_path == path {
+                        "exact"
+                    } else if preview.cache.contains(path) {
+                        "cached"
+                    } else if preview.has_visible_preview {
+                        "stale"
+                    } else {
+                        "placeholder"
+                    }
+                })
+                .unwrap_or("empty");
+            let _ = std::io::Write::write_fmt(
+                file,
+                format_args!(
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    frames,
+                    frame_start.duration_since(start).as_micros(),
+                    nav.arcade.selected,
+                    nav.arcade.visual_index,
+                    cache_state,
+                    copied_rows,
+                    (prepare_done - frame_start).as_micros(),
+                    (frame_t2 - frame_t1).as_micros(),
+                    (custom_draw_done - custom_draw_start).as_micros(),
+                    (frame_t3 - custom_draw_done).as_micros(),
+                    (frame_t4 - frame_t3).as_micros(),
+                    cached_present_frame_us,
+                    overlay_present_frame_us,
+                    (frame_t4 - frame_start).as_micros()
+                ),
+            );
+        }
+
+        frames += 1;
+        fps_frames += 1;
+        prepare_us += (prepare_done - frame_start).as_micros();
+        render_us += (frame_t2 - frame_t1).as_micros();
+        custom_draw_us += (custom_draw_done - custom_draw_start).as_micros();
+        vsync_us += (frame_t3 - custom_draw_done).as_micros();
+        copy_us += (frame_t4 - frame_t3).as_micros();
+        cached_present_us += cached_present_frame_us;
+        overlay_present_us += overlay_present_frame_us;
+        rows += copied_rows as u128;
+        if fps_window_start.elapsed() >= Duration::from_secs(1) {
+            let n = fps_frames.max(1) as u128;
+            println!(
+                "preview_scroll_bench fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
+                fps_frames,
+                prepare_us / n,
+                render_us / n,
+                custom_draw_us / n,
+                vsync_us / n,
+                copy_us / n,
+                cached_present_us / n,
+                overlay_present_us / n,
+                rows / n
+            );
+            fps_window_start = Instant::now();
+            fps_frames = 0;
+            prepare_us = 0;
+            render_us = 0;
+            custom_draw_us = 0;
+            vsync_us = 0;
+            copy_us = 0;
+            cached_present_us = 0;
+            overlay_present_us = 0;
+            rows = 0;
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
+        frames as f64 / elapsed
+    );
+}
+
 fn run_launcher_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -5177,6 +5556,21 @@ fn run_launcher_loop(
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let mut active_arcade_games_cache: Vec<ArcadeGameEntry> = Vec::new();
     let mut active_arcade_games_cache_key: Option<(usize, usize)> = None;
+    let mut preview_scroll_trace = std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
+        .ok()
+        .and_then(|path| {
+            let mut file = std::fs::File::create(&path)
+                .map_err(|e| eprintln!("preview scroll trace: create {path} failed: {e}"))
+                .ok()?;
+            std::io::Write::write_all(
+                &mut file,
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+            )
+            .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
+            .ok()?;
+            println!("preview_scroll_trace={path}");
+            Some(file)
+        });
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let mut catalog = match library_bench::load_arcade_catalog_from_sqlite(&arcade_root) {
@@ -5611,6 +6005,16 @@ fn run_launcher_loop(
                 );
                 window.request_redraw();
             } else if light_bridge_dirty {
+                let active_games = if nav.screen == Screen::Arcade {
+                    let cache_key = (nav.selected, catalog.len());
+                    if active_arcade_games_cache_key != Some(cache_key) {
+                        active_arcade_games_cache = active_system_games(&catalog, &nav);
+                        active_arcade_games_cache_key = Some(cache_key);
+                    }
+                    Some(active_arcade_games_cache.as_slice())
+                } else {
+                    None
+                };
                 sync_bridge_launcher_light(
                     &app,
                     &nav,
@@ -5618,6 +6022,7 @@ fn run_launcher_loop(
                     &loading_title,
                     "",
                     &catalog,
+                    active_games,
                     &mut preview,
                 );
                 window.request_redraw();
@@ -5648,9 +6053,10 @@ fn run_launcher_loop(
         }
         if dirty_opt && !launching && nav.screen == Screen::Arcade {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-            if schedule_arcade_preview_for_game(
+            if schedule_arcade_preview_window(
                 &bridge,
-                active_arcade_games_cache.get(nav.arcade.selected),
+                &active_arcade_games_cache,
+                nav.arcade.selected,
                 &mut preview,
             ) {
                 window.request_redraw();
@@ -5728,6 +6134,43 @@ fn run_launcher_loop(
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
         let frame_t4 = Instant::now();
+        if let Some(file) = preview_scroll_trace.as_mut() {
+            let cache_state = preview
+                .selected_image_path
+                .as_deref()
+                .map(|path| {
+                    if preview.visible_path == path {
+                        "exact"
+                    } else if preview.cache.contains(path) {
+                        "cached"
+                    } else if preview.has_visible_preview {
+                        "stale"
+                    } else {
+                        "placeholder"
+                    }
+                })
+                .unwrap_or("empty");
+            let _ = std::io::Write::write_fmt(
+                file,
+                format_args!(
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    frames,
+                    loop_start.duration_since(start).as_micros(),
+                    nav.arcade.selected,
+                    nav.arcade.visual_index,
+                    cache_state,
+                    copied_rows,
+                    prepare_us,
+                    (frame_t2 - frame_t1).as_micros(),
+                    (custom_draw_done - custom_draw_start).as_micros(),
+                    (frame_t3 - custom_draw_done).as_micros(),
+                    (frame_t4 - frame_t3).as_micros(),
+                    cached_present_frame_us,
+                    overlay_present_frame_us,
+                    (frame_t4 - loop_start).as_micros()
+                ),
+            );
+        }
         if copied_rows > 0 && !first_copy_logged {
             first_copy_logged = true;
             boot_analytics::event(
