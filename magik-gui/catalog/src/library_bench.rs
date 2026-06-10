@@ -366,11 +366,7 @@ pub fn load_arcade_catalog_from_sqlite(
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
     Ok(LibraryCatalogLoad {
-        catalog: ArcadeCatalog {
-            root,
-            games,
-            systems,
-        },
+        catalog: ArcadeCatalog::new(root, games, systems),
         us: t.elapsed().as_micros() as u64,
         rows,
     })

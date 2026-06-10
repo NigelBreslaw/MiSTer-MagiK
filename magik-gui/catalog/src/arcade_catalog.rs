@@ -1,6 +1,6 @@
 //! Arcade catalog helpers: recursive `.mra` scan + optional `gamelist.xml` metadata.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -72,9 +72,20 @@ pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Vec<ArcadeGameEntry>,
     pub systems: Vec<GameSystemEntry>,
+    preview_games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
 }
 
 impl ArcadeCatalog {
+    pub fn new(root: PathBuf, games: Vec<ArcadeGameEntry>, systems: Vec<GameSystemEntry>) -> Self {
+        let preview_games_by_system = preview_games_by_system(&games);
+        Self {
+            root,
+            games,
+            systems,
+            preview_games_by_system,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.games.len()
     }
@@ -110,25 +121,37 @@ impl ArcadeCatalog {
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
-        preview_games(
-            self.games
-                .iter()
-                .filter(|game| game.system_id == system_id),
-        )
+        self.system_preview_game_slice(system_id).to_vec()
     }
 
     pub fn system_preview_game_count(&self, system_id: &str) -> usize {
-        let mut seen = HashSet::new();
-        self.games
-            .iter()
-            .filter(|game| game.system_id == system_id && has_preview_image(game))
-            .filter(|game| seen.insert(preview_dedupe_key(&game.title)))
-            .count()
+        self.system_preview_game_slice(system_id).len()
     }
 
     pub fn system_preview_game_at(&self, system_id: &str, index: usize) -> Option<ArcadeGameEntry> {
-        self.system_preview_games(system_id).into_iter().nth(index)
+        self.system_preview_game_slice(system_id).get(index).cloned()
     }
+
+    pub fn system_preview_game_slice(&self, system_id: &str) -> &[ArcadeGameEntry] {
+        self.preview_games_by_system
+            .get(system_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+}
+
+fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
+    let mut by_system: HashMap<String, Vec<&ArcadeGameEntry>> = HashMap::new();
+    for game in games {
+        by_system
+            .entry(game.system_id.clone())
+            .or_default()
+            .push(game);
+    }
+    by_system
+        .into_iter()
+        .map(|(system_id, games)| (system_id, preview_games(games.into_iter())))
+        .collect()
 }
 
 fn preview_games<'a>(games: impl Iterator<Item = &'a ArcadeGameEntry>) -> Vec<ArcadeGameEntry> {
@@ -357,14 +380,7 @@ pub fn build_with_options(
     timings.total_ms = t0.elapsed().as_millis() as u64;
 
     let systems = systems_from_games(&games);
-    (
-        ArcadeCatalog {
-            root,
-            games,
-            systems,
-        },
-        timings,
-    )
+    (ArcadeCatalog::new(root, games, systems), timings)
 }
 
 pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
@@ -1038,51 +1054,50 @@ mod tests {
 
     #[test]
     fn preview_games_require_images_and_collapse_parenthetical_clones() {
-        let catalog = ArcadeCatalog {
-            root: PathBuf::from("/media/fat/_Arcade"),
-            systems: vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 5,
-            }],
-            games: vec![
-                ArcadeGameEntry {
-                    title: "1941: Counter Attack (Japan)".into(),
-                    mra_path: "/media/fat/_Arcade/1941 Japan.mra".into(),
-                    image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
-                    has_image: true,
-                    system_id: "arcade".into(),
-                },
-                ArcadeGameEntry {
-                    title: "1941: Counter Attack (World)".into(),
-                    mra_path: "/media/fat/_Arcade/1941 World.mra".into(),
-                    image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
-                    has_image: true,
-                    system_id: "arcade".into(),
-                },
-                ArcadeGameEntry {
-                    title: "1942".into(),
-                    mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                    image_path: String::new(),
-                    has_image: false,
-                    system_id: "arcade".into(),
-                },
-                ArcadeGameEntry {
-                    title: "1943".into(),
-                    mra_path: "/media/fat/_Arcade/1943.mra".into(),
-                    image_path: "/media/fat/_Arcade/media/screenshot/1943.png".into(),
-                    has_image: true,
-                    system_id: "arcade".into(),
-                },
-                ArcadeGameEntry {
-                    title: "Astra SuperStars".into(),
-                    mra_path: "/media/fat/_Arcade/Astra SuperStars.mra".into(),
-                    image_path: "/media/fat/_Arcade/media/screenshot/astrass.jpg".into(),
-                    has_image: true,
-                    system_id: "arcade".into(),
-                },
-            ],
-        };
+        let root = PathBuf::from("/media/fat/_Arcade");
+        let systems = vec![GameSystemEntry {
+            id: "arcade".into(),
+            title: "Arcade".into(),
+            count: 5,
+        }];
+        let games = vec![
+            ArcadeGameEntry {
+                title: "1941: Counter Attack (Japan)".into(),
+                mra_path: "/media/fat/_Arcade/1941 Japan.mra".into(),
+                image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
+                has_image: true,
+                system_id: "arcade".into(),
+            },
+            ArcadeGameEntry {
+                title: "1941: Counter Attack (World)".into(),
+                mra_path: "/media/fat/_Arcade/1941 World.mra".into(),
+                image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
+                has_image: true,
+                system_id: "arcade".into(),
+            },
+            ArcadeGameEntry {
+                title: "1942".into(),
+                mra_path: "/media/fat/_Arcade/1942.mra".into(),
+                image_path: String::new(),
+                has_image: false,
+                system_id: "arcade".into(),
+            },
+            ArcadeGameEntry {
+                title: "1943".into(),
+                mra_path: "/media/fat/_Arcade/1943.mra".into(),
+                image_path: "/media/fat/_Arcade/media/screenshot/1943.png".into(),
+                has_image: true,
+                system_id: "arcade".into(),
+            },
+            ArcadeGameEntry {
+                title: "Astra SuperStars".into(),
+                mra_path: "/media/fat/_Arcade/Astra SuperStars.mra".into(),
+                image_path: "/media/fat/_Arcade/media/screenshot/astrass.jpg".into(),
+                has_image: true,
+                system_id: "arcade".into(),
+            },
+        ];
+        let catalog = ArcadeCatalog::new(root, games, systems);
 
         let games = catalog.system_preview_games("arcade");
         assert_eq!(games.len(), 2);

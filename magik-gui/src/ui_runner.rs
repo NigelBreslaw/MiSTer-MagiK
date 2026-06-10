@@ -2148,11 +2148,7 @@ fn slint_game_systems(catalog: &ArcadeCatalog) -> ModelRc<slint_ui::launcher::Ga
 }
 
 fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
-    ArcadeCatalog {
-        root: PathBuf::from(root),
-        games: Vec::new(),
-        systems: Vec::new(),
-    }
+    ArcadeCatalog::new(PathBuf::from(root), Vec::new(), Vec::new())
 }
 
 fn active_system<'a>(
