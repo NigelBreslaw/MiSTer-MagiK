@@ -1,7 +1,8 @@
 //! Optional CPU sampling profiler (`--features profile`, env `MISTER_PPROF=1`).
 //!
 //! Uses `SIGPROF`/`ITIMER_PROF` sampling from the `pprof` crate — no `perf` CLI required.
-//! Build with `build-arm.sh --profile`, run with `MISTER_PPROF=1`, pull the SVG.
+//! Build with `build-arm.sh --profile`, run with `MISTER_PPROF=1`, pull the SVG
+//! and/or folded stack output.
 
 #[derive(Debug, Clone)]
 pub struct CpuProfileSummary {
@@ -21,6 +22,7 @@ mod imp {
         guard: pprof::ProfilerGuard<'static>,
         hz: i32,
         out_path: String,
+        folded_out_path: Option<String>,
     }
 
     pub fn start() -> Option<CpuProfiler> {
@@ -33,12 +35,17 @@ mod imp {
             .unwrap_or(99);
         let out_path =
             std::env::var("MISTER_PPROF_OUT").unwrap_or_else(|_| "/tmp/mister-pprof.svg".into());
+        let folded_out_path = std::env::var("MISTER_PPROF_FOLDED_OUT").ok();
         println!("cpu_profile: sampling at {hz} Hz → {out_path}");
+        if let Some(path) = folded_out_path.as_deref() {
+            println!("cpu_profile: folded stacks → {path}");
+        }
         match pprof::ProfilerGuard::new(hz) {
             Ok(guard) => Some(CpuProfiler {
                 guard,
                 hz,
                 out_path,
+                folded_out_path,
             }),
             Err(e) => {
                 eprintln!("cpu_profile: ProfilerGuard::new failed: {e}");
@@ -65,6 +72,9 @@ mod imp {
                 "cpu_profile: no CPU samples collected from SIGPROF/ITIMER_PROF timer".into(),
             );
         }
+        if let Some(path) = p.folded_out_path.as_deref() {
+            write_folded_report(&report, path)?;
+        }
         match std::fs::File::create(&p.out_path) {
             Ok(mut file) => {
                 if let Err(e) = report.flamegraph(&mut file) {
@@ -86,6 +96,44 @@ mod imp {
             }
             Err(e) => Err(format!("cpu_profile: create {} failed: {e}", p.out_path)),
         }
+    }
+
+    fn write_folded_report(report: &pprof::Report, path: &str) -> Result<u64, String> {
+        use std::fmt::Write as _;
+        use std::io::Write as _;
+
+        let mut lines: Vec<String> = report
+            .data
+            .iter()
+            .map(|(key, value)| {
+                let mut line = key.thread_name_or_id();
+                line.push(';');
+                for frame in key.frames.iter().rev() {
+                    for symbol in frame.iter().rev() {
+                        write!(&mut line, "{};", symbol)
+                            .expect("writing folded stack line to String cannot fail");
+                    }
+                }
+                line.pop();
+                write!(&mut line, " {}", value)
+                    .expect("writing folded stack count to String cannot fail");
+                line
+            })
+            .collect();
+        lines.sort();
+
+        let mut file = std::fs::File::create(path)
+            .map_err(|e| format!("cpu_profile: create folded stack file {path} failed: {e}"))?;
+        for line in lines {
+            writeln!(file, "{line}")
+                .map_err(|e| format!("cpu_profile: write folded stack file {path} failed: {e}"))?;
+        }
+        let bytes = file
+            .metadata()
+            .map(|m| m.len())
+            .map_err(|e| format!("cpu_profile: stat folded stack file {path} failed: {e}"))?;
+        println!("cpu_profile: wrote folded stacks to {path} ({bytes} bytes)");
+        Ok(bytes)
     }
 }
 
