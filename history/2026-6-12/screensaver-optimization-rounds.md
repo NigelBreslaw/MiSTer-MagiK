@@ -218,3 +218,23 @@ frames copy the dim layer and reveal bright cells with row copies.
 
 `tilemap-museum` is now inside the p95 60fps target. As with the other retained
 mosaics, the remaining >20ms frames are page rebuild spikes.
+
+## Round 9 - Retained attract-wall pages
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-ATTRACT-WALL-R09-20260612 --deploy-fast --mode attract-wall --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `attract-wall` from scaling six 320x224 screenshots every frame to
+retaining the current and next 3x2 wall pages. Normal frames copy the retained
+current wall, reveal from the retained next wall, and redraw the active border.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R8 mega attract-wall segment | 132 | 22593 | 25119 | 25369 | 132 | 132 | 24308 |
+| round 9 focused attract-wall | 720 | 16527 | 16572 | 17046 | 18 | 2 | 26020 |
+
+`attract-wall` is now inside the p95 60fps target. Remaining >20ms frames are
+page rebuild spikes.

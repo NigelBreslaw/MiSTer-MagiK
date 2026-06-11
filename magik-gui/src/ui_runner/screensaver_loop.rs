@@ -165,6 +165,10 @@ struct ScreensaverRenderState {
     tilemap_bright: Vec<Rgb565Pixel>,
     tilemap_page: usize,
     tilemap_valid: bool,
+    attract_wall_base: Vec<Rgb565Pixel>,
+    attract_wall_next: Vec<Rgb565Pixel>,
+    attract_wall_page: usize,
+    attract_wall_valid: bool,
 }
 
 impl ScreensaverRenderState {
@@ -180,6 +184,10 @@ impl ScreensaverRenderState {
             tilemap_bright: vec![Rgb565Pixel(0); w * h],
             tilemap_page: usize::MAX,
             tilemap_valid: false,
+            attract_wall_base: vec![Rgb565Pixel(0); w * h],
+            attract_wall_next: vec![Rgb565Pixel(0); w * h],
+            attract_wall_page: usize::MAX,
+            attract_wall_valid: false,
         }
     }
 }
@@ -334,14 +342,15 @@ fn render_screensaver_frame(
 ) {
     if !matches!(
         mode,
-        ScreensaverMode::TilemapMuseum
+        ScreensaverMode::AttractWall
+            | ScreensaverMode::TilemapMuseum
             | ScreensaverMode::PhosphorGrid
             | ScreensaverMode::RandomAccessLoader
     ) {
         clear(dst, color565(2, 4, 10));
     }
     match mode {
-        ScreensaverMode::AttractWall => render_attract_wall(dst, w, h, images, frame),
+        ScreensaverMode::AttractWall => render_attract_wall(dst, state, w, h, images, frame),
         ScreensaverMode::MvsCarousel => render_carousel(dst, w, h, images, frame),
         ScreensaverMode::SuperScalerFlyby => render_flyby(dst, w, h, images, frame),
         ScreensaverMode::StarfieldCabinets => {
@@ -622,6 +631,7 @@ fn render_contact_sheet(
 
 fn render_attract_wall(
     dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
     w: usize,
     h: usize,
     images: &[SaverImage],
@@ -633,23 +643,80 @@ fn render_attract_wall(
     let page = (frame / 360) as usize;
     let active = ((frame / 60) as usize) % 6;
     let reveal = ((frame % 60) as usize * slot_w) / 60;
+    if !state.attract_wall_valid
+        || state.attract_wall_page != page
+        || state.attract_wall_base.len() != dst.len()
+    {
+        state.attract_wall_base.resize(dst.len(), Rgb565Pixel(0));
+        state.attract_wall_next.resize(dst.len(), Rgb565Pixel(0));
+        clear(&mut state.attract_wall_base, color565(2, 4, 10));
+        clear(&mut state.attract_wall_next, color565(2, 4, 10));
+        for slot in 0..6 {
+            let col = slot % 3;
+            let row = slot / 3;
+            let x = col * slot_w;
+            let y = gutter_y + row * (slot_h + gutter_y);
+            fill_rect(
+                &mut state.attract_wall_base,
+                w,
+                h,
+                x,
+                y,
+                slot_w,
+                slot_h,
+                color565(0, 0, 0),
+            );
+            if let Some(img) = image_at(images, page * 6 + slot) {
+                blit_scaled(
+                    &mut state.attract_wall_base,
+                    w,
+                    h,
+                    img,
+                    x as isize,
+                    y as isize,
+                    slot_w,
+                    slot_h,
+                    230,
+                );
+            }
+            if let Some(img) = image_at(images, (page + 1) * 6 + slot) {
+                blit_scaled(
+                    &mut state.attract_wall_next,
+                    w,
+                    h,
+                    img,
+                    x as isize,
+                    y as isize,
+                    slot_w,
+                    slot_h,
+                    255,
+                );
+            }
+            stroke_rect(
+                &mut state.attract_wall_base,
+                w,
+                h,
+                x,
+                y,
+                slot_w,
+                slot_h,
+                color565(70, 255, 210),
+            );
+        }
+        state.attract_wall_page = page;
+        state.attract_wall_valid = true;
+    }
+
+    dst.copy_from_slice(&state.attract_wall_base);
     for slot in 0..6 {
+        if slot != active || reveal == 0 {
+            continue;
+        }
         let col = slot % 3;
         let row = slot / 3;
         let x = col * slot_w;
         let y = gutter_y + row * (slot_h + gutter_y);
-        fill_rect(dst, w, h, x, y, slot_w, slot_h, color565(0, 0, 0));
-        if let Some(img) = image_at(images, page * 6 + slot) {
-            blit_scaled(dst, w, h, img, x as isize, y as isize, slot_w, slot_h, 230);
-        }
-        if slot == active && reveal > 0 {
-            if let Some(next) = image_at(images, (page + 1) * 6 + slot) {
-                let src_w = (next.w * reveal / slot_w.max(1)).max(1);
-                blit_slice_scaled(
-                    dst, w, h, next, 0, src_w, x as isize, y as isize, reveal, slot_h, 255,
-                );
-            }
-        }
+        copy_rect(dst, &state.attract_wall_next, w, h, x, y, reveal, slot_h);
         stroke_rect(dst, w, h, x, y, slot_w, slot_h, color565(70, 255, 210));
     }
 }
