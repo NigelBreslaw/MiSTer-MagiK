@@ -766,29 +766,12 @@ fn validate_or_rebuild_directory_manifest(
             return None;
         }
     }
-    let mut current = BTreeMap::new();
-    for (dir, sig) in &existing.directory_manifest {
-        let current_sig = read_directory_metadata_signature(Path::new(dir), *sig)?;
-        if current_sig.dir_size != sig.dir_size || current_sig.dir_mtime_secs != sig.dir_mtime_secs
-        {
-            return Some(DirectoryManifest::new());
-        }
-        current.insert(dir.clone(), *sig);
+    let current = build_directory_manifest(roots, None);
+    if current == existing.directory_manifest {
+        Some(current)
+    } else {
+        Some(DirectoryManifest::new())
     }
-    Some(current)
-}
-
-fn read_directory_metadata_signature(
-    dir: &Path,
-    existing: DirectorySignature,
-) -> Option<DirectorySignature> {
-    let meta = fs::metadata(dir).ok()?;
-    Some(DirectorySignature {
-        dir_size: meta.len(),
-        dir_mtime_secs: mtime_secs(&meta),
-        child_count: existing.child_count,
-        hash: existing.hash,
-    })
 }
 
 enum DiscoveryEvent {
@@ -877,6 +860,13 @@ fn discover_files_streaming(
     roots: &[String],
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> DirectoryManifest {
+    build_directory_manifest(roots, Some(tx))
+}
+
+fn build_directory_manifest(
+    roots: &[String],
+    tx: Option<&mpsc::SyncSender<DiscoveryEvent>>,
+) -> DirectoryManifest {
     let mut manifest_builders = BTreeMap::<String, DirectorySignatureBuilder>::new();
     for root in roots {
         let path = Path::new(root);
@@ -951,8 +941,10 @@ fn discover_files_streaming(
                     size: meta.len(),
                     mtime_secs,
                 };
-                if tx.send(DiscoveryEvent::File(file)).is_err() {
-                    break;
+                if let Some(tx) = tx {
+                    if tx.send(DiscoveryEvent::File(file)).is_err() {
+                        break;
+                    }
                 }
             }
         }
@@ -2923,6 +2915,49 @@ mod tests {
         assert_eq!(games.len(), 2);
     }
 
+    #[test]
+    fn directory_manifest_validation_recomputes_child_signature() {
+        let root = unique_temp_dir("manifest-child-signature");
+        let rom = root.join("same-second.nes");
+        std::fs::write(&rom, b"rom").expect("write rom");
+        let root_key = root.display().to_string();
+        let current = build_directory_manifest(std::slice::from_ref(&root_key), None);
+        let current_sig = current[&root_key];
+        let mut manifest = DirectoryManifest::new();
+        manifest.insert(
+            root_key.clone(),
+            DirectorySignature {
+                dir_size: current_sig.dir_size,
+                dir_mtime_secs: current_sig.dir_mtime_secs,
+                child_count: 0,
+                hash: MANIFEST_HASH_OFFSET,
+            },
+        );
+        let fingerprint = fingerprint_with_manifest(manifest);
+
+        let validated = validate_or_rebuild_directory_manifest(
+            std::slice::from_ref(&root_key),
+            &fingerprint,
+        );
+
+        assert_eq!(validated, Some(DirectoryManifest::new()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn directory_manifest_validation_keeps_unchanged_manifest() {
+        let root = unique_temp_dir("manifest-unchanged");
+        std::fs::write(root.join("unchanged.nes"), b"rom").expect("write rom");
+        let root_key = root.display().to_string();
+        let manifest = build_directory_manifest(std::slice::from_ref(&root_key), None);
+        let fingerprint = fingerprint_with_manifest(manifest.clone());
+
+        let validated = validate_or_rebuild_directory_manifest(&[root_key], &fingerprint);
+
+        assert_eq!(validated, Some(manifest));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn payload(path: &str) -> GameDiscovery {
         let ext = path_ext(path).unwrap_or_default();
         let taxonomy = taxonomy_from_path(path, &ext);
@@ -3027,5 +3062,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create temp dir");
         path
+    }
+
+    fn fingerprint_with_manifest(directory_manifest: DirectoryManifest) -> DbFingerprint {
+        DbFingerprint {
+            normal_files: 0,
+            containers: 0,
+            entries: 0,
+            discoveries: 0,
+            file_fingerprints: FileFingerprint::default(),
+            container_fingerprints: BTreeMap::new(),
+            directory_manifest,
+        }
     }
 }
