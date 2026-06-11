@@ -361,6 +361,7 @@ fn render_screensaver_frame(
     if !matches!(
         mode,
         ScreensaverMode::AttractWall
+            | ScreensaverMode::StarfieldCabinets
             | ScreensaverMode::TilemapMuseum
             | ScreensaverMode::PreviewPlasmaCollage
             | ScreensaverMode::PhosphorGrid

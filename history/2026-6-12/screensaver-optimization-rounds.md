@@ -318,3 +318,25 @@ was redundant memory traffic.
 
 This is a small cleanup win rather than a structural change: plasma remains
 inside target, with slightly lower p95/p99 than the post-R12 matrix segment.
+
+## Round 14 - Skip starfield-cabinets pre-clear
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-STARFIELD-R14-20260612 --deploy-fast --mode starfield-cabinets --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This removes the generic full-screen clear before `starfield-cabinets`. The
+mode immediately calls `render_starfield`, which clears its own background, so
+the dispatcher clear was redundant. A broader clear-skip trial was not committed
+because the full mega matrix regressed slightly overall; this round keeps only
+the focused starfield win.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| round 12 focused starfield | 721 | 16533 | 16609 | 17226 | 23 | 5 | 29260 |
+| round 14 focused starfield | 720 | 16532 | 16574 | 17083 | 19 | 4 | 29160 |
+
+This is a small but measured p95/p99 improvement on a mode already inside the
+60fps target.
