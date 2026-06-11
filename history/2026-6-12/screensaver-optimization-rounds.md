@@ -96,3 +96,23 @@ row/bar pass using the row-wave table.
 
 The p95 is still just above the 16.7ms target, but the mode is now close enough
 for fine-tuning rather than architectural replacement.
+
+## Round 3 - Mode7 floor strip renderer
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-MODE7-R03-20260612 --deploy-fast --mode mode7-floor --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `mode7-floor` to the horizontal-strip strategy from the screensaver
+notes: draw every other perspective strip with fixed-point source stepping, then
+duplicate it into the next row.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| round 1 mega mode7 segment | 30 | 32981 | 33011 | 34190 | 30 | 30 | 20364 |
+| round 3 focused mode7 | 721 | 16504 | 16646 | 16842 | 32 | 0 | 20376 |
+
+`mode7-floor` is now inside the 60fps target for p95 and has no >20ms frames in
+the focused run.

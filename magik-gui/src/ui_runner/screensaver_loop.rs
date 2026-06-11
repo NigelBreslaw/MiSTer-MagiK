@@ -847,14 +847,26 @@ fn render_warp(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage
 fn render_mode7(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
     clear(dst, color565(4, 8, 22));
     if let Some(img) = image_at(images, frame as usize / 150) {
-        for y in h / 2..h {
+        let mut y = h / 2;
+        while y < h {
             let depth = (y - h / 2 + 1) * 2;
             let span = (w * 80 / depth).max(1);
+            let step_fp = ((span << 16) / w.max(1)).max(1);
+            let mut sx_fp = 0usize;
+            let base_x = (frame as usize * 2) % img.w;
+            let sy = ((depth + frame as usize) / 3) % img.h;
+            let row = y * w;
             for x in 0..w {
-                let sx = (x * span / w + frame as usize * 2) % img.w;
-                let sy = ((depth + frame as usize) / 3) % img.h;
-                dst[y * w + x] = sample_image(img, sx, sy);
+                let sx = (base_x + (sx_fp >> 16)) % img.w;
+                dst[row + x] = sample_image(img, sx, sy);
+                sx_fp = sx_fp.saturating_add(step_fp);
             }
+            if y + 1 < h {
+                let next = (y + 1) * w;
+                let (head, tail) = dst.split_at_mut(next);
+                tail[..w].copy_from_slice(&head[row..row + w]);
+            }
+            y += 2;
         }
     }
 }
