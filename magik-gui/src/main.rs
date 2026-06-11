@@ -178,8 +178,8 @@ fn run_preview_cache() {
         std::process::exit(2);
     }
 
-    let mut filter = preview_worker::PreviewResizeFilter::Lanczos;
-    let mut format = preview_worker::PreviewStorageFormat::RawRgb;
+    let mut filter = preview_worker::PreviewResizeFilter::Nearest;
+    let mut format = preview_worker::PreviewStorageFormat::DerivedPng;
     let mut max_w = 320u32;
     let mut max_h = 320u32;
     let mut root = std::path::PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT);

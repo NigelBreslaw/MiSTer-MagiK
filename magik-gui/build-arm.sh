@@ -132,7 +132,7 @@ fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
-BUILD_ARGS=(--target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
 if [ "${#FEATURES[@]}" -gt 0 ]; then
   FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
   BUILD_ARGS+=(--features "$FEATURE_LIST")
