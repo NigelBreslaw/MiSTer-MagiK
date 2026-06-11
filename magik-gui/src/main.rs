@@ -22,6 +22,8 @@
 
 use std::ffi::CString;
 
+mod arcade_list_renderer;
+mod bitmap_text;
 mod boot_analytics;
 mod cpu_profile;
 mod display_config;
@@ -32,6 +34,7 @@ mod frame_profile;
 mod input;
 mod launcher;
 mod mr_audio;
+mod preview_state;
 mod runtime_status;
 mod setup_nav;
 mod ui_display;

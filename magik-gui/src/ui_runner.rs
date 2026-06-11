@@ -7,10 +7,9 @@ use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{
-    ComponentHandle, Image, ModelRc, PhysicalSize, Rgb8Pixel, SharedPixelBuffer, SharedString,
-    VecModel,
-};
+use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, SharedString, VecModel};
+#[cfg(feature = "video")]
+use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -20,6 +19,13 @@ use crate::arcade_catalog::{
     self, ArcadeCatalog, ArcadeGameEntry, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
     HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
 };
+use crate::arcade_list_renderer::{
+    blend_row_towards, blend_velocity_fade_h_from_env, draw_arcade_row_background,
+    fade_blend_constants, ArcadeListRenderer, ArcadeListUpdate, CachedArcadeRow,
+    FadeBlendConstants, ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FONT_PX, ARCADE_LIST_H, ARCADE_LIST_W,
+    ARCADE_LIST_X, ARCADE_LIST_Y,
+};
+use crate::bitmap_text::ConsoleFont;
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
@@ -28,10 +34,12 @@ use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
-use crate::preview_worker::{
-    preview_window_indices, preview_window_paths, PreviewPriority, PreviewWorker,
-    DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
+use crate::preview_state::{
+    apply_ready_preview, preview_visual_pct, request_arcade_preview, request_arcade_preview_window,
+    schedule_arcade_preview_window, PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W,
+    ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
+use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
@@ -41,8 +49,7 @@ use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
-use std::collections::VecDeque;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 #[cfg(mister_bench_scenes)]
 use std::fs::File;
 #[cfg(mister_bench_scenes)]
@@ -52,11 +59,6 @@ use std::sync::{mpsc, Mutex, OnceLock};
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
-const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
-const ARCADE_PREVIEW_BOX_X: usize = 8;
-const ARCADE_PREVIEW_BOX_Y: usize = 92;
-const ARCADE_PREVIEW_BOX_W: u32 = 320;
-const ARCADE_PREVIEW_BOX_H: u32 = 320;
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
@@ -243,15 +245,15 @@ pub fn print_effects() {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirtyRect {
-    x0: usize,
-    y0: usize,
-    x1: usize,
-    y1: usize,
+pub(crate) struct DirtyRect {
+    pub(crate) x0: usize,
+    pub(crate) y0: usize,
+    pub(crate) x1: usize,
+    pub(crate) y1: usize,
 }
 
 impl DirtyRect {
-    fn rows(self) -> u32 {
+    pub(crate) fn rows(self) -> u32 {
         (self.y1 - self.y0) as u32
     }
 
@@ -263,7 +265,7 @@ impl DirtyRect {
         self.x0 == 0 && self.x1 >= render_w
     }
 
-    fn intersection(self, other: DirtyRect) -> Option<DirtyRect> {
+    pub(crate) fn intersection(self, other: DirtyRect) -> Option<DirtyRect> {
         let x0 = self.x0.max(other.x0);
         let y0 = self.y0.max(other.y0);
         let x1 = self.x1.min(other.x1);
@@ -311,26 +313,6 @@ fn launcher_dirty_opt_enabled() -> bool {
     })
 }
 
-fn preview_trace_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_PREVIEW_TRACE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    })
-}
-
-fn preview_loading_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_PREVIEW_LOADING").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
-        )
-    })
-}
-
 fn preview_stress_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -343,17 +325,6 @@ fn preview_stress_enabled() -> bool {
 
 fn preview_run_label() -> String {
     std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
-}
-
-fn preview_visual_pct() -> u32 {
-    static VALUE: OnceLock<u32> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_PREVIEW_VISUAL_PCT")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(100)
-            .clamp(10, 100)
-    })
 }
 
 fn catalog_refresh_requested() -> bool {
@@ -1086,7 +1057,7 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
     disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
 }
 
-struct UiFrameTarget {
+pub(crate) struct UiFrameTarget {
     cached: Vec<Pixel>,
 }
 
@@ -1135,7 +1106,7 @@ impl UiFrameTarget {
         y1.saturating_sub(y0) as u32
     }
 
-    fn copy_rect_from(
+    pub(crate) fn copy_rect_from(
         &mut self,
         disp: &mut Display,
         ui: &UiDisplay,
@@ -1149,7 +1120,7 @@ impl UiFrameTarget {
         disp.copy_rect_from(x, y, w, h, src);
     }
 
-    fn scroll_rect_y(
+    pub(crate) fn scroll_rect_y(
         &mut self,
         disp: &mut Display,
         ui: &UiDisplay,
@@ -1665,11 +1636,6 @@ fn sync_bridge_launcher_light(
     bridge.set_setup_visible(setup.is_active());
 }
 
-fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
-    let buffer = SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, width, height);
-    Image::from_rgb8(buffer)
-}
-
 fn launcher_clock_text() -> String {
     unsafe {
         let mut now: libc::time_t = 0;
@@ -1682,454 +1648,6 @@ fn launcher_clock_text() -> String {
         }
         format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
     }
-}
-
-#[derive(Clone)]
-struct PreviewImage {
-    image: Image,
-    source_w: u32,
-    source_h: u32,
-    display_w: u32,
-    display_h: u32,
-}
-
-#[derive(Default)]
-struct PreviewImageCache {
-    entries: VecDeque<(String, PreviewImage)>,
-    failed_paths: VecDeque<String>,
-}
-
-impl PreviewImageCache {
-    const FAILED_CAP: usize = 128;
-
-    fn get(&mut self, path: &str) -> Option<PreviewImage> {
-        let idx = self.entries.iter().position(|(p, _)| p == path)?;
-        let (_, image) = self.entries.remove(idx)?;
-        let out = image.clone();
-        self.entries.push_back((path.to_string(), image));
-        Some(out)
-    }
-
-    fn insert(&mut self, path: String, image: PreviewImage, window_paths: &[String]) {
-        if let Some(idx) = self.entries.iter().position(|(p, _)| p == &path) {
-            self.entries.remove(idx);
-        }
-        self.entries.push_back((path, image));
-        self.retain_window(window_paths);
-    }
-
-    fn insert_failed(&mut self, path: String) {
-        if let Some(idx) = self.failed_paths.iter().position(|p| p == &path) {
-            self.failed_paths.remove(idx);
-        }
-        self.failed_paths.push_back(path);
-        while self.failed_paths.len() > Self::FAILED_CAP {
-            self.failed_paths.pop_front();
-        }
-    }
-
-    fn retain_window(&mut self, window_paths: &[String]) {
-        if !window_paths.is_empty() {
-            self.entries
-                .retain(|(path, _)| window_paths.iter().any(|keep| keep == path));
-        }
-        while self.entries.len() > DEFAULT_PREVIEW_CACHE_CAP {
-            self.entries.pop_front();
-        }
-    }
-
-    fn contains(&self, path: &str) -> bool {
-        self.entries.iter().any(|(p, _)| p == path)
-    }
-
-    fn contains_failed(&self, path: &str) -> bool {
-        self.failed_paths.iter().any(|p| p == path)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PreviewDisplaySize {
-    w: u32,
-    h: u32,
-}
-
-fn preview_display_size(
-    source_w: u32,
-    source_h: u32,
-    pane_w: u32,
-    pane_h: u32,
-) -> PreviewDisplaySize {
-    if source_w == 0 || source_h == 0 || pane_w == 0 || pane_h == 0 {
-        return PreviewDisplaySize { w: 0, h: 0 };
-    }
-
-    let max_area = PREVIEW_MAX_AREA.min(pane_w.saturating_mul(pane_h)).max(1);
-    let max_area = (max_area.saturating_mul(preview_visual_pct()) / 100).max(1);
-
-    let integer_upscale = (pane_w / source_w).min(pane_h / source_h).max(1);
-    let area_upscale = ((max_area as f64) / (source_w.saturating_mul(source_h).max(1) as f64))
-        .sqrt()
-        .floor() as u32;
-    let scale = integer_upscale.min(area_upscale.max(1)).max(1);
-    PreviewDisplaySize {
-        w: source_w.saturating_mul(scale),
-        h: source_h.saturating_mul(scale),
-    }
-}
-
-fn apply_preview_image_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
-    preview_image: &PreviewImage,
-) {
-    bridge.set_arcade_preview_image(preview_image.image.clone());
-    bridge.set_arcade_preview_has_image(true);
-    bridge.set_arcade_preview_status(PreviewStatus::Ready);
-    bridge.set_arcade_preview_source_width(preview_image.source_w as i32);
-    bridge.set_arcade_preview_source_height(preview_image.source_h as i32);
-    bridge.set_arcade_preview_display_width(preview_image.display_w as i32);
-    bridge.set_arcade_preview_display_height(preview_image.display_h as i32);
-}
-
-fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
-    bridge.set_arcade_preview_image(Image::default());
-    bridge.set_arcade_preview_has_image(false);
-    bridge.set_arcade_preview_source_width(0);
-    bridge.set_arcade_preview_source_height(0);
-    bridge.set_arcade_preview_display_width(0);
-    bridge.set_arcade_preview_display_height(0);
-}
-
-struct PreviewState {
-    worker: PreviewWorker,
-    selected_mra_path: Option<String>,
-    selected_image_path: Option<String>,
-    current_generation: u64,
-    cache: PreviewImageCache,
-    has_visible_preview: bool,
-    visible_path: String,
-    window_paths: Vec<String>,
-    pending_prefetch_paths: HashSet<String>,
-}
-
-impl PreviewState {
-    fn new() -> Self {
-        Self {
-            worker: PreviewWorker::new(),
-            selected_mra_path: None,
-            selected_image_path: None,
-            current_generation: 0,
-            cache: PreviewImageCache::default(),
-            has_visible_preview: false,
-            visible_path: String::new(),
-            window_paths: Vec::new(),
-            pending_prefetch_paths: HashSet::new(),
-        }
-    }
-
-    fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
-        if self.selected_mra_path.is_some()
-            || self.current_generation != 0
-            || self.has_visible_preview
-        {
-            self.selected_mra_path = None;
-            self.selected_image_path = None;
-            self.current_generation = 0;
-            self.has_visible_preview = false;
-            self.visible_path.clear();
-            self.window_paths.clear();
-            self.pending_prefetch_paths.clear();
-            bridge.set_arcade_preview_has_image(false);
-            bridge.set_arcade_preview_placeholder_visible(true);
-            bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            bridge.set_arcade_preview_title("".into());
-            clear_preview_image_bridge(bridge);
-        }
-    }
-}
-
-fn request_arcade_preview(
-    bridge: &slint_ui::launcher::MisterBridge,
-    games: &[ArcadeGameEntry],
-    selected: usize,
-    preview: &mut PreviewState,
-) {
-    let _ = request_arcade_preview_window(bridge, games, selected, preview);
-}
-
-fn request_arcade_preview_window(
-    bridge: &slint_ui::launcher::MisterBridge,
-    games: &[ArcadeGameEntry],
-    selected: usize,
-    preview: &mut PreviewState,
-) -> bool {
-    if !preview_loading_enabled() {
-        preview.clear(bridge);
-        return false;
-    }
-    let game = games.get(selected);
-    let Some(game) = game else {
-        preview.selected_mra_path = None;
-        preview.selected_image_path = None;
-        preview.current_generation = 0;
-        preview.has_visible_preview = false;
-        preview.visible_path.clear();
-        preview.window_paths.clear();
-        preview.pending_prefetch_paths.clear();
-        bridge.set_arcade_preview_placeholder_visible(true);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        bridge.set_arcade_preview_title("".into());
-        clear_preview_image_bridge(bridge);
-        return true;
-    };
-    bridge.set_arcade_preview_placeholder_visible(true);
-
-    preview.window_paths = preview_window_paths(games, selected, DEFAULT_PREVIEW_RADIUS, |game| {
-        game.has_image.then_some(game.image_path.as_str())
-    })
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    preview.cache.retain_window(&preview.window_paths);
-
-    if preview
-        .selected_mra_path
-        .as_deref()
-        .is_some_and(|path| path == game.mra_path)
-    {
-        if let Some(path) = preview.selected_image_path.clone() {
-            if preview.visible_path != path {
-                if let Some(image) = preview.cache.get(&path) {
-                    bridge.set_arcade_preview_title(game.title.clone().into());
-                    preview.current_generation = 0;
-                    preview.has_visible_preview = true;
-                    preview.visible_path = path;
-                    apply_preview_image_bridge(bridge, &image);
-                    request_preview_prefetches(games, selected, preview);
-                    return true;
-                }
-                if preview.cache.contains_failed(&path) {
-                    preview.current_generation = 0;
-                    bridge.set_arcade_preview_status(PreviewStatus::Empty);
-                    request_preview_prefetches(games, selected, preview);
-                    return true;
-                }
-            }
-        }
-        request_preview_prefetches(games, selected, preview);
-        return false;
-    }
-    preview.selected_mra_path = Some(game.mra_path.clone());
-
-    bridge.set_arcade_preview_title(game.title.clone().into());
-    if game.has_image {
-        preview.selected_image_path = Some(game.image_path.clone());
-        if preview.cache.contains_failed(&game.image_path) {
-            preview.current_generation = 0;
-            bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            request_preview_prefetches(games, selected, preview);
-            return true;
-        }
-        if let Some(image) = preview.cache.get(&game.image_path) {
-            preview.current_generation = 0;
-            preview.has_visible_preview = true;
-            if preview_trace_enabled() {
-                eprintln!(
-                    "preview_trace cache_hit title={} path={}",
-                    game.title, game.image_path
-                );
-            }
-            preview.visible_path = game.image_path.clone();
-            apply_preview_image_bridge(bridge, &image);
-            request_preview_prefetches(games, selected, preview);
-            return true;
-        }
-        preview.current_generation = preview
-            .worker
-            .request_selected(game.title.clone(), game.image_path.clone());
-        if preview_trace_enabled() {
-            eprintln!(
-                "preview_trace requested generation={} title={} path={}",
-                preview.current_generation, game.title, game.image_path
-            );
-        }
-        if !preview.has_visible_preview {
-            clear_preview_image_bridge(bridge);
-        }
-        bridge.set_arcade_preview_status(PreviewStatus::Loading);
-        request_preview_prefetches(games, selected, preview);
-        return true;
-    }
-    preview.current_generation = 0;
-    preview.selected_image_path = None;
-    preview.has_visible_preview = false;
-    preview.visible_path.clear();
-    bridge.set_arcade_preview_placeholder_visible(true);
-    clear_preview_image_bridge(bridge);
-    bridge.set_arcade_preview_status(PreviewStatus::Empty);
-    true
-}
-
-fn request_preview_prefetches(
-    games: &[ArcadeGameEntry],
-    selected: usize,
-    preview: &mut PreviewState,
-) {
-    for idx in preview_window_indices(games.len(), selected, DEFAULT_PREVIEW_RADIUS) {
-        if idx == selected {
-            continue;
-        }
-        let Some(game) = games.get(idx) else {
-            continue;
-        };
-        if !game.has_image
-            || preview.cache.contains(&game.image_path)
-            || preview.cache.contains_failed(&game.image_path)
-            || preview.pending_prefetch_paths.contains(&game.image_path)
-        {
-            continue;
-        }
-        let distance = idx.abs_diff(selected);
-        preview
-            .pending_prefetch_paths
-            .insert(game.image_path.clone());
-        preview
-            .worker
-            .request_prefetch(game.title.clone(), game.image_path.clone(), distance);
-        if preview_trace_enabled() {
-            eprintln!(
-                "preview_trace prefetch distance={} title={} path={}",
-                distance, game.title, game.image_path
-            );
-        }
-    }
-}
-
-fn schedule_arcade_preview_window(
-    bridge: &slint_ui::launcher::MisterBridge,
-    games: &[ArcadeGameEntry],
-    selected: usize,
-    preview: &mut PreviewState,
-) -> bool {
-    if !preview_loading_enabled() {
-        preview.clear(bridge);
-        return false;
-    }
-    let Some(game) = games.get(selected) else {
-        preview.clear(bridge);
-        return true;
-    };
-    if preview
-        .selected_mra_path
-        .as_deref()
-        .is_some_and(|path| path == game.mra_path)
-    {
-        request_preview_prefetches(games, selected, preview);
-        return false;
-    }
-    request_arcade_preview_window(bridge, games, selected, preview)
-}
-
-fn apply_ready_preview(app: &slint_ui::launcher::Launcher, preview: &mut PreviewState) -> bool {
-    if !preview_loading_enabled() {
-        for _ in preview.worker.drain() {}
-        return false;
-    }
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    let mut dirty = false;
-    for result in preview.worker.drain() {
-        preview.pending_prefetch_paths.remove(&result.image_path);
-        let is_selected_result = result.generation == preview.current_generation
-            && preview
-                .selected_image_path
-                .as_deref()
-                .is_some_and(|path| path == result.image_path);
-        if !is_selected_result && matches!(result.priority, PreviewPriority::Selected) {
-            if preview_trace_enabled() {
-                eprintln!(
-                    "preview_trace stale_result generation={} current_generation={} path={}",
-                    result.generation, preview.current_generation, result.image_path
-                );
-            }
-            continue;
-        }
-        if let Some(image) = result.image {
-            if preview_trace_enabled() {
-                eprintln!(
-                    "preview_trace apply generation={} priority={:?} selected={} age_us={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
-                    result.generation,
-                    result.priority,
-                    is_selected_result,
-                    result.request_age_us,
-                    result.storage_format.label(),
-                    result.resize_filter,
-                    result.source_width,
-                    result.source_height,
-                    image.width,
-                    image.height,
-                    result.total_us,
-                    result.read_us,
-                    result.decode_us,
-                    result.resize_us,
-                    result.encoded_bytes,
-                    result.decoded_bytes,
-                    result.image_path
-                );
-            }
-            let source_w = image.width;
-            let source_h = image.height;
-            let display = preview_display_size(
-                source_w,
-                source_h,
-                ARCADE_PREVIEW_BOX_W,
-                ARCADE_PREVIEW_BOX_H,
-            );
-            let slint_image_t = Instant::now();
-            let slint_image = png_to_slint_image(source_w, source_h, image.rgb);
-            let slint_image_us = slint_image_t.elapsed().as_micros() as u64;
-            if preview_trace_enabled() {
-                eprintln!(
-                    "preview_trace slint_image generation={} slint_image_us={} output={}x{} path={}",
-                    result.generation, slint_image_us, source_w, source_h, result.image_path
-                );
-            }
-            let image = PreviewImage {
-                image: slint_image,
-                source_w,
-                source_h,
-                display_w: display.w,
-                display_h: display.h,
-            };
-            let image_path = result.image_path;
-            preview
-                .cache
-                .insert(image_path.clone(), image.clone(), &preview.window_paths);
-            if is_selected_result {
-                preview.current_generation = 0;
-                bridge.set_arcade_preview_title(result.title.into());
-                preview.has_visible_preview = true;
-                preview.visible_path = image_path;
-                apply_preview_image_bridge(&bridge, &image);
-                dirty = true;
-            }
-        } else {
-            preview.cache.insert_failed(result.image_path.clone());
-            if preview_trace_enabled() {
-                eprintln!(
-                    "preview_trace cache_failed priority={:?} selected={} path={}",
-                    result.priority, is_selected_result, result.image_path
-                );
-            }
-            if is_selected_result {
-                preview.current_generation = 0;
-                preview.has_visible_preview = false;
-                preview.visible_path.clear();
-                clear_preview_image_bridge(&bridge);
-                bridge.set_arcade_preview_status(PreviewStatus::Empty);
-                dirty = true;
-            }
-        }
-    }
-    dirty
 }
 
 fn slint_arcade_games(games: &[ArcadeGameEntry]) -> ModelRc<slint_ui::launcher::ArcadeGame> {
@@ -4543,706 +4061,6 @@ fn console_pixel(row: usize, x: usize, y: usize) -> Pixel {
     bg
 }
 
-struct ConsoleGlyph {
-    left: i32,
-    top: i32,
-    width: usize,
-    height: usize,
-    advance: i32,
-    data: Vec<u8>,
-}
-
-struct ConsoleFont {
-    font: swash::FontRef<'static>,
-    scale_context: swash::scale::ScaleContext,
-    glyphs: HashMap<char, ConsoleGlyph>,
-    pixel_size: f32,
-    units_per_em: f32,
-}
-
-impl ConsoleFont {
-    fn new(pixel_size: f32) -> Self {
-        let data = include_bytes!("../ui/fonts/PressStart2P-Regular.ttf");
-        let font = swash::FontRef::from_index(data, 0).expect("PressStart2P-Regular.ttf");
-        let units_per_em = font.metrics(&[]).units_per_em as f32;
-        Self {
-            font,
-            scale_context: swash::scale::ScaleContext::new(),
-            glyphs: HashMap::new(),
-            pixel_size,
-            units_per_em,
-        }
-    }
-
-    fn glyph(&mut self, ch: char) -> Option<&ConsoleGlyph> {
-        if !self.glyphs.contains_key(&ch) {
-            let glyph_id = self.font.charmap().map(ch);
-            let advance = if glyph_id == 0 {
-                (self.pixel_size * 0.75) as i32
-            } else {
-                let scale = self.pixel_size / self.units_per_em;
-                (self.font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
-            };
-            let glyph = if glyph_id == 0 || ch == ' ' {
-                ConsoleGlyph {
-                    left: 0,
-                    top: 0,
-                    width: 0,
-                    height: 0,
-                    advance,
-                    data: Vec::new(),
-                }
-            } else {
-                let mut scaler = self
-                    .scale_context
-                    .builder(self.font)
-                    .size(self.pixel_size)
-                    .build();
-                let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
-                    .format(swash::zeno::Format::Alpha)
-                    .render(&mut scaler, glyph_id)?;
-                ConsoleGlyph {
-                    left: image.placement.left,
-                    top: image.placement.top,
-                    width: image.placement.width as usize,
-                    height: image.placement.height as usize,
-                    advance,
-                    data: image.data,
-                }
-            };
-            self.glyphs.insert(ch, glyph);
-        }
-        self.glyphs.get(&ch)
-    }
-
-    fn draw_text_clipped(
-        &mut self,
-        dst: &mut [Pixel],
-        stride: usize,
-        clip_w: usize,
-        clip_y: usize,
-        clip_h: usize,
-        x: isize,
-        baseline_y: isize,
-        text: &str,
-        color: Pixel,
-    ) {
-        let mut pen_x = x;
-        for ch in text.chars() {
-            let Some(glyph) = self.glyph(ch) else {
-                continue;
-            };
-            let gx0 = pen_x + glyph.left as isize;
-            let gy0 = baseline_y - glyph.top as isize;
-            for gy in 0..glyph.height {
-                let dy = gy0 + gy as isize;
-                if dy < clip_y as isize || dy >= (clip_y + clip_h) as isize {
-                    continue;
-                }
-                for gx in 0..glyph.width {
-                    let dx = gx0 + gx as isize;
-                    if dx < 0 || dx >= clip_w as isize {
-                        continue;
-                    }
-                    let alpha = glyph.data[gy * glyph.width + gx];
-                    if alpha >= 128 {
-                        dst[dy as usize * stride + dx as usize] = color;
-                    }
-                }
-            }
-            pen_x += glyph.advance as isize;
-        }
-    }
-}
-
-const ARCADE_LIST_X: usize = 8;
-const ARCADE_LIST_Y: usize = 56;
-const ARCADE_LIST_W: usize = 464;
-const ARCADE_LIST_H: usize = 384;
-const ARCADE_LIST_FONT_PX: f32 = 16.0;
-const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
-const ARCADE_LIST_FADE_H: usize = 48;
-const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
-const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x001a1424);
-
-struct ArcadeListRenderer {
-    title_font: ConsoleFont,
-    meta_font: ConsoleFont,
-    row_cache: HashMap<usize, CachedArcadeRow>,
-    surface: Vec<Pixel>,
-    band_scratch: Vec<Pixel>,
-    fade_scratch: Vec<Pixel>,
-    fade_constants: Vec<FadeBlendConstants>,
-    selection_horizontal: Vec<Pixel>,
-    selection_vertical: Vec<Pixel>,
-    surface_y: usize,
-    last_draw: Option<ArcadeListDrawKey>,
-}
-
-struct CachedArcadeRow {
-    title: String,
-    pixels: Vec<Pixel>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ArcadeListDrawKey {
-    len: usize,
-    visual_px: i32,
-    anchor_system_id: String,
-    anchor_mra_path: String,
-    anchor_title: String,
-}
-
-enum ArcadeListUpdate {
-    Full(DirtyRect),
-    Scroll { delta_y: isize },
-}
-
-impl ArcadeListRenderer {
-    fn new() -> Self {
-        Self {
-            title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
-            meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
-            row_cache: HashMap::new(),
-            surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
-            band_scratch: Vec::new(),
-            fade_scratch: Vec::new(),
-            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR),
-            selection_horizontal: Vec::new(),
-            selection_vertical: Vec::new(),
-            surface_y: 0,
-            last_draw: None,
-        }
-    }
-
-    fn dirty_rect() -> DirtyRect {
-        DirtyRect {
-            x0: ARCADE_LIST_X,
-            y0: ARCADE_LIST_Y,
-            x1: ARCADE_LIST_X + ARCADE_LIST_W,
-            y1: ARCADE_LIST_Y + ARCADE_LIST_H,
-        }
-    }
-
-    fn draw(
-        &mut self,
-        games: &[ArcadeGameEntry],
-        visual_index: f32,
-        force: bool,
-    ) -> Option<ArcadeListUpdate> {
-        let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
-        let anchor = visual_index
-            .round()
-            .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
-        let previous = self.last_draw.clone();
-        let key = ArcadeListDrawKey {
-            len: games.len(),
-            visual_px,
-            anchor_system_id: games
-                .get(anchor)
-                .map(|game| game.system_id.clone())
-                .unwrap_or_default(),
-            anchor_mra_path: games
-                .get(anchor)
-                .map(|game| game.mra_path.clone())
-                .unwrap_or_default(),
-            anchor_title: games
-                .get(anchor)
-                .map(|game| game.title.clone())
-                .unwrap_or_default(),
-        };
-        if !force && self.last_draw.as_ref() == Some(&key) {
-            return None;
-        }
-        let same_game_set = previous
-            .as_ref()
-            .is_some_and(|previous| previous.len == key.len);
-        self.last_draw = Some(key);
-        let content_delta = previous
-            .as_ref()
-            .map(|previous| previous.visual_px - visual_px)
-            .unwrap_or(0);
-        if force || previous.is_none() || !same_game_set || games.is_empty() {
-            self.surface_y = 0;
-            self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
-        } else if content_delta == 0 {
-        } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
-            self.surface_y = 0;
-            self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
-        } else if content_delta < 0 {
-            let d = content_delta.unsigned_abs() as usize;
-            self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
-            self.draw_content_band(games, visual_index, ARCADE_LIST_H - d, d);
-        } else {
-            let d = content_delta as usize;
-            self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
-            self.draw_content_band(games, visual_index, 0, d);
-        }
-        if force {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
-        }
-        if previous.is_none() {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
-        }
-        if !same_game_set {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
-        }
-        if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
-        }
-        Some(ArcadeListUpdate::Scroll {
-            delta_y: content_delta as isize,
-        })
-    }
-
-    fn selection_rect() -> DirtyRect {
-        let y = Self::selection_y();
-        DirtyRect {
-            x0: ARCADE_LIST_X,
-            y0: ARCADE_LIST_Y + y,
-            x1: ARCADE_LIST_X + ARCADE_LIST_W,
-            y1: ARCADE_LIST_Y + y + ARCADE_ROW_HEIGHT as usize,
-        }
-    }
-
-    fn selection_y() -> usize {
-        let row_h = ARCADE_ROW_HEIGHT as usize;
-        let visible_rows = (ARCADE_LIST_H / row_h).max(1);
-        (visible_rows / 2) * row_h
-    }
-
-    fn draw_content_band(
-        &mut self,
-        games: &[ArcadeGameEntry],
-        visual_index: f32,
-        band_y: usize,
-        band_h: usize,
-    ) {
-        if band_h == 0 || band_y >= ARCADE_LIST_H {
-            return;
-        }
-        let band_h = band_h.min(ARCADE_LIST_H - band_y);
-        let mut band = std::mem::take(&mut self.band_scratch);
-        band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_FADE_COLOR);
-        band.fill(ARCADE_LIST_FADE_COLOR);
-        if games.is_empty() {
-            self.meta_font.draw_text_clipped(
-                &mut band,
-                ARCADE_LIST_W,
-                ARCADE_LIST_W,
-                0,
-                band_h,
-                96,
-                (ARCADE_LIST_H / 2).saturating_sub(band_y) as isize,
-                "NO GAMES",
-                Pixel(0x00706080),
-            );
-            self.copy_band_to_surface(&band, band_y, band_h);
-            self.band_scratch = band;
-            return;
-        }
-        let row_h = ARCADE_ROW_HEIGHT as isize;
-        let local_anchor_y = Self::selection_y() as isize;
-        let first = ((visual_index.floor() as isize) - 7).max(0) as usize;
-        let last = ((visual_index.ceil() as isize) + 8).max(0) as usize;
-        let end = last.min(games.len().saturating_sub(1));
-        for idx in first..=end {
-            let y =
-                local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
-            let clip_y0 = y.max(band_y as isize);
-            let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
-            if clip_y1 <= clip_y0 {
-                continue;
-            }
-            self.blit_cached_row_to_band(&mut band, band_h, band_y, &games[idx].title, idx, y);
-        }
-        self.copy_band_to_surface(&band, band_y, band_h);
-        self.band_scratch = band;
-    }
-
-    fn blit_cached_row_to_band(
-        &mut self,
-        band: &mut [Pixel],
-        band_h: usize,
-        band_y: usize,
-        title: &str,
-        idx: usize,
-        y: isize,
-    ) {
-        let needs_render = self
-            .row_cache
-            .get(&idx)
-            .is_none_or(|cached| cached.title != title);
-        if needs_render {
-            if self.row_cache.len() > 128 {
-                self.row_cache.clear();
-            }
-            let row = self.render_row(title, idx);
-            self.row_cache.insert(
-                idx,
-                CachedArcadeRow {
-                    title: title.to_string(),
-                    pixels: row,
-                },
-            );
-        }
-        let row = &self.row_cache.get(&idx).expect("row cache insert").pixels;
-        let row_h = ARCADE_ROW_HEIGHT as isize;
-        let clip_y0 = y.max(band_y as isize);
-        let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
-        if clip_y1 <= clip_y0 {
-            return;
-        }
-        let copy_h = (clip_y1 - clip_y0) as usize;
-        let src_y = (clip_y0 - y) as usize;
-        let dst_y = (clip_y0 as usize).saturating_sub(band_y);
-        for row_y in 0..copy_h {
-            let src = (src_y + row_y) * ARCADE_LIST_W;
-            let dst = (dst_y + row_y) * ARCADE_LIST_W;
-            band[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
-        }
-    }
-
-    fn copy_band_to_surface(&mut self, band: &[Pixel], band_y: usize, band_h: usize) {
-        for row in 0..band_h {
-            let src = row * ARCADE_LIST_W;
-            let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
-            let dst = dst_y * ARCADE_LIST_W;
-            self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&band[src..src + ARCADE_LIST_W]);
-        }
-    }
-
-    fn copy_layer_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-    ) {
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        self.copy_fade_to_target(target, disp, ui);
-        self.copy_viewport_band_to_target(target, disp, ui, fade_h, ARCADE_LIST_H - fade_h * 2);
-        self.copy_selection_frame_to_target(target, disp, ui);
-    }
-
-    fn copy_scrolled_layer_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-        delta_y: isize,
-    ) -> u32 {
-        if delta_y == 0 {
-            return 0;
-        }
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        let body_y = fade_h;
-        let body_bottom = ARCADE_LIST_H.saturating_sub(fade_h);
-        let selection_y = Self::selection_y();
-        let selection_h = ARCADE_ROW_HEIGHT as usize;
-        let selection_bottom = (selection_y + selection_h).min(body_bottom);
-        let thickness = 3usize;
-        let mut touched_rows = 0u32;
-
-        self.copy_fade_to_target(target, disp, ui);
-        touched_rows += (fade_h * 2) as u32;
-
-        touched_rows += self.scroll_and_patch_viewport_segment(
-            target,
-            disp,
-            ui,
-            body_y,
-            selection_y.saturating_sub(body_y),
-            delta_y,
-        );
-        touched_rows += self.scroll_and_patch_viewport_segment(
-            target,
-            disp,
-            ui,
-            (selection_y + thickness).min(body_bottom),
-            selection_bottom.saturating_sub(selection_y + thickness * 2),
-            delta_y,
-        );
-        touched_rows += self.scroll_and_patch_viewport_segment(
-            target,
-            disp,
-            ui,
-            selection_bottom,
-            body_bottom.saturating_sub(selection_bottom),
-            delta_y,
-        );
-
-        self.copy_selection_frame_to_target(target, disp, ui);
-        touched_rows + selection_h as u32
-    }
-
-    fn scroll_and_patch_viewport_segment(
-        &self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-        viewport_y: usize,
-        h: usize,
-        delta_y: isize,
-    ) -> u32 {
-        if h == 0 || viewport_y >= ARCADE_LIST_H || delta_y == 0 {
-            return 0;
-        }
-        let h = h.min(ARCADE_LIST_H - viewport_y);
-        let d = delta_y.unsigned_abs().min(h);
-        if d == 0 {
-            return 0;
-        }
-        if d < h {
-            target.scroll_rect_y(
-                disp,
-                ui,
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y + viewport_y,
-                ARCADE_LIST_W,
-                h,
-                delta_y,
-            );
-        }
-        if delta_y < 0 {
-            self.copy_viewport_band_to_target(target, disp, ui, viewport_y + h - d, d);
-        } else {
-            self.copy_viewport_band_to_target(target, disp, ui, viewport_y, d);
-        }
-        (h + d) as u32
-    }
-
-    fn copy_viewport_band_to_target(
-        &self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-        viewport_y: usize,
-        h: usize,
-    ) {
-        if h == 0 || viewport_y >= ARCADE_LIST_H {
-            return;
-        }
-        let h = h.min(ARCADE_LIST_H - viewport_y);
-        let mut copied = 0usize;
-        while copied < h {
-            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
-            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
-            let src = src_y * ARCADE_LIST_W;
-            target.copy_rect_from(
-                disp,
-                ui,
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y + viewport_y + copied,
-                ARCADE_LIST_W,
-                copy_h,
-                &self.surface[src..src + copy_h * ARCADE_LIST_W],
-            );
-            copied += copy_h;
-        }
-    }
-
-    fn surface_row(&self, viewport_y: usize) -> &[Pixel] {
-        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
-        let src = src_y * ARCADE_LIST_W;
-        &self.surface[src..src + ARCADE_LIST_W]
-    }
-
-    fn copy_fade_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-    ) {
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        let mut band = std::mem::take(&mut self.fade_scratch);
-        band.resize(ARCADE_LIST_W * fade_h, Pixel(0));
-        for row in 0..fade_h {
-            blend_row_towards(
-                self.surface_row(row),
-                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                self.fade_constants[row],
-            );
-        }
-        target.copy_rect_from(
-            disp,
-            ui,
-            ARCADE_LIST_X,
-            ARCADE_LIST_Y,
-            ARCADE_LIST_W,
-            fade_h,
-            &band,
-        );
-
-        for row in 0..fade_h {
-            let viewport_y = ARCADE_LIST_H - fade_h + row;
-            blend_row_towards(
-                self.surface_row(viewport_y),
-                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                self.fade_constants[fade_h - 1 - row],
-            );
-        }
-        target.copy_rect_from(
-            disp,
-            ui,
-            ARCADE_LIST_X,
-            ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
-            ARCADE_LIST_W,
-            fade_h,
-            &band,
-        );
-        self.fade_scratch = band;
-    }
-
-    fn copy_selection_frame_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-    ) {
-        let rect = Self::selection_rect();
-        let color = Pixel(0x0006d6a0);
-        let thickness = 3usize;
-        let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
-        self.selection_horizontal
-            .resize(ARCADE_LIST_W * thickness, color);
-        self.selection_horizontal.fill(color);
-        target.copy_rect_from(
-            disp,
-            ui,
-            rect.x0,
-            rect.y0,
-            ARCADE_LIST_W,
-            thickness,
-            &self.selection_horizontal,
-        );
-        target.copy_rect_from(
-            disp,
-            ui,
-            rect.x0,
-            rect.y1.saturating_sub(thickness),
-            ARCADE_LIST_W,
-            thickness,
-            &self.selection_horizontal,
-        );
-        self.selection_vertical.resize(thickness * h, color);
-        self.selection_vertical.fill(color);
-        target.copy_rect_from(
-            disp,
-            ui,
-            rect.x0,
-            rect.y0,
-            thickness,
-            h,
-            &self.selection_vertical,
-        );
-        target.copy_rect_from(
-            disp,
-            ui,
-            rect.x1.saturating_sub(thickness),
-            rect.y0,
-            thickness,
-            h,
-            &self.selection_vertical,
-        );
-    }
-
-    fn render_row(&mut self, title: &str, idx: usize) -> Vec<Pixel> {
-        let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
-        draw_arcade_row_background(&mut row, idx);
-        let title = clipped_title(title, 30);
-        self.title_font.draw_text_clipped(
-            &mut row,
-            ARCADE_LIST_W,
-            ARCADE_LIST_W,
-            0,
-            ARCADE_ROW_HEIGHT as usize,
-            12,
-            30,
-            &title,
-            Pixel(0x00e8e0f0),
-        );
-        row
-    }
-}
-
-fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
-    let bg = if idx % 2 == 0 {
-        Pixel(0x001a1424)
-    } else {
-        Pixel(0x00150f20)
-    };
-    let border = Pixel(0x00251c34);
-    for row_y in 0..ARCADE_ROW_HEIGHT as isize {
-        let dy = row_y as usize;
-        let line = &mut row[dy * ARCADE_LIST_W..(dy + 1) * ARCADE_LIST_W];
-        for px in line.iter_mut() {
-            *px = bg;
-        }
-        if row_y == 0 || row_y == ARCADE_ROW_HEIGHT as isize - 1 {
-            for px in line.iter_mut() {
-                *px = border;
-            }
-        }
-    }
-}
-
-fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
-    if fade_h <= 1 {
-        return ARCADE_LIST_FADE_MAX_ALPHA;
-    }
-    let inv = (fade_h - 1 - row_from_edge) as u32;
-    (ARCADE_LIST_FADE_MAX_ALPHA * inv) / (fade_h - 1) as u32
-}
-
-fn blend_velocity_fade_h_from_env() -> usize {
-    std::env::var("MISTER_BLEND_BENCH_FADE_H")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|h| *h > 0)
-        .unwrap_or(ARCADE_LIST_FADE_H)
-        .min(ARCADE_LIST_H / 2)
-}
-
-#[derive(Clone, Copy)]
-struct FadeBlendConstants {
-    inv: u32,
-    cr_alpha: u32,
-    cg_alpha: u32,
-    cb_alpha: u32,
-}
-
-impl FadeBlendConstants {
-    fn new(alpha: u32, color: Pixel) -> Self {
-        let cr = (color.0 >> 16) & 0xff;
-        let cg = (color.0 >> 8) & 0xff;
-        let cb = color.0 & 0xff;
-        Self {
-            inv: 256 - alpha,
-            cr_alpha: cr * alpha,
-            cg_alpha: cg * alpha,
-            cb_alpha: cb * alpha,
-        }
-    }
-}
-
-fn fade_blend_constants(fade_h: usize, color: Pixel) -> Vec<FadeBlendConstants> {
-    (0..fade_h)
-        .map(|row| FadeBlendConstants::new(fade_alpha(row, fade_h), color))
-        .collect()
-}
-
-fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], constants: FadeBlendConstants) {
-    for (src, dst) in src.iter().zip(dst.iter_mut()) {
-        let sr = (src.0 >> 16) & 0xff;
-        let sg = (src.0 >> 8) & 0xff;
-        let sb = src.0 & 0xff;
-        let r = (sr * constants.inv + constants.cr_alpha) >> 8;
-        let g = (sg * constants.inv + constants.cg_alpha) >> 8;
-        let b = (sb * constants.inv + constants.cb_alpha) >> 8;
-        *dst = Pixel((r << 16) | (g << 8) | b);
-    }
-}
-
 fn blend_backend_label() -> &'static str {
     "scalar"
 }
@@ -5263,17 +4081,6 @@ fn blend_velocity_title(idx: usize) -> String {
         "RAIDEN II",
     ];
     format!("{} {:03}", TITLES[idx % TITLES.len()], idx)
-}
-
-fn clipped_title(title: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    for ch in title.chars().take(max_chars) {
-        out.push(ch);
-    }
-    if title.chars().count() > max_chars {
-        out.push_str("...");
-    }
-    out
 }
 
 fn run_controller_loop(
@@ -5773,21 +4580,7 @@ fn run_preview_scroll_bench_loop(
         }
         let frame_t4 = Instant::now();
         if let Some(file) = frame_trace.as_mut() {
-            let cache_state = preview
-                .selected_image_path
-                .as_deref()
-                .map(|path| {
-                    if preview.visible_path == path {
-                        "exact"
-                    } else if preview.cache.contains(path) {
-                        "cached"
-                    } else if preview.has_visible_preview {
-                        "stale"
-                    } else {
-                        "placeholder"
-                    }
-                })
-                .unwrap_or("empty");
+            let cache_state = preview.trace_cache_state();
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
@@ -6518,21 +5311,7 @@ fn run_launcher_loop(
         }
         let frame_t4 = Instant::now();
         if let Some(file) = preview_scroll_trace.as_mut() {
-            let cache_state = preview
-                .selected_image_path
-                .as_deref()
-                .map(|path| {
-                    if preview.visible_path == path {
-                        "exact"
-                    } else if preview.cache.contains(path) {
-                        "cached"
-                    } else if preview.has_visible_preview {
-                        "stale"
-                    } else {
-                        "placeholder"
-                    }
-                })
-                .unwrap_or("empty");
+            let cache_state = preview.trace_cache_state();
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
@@ -6699,35 +5478,6 @@ fn run_launcher_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn preview_size_enlarges_only_by_integer_scale() {
-        let size = preview_display_size(100, 50, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 300, h: 150 });
-        assert_eq!(size.w % 100, 0);
-        assert_eq!(size.h % 50, 0);
-        assert!(size.w * size.h <= PREVIEW_MAX_AREA);
-    }
-
-    #[test]
-    fn preview_size_keeps_large_images_native_for_aperture_clipping() {
-        let size = preview_display_size(1920, 1080, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 1920, h: 1080 });
-        assert_eq!(size.w as u64 * 1080, size.h as u64 * 1920);
-    }
-
-    #[test]
-    fn preview_size_keeps_odd_ratio_integer_dimensions() {
-        let size = preview_display_size(321, 225, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 321, h: 225 });
-        assert_eq!(size.w as u64 * 225, size.h as u64 * 321);
-    }
-
-    #[test]
-    fn preview_size_keeps_common_arcade_screenshot_native_when_resize_is_off() {
-        let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
-    }
 
     #[test]
     fn effect_half_target_allows_640x448_at_native_scale() {
