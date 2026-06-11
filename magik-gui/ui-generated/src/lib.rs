@@ -42,8 +42,3 @@ pub mod controller {
 pub mod launcher {
     include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
 }
-
-#[cfg(not(mister_ui_scope_launcher))]
-pub mod arcade_page {
-    include!(concat!(env!("OUT_DIR"), "/arcade_page.rs"));
-}

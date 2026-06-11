@@ -210,7 +210,7 @@ scripts/install-slint-boot.sh
 scripts/deploy-rust.sh --fast
 
 # Restart the already-deployed Rust UI with no build/copy
-scripts/run-rust.sh arcade_page 0
+scripts/run-rust.sh arcade 0
 scripts/run-rust.sh launcher 0
 
 # Prefer scripts/run-rust.sh for dev runs; it stops stale owners and starts the

@@ -335,16 +335,6 @@ impl PreviewState {
     }
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
-pub(crate) fn request_arcade_preview(
-    bridge: &slint_ui::launcher::MisterBridge,
-    games: &[ArcadeGameEntry],
-    selected: usize,
-    preview: &mut PreviewState,
-) {
-    let _ = request_arcade_preview_window(bridge, games, selected, preview);
-}
-
 pub(crate) fn request_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
     games: &[ArcadeGameEntry],

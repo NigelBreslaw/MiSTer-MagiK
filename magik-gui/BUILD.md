@@ -91,7 +91,7 @@ The benchmark writes `build/debug-build-bench.tsv` with wall time, Cargo total
 time, and the largest `mister-magik-fb` timing units. `check-arm-ui` uses
 `MISTER_UI_BUILD_SCOPE=launcher`, so it compiles only the launcher, controller
 test, and their required shared Slint modules. `check-arm-arcade-ui` uses
-`MISTER_UI_BUILD_SCOPE=arcade` and keeps the standalone arcade page. `check-arm-ui-full`,
+`MISTER_UI_BUILD_SCOPE=arcade` and keeps the launcher-backed arcade screen. `check-arm-ui-full`,
 `build-arm-debug-full`, and `build-arm.sh --all-scenes` enable the
 `bench-scenes` feature and compile every benchmark scene.
 
@@ -106,9 +106,9 @@ build settings are identical, it reuses the generated files already in `OUT_DIR`
 instead of rerunning Slint codegen; real source-content changes still regenerate
 the UI modules.
 
-Launcher-scope builds intentionally omit standalone `demo` and `arcade_page`
-scene code to keep local optimized builds small. Use `--ui-scope arcade` for
-standalone arcade-page work and `--all-scenes` for benchmark/demo coverage.
+Launcher-scope builds intentionally omit standalone `demo` scene code to keep
+local optimized builds small. Use `--ui-scope arcade` for real arcade-screen
+work and `--all-scenes` for benchmark/demo coverage.
 
 Compile-time experiment tracking lives in
 [`history/toolchain-bench/compile-time-experiments-20260609.md`](../history/toolchain-bench/compile-time-experiments-20260609.md).

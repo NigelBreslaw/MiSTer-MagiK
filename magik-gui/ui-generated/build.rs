@@ -17,8 +17,7 @@ fn main() {
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
     let launcher_only = match scope.as_str() {
         "" | "all" => false,
-        "launcher" => true,
-        "arcade" => false,
+        "launcher" | "arcade" => true,
         other => panic!("unknown MISTER_UI_BUILD_SCOPE={other:?}; use all|launcher|arcade"),
     };
     if launcher_only {
@@ -27,7 +26,7 @@ fn main() {
 
     let mut sources = vec!["../ui/controller_test.slint", "../ui/launcher.slint"];
     if !launcher_only {
-        sources.extend(["../ui/app.slint", "../ui/arcade_page.slint"]);
+        sources.push("../ui/app.slint");
     }
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
@@ -57,7 +56,7 @@ fn main() {
         "../ui/icons/settings.svg",
     ];
     if !launcher_only {
-        inputs.extend(["../ui/app.slint", "../ui/arcade_page.slint"]);
+        inputs.push("../ui/app.slint");
     }
     if bench_scenes {
         inputs.extend([

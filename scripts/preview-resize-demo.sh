@@ -35,6 +35,6 @@ for FILTER in nearest box lanczos; do
   MISTER_PREVIEW_RESIZE_MAX='$MAX_SIZE' \
   MISTER_PREVIEW_FORMAT='$FORMAT' \
   MISTER_PREVIEW_RUN_LABEL=\"\$FILTER resize - $FORMAT - $MAX_SIZE\" \
-  \$REMOTE ui preview_scroll_bench '$SECS' >'$LOG' 2>&1 || exit \$?
+  \$REMOTE ui arcade '$SECS' >'$LOG' 2>&1 || exit \$?
 done
 "

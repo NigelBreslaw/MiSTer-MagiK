@@ -130,6 +130,22 @@ case "$UI_SCOPE" in
   all|launcher|arcade) ;;
   *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;
 esac
+if [[ "$SCENE_FILTER" -eq 0 && -n "$LAUNCHER_SCENARIO" ]]; then
+  BENCH_SCENES=(arcade)
+elif [[ "$SCENE_FILTER" -eq 0 && "$UI_SCOPE" == "arcade" ]]; then
+  BENCH_SCENES=(arcade)
+elif [[ "$SCENE_FILTER" -eq 0 && "$UI_SCOPE" == "launcher" ]]; then
+  BENCH_SCENES=(launcher)
+fi
+if [[ "$UI_SCOPE" != "all" ]]; then
+  filtered_build_flags=()
+  for flag in "${BUILD_FLAG[@]}"; do
+    if [[ "$flag" != "--all-scenes" ]]; then
+      filtered_build_flags+=("$flag")
+    fi
+  done
+  BUILD_FLAG=("${filtered_build_flags[@]}")
+fi
 for numeric_var in MIN_FPS MAX_VSYNC_FALLBACK MAX_VSYNC_ERRORS; do
   numeric_value="${!numeric_var}"
   case "$numeric_value" in

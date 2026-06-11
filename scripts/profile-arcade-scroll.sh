@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture a raw arcade-page velocity-scroll trace on the MiSTer and summarize it.
+# Capture a real arcade-screen velocity-scroll trace on the MiSTer and summarize it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,9 +11,9 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-arcade-scroll.sh [SECS] [LABEL] [--skip-build|--deploy-fast|--deploy-device]
 
-Runs `ui arcade_page` with `MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll` and
-`MISTER_ARCADE_FRAME_TRACE`, pulls the raw TSV/log, then prints full/none frame
-timing summaries.
+Runs `ui arcade` with `MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll` and
+`MISTER_PREVIEW_SCROLL_TRACE`, pulls the raw TSV/log, then prints frame timing
+summaries.
 
 Do not use row-step `list-scroll` for arcade performance benchmarking. It does
 not reproduce real velocity scrolling.
@@ -73,8 +73,8 @@ case "$deploy" in
   skip) : ;;
 esac
 
-echo "==> Capture arcade_page held-scroll secs=$secs label=$label deploy=$deploy"
-if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true; kill -9 \$(pidof MiSTer) 2>/dev/null || true; rm -f $remote_tsv $remote_log; sleep 5; MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll MISTER_ARCADE_FRAME_TRACE=$remote_tsv $REMOTE ui arcade_page $secs >$remote_log 2>&1; status=\$?; grep -E 'launcher_bench_scenario|arcade_frame_trace|arcade_page fps|done:' $remote_log || true; test -s $remote_tsv || status=1; exit \$status"; then
+echo "==> Capture ui arcade held-scroll secs=$secs label=$label deploy=$deploy"
+if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true; kill -9 \$(pidof MiSTer) 2>/dev/null || true; rm -f $remote_tsv $remote_log; sleep 5; MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll MISTER_PREVIEW_SCROLL_TRACE=$remote_tsv $REMOTE ui arcade $secs >$remote_log 2>&1; status=\$?; grep -E 'launcher_mode=|launcher_bench_scenario|preview_scroll_trace|launcher fps|done:' $remote_log || true; test -s $remote_tsv || status=1; exit \$status"; then
   "$MISTER" get "$remote_log" "$local_log" || true
   echo "arcade scroll profile failed; see $local_log" >&2
   exit 1

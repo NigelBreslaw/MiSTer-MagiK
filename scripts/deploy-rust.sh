@@ -128,5 +128,5 @@ fi
 echo "==> Deployed ($PROFILE)."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"
-echo "    Dev / bench:     scripts/run-rust.sh arcade_page 0"
+echo "    Dev / bench:     scripts/run-rust.sh arcade 0"
 echo "    Restore stock:   scripts/restore-stock-boot.sh"

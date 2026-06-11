@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Summarize arcade-page raw frame traces.
+"""Summarize real arcade-screen frame traces.
 
-The trace is produced by `MISTER_ARCADE_FRAME_TRACE` and has one row per frame.
-By default the first frame is ignored because it includes startup rendering.
+The current trace is produced by `MISTER_PREVIEW_SCROLL_TRACE` from `ui arcade`
+and has one row per frame. Older `MISTER_ARCADE_FRAME_TRACE` files are still
+accepted so historical captures remain readable. By default the first frame is
+ignored because it includes startup rendering.
 """
 
 from __future__ import annotations
@@ -13,15 +15,16 @@ from pathlib import Path
 
 
 FLOAT_COLUMNS = {"visual_index"}
-STRING_COLUMNS = {"update"}
+STRING_COLUMNS = {"update", "arcade_update", "cache_state"}
 PHASES = [
     "prepare_us",
     "slint_render_us",
-    "arcade_draw_us",
+    "custom_draw_us",
     "vsync_us",
     "fb_present_us",
     "cached_present_us",
     "overlay_present_us",
+    "present_probe_us",
     "wall_us",
     "rows",
 ]
@@ -48,6 +51,8 @@ def print_stats(label: str, rows: list[dict[str, int | float | str]]) -> None:
     if not rows:
         return
     for phase in PHASES:
+        if phase not in rows[0]:
+            continue
         values = [int(row[phase]) for row in rows]
         avg = sum(values) / len(values)
         print(
@@ -76,6 +81,13 @@ def main() -> int:
             {key: parse_value(key, value) for key, value in row.items()}
             for row in csv.DictReader(f, delimiter="\t")
         ]
+    for row in rows:
+        if "arcade_update" in row and "update" not in row:
+            row["update"] = row["arcade_update"]
+        if "arcade_draw_us" in row and "custom_draw_us" not in row:
+            row["custom_draw_us"] = row["arcade_draw_us"]
+        if "present_probe_us" not in row:
+            row["present_probe_us"] = 0
     if not args.include_first:
         rows = [row for row in rows if int(row["frame"]) != 0]
 
@@ -92,16 +104,16 @@ def main() -> int:
         fields = [
             "frame",
             "selected",
-            "visual_px",
-            "scroll_y",
+            "visual_index",
             "update",
             "rows",
             "prepare_us",
             "slint_render_us",
-            "arcade_draw_us",
+            "custom_draw_us",
             "fb_present_us",
             "cached_present_us",
             "overlay_present_us",
+            "present_probe_us",
             "wall_us",
         ]
         print("\t".join(f"{field}={row[field]}" for field in fields))

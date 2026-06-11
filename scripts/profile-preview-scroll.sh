@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run paired preview-scroll benchmarks on the MiSTer and compare traces.
+# Run a real arcade preview-scroll benchmark on the MiSTer.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,16 +12,15 @@ usage() {
 Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
-Runs both:
-  ui preview_scroll_bench
-  ui launcher
-with matching MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
+Runs the real launcher-backed arcade screen:
+  ui arcade
+with MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 
 --list-only disables screenshot loading and the real launcher's catalog refresh
 worker so list-renderer changes can be measured without preview/catalog noise.
 --fb-format selects the framebuffer format passed to the UI.
 --preview-blitter selects Slint Image rendering or the raw post-render blitter.
---visual-captures captures fixed arcade indices from the real launcher after the
+--visual-captures captures fixed arcade indices from the real arcade screen after the
 benchmark, storing before/after PNG evidence under <label>-visuals.
 --preview-visual-pct scales screenshot display area. 100 is the current size;
 50 renders screenshots at half the current visual area.
@@ -208,7 +207,7 @@ kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 rm -f '$remote_log' '$remote_pid'
 sleep 5
-$remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO=idle MISTER_ARCADE_SELECTED_INDEX='$idx' MISTER_PREVIEW_TRACE=1 '$REMOTE' ui launcher 20 >'$remote_log' 2>&1 &
+$remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO=idle MISTER_ARCADE_SELECTED_INDEX='$idx' MISTER_PREVIEW_TRACE=1 '$REMOTE' ui arcade 20 >'$remote_log' 2>&1 &
 echo \$! >'$remote_pid'
 " >/dev/null
     sleep 8
@@ -298,35 +297,26 @@ check_velocity_motion() {
   ' "$tsv"
 }
 
-run_case standalone preview_scroll_bench
-run_case real launcher
+run_case arcade arcade
 capture_visuals
 
-standalone_tsv="$OUT_DIR/${label}-standalone.tsv"
-standalone_log="$OUT_DIR/${label}-standalone.log"
-real_tsv="$OUT_DIR/${label}-real.tsv"
-real_log="$OUT_DIR/${label}-real.log"
+arcade_tsv="$OUT_DIR/${label}-arcade.tsv"
+arcade_log="$OUT_DIR/${label}-arcade.log"
 
 echo
 echo $'case\tframes\tavg_wall_us\tp95_wall_us\tslow_gt_16_7ms\tslow_gt_20ms\texact\tcached\tstale\tplaceholder\trss_hwm_kb'
-summarize_trace standalone "$standalone_tsv" "$standalone_log"
-summarize_trace real "$real_tsv" "$real_log"
+summarize_trace arcade "$arcade_tsv" "$arcade_log"
 
 echo
 echo $'motion_check\tframes\tfractional_visual_index_frames\tmoving_frames'
 if [[ "$preview_stress" == "1" ]]; then
-  check_velocity_motion standalone "$standalone_tsv" || true
-  check_velocity_motion real "$real_tsv" || true
+  check_velocity_motion arcade "$arcade_tsv" || true
 else
-  check_velocity_motion standalone "$standalone_tsv"
-  check_velocity_motion real "$real_tsv"
+  check_velocity_motion arcade "$arcade_tsv"
 fi
 
 echo
 echo "preview trace counts:"
-printf "standalone decoded=%s apply=%s\n" \
-  "$(grep -c 'preview_trace decoded' "$standalone_log" 2>/dev/null || true)" \
-  "$(grep -c 'preview_trace apply' "$standalone_log" 2>/dev/null || true)"
-printf "real       decoded=%s apply=%s\n" \
-  "$(grep -c 'preview_trace decoded' "$real_log" 2>/dev/null || true)" \
-  "$(grep -c 'preview_trace apply' "$real_log" 2>/dev/null || true)"
+printf "arcade decoded=%s apply=%s\n" \
+  "$(grep -c 'preview_trace decoded' "$arcade_log" 2>/dev/null || true)" \
+  "$(grep -c 'preview_trace apply' "$arcade_log" 2>/dev/null || true)"

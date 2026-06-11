@@ -826,6 +826,9 @@ pub fn reboot_mister() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static LAUNCH_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct FakeLaunchIo {
         target_exists: bool,
@@ -1113,6 +1116,7 @@ mod tests {
 
     #[test]
     fn launch_missing_target_does_not_spawn_or_require_recovery() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
         io.target_exists = false;
@@ -1126,6 +1130,7 @@ mod tests {
 
     #[test]
     fn launch_fifo_timeout_after_spawn_reports_recovery_needed() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
         io.mister_running = false;
@@ -1142,6 +1147,7 @@ mod tests {
 
     #[test]
     fn launch_write_failure_after_spawn_reports_recovery_needed() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
         io.mister_running = false;
@@ -1162,6 +1168,7 @@ mod tests {
 
     #[test]
     fn launch_running_stock_main_uses_load_core_without_recovery_flag() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
         io.magik_running = false;

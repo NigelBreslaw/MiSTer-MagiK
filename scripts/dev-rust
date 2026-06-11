@@ -19,11 +19,11 @@ Commands:
   check-arm-lib      Cross-check host-testable library for ARM, without Slint/UI
   check-arm-ui       Cross-check launcher/controller Slint UI for ARM
   check-ui           Alias for check-arm-ui
-  check-arm-arcade-ui Cross-check standalone arcade page Slint UI for ARM
+  check-arm-arcade-ui Cross-check launcher-backed arcade UI for ARM
   check-arm-ui-full  Cross-check all Slint UI scenes for ARM
   check-ui-full      Alias for check-arm-ui-full
   build-arm-debug       Cross-build launcher/controller ARM debug binary
-  build-arm-arcade-debug Cross-build standalone arcade page ARM debug binary
+  build-arm-arcade-debug Cross-build launcher-backed arcade ARM debug binary
   build-arm-debug-full  Cross-build all-scene ARM debug binary
   build-ui  Build the ARM Slint binary via magik-gui/build-arm.sh --fast
 EOF

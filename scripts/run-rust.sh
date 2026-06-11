@@ -4,19 +4,19 @@
 # This is intentionally separate from deploy-rust.sh: use it when the binary on
 # /media/fat is already good and you only need to restart a scene.
 #
-#   scripts/run-rust.sh                  # standalone arcade page, forever
+#   scripts/run-rust.sh                  # real arcade screen, forever
 #   scripts/run-rust.sh launcher 0       # full launcher, forever
 #   scripts/run-rust.sh console_scroll 15
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
-SCENE="${1:-arcade_page}"
+SCENE="${1:-arcade}"
 SECS="${2:-0}"
 LOG="/tmp/mister-magik-${SCENE}.log"
 
 case "$SCENE" in
-  demo|full_motion|static_ui|local_motion|console_scroll|launcher|controller_test|arcade_page|preview_scroll_bench|blend_velocity|video_playback|solid_fill|dirty_band) ;;
+  demo|full_motion|static_ui|local_motion|console_scroll|launcher|controller_test|arcade|blend_velocity|video_playback|solid_fill|dirty_band) ;;
   -h|--help)
     sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
