@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs both:
@@ -19,6 +19,10 @@ with matching MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 
 --list-only disables screenshot loading and the real launcher's catalog refresh
 worker so list-renderer changes can be measured without preview/catalog noise.
+--fb-format selects the framebuffer format passed to the UI.
+--preview-blitter selects Slint Image rendering or the raw post-render blitter.
+--visual-captures captures fixed arcade indices from the real launcher after the
+benchmark, storing before/after PNG evidence under <label>-visuals.
 --preview-visual-pct scales screenshot display area. 100 is the current size;
 50 renders screenshots at half the current visual area.
 --preview-resize-filter enables runtime resize before Slint image creation.
@@ -39,6 +43,9 @@ preview_visual_pct=""
 preview_resize_filter=""
 preview_resize_max=""
 preview_format=""
+fb_format="8888"
+preview_blitter="slint"
+visual_captures="4"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -47,6 +54,9 @@ while [[ $# -gt 0 ]]; do
     --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --list-only) list_only="1"; shift ;;
+    --fb-format) fb_format="${2:-}"; shift 2 ;;
+    --preview-blitter) preview_blitter="${2:-}"; shift 2 ;;
+    --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     --preview-visual-pct) preview_visual_pct="${2:-}"; shift 2 ;;
     --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
     --preview-resize-max) preview_resize_max="${2:-}"; shift 2 ;;
@@ -89,12 +99,15 @@ if [[ -n "$preview_visual_pct" && ! "$preview_visual_pct" =~ ^[0-9]+$ ]]; then e
 case "$preview_resize_filter" in ""|off|nearest|box|lanczos) ;; *) echo "--preview-resize-filter must be off, nearest, box, or lanczos" >&2; exit 2 ;; esac
 if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ ]]; then echo "--preview-resize-max must look like 320x320" >&2; exit 2; fi
 case "$preview_format" in ""|png|derived-png|raw-rgb) ;; *) echo "--preview-format must be png, derived-png, or raw-rgb" >&2; exit 2 ;; esac
+case "$fb_format" in 8888|565) ;; *) echo "--fb-format must be 8888 or 565" >&2; exit 2 ;; esac
+case "$preview_blitter" in slint|raw) ;; *) echo "--preview-blitter must be slint or raw" >&2; exit 2 ;; esac
+if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
 
-remote_extra_env="MISTER_CATALOG_REFRESH=off"
+remote_extra_env="MISTER_FB_FORMAT=$fb_format MISTER_PREVIEW_BLITTER=$preview_blitter MISTER_CATALOG_REFRESH=off"
 if [[ "$list_only" == "1" ]]; then
-  remote_extra_env="MISTER_PREVIEW_LOADING=off MISTER_CATALOG_REFRESH=off"
+  remote_extra_env="MISTER_FB_FORMAT=$fb_format MISTER_PREVIEW_BLITTER=$preview_blitter MISTER_PREVIEW_LOADING=off MISTER_CATALOG_REFRESH=off"
 fi
 if [[ "$preview_stress" == "1" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_STRESS=1 MISTER_CATALOG_REFRESH=off"
@@ -132,7 +145,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format preview_blitter=$preview_blitter list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -169,6 +182,42 @@ test -s '$remote_tsv'
   "$MISTER" get "$remote_log" "$local_log"
   echo "wrote $local_tsv"
   echo "wrote $local_log"
+}
+
+capture_visuals() {
+  local count="$visual_captures"
+  if [[ "$count" == "0" || "$list_only" == "1" ]]; then
+    return
+  fi
+  local visual_dir="$OUT_DIR/${label}-visuals"
+  mkdir -p "$visual_dir"
+  local indices=(0 7 14 21 28 35 42 49)
+  local i idx idx_pad remote_log remote_pid snap_dir png_out
+  for ((i = 0; i < count && i < ${#indices[@]}; i++)); do
+    idx="${indices[$i]}"
+    idx_pad="$(printf "%03d" "$idx")"
+    remote_log="/tmp/${label}-visual-${fb_format}-${idx_pad}.log"
+    remote_pid="/tmp/${label}-visual-${fb_format}-${idx_pad}.pid"
+    snap_dir="$visual_dir/${fb_format}-idx${idx_pad}.snapshot"
+    png_out="$visual_dir/${fb_format}-idx${idx_pad}.png"
+    echo "==> visual fb_format=$fb_format preview_blitter=$preview_blitter selected_index=$idx"
+    "$MISTER" run "
+set -e
+kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
+kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
+kill -9 \$(pidof MiSTer) 2>/dev/null || true
+rm -f '$remote_log' '$remote_pid'
+sleep 5
+$remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO=idle MISTER_ARCADE_SELECTED_INDEX='$idx' MISTER_PREVIEW_TRACE=1 '$REMOTE' ui launcher 20 >'$remote_log' 2>&1 &
+echo \$! >'$remote_pid'
+" >/dev/null
+    sleep 8
+    "$MISTER" snapshot "$snap_dir" >/dev/null
+    cp "$snap_dir/fb0.png" "$png_out"
+    "$MISTER" get "$remote_log" "$visual_dir/${fb_format}-idx${idx_pad}.log" >/dev/null || true
+    "$MISTER" run "kill -9 \$(cat '$remote_pid' 2>/dev/null) 2>/dev/null || true; rm -f '$remote_pid'" >/dev/null || true
+    echo "wrote $png_out"
+  done
 }
 
 summarize_trace() {
@@ -251,6 +300,7 @@ check_velocity_motion() {
 
 run_case standalone preview_scroll_bench
 run_case real launcher
+capture_visuals
 
 standalone_tsv="$OUT_DIR/${label}-standalone.tsv"
 standalone_log="$OUT_DIR/${label}-standalone.log"

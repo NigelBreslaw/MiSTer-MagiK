@@ -39,6 +39,16 @@ fn preview_loading_enabled() -> bool {
     })
 }
 
+pub(crate) fn preview_raw_blitter_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_PREVIEW_BLITTER").as_deref(),
+            Ok("raw") | Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 pub(crate) fn preview_visual_pct() -> u32 {
     static VALUE: OnceLock<u32> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -58,6 +68,7 @@ fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
 #[derive(Clone)]
 struct PreviewImage {
     image: Image,
+    rgb: Vec<u8>,
     source_w: u32,
     source_h: u32,
     display_w: u32,
@@ -81,12 +92,24 @@ impl PreviewImageCache {
         Some(out)
     }
 
-    fn insert(&mut self, path: String, image: PreviewImage, window_paths: &[String]) {
+    fn peek(&self, path: &str) -> Option<&PreviewImage> {
+        self.entries
+            .iter()
+            .find_map(|(p, image)| (p == path).then_some(image))
+    }
+
+    fn insert(
+        &mut self,
+        path: String,
+        image: PreviewImage,
+        window_paths: &[String],
+        visible_path: Option<&str>,
+    ) {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == &path) {
             self.entries.remove(idx);
         }
         self.entries.push_back((path, image));
-        self.retain_window(window_paths);
+        self.retain_window(window_paths, visible_path);
     }
 
     fn insert_failed(&mut self, path: String) {
@@ -99,13 +122,26 @@ impl PreviewImageCache {
         }
     }
 
-    fn retain_window(&mut self, window_paths: &[String]) {
+    fn retain_window(&mut self, window_paths: &[String], visible_path: Option<&str>) {
         if !window_paths.is_empty() {
-            self.entries
-                .retain(|(path, _)| window_paths.iter().any(|keep| keep == path));
+            self.entries.retain(|(path, _)| {
+                visible_path.is_some_and(|visible| visible == path)
+                    || window_paths.iter().any(|keep| keep == path)
+            });
         }
         while self.entries.len() > DEFAULT_PREVIEW_CACHE_CAP {
-            self.entries.pop_front();
+            if self
+                .entries
+                .front()
+                .is_some_and(|(path, _)| visible_path.is_some_and(|visible| visible == path))
+                && self.entries.len() > 1
+            {
+                if let Some(entry) = self.entries.pop_front() {
+                    self.entries.push_back(entry);
+                }
+            } else {
+                self.entries.pop_front();
+            }
         }
     }
 
@@ -152,8 +188,13 @@ fn apply_preview_image_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
     preview_image: &PreviewImage,
 ) {
-    bridge.set_arcade_preview_image(preview_image.image.clone());
-    bridge.set_arcade_preview_has_image(true);
+    if preview_raw_blitter_enabled() {
+        bridge.set_arcade_preview_image(Image::default());
+        bridge.set_arcade_preview_has_image(false);
+    } else {
+        bridge.set_arcade_preview_image(preview_image.image.clone());
+        bridge.set_arcade_preview_has_image(true);
+    }
     bridge.set_arcade_preview_status(PreviewStatus::Ready);
     bridge.set_arcade_preview_source_width(preview_image.source_w as i32);
     bridge.set_arcade_preview_source_height(preview_image.source_h as i32);
@@ -180,6 +221,15 @@ pub(crate) struct PreviewState {
     visible_path: String,
     window_paths: Vec<String>,
     pending_prefetch_paths: HashSet<String>,
+    raw_dirty: bool,
+}
+
+pub(crate) struct PreviewRawFrame<'a> {
+    pub(crate) rgb: &'a [u8],
+    pub(crate) source_w: u32,
+    pub(crate) source_h: u32,
+    pub(crate) display_w: u32,
+    pub(crate) display_h: u32,
 }
 
 impl PreviewState {
@@ -194,6 +244,7 @@ impl PreviewState {
             visible_path: String::new(),
             window_paths: Vec::new(),
             pending_prefetch_paths: HashSet::new(),
+            raw_dirty: false,
         }
     }
 
@@ -209,6 +260,7 @@ impl PreviewState {
             self.visible_path.clear();
             self.window_paths.clear();
             self.pending_prefetch_paths.clear();
+            self.raw_dirty = false;
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -232,6 +284,26 @@ impl PreviewState {
                 }
             })
             .unwrap_or("empty")
+    }
+
+    pub(crate) fn take_raw_dirty(&mut self) -> bool {
+        let dirty = self.raw_dirty;
+        self.raw_dirty = false;
+        dirty
+    }
+
+    pub(crate) fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
+        if !preview_raw_blitter_enabled() || !self.has_visible_preview {
+            return None;
+        }
+        let image = self.cache.peek(&self.visible_path)?;
+        Some(PreviewRawFrame {
+            rgb: &image.rgb,
+            source_w: image.source_w,
+            source_h: image.source_h,
+            display_w: image.display_w,
+            display_h: image.display_h,
+        })
     }
 }
 
@@ -278,7 +350,9 @@ pub(crate) fn request_arcade_preview_window(
     .into_iter()
     .map(str::to_string)
     .collect();
-    preview.cache.retain_window(&preview.window_paths);
+    preview
+        .cache
+        .retain_window(&preview.window_paths, Some(&preview.visible_path));
 
     if preview
         .selected_mra_path
@@ -292,6 +366,7 @@ pub(crate) fn request_arcade_preview_window(
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
                     preview.visible_path = path;
+                    preview.raw_dirty = true;
                     apply_preview_image_bridge(bridge, &image);
                     request_preview_prefetches(games, selected, preview);
                     return true;
@@ -328,6 +403,7 @@ pub(crate) fn request_arcade_preview_window(
                 );
             }
             preview.visible_path = game.image_path.clone();
+            preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &image);
             request_preview_prefetches(games, selected, preview);
             return true;
@@ -475,31 +551,46 @@ pub(crate) fn apply_ready_preview(
                 ARCADE_PREVIEW_BOX_W,
                 ARCADE_PREVIEW_BOX_H,
             );
+            let raw_rgb = image.rgb;
             let slint_image_t = Instant::now();
-            let slint_image = png_to_slint_image(source_w, source_h, image.rgb);
+            let slint_image = if preview_raw_blitter_enabled() {
+                Image::default()
+            } else {
+                png_to_slint_image(source_w, source_h, raw_rgb.clone())
+            };
             let slint_image_us = slint_image_t.elapsed().as_micros() as u64;
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace slint_image generation={} slint_image_us={} output={}x{} path={}",
-                    result.generation, slint_image_us, source_w, source_h, result.image_path
+                    "preview_trace slint_image generation={} slint_image_us={} raw_blitter={} output={}x{} path={}",
+                    result.generation,
+                    slint_image_us,
+                    if preview_raw_blitter_enabled() { 1 } else { 0 },
+                    source_w,
+                    source_h,
+                    result.image_path
                 );
             }
             let image = PreviewImage {
                 image: slint_image,
+                rgb: raw_rgb,
                 source_w,
                 source_h,
                 display_w: display.w,
                 display_h: display.h,
             };
             let image_path = result.image_path;
-            preview
-                .cache
-                .insert(image_path.clone(), image.clone(), &preview.window_paths);
+            preview.cache.insert(
+                image_path.clone(),
+                image.clone(),
+                &preview.window_paths,
+                Some(&preview.visible_path),
+            );
             if is_selected_result {
                 preview.current_generation = 0;
                 bridge.set_arcade_preview_title(result.title.into());
                 preview.has_visible_preview = true;
                 preview.visible_path = image_path;
+                preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
                 dirty = true;
             }

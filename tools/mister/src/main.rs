@@ -660,16 +660,11 @@ fn classify_fb(raw: &[u8], geometry: &FbGeometry) -> Value {
     let mut color_max = 0u32;
     let mut prev = None;
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    let bytes_per_pixel = geometry.bpp / 8;
     for y in (0..geometry.height).step_by(16) {
         for x in (0..geometry.width).step_by(16) {
-            let i = y * geometry.stride + x * bytes_per_pixel;
-            if i + 2 >= raw.len() {
+            let Some((r, g, b)) = rgb_from_raw(raw, geometry, x, y) else {
                 continue;
-            }
-            let b = raw[i] as u32;
-            let g = raw[i + 1] as u32;
-            let r = raw[i + 2] as u32;
+            };
             let p = (r << 16) | (g << 8) | b;
             samples += 1;
             nonzero += u32::from(p != 0);
@@ -1022,13 +1017,6 @@ fn write_png_bgrx(raw: &[u8], w: usize, h: usize, path: &Path) -> Result<()> {
 }
 
 fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Result<()> {
-    if geometry.bpp != 32 {
-        return Err(format!(
-            "PNG capture only supports 32bpp framebuffer, got {}",
-            geometry.bpp
-        )
-        .into());
-    }
     let expected = geometry.bytes()?;
     if raw.len() < expected {
         return Err(format!(
@@ -1043,10 +1031,13 @@ fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Resu
     for y in 0..h {
         rgba.push(0);
         for x in 0..w {
-            let i = y * geometry.stride + x * 4;
-            rgba.push(raw[i + 2]);
-            rgba.push(raw[i + 1]);
-            rgba.push(raw[i]);
+            let Some((r, g, b)) = rgb_from_raw(raw, geometry, x, y) else {
+                rgba.extend_from_slice(&[0, 0, 0, 0xff]);
+                continue;
+            };
+            rgba.push(r as u8);
+            rgba.push(g as u8);
+            rgba.push(b as u8);
             rgba.push(0xff);
         }
     }
@@ -1061,6 +1052,37 @@ fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Resu
     png_chunk(&mut png, b"IEND", &[]);
     fs::write(path, png)?;
     Ok(())
+}
+
+fn rgb_from_raw(raw: &[u8], geometry: &FbGeometry, x: usize, y: usize) -> Option<(u32, u32, u32)> {
+    match geometry.bpp {
+        32 => {
+            let i = y
+                .checked_mul(geometry.stride)?
+                .checked_add(x.checked_mul(4)?)?;
+            if i + 2 >= raw.len() {
+                return None;
+            }
+            Some((raw[i + 2] as u32, raw[i + 1] as u32, raw[i] as u32))
+        }
+        16 => {
+            let i = y
+                .checked_mul(geometry.stride)?
+                .checked_add(x.checked_mul(2)?)?;
+            if i + 1 >= raw.len() {
+                return None;
+            }
+            let v = u16::from_le_bytes([raw[i], raw[i + 1]]);
+            let r5 = (v >> 11) & 0x1f;
+            let g6 = (v >> 5) & 0x3f;
+            let b5 = v & 0x1f;
+            let r = ((r5 << 3) | (r5 >> 2)) as u32;
+            let g = ((g6 << 2) | (g6 >> 4)) as u32;
+            let b = ((b5 << 3) | (b5 >> 2)) as u32;
+            Some((r, g, b))
+        }
+        _ => None,
+    }
 }
 
 fn raw_to_png(raw_path: &Path, w: usize, h: usize, out_path: &Path) -> Result<()> {

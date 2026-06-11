@@ -8,12 +8,13 @@
 //!
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
+use crate::fb_format::FramebufferFormat;
 use crate::fpga::FB_SIZE_PX;
 use mister_magik_fb::framebuffer_copy;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
 
 use crate::boot_analytics;
-use slint::platform::software_renderer::{PremultipliedRgbaColor, TargetPixel};
+use slint::platform::software_renderer::{PremultipliedRgbaColor, Rgb565Pixel, TargetPixel};
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::unix::io::AsRawFd;
@@ -94,10 +95,11 @@ impl TargetPixel for Pixel {
 }
 
 pub struct Display {
-    mem: *mut Pixel,
+    mem: *mut u8,
     map_len: usize,
     w: usize,
     h: usize,
+    format: FramebufferFormat,
     info: FbInfo,
     #[allow(dead_code)]
     fb0: std::fs::File,
@@ -491,10 +493,31 @@ fn pixels_as_u32_mut(dst: &mut [Pixel]) -> &mut [u32] {
 }
 
 impl Display {
+    #[allow(dead_code)]
     pub fn write_mister_mode(w: usize, h: usize, stride_bytes: usize) -> io::Result<()> {
+        Self::write_mister_mode_format(FramebufferFormat::Xrgb8888, w, h, stride_bytes)
+    }
+
+    pub fn write_mister_mode_format(
+        format: FramebufferFormat,
+        w: usize,
+        h: usize,
+        stride_bytes: usize,
+    ) -> io::Result<()> {
+        let rb = format.rb_from_env();
+        let expected = format.stride_bytes(w);
+        let stride_bytes = if stride_bytes == 0 {
+            expected
+        } else {
+            stride_bytes
+        };
         std::fs::write(
             "/sys/module/MiSTer_fb/parameters/mode",
-            format!("8888 1 {w} {h} {stride_bytes}\n"),
+            format!(
+                "{} {} {w} {h} {stride_bytes}\n",
+                format.mister_mode_format(),
+                if rb { 1 } else { 0 }
+            ),
         )
     }
 
@@ -585,6 +608,10 @@ impl Display {
     }
 
     pub fn open(w: usize, h: usize) -> io::Result<Self> {
+        Self::open_with_format(w, h, FramebufferFormat::Xrgb8888)
+    }
+
+    pub fn open_with_format(w: usize, h: usize, format: FramebufferFormat) -> io::Result<Self> {
         assert!(w * h <= FB_SIZE_PX as usize);
         let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
         let mut var = FbVarScreeninfo::zeroed();
@@ -605,27 +632,45 @@ impl Display {
                     format!("fb0 is {}px tall, need {h}", virt),
                 ));
             }
-            if var.bits_per_pixel != 0 && var.bits_per_pixel != 32 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("fb0 is {}bpp, need 32bpp", var.bits_per_pixel),
-                ));
-            }
-            if var.red.length != 0
-                && (var.red.offset, var.green.offset, var.blue.offset) != (16, 8, 0)
-            {
+            let expected_bpp = (format.bytes_per_pixel() * 8) as u32;
+            if var.bits_per_pixel != 0 && var.bits_per_pixel != expected_bpp {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
-                        "fb0 channel offsets are r{} g{} b{}, expected r16 g8 b0",
-                        var.red.offset, var.green.offset, var.blue.offset
+                        "fb0 is {}bpp, need {}bpp for {}",
+                        var.bits_per_pixel,
+                        expected_bpp,
+                        format.label()
                     ),
                 ));
+            }
+            let expected_offsets = match format {
+                FramebufferFormat::Xrgb8888 => Some((16, 8, 0)),
+                FramebufferFormat::Rgb565 => Some((11, 5, 0)),
+            };
+            if let Some(expected_offsets) = expected_offsets {
+                if var.red.length != 0
+                    && (var.red.offset, var.green.offset, var.blue.offset) != expected_offsets
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "fb0 channel offsets are r{} g{} b{}, expected r{} g{} b{} for {}",
+                            var.red.offset,
+                            var.green.offset,
+                            var.blue.offset,
+                            expected_offsets.0,
+                            expected_offsets.1,
+                            expected_offsets.2,
+                            format.label()
+                        ),
+                    ));
+                }
             }
         }
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
         if fix_ok {
-            let expected = w * 4;
+            let expected = format.stride_bytes(w);
             if fix.line_length != 0 && fix.line_length as usize != expected {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -634,7 +679,7 @@ impl Display {
             }
         }
         let info = fb_info_from(var_ok, &var, fix_ok, &fix, w, h);
-        let map_len = w * h * 4;
+        let map_len = format.stride_bytes(w) * h;
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
         let mem = unsafe {
             libc::mmap(
@@ -650,10 +695,11 @@ impl Display {
             return Err(io::Error::last_os_error());
         }
         Ok(Self {
-            mem: mem as *mut Pixel,
+            mem: mem as *mut u8,
             map_len,
             w,
             h,
+            format,
             info,
             fb0,
         })
@@ -673,7 +719,13 @@ impl Display {
 
     /// The (single) on-screen buffer, as a mutable pixel slice.
     pub fn buffer_mut(&mut self) -> &mut [Pixel] {
-        unsafe { std::slice::from_raw_parts_mut(self.mem, self.w * self.h) }
+        assert_eq!(self.format, FramebufferFormat::Xrgb8888);
+        unsafe { std::slice::from_raw_parts_mut(self.mem.cast::<Pixel>(), self.w * self.h) }
+    }
+
+    pub fn buffer_565_mut(&mut self) -> &mut [Rgb565Pixel] {
+        assert_eq!(self.format, FramebufferFormat::Rgb565);
+        unsafe { std::slice::from_raw_parts_mut(self.mem.cast::<Rgb565Pixel>(), self.w * self.h) }
     }
 
     #[allow(dead_code)]
@@ -703,14 +755,13 @@ impl Display {
     }
 
     pub fn sampled_signature(&self) -> (u64, u32) {
-        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut nonzero = 0u32;
         let step = 16usize;
         for y in (0..self.h).step_by(step) {
             let row = y * self.w;
             for x in (0..self.w).step_by(step) {
-                let p = pixels[row + x].0 & 0x00ff_ffff;
+                let p = self.pixel_rgb(row + x);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -730,7 +781,6 @@ impl Display {
         h: usize,
         step: usize,
     ) -> (u64, u32) {
-        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
         let x1 = x.saturating_add(w).min(self.w);
         let y1 = y.saturating_add(h).min(self.h);
         let step = step.max(1);
@@ -740,7 +790,7 @@ impl Display {
         for yy in (y..y1).step_by(step) {
             let row = yy * self.w;
             for xx in (x..x1).step_by(step) {
-                let p = pixels[row + xx].0 & 0x00ff_ffff;
+                let p = self.pixel_rgb(row + xx);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -802,15 +852,28 @@ impl Display {
         }
     }
 
+    fn pixel_rgb(&self, idx: usize) -> u32 {
+        match self.format {
+            FramebufferFormat::Xrgb8888 => unsafe {
+                let pixels = std::slice::from_raw_parts(self.mem.cast::<Pixel>(), self.w * self.h);
+                pixels[idx].0 & 0x00ff_ffff
+            },
+            FramebufferFormat::Rgb565 => unsafe {
+                let pixels =
+                    std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.w * self.h);
+                rgb565_to_rgb888(pixels[idx])
+            },
+        }
+    }
+
     fn vertical_edge_signature(&self, x0: usize, x1: usize, min_cols: usize) -> (u64, u32) {
-        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut nonzero = 0u32;
         let x_end = x1.max(x0 + min_cols.min(self.w - x0)).min(self.w);
         for y in 0..self.h {
             let row = y * self.w;
             for x in x0..x_end {
-                let p = pixels[row + x].0;
+                let p = self.pixel_rgb(row + x);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -822,14 +885,13 @@ impl Display {
     }
 
     fn horizontal_edge_signature(&self, y0: usize, y1: usize, min_rows: usize) -> (u64, u32) {
-        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut nonzero = 0u32;
         let y_end = y1.max(y0 + min_rows.min(self.h - y0)).min(self.h);
         for y in y0..y_end {
             let row = y * self.w;
             for x in 0..self.w {
-                let p = pixels[row + x].0;
+                let p = self.pixel_rgb(row + x);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -841,7 +903,6 @@ impl Display {
     }
 
     fn visual_sample(&self) -> VisualSample {
-        let pixels = unsafe { std::slice::from_raw_parts(self.mem, self.w * self.h) };
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut samples = 0u32;
         let mut nonzero = 0u32;
@@ -854,7 +915,7 @@ impl Display {
         for y in (0..self.h).step_by(step) {
             let row = y * self.w;
             for x in (0..self.w).step_by(step) {
-                let p = pixels[row + x].0 & 0x00ff_ffff;
+                let p = self.pixel_rgb(row + x);
                 samples += 1;
                 if p != 0 {
                     nonzero += 1;
@@ -904,8 +965,20 @@ impl Display {
     /// Copy rows [y0,y1) from `src` into the framebuffer (write-combined).
     /// `src` stride is `self.w`; used when render size equals fb size.
     pub fn copy_rows(&mut self, src: &[Pixel], y0: usize, y1: usize) {
+        assert_eq!(self.format, FramebufferFormat::Xrgb8888);
         let w = self.w;
         let dst = self.buffer_mut();
+        let a = y0 * w;
+        let b = (y1 * w).min(dst.len());
+        if b > a {
+            dst[a..b].copy_from_slice(&src[a..b]);
+        }
+    }
+
+    pub fn copy_rows_565(&mut self, src: &[Rgb565Pixel], y0: usize, y1: usize) {
+        assert_eq!(self.format, FramebufferFormat::Rgb565);
+        let w = self.w;
+        let dst = self.buffer_565_mut();
         let a = y0 * w;
         let b = (y1 * w).min(dst.len());
         if b > a {
@@ -925,6 +998,7 @@ impl Display {
         src_x1: usize,
         src_y1: usize,
     ) {
+        assert_eq!(self.format, FramebufferFormat::Xrgb8888);
         if src_x1 <= src_x0 || src_y1 <= src_y0 {
             return;
         }
@@ -935,6 +1009,33 @@ impl Display {
         debug_assert_eq!(src_w, self.w);
         let dst_w = self.w;
         let dst = self.buffer_mut();
+        for sy in src_y0..src_y1 {
+            let a = sy * dst_w + src_x0;
+            let b = sy * dst_w + src_x1;
+            dst[a..b].copy_from_slice(&src[a..b]);
+        }
+    }
+
+    pub fn copy_rect_565(
+        &mut self,
+        src: &[Rgb565Pixel],
+        src_w: usize,
+        src_x0: usize,
+        src_y0: usize,
+        src_x1: usize,
+        src_y1: usize,
+    ) {
+        assert_eq!(self.format, FramebufferFormat::Rgb565);
+        if src_x1 <= src_x0 || src_y1 <= src_y0 {
+            return;
+        }
+        if src_x0 == 0 && src_x1 == self.w && src_w == self.w {
+            self.copy_rows_565(src, src_y0, src_y1);
+            return;
+        }
+        debug_assert_eq!(src_w, self.w);
+        let dst_w = self.w;
+        let dst = self.buffer_565_mut();
         for sy in src_y0..src_y1 {
             let a = sy * dst_w + src_x0;
             let b = sy * dst_w + src_x1;
@@ -973,11 +1074,28 @@ impl Display {
         }
         let copy_w = x1 - x;
         let copy_h = y1 - y;
-        let dst = self.buffer_mut();
-        for row in 0..copy_h {
-            let src_a = row * w;
-            let dst_a = (y + row) * dst_w + x;
-            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+        match self.format {
+            FramebufferFormat::Xrgb8888 => {
+                let dst = self.buffer_mut();
+                for row in 0..copy_h {
+                    let src_a = row * w;
+                    let dst_a = (y + row) * dst_w + x;
+                    dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+                }
+            }
+            FramebufferFormat::Rgb565 => {
+                let dst = self.buffer_565_mut();
+                for row in 0..copy_h {
+                    let src_a = row * w;
+                    let dst_a = (y + row) * dst_w + x;
+                    for (dst, src) in dst[dst_a..dst_a + copy_w]
+                        .iter_mut()
+                        .zip(&src[src_a..src_a + copy_w])
+                    {
+                        *dst = pixel_to_rgb565(*src);
+                    }
+                }
+            }
         }
     }
 
@@ -1103,6 +1221,22 @@ fn color_distance(a: u32, b: u32) -> u32 {
     let bg = (b >> 8) & 0xff;
     let bb = b & 0xff;
     ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)
+}
+
+pub(crate) fn pixel_to_rgb565(pixel: Pixel) -> Rgb565Pixel {
+    let p = pixel.0 & 0x00ff_ffff;
+    <Rgb565Pixel as TargetPixel>::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8)
+}
+
+fn rgb565_to_rgb888(pixel: Rgb565Pixel) -> u32 {
+    let v = pixel.0;
+    let r5 = (v >> 11) & 0x1f;
+    let g6 = (v >> 5) & 0x3f;
+    let b5 = v & 0x1f;
+    let r = ((r5 << 3) | (r5 >> 2)) as u32;
+    let g = ((g6 << 2) | (g6 >> 4)) as u32;
+    let b = ((b5 << 3) | (b5 >> 2)) as u32;
+    (r << 16) | (g << 8) | b
 }
 
 fn sanitize_tsv(s: &str) -> String {

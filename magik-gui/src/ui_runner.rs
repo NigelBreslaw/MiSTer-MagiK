@@ -2,10 +2,13 @@
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
 use crate::fb::{Display, Pixel, VsyncPacer};
+use crate::fb_format::FramebufferFormat;
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+use slint::platform::software_renderer::{
+    MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, SoftwareRenderer, TargetPixel,
+};
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, SharedString, VecModel};
 #[cfg(feature = "video")]
@@ -37,8 +40,8 @@ use crate::library_db;
 use crate::preview_state::request_arcade_preview;
 use crate::preview_state::{
     apply_ready_preview, preview_visual_pct, request_arcade_preview_window,
-    schedule_arcade_preview_window, PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W,
-    ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
+    schedule_arcade_preview_window, PreviewRawFrame, PreviewState, ARCADE_PREVIEW_BOX_H,
+    ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
 use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};
@@ -335,6 +338,26 @@ fn catalog_refresh_requested() -> bool {
     })
 }
 
+fn forced_arcade_selected_index() -> Option<usize> {
+    std::env::var("MISTER_ARCADE_SELECTED_INDEX")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+}
+
+fn apply_forced_arcade_selected(nav: &mut LauncherNav, catalog: &ArcadeCatalog) {
+    let Some(index) = forced_arcade_selected_index() else {
+        return;
+    };
+    let count = active_system_game_slice(catalog, nav).len();
+    if count == 0 {
+        return;
+    }
+    nav.screen = Screen::Arcade;
+    nav.arcade.selected = index.min(count - 1);
+    nav.arcade.snap_to_selected();
+    keep_bench_arcade_visible(&mut nav.arcade.scroll_y, nav.arcade.selected, count);
+}
+
 fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -354,9 +377,18 @@ pub(crate) struct FbModeGuard {
 }
 
 impl FbModeGuard {
+    #[allow(dead_code)]
     pub(crate) fn set_temporary(w: usize, h: usize) -> std::io::Result<Self> {
+        Self::set_temporary_format(w, h, FramebufferFormat::Xrgb8888)
+    }
+
+    pub(crate) fn set_temporary_format(
+        w: usize,
+        h: usize,
+        format: FramebufferFormat,
+    ) -> std::io::Result<Self> {
         let previous = Display::current_info()?;
-        Display::write_mister_mode(w, h, w * 4)?;
+        Display::write_mister_mode_format(format, w, h, format.stride_bytes(w))?;
         remember_fb_mode_for_exit(previous);
         Ok(Self {
             previous,
@@ -451,28 +483,114 @@ fn copy_cached_rect(disp: &mut Display, ui: &UiDisplay, cached: &[Pixel], rect: 
     disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
 }
 
-pub(crate) struct UiFrameTarget {
-    cached: Vec<Pixel>,
+fn copy_cached_rows_565(
+    disp: &mut Display,
+    ui: &UiDisplay,
+    cached: &[Rgb565Pixel],
+    y0: usize,
+    y1: usize,
+) {
+    debug_assert_eq!(ui.fb_scale(), 1);
+    disp.copy_rows_565(cached, y0, y1);
+}
+
+fn copy_cached_rect_565(
+    disp: &mut Display,
+    ui: &UiDisplay,
+    cached: &[Rgb565Pixel],
+    rect: DirtyRect,
+) {
+    if rect.is_full_width(ui.render_w()) || dirty_rect_is_broad(rect, ui.render_w()) {
+        copy_cached_rows_565(disp, ui, cached, rect.y0, rect.y1);
+        return;
+    }
+    debug_assert_eq!(ui.fb_scale(), 1);
+    disp.copy_rect_565(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
+}
+
+fn preview_screen_rect(ui: &UiDisplay) -> DirtyRect {
+    const CABINET_W: usize = 336;
+    const CABINET_H: usize = 520;
+    let right_x = ui.render_w() / 2;
+    let right_w = ui.render_w().saturating_sub(right_x);
+    let cabinet_x = right_x + right_w.saturating_sub(CABINET_W) / 2;
+    let cabinet_y = ui.render_h().saturating_sub(CABINET_H) / 2;
+    DirtyRect {
+        x0: cabinet_x + ARCADE_PREVIEW_BOX_X,
+        y0: cabinet_y + ARCADE_PREVIEW_BOX_Y,
+        x1: cabinet_x + ARCADE_PREVIEW_BOX_X + ARCADE_PREVIEW_BOX_W as usize,
+        y1: cabinet_y + ARCADE_PREVIEW_BOX_Y + ARCADE_PREVIEW_BOX_H as usize,
+    }
+}
+
+fn raw_preview_image_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Option<DirtyRect> {
+    if frame.source_w == 0
+        || frame.source_h == 0
+        || frame.display_w == 0
+        || frame.display_h == 0
+        || frame.rgb.len() < frame.source_w as usize * frame.source_h as usize * 3
+    {
+        return None;
+    }
+
+    let screen = preview_screen_rect(ui);
+    let image_x =
+        screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - frame.display_w as isize) / 2;
+    let image_y =
+        screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - frame.display_h as isize) / 2;
+    let x0 = screen.x0.max(image_x.max(0) as usize);
+    let y0 = screen.y0.max(image_y.max(0) as usize);
+    let x1 = screen
+        .x1
+        .min((image_x + frame.display_w as isize).max(0) as usize)
+        .min(ui.render_w());
+    let y1 = screen
+        .y1
+        .min((image_y + frame.display_h as isize).max(0) as usize)
+        .min(ui.render_h());
+
+    (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
+}
+
+pub(crate) enum UiFrameTarget {
+    Xrgb8888 { cached: Vec<Pixel> },
+    Rgb565 { cached: Vec<Rgb565Pixel> },
 }
 
 impl UiFrameTarget {
     fn cached(ui: &UiDisplay) -> Self {
-        Self {
-            cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
+        Self::cached_with_format(ui, FramebufferFormat::from_env())
+    }
+
+    fn cached_with_format(ui: &UiDisplay, format: FramebufferFormat) -> Self {
+        match format {
+            FramebufferFormat::Xrgb8888 => Self::Xrgb8888 {
+                cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
+            },
+            FramebufferFormat::Rgb565 => Self::Rgb565 {
+                cached: vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()],
+            },
         }
     }
 
     fn open(ui: &UiDisplay) -> Self {
-        println!("slint-render-target=cached");
-        Self::cached(ui)
+        let format = FramebufferFormat::from_env();
+        println!("slint-render-target=cached fb-format={}", format.label());
+        Self::cached_with_format(ui, format)
+    }
+
+    fn render(&mut self, renderer: &SoftwareRenderer, ui: &UiDisplay) -> PhysicalRegion {
+        match self {
+            Self::Xrgb8888 { cached } => renderer.render(cached, ui.render_w()),
+            Self::Rgb565 { cached } => renderer.render(cached, ui.render_w()),
+        }
     }
 
     fn label(&self) -> &'static str {
-        "cached"
-    }
-
-    fn render_buffer_mut(&mut self) -> &mut [Pixel] {
-        &mut self.cached
+        match self {
+            Self::Xrgb8888 { .. } => "cached-8888",
+            Self::Rgb565 { .. } => "cached-565",
+        }
     }
 
     fn present_rect(
@@ -483,8 +601,61 @@ impl UiFrameTarget {
         rect: DirtyRect,
     ) -> u32 {
         let _ = f;
-        copy_cached_rect(disp, ui, &self.cached, rect);
+        match self {
+            Self::Xrgb8888 { cached } => copy_cached_rect(disp, ui, cached, rect),
+            Self::Rgb565 { cached } => copy_cached_rect_565(disp, ui, cached, rect),
+        }
         rect.rows()
+    }
+
+    fn blit_raw_preview(
+        &mut self,
+        ui: &UiDisplay,
+        frame: &PreviewRawFrame<'_>,
+    ) -> Option<DirtyRect> {
+        let rect = raw_preview_image_rect(ui, frame)?;
+        let screen = preview_screen_rect(ui);
+        let image_x =
+            screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - frame.display_w as isize) / 2;
+        let image_y =
+            screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - frame.display_h as isize) / 2;
+        let scale_x = (frame.display_w / frame.source_w).max(1) as usize;
+        let scale_y = (frame.display_h / frame.source_h).max(1) as usize;
+        let src_w = frame.source_w as usize;
+        let src_h = frame.source_h as usize;
+
+        match self {
+            Self::Xrgb8888 { cached } => {
+                for y in rect.y0..rect.y1 {
+                    let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
+                    let row = y * ui.render_w();
+                    for x in rect.x0..rect.x1 {
+                        let src_x =
+                            ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
+                        let si = (src_y * src_w + src_x) * 3;
+                        cached[row + x] =
+                            Pixel::from_rgb(frame.rgb[si], frame.rgb[si + 1], frame.rgb[si + 2]);
+                    }
+                }
+            }
+            Self::Rgb565 { cached } => {
+                for y in rect.y0..rect.y1 {
+                    let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
+                    let row = y * ui.render_w();
+                    for x in rect.x0..rect.x1 {
+                        let src_x =
+                            ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
+                        let si = (src_y * src_w + src_x) * 3;
+                        cached[row + x] = <Rgb565Pixel as TargetPixel>::from_rgb(
+                            frame.rgb[si],
+                            frame.rgb[si + 1],
+                            frame.rgb[si + 2],
+                        );
+                    }
+                }
+            }
+        }
+        Some(rect)
     }
 
     fn present_rows(
@@ -496,7 +667,10 @@ impl UiFrameTarget {
         y1: usize,
     ) -> u32 {
         let _ = f;
-        copy_cached_rows(disp, ui, &self.cached, y0, y1);
+        match self {
+            Self::Xrgb8888 { cached } => copy_cached_rows(disp, ui, cached, y0, y1),
+            Self::Rgb565 { cached } => copy_cached_rows_565(disp, ui, cached, y0, y1),
+        }
         y1.saturating_sub(y0) as u32
     }
 
@@ -512,6 +686,31 @@ impl UiFrameTarget {
     ) {
         let _ = ui;
         disp.copy_rect_from(x, y, w, h, src);
+    }
+}
+
+fn blit_raw_preview_if_needed(
+    target: &mut UiFrameTarget,
+    ui: &UiDisplay,
+    preview: &mut PreviewState,
+    slint_dirty: Option<DirtyRect>,
+) -> Option<DirtyRect> {
+    let raw_dirty = preview.take_raw_dirty();
+    let slint_touched_preview = slint_dirty
+        .and_then(|rect| rect.intersection(preview_screen_rect(ui)))
+        .is_some();
+    if !raw_dirty && !slint_touched_preview {
+        return None;
+    }
+    let frame = preview.raw_frame()?;
+    let raw_rect = target.blit_raw_preview(ui, &frame)?;
+    if slint_dirty
+        .and_then(|rect| rect.intersection(raw_rect))
+        .is_some()
+    {
+        None
+    } else {
+        Some(raw_rect)
     }
 }
 
@@ -578,8 +777,12 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    println!("ui-fb-mode=temporary {UI_FB_W}x{UI_FB_H} fpga-scale=1920x1080 restore=on-drop");
-    let _fb_mode_guard = match FbModeGuard::set_temporary(UI_FB_W, UI_FB_H) {
+    let fb_format = FramebufferFormat::from_env();
+    println!(
+        "ui-fb-mode=temporary {UI_FB_W}x{UI_FB_H} format={} fpga-scale=1920x1080 restore=on-drop",
+        fb_format.label()
+    );
+    let _fb_mode_guard = match FbModeGuard::set_temporary_format(UI_FB_W, UI_FB_H, fb_format) {
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("failed to set temporary framebuffer mode for FPGA-scaled UI: {e}");
@@ -588,7 +791,7 @@ pub fn run_ui(f: &mut Fpga) {
     };
 
     println!("display-open-path=temporary-fb-fpga-scale");
-    let mut disp = match Display::open(UI_FB_W, UI_FB_H) {
+    let mut disp = match Display::open_with_format(UI_FB_W, UI_FB_H, fb_format) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
@@ -624,7 +827,7 @@ pub fn run_ui(f: &mut Fpga) {
             disp.height()
         ),
     );
-    let flag = match f.fb_enable(
+    let flag = match f.fb_enable_format(
         0,
         disp.width() as u16,
         disp.height() as u16,
@@ -632,6 +835,7 @@ pub fn run_ui(f: &mut Fpga) {
         Some(0),
         Some(0),
         set_vga_fb,
+        fb_format,
     ) {
         Ok(flag) => flag,
         Err(e) => {
@@ -1770,7 +1974,7 @@ fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t1 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+                let region = target.render(renderer, ui);
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t2 = Instant::now();
@@ -1811,7 +2015,7 @@ fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+                let region = target.render(renderer, ui);
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t3 = Instant::now();
@@ -2978,7 +3182,7 @@ fn run_controller_loop(
 fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
-        if let Err(e) = f.fb_enable(
+        if let Err(e) = f.fb_enable_format(
             0,
             ui.fb_w() as u16,
             ui.fb_h() as u16,
@@ -2986,6 +3190,7 @@ fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) 
             Some(0),
             Some(0),
             std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+            FramebufferFormat::from_env(),
         ) {
             eprintln!("failed to recover Slint framebuffer route after launch failure: {e}");
         }
@@ -3150,7 +3355,7 @@ fn run_arcade_page_loop(
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+            let region = target.render(renderer, ui);
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
@@ -3300,6 +3505,7 @@ fn run_preview_scroll_bench_loop(
             eprintln!("preview_scroll_bench catalog cache load failed: {e}");
             empty_arcade_catalog(&arcade_root)
         });
+    apply_forced_arcade_selected(&mut nav, &catalog);
     let games = active_system_games(&catalog, &nav);
     let active_title = if preview_stress {
         "Screenshot stress".to_string()
@@ -3388,7 +3594,7 @@ fn run_preview_scroll_bench_loop(
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+            let region = target.render(renderer, ui);
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
@@ -3402,6 +3608,7 @@ fn run_preview_scroll_bench_loop(
             });
             arcade_list_renderer.draw(&games, nav.arcade.visual_index, force_arcade_redraw)
         };
+        let raw_preview_rect = blit_raw_preview_if_needed(&mut target, ui, &mut preview, this_rect);
         let custom_draw_done = Instant::now();
         let _pace = pacer.wait();
         let frame_t3 = Instant::now();
@@ -3411,6 +3618,11 @@ fn run_preview_scroll_bench_loop(
             let cached_copy_start = Instant::now();
             copied_rows = target.present_rect(f, disp, ui, rect);
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
+        }
+        if let Some(rect) = raw_preview_rect {
+            let cached_copy_start = Instant::now();
+            copied_rows += target.present_rect(f, disp, ui, rect);
+            cached_present_frame_us += cached_copy_start.elapsed().as_micros();
         }
         let arcade_update_label = match arcade_list_rect.as_ref() {
             Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
@@ -3678,6 +3890,7 @@ fn run_launcher_loop(
                         catalog = ready_catalog;
                         catalog_version = catalog_version.wrapping_add(1);
                         catalog_ready = true;
+                        apply_forced_arcade_selected(&mut nav, &catalog);
                         let cached_before_refresh = summary.is_none();
                         catalog_refresh_done = !cached_before_refresh;
                         print_startup_event(
@@ -3869,8 +4082,7 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region =
-                                        renderer.render(target.render_buffer_mut(), ui.render_w());
+                                    let region = target.render(renderer, ui);
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
@@ -3900,8 +4112,7 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region =
-                                        renderer.render(target.render_buffer_mut(), ui.render_w());
+                                    let region = target.render(renderer, ui);
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
@@ -3931,8 +4142,7 @@ fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region =
-                                        renderer.render(target.render_buffer_mut(), ui.render_w());
+                                    let region = target.render(renderer, ui);
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
@@ -3967,7 +4177,7 @@ fn run_launcher_loop(
                         window.request_redraw();
                         update_slint_animations(animation_clock);
                         window.draw_if_needed(|renderer| {
-                            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+                            let region = target.render(renderer, ui);
                             let _ = region;
                         });
                         let _pace = pacer.wait();
@@ -4090,7 +4300,7 @@ fn run_launcher_loop(
         let frame_t1 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         window.draw_if_needed(|renderer| {
-            let region = renderer.render(target.render_buffer_mut(), ui.render_w());
+            let region = target.render(renderer, ui);
             this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
         });
         let frame_t2 = Instant::now();
@@ -4108,6 +4318,7 @@ fn run_launcher_loop(
         } else {
             None
         };
+        let raw_preview_rect = blit_raw_preview_if_needed(target, ui, &mut preview, this_rect);
         let custom_draw_done = Instant::now();
         if !first_render_logged {
             first_render_logged = true;
@@ -4143,6 +4354,11 @@ fn run_launcher_loop(
             let cached_copy_start = Instant::now();
             copied_rows = target.present_rect(f, disp, ui, rect);
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
+        }
+        if let Some(rect) = raw_preview_rect {
+            let cached_copy_start = Instant::now();
+            copied_rows += target.present_rect(f, disp, ui, rect);
+            cached_present_frame_us += cached_copy_start.elapsed().as_micros();
         }
         let arcade_update_label = match arcade_list_rect.as_ref() {
             Some(ArcadeListUpdate::Full(_)) => "full".to_string(),

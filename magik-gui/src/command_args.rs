@@ -3,6 +3,7 @@ pub const COMMANDS: &[&str] = &[
     "route",
     "fb",
     "fb-current",
+    "fb-format-smoke",
     "ui",
     "scenes",
     "effects",

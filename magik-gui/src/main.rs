@@ -45,6 +45,7 @@ mod ui_runner;
 mod video_player;
 mod vt;
 
+pub use mister_magik_fb::fb_format;
 pub use mister_magik_fb::{
     arcade_catalog, command_args, controller_db, input_repeat, input_state, library_db,
     preview_worker,
@@ -52,6 +53,8 @@ pub use mister_magik_fb::{
 
 use fb::{Display, Pixel, VsyncPacer};
 use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
+use mister_magik_fb::fb_format::FramebufferFormat;
+use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
@@ -96,6 +99,7 @@ fn main() {
         "route" => route_framebuffer(&mut f),
         "fb" => fb_current_probe(&mut f),
         "fb-current" => fb_current_probe(&mut f),
+        "fb-format-smoke" => fb_format_smoke(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "effects" => ui_runner::print_effects(),
@@ -536,6 +540,111 @@ fn fb_current_probe(f: &mut Fpga) {
     std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
+fn fb_format_smoke(f: &mut Fpga) {
+    let _vt = vt::VtGraphicsGuard::enter_or_warn();
+    let format_arg = std::env::args().nth(2).unwrap_or_else(|| "8888".into());
+    let format = match FramebufferFormat::from_label(&format_arg) {
+        Some(format) => format,
+        None => {
+            eprintln!("fb-format-smoke format must be 8888 or 565");
+            std::process::exit(2);
+        }
+    };
+    let secs = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(10);
+    let route = std::env::args().nth(4).unwrap_or_else(|| "normal".into());
+    let previous = match Display::current_info() {
+        Ok(info) => info,
+        Err(e) => {
+            eprintln!("failed to read current framebuffer mode: {e}");
+            std::process::exit(1);
+        }
+    };
+    const W: usize = 960;
+    const H: usize = 540;
+    const HDMI_W: u16 = 1920;
+    const HDMI_H: u16 = 1080;
+    let scan_mode = Mode::framebuffer_sized(HDMI_W, HDMI_H);
+    if let Err(e) = Display::write_mister_mode_format(format, W, H, format.stride_bytes(W)) {
+        eprintln!("failed to set framebuffer mode for smoke: {e}");
+        std::process::exit(1);
+    }
+    let restore = || {
+        if let Err(e) = Display::restore_mister_mode(previous) {
+            eprintln!("warning: failed to restore framebuffer mode: {e}");
+        }
+    };
+    let mut disp = match Display::open_with_format(W, H, format) {
+        Ok(d) => d,
+        Err(e) => {
+            restore();
+            eprintln!("failed to open smoke framebuffer: {e}");
+            std::process::exit(1);
+        }
+    };
+    match format {
+        FramebufferFormat::Xrgb8888 => paint_pattern(disp.buffer_mut(), W, H),
+        FramebufferFormat::Rgb565 => paint_pattern_565(disp.buffer_565_mut(), W, H),
+    }
+    let route_res = match route.as_str() {
+        "normal" => f.fb_enable_format(
+            0,
+            W as u16,
+            H as u16,
+            scan_mode,
+            Some(0),
+            Some(0),
+            false,
+            format,
+        ),
+        "direct" => f.fb_enable_format(
+            0,
+            W as u16,
+            H as u16,
+            scan_mode,
+            Some(0),
+            Some(0),
+            true,
+            format,
+        ),
+        "none" => Ok(0),
+        other => {
+            restore();
+            eprintln!("unknown fb-format-smoke route '{other}' (use normal|direct|none)");
+            std::process::exit(2);
+        }
+    };
+    match route_res {
+        Ok(flag) => println!(
+            "fb-format-smoke: format={} rb={} source={}x{} scan={}x{} stride={} route={} support_flag={flag}",
+            format.label(),
+            if format.rb_from_env() { 1 } else { 0 },
+            W,
+            H,
+            HDMI_W,
+            HDMI_H,
+            format.stride_bytes(W),
+            route
+        ),
+        Err(e) => {
+            restore();
+            eprintln!("failed to route smoke framebuffer: {e}");
+            std::process::exit(1);
+        }
+    }
+    if secs == 0 {
+        println!("holding forever - stop this process or reboot when done");
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
+    println!("holding {secs}s - check HDMI for RGB/color-ramp smoke pattern...");
+    std::thread::sleep(std::time::Duration::from_secs(secs));
+    restore();
+}
+
 fn paint_pattern(buf: &mut [Pixel], w: usize, h: usize) {
     const RED: u32 = 0x00FF_0000;
     const GREEN: u32 = 0x0000_FF00;
@@ -556,6 +665,15 @@ fn paint_pattern(buf: &mut [Pixel], w: usize, h: usize) {
     fill_rect_strided(buf, w, w.saturating_sub(b), 0, w, h, WHITE);
     fill_rect_strided(buf, w, 0, h / 2 - b / 2, w, h / 2 + b / 2, WHITE);
     fill_rect_strided(buf, w, w / 2 - b / 2, 0, w / 2 + b / 2, h, WHITE);
+}
+
+fn paint_pattern_565(buf: &mut [Rgb565Pixel], w: usize, h: usize) {
+    let mut tmp = vec![Pixel(0); w * h];
+    paint_pattern(&mut tmp, w, h);
+    for (dst, src) in buf.iter_mut().zip(tmp) {
+        let p = src.0 & 0x00ff_ffff;
+        *dst = <Rgb565Pixel as TargetPixel>::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8);
+    }
 }
 
 fn fill_rect_strided(
