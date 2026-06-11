@@ -1549,7 +1549,9 @@ fn sync_bridge_launcher(
     loading_detail: &str,
     catalog: Option<&ArcadeCatalog>,
     preview: &mut PreviewState,
-) -> Option<Vec<ArcadeGameEntry>> {
+    models: &mut LauncherBridgeModels,
+    catalog_version: usize,
+) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
@@ -1565,15 +1567,15 @@ fn sync_bridge_launcher(
     bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_arcade_selected(nav.arcade.selected as i32);
     bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
-    let mut active_games_for_preview: Option<Vec<ArcadeGameEntry>> = None;
+    let mut active_games_for_preview: Option<&[ArcadeGameEntry]> = None;
     if let Some(catalog) = catalog {
-        let games = active_system_games(catalog, nav);
+        let games = active_system_game_slice(catalog, nav);
         let title = active_system(catalog, nav)
             .map(|system| system.title.clone())
             .unwrap_or_else(|| "Games".to_string());
-        bridge.set_game_systems(slint_game_systems(catalog));
+        bridge.set_game_systems(models.game_systems(catalog, catalog_version));
         bridge.set_active_system_title(title.into());
-        bridge.set_arcade_games(slint_arcade_games(&games));
+        bridge.set_arcade_games(models.arcade_games(catalog, nav, catalog_version));
         active_games_for_preview = Some(games);
     }
     bridge.set_confirm_visible(nav.confirm_action.is_some());
@@ -1607,21 +1609,14 @@ fn sync_bridge_launcher(
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
-        let games;
-        let games = if let Some(games) = active_games_for_preview.as_deref() {
-            games
-        } else {
-            games = catalog
-                .map(|catalog| active_system_games(catalog, nav))
-                .unwrap_or_default();
-            &games
-        };
-        let _ = request_arcade_preview_window(&bridge, &games, nav.arcade.selected, preview);
+        let games = active_games_for_preview
+            .or_else(|| catalog.map(|catalog| active_system_game_slice(catalog, nav)))
+            .unwrap_or(&[]);
+        let _ = request_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
     }
     sync_setup_bridge(&bridge, pad, setup);
-    active_games_for_preview
 }
 
 fn sync_bridge_launcher_light(
@@ -1652,13 +1647,7 @@ fn sync_bridge_launcher_light(
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
-        let games;
-        let games = if let Some(games) = active_arcade_games {
-            games
-        } else {
-            games = active_system_games(catalog, nav);
-            &games
-        };
+        let games = active_arcade_games.unwrap_or_else(|| active_system_game_slice(catalog, nav));
         schedule_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
@@ -2172,9 +2161,13 @@ fn active_system<'a>(
 }
 
 fn active_system_games(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<ArcadeGameEntry> {
+    active_system_game_slice(catalog, nav).to_vec()
+}
+
+fn active_system_game_slice<'a>(catalog: &'a ArcadeCatalog, nav: &LauncherNav) -> &'a [ArcadeGameEntry] {
     active_system(catalog, nav)
-        .map(|system| catalog.system_preview_games(&system.id))
-        .unwrap_or_default()
+        .map(|system| catalog.system_preview_game_slice(&system.id))
+        .unwrap_or(&[])
 }
 
 fn start_library_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
@@ -2343,6 +2336,48 @@ impl LauncherBridgeKey {
             confirm_selected: nav.confirm_selected,
             arcade_selected: nav.arcade.selected,
         }
+    }
+}
+
+#[derive(Default)]
+struct LauncherBridgeModels {
+    game_systems_key: Option<usize>,
+    game_systems: Option<ModelRc<slint_ui::launcher::GameSystem>>,
+    arcade_games_key: Option<(usize, usize)>,
+    arcade_games: Option<ModelRc<slint_ui::launcher::ArcadeGame>>,
+}
+
+impl LauncherBridgeModels {
+    fn game_systems(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        catalog_version: usize,
+    ) -> ModelRc<slint_ui::launcher::GameSystem> {
+        if self.game_systems_key != Some(catalog_version) {
+            self.game_systems = Some(slint_game_systems(catalog));
+            self.game_systems_key = Some(catalog_version);
+        }
+        self.game_systems
+            .as_ref()
+            .expect("game system model should be initialized")
+            .clone()
+    }
+
+    fn arcade_games(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+        catalog_version: usize,
+    ) -> ModelRc<slint_ui::launcher::ArcadeGame> {
+        let key = (catalog_version, nav.selected);
+        if self.arcade_games_key != Some(key) {
+            self.arcade_games = Some(slint_arcade_games(active_system_game_slice(catalog, nav)));
+            self.arcade_games_key = Some(key);
+        }
+        self.arcade_games
+            .as_ref()
+            .expect("arcade game model should be initialized")
+            .clone()
     }
 }
 
@@ -5876,8 +5911,8 @@ fn run_launcher_loop(
     let mut preview = PreviewState::new();
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let cpu = cpu_profile::start();
-    let mut active_arcade_games_cache: Vec<ArcadeGameEntry> = Vec::new();
-    let mut active_arcade_games_cache_key: Option<(usize, usize)> = None;
+    let mut bridge_models = LauncherBridgeModels::default();
+    let mut catalog_version = 0usize;
     let mut preview_scroll_trace = std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
         .ok()
         .and_then(|path| {
@@ -5909,7 +5944,7 @@ fn run_launcher_loop(
     let catalog_rx = Some(start_library_catalog_worker(arcade_root.clone()));
     let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    bridge.set_game_systems(slint_game_systems(&catalog));
+    bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version));
     bridge.set_catalog_scan_visible(!catalog_ready);
     bridge.set_catalog_scan_title(if catalog_ready {
         if catalog_refresh {
@@ -5934,6 +5969,8 @@ fn run_launcher_loop(
         "",
         Some(&catalog),
         &mut preview,
+        &mut bridge_models,
+        catalog_version,
     );
     window.request_redraw();
     let mut first_frame_logged = false;
@@ -5987,7 +6024,7 @@ fn run_launcher_loop(
                         load_us,
                     } => {
                         catalog = ready_catalog;
-                        active_arcade_games_cache_key = None;
+                        catalog_version = catalog_version.wrapping_add(1);
                         catalog_ready = true;
                         let cached_before_refresh = summary.is_none();
                         catalog_refresh_done = !cached_before_refresh;
@@ -6037,6 +6074,8 @@ fn run_launcher_loop(
                             "",
                             Some(&catalog),
                             &mut preview,
+                            &mut bridge_models,
+                            catalog_version,
                         );
                         full_bridge_dirty = true;
                     }
@@ -6172,6 +6211,8 @@ fn run_launcher_loop(
                                     "Return to Magik after reboot",
                                     Some(&catalog),
                                     &mut preview,
+                                    &mut bridge_models,
+                                    catalog_version,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -6201,6 +6242,8 @@ fn run_launcher_loop(
                                     "Rebooting MiSTer",
                                     Some(&catalog),
                                     &mut preview,
+                                    &mut bridge_models,
+                                    catalog_version,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -6230,6 +6273,8 @@ fn run_launcher_loop(
                                     "Please wait",
                                     Some(&catalog),
                                     &mut preview,
+                                    &mut bridge_models,
+                                    catalog_version,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -6264,6 +6309,8 @@ fn run_launcher_loop(
                             "",
                             Some(&catalog),
                             &mut preview,
+                            &mut bridge_models,
+                            catalog_version,
                         );
                         window.request_redraw();
                         update_slint_animations(animation_clock);
@@ -6291,6 +6338,8 @@ fn run_launcher_loop(
                                     "",
                                     Some(&catalog),
                                     &mut preview,
+                                    &mut bridge_models,
+                                    catalog_version,
                                 );
                                 recover_launcher_ui(f, ui, &mut launch_spawned_mister);
                             }
@@ -6314,7 +6363,7 @@ fn run_launcher_loop(
             }
 
             if full_bridge_dirty {
-                if let Some(active_games) = sync_bridge_launcher(
+                sync_bridge_launcher(
                     &app,
                     &pad,
                     &nav,
@@ -6323,19 +6372,13 @@ fn run_launcher_loop(
                     "",
                     Some(&catalog),
                     &mut preview,
-                ) {
-                    active_arcade_games_cache = active_games;
-                    active_arcade_games_cache_key = Some((nav.selected, catalog.len()));
-                }
+                    &mut bridge_models,
+                    catalog_version,
+                );
                 window.request_redraw();
             } else if light_bridge_dirty {
                 let active_games = if nav.screen == Screen::Arcade {
-                    let cache_key = (nav.selected, catalog.len());
-                    if active_arcade_games_cache_key != Some(cache_key) {
-                        active_arcade_games_cache = active_system_games(&catalog, &nav);
-                        active_arcade_games_cache_key = Some(cache_key);
-                    }
-                    Some(active_arcade_games_cache.as_slice())
+                    Some(active_system_game_slice(&catalog, &nav))
                 } else {
                     None
                 };
@@ -6368,18 +6411,16 @@ fn run_launcher_loop(
         if launching {
             window.request_redraw();
         }
-        if !launching && nav.screen == Screen::Arcade {
-            let cache_key = (nav.selected, catalog.len());
-            if active_arcade_games_cache_key != Some(cache_key) {
-                active_arcade_games_cache = active_system_games(&catalog, &nav);
-                active_arcade_games_cache_key = Some(cache_key);
-            }
-        }
+        let active_arcade_games = if !launching && nav.screen == Screen::Arcade {
+            active_system_game_slice(&catalog, &nav)
+        } else {
+            &[]
+        };
         if dirty_opt && !launching && nav.screen == Screen::Arcade {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if schedule_arcade_preview_window(
                 &bridge,
-                &active_arcade_games_cache,
+                active_arcade_games,
                 nav.arcade.selected,
                 &mut preview,
             ) {
@@ -6407,7 +6448,7 @@ fn run_launcher_loop(
                     .is_some()
             });
             arcade_list_renderer.draw(
-                &active_arcade_games_cache,
+                active_arcade_games,
                 nav.arcade.visual_index,
                 force_arcade_redraw,
             )
