@@ -5,10 +5,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
-MISTER_PASS="${MISTER_PASS:-1}"
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister run '
+scripts/mister run '
 set -e
 mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
@@ -51,6 +49,6 @@ echo "=== restored inittab ==="
 grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
 '
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister ini-restore-stock
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister reboot-wait
+scripts/mister ini-restore-stock
+scripts/mister reboot-wait
 echo "Stock MiSTer boot restored. MiSTer.ini backup left untouched at /media/fat/MiSTer.ini.bak if present."

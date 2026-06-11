@@ -46,9 +46,7 @@ else
 fi
 
 echo "==> Deploying experiment binaries"
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" run '
+"$ROOT/scripts/mister" run '
 set -e
 STAMP=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)
 SNAP="/media/fat/mister-magik/snapshots/$STAMP-deploy"
@@ -63,22 +61,14 @@ kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
 '
 
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" put "$GUI_BIN" "$GUI_REMOTE.upload"
+"$ROOT/scripts/mister" put "$GUI_BIN" "$GUI_REMOTE.upload"
 
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
+"$ROOT/scripts/mister" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
 
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
+"$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
 
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" run '
+"$ROOT/scripts/mister" run '
 set -e
 mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
@@ -113,12 +103,8 @@ echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
 
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" ini-repair-boot
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" ini-repair-arcade-video
+"$ROOT/scripts/mister" ini-repair-boot
+"$ROOT/scripts/mister" ini-repair-arcade-video
 
 echo "==> Installed. Reboot to let stock MiSTer hand off to MiSTer_MagiK via MiSTer.ini main=."
 echo "    Restore stock with scripts/restore-stock-boot.sh."

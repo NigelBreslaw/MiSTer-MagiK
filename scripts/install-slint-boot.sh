@@ -7,11 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
-MISTER_PASS="${MISTER_PASS:-1}"
-
 echo "==> Configure device (stock inittab + MiSTer.ini main=MiSTer_MagiK)"
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister run '
+scripts/mister run '
 set -e
 if [ ! -x /media/fat/MiSTer_MagiK ]; then
   echo "ERROR: /media/fat/MiSTer_MagiK is missing or not executable"
@@ -62,10 +59,10 @@ echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister ini-repair-boot
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister ini-repair-arcade-video
+scripts/mister ini-repair-boot
+scripts/mister ini-repair-arcade-video
 
 echo "==> Reboot to apply"
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister reboot-wait
+scripts/mister reboot-wait
 
 echo "Done. Stock MiSTer should hand off to MiSTer_MagiK via MiSTer.ini main=."
