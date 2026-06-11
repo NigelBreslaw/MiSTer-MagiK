@@ -301,7 +301,7 @@ fn render_screensaver_frame(
 ) {
     clear(dst, color565(2, 4, 10));
     match mode {
-        ScreensaverMode::AttractWall => render_contact_sheet(dst, w, h, images, frame, 6, 4, false),
+        ScreensaverMode::AttractWall => render_attract_wall(dst, w, h, images, frame),
         ScreensaverMode::MvsCarousel => render_carousel(dst, w, h, images, frame),
         ScreensaverMode::SuperScalerFlyby => render_flyby(dst, w, h, images, frame),
         ScreensaverMode::StarfieldCabinets => {
@@ -313,8 +313,7 @@ fn render_screensaver_frame(
         ScreensaverMode::RasterGallery => render_raster_gallery(dst, w, h, images, frame),
         ScreensaverMode::KefrensScreenshotBars => render_kefrens(dst, w, h, images, frame),
         ScreensaverMode::PreviewPlasmaCollage => {
-            render_plasma(dst, w, h, frame);
-            render_contact_sheet(dst, w, h, images, frame / 3, 4, 3, true);
+            render_plasma_collage(dst, w, h, images, frame);
         }
         ScreensaverMode::PhosphorGrid => render_phosphor_grid(dst, w, h, images, frame),
         ScreensaverMode::WarpTunnel => render_warp(dst, w, h, images, frame),
@@ -379,6 +378,99 @@ fn blit_scaled(
     }
 }
 
+fn blit_slice_scaled(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    img: &SaverImage,
+    src_x0: usize,
+    src_w: usize,
+    x: isize,
+    y: isize,
+    out_w: usize,
+    out_h: usize,
+    tint: u8,
+) {
+    if out_w == 0 || out_h == 0 || src_w == 0 {
+        return;
+    }
+    let src_x0 = src_x0.min(img.w - 1);
+    let src_w = src_w.min(img.w.saturating_sub(src_x0)).max(1);
+    for yy in 0..out_h {
+        let dy = y + yy as isize;
+        if dy < 0 || dy >= screen_h as isize {
+            continue;
+        }
+        let sy = yy * img.h / out_h;
+        for xx in 0..out_w {
+            let dx = x + xx as isize;
+            if dx < 0 || dx >= screen_w as isize {
+                continue;
+            }
+            let sx = src_x0 + (xx * src_w / out_w).min(src_w - 1);
+            let mut px = sample_image(img, sx, sy);
+            if tint < 255 {
+                px = blend_565(color565(0, 0, 18), px, tint);
+            }
+            dst[dy as usize * screen_w + dx as usize] = px;
+        }
+    }
+}
+
+fn fill_rect(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: Rgb565Pixel,
+) {
+    let x1 = (x + w).min(screen_w);
+    let y1 = (y + h).min(screen_h);
+    for yy in y.min(screen_h)..y1 {
+        dst[yy * screen_w + x.min(screen_w)..yy * screen_w + x1].fill(color);
+    }
+}
+
+fn stroke_rect(
+    dst: &mut [Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: Rgb565Pixel,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    fill_rect(dst, screen_w, screen_h, x, y, w, 2, color);
+    fill_rect(
+        dst,
+        screen_w,
+        screen_h,
+        x,
+        y.saturating_add(h.saturating_sub(2)),
+        w,
+        2,
+        color,
+    );
+    fill_rect(dst, screen_w, screen_h, x, y, 2, h, color);
+    fill_rect(
+        dst,
+        screen_w,
+        screen_h,
+        x.saturating_add(w.saturating_sub(2)),
+        y,
+        2,
+        h,
+        color,
+    );
+}
+
 fn image_at(images: &[SaverImage], idx: usize) -> Option<&SaverImage> {
     if images.is_empty() {
         None
@@ -421,8 +513,52 @@ fn render_contact_sheet(
                     cell_h.saturating_sub(16),
                     230,
                 );
+                stroke_rect(
+                    dst,
+                    w,
+                    h,
+                    x.max(0) as usize,
+                    y.max(0) as usize,
+                    cell_w.saturating_sub(16),
+                    cell_h.saturating_sub(16),
+                    color565(40, 250, 220),
+                );
             }
         }
+    }
+}
+
+fn render_attract_wall(
+    dst: &mut [Rgb565Pixel],
+    w: usize,
+    h: usize,
+    images: &[SaverImage],
+    frame: u64,
+) {
+    let slot_w = 320usize;
+    let slot_h = 224usize;
+    let gutter_y = (h.saturating_sub(slot_h * 2)) / 3;
+    let page = (frame / 360) as usize;
+    let active = ((frame / 60) as usize) % 6;
+    let reveal = ((frame % 60) as usize * slot_w) / 60;
+    for slot in 0..6 {
+        let col = slot % 3;
+        let row = slot / 3;
+        let x = col * slot_w;
+        let y = gutter_y + row * (slot_h + gutter_y);
+        fill_rect(dst, w, h, x, y, slot_w, slot_h, color565(0, 0, 0));
+        if let Some(img) = image_at(images, page * 6 + slot) {
+            blit_scaled(dst, w, h, img, x as isize, y as isize, slot_w, slot_h, 230);
+        }
+        if slot == active && reveal > 0 {
+            if let Some(next) = image_at(images, (page + 1) * 6 + slot) {
+                let src_w = (next.w * reveal / slot_w.max(1)).max(1);
+                blit_slice_scaled(
+                    dst, w, h, next, 0, src_w, x as isize, y as isize, reveal, slot_h, 255,
+                );
+            }
+        }
+        stroke_rect(dst, w, h, x, y, slot_w, slot_h, color565(70, 255, 210));
     }
 }
 
@@ -444,8 +580,8 @@ fn render_flyby(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImag
     render_starfield(dst, w, h, frame);
     for i in 0..5 {
         if let Some(img) = image_at(images, i + frame as usize / 100) {
-            let t = ((frame as usize * 5 + i * 97) % 360).max(1);
-            let out_w = 48 + t;
+            let scale_idx = ((frame as usize / 12 + i * 2) % 6).max(1);
+            let out_w = [64, 96, 128, 160, 224, 320][scale_idx];
             let out_h = out_w * 3 / 4;
             let x = (w / 2 + (i * 173 + frame as usize * 2) % w) as isize - out_w as isize / 2;
             let y = (h / 2 + (i * 71 + frame as usize) % (h / 2)) as isize - out_h as isize / 2;
@@ -469,18 +605,45 @@ fn render_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
 }
 
 fn render_rain(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
-    render_plasma(dst, w, h, frame / 2);
-    for i in 0..18 {
+    for y in 0..h {
+        let c = (y * 60 / h) as u8;
+        fill_rect(dst, w, h, 0, y, w, 1, color565(0, c / 3, c));
+    }
+    for i in 0..28 {
         if let Some(img) = image_at(images, i + frame as usize / 75) {
-            let x = ((i * 59 + frame as usize * 2) % (w + 180)) as isize - 90;
-            let y = ((i * 113 + frame as usize * (2 + i % 3)) % (h + 150)) as isize - 120;
-            blit_scaled(dst, w, h, img, x, y, 112, 84, 210);
+            let x = ((i * 47) % (w + 120)) as isize - 60;
+            let y = ((i * 83 + frame as usize * (2 + i % 4)) % (h + 96)) as isize - 72;
+            let (tw, th) = if i & 1 == 0 { (80, 56) } else { (120, 84) };
+            blit_scaled(dst, w, h, img, x, y, tw, th, 205);
         }
     }
 }
 
 fn render_tilemap(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
-    render_contact_sheet(dst, w, h, images, frame / 2, 8, 5, true);
+    let cols = 12usize;
+    let rows = 8usize;
+    let cell_w = w / cols;
+    let cell_h = h / rows;
+    let page = (frame / 180) as usize;
+    for ty in 0..rows {
+        for tx in 0..cols {
+            if let Some(img) = image_at(images, page + ty * cols + tx) {
+                let flash = hash2_u8(tx + page, ty) < (frame as u8).wrapping_mul(3);
+                let tint = if flash { 255 } else { 185 };
+                blit_scaled(
+                    dst,
+                    w,
+                    h,
+                    img,
+                    (tx * cell_w) as isize,
+                    (ty * cell_h) as isize,
+                    cell_w.saturating_sub(2),
+                    cell_h.saturating_sub(2),
+                    tint,
+                );
+            }
+        }
+    }
 }
 
 fn render_raster_gallery(
@@ -496,14 +659,41 @@ fn render_raster_gallery(
             dst[y * w + x] = color565(c / 3, c, 80);
         }
     }
-    render_contact_sheet(dst, w, h, images, frame, 5, 3, true);
+    if let Some(curr) = image_at(images, frame as usize / 240) {
+        blit_scaled(dst, w, h, curr, 220, 70, 520, 390, 230);
+    }
+    if let Some(next) = image_at(images, frame as usize / 240 + 1) {
+        let reveal_y = ((frame as usize % 180) * h) / 180;
+        for y in (0..reveal_y).step_by(8) {
+            blit_slice_scaled(dst, w, h, next, 0, next.w, 220, y as isize, 520, 6, 255);
+        }
+    }
+    stroke_rect(dst, w, h, 218, 68, 524, 394, color565(255, 80, 200));
 }
 
 fn render_kefrens(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
-    for y in 0..h {
-        let shift = triangle_wave_u8(y / 3, frame as u8) as isize - 128;
-        if let Some(img) = image_at(images, y / 36 + frame as usize / 120) {
-            blit_scaled(dst, w, h, img, shift - 80, y as isize, w + 160, 2, 240);
+    let bar_w = 24usize;
+    let bars = w / bar_w + 3;
+    for bar in 0..bars {
+        if let Some(img) = image_at(images, bar + frame as usize / 120) {
+            let base_x = bar as isize * bar_w as isize - bar_w as isize;
+            let src_x = (bar * 23 + frame as usize / 3) % img.w;
+            for band_y in (0..h).step_by(6) {
+                let wave = triangle_wave_u8(band_y / 3 + bar * 5, frame as u8) as isize / 5 - 25;
+                blit_slice_scaled(
+                    dst,
+                    w,
+                    h,
+                    img,
+                    src_x,
+                    bar_w.min(img.w),
+                    base_x + wave,
+                    band_y as isize,
+                    bar_w,
+                    6,
+                    240,
+                );
+            }
         }
     }
 }
@@ -517,6 +707,36 @@ fn render_plasma(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
     }
 }
 
+fn render_plasma_collage(
+    dst: &mut [Rgb565Pixel],
+    w: usize,
+    h: usize,
+    images: &[SaverImage],
+    frame: u64,
+) {
+    let tile = 16usize;
+    let page = frame as usize / 180;
+    for y in (0..h).step_by(tile) {
+        for x in (0..w).step_by(tile) {
+            let selector = plasma_gate(x / tile, y / tile, frame as u8) as usize;
+            if let Some(img) = image_at(images, page + selector / 32) {
+                let sx = (x * img.w / w + selector) % img.w;
+                let sy = (y * img.h / h + selector / 2) % img.h;
+                for yy in 0..tile.min(h - y) {
+                    for xx in 0..tile.min(w - x) {
+                        let px = sample_image(
+                            img,
+                            (sx + xx * img.w / w.max(1)).min(img.w - 1),
+                            (sy + yy * img.h / h.max(1)).min(img.h - 1),
+                        );
+                        dst[(y + yy) * w + x + xx] = px;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn render_phosphor_grid(
     dst: &mut [Rgb565Pixel],
     w: usize,
@@ -524,30 +744,69 @@ fn render_phosphor_grid(
     images: &[SaverImage],
     frame: u64,
 ) {
-    render_contact_sheet(dst, w, h, images, frame / 4, 6, 4, false);
-    for y in (0..h).step_by(3) {
-        for x in 0..w {
-            dst[y * w + x] = darken_565(dst[y * w + x]);
+    render_tilemap(dst, w, h, images, frame / 4);
+    for px in dst.iter_mut() {
+        *px = blend_565(color565(0, 40, 24), *px, 96);
+    }
+    for y in (0..h).step_by(24) {
+        fill_rect(dst, w, h, 0, y, w, 1, color565(30, 255, 180));
+    }
+    for x in (0..w).step_by(32) {
+        fill_rect(dst, w, h, x, 0, 1, h, color565(20, 180, 150));
+    }
+    if frame % 180 < 12 {
+        for y in (0..h).step_by(3) {
+            for x in 0..w {
+                dst[y * w + x] = brighten_565(dst[y * w + x]);
+            }
+        }
+    } else {
+        for y in (0..h).step_by(3) {
+            for x in 0..w {
+                dst[y * w + x] = darken_565(dst[y * w + x]);
+            }
         }
     }
 }
 
 fn render_warp(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
     render_starfield(dst, w, h, frame);
-    if let Some(img) = image_at(images, frame as usize / 120) {
-        for i in 0..10 {
-            let size = 60 + i * 36 + (frame as usize % 36);
-            blit_scaled(
+    for i in 0..12 {
+        if let Some(img) = image_at(images, i + frame as usize / 150) {
+            let inset_x = i * 34 + (frame as usize % 34);
+            let inset_y = i * 18 + (frame as usize % 18);
+            if inset_x * 2 >= w || inset_y * 2 >= h {
+                continue;
+            }
+            let rw = w - inset_x * 2;
+            let rh = h - inset_y * 2;
+            blit_slice_scaled(
                 dst,
                 w,
                 h,
                 img,
-                w as isize / 2 - size as isize / 2,
-                h as isize / 2 - size as isize / 3,
-                size,
-                size * 2 / 3,
-                120,
+                0,
+                img.w,
+                inset_x as isize,
+                inset_y as isize,
+                rw,
+                4,
+                180,
             );
+            blit_slice_scaled(
+                dst,
+                w,
+                h,
+                img,
+                0,
+                img.w,
+                inset_x as isize,
+                (inset_y + rh.saturating_sub(4)) as isize,
+                rw,
+                4,
+                180,
+            );
+            stroke_rect(dst, w, h, inset_x, inset_y, rw, rh, color565(60, 220, 255));
         }
     }
 }
@@ -575,6 +834,11 @@ fn render_scanner(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverIm
             dst[y * w + x] = brighten_565(dst[y * w + x]);
         }
     }
+    let active = (scan_y * 7 / h).min(6);
+    if let Some(img) = image_at(images, active + frame as usize / 120) {
+        blit_scaled(dst, w, h, img, 360, 170, 240, 180, 255);
+        stroke_rect(dst, w, h, 358, 168, 244, 184, color565(255, 255, 255));
+    }
 }
 
 fn render_parade(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
@@ -589,7 +853,7 @@ fn render_parade(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverIma
 }
 
 fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
-    render_plasma(dst, w, h, frame / 3);
+    fill_rect(dst, w, h, 0, 0, w, h, color565(2, 4, 16));
     for i in 0..8 {
         if let Some(img) = image_at(images, i + frame as usize / 100) {
             blit_scaled(
@@ -616,6 +880,10 @@ fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverIm
             );
         }
     }
+    if let Some(img) = image_at(images, frame as usize / 180) {
+        blit_scaled(dst, w, h, img, 280, 150, 400, 260, 245);
+        stroke_rect(dst, w, h, 276, 146, 408, 268, color565(255, 60, 180));
+    }
 }
 
 fn render_random_loader(
@@ -625,8 +893,8 @@ fn render_random_loader(
     images: &[SaverImage],
     frame: u64,
 ) {
-    let tiles_x = 12;
-    let tiles_y = 7;
+    let tiles_x = 15;
+    let tiles_y = 9;
     for ty in 0..tiles_y {
         for tx in 0..tiles_x {
             let idx = tx + ty * tiles_x + frame as usize / 30;
@@ -642,7 +910,24 @@ fn render_random_loader(
             }
         }
     }
-    render_contact_sheet(dst, w, h, images, frame, 4, 3, true);
+    let loaded_tiles = ((frame as usize * 3) % (tiles_x * tiles_y)).max(1);
+    for tile_idx in 0..loaded_tiles {
+        let tx = tile_idx % tiles_x;
+        let ty = tile_idx / tiles_x;
+        if let Some(img) = image_at(images, tile_idx + frame as usize / 180) {
+            blit_scaled(
+                dst,
+                w,
+                h,
+                img,
+                (tx * w / tiles_x) as isize,
+                (ty * h / tiles_y) as isize,
+                w / tiles_x,
+                h / tiles_y,
+                240,
+            );
+        }
+    }
 }
 
 fn render_color_clash(
@@ -652,12 +937,30 @@ fn render_color_clash(
     images: &[SaverImage],
     frame: u64,
 ) {
-    render_contact_sheet(dst, w, h, images, frame / 3, 6, 4, false);
-    for y in 0..h {
-        for x in 0..w {
-            if ((x / 16 + y / 16 + frame as usize / 8) & 1) == 0 {
-                dst[y * w + x] = brighten_565(dst[y * w + x]);
+    let cell = 16usize;
+    let page = frame as usize / 180;
+    for y in (0..h).step_by(cell) {
+        for x in (0..w).step_by(cell) {
+            if let Some(img) = image_at(images, page + x / cell + y / cell) {
+                let sx = (x * img.w / w) % img.w;
+                let sy = (y * img.h / h) % img.h;
+                let sample = sample_image(img, sx, sy);
+                let bright = if ((x / cell + y / cell + frame as usize / 12) & 1) == 0 {
+                    color565(255, 230, 80)
+                } else {
+                    color565(40, 250, 220)
+                };
+                let dark = color565(10, 12, 30);
+                let color = if (sample.0 & 0x0421) != 0 {
+                    bright
+                } else {
+                    dark
+                };
+                fill_rect(dst, w, h, x, y, cell, cell, color);
             }
         }
+    }
+    if frame % 240 > 180 {
+        render_contact_sheet(dst, w, h, images, frame, 3, 2, false);
     }
 }
