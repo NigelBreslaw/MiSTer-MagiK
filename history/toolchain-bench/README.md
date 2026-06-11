@@ -26,6 +26,13 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
 | `--replace-label` | Drop existing TSV rows for this label before appending (re-run A0) |
 | `--scene-secs N` | Seconds per scene (default **15**, ~105s device for 7 scenes) |
 
+Launcher scenarios are selected with `--launcher-scenario` or
+`MISTER_LAUNCHER_BENCH_SCENARIO`. Use `held-scroll` / `turbo-hold` for arcade
+scrolling conclusions. Use `model-sync` only for bridge/model sync costs: it
+alternates Home and Arcade every 300 ms while cycling systems, so it intentionally
+exercises screen transitions and active-system model updates instead of real
+scroll motion.
+
 Each on-device scene run **kills any running `mister-magik-fb` and MiSTer** before starting the bench UI (same as `scripts/bench-diagnose.sh visible`). Without this, vsync can sit at ~30 Hz and fps reads ~30 instead of ~60.
 
 ## Visual artifacts (gitignored)

@@ -2358,6 +2358,7 @@ enum LauncherBenchScenario {
     RapidTaps,
     HeldScroll,
     TurboHold,
+    ModelSync,
     PreviewChanges,
 }
 
@@ -2381,6 +2382,7 @@ impl LauncherBenchScenario {
             "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
             "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
             "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
+            "model-sync" | "model_sync" => Some(Self::ModelSync),
             "preview" | "preview-changes" | "preview_changes" => Some(Self::PreviewChanges),
             _ => None,
         }
@@ -2398,6 +2400,7 @@ impl LauncherBenchScenario {
             Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
             Self::TurboHold => "turbo-hold",
+            Self::ModelSync => "model-sync",
             Self::PreviewChanges => "preview-changes",
         }
     }
@@ -2410,6 +2413,7 @@ impl LauncherBenchScenario {
             Self::SelectedFirst => Duration::from_millis(700),
             Self::StressScroll => Duration::from_millis(60),
             Self::CacheWarm => Duration::from_millis(120),
+            Self::ModelSync => Duration::from_millis(300),
             Self::QuickTap | Self::RapidTaps | Self::HeldScroll | Self::TurboHold => Duration::ZERO,
             Self::PreviewChanges => Duration::from_millis(500),
         }
@@ -2439,6 +2443,33 @@ fn launcher_bench_step(
             }
             nav.selected = selected;
             keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
+            true
+        }
+        LauncherBenchScenario::ModelSync => {
+            let count = catalog.systems.len();
+            if count == 0 {
+                return false;
+            }
+            let selected = (step / 2) % count;
+            if selected < nav.selected {
+                nav.scroll_x = 0;
+            }
+            nav.selected = selected;
+            nav.settings_focused = false;
+            if step % 2 == 0 {
+                nav.screen = Screen::Home;
+                keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
+            } else {
+                nav.screen = Screen::Arcade;
+                let game_count = catalog.system_preview_game_count(&catalog.systems[selected].id);
+                nav.arcade.selected = nav.arcade.selected.min(game_count.saturating_sub(1));
+                nav.arcade.snap_to_selected();
+                keep_bench_arcade_visible(
+                    &mut nav.arcade.scroll_y,
+                    nav.arcade.selected,
+                    game_count,
+                );
+            }
             true
         }
         LauncherBenchScenario::ListScroll
