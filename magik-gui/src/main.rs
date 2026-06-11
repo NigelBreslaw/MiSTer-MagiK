@@ -1,24 +1,27 @@
-//! Native MiSTer frontend — spike stage.
+//! Native MiSTer MagiK framebuffer frontend.
 //!
 //! Subcommands:
-//!   read      read & print the live video mode + fb params (UIO_GET_VRES/FB_PAR)
-//!   route     route the current /dev/fb0 buffer 0 to HDMI
-//!   ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
-//!   scenes    list Slint scene names
-//!   effects   list framebuffer effect benchmark names
-//!   effect-bench [effect|all] [secs] [raw|overlay|both] [WIDTHxHEIGHT]
-//!   vsync-probe [frames]  print per-frame vsync/fallback pacing diagnostics
-//!   cpu-profile-smoke [secs]  burn CPU and verify profiler SVG output
-//!   fb [secs] [normal|direct|none]  paint + optionally route current fb size
-//!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
-//!   input     gamepad log / sniff / calibrate
-//!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
-//!   preview-cache build --filter nearest|box|lanczos --format derived-png|raw-rgb|raw-rgb565 --max 320x320
-//!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
+//!   Production:
+//!     ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
+//!     input              gamepad log / sniff / calibrate
+//!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
+//!   Diagnostics:
+//!     read               print live video mode + fb params
+//!     route              route the current /dev/fb0 buffer 0 to HDMI
+//!     fb                 paint + optionally route current fb size
+//!     fb-current         compatibility alias for `fb`
+//!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
+//!     cpu-profile-smoke  burn CPU and verify profiler SVG output
+//!     preview-cache      build resized/raw screenshot cache assets
+//!   Benchmarks:
+//!     scenes             list Slint scene names
+//!     effects            list framebuffer effect benchmark names
+//!     effect-bench       run framebuffer effect benchmarks
+//!     library-scan-bench benchmark cold scan, import, cached load, no-op rescan
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
 //!
-//! See AGENTS.md §9.5 (spike) and §12 (toolchain).
+//! See AGENTS.md for display routing, boot handoff, and toolchain details.
 
 use std::ffi::CString;
 

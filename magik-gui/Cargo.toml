@@ -2,7 +2,7 @@
 name = "mister-magik-fb"
 version = "0.1.0"
 edition = "2021"
-description = "Native MiSTer frontend: owns the FPGA framebuffer and renders Slint. Spike stage."
+description = "Native MiSTer MagiK frontend: owns the FPGA framebuffer and renders Slint."
 
 [[bin]]
 name = "mister-magik-fb"
