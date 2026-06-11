@@ -148,12 +148,8 @@ impl PreviewStorageFormat {
     }
 
     fn from_env() -> Self {
-        match std::env::var("MISTER_PREVIEW_FORMAT")
-            .unwrap_or_else(|_| "derived-png".into())
-            .as_str()
-        {
-            label => Self::from_label(label),
-        }
+        let label = std::env::var("MISTER_PREVIEW_FORMAT").unwrap_or_else(|_| "derived-png".into());
+        Self::from_label(&label)
     }
 }
 
@@ -166,6 +162,12 @@ pub struct PreviewWorker {
 #[derive(Clone, Debug)]
 enum PreviewCommand {
     Request(PreviewRequest),
+}
+
+impl Default for PreviewWorker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PreviewWorker {

@@ -90,6 +90,10 @@ impl ArcadeCatalog {
         self.games.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.games.is_empty()
+    }
+
     pub fn title_for_path(&self, mra_path: &str) -> &str {
         self.games
             .iter()
@@ -225,17 +229,12 @@ struct GamelistIndex {
     by_basename: HashMap<String, IndexedGamelistEntry>,
 }
 
+#[derive(Default)]
 pub struct BuildOptions {
     pub sample_image_decodes: usize,
 }
 
-impl Default for BuildOptions {
-    fn default() -> Self {
-        Self {
-            sample_image_decodes: 0,
-        }
-    }
-}
+type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 
 pub fn build(root: impl AsRef<Path>) -> (ArcadeCatalog, CatalogTimings) {
     build_with_options(root, BuildOptions::default(), None)
@@ -244,7 +243,7 @@ pub fn build(root: impl AsRef<Path>) -> (ArcadeCatalog, CatalogTimings) {
 pub fn build_with_options(
     root: impl AsRef<Path>,
     opts: BuildOptions,
-    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+    mut progress: ProgressCallback<'_>,
 ) -> (ArcadeCatalog, CatalogTimings) {
     let mut report = |title: &str, detail: &str| {
         if let Some(f) = progress.as_mut() {

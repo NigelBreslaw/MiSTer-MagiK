@@ -38,6 +38,7 @@ const NORMAL_LAUNCH_EXTS: &[&str] = &[
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
+type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
 const SCHEMA_VERSION: u32 = 7;
@@ -493,7 +494,7 @@ fn canonical_variant_title(title: &str) -> String {
 }
 
 pub fn refresh_default_sqlite_database(
-    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+    mut progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let cfg = BenchConfig::production();
     let scan_t = Instant::now();
@@ -630,7 +631,7 @@ fn scan_library(cfg: &BenchConfig) -> LibraryScan {
 
 fn scan_library_with_progress(
     cfg: &BenchConfig,
-    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+    mut progress: ProgressCallback<'_>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
     let rx = discover_files_pipelined(cfg.roots.clone());
@@ -663,7 +664,7 @@ fn scan_library_with_progress(
             }
         };
         file_fingerprints.insert(f.path.display().to_string(), (f.size, f.mtime_secs));
-        if idx % 250 == 0 {
+        if idx.is_multiple_of(250) {
             if let Some(report) = progress.as_mut() {
                 report(
                     "Classifying library",
@@ -692,9 +693,7 @@ fn scan_library_with_progress(
                     );
                 }
             }
-            if format == ArchiveFormat::Chd {
-                discoveries.push(discovery_from_file(&f, DiscoverySourceKind::Container));
-            } else if is_launchable_container(&f, format) {
+            if format == ArchiveFormat::Chd || is_launchable_container(&f, format) {
                 discoveries.push(discovery_from_file(&f, DiscoverySourceKind::Container));
             }
             if cfg.optional_catalogs {
@@ -1099,7 +1098,7 @@ struct GamelistMetadata {
 fn enrich_discoveries_from_gamelists(
     discoveries: &mut [GameDiscovery],
     roots: &[String],
-    mut progress: Option<&mut dyn FnMut(&str, &str)>,
+    mut progress: ProgressCallback<'_>,
 ) -> usize {
     let mut by_path = HashMap::<String, GamelistMetadata>::new();
     let mut by_stem = HashMap::<String, GamelistMetadata>::new();
