@@ -37,7 +37,9 @@ mod mr_audio;
 mod preview_state;
 mod runtime_status;
 mod setup_nav;
+mod ui_blend_velocity;
 mod ui_display;
+mod ui_effect_bench;
 mod ui_runner;
 #[cfg(feature = "video")]
 mod video_player;
@@ -97,7 +99,7 @@ fn main() {
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "effects" => ui_runner::print_effects(),
-        "effect-bench" => ui_runner::run_effect_bench(&mut f),
+        "effect-bench" => ui_effect_bench::run_effect_bench(&mut f),
         "input" => run_input(),
         "library-scan-bench" => library_db::run_scan_bench(),
         "audio-tone" => run_audio_tone(&mut f),
