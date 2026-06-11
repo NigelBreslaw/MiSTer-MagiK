@@ -356,16 +356,6 @@ fn preview_visual_pct() -> u32 {
     })
 }
 
-fn catalog_refresh_requested() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_CATALOG_REFRESH").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    })
-}
-
 fn arcade_scroll_present_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -5838,53 +5828,16 @@ fn run_launcher_loop(
         if preview_stress { "on" } else { "off" },
         preview_visual_pct()
     );
-    let mut catalog = match library_bench::load_arcade_catalog_from_sqlite(&arcade_root) {
-        Ok(loaded) => {
-            print_startup_event(
-                start,
-                "catalog_cache_load",
-                format!(
-                    "ok=1 games={} rows={} load_us={}",
-                    loaded.catalog.len(),
-                    loaded.rows,
-                    loaded.us
-                ),
-            );
-            print_startup_event(
-                start,
-                "library_db_loaded",
-                format!(
-                    "games={} rows={} load_us={}",
-                    loaded.catalog.len(),
-                    loaded.rows,
-                    loaded.us
-                ),
-            );
-            loaded.catalog
-        }
-        Err(e) => {
-            print_startup_event(start, "catalog_cache_load", format!("ok=0 error={e}"));
-            print_startup_event(start, "library_db_miss", e);
-            empty_arcade_catalog(&arcade_root)
-        }
-    };
-    let mut catalog_ready = !catalog.games.is_empty();
-    let catalog_refresh = !catalog_ready || catalog_refresh_requested();
-    let catalog_rx = if catalog_refresh {
-        print_startup_event(start, "catalog_worker_start", &arcade_root);
-        Some(start_library_catalog_worker(
-            arcade_root.clone(),
-            catalog_ready,
-        ))
-    } else {
-        print_startup_event(
-            start,
-            "catalog_worker_skipped",
-            "cached catalog ready; set MISTER_CATALOG_REFRESH=1 to rescan",
-        );
-        None
-    };
-    let mut catalog_refresh_done = !catalog_refresh;
+    let mut catalog = empty_arcade_catalog(&arcade_root);
+    let mut catalog_ready = false;
+    let catalog_refresh = true;
+    print_startup_event(start, "catalog_cache_load_deferred", &arcade_root);
+    print_startup_event(start, "catalog_worker_start", &arcade_root);
+    let catalog_rx = Some(start_library_catalog_worker(
+        arcade_root.clone(),
+        catalog_ready,
+    ));
+    let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_game_systems(slint_game_systems(&catalog));
     bridge.set_catalog_scan_visible(!catalog_ready);
