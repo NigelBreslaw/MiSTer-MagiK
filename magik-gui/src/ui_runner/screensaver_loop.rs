@@ -362,6 +362,7 @@ fn render_screensaver_frame(
         mode,
         ScreensaverMode::AttractWall
             | ScreensaverMode::TilemapMuseum
+            | ScreensaverMode::PreviewPlasmaCollage
             | ScreensaverMode::PhosphorGrid
             | ScreensaverMode::ScannerContactSheet
             | ScreensaverMode::RandomAccessLoader

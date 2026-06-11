@@ -298,3 +298,23 @@ them with per-row drift offsets over the live starfield.
 
 `starfield-cabinets` is now inside the p95 60fps target. Remaining >20ms frames
 are thumbnail-cache rebuild spikes.
+
+## Round 13 - Skip plasma collage pre-clear
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-PLASMA-R13-20260612 --deploy-fast --mode preview-plasma-collage --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This removes the generic full-screen clear before `preview-plasma-collage`.
+The effect already fills the whole 960x540 frame with 16x16 cells, so the clear
+was redundant memory traffic.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R12 mega plasma segment | 180 | 16528 | 16723 | 17109 | 10 | 0 | 29512 |
+| round 13 focused plasma | 721 | 16509 | 16594 | 16966 | 15 | 0 | 29160 |
+
+This is a small cleanup win rather than a structural change: plasma remains
+inside target, with slightly lower p95/p99 than the post-R12 matrix segment.
