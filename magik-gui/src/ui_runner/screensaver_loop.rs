@@ -175,6 +175,9 @@ struct ScreensaverRenderState {
     scanner_contact: Vec<Rgb565Pixel>,
     scanner_contact_start: usize,
     scanner_contact_valid: bool,
+    starfield_contact: Vec<Rgb565Pixel>,
+    starfield_contact_start: usize,
+    starfield_contact_valid: bool,
 }
 
 impl ScreensaverRenderState {
@@ -200,6 +203,9 @@ impl ScreensaverRenderState {
             scanner_contact: vec![Rgb565Pixel(0); w * h],
             scanner_contact_start: usize::MAX,
             scanner_contact_valid: false,
+            starfield_contact: vec![Rgb565Pixel(0); w * h],
+            starfield_contact_start: usize::MAX,
+            starfield_contact_valid: false,
         }
     }
 }
@@ -368,8 +374,7 @@ fn render_screensaver_frame(
         ScreensaverMode::MvsCarousel => render_carousel(dst, w, h, images, frame),
         ScreensaverMode::SuperScalerFlyby => render_flyby(dst, w, h, images, frame),
         ScreensaverMode::StarfieldCabinets => {
-            render_starfield(dst, w, h, frame);
-            render_contact_sheet(dst, w, h, images, frame / 2, 5, 3, true);
+            render_starfield_cabinets(dst, state, w, h, images, frame);
         }
         ScreensaverMode::ScreenshotRain => render_rain(dst, w, h, images, frame),
         ScreensaverMode::TilemapMuseum => render_tilemap(dst, state, w, h, images, frame),
@@ -546,6 +551,34 @@ fn copy_rect(
     for yy in y.min(screen_h)..y1 {
         let row = yy * screen_w;
         dst[row + x.min(screen_w)..row + x1].copy_from_slice(&src[row + x.min(screen_w)..row + x1]);
+    }
+}
+
+fn copy_rect_from_to(
+    dst: &mut [Rgb565Pixel],
+    src: &[Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    src_x: usize,
+    src_y: usize,
+    dst_x: isize,
+    dst_y: isize,
+    w: usize,
+    h: usize,
+) {
+    let dx0 = dst_x.max(0) as usize;
+    let dy0 = dst_y.max(0) as usize;
+    let dx1 = (dst_x + w as isize).clamp(0, screen_w as isize) as usize;
+    let dy1 = (dst_y + h as isize).clamp(0, screen_h as isize) as usize;
+    if dx1 <= dx0 || dy1 <= dy0 {
+        return;
+    }
+    let sx0 = src_x + (dx0 as isize - dst_x) as usize;
+    let sy0 = src_y + (dy0 as isize - dst_y) as usize;
+    for row in 0..(dy1 - dy0) {
+        let src_row = (sy0 + row) * screen_w + sx0;
+        let dst_row = (dy0 + row) * screen_w + dx0;
+        dst[dst_row..dst_row + (dx1 - dx0)].copy_from_slice(&src[src_row..src_row + (dx1 - dx0)]);
     }
 }
 
@@ -773,6 +806,83 @@ fn render_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
         let y = h as isize / 2 + sy * 255 / z as isize;
         if x >= 0 && y >= 0 && x < w as isize && y < h as isize {
             dst[y as usize * w + x as usize] = color565(80, 220, 255);
+        }
+    }
+}
+
+fn render_starfield_cabinets(
+    dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
+    w: usize,
+    h: usize,
+    images: &[SaverImage],
+    frame: u64,
+) {
+    render_starfield(dst, w, h, frame);
+    let cols = 5usize;
+    let rows = 3usize;
+    let cell_w = w / cols;
+    let cell_h = h / rows;
+    let contact_frame = frame / 2;
+    let contact_start = (contact_frame / 90) as usize;
+    if !state.starfield_contact_valid
+        || state.starfield_contact_start != contact_start
+        || state.starfield_contact.len() != dst.len()
+    {
+        state.starfield_contact.resize(dst.len(), Rgb565Pixel(0));
+        clear(&mut state.starfield_contact, Rgb565Pixel(0));
+        for row in 0..rows {
+            for col in 0..cols {
+                if let Some(img) = image_at(images, contact_start + row * cols + col) {
+                    let x = col * cell_w + 8;
+                    let y = row * cell_h + 8;
+                    let out_w = cell_w.saturating_sub(16);
+                    let out_h = cell_h.saturating_sub(16);
+                    blit_scaled(
+                        &mut state.starfield_contact,
+                        w,
+                        h,
+                        img,
+                        x as isize,
+                        y as isize,
+                        out_w,
+                        out_h,
+                        230,
+                    );
+                    stroke_rect(
+                        &mut state.starfield_contact,
+                        w,
+                        h,
+                        x,
+                        y,
+                        out_w,
+                        out_h,
+                        color565(40, 250, 220),
+                    );
+                }
+            }
+        }
+        state.starfield_contact_start = contact_start;
+        state.starfield_contact_valid = true;
+    }
+
+    for row in 0..rows {
+        let ox = ((contact_frame as usize + row * 13) & 31) as isize - 16;
+        for col in 0..cols {
+            let x = col * cell_w + 8;
+            let y = row * cell_h + 8;
+            copy_rect_from_to(
+                dst,
+                &state.starfield_contact,
+                w,
+                h,
+                x,
+                y,
+                x as isize + ox,
+                y as isize,
+                cell_w.saturating_sub(16),
+                cell_h.saturating_sub(16),
+            );
         }
     }
 }

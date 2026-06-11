@@ -278,3 +278,23 @@ central preview remain live.
 
 `scanner-contact-sheet` is now inside the p95 60fps target. Remaining >20ms
 frames are contact-sheet rebuild spikes.
+
+## Round 12 - Cached drifting starfield thumbnails
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-STARFIELD-R12-20260612 --deploy-fast --mode starfield-cabinets --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `starfield-cabinets` from rescaling the drifting 5x3 contact sheet
+every frame to retaining the scaled thumbnails for the active page and copying
+them with per-row drift offsets over the live starfield.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R11 mega starfield segment | 142 | 20964 | 21090 | 22682 | 142 | 142 | 27948 |
+| round 12 focused starfield | 721 | 16533 | 16609 | 17226 | 23 | 5 | 29260 |
+
+`starfield-cabinets` is now inside the p95 60fps target. Remaining >20ms frames
+are thumbnail-cache rebuild spikes.
