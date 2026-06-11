@@ -4,7 +4,7 @@ use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::ConsoleFont;
 use crate::fb::{Display, Pixel};
 use crate::ui_display::UiDisplay;
-use crate::ui_runner::{DirtyRect, UiFrameTarget};
+use crate::ui_runner::ui_frame_target::{DirtyRect, UiFrameTarget};
 
 pub(crate) const ARCADE_LIST_X: usize = 8;
 pub(crate) const ARCADE_LIST_Y: usize = 56;

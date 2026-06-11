@@ -529,8 +529,8 @@ fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
     let mut changed = false;
     let mut insert_at = None;
 
-    for idx in 0..lines.len() {
-        if let Some(name) = section_name(&lines[idx]) {
+    for (idx, line) in lines.iter_mut().enumerate() {
+        if let Some(name) = section_name(line) {
             if current.eq_ignore_ascii_case(section) && insert_at.is_none() {
                 insert_at = Some(idx);
             }
@@ -541,8 +541,8 @@ fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
             continue;
         }
 
-        if current.eq_ignore_ascii_case(section) && active_key_eq(&lines[idx], key) {
-            lines[idx] = replace_assignment_value(&lines[idx], value);
+        if current.eq_ignore_ascii_case(section) && active_key_eq(line, key) {
+            *line = replace_assignment_value(line, value);
             changed = true;
         }
     }
