@@ -462,7 +462,11 @@ impl EffectTarget {
     fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
         let (physical_w, physical_h, scale) = match fill {
             EffectFill::Full => (1920, 1080, size.scale_to_1080p()?),
-            EffectFill::Half => (960, 540, size.scale_to_half_1080p()?),
+            EffectFill::Half => match size.scale_to_half_1080p() {
+                Some(scale) => (960, 540, scale),
+                None if size.w <= 960 && size.h <= 540 => (size.w, size.h, 1),
+                None => return None,
+            },
             EffectFill::Double => (size.w.checked_mul(2)?, size.h.checked_mul(2)?, 2),
             EffectFill::Native => (size.w, size.h, 1),
             EffectFill::FpgaHalf => {
@@ -6638,5 +6642,22 @@ mod tests {
     fn preview_size_keeps_common_arcade_screenshot_native_when_resize_is_off() {
         let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
         assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
+    }
+
+    #[test]
+    fn effect_half_target_allows_640x448_at_native_scale() {
+        let ui = UiDisplay::for_framebuffer(1920, 1080);
+        let target = EffectTarget::new(
+            EffectFill::Half,
+            EffectSize { w: 640, h: 448 },
+            &ui,
+        )
+        .expect("640x448 should fit in half-fill benchmark mode");
+
+        assert_eq!(target.physical_w, 640);
+        assert_eq!(target.physical_h, 448);
+        assert_eq!(target.render_w, 640);
+        assert_eq!(target.render_h, 448);
+        assert_eq!(target.scale, 1);
     }
 }

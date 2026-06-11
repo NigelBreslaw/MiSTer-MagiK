@@ -277,6 +277,7 @@ fn crt_image_for_size(size: EffectSize) -> Option<&'static CrtImage> {
         (320, 224) => cached!(CRT_320_224, 320, 224),
         (480, 270) => cached!(CRT_480_270, 480, 270),
         (640, 360) => cached!(CRT_640_360, 640, 360),
+        (640, 448) => cached!(CRT_640_448, 640, 448),
         (960, 540) => cached!(CRT_960_540, 960, 540),
         _ => None,
     }
@@ -922,6 +923,16 @@ mod tests {
         assert_eq!(EffectSize { w: 640, h: 360 }.scale_to_half_1080p(), None);
         assert_eq!(EffectSize { w: 640, h: 448 }.scale_to_half_1080p(), None);
         assert_eq!(EffectSize { w: 960, h: 540 }.scale_to_half_1080p(), Some(1));
+    }
+
+    #[test]
+    fn vhs_glitch_caches_all_supported_effect_sizes() {
+        for &(w, h) in EFFECT_SIZES {
+            assert!(
+                crt_image_for_size(EffectSize { w, h }).is_some(),
+                "vhs_glitch should cache {w}x{h}"
+            );
+        }
     }
 
     #[test]
