@@ -14,7 +14,9 @@
 # Default installs the release-device (A3) binary — use --fast for daily iteration.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_DIR="/media/fat/mister-magik"
+REMOTE="$REMOTE_DIR/mister-magik-fb"
+DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
 DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
   DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov"
@@ -83,15 +85,22 @@ LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Deploying $BIN -> $REMOTE"
+cleanup_deploy_lock() {
+  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+  MISTER_PASS="${MISTER_PASS:-1}" \
+    "$HERE/scripts/mister" run "rm -f '$DEPLOY_LOCK'" >/dev/null 2>&1 || true
+}
+trap cleanup_deploy_lock EXIT
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
+  "$HERE/scripts/mister" run "mkdir -p '$REMOTE_DIR'; : > '$DEPLOY_LOCK'; kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   "$HERE/scripts/mister" put "$BIN" "$REMOTE.upload"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'"
+  "$HERE/scripts/mister" run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'; rm -f '$DEPLOY_LOCK'"
+trap - EXIT
 if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   if [ ! -f "$VIDEO_SRC" ]; then
     echo "ERROR: --video requested but $VIDEO_SRC does not exist" >&2

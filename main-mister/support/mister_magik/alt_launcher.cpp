@@ -25,6 +25,7 @@
 static const char s_launcher_path[] = "mister-magik/mister-magik-fb";
 static const char s_launcher_scene[] = "launcher";
 static const char s_bench_request_path[] = "/media/fat/mister-magik/bench-boot";
+static const char s_deploy_lock_path[] = "/media/fat/mister-magik/deploy.lock";
 static const char s_script_path[] = "/tmp/mister_magik_launcher";
 static const char s_log_path[] = "/tmp/mister-magik-main.log";
 static const char s_status_dir[] = "/tmp/mister-magik";
@@ -44,6 +45,7 @@ static bool s_gave_up = false;
 static bool s_escaped = false;
 static bool s_last_spawn_was_bench = false;
 static bool s_stock_menu_enabled = false;
+static bool s_deploy_lock_waiting = false;
 static unsigned long s_analytics_seq = 0;
 static bool s_analytics_header_written = false;
 static unsigned long s_osd_suppressed_count = 0;
@@ -123,6 +125,11 @@ static void event_jsonl(const char *source, const char *event, const char *detai
 	fclose(f);
 }
 
+static bool deploy_lock_active(void)
+{
+	return access(s_deploy_lock_path, F_OK) == 0;
+}
+
 void mister_magik_status_write(void)
 {
 	ensure_status_dir();
@@ -147,6 +154,7 @@ void mister_magik_status_write(void)
 	fprintf(f, "\"escaped\":%s,", s_escaped ? "true" : "false");
 	fprintf(f, "\"bench_active\":%s,", s_last_spawn_was_bench ? "true" : "false");
 	fprintf(f, "\"stock_menu_enabled\":%s,", s_stock_menu_enabled ? "true" : "false");
+	fprintf(f, "\"deploy_locked\":%s,", deploy_lock_active() ? "true" : "false");
 	fprintf(f, "\"tty_ready\":%s,", (s_pid && launcher_tty_ready(s_pid)) ? "true" : "false");
 	fprintf(f, "\"active_vt\":");
 	json_escape(f, active_vt[0] ? active_vt : "unknown");
@@ -363,9 +371,10 @@ static void analytics_state(const char *event, const char *extra_fmt = NULL, ...
 		sanitize_detail(extra);
 	}
 
-	analytics_event(event, "pid=%d crash_count=%d respawn_timer=%lu init_pending=%d gave_up=%d escaped=%d tty_ready=%d active_vt=%s fb_mode=%s%s%s",
+	analytics_event(event, "pid=%d crash_count=%d respawn_timer=%lu init_pending=%d gave_up=%d escaped=%d deploy_locked=%d tty_ready=%d active_vt=%s fb_mode=%s%s%s",
 	                s_pid, s_crash_count, s_respawn_timer, s_init_pending, s_gave_up,
-	                s_escaped, s_pid ? launcher_tty_ready(s_pid) : 0,
+	                s_escaped, deploy_lock_active() ? 1 : 0,
+	                s_pid ? launcher_tty_ready(s_pid) : 0,
 	                active_vt[0] ? active_vt : "unknown",
 	                fb_mode[0] ? fb_mode : "unknown",
 	                extra[0] ? " " : "", extra);
@@ -787,6 +796,26 @@ void mister_magik_launcher_poll(void)
 
 	if (!mister_magik_launcher_configured())
 		return;
+
+	if (deploy_lock_active())
+	{
+		s_respawn_timer = GetTimer(1000);
+		if (!s_respawn_timer) s_respawn_timer = 1;
+		if (!s_deploy_lock_waiting)
+		{
+			s_deploy_lock_waiting = true;
+			log_msg("launcher spawn suppressed while deploy lock exists");
+			mister_magik_status_write();
+			analytics_state("spawn_suppressed_deploy_lock");
+		}
+		return;
+	}
+	if (s_deploy_lock_waiting)
+	{
+		s_deploy_lock_waiting = false;
+		mister_magik_status_write();
+		analytics_state("deploy_lock_cleared");
+	}
 
 	if (s_init_pending)
 	{
