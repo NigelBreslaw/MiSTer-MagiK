@@ -777,9 +777,29 @@ fn render_phosphor_grid(
     images: &[SaverImage],
     frame: u64,
 ) {
-    render_tilemap(dst, w, h, images, frame / 4);
-    for px in dst.iter_mut() {
-        *px = blend_565(color565(0, 40, 24), *px, 96);
+    fill_rect(dst, w, h, 0, 0, w, h, color565(0, 18, 14));
+    let cols = 12usize;
+    let rows = 8usize;
+    let cell_w = w / cols;
+    let cell_h = h / rows;
+    let page = frame as usize / 240;
+    let tint = if frame % 180 < 12 { 190 } else { 105 };
+    for ty in 0..rows {
+        for tx in 0..cols {
+            if let Some(img) = image_at(images, page + ty * cols + tx) {
+                blit_scaled(
+                    dst,
+                    w,
+                    h,
+                    img,
+                    (tx * cell_w) as isize,
+                    (ty * cell_h) as isize,
+                    cell_w.saturating_sub(2),
+                    cell_h.saturating_sub(2),
+                    tint,
+                );
+            }
+        }
     }
     for y in (0..h).step_by(24) {
         fill_rect(dst, w, h, 0, y, w, 1, color565(30, 255, 180));
@@ -788,17 +808,8 @@ fn render_phosphor_grid(
         fill_rect(dst, w, h, x, 0, 1, h, color565(20, 180, 150));
     }
     if frame % 180 < 12 {
-        for y in (0..h).step_by(3) {
-            for x in 0..w {
-                dst[y * w + x] = brighten_565(dst[y * w + x]);
-            }
-        }
-    } else {
-        for y in (0..h).step_by(3) {
-            for x in 0..w {
-                dst[y * w + x] = darken_565(dst[y * w + x]);
-            }
-        }
+        fill_rect(dst, w, h, 0, h / 2 - 3, w, 6, color565(180, 255, 230));
+        fill_rect(dst, w, h, w / 2 - 3, 0, 6, h, color565(120, 255, 220));
     }
 }
 

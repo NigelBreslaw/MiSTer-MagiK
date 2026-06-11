@@ -116,3 +116,23 @@ duplicate it into the next row.
 
 `mode7-floor` is now inside the 60fps target for p95 and has no >20ms frames in
 the focused run.
+
+## Round 4 - Cheaper phosphor-grid tint path
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-PHOSPHOR-R04-20260612 --deploy-fast --mode phosphor-grid --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This removes the full-screen brighten/darken post-process passes from
+`phosphor-grid`. The mode now draws the screenshot mosaic already darkened with
+the shared blitter tint and reserves the bright flash for sparse scan lines.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| current deployed mega phosphor segment | 32 | 31294 | 31597 | 32361 | 32 | 32 | 20548 |
+| round 4 focused phosphor | 405 | 29522 | 29621 | 32342 | 405 | 405 | 20068 |
+
+This is a modest but measured improvement. `phosphor-grid` still needs a more
+structural retained/atlas approach to reach 60fps.
