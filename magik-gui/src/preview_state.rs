@@ -9,12 +9,13 @@ use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::ArcadeGameEntry;
 use crate::preview_worker::{
-    preview_window_indices, preview_window_paths, PreviewPixels, PreviewPriority, PreviewWorker,
-    DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
+    preview_window_indices, preview_window_paths, PreviewPixels, PreviewPriority, PreviewResult,
+    PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
+const MAX_PREFETCH_RESULTS_PER_FRAME: usize = 1;
 pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
 pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
 pub(crate) const ARCADE_PREVIEW_BOX_W: u32 = 320;
@@ -233,6 +234,7 @@ pub(crate) struct PreviewState {
     raw_transition_id: u64,
     window_paths: Vec<String>,
     pending_prefetch_paths: HashSet<String>,
+    ready_backlog: VecDeque<PreviewResult>,
     raw_dirty: bool,
 }
 
@@ -273,6 +275,7 @@ impl PreviewState {
             raw_transition_id: 0,
             window_paths: Vec::new(),
             pending_prefetch_paths: HashSet::new(),
+            ready_backlog: VecDeque::new(),
             raw_dirty: false,
         }
     }
@@ -291,6 +294,7 @@ impl PreviewState {
             self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
             self.window_paths.clear();
             self.pending_prefetch_paths.clear();
+            self.ready_backlog.clear();
             self.raw_dirty = false;
             bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_placeholder_visible(true);
@@ -370,6 +374,37 @@ impl PreviewState {
             transition_id: self.raw_transition_id,
         })
     }
+}
+
+fn is_current_selected_result(
+    result: &PreviewResult,
+    current_generation: u64,
+    selected_image_path: Option<&str>,
+) -> bool {
+    result.generation == current_generation
+        && selected_image_path.is_some_and(|path| path == result.image_path)
+}
+
+fn next_ready_result_index(
+    backlog: &VecDeque<PreviewResult>,
+    current_generation: u64,
+    selected_image_path: Option<&str>,
+    selected_processed: bool,
+    prefetch_results: usize,
+) -> Option<usize> {
+    if !selected_processed {
+        if let Some(idx) = backlog.iter().position(|result| {
+            is_current_selected_result(result, current_generation, selected_image_path)
+        }) {
+            return Some(idx);
+        }
+    }
+
+    let result = backlog.front()?;
+    if matches!(result.priority, PreviewPriority::Selected) {
+        return Some(0);
+    }
+    (prefetch_results < MAX_PREFETCH_RESULTS_PER_FRAME).then_some(0)
 }
 
 pub(crate) fn request_arcade_preview_window(
@@ -559,17 +594,35 @@ pub(crate) fn apply_ready_preview(
 ) -> bool {
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
+        preview.ready_backlog.clear();
         return false;
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
-    for result in preview.worker.drain() {
+    preview.ready_backlog.extend(preview.worker.drain());
+    let mut selected_processed = false;
+    let mut prefetch_results = 0;
+    while let Some(idx) = next_ready_result_index(
+        &preview.ready_backlog,
+        preview.current_generation,
+        preview.selected_image_path.as_deref(),
+        selected_processed,
+        prefetch_results,
+    ) {
+        let Some(result) = preview.ready_backlog.remove(idx) else {
+            break;
+        };
         preview.pending_prefetch_paths.remove(&result.image_path);
-        let is_selected_result = result.generation == preview.current_generation
-            && preview
-                .selected_image_path
-                .as_deref()
-                .is_some_and(|path| path == result.image_path);
+        let is_selected_result = is_current_selected_result(
+            &result,
+            preview.current_generation,
+            preview.selected_image_path.as_deref(),
+        );
+        if is_selected_result {
+            selected_processed = true;
+        } else if matches!(result.priority, PreviewPriority::Prefetch { .. }) {
+            prefetch_results += 1;
+        }
         if !is_selected_result && matches!(result.priority, PreviewPriority::Selected) {
             if preview_trace_enabled() {
                 eprintln!(
@@ -726,5 +779,76 @@ mod tests {
     fn preview_size_keeps_common_arcade_screenshot_native_when_resize_is_off() {
         let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
         assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
+    }
+
+    #[test]
+    fn ready_result_selector_prioritizes_current_selected_preview() {
+        let backlog = VecDeque::from(vec![
+            preview_result(
+                10,
+                "prefetch-a.png",
+                PreviewPriority::Prefetch { distance: 1 },
+            ),
+            preview_result(11, "selected.png", PreviewPriority::Selected),
+            preview_result(
+                12,
+                "prefetch-b.png",
+                PreviewPriority::Prefetch { distance: 2 },
+            ),
+        ]);
+
+        let idx = next_ready_result_index(&backlog, 11, Some("selected.png"), false, 0);
+
+        assert_eq!(idx, Some(1));
+    }
+
+    #[test]
+    fn ready_result_selector_limits_prefetches_per_frame() {
+        let backlog = VecDeque::from(vec![
+            preview_result(
+                1,
+                "prefetch-a.png",
+                PreviewPriority::Prefetch { distance: 1 },
+            ),
+            preview_result(
+                2,
+                "prefetch-b.png",
+                PreviewPriority::Prefetch { distance: 2 },
+            ),
+        ]);
+
+        assert_eq!(
+            next_ready_result_index(&backlog, 99, Some("selected.png"), false, 0),
+            Some(0)
+        );
+        assert_eq!(
+            next_ready_result_index(&backlog, 99, Some("selected.png"), false, 1),
+            None
+        );
+    }
+
+    fn preview_result(
+        generation: u64,
+        image_path: &str,
+        priority: PreviewPriority,
+    ) -> PreviewResult {
+        PreviewResult {
+            generation,
+            title: image_path.to_string(),
+            image_path: image_path.to_string(),
+            image: None,
+            request_age_us: 0,
+            read_us: 0,
+            decode_us: 0,
+            resize_us: 0,
+            total_us: 0,
+            encoded_bytes: 0,
+            decoded_bytes: 0,
+            source_width: 0,
+            source_height: 0,
+            storage_format: crate::preview_worker::PreviewStorageFormat::Png,
+            resize_filter: crate::preview_worker::PreviewResizeFilter::Off,
+            priority,
+        }
     }
 }
