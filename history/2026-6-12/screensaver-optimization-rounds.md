@@ -76,3 +76,23 @@ Next targets:
 | mode7-floor | 32981 | 33011 | full lower-half floor resamples every pixel |
 | phosphor-grid | 30412 | 30719 | post-process passes still expensive |
 | preview-plasma-collage | 30102 | 30140 | per-tile inner copy still samples per pixel |
+
+## Round 2 - Direct Kefrens vertical-slice copier
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-KEFRENS-R02-20260612 --deploy-fast --mode kefrens-screenshot-bars --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This removes thousands of tiny scaled-blit calls from
+`kefrens-screenshot-bars`. The mode now draws screenshot slices in a direct
+row/bar pass using the row-wave table.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| round 1 mega kefrens segment | 29 | 35219 | 35299 | 36195 | 29 | 29 | 20364 |
+| round 2 focused kefrens | 696 | 17103 | 17239 | 20027 | 696 | 8 | 20268 |
+
+The p95 is still just above the 16.7ms target, but the mode is now close enough
+for fine-tuning rather than architectural replacement.

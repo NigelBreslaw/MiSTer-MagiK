@@ -706,25 +706,26 @@ fn render_raster_gallery(
 fn render_kefrens(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
     let bar_w = 24usize;
     let bars = w / bar_w + 3;
-    for bar in 0..bars {
-        if let Some(img) = image_at(images, bar + frame as usize / 120) {
-            let base_x = bar as isize * bar_w as isize - bar_w as isize;
-            let src_x = (bar * 23 + frame as usize / 3) % img.w;
-            for band_y in (0..h).step_by(6) {
-                let wave = triangle_wave_u8(band_y / 3 + bar * 5, frame as u8) as isize / 5 - 25;
-                blit_slice_scaled(
-                    dst,
-                    w,
-                    h,
-                    img,
-                    src_x,
-                    bar_w.min(img.w),
-                    base_x + wave,
-                    band_y as isize,
-                    bar_w,
-                    6,
-                    240,
-                );
+    for y in 0..h {
+        let row = y * w;
+        for bar in 0..bars {
+            if let Some(img) = image_at(images, bar + frame as usize / 120) {
+                let wave = triangle_wave_u8(y / 3 + bar * 5, frame as u8) as isize / 5 - 25;
+                let x0 = bar as isize * bar_w as isize - bar_w as isize + wave;
+                let x1 = x0 + bar_w as isize;
+                if x1 <= 0 || x0 >= w as isize {
+                    continue;
+                }
+                let dst_x0 = x0.max(0) as usize;
+                let dst_x1 = x1.min(w as isize) as usize;
+                let src_y = y * img.h / h;
+                let src_row = src_y * img.stride;
+                let src_base = (bar * 23 + frame as usize / 3) % img.w;
+                for x in dst_x0..dst_x1 {
+                    let local = (x as isize - x0) as usize;
+                    let src_x = (src_base + local).min(img.w - 1);
+                    dst[row + x] = img.pixels[src_row + src_x];
+                }
             }
         }
     }
