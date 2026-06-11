@@ -1545,7 +1545,7 @@ fn sync_bridge_launcher(
     loading_detail: &str,
     catalog: Option<&ArcadeCatalog>,
     preview: &mut PreviewState,
-) {
+) -> Option<Vec<ArcadeGameEntry>> {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
@@ -1561,6 +1561,7 @@ fn sync_bridge_launcher(
     bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_arcade_selected(nav.arcade.selected as i32);
     bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    let mut active_games_for_preview: Option<Vec<ArcadeGameEntry>> = None;
     if let Some(catalog) = catalog {
         let games = active_system_games(catalog, nav);
         let title = active_system(catalog, nav)
@@ -1569,6 +1570,7 @@ fn sync_bridge_launcher(
         bridge.set_game_systems(slint_game_systems(catalog));
         bridge.set_active_system_title(title.into());
         bridge.set_arcade_games(slint_arcade_games(&games));
+        active_games_for_preview = Some(games);
     }
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
@@ -1601,14 +1603,21 @@ fn sync_bridge_launcher(
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
-        let games = catalog
-            .map(|catalog| active_system_games(catalog, nav))
-            .unwrap_or_default();
+        let games;
+        let games = if let Some(games) = active_games_for_preview.as_deref() {
+            games
+        } else {
+            games = catalog
+                .map(|catalog| active_system_games(catalog, nav))
+                .unwrap_or_default();
+            &games
+        };
         let _ = request_arcade_preview_window(&bridge, &games, nav.arcade.selected, preview);
     } else {
         preview.clear(&bridge);
     }
     sync_setup_bridge(&bridge, pad, setup);
+    active_games_for_preview
 }
 
 fn sync_bridge_launcher_light(
@@ -6270,7 +6279,7 @@ fn run_launcher_loop(
             }
 
             if full_bridge_dirty {
-                sync_bridge_launcher(
+                if let Some(active_games) = sync_bridge_launcher(
                     &app,
                     &pad,
                     &nav,
@@ -6279,7 +6288,10 @@ fn run_launcher_loop(
                     "",
                     Some(&catalog),
                     &mut preview,
-                );
+                ) {
+                    active_arcade_games_cache = active_games;
+                    active_arcade_games_cache_key = Some((nav.selected, catalog.len()));
+                }
                 window.request_redraw();
             } else if light_bridge_dirty {
                 let active_games = if nav.screen == Screen::Arcade {
