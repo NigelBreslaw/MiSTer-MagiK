@@ -357,24 +357,56 @@ fn blit_scaled(
     if out_w == 0 || out_h == 0 {
         return;
     }
-    for yy in 0..out_h {
-        let dy = y + yy as isize;
-        if dy < 0 || dy >= screen_h as isize {
-            continue;
+    if tint == 255
+        && out_w == img.w
+        && out_h == img.h
+        && x >= 0
+        && y >= 0
+        && (x as usize + out_w) <= screen_w
+        && (y as usize + out_h) <= screen_h
+    {
+        let x = x as usize;
+        let y = y as usize;
+        for yy in 0..out_h {
+            let dst_row = (y + yy) * screen_w + x;
+            let src_row = yy * img.stride;
+            dst[dst_row..dst_row + out_w].copy_from_slice(&img.pixels[src_row..src_row + out_w]);
         }
-        let sy = yy * img.h / out_h;
-        for xx in 0..out_w {
-            let dx = x + xx as isize;
-            if dx < 0 || dx >= screen_w as isize {
-                continue;
+        return;
+    }
+
+    let dx0 = x.max(0) as usize;
+    let dy0 = y.max(0) as usize;
+    let dx1 = (x + out_w as isize).clamp(0, screen_w as isize) as usize;
+    let dy1 = (y + out_h as isize).clamp(0, screen_h as isize) as usize;
+    if dx1 <= dx0 || dy1 <= dy0 {
+        return;
+    }
+
+    let step_x_fp = ((img.w << 16) / out_w.max(1)).max(1);
+    let step_y_fp = ((img.h << 16) / out_h.max(1)).max(1);
+    let base_x_fp = (dx0 as isize - x).max(0) as usize * step_x_fp;
+    let mut sy_fp = (dy0 as isize - y).max(0) as usize * step_y_fp;
+    let dark = color565(0, 0, 18);
+    for dy in dy0..dy1 {
+        let sy = (sy_fp >> 16).min(img.h - 1);
+        let mut sx_fp = base_x_fp;
+        let dst_row = dy * screen_w;
+        let src_row = sy * img.stride;
+        if tint == 255 {
+            for dx in dx0..dx1 {
+                let sx = (sx_fp >> 16).min(img.w - 1);
+                dst[dst_row + dx] = img.pixels[src_row + sx];
+                sx_fp = sx_fp.saturating_add(step_x_fp);
             }
-            let sx = xx * img.w / out_w;
-            let mut px = sample_image(img, sx, sy);
-            if tint < 255 {
-                px = blend_565(color565(0, 0, 18), px, tint);
+        } else {
+            for dx in dx0..dx1 {
+                let sx = (sx_fp >> 16).min(img.w - 1);
+                dst[dst_row + dx] = blend_565(dark, img.pixels[src_row + sx], tint);
+                sx_fp = sx_fp.saturating_add(step_x_fp);
             }
-            dst[dy as usize * screen_w + dx as usize] = px;
         }
+        sy_fp = sy_fp.saturating_add(step_y_fp);
     }
 }
 
