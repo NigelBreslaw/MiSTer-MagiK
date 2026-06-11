@@ -59,6 +59,8 @@ comment-preserving mutator in `scripts/mister`: it installs
 without using ad hoc shell edits. Normal arcade direct-video output is configured
 with `[arcade] direct_video=1`; vertical arcade stays scaler-based with
 `[arcade_vertical] direct_video=0` and `video_mode=8` so MiSTer can rotate it.
+The vertical section must appear after `[arcade]`, because MiSTer applies matching
+sections in file order.
 
 Build and deploy the fork + Slint child:
 

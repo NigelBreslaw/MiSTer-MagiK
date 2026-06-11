@@ -79,7 +79,8 @@ use the Rust comment-preserving INI mutator in `scripts/mister`; do not edit
 `main=MiSTer_MagiK` in `[MiSTer]`, keeps launcher-safe `[MiSTer]
 direct_video=0`, sets `[Menu] direct_video=0` / `video_mode=8`, and can repair
 arcade video sections to `[arcade] direct_video=1` plus `[arcade_vertical]
-direct_video=0` / `video_mode=8`.
+direct_video=0` / `video_mode=8`. It keeps `[arcade_vertical]` after `[arcade]`
+because vertical arcade games match both sections and later values win.
 
 ## Build
 

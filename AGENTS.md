@@ -72,6 +72,9 @@ Remaining work: in-game settings strategy (§7).
   `[MiSTer] direct_video=0`; `[Menu] direct_video=0`, `video_mode=8`;
   `[arcade] direct_video=1`; `[arcade_vertical] direct_video=0`,
   `video_mode=8`, `vscale_mode=1`.
+- `MiSTer.ini` is parsed top-to-bottom. Because vertical arcade games match both
+  `[arcade]` and `[arcade_vertical]`, keep `[arcade_vertical]` after `[arcade]`
+  so the vertical 1080p/non-direct override wins.
 - `MiSTer.ini` has a backup at `/media/fat/MiSTer.ini.bak`.
 - `/media/fat` is exFAT (via FUSE). Writing many small files is **slow**; that
   dominates deploy time, not the network.

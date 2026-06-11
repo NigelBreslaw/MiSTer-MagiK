@@ -463,6 +463,7 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
             set_ini_key(&mut lines, "arcade_vertical", "direct_video", "0");
             set_ini_key(&mut lines, "arcade_vertical", "video_mode", "8");
             set_ini_key(&mut lines, "arcade_vertical", "vscale_mode", "1");
+            ensure_section_after(&mut lines, "arcade", "arcade_vertical");
         }
         IniEdit::MenuMode(mode) => {
             set_ini_key(&mut lines, "Menu", "video_mode", &mode);
@@ -547,6 +548,35 @@ fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
         lines.push(format!("[{section}]"));
         lines.push(format!("{key}={value}"));
     }
+}
+
+fn ensure_section_after(lines: &mut Vec<String>, earlier: &str, later: &str) {
+    let Some(earlier_range) = section_range(lines, earlier) else {
+        return;
+    };
+    let Some(later_range) = section_range(lines, later) else {
+        return;
+    };
+    if earlier_range.start < later_range.start {
+        return;
+    }
+
+    let later_len = later_range.end - later_range.start;
+    let moved: Vec<String> = lines.drain(later_range.clone()).collect();
+    let adjusted_earlier_end = earlier_range.end.saturating_sub(later_len);
+    lines.splice(adjusted_earlier_end..adjusted_earlier_end, moved);
+}
+
+fn section_range(lines: &[String], section: &str) -> Option<std::ops::Range<usize>> {
+    let start = lines.iter().position(|line| {
+        section_name(line).is_some_and(|name| name.eq_ignore_ascii_case(section))
+    })?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| section_name(line).is_some())
+        .map(|offset| start + 1 + offset)
+        .unwrap_or(lines.len());
+    Some(start..end)
 }
 
 fn comment_ini_key(lines: &mut [String], section: Option<&str>, key: &str, reason: &str) {
@@ -1084,6 +1114,10 @@ fn ini_value<'a>(status: &'a Value, section: &str, key: &str) -> Option<&'a str>
     status["boot"]["ini_keys"][section][key]["value"].as_str()
 }
 
+fn ini_line(status: &Value, section: &str, key: &str) -> Option<u64> {
+    status["boot"]["ini_keys"][section][key]["line"].as_u64()
+}
+
 fn doctor_findings(status: &Value) -> Vec<(String, String)> {
     let mut findings = Vec::new();
     if ini_value(status, "MiSTer", "main") != Some("MiSTer_MagiK") {
@@ -1120,6 +1154,18 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
             "[arcade_vertical] video_mode is not 8; rotated games should use 1080p scaler mode"
                 .into(),
         ));
+    }
+    if let (Some(arcade), Some(vertical)) = (
+        ini_line(status, "arcade", "direct_video"),
+        ini_line(status, "arcade_vertical", "direct_video"),
+    ) {
+        if arcade > vertical {
+            findings.push((
+                "warn".into(),
+                "[arcade] appears after [arcade_vertical]; vertical arcade settings will be overwritten"
+                    .into(),
+            ));
+        }
     }
     for name in ["MiSTer_MagiK", "mister-magik-fb"] {
         if status["processes"][name]
@@ -1493,10 +1539,10 @@ mod tests {
                         "direct_video": {"value": "0"}
                     },
                     "arcade": {
-                        "direct_video": {"value": "1"}
+                        "direct_video": {"value": "1", "line": 20}
                     },
                     "arcade_vertical": {
-                        "direct_video": {"value": "0"},
+                        "direct_video": {"value": "0", "line": 24},
                         "video_mode": {"value": "8"}
                     },
                     "Menu": {
@@ -1640,6 +1686,7 @@ video_mode=14
         assert!(edited.contains("[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK"));
         assert!(edited.contains("[arcade]\ndirect_video=1"));
         assert!(edited.contains("[arcade_vertical]\ndirect_video=0\nvideo_mode=8\nvscale_mode=1"));
+        assert!(edited.find("[arcade]\n").unwrap() < edited.find("[arcade_vertical]\n").unwrap());
     }
 
     #[test]
@@ -1793,6 +1840,19 @@ H: Handlers=sysrq kbd event7
         assert!(texts.contains(&"/dev/fb0 samples as mostly_black"));
         assert!(texts.contains(&"Main reports visible_owner=menu_bg rather than fb0"));
         assert!(texts.contains(&"/dev/fb0 is not owned by mister-magik-fb"));
+    }
+
+    #[test]
+    fn doctor_reports_arcade_vertical_section_order_regression() {
+        let mut status = status_fixture();
+        status["boot"]["ini_keys"]["arcade"]["direct_video"]["line"] = json!(30);
+        status["boot"]["ini_keys"]["arcade_vertical"]["direct_video"]["line"] = json!(20);
+
+        let findings = doctor_findings(&status);
+        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(texts.contains(
+            &"[arcade] appears after [arcade_vertical]; vertical arcade settings will be overwritten"
+        ));
     }
 
     #[test]
