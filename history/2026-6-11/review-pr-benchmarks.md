@@ -27,3 +27,25 @@ Summary:
 | mega frames >20 ms | 2 | 1 | neutral/improved |
 
 Trace files are under `build/preview-scroll-profiles/`.
+
+## PR 4: Clamp Dirty Rects In Signed Space
+
+Commit under test: `3dcfb93` before benchmark-note amend.
+
+Commands:
+
+```bash
+scripts/bench-toolchain.sh REVIEW-PR4-BEFORE-20260611 --device --replace-label --launcher-scenario held-scroll --scene-secs 15
+scripts/bench-toolchain.sh REVIEW-PR4-AFTER-20260611 --device --replace-label --launcher-scenario held-scroll --scene-secs 15
+```
+
+Summary from `history/toolchain-bench/results.tsv`:
+
+| Scenario | render_us | vsync_us | copy_us | rows_avg | fps | visual |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| before | 207 | 4963 | 2973 | 701 | 60 | capture failed |
+| after | 210 | 2868 | 3180 | 701 | 60 | capture failed |
+
+Both runs appended timing rows but failed the mid-run framebuffer capture gate
+with `capture-fail,visual_ok=no`, so the comparison is useful for present timing
+only. The code fix is covered by host unit tests for offscreen and clipped rects.

@@ -485,13 +485,26 @@ fn ui_fpga_scaled_mode() -> Mode {
 fn dirty_rect(region: &PhysicalRegion, render_w: usize, render_h: usize) -> Option<DirtyRect> {
     let o = region.bounding_box_origin();
     let s = region.bounding_box_size();
-    if s.width == 0 || s.height == 0 {
+    dirty_rect_from_bounds(o.x, o.y, s.width, s.height, render_w, render_h)
+}
+
+fn dirty_rect_from_bounds(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    render_w: usize,
+    render_h: usize,
+) -> Option<DirtyRect> {
+    if width == 0 || height == 0 {
         return None;
     }
-    let x0 = o.x.max(0) as usize;
-    let x1 = ((o.x + s.width as i32) as usize).min(render_w);
-    let y0 = o.y.max(0) as usize;
-    let y1 = ((o.y + s.height as i32) as usize).min(render_h);
+    let render_w = render_w as i64;
+    let render_h = render_h as i64;
+    let x0 = (x as i64).clamp(0, render_w) as usize;
+    let x1 = ((x as i64) + width as i64).clamp(0, render_w) as usize;
+    let y0 = (y as i64).clamp(0, render_h) as usize;
+    let y1 = ((y as i64) + height as i64).clamp(0, render_h) as usize;
     if x1 > x0 && y1 > y0 {
         Some(DirtyRect { x0, y0, x1, y1 })
     } else {
@@ -5024,5 +5037,43 @@ mod tests {
         assert_eq!(target.render_w, 640);
         assert_eq!(target.render_h, 448);
         assert_eq!(target.scale, 1);
+    }
+
+    #[test]
+    fn dirty_rect_ignores_fully_negative_bounds() {
+        assert_eq!(dirty_rect_from_bounds(-40, 10, 20, 20, 960, 540), None);
+        assert_eq!(dirty_rect_from_bounds(10, -40, 20, 20, 960, 540), None);
+    }
+
+    #[test]
+    fn dirty_rect_clips_partially_negative_bounds() {
+        assert_eq!(
+            dirty_rect_from_bounds(-10, -5, 30, 20, 960, 540),
+            Some(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: 20,
+                y1: 15
+            })
+        );
+    }
+
+    #[test]
+    fn dirty_rect_ignores_zero_area_bounds() {
+        assert_eq!(dirty_rect_from_bounds(10, 10, 0, 20, 960, 540), None);
+        assert_eq!(dirty_rect_from_bounds(10, 10, 20, 0, 960, 540), None);
+    }
+
+    #[test]
+    fn dirty_rect_keeps_in_bounds_rect() {
+        assert_eq!(
+            dirty_rect_from_bounds(10, 20, 30, 40, 960, 540),
+            Some(DirtyRect {
+                x0: 10,
+                y0: 20,
+                x1: 40,
+                y1: 60
+            })
+        );
     }
 }
