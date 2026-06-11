@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use crate::preview_state::PreviewRawTransitionFrame;
 
+const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 160;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewTransitionEffect {
     Cut,
@@ -143,7 +145,7 @@ impl PreviewTransitionDemo {
         let duration_ms = std::env::var("MISTER_PREVIEW_TRANSITION_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(320)
+            .unwrap_or(DEFAULT_PREVIEW_TRANSITION_MS)
             .clamp(1, 2_000);
         Self {
             effects,
