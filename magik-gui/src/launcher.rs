@@ -6,7 +6,9 @@ use crate::arcade_catalog::{
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
+use std::fmt;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -20,11 +22,41 @@ const ARCADE_NORMAL_PX_PER_FRAME: i32 = 6;
 const ARCADE_TURBO_PX_PER_FRAME: i32 = 12;
 const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
 const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
+const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
 
 static LAUNCH_STATE: AtomicU8 = AtomicU8::new(LAUNCH_IDLE);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchError {
+    message: String,
+    spawned_mister: bool,
+}
+
+impl LaunchError {
+    fn new(message: impl Into<String>, spawned_mister: bool) -> Self {
+        Self {
+            message: message.into(),
+            spawned_mister,
+        }
+    }
+
+    pub fn spawned_mister(&self) -> bool {
+        self.spawned_mister
+    }
+}
+
+impl fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.message.fmt(f)
+    }
+}
+
+impl std::error::Error for LaunchError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -515,14 +547,122 @@ pub fn game_title(catalog: &ArcadeCatalog, mra_path: &str) -> String {
     catalog.title_for_path(mra_path).to_string()
 }
 
-fn wait_for_fifo() -> bool {
-    for _ in 0..50 {
-        if Path::new(CMD_FIFO).exists() {
+fn wait_until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if ready() {
             return true;
         }
         thread::sleep(Duration::from_millis(100));
     }
-    false
+    ready()
+}
+
+fn wait_for_fifo() -> bool {
+    wait_until(FIFO_WAIT_TIMEOUT, || Path::new(CMD_FIFO).exists())
+}
+
+fn wait_for_mister_and_fifo() -> bool {
+    wait_until(MISTER_START_TIMEOUT, || {
+        Path::new(CMD_FIFO).exists() && mister_running()
+    })
+}
+
+fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
+    let start = Instant::now();
+    let mut last_error = None;
+    while start.elapsed() < FIFO_WRITE_TIMEOUT {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(CMD_FIFO)
+        {
+            Ok(mut f) => {
+                let bytes = cmd.as_bytes();
+                let mut written = 0usize;
+                while written < bytes.len() && start.elapsed() < FIFO_WRITE_TIMEOUT {
+                    match f.write(&bytes[written..]) {
+                        Ok(0) => {
+                            last_error = Some("zero-length FIFO write".to_string());
+                            break;
+                        }
+                        Ok(n) => written += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            last_error = Some(e.to_string());
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(e) => {
+                            return Err(format!("failed to write {CMD_FIFO}: {e}"));
+                        }
+                    }
+                }
+                if written == bytes.len() {
+                    return Ok(());
+                }
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.raw_os_error() == Some(libc::ENXIO) =>
+            {
+                last_error = Some(e.to_string());
+            }
+            Err(e) => return Err(format!("failed to open {CMD_FIFO}: {e}")),
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(format!(
+        "timed out writing {CMD_FIFO}: {}",
+        last_error.unwrap_or_else(|| "no reader".to_string())
+    ))
+}
+
+trait LaunchIo {
+    fn target_exists(&mut self, path: &str) -> bool;
+    fn mister_running(&mut self) -> bool;
+    fn magik_running(&mut self) -> bool;
+    fn start_mister(&mut self) -> Result<(), String>;
+    fn wait_for_started_mister(&mut self) -> bool;
+    fn wait_for_command_fifo(&mut self) -> bool;
+    fn write_mister_command(&mut self, cmd: &str) -> Result<(), String>;
+}
+
+struct SystemLaunchIo;
+
+impl LaunchIo for SystemLaunchIo {
+    fn target_exists(&mut self, path: &str) -> bool {
+        Path::new(path).exists()
+    }
+
+    fn mister_running(&mut self) -> bool {
+        mister_running()
+    }
+
+    fn magik_running(&mut self) -> bool {
+        Command::new("pidof")
+            .arg("MiSTer_MagiK")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn start_mister(&mut self) -> Result<(), String> {
+        Command::new(MISTER_BIN)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("failed to spawn {MISTER_BIN}: {e}"))
+    }
+
+    fn wait_for_started_mister(&mut self) -> bool {
+        wait_for_mister_and_fifo()
+    }
+
+    fn wait_for_command_fifo(&mut self) -> bool {
+        wait_for_fifo()
+    }
+
+    fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
+        write_mister_command_nonblocking(cmd)
+    }
 }
 
 fn mister_running() -> bool {
@@ -551,15 +691,11 @@ pub fn stop_mister() {
 }
 
 fn spawn_mister() -> Result<(), String> {
-    Command::new(MISTER_BIN)
-        .spawn()
-        .map_err(|e| format!("failed to spawn {MISTER_BIN}: {e}"))?;
-    for _ in 0..150 {
-        if Path::new(CMD_FIFO).exists() && mister_running() {
-            thread::sleep(Duration::from_millis(200));
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(100));
+    let mut io = SystemLaunchIo;
+    io.start_mister()?;
+    if io.wait_for_started_mister() {
+        thread::sleep(Duration::from_millis(200));
+        return Ok(());
     }
     Err(format!("timed out waiting for {MISTER_BIN} + {CMD_FIFO}"))
 }
@@ -574,11 +710,7 @@ fn restore_menu_wallpaper() {
 }
 
 fn write_mister_command(cmd: &str) -> Result<(), String> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(CMD_FIFO)
-        .and_then(|mut f| f.write_all(cmd.as_bytes()))
-        .map_err(|e| format!("failed to write {CMD_FIFO}: {e}"))
+    write_mister_command_nonblocking(cmd)
 }
 
 pub fn exit_to_mister() -> Result<(), String> {
@@ -621,35 +753,48 @@ pub fn mister_running_arcade_core() -> bool {
 
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
 /// Returns `true` if Main was spawned for this launch (caller should stop it on failure).
-pub fn execute_game_launch(launch_ref: &str) -> Result<bool, String> {
-    if !Path::new(launch_ref).exists() {
-        return Err(format!("launch target not found: {launch_ref}"));
+pub fn execute_game_launch(launch_ref: &str) -> Result<bool, LaunchError> {
+    let mut io = SystemLaunchIo;
+    execute_game_launch_with(launch_ref, &mut io)
+}
+
+fn execute_game_launch_with(launch_ref: &str, io: &mut impl LaunchIo) -> Result<bool, LaunchError> {
+    if !io.target_exists(launch_ref) {
+        return Err(LaunchError::new(
+            format!("launch target not found: {launch_ref}"),
+            false,
+        ));
     }
 
-    let spawned = if mister_running() {
+    let spawned = if io.mister_running() {
         false
     } else {
         println!("launch: starting {MISTER_BIN} for load_core");
-        spawn_mister()?;
+        io.start_mister().map_err(|e| LaunchError::new(e, false))?;
+        if !io.wait_for_started_mister() {
+            return Err(LaunchError::new(
+                format!("timed out waiting for {MISTER_BIN} + {CMD_FIFO}"),
+                true,
+            ));
+        }
         true
     };
 
-    if !wait_for_fifo() {
-        return Err(format!("timed out waiting for {CMD_FIFO}"));
+    if !io.wait_for_command_fifo() {
+        return Err(LaunchError::new(
+            format!("timed out waiting for {CMD_FIFO}"),
+            spawned,
+        ));
     }
 
-    let cmd = if Command::new("pidof")
-        .arg("MiSTer_MagiK")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    let cmd = if io.magik_running() {
         format!("mister_magik_launch {launch_ref}\n")
     } else {
         format!("load_core {launch_ref}\n")
     };
     println!("launch: {}", cmd.trim_end());
-    write_mister_command(&cmd)?;
+    io.write_mister_command(&cmd)
+        .map_err(|e| LaunchError::new(e, spawned))?;
 
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
     Ok(spawned)
@@ -681,6 +826,64 @@ pub fn reboot_mister() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FakeLaunchIo {
+        target_exists: bool,
+        mister_running: bool,
+        magik_running: bool,
+        start_result: Result<(), String>,
+        started_ready: bool,
+        fifo_ready: bool,
+        write_result: Result<(), String>,
+        start_calls: usize,
+        commands: Vec<String>,
+    }
+
+    impl LaunchIo for FakeLaunchIo {
+        fn target_exists(&mut self, _path: &str) -> bool {
+            self.target_exists
+        }
+
+        fn mister_running(&mut self) -> bool {
+            self.mister_running
+        }
+
+        fn magik_running(&mut self) -> bool {
+            self.magik_running
+        }
+
+        fn start_mister(&mut self) -> Result<(), String> {
+            self.start_calls += 1;
+            self.start_result.clone()
+        }
+
+        fn wait_for_started_mister(&mut self) -> bool {
+            self.started_ready
+        }
+
+        fn wait_for_command_fifo(&mut self) -> bool {
+            self.fifo_ready
+        }
+
+        fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
+            self.commands.push(cmd.to_string());
+            self.write_result.clone()
+        }
+    }
+
+    fn launch_io() -> FakeLaunchIo {
+        FakeLaunchIo {
+            target_exists: true,
+            mister_running: true,
+            magik_running: true,
+            start_result: Ok(()),
+            started_ready: true,
+            fifo_ready: true,
+            write_result: Ok(()),
+            start_calls: 0,
+            commands: Vec::new(),
+        }
+    }
 
     fn input(nav: &mut ArcadeNav, dir: i32, previous_dir: i32, count: usize, now: Instant) {
         nav.handle_direction_input(dir, previous_dir, now, count);
@@ -906,5 +1109,70 @@ mod tests {
             nav.scroll.visual_px,
             visual_before_repress - ARCADE_NORMAL_PX_PER_FRAME
         );
+    }
+
+    #[test]
+    fn launch_missing_target_does_not_spawn_or_require_recovery() {
+        reset_launch();
+        let mut io = launch_io();
+        io.target_exists = false;
+
+        let err = execute_game_launch_with("/missing.mra", &mut io).expect_err("launch fails");
+
+        assert!(!err.spawned_mister());
+        assert_eq!(io.start_calls, 0);
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn launch_fifo_timeout_after_spawn_reports_recovery_needed() {
+        reset_launch();
+        let mut io = launch_io();
+        io.mister_running = false;
+        io.started_ready = false;
+
+        let err = execute_game_launch_with("/media/fat/_Arcade/test.mra", &mut io)
+            .expect_err("launch fails");
+
+        assert!(err.spawned_mister());
+        assert_eq!(io.start_calls, 1);
+        assert!(err.to_string().contains("timed out waiting"));
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn launch_write_failure_after_spawn_reports_recovery_needed() {
+        reset_launch();
+        let mut io = launch_io();
+        io.mister_running = false;
+        io.write_result = Err("fifo write failed".to_string());
+
+        let err = execute_game_launch_with("/media/fat/_Arcade/test.mra", &mut io)
+            .expect_err("launch fails");
+
+        assert!(err.spawned_mister());
+        assert_eq!(io.start_calls, 1);
+        assert_eq!(
+            io.commands,
+            vec!["mister_magik_launch /media/fat/_Arcade/test.mra\n"]
+        );
+        assert_eq!(err.to_string(), "fifo write failed");
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn launch_running_stock_main_uses_load_core_without_recovery_flag() {
+        reset_launch();
+        let mut io = launch_io();
+        io.magik_running = false;
+
+        let spawned = execute_game_launch_with("/media/fat/_Arcade/test.mra", &mut io)
+            .expect("launch succeeds");
+
+        assert!(!spawned);
+        assert_eq!(io.start_calls, 0);
+        assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
+        assert!(launch_in_progress());
+        reset_launch();
     }
 }

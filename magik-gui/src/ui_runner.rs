@@ -34,8 +34,10 @@ use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
+#[cfg(not(mister_ui_scope_launcher))]
+use crate::preview_state::request_arcade_preview;
 use crate::preview_state::{
-    apply_ready_preview, preview_visual_pct, request_arcade_preview, request_arcade_preview_window,
+    apply_ready_preview, preview_visual_pct, request_arcade_preview_window,
     schedule_arcade_preview_window, PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W,
     ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
@@ -5105,6 +5107,7 @@ fn run_launcher_loop(
                             }
                             Err(e) => {
                                 eprintln!("game launch failed: {e}");
+                                launch_spawned_mister |= e.spawned_mister();
                                 loading_title.clear();
                                 launcher::reset_launch();
                                 sync_bridge_launcher(

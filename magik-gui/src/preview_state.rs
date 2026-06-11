@@ -235,6 +235,7 @@ impl PreviewState {
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 pub(crate) fn request_arcade_preview(
     bridge: &slint_ui::launcher::MisterBridge,
     games: &[ArcadeGameEntry],

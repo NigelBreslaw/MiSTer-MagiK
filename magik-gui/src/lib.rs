@@ -11,6 +11,7 @@ pub mod framebuffer_copy;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
+pub mod launcher;
 pub mod runtime_status;
 pub mod vsync_pacer;
 
