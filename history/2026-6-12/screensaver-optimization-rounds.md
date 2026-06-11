@@ -340,3 +340,24 @@ the focused starfield win.
 
 This is a small but measured p95/p99 improvement on a mode already inside the
 60fps target.
+
+## Round 15 - Duplicate Kefrens bar rows
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-KEFRENS-R15-20260612 --deploy-fast --mode kefrens-screenshot-bars --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `kefrens-screenshot-bars` to render every other row and duplicate
+it into the next row. The effect's wave already advances in coarse row bands,
+so this removes roughly half of the inner per-pixel bar work while preserving
+the visual shape.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R14 mega kefrens segment | 175 | 16969 | 17445 | 20123 | 101 | 3 | 29392 |
+| round 15 focused kefrens | 721 | 16518 | 16565 | 17059 | 16 | 0 | 29348 |
+
+`kefrens-screenshot-bars` is back inside the p95 target with no >20ms frames in
+the focused run.

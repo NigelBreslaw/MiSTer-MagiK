@@ -1007,7 +1007,8 @@ fn render_raster_gallery(
 fn render_kefrens(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
     let bar_w = 24usize;
     let bars = w / bar_w + 3;
-    for y in 0..h {
+    let mut y = 0usize;
+    while y < h {
         let row = y * w;
         for bar in 0..bars {
             if let Some(img) = image_at(images, bar + frame as usize / 120) {
@@ -1029,6 +1030,12 @@ fn render_kefrens(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverIm
                 }
             }
         }
+        if y + 1 < h {
+            let next = (y + 1) * w;
+            let (head, tail) = dst.split_at_mut(next);
+            tail[..w].copy_from_slice(&head[row..row + w]);
+        }
+        y += 2;
     }
 }
 
