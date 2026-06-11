@@ -130,6 +130,15 @@ static bool deploy_lock_active(void)
 	return access(s_deploy_lock_path, F_OK) == 0;
 }
 
+static bool launcher_runtime_active(void)
+{
+	if (s_stock_menu_enabled || s_gave_up || s_escaped)
+		return false;
+	if (!FileExists(s_launcher_path, 0))
+		return false;
+	return s_pid || s_init_pending || s_respawn_timer || s_deploy_lock_waiting;
+}
+
 void mister_magik_status_write(void)
 {
 	ensure_status_dir();
@@ -146,7 +155,7 @@ void mister_magik_status_write(void)
 	fprintf(f, "\"ts_boot_ms\":%lu,", GetTimer(0));
 	fprintf(f, "\"pid\":%d,", getpid());
 	fprintf(f, "\"launcher_pid\":%d,", s_pid);
-	fprintf(f, "\"launcher_active\":%s,", s_pid ? "true" : "false");
+	fprintf(f, "\"launcher_active\":%s,", launcher_runtime_active() ? "true" : "false");
 	fprintf(f, "\"crash_count\":%d,", s_crash_count);
 	fprintf(f, "\"respawn_timer\":%lu,", s_respawn_timer);
 	fprintf(f, "\"init_pending\":%s,", s_init_pending ? "true" : "false");
@@ -678,7 +687,7 @@ static void spawn(void)
 
 bool mister_magik_launcher_active(void)
 {
-	return !s_stock_menu_enabled && FileExists(s_launcher_path, 0);
+	return launcher_runtime_active();
 }
 
 bool mister_magik_boot_analytics_enabled(void)
@@ -688,6 +697,9 @@ bool mister_magik_boot_analytics_enabled(void)
 
 void mister_magik_boot_analytics_event(const char *source, const char *event, const char *fmt, ...)
 {
+	if (!analytics_enabled())
+		return;
+
 	char detail[768];
 	detail[0] = 0;
 	if (fmt)
@@ -701,9 +713,6 @@ void mister_magik_boot_analytics_event(const char *source, const char *event, co
 	}
 	event_jsonl(source ? source : "main", event, detail);
 	mister_magik_status_write();
-
-	if (!analytics_enabled())
-		return;
 
 	FILE *f = fopen(s_analytics_path, "a");
 	if (!f) return;
