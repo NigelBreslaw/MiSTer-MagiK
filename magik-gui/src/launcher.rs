@@ -5,7 +5,7 @@ use crate::arcade_catalog::{
 };
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
-use crate::library_bench;
+use crate::library_db;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
@@ -660,7 +660,7 @@ pub fn reset_launch() {
 }
 
 pub fn reset_database_and_reboot() -> Result<(), String> {
-    library_bench::remove_default_sqlite_database()?;
+    library_db::remove_default_sqlite_database()?;
     reboot_mister()
 }
 

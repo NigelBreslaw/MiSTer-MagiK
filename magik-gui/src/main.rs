@@ -41,7 +41,7 @@ mod video_player;
 mod vt;
 
 pub use mister_magik_fb::{
-    arcade_catalog, command_args, controller_db, input_repeat, input_state, library_bench,
+    arcade_catalog, command_args, controller_db, input_repeat, input_state, library_db,
     preview_worker,
 };
 
@@ -96,7 +96,7 @@ fn main() {
         "effects" => ui_runner::print_effects(),
         "effect-bench" => ui_runner::run_effect_bench(&mut f),
         "input" => run_input(),
-        "library-scan-bench" => library_bench::run_scan_bench(),
+        "library-scan-bench" => library_db::run_scan_bench(),
         "preview-cache" => run_preview_cache(),
         "audio-tone" => run_audio_tone(&mut f),
         other => {

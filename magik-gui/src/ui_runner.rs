@@ -27,7 +27,7 @@ use crate::display_config::DisplayConfig;
 use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
-use crate::library_bench;
+use crate::library_db;
 use crate::preview_worker::{
     preview_window_indices, preview_window_paths, PreviewPriority, PreviewWorker,
     DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
@@ -2170,8 +2170,7 @@ fn start_library_catalog_worker(
                     detail: detail.to_string(),
                 });
             };
-            let summary = match library_bench::refresh_default_sqlite_database(Some(&mut progress))
-            {
+            let summary = match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
                 Ok(summary) => Some(summary),
                 Err(e) => {
                     eprintln!("library refresh failed: {e}");
@@ -2196,7 +2195,7 @@ fn start_library_catalog_worker(
                     detail: "Opening SQLite catalog...".to_string(),
                 });
             }
-            match library_bench::load_arcade_catalog_from_sqlite(&root) {
+            match library_db::load_arcade_catalog_from_sqlite(&root) {
                 Ok(loaded) => {
                     let _ = tx.send(CatalogWorkerMessage::Ready {
                         catalog: loaded.catalog,
@@ -2224,11 +2223,11 @@ enum CatalogWorkerMessage {
     },
     Ready {
         catalog: ArcadeCatalog,
-        summary: Option<library_bench::LibraryRefreshSummary>,
+        summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
     },
     Unchanged {
-        summary: library_bench::LibraryRefreshSummary,
+        summary: library_db::LibraryRefreshSummary,
     },
 }
 
@@ -5274,7 +5273,7 @@ fn run_arcade_page_loop(
 
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    let catalog = library_bench::load_arcade_catalog_from_sqlite(&arcade_root)
+    let catalog = library_db::load_arcade_catalog_from_sqlite(&arcade_root)
         .map(|loaded| loaded.catalog)
         .unwrap_or_else(|e| {
             eprintln!("arcade_page catalog cache load failed: {e}");
@@ -5520,7 +5519,7 @@ fn run_preview_scroll_bench_loop(
 
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    let catalog = library_bench::load_arcade_catalog_from_sqlite(&arcade_root)
+    let catalog = library_db::load_arcade_catalog_from_sqlite(&arcade_root)
         .map(|loaded| loaded.catalog)
         .unwrap_or_else(|e| {
             eprintln!("preview_scroll_bench catalog cache load failed: {e}");

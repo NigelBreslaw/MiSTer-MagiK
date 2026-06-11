@@ -14,4 +14,4 @@ pub mod input_state;
 pub mod runtime_status;
 pub mod vsync_pacer;
 
-pub use mister_magik_catalog::{arcade_catalog, library_bench, preview_worker};
+pub use mister_magik_catalog::{arcade_catalog, library_bench, library_db, preview_worker};
