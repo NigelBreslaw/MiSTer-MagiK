@@ -13,7 +13,7 @@
 //!   fb-current [secs] [normal|direct|none]  compatibility alias for `fb`
 //!   input     gamepad log / sniff / calibrate
 //!   library-scan-bench  benchmark cold scan, import, cached load, and no-op rescan
-//!   preview-cache build --filter nearest|box|lanczos --format derived-png|raw-rgb --max 320x320
+//!   preview-cache build --filter nearest|box|lanczos --format derived-png|raw-rgb|raw-rgb565 --max 320x320
 //!   audio-tone  play a 48 kHz stereo sine wave through /dev/MrAudio
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
@@ -179,7 +179,7 @@ fn run_preview_cache() {
     let sub = args.first().map(String::as_str).unwrap_or("help");
     if sub != "build" {
         eprintln!(
-            "usage: preview-cache build [--filter nearest|box|lanczos] [--format derived-png|raw-rgb] [--max 320x320] [--root /media/fat/_Arcade] [--limit N]"
+            "usage: preview-cache build [--filter nearest|box|lanczos] [--format derived-png|raw-rgb|raw-rgb565] [--max 320x320] [--root /media/fat/_Arcade] [--limit N]"
         );
         std::process::exit(2);
     }
@@ -213,7 +213,7 @@ fn run_preview_cache() {
                 };
                 format = preview_worker::PreviewStorageFormat::from_label(value);
                 if format == preview_worker::PreviewStorageFormat::Png {
-                    eprintln!("preview-cache: format must be derived-png or raw-rgb");
+                    eprintln!("preview-cache: format must be derived-png, raw-rgb, or raw-rgb565");
                     std::process::exit(2);
                 }
                 i += 2;

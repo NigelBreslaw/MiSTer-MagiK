@@ -3,12 +3,13 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use mister_magik_ui as slint_ui;
+use slint::platform::software_renderer::Rgb565Pixel;
 use slint::{ComponentHandle, Image, Rgb8Pixel, SharedPixelBuffer};
 use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::ArcadeGameEntry;
 use crate::preview_worker::{
-    preview_window_indices, preview_window_paths, PreviewPriority, PreviewWorker,
+    preview_window_indices, preview_window_paths, PreviewPixels, PreviewPriority, PreviewWorker,
     DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
@@ -68,11 +69,20 @@ fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
 #[derive(Clone)]
 struct PreviewImage {
     image: Image,
-    rgb: Vec<u8>,
+    pixels: PreviewImagePixels,
     source_w: u32,
     source_h: u32,
     display_w: u32,
     display_h: u32,
+}
+
+#[derive(Clone)]
+enum PreviewImagePixels {
+    Rgb8(Vec<u8>),
+    Rgb565 {
+        pixels: Vec<Rgb565Pixel>,
+        stride_pixels: usize,
+    },
 }
 
 #[derive(Default)]
@@ -225,11 +235,20 @@ pub(crate) struct PreviewState {
 }
 
 pub(crate) struct PreviewRawFrame<'a> {
-    pub(crate) rgb: &'a [u8],
+    pub(crate) pixels: PreviewRawPixels<'a>,
     pub(crate) source_w: u32,
     pub(crate) source_h: u32,
     pub(crate) display_w: u32,
     pub(crate) display_h: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PreviewRawPixels<'a> {
+    Rgb8(&'a [u8]),
+    Rgb565 {
+        pixels: &'a [Rgb565Pixel],
+        stride_pixels: usize,
+    },
 }
 
 impl PreviewState {
@@ -298,7 +317,16 @@ impl PreviewState {
         }
         let image = self.cache.peek(&self.visible_path)?;
         Some(PreviewRawFrame {
-            rgb: &image.rgb,
+            pixels: match &image.pixels {
+                PreviewImagePixels::Rgb8(rgb) => PreviewRawPixels::Rgb8(rgb),
+                PreviewImagePixels::Rgb565 {
+                    pixels,
+                    stride_pixels,
+                } => PreviewRawPixels::Rgb565 {
+                    pixels,
+                    stride_pixels: *stride_pixels,
+                },
+            },
             source_w: image.source_w,
             source_h: image.source_h,
             display_w: image.display_w,
@@ -532,8 +560,8 @@ pub(crate) fn apply_ready_preview(
                     result.resize_filter,
                     result.source_width,
                     result.source_height,
-                    image.width,
-                    image.height,
+                    image.width(),
+                    image.height(),
                     result.total_us,
                     result.read_us,
                     result.decode_us,
@@ -543,20 +571,38 @@ pub(crate) fn apply_ready_preview(
                     result.image_path
                 );
             }
-            let source_w = image.width;
-            let source_h = image.height;
+            let source_w = image.width();
+            let source_h = image.height();
             let display = preview_display_size(
                 source_w,
                 source_h,
                 ARCADE_PREVIEW_BOX_W,
                 ARCADE_PREVIEW_BOX_H,
             );
-            let raw_rgb = image.rgb;
             let slint_image_t = Instant::now();
-            let slint_image = if preview_raw_blitter_enabled() {
-                Image::default()
-            } else {
-                png_to_slint_image(source_w, source_h, raw_rgb.clone())
+            let (slint_image, pixels) = match image {
+                PreviewPixels::Rgb8(image) => {
+                    let slint_image = if preview_raw_blitter_enabled() {
+                        Image::default()
+                    } else {
+                        png_to_slint_image(source_w, source_h, image.rgb.clone())
+                    };
+                    (slint_image, PreviewImagePixels::Rgb8(image.rgb))
+                }
+                PreviewPixels::Rgb565 {
+                    stride_bytes,
+                    words,
+                    ..
+                } => {
+                    let pixels = words.into_iter().map(Rgb565Pixel).collect();
+                    (
+                        Image::default(),
+                        PreviewImagePixels::Rgb565 {
+                            pixels,
+                            stride_pixels: stride_bytes as usize / 2,
+                        },
+                    )
+                }
             };
             let slint_image_us = slint_image_t.elapsed().as_micros() as u64;
             if preview_trace_enabled() {
@@ -572,7 +618,7 @@ pub(crate) fn apply_ready_preview(
             }
             let image = PreviewImage {
                 image: slint_image,
-                rgb: raw_rgb,
+                pixels,
                 source_w,
                 source_h,
                 display_w: display.w,

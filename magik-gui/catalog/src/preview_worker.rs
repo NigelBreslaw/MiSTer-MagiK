@@ -39,7 +39,7 @@ pub struct PreviewResult {
     pub generation: u64,
     pub title: String,
     pub image_path: String,
-    pub image: Option<DecodedImage>,
+    pub image: Option<PreviewPixels>,
     pub request_age_us: u64,
     pub read_us: u64,
     pub decode_us: u64,
@@ -128,6 +128,7 @@ pub enum PreviewStorageFormat {
     Png,
     DerivedPng,
     RawRgb,
+    RawRgb565,
 }
 
 impl PreviewStorageFormat {
@@ -136,6 +137,7 @@ impl PreviewStorageFormat {
             Self::Png => "png",
             Self::DerivedPng => "derived-png",
             Self::RawRgb => "raw-rgb",
+            Self::RawRgb565 => "raw-rgb565",
         }
     }
 
@@ -143,13 +145,58 @@ impl PreviewStorageFormat {
         match label.to_ascii_lowercase().replace('_', "-").as_str() {
             "derived-png" | "resized-png" | "cache-png" => Self::DerivedPng,
             "raw" | "rgb" | "raw-rgb" => Self::RawRgb,
+            "raw565" | "rgb565" | "565" | "raw-rgb565" => Self::RawRgb565,
             _ => Self::Png,
         }
     }
 
     fn from_env() -> Self {
-        let label = std::env::var("MISTER_PREVIEW_FORMAT").unwrap_or_else(|_| "derived-png".into());
-        Self::from_label(&label)
+        if let Ok(label) = std::env::var("MISTER_PREVIEW_FORMAT") {
+            return Self::from_label(&label);
+        }
+        if fb_format_env_is_565() && raw_blitter_env_enabled() {
+            Self::RawRgb565
+        } else {
+            Self::DerivedPng
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PreviewPixels {
+    Rgb8(DecodedImage),
+    Rgb565 {
+        width: u32,
+        height: u32,
+        stride_bytes: u32,
+        words: Vec<u16>,
+    },
+}
+
+impl PreviewPixels {
+    pub fn width(&self) -> u32 {
+        match self {
+            Self::Rgb8(image) => image.width,
+            Self::Rgb565 { width, .. } => *width,
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            Self::Rgb8(image) => image.height,
+            Self::Rgb565 { height, .. } => *height,
+        }
+    }
+
+    pub fn decoded_bytes(&self) -> usize {
+        match self {
+            Self::Rgb8(image) => image.rgb.len(),
+            Self::Rgb565 {
+                stride_bytes,
+                height,
+                ..
+            } => *stride_bytes as usize * *height as usize,
+        }
     }
 }
 
@@ -307,7 +354,7 @@ fn enqueue_command(queue: &mut Vec<PreviewRequest>, command: PreviewCommand) {
 fn load_preview(req: PreviewRequest) -> PreviewResult {
     let resize = PreviewResizeSpec::from_env();
     let storage = PreviewStorageFormat::from_env();
-    match load_preview_image(&req.image_path, storage, resize) {
+    match load_preview_pixels(&req.image_path, storage, resize) {
         Ok(loaded) => {
             if preview_trace_enabled() {
                 eprintln!(
@@ -317,17 +364,18 @@ fn load_preview(req: PreviewRequest) -> PreviewResult {
                     resize.filter.label(),
                     loaded.timing.source_width,
                     loaded.timing.source_height,
-                    loaded.image.width,
-                    loaded.image.height,
+                    loaded.image.width(),
+                    loaded.image.height(),
                     loaded.timing.total_us,
                     loaded.timing.read_us,
                     loaded.timing.decode_us,
                     loaded.timing.resize_us,
                     loaded.timing.encoded_bytes,
-                    loaded.timing.decoded_bytes,
+                    loaded.image.decoded_bytes(),
                     req.image_path
                 );
             }
+            let decoded_bytes = loaded.image.decoded_bytes();
             PreviewResult {
                 generation: req.generation,
                 title: req.title,
@@ -339,7 +387,7 @@ fn load_preview(req: PreviewRequest) -> PreviewResult {
                 resize_us: loaded.timing.resize_us,
                 total_us: loaded.timing.total_us,
                 encoded_bytes: loaded.timing.encoded_bytes,
-                decoded_bytes: loaded.timing.decoded_bytes,
+                decoded_bytes,
                 source_width: loaded.timing.source_width,
                 source_height: loaded.timing.source_height,
                 storage_format: storage,
@@ -404,6 +452,49 @@ pub fn load_preview_image(
             apply_resize(&mut loaded, resize);
             Ok(loaded)
         }),
+        PreviewStorageFormat::RawRgb565 => {
+            trace_preview_fallback(
+                image_path,
+                PreviewStorageFormat::RawRgb565,
+                "raw565 requested through rgb8 loader",
+            );
+            let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
+            apply_resize(&mut loaded, resize);
+            Ok(loaded)
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LoadedPreviewPixels {
+    timing: ImageLoadTiming,
+    image: PreviewPixels,
+}
+
+fn load_preview_pixels(
+    image_path: &str,
+    storage: PreviewStorageFormat,
+    resize: PreviewResizeSpec,
+) -> Result<LoadedPreviewPixels, String> {
+    match storage {
+        PreviewStorageFormat::RawRgb565 => {
+            load_raw565_preview_timed(image_path, resize).or_else(|e| {
+                trace_preview_fallback(image_path, PreviewStorageFormat::RawRgb565, &e);
+                let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
+                apply_resize(&mut loaded, resize);
+                Ok(LoadedPreviewPixels {
+                    timing: loaded.timing,
+                    image: PreviewPixels::Rgb8(loaded.image),
+                })
+            })
+        }
+        _ => {
+            let loaded = load_preview_image(image_path, storage, resize)?;
+            Ok(LoadedPreviewPixels {
+                timing: loaded.timing,
+                image: PreviewPixels::Rgb8(loaded.image),
+            })
+        }
     }
 }
 
@@ -432,6 +523,7 @@ pub fn preview_cache_path(
     let (dir_prefix, ext) = match storage {
         PreviewStorageFormat::Png | PreviewStorageFormat::DerivedPng => ("png", "png"),
         PreviewStorageFormat::RawRgb => ("raw", "rgb"),
+        PreviewStorageFormat::RawRgb565 => ("raw565", "rgb565"),
     };
     let cache_dir = format!("{dir_prefix}-{}", resize.cache_label());
     if let Ok(root) = std::env::var("MISTER_PREVIEW_CACHE_DIR") {
@@ -456,6 +548,10 @@ pub fn preview_cache_path(
 
 pub fn raw_preview_cache_path(image_path: &str, resize: PreviewResizeSpec) -> PathBuf {
     preview_cache_path(image_path, PreviewStorageFormat::RawRgb, resize)
+}
+
+pub fn raw565_preview_cache_path(image_path: &str, resize: PreviewResizeSpec) -> PathBuf {
+    preview_cache_path(image_path, PreviewStorageFormat::RawRgb565, resize)
 }
 
 #[derive(Clone, Debug)]
@@ -483,9 +579,12 @@ pub fn write_preview_cache(
     resize: PreviewResizeSpec,
 ) -> Result<PreviewCacheBuildResult, String> {
     match storage {
-        PreviewStorageFormat::Png => Err("preview cache format must be derived-png or raw-rgb".into()),
+        PreviewStorageFormat::Png => {
+            Err("preview cache format must be derived-png, raw-rgb, or raw-rgb565".into())
+        }
         PreviewStorageFormat::DerivedPng => write_derived_png_preview_cache(image_path, resize),
         PreviewStorageFormat::RawRgb => write_raw_preview_cache(image_path, resize),
+        PreviewStorageFormat::RawRgb565 => write_raw565_preview_cache(image_path, resize),
     }
 }
 
@@ -571,6 +670,45 @@ fn write_derived_png_preview_cache(
     })
 }
 
+pub fn write_raw565_preview_cache(
+    image_path: &str,
+    resize: PreviewResizeSpec,
+) -> Result<PreviewCacheBuildResult, String> {
+    let total_t = Instant::now();
+    let mut loaded = arcade_catalog::load_png_rgb8_timed(image_path)?;
+    let source_width = loaded.timing.source_width;
+    let source_height = loaded.timing.source_height;
+    apply_resize(&mut loaded, resize);
+    let out = raw565_preview_cache_path(image_path, resize);
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let write_t = Instant::now();
+    let bytes = encode_raw565_preview_bytes(&loaded.image);
+    std::fs::write(&out, bytes).map_err(|e| format!("write {}: {e}", out.display()))?;
+    let encode_write_us = write_t.elapsed().as_micros() as u64;
+    let output_bytes = std::fs::metadata(&out)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    Ok(PreviewCacheBuildResult {
+        input_path: image_path.to_string(),
+        output_path: out,
+        storage_format: PreviewStorageFormat::RawRgb565,
+        resize_filter: resize.filter,
+        source_width,
+        source_height,
+        output_width: loaded.image.width,
+        output_height: loaded.image.height,
+        read_us: loaded.timing.read_us,
+        decode_us: loaded.timing.decode_us,
+        resize_us: loaded.timing.resize_us,
+        encode_write_us,
+        total_us: total_t.elapsed().as_micros() as u64,
+        input_bytes: loaded.timing.encoded_bytes,
+        output_bytes,
+    })
+}
+
 fn load_raw_preview_timed(image_path: &str, resize: PreviewResizeSpec) -> Result<LoadedImage, String> {
     let path = raw_preview_cache_path(image_path, resize);
     let total_t = Instant::now();
@@ -602,6 +740,35 @@ fn load_derived_png_timed(image_path: &str, resize: PreviewResizeSpec) -> Result
         path.to_str()
             .ok_or_else(|| format!("non-utf8 derived png path {}", path.display()))?,
     )
+}
+
+fn load_raw565_preview_timed(
+    image_path: &str,
+    resize: PreviewResizeSpec,
+) -> Result<LoadedPreviewPixels, String> {
+    let path = raw565_preview_cache_path(image_path, resize);
+    let total_t = Instant::now();
+    let read_t = Instant::now();
+    let data = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let read_us = read_t.elapsed().as_micros() as u64;
+    let decode_t = Instant::now();
+    let image = decode_raw565_preview_bytes(&data)?;
+    let decode_us = decode_t.elapsed().as_micros() as u64;
+    let total_us = total_t.elapsed().as_micros() as u64;
+    let decoded_bytes = image.decoded_bytes();
+    Ok(LoadedPreviewPixels {
+        timing: ImageLoadTiming {
+            read_us,
+            decode_us,
+            resize_us: 0,
+            total_us,
+            encoded_bytes: data.len(),
+            decoded_bytes,
+            source_width: image.width(),
+            source_height: image.height(),
+        },
+        image,
+    })
 }
 
 fn encode_png_rgb8(image: &DecodedImage) -> Result<Vec<u8>, String> {
@@ -639,6 +806,70 @@ fn decode_raw_preview_bytes(data: &[u8]) -> Result<DecodedImage, String> {
         height,
         rgb: data[16..].to_vec(),
     })
+}
+
+fn encode_raw565_preview_bytes(image: &DecodedImage) -> Vec<u8> {
+    let stride_bytes = align16(image.width as usize * 2);
+    let payload_len = stride_bytes * image.height as usize;
+    let mut bytes = Vec::with_capacity(20 + payload_len);
+    bytes.extend_from_slice(b"MM56501\0");
+    bytes.extend_from_slice(&image.width.to_le_bytes());
+    bytes.extend_from_slice(&image.height.to_le_bytes());
+    bytes.extend_from_slice(&(stride_bytes as u32).to_le_bytes());
+    bytes.resize(20 + payload_len, 0);
+    for y in 0..image.height as usize {
+        let src_row = y * image.width as usize * 3;
+        let dst_row = 20 + y * stride_bytes;
+        for x in 0..image.width as usize {
+            let si = src_row + x * 3;
+            let word = rgb8_to_rgb565_word(image.rgb[si], image.rgb[si + 1], image.rgb[si + 2]);
+            let di = dst_row + x * 2;
+            bytes[di..di + 2].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
+    if data.len() < 20 || &data[..8] != b"MM56501\0" {
+        return Err("raw565 preview bad header".into());
+    }
+    let width = u32::from_le_bytes(data[8..12].try_into().unwrap());
+    let height = u32::from_le_bytes(data[12..16].try_into().unwrap());
+    let stride_bytes = u32::from_le_bytes(data[16..20].try_into().unwrap());
+    let min_stride = width as usize * 2;
+    if stride_bytes as usize % 16 != 0 || (stride_bytes as usize) < min_stride {
+        return Err(format!(
+            "raw565 preview bad stride width={} stride={}",
+            width, stride_bytes
+        ));
+    }
+    let expected = stride_bytes as usize * height as usize;
+    if data.len() - 20 != expected {
+        return Err(format!(
+            "raw565 preview length mismatch got={} expected={}",
+            data.len() - 20,
+            expected
+        ));
+    }
+    let mut words = Vec::with_capacity(expected / 2);
+    for chunk in data[20..].chunks_exact(2) {
+        words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    Ok(PreviewPixels::Rgb565 {
+        width,
+        height,
+        stride_bytes,
+        words,
+    })
+}
+
+fn rgb8_to_rgb565_word(r: u8, g: u8, b: u8) -> u16 {
+    ((r as u16 & 0xf8) << 8) | ((g as u16 & 0xfc) << 3) | (b as u16 >> 3)
+}
+
+fn align16(n: usize) -> usize {
+    (n + 15) & !15
 }
 
 fn apply_resize(loaded: &mut LoadedImage, resize: PreviewResizeSpec) {
@@ -819,6 +1050,23 @@ fn preview_trace_enabled() -> bool {
     })
 }
 
+fn fb_format_env_is_565() -> bool {
+    match std::env::var("MISTER_FB_FORMAT") {
+        Ok(label) => matches!(
+            label.to_ascii_lowercase().replace('_', "-").as_str(),
+            "565" | "rgb565"
+        ),
+        Err(_) => true,
+    }
+}
+
+fn raw_blitter_env_enabled() -> bool {
+    !matches!(
+        std::env::var("MISTER_PREVIEW_BLITTER").as_deref(),
+        Ok("slint") | Ok("image") | Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    )
+}
+
 fn lower_thread_priority() {
     #[cfg(target_os = "linux")]
     unsafe {
@@ -911,11 +1159,18 @@ mod tests {
         };
         let original = "/media/fat/_Arcade/media/screenshot/1941u.png";
         let raw = preview_cache_path(original, PreviewStorageFormat::RawRgb, resize);
+        let raw565 = preview_cache_path(original, PreviewStorageFormat::RawRgb565, resize);
         let derived = preview_cache_path(original, PreviewStorageFormat::DerivedPng, resize);
         assert_eq!(
             raw,
             PathBuf::from(
                 "/media/fat/_Arcade/media/screenshot-magik/raw-lanczos-320x320/1941u.rgb"
+            )
+        );
+        assert_eq!(
+            raw565,
+            PathBuf::from(
+                "/media/fat/_Arcade/media/screenshot-magik/raw565-lanczos-320x320/1941u.rgb565"
             )
         );
         assert_eq!(
@@ -925,6 +1180,7 @@ mod tests {
             )
         );
         assert_ne!(raw, PathBuf::from(original));
+        assert_ne!(raw565, PathBuf::from(original));
         assert_ne!(derived, PathBuf::from(original));
     }
 
@@ -939,6 +1195,55 @@ mod tests {
         assert_eq!(decoded.width, 2);
         assert_eq!(decoded.height, 1);
         assert_eq!(decoded.rgb, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn raw565_preview_header_round_trips_pixels() {
+        let image = DecodedImage {
+            width: 3,
+            height: 1,
+            rgb: vec![255, 0, 0, 0, 255, 0, 0, 0, 255],
+        };
+        let bytes = encode_raw565_preview_bytes(&image);
+        let decoded = decode_raw565_preview_bytes(&bytes).unwrap();
+        match decoded {
+            PreviewPixels::Rgb565 {
+                width,
+                height,
+                stride_bytes,
+                words,
+            } => {
+                assert_eq!(width, 3);
+                assert_eq!(height, 1);
+                assert_eq!(stride_bytes, 16);
+                assert_eq!(&words[..3], &[0xf800, 0x07e0, 0x001f]);
+            }
+            PreviewPixels::Rgb8(_) => panic!("expected raw565 pixels"),
+        }
+    }
+
+    #[test]
+    fn raw565_padding_is_16_byte_aligned_and_zeroed() {
+        let image = DecodedImage {
+            width: 5,
+            height: 2,
+            rgb: vec![255; 5 * 2 * 3],
+        };
+        let bytes = encode_raw565_preview_bytes(&image);
+        assert_eq!(&bytes[..8], b"MM56501\0");
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 5);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 16);
+        assert_eq!(bytes.len(), 20 + 16 * 2);
+        assert!(bytes[20 + 10..20 + 16].iter().all(|b| *b == 0));
+        assert!(bytes[20 + 16 + 10..20 + 32].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn rgb8_primary_colours_encode_to_rgb565_words() {
+        assert_eq!(rgb8_to_rgb565_word(255, 0, 0), 0xf800);
+        assert_eq!(rgb8_to_rgb565_word(0, 255, 0), 0x07e0);
+        assert_eq!(rgb8_to_rgb565_word(0, 0, 255), 0x001f);
     }
 
     #[test]
@@ -972,6 +1277,48 @@ mod tests {
         .unwrap();
         assert_eq!(loaded.image.width, 4);
         assert_eq!(loaded.image.height, 2);
+        assert_eq!(loaded.timing.source_width, 2);
+        assert_eq!(loaded.timing.source_height, 1);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_raw565_cache_falls_back_to_original_png() {
+        let dir = std::env::temp_dir().join(format!(
+            "mister-magik-preview-worker-test-raw565-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("media/screenshot")).unwrap();
+        let png_path = dir.join("media/screenshot/tiny.png");
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            rgb: vec![255, 0, 0, 0, 255, 0],
+        };
+        std::fs::write(&png_path, encode_png_rgb8(&image).unwrap()).unwrap();
+
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Nearest,
+            max_w: 4,
+            max_h: 4,
+        };
+        let loaded = load_preview_pixels(
+            png_path.to_str().unwrap(),
+            PreviewStorageFormat::RawRgb565,
+            resize,
+        )
+        .unwrap();
+        match loaded.image {
+            PreviewPixels::Rgb8(image) => {
+                assert_eq!(image.width, 4);
+                assert_eq!(image.height, 2);
+            }
+            PreviewPixels::Rgb565 { .. } => panic!("missing raw565 cache should fall back to RGB8"),
+        }
         assert_eq!(loaded.timing.source_width, 2);
         assert_eq!(loaded.timing.source_height, 1);
 

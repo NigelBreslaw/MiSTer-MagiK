@@ -40,8 +40,9 @@ use crate::library_db;
 use crate::preview_state::request_arcade_preview;
 use crate::preview_state::{
     apply_ready_preview, preview_raw_blitter_enabled, preview_visual_pct,
-    request_arcade_preview_window, schedule_arcade_preview_window, PreviewRawFrame, PreviewState,
-    ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
+    request_arcade_preview_window, schedule_arcade_preview_window, PreviewRawFrame,
+    PreviewRawPixels, PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W,
+    ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
 use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};
@@ -527,14 +528,36 @@ fn preview_screen_rect(ui: &UiDisplay) -> DirtyRect {
     }
 }
 
-fn raw_preview_image_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Option<DirtyRect> {
-    if frame.source_w == 0
-        || frame.source_h == 0
-        || frame.display_w == 0
-        || frame.display_h == 0
-        || frame.rgb.len() < frame.source_w as usize * frame.source_h as usize * 3
-    {
+fn rgb565_to_pixel(pixel: Rgb565Pixel) -> Pixel {
+    let v = pixel.0;
+    let r5 = (v >> 11) & 0x1f;
+    let g6 = (v >> 5) & 0x3f;
+    let b5 = v & 0x1f;
+    let r = ((r5 << 3) | (r5 >> 2)) as u32;
+    let g = ((g6 << 2) | (g6 >> 4)) as u32;
+    let b = ((b5 << 3) | (b5 >> 2)) as u32;
+    Pixel((r << 16) | (g << 8) | b)
+}
+
+fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Option<DirtyRect> {
+    if frame.source_w == 0 || frame.source_h == 0 || frame.display_w == 0 || frame.display_h == 0 {
         return None;
+    }
+    match frame.pixels {
+        PreviewRawPixels::Rgb8(rgb)
+            if rgb.len() < frame.source_w as usize * frame.source_h as usize * 3 =>
+        {
+            return None;
+        }
+        PreviewRawPixels::Rgb565 {
+            pixels,
+            stride_pixels,
+        } if stride_pixels < frame.source_w as usize
+            || pixels.len() < stride_pixels * frame.source_h as usize =>
+        {
+            return None;
+        }
+        _ => {}
     }
 
     let screen = preview_screen_rect(ui);
@@ -618,7 +641,7 @@ impl UiFrameTarget {
         frame: &PreviewRawFrame<'_>,
         clear_screen: bool,
     ) -> Option<DirtyRect> {
-        let rect = raw_preview_image_rect(ui, frame)?;
+        let rect = raw_preview_scaled_rect(ui, frame)?;
         let screen = preview_screen_rect(ui);
         let image_x =
             screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - frame.display_w as isize) / 2;
@@ -639,15 +662,36 @@ impl UiFrameTarget {
                         }
                     }
                 }
-                for y in rect.y0..rect.y1 {
-                    let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                    let row = y * ui.render_w();
-                    for x in rect.x0..rect.x1 {
-                        let src_x =
-                            ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
-                        let si = (src_y * src_w + src_x) * 3;
-                        cached[row + x] =
-                            Pixel::from_rgb(frame.rgb[si], frame.rgb[si + 1], frame.rgb[si + 2]);
+                match frame.pixels {
+                    PreviewRawPixels::Rgb8(rgb) => {
+                        for y in rect.y0..rect.y1 {
+                            let src_y =
+                                ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
+                            let row = y * ui.render_w();
+                            for x in rect.x0..rect.x1 {
+                                let src_x = ((x as isize - image_x).max(0) as usize / scale_x)
+                                    .min(src_w - 1);
+                                let si = (src_y * src_w + src_x) * 3;
+                                cached[row + x] =
+                                    Pixel::from_rgb(rgb[si], rgb[si + 1], rgb[si + 2]);
+                            }
+                        }
+                    }
+                    PreviewRawPixels::Rgb565 {
+                        pixels,
+                        stride_pixels,
+                    } => {
+                        for y in rect.y0..rect.y1 {
+                            let src_y =
+                                ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
+                            let row = y * ui.render_w();
+                            for x in rect.x0..rect.x1 {
+                                let src_x = ((x as isize - image_x).max(0) as usize / scale_x)
+                                    .min(src_w - 1);
+                                cached[row + x] =
+                                    rgb565_to_pixel(pixels[src_y * stride_pixels + src_x]);
+                            }
+                        }
                     }
                 }
             }
@@ -661,18 +705,51 @@ impl UiFrameTarget {
                         }
                     }
                 }
-                for y in rect.y0..rect.y1 {
-                    let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                    let row = y * ui.render_w();
-                    for x in rect.x0..rect.x1 {
-                        let src_x =
-                            ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
-                        let si = (src_y * src_w + src_x) * 3;
-                        cached[row + x] = <Rgb565Pixel as TargetPixel>::from_rgb(
-                            frame.rgb[si],
-                            frame.rgb[si + 1],
-                            frame.rgb[si + 2],
-                        );
+                match frame.pixels {
+                    PreviewRawPixels::Rgb565 {
+                        pixels,
+                        stride_pixels,
+                    } if frame.display_w == frame.source_w && frame.display_h == frame.source_h => {
+                        for y in rect.y0..rect.y1 {
+                            let src_y = (y as isize - image_y).max(0) as usize;
+                            let src_x = (rect.x0 as isize - image_x).max(0) as usize;
+                            let src_a = src_y * stride_pixels + src_x;
+                            let dst_a = y * ui.render_w() + rect.x0;
+                            cached[dst_a..dst_a + rect.width()]
+                                .copy_from_slice(&pixels[src_a..src_a + rect.width()]);
+                        }
+                    }
+                    PreviewRawPixels::Rgb565 {
+                        pixels,
+                        stride_pixels,
+                    } => {
+                        for y in rect.y0..rect.y1 {
+                            let src_y =
+                                ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
+                            let row = y * ui.render_w();
+                            for x in rect.x0..rect.x1 {
+                                let src_x = ((x as isize - image_x).max(0) as usize / scale_x)
+                                    .min(src_w - 1);
+                                cached[row + x] = pixels[src_y * stride_pixels + src_x];
+                            }
+                        }
+                    }
+                    PreviewRawPixels::Rgb8(rgb) => {
+                        for y in rect.y0..rect.y1 {
+                            let src_y =
+                                ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
+                            let row = y * ui.render_w();
+                            for x in rect.x0..rect.x1 {
+                                let src_x = ((x as isize - image_x).max(0) as usize / scale_x)
+                                    .min(src_w - 1);
+                                let si = (src_y * src_w + src_x) * 3;
+                                cached[row + x] = <Rgb565Pixel as TargetPixel>::from_rgb(
+                                    rgb[si],
+                                    rgb[si + 1],
+                                    rgb[si + 2],
+                                );
+                            }
+                        }
                     }
                 }
             }

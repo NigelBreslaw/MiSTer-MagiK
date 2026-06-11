@@ -59,3 +59,51 @@ Artifacts:
 - `build/preview-scroll-profiles/RGB565-AFTER-565-20260611-*`
 - `build/preview-scroll-profiles/RGB565-RAW-565-20260611-*`
 - `build/rgb565-smoke-scaled-snapshot/fb0.png`
+
+## Native raw RGB565 preview cache follow-up
+
+Date: 2026-06-11
+
+Change: added `PreviewStorageFormat::RawRgb565`, storing resized
+little-endian RGB565 rows with 16-byte-aligned stride under
+`screenshot-magik/raw565-nearest-320x320/*.rgb565`. The default preview storage
+is now raw565 when the framebuffer is RGB565 and the raw blitter is enabled;
+`MISTER_PREVIEW_FORMAT` still overrides it.
+
+Cache build on MiSTer:
+
+```bash
+mister-magik-fb preview-cache build --format raw-rgb565 --filter nearest --max 320x320 --root /media/fat/_Arcade
+```
+
+Result: 904 files converted, 0 failures, 146,841,760 output bytes,
+30.5 s elapsed. Average build-time costs were read 2.337 ms, PNG decode
+3.186 ms, resize 9.197 ms, encode/write 18.732 ms.
+
+Real launcher held-scroll, 30 s, RGB565 framebuffer and raw blitter:
+
+| Run | frames | avg wall | p95 wall | >16.7ms | >20ms | custom avg | custom p50 | custom p95 | Slint avg | Slint p95 | decoded | read avg | decode avg | resize avg | load total avg |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pre-change raw-rgb deployed baseline | 1786 | 16.561 ms | 17.242 ms | 229 | 1 | 0.493 ms | 0.052 ms | 3.567 ms | 0.187 ms | 0.330 ms | 220 | 11.447 ms | 2.392 ms | 4.264 ms | 18.115 ms |
+| Same-build raw-rgb | 1801 | 16.412 ms | 17.002 ms | 215 | 1 | 0.551 ms | 0.054 ms | 4.304 ms | 0.070 ms | 0.366 ms | 220 | 0.594 ms | 2.590 ms | 4.153 ms | 7.351 ms |
+| After raw-rgb565 | 1802 | 16.439 ms | 16.950 ms | 218 | 1 | 0.192 ms | 0.049 ms | 1.204 ms | 0.056 ms | 0.265 ms | 220 | 0.942 ms | 1.582 ms | 0.000 ms | 2.539 ms |
+
+Findings:
+
+- Native raw565 removes runtime preview resize from the cache-hit path and
+  cuts average preview load total from 7.351 ms to 2.539 ms versus same-build
+  raw RGB.
+- The raw preview blitter no longer does per-frame RGB8 to RGB565 conversion
+  for cached raw565 images. `custom_draw_us` p95 fell from 4.304 ms to
+  1.204 ms in the real launcher held-scroll run.
+- Fixed-index framebuffer captures for raw RGB and raw565 both show the same
+  selected games, and the raw565 path still clears the full cabinet aperture on
+  image changes.
+
+Artifacts:
+
+- `build/preview-scroll-profiles/NATIVE565-BEFORE-RAWRGB-20260611-real.*`
+- `build/preview-scroll-profiles/NATIVE565-AB-RAWRGB-20260611-real.*`
+- `build/preview-scroll-profiles/NATIVE565-AFTER-RAW565-20260611-real.*`
+- `build/preview-scroll-profiles/NATIVE565-VISUALS-20260611/`
+- `build/preview-rgb565-samples/preview-rgb565-samples-20260611/`
