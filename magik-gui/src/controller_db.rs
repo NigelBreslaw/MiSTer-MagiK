@@ -249,7 +249,7 @@ impl ControllerDb {
                 setup_complete: e.setup_complete,
             })
             .collect();
-        items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+        items.sort_by_key(|item| item.label.to_lowercase());
         items
     }
 

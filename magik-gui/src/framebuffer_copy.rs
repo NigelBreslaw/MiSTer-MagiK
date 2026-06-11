@@ -2,6 +2,9 @@
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
 use std::sync::OnceLock;
 
+// Flat rectangle parameters keep framebuffer call sites allocation-free and easy
+// to inline in copy-heavy paths.
+#[allow(clippy::too_many_arguments)]
 pub fn copy_rect_scaled_to<T: Copy>(
     dst: &mut [T],
     dst_w: usize,
@@ -43,6 +46,9 @@ pub fn copy_rect_scaled_to<T: Copy>(
 }
 
 /// Copy a source rectangle into a destination buffer with a specialized 2x path.
+// Flat rectangle parameters keep framebuffer call sites allocation-free and easy
+// to inline in copy-heavy paths.
+#[allow(clippy::too_many_arguments)]
 pub fn copy_rect_2x_to<T: Copy>(
     dst: &mut [T],
     dst_w: usize,
@@ -88,6 +94,7 @@ pub fn copy_rect_2x_to<T: Copy>(
 /// This is the hot framebuffer path. Keep stores as 32-bit words: the MiSTer
 /// framebuffer mapping is write-combined, and wider `u64` stores benchmarked
 /// slower on the Cortex-A9.
+#[allow(clippy::too_many_arguments)]
 pub fn copy_rect_2x_u32_to(
     dst: &mut [u32],
     dst_w: usize,
@@ -174,7 +181,7 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
             d.add(1).write(color);
             i += 1;
         }
-        if dst_len % 2 != 0 && packed_len < src_len {
+        if !dst_len.is_multiple_of(2) && packed_len < src_len {
             dst.add(packed_len * 2).write(*src.add(packed_len));
         }
     }

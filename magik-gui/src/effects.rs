@@ -296,8 +296,6 @@ fn decode_fixture_png(data: &[u8]) -> Result<SourceImage, String> {
     let (w, h) = decoder
         .dimensions()
         .ok_or_else(|| "zune png missing dimensions".to_string())?;
-    let w = usize::try_from(w).map_err(|_| "zune png width too large".to_string())?;
-    let h = usize::try_from(h).map_err(|_| "zune png height too large".to_string())?;
     let colorspace = decoder
         .colorspace()
         .ok_or_else(|| "zune png missing colorspace".to_string())?;
@@ -378,8 +376,8 @@ fn chroma_aberrate_image(w: usize, h: usize, src: &[u32], aberr: usize) -> Vec<u
     for y in 0..h {
         let src_row = &src[y * w..(y + 1) * w];
         let out_row = &mut out[y * w..(y + 1) * w];
-        for x in 0..w {
-            out_row[x] = chroma_pixel(src_row, x, aberr);
+        for (x, pixel) in out_row.iter_mut().enumerate().take(w) {
+            *pixel = chroma_pixel(src_row, x, aberr);
         }
     }
     out
@@ -424,8 +422,8 @@ fn palette_cycle(size: EffectSize, frame: u64, out: &mut [u32]) {
     for y in 0..size.h {
         let mut v = (y * 5 + f) & 255;
         let row = &mut out[y * size.w..(y + 1) * size.w];
-        for x in 0..size.w {
-            row[x] = colors[v];
+        for pixel in row.iter_mut().take(size.w) {
+            *pixel = colors[v];
             v = (v + 3) & 255;
         }
     }
@@ -438,13 +436,13 @@ fn plasma(size: EffectSize, frame: u64, out: &mut [u32]) {
         let yi = y as i32;
         let y_wave = wave(yi * 5 + f * 2);
         let row = &mut out[y * size.w..(y + 1) * size.w];
-        for x in 0..size.w {
+        for (x, pixel) in row.iter_mut().enumerate().take(size.w) {
             let xi = x as i32;
             let v = wave(xi * 4 + f * 3)
                 + y_wave
                 + wave((xi + yi) * 3 + f * 4)
                 + wave((xi - yi) * 4 + f);
-            row[x] = colors[((v / 4 + f as u32) & 255) as usize];
+            *pixel = colors[((v / 4 + f as u32) & 255) as usize];
         }
     }
 }
@@ -800,7 +798,10 @@ impl CrtGlitchFrame {
 fn crt_scanline_amount(y: usize, frame: usize) -> u32 {
     let seed =
         hash32((y as u32).wrapping_mul(0x45d9f3b) ^ ((frame / 4) as u32).wrapping_mul(0x9e37));
-    let roll = (y.wrapping_add(frame * 2).wrapping_add((seed as usize) & 7)) % 41 == 0;
+    let roll = y
+        .wrapping_add(frame * 2)
+        .wrapping_add((seed as usize) & 7)
+        .is_multiple_of(41);
     if y & 1 == 0 {
         138 + (seed & 23)
     } else if roll {
