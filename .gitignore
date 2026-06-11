@@ -42,7 +42,6 @@ htmlcov/
 /magik-gui/target/
 /magik-gui/build/
 /magik-gui/catalog/target/
-/magik-gui/catalog/Cargo.lock
 
 # Main_MiSTer fork build output
 /main-mister/bin/
