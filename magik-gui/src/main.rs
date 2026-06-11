@@ -16,6 +16,7 @@
 //!   Benchmarks:
 //!     scenes             list Slint scene names
 //!     effects            list framebuffer effect benchmark names
+//!     preview-transitions list screenshot transition labels
 //!     effect-bench       run framebuffer effect benchmarks
 //!     library-scan-bench benchmark cold scan, import, cached load, no-op rescan
 //!
@@ -90,6 +91,11 @@ fn main() {
         return;
     }
 
+    if cmd == "preview-transitions" {
+        print_preview_transitions();
+        return;
+    }
+
     let mut f = match Fpga::open() {
         Ok(f) => f,
         Err(e) => {
@@ -119,6 +125,13 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+fn print_preview_transitions() {
+    println!(
+        "{}",
+        screenshot_transitions::PreviewTransitionEffect::labels()
+    );
 }
 
 fn run_cpu_profile_smoke() {

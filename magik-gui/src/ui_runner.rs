@@ -68,6 +68,7 @@ mod controller_loop;
 mod launcher_bench;
 mod launcher_bridge;
 mod launcher_loop;
+mod screensaver_loop;
 pub(crate) mod ui_boot;
 #[cfg(mister_bench_scenes)]
 mod ui_frame_loop;
@@ -83,6 +84,7 @@ use controller_loop::*;
 use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_loop::*;
+use screensaver_loop::*;
 use ui_boot::*;
 #[cfg(mister_bench_scenes)]
 use ui_frame_loop::*;
@@ -134,6 +136,7 @@ impl LauncherRunMode {
 pub const UI_SCENES: &[&str] = &[
     "launcher",
     "arcade",
+    "screensaver",
     "blend_velocity",
     #[cfg(not(mister_ui_scope_launcher))]
     "demo",
@@ -307,6 +310,11 @@ pub fn run_ui(f: &mut Fpga) {
 
     if scene == "blend_velocity" {
         crate::ui_blend_velocity::run_blend_velocity_loop(secs, &mut disp);
+        return;
+    }
+
+    if scene == "screensaver" {
+        run_screensaver_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 

@@ -18,10 +18,34 @@ pub(crate) enum PreviewTransitionEffect {
     Dissolve,
     CrtBeamWipe,
     MosaicResolve,
+    CopperBars,
+    VenetianBlinds,
+    BarnDoor,
+    Iris,
+    ClockWipe,
+    SpriteStrips,
+    StarfieldWarp,
+    VectorRedraw,
+    PaletteCycle,
+    RasterTear,
+    TileLoader,
+    VenetianCopper,
+    AttributeFlash,
+    TecTec,
+    Linecrunch,
+    RacingBeam,
+    SpriteMultiplex,
+    RowScrollParallax,
+    SuperScalerPop,
+    MaskBlit,
+    PhosphorDecay,
+    PlasmaMask,
+    MoireRings,
+    KefrensCurtain,
 }
 
 impl PreviewTransitionEffect {
-    const MEGA: [Self; 10] = [
+    pub(crate) const MEGA: [Self; 34] = [
         Self::Cut,
         Self::Fade,
         Self::Wipe,
@@ -32,7 +56,35 @@ impl PreviewTransitionEffect {
         Self::Dissolve,
         Self::CrtBeamWipe,
         Self::MosaicResolve,
+        Self::CopperBars,
+        Self::VenetianBlinds,
+        Self::BarnDoor,
+        Self::Iris,
+        Self::ClockWipe,
+        Self::SpriteStrips,
+        Self::StarfieldWarp,
+        Self::VectorRedraw,
+        Self::PaletteCycle,
+        Self::RasterTear,
+        Self::TileLoader,
+        Self::VenetianCopper,
+        Self::AttributeFlash,
+        Self::TecTec,
+        Self::Linecrunch,
+        Self::RacingBeam,
+        Self::SpriteMultiplex,
+        Self::RowScrollParallax,
+        Self::SuperScalerPop,
+        Self::MaskBlit,
+        Self::PhosphorDecay,
+        Self::PlasmaMask,
+        Self::MoireRings,
+        Self::KefrensCurtain,
     ];
+
+    pub(crate) fn all() -> &'static [Self] {
+        &Self::MEGA
+    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -46,10 +98,34 @@ impl PreviewTransitionEffect {
             Self::Dissolve => "dissolve",
             Self::CrtBeamWipe => "crt-beam-wipe",
             Self::MosaicResolve => "mosaic-resolve",
+            Self::CopperBars => "copper-bars",
+            Self::VenetianBlinds => "venetian-blinds",
+            Self::BarnDoor => "barn-door",
+            Self::Iris => "iris",
+            Self::ClockWipe => "clock-wipe",
+            Self::SpriteStrips => "sprite-strips",
+            Self::StarfieldWarp => "starfield-warp",
+            Self::VectorRedraw => "vector-redraw",
+            Self::PaletteCycle => "palette-cycle",
+            Self::RasterTear => "raster-tear",
+            Self::TileLoader => "tile-loader",
+            Self::VenetianCopper => "venetian-copper",
+            Self::AttributeFlash => "attribute-flash",
+            Self::TecTec => "tec-tec",
+            Self::Linecrunch => "linecrunch",
+            Self::RacingBeam => "racing-beam",
+            Self::SpriteMultiplex => "sprite-multiplex",
+            Self::RowScrollParallax => "row-scroll-parallax",
+            Self::SuperScalerPop => "super-scaler-pop",
+            Self::MaskBlit => "mask-blit",
+            Self::PhosphorDecay => "phosphor-decay",
+            Self::PlasmaMask => "plasma-mask",
+            Self::MoireRings => "moire-rings",
+            Self::KefrensCurtain => "kefrens-curtain",
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().replace('_', "-").as_str() {
             "cut" | "none" | "off" | "0" | "false" | "no" => Some(Self::Cut),
             "fade" | "crossfade" | "cross-fade" => Some(Self::Fade),
@@ -61,8 +137,40 @@ impl PreviewTransitionEffect {
             "dissolve" | "noise" => Some(Self::Dissolve),
             "crt-beam" | "crt-beam-wipe" | "beam" | "beam-wipe" => Some(Self::CrtBeamWipe),
             "mosaic" | "mosaic-resolve" | "chunky" | "chunky-resolve" => Some(Self::MosaicResolve),
+            "copper" | "copper-bars" => Some(Self::CopperBars),
+            "venetian" | "venetian-blinds" | "blinds" => Some(Self::VenetianBlinds),
+            "barn" | "barn-door" | "barn-doors" => Some(Self::BarnDoor),
+            "iris" | "circle" => Some(Self::Iris),
+            "clock" | "clock-wipe" | "radar" => Some(Self::ClockWipe),
+            "sprite-strips" | "strips" => Some(Self::SpriteStrips),
+            "starfield" | "starfield-warp" | "warp-stars" => Some(Self::StarfieldWarp),
+            "vector" | "vector-redraw" => Some(Self::VectorRedraw),
+            "palette" | "palette-cycle" | "cycle" => Some(Self::PaletteCycle),
+            "raster-tear" | "tear" => Some(Self::RasterTear),
+            "tile-loader" | "tile-load" | "loader" => Some(Self::TileLoader),
+            "venetian-copper" | "copper-blinds" => Some(Self::VenetianCopper),
+            "attribute" | "attribute-flash" | "color-clash" => Some(Self::AttributeFlash),
+            "tec-tec" | "tectec" => Some(Self::TecTec),
+            "linecrunch" | "line-crunch" => Some(Self::Linecrunch),
+            "racing-beam" | "race-beam" => Some(Self::RacingBeam),
+            "sprite-multiplex" | "multiplex" => Some(Self::SpriteMultiplex),
+            "row-scroll-parallax" | "parallax" => Some(Self::RowScrollParallax),
+            "super-scaler-pop" | "superscaler" | "scaler-pop" => Some(Self::SuperScalerPop),
+            "mask-blit" | "mask" => Some(Self::MaskBlit),
+            "phosphor" | "phosphor-decay" => Some(Self::PhosphorDecay),
+            "plasma" | "plasma-mask" => Some(Self::PlasmaMask),
+            "moire" | "moire-rings" => Some(Self::MoireRings),
+            "kefrens" | "kefrens-curtain" | "curtain" => Some(Self::KefrensCurtain),
             _ => None,
         }
+    }
+
+    pub(crate) fn labels() -> String {
+        Self::all()
+            .iter()
+            .map(|effect| effect.label())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -123,7 +231,7 @@ impl PreviewTransitionDemo {
                     effects.push(effect);
                 } else {
                     eprintln!(
-                        "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; use cut|fade|wipe|slide|zoom|scanline|checker|dissolve|crt-beam-wipe|mosaic-resolve|mega"
+                        "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; use `mister-magik-fb preview-transitions` for labels"
                     );
                 }
             }

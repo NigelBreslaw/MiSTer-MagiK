@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--transition cut|fade|wipe|slide|zoom|scanline|checker|dissolve|crt-beam-wipe|mosaic-resolve|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs the real launcher-backed arcade screen:
@@ -109,7 +109,7 @@ if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ 
 case "$preview_format" in ""|png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be png, derived-png, raw-rgb, or raw-rgb565" >&2; exit 2 ;; esac
 case "$fb_format" in 8888|565) ;; *) echo "--fb-format must be 8888 or 565" >&2; exit 2 ;; esac
 case "$preview_blitter" in slint|raw) ;; *) echo "--preview-blitter must be slint or raw" >&2; exit 2 ;; esac
-case "$transition" in ""|cut|none|off|fade|crossfade|wipe|wipe-left|slide|slide-left|zoom|pop|scanline|scanlines|checker|checkerboard|dissolve|noise|crt-beam|crt-beam-wipe|beam|beam-wipe|mosaic|mosaic-resolve|chunky|chunky-resolve|mega|all|demo) ;; *) echo "--transition must be cut, fade, wipe, slide, zoom, scanline, checker, dissolve, crt-beam-wipe, mosaic-resolve, or mega" >&2; exit 2 ;; esac
+if [[ -n "$transition" && ! "$transition" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--transition must be a comma-separated transition label list or mega" >&2; exit 2; fi
 if [[ -n "$transition_segment_secs" && ! "$transition_segment_secs" =~ ^[0-9]+$ ]]; then echo "--transition-segment-secs must be an integer" >&2; exit 2; fi
 if [[ -n "$transition_ms" && ! "$transition_ms" =~ ^[0-9]+$ ]]; then echo "--transition-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi

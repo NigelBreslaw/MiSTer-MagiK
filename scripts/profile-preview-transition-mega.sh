@@ -45,7 +45,11 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
 if [[ ! "$transition_ms" =~ ^[0-9]+$ || "$transition_ms" -lt 1 ]]; then echo "--transition-ms must be a positive integer" >&2; exit 2; fi
 
-effect_count=10
+effect_count="$(rg -c 'Self::[A-Za-z0-9]+ => "[a-z0-9-]+",' "$HERE/magik-gui/src/screenshot_transitions.rs" || true)"
+if [[ ! "$effect_count" =~ ^[0-9]+$ || "$effect_count" -lt 1 ]]; then
+  echo "failed to count preview transition labels" >&2
+  exit 1
+fi
 secs=$((segment_secs * effect_count))
 
 "$HERE/scripts/profile-preview-scroll.sh" \

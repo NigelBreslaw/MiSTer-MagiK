@@ -7,6 +7,7 @@ pub const COMMANDS: &[&str] = &[
     "ui",
     "scenes",
     "effects",
+    "preview-transitions",
     "effect-bench",
     "vsync-probe",
     "cpu-profile-smoke",

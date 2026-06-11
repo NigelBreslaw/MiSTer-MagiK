@@ -509,6 +509,301 @@ pub(super) fn mosaic_block_size(progress: f32) -> usize {
     }
 }
 
+fn progress_u8(progress: f32) -> u8 {
+    (progress.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+pub(super) fn triangle_wave_u8(x: usize, phase: u8) -> u8 {
+    let v = ((x as u32).wrapping_mul(13).wrapping_add(phase as u32)) & 0xff;
+    let v = if v < 128 { v } else { 255 - v };
+    (v * 2).min(255) as u8
+}
+
+pub(super) fn plasma_gate(x: usize, y: usize, phase: u8) -> u8 {
+    let a = triangle_wave_u8(x / 3 + y / 7, phase);
+    let b = triangle_wave_u8(x / 9 + y / 2, phase.wrapping_mul(3));
+    ((a as u16 + b as u16) / 2) as u8
+}
+
+fn dist2_from_center(local_x: usize, local_y: usize, w: usize, h: usize) -> u64 {
+    let cx = w as i64 / 2;
+    let cy = h as i64 / 2;
+    let dx = local_x as i64 - cx;
+    let dy = local_y as i64 - cy;
+    (dx * dx + dy * dy) as u64
+}
+
+fn angle_byte(local_x: usize, local_y: usize, w: usize, h: usize) -> u8 {
+    let cx = w as f32 / 2.0;
+    let cy = h as f32 / 2.0;
+    let a = (local_y as f32 - cy).atan2(local_x as f32 - cx);
+    (((a + std::f32::consts::PI) / (std::f32::consts::PI * 2.0)) * 255.0) as u8
+}
+
+fn transition_gate(
+    effect: PreviewTransitionEffect,
+    progress: f32,
+    local_x: usize,
+    local_y: usize,
+    w: usize,
+    h: usize,
+) -> u8 {
+    let alpha = progress_u8(progress);
+    let reveal_w = ((w as f32) * progress).round() as usize;
+    let reveal_h = ((h as f32) * progress).round() as usize;
+    match effect {
+        PreviewTransitionEffect::Cut => 255,
+        PreviewTransitionEffect::Fade => alpha,
+        PreviewTransitionEffect::Wipe => {
+            if local_x < reveal_w {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Zoom => {
+            let cx = w / 2;
+            let cy = h / 2;
+            if local_x.abs_diff(cx) <= reveal_w / 2 && local_y.abs_diff(cy) <= reveal_h / 2 {
+                alpha
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Scanline => {
+            if local_y < reveal_h {
+                alpha
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Checker => {
+            if hash2_u8(local_x / 16, local_y / 16) <= alpha {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Dissolve => {
+            if hash2_u8(local_x / 2, local_y / 2) <= alpha {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::CrtBeamWipe => {
+            let beam_y = (progress * (h as f32 + 4.0)).round() as isize - 2;
+            let dy = local_y as isize - beam_y;
+            if dy <= 0 {
+                255
+            } else if dy <= 10 {
+                220u8.saturating_sub((dy as u8) * 18)
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::MosaicResolve => alpha,
+        PreviewTransitionEffect::CopperBars => {
+            let bar = ((local_y / 10 + progress_u8(progress) as usize / 7) & 7) as u8;
+            if local_x < reveal_w || bar <= (alpha >> 5) {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::VenetianBlinds => {
+            let open = ((16.0 * progress).round() as usize).min(16);
+            if local_x % 16 < open {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::BarnDoor => {
+            let half = (w as f32 * progress / 2.0).round() as usize;
+            let cx = w / 2;
+            if local_x >= cx.saturating_sub(half) && local_x <= (cx + half).min(w) {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Iris => {
+            let max_r2 = ((w * w + h * h) / 4) as u64;
+            if dist2_from_center(local_x, local_y, w, h)
+                <= (max_r2 as f32 * progress * progress) as u64
+            {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::ClockWipe => {
+            if angle_byte(local_x, local_y, w, h) <= alpha {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::SpriteStrips => {
+            let strip = local_y / 24;
+            let skew = (strip * 19) % w.max(1);
+            if (local_x + skew) % w.max(1) < reveal_w {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::StarfieldWarp => {
+            let d = dist2_from_center(local_x, local_y, w, h);
+            let noise = hash2_u8(local_x / 4, local_y / 4) as u64;
+            let max_r2 = ((w * w + h * h) / 4) as u64;
+            if d.saturating_add(noise * 48) <= (max_r2 as f32 * progress * progress) as u64 {
+                255
+            } else if noise as u8 > 244u8.saturating_sub(alpha / 8) {
+                192
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::VectorRedraw => {
+            let diag = local_x + local_y;
+            if diag < ((w + h) as f32 * progress).round() as usize || local_x % 37 == local_y % 29 {
+                alpha
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::PaletteCycle => {
+            if ((local_x / 12 + local_y / 12 + alpha as usize / 16) & 3) == 0 {
+                alpha / 2
+            } else {
+                alpha
+            }
+        }
+        PreviewTransitionEffect::RasterTear => {
+            let tear = ((local_y * 11 + alpha as usize * 3) & 63) as isize - 32;
+            if (local_x as isize + tear).unsigned_abs() % w.max(1) < reveal_w {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::TileLoader => {
+            if hash2_u8(local_x / 24, local_y / 24) <= alpha {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::VenetianCopper => {
+            let open = ((20.0 * progress).round() as usize).min(20);
+            if local_x % 20 < open || ((local_y / 9 + alpha as usize / 18) & 3) == 0 {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::AttributeFlash => {
+            if hash2_u8(local_x / 8, local_y / 8) <= alpha {
+                255
+            } else {
+                alpha / 3
+            }
+        }
+        PreviewTransitionEffect::TecTec => {
+            let wave = triangle_wave_u8(local_y / 2, alpha);
+            if local_x.saturating_add(wave as usize / 2) < reveal_w + w / 8 {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Linecrunch => {
+            let band = ((local_y as f32 - h as f32 / 2.0).abs() * (1.0 - progress)) as usize;
+            if band < h / 2 || local_y < reveal_h {
+                alpha
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::RacingBeam => {
+            let beam = reveal_w as isize;
+            let dx = local_x as isize - beam;
+            if dx <= 0 {
+                255
+            } else if dx < 28 {
+                255u8.saturating_sub((dx as u8) * 8)
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::SpriteMultiplex => {
+            if hash2_u8(local_x / 32, (local_y + alpha as usize) / 20) <= alpha {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::RowScrollParallax => {
+            let row_phase = ((local_y / 12) * 17) % w.max(1);
+            if (local_x + row_phase) % w.max(1) < reveal_w {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::SuperScalerPop => {
+            let d = dist2_from_center(local_x, local_y, w, h);
+            let r = (w.min(h) as f32 * (0.08 + progress * 0.92)) as u64;
+            if d <= r * r {
+                alpha
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::MaskBlit => {
+            let mask = ((local_x ^ local_y) + (local_x / 7) + (local_y / 11)) & 255;
+            if mask <= alpha as usize {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::PhosphorDecay => {
+            if local_y < reveal_h {
+                255
+            } else {
+                alpha / 2
+            }
+        }
+        PreviewTransitionEffect::PlasmaMask => {
+            if plasma_gate(local_x, local_y, alpha) <= alpha {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::MoireRings => {
+            let ring = ((dist2_from_center(local_x, local_y, w, h) / 96) & 255) as u8;
+            if ring <= alpha || ring.abs_diff(alpha) < 12 {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::KefrensCurtain => {
+            let wave = triangle_wave_u8(local_y / 3, alpha) as usize;
+            if local_x < reveal_w.saturating_add(wave / 3) {
+                255
+            } else {
+                0
+            }
+        }
+        PreviewTransitionEffect::Slide => 255,
+    }
+}
+
 pub(super) fn blit_transition_565_fast(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
@@ -625,6 +920,39 @@ pub(super) fn blit_transition_565_fast(
                     let chunky = sample_raw565(&current, sample_x, sample_y).unwrap_or(curr);
                     blend_565(prev, chunky, alpha)
                 }
+                other => {
+                    let gate = transition_gate(
+                        other,
+                        progress,
+                        local_x,
+                        local_y,
+                        screen.width(),
+                        screen.rows() as usize,
+                    );
+                    let base = if gate == 255 {
+                        curr
+                    } else if gate == 0 {
+                        prev
+                    } else {
+                        blend_565(prev, curr, gate)
+                    };
+                    match other {
+                        PreviewTransitionEffect::CopperBars
+                        | PreviewTransitionEffect::VenetianCopper
+                        | PreviewTransitionEffect::RacingBeam
+                            if gate > 0
+                                && ((local_y + alpha as usize / 8) & 15 == 0 || gate > 220) =>
+                        {
+                            brighten_565(base)
+                        }
+                        PreviewTransitionEffect::PaletteCycle if ((local_x + local_y) & 7) == 0 => {
+                            brighten_565(base)
+                        }
+                        PreviewTransitionEffect::PhosphorDecay if gate < 255 => darken_565(base),
+                        PreviewTransitionEffect::StarfieldWarp if gate == 192 => brighten_565(base),
+                        _ => base,
+                    }
+                }
             };
         }
     }
@@ -740,6 +1068,45 @@ pub(super) fn transition_rgb(
                 sample_preview_rgb(&frame.current, screen, sample_x, sample_y, 0, 1024, 1024)
                     .unwrap_or(current);
             blend_rgb(prev, chunky, alpha)
+        }
+        other => {
+            let gate = transition_gate(
+                other,
+                progress,
+                local_x,
+                local_y,
+                screen.width(),
+                screen.rows() as usize,
+            );
+            let mut base = if gate == 255 {
+                current
+            } else if gate == 0 {
+                prev
+            } else {
+                blend_rgb(prev, current, gate)
+            };
+            match other {
+                PreviewTransitionEffect::CopperBars
+                | PreviewTransitionEffect::VenetianCopper
+                | PreviewTransitionEffect::RacingBeam
+                    if gate > 0 && ((local_y + alpha as usize / 8) & 15 == 0 || gate > 220) =>
+                {
+                    base = brighten_rgb(base, 56);
+                }
+                PreviewTransitionEffect::PaletteCycle if ((local_x + local_y) & 7) == 0 => {
+                    base = brighten_rgb(base, 40);
+                }
+                PreviewTransitionEffect::PhosphorDecay if gate < 255 => {
+                    base.0 = ((base.0 as u16 * 5) / 8) as u8;
+                    base.1 = ((base.1 as u16 * 5) / 8) as u8;
+                    base.2 = ((base.2 as u16 * 5) / 8) as u8;
+                }
+                PreviewTransitionEffect::StarfieldWarp if gate == 192 => {
+                    base = brighten_rgb(base, 72);
+                }
+                _ => {}
+            }
+            base
         }
     }
 }
