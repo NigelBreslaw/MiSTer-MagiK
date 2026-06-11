@@ -14,7 +14,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
-AWK="$ROOT/scripts/mister-magik/set-menu-video-mode.awk"
 WORK="$ROOT/build/mister-video-mode-test"
 REMOTE_INI="/media/fat/MiSTer.ini"
 REMOTE_BACKUP="/media/fat/MiSTer.ini.magik-mode-test.bak"
@@ -167,7 +166,7 @@ set_mode() {
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
   echo "==> Writing [Menu] video_mode=$mode"
-  awk -v mode="$mode" -f "$AWK" "$before" >"$after"
+  mister ini-edit-local menu-mode "$mode" "$before" "$after"
   mister put "$after" "$REMOTE_INI"
 
   echo "==> Rebooting into video_mode=$mode"
@@ -190,7 +189,7 @@ write_mode_no_reboot() {
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
   echo "==> Writing [Menu] video_mode=$mode"
-  awk -v mode="$mode" -f "$AWK" "$before" >"$after"
+  mister ini-edit-local menu-mode "$mode" "$before" "$after"
   mister put "$after" "$REMOTE_INI"
 }
 
@@ -208,20 +207,7 @@ write_auto_no_reboot() {
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
   echo "==> Commenting [Menu] video_mode for EDID/native mode"
-  awk '
-    BEGIN { section = "" }
-    {
-      sub(/\r$/, "", $0)
-      if ($0 ~ /^\[/) {
-        section = tolower($0)
-      }
-      if (section == "[menu]" && $0 ~ /^[[:space:]]*video_mode[[:space:]]*=/) {
-        print ";" $0 " ; MiSTer MagiK EDID/native video-mode probe"
-      } else {
-        print
-      }
-    }
-  ' "$before" >"$after"
+  mister ini-edit-local menu-auto "$before" "$after"
   mister put "$after" "$REMOTE_INI"
 }
 
@@ -244,44 +230,7 @@ write_crt_no_reboot() {
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
   echo "==> Writing CRT/direct-video settings: $description"
-  awk \
-    -v direct_video="$direct_video" \
-    -v menu_pal="$menu_pal" \
-    -v forced_scandoubler="$forced_scandoubler" '
-    function flush_mister() {
-      if (!in_mister || flushed) return
-      if (!wrote_forced) print "forced_scandoubler=" forced_scandoubler
-      if (!wrote_menu_pal) print "menu_pal=" menu_pal
-      if (!wrote_direct) print "direct_video=" direct_video
-      flushed = 1
-    }
-    {
-      sub(/\r$/, "", $0)
-      if ($0 ~ /^\[/) {
-        flush_mister()
-        in_mister = (tolower($0) == "[mister]")
-      }
-      if (in_mister && $0 ~ /^[[:space:]]*forced_scandoubler[[:space:]]*=/) {
-        print "forced_scandoubler=" forced_scandoubler
-        wrote_forced = 1
-        next
-      }
-      if (in_mister && $0 ~ /^[[:space:]]*menu_pal[[:space:]]*=/) {
-        print "menu_pal=" menu_pal
-        wrote_menu_pal = 1
-        next
-      }
-      if (in_mister && $0 ~ /^[[:space:]]*direct_video[[:space:]]*=/) {
-        print "direct_video=" direct_video
-        wrote_direct = 1
-        next
-      }
-      print
-    }
-    END {
-      flush_mister()
-    }
-  ' "$before" >"$after"
+  mister ini-edit-local crt "$direct_video" "$menu_pal" "$forced_scandoubler" "$before" "$after"
   mister put "$after" "$REMOTE_INI"
   printf 'label=%s\ndirect_video=%s\nmenu_pal=%s\nforced_scandoubler=%s\ndescription=%s\n' \
     "$label" "$direct_video" "$menu_pal" "$forced_scandoubler" "$description" >"$out_dir/crt.env"
@@ -526,13 +475,7 @@ stock_ui_probe() {
   mister get "$REMOTE_INI" "$before"
 
   echo "==> Commenting main=MiSTer_MagiK so stock MiSTer owns the menu"
-  awk '
-    {
-      sub(/\r$/, "", $0)
-      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock UI video-mode probe"
-      else print
-    }
-  ' "$before" >"$after"
+  mister ini-edit-local comment-main "$before" "$after"
   mister put "$after" "$REMOTE_INI"
 
   echo "==> Rebooting into stock MiSTer for display compatibility check"
@@ -562,14 +505,8 @@ stock_ui_mode_probe() {
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
   echo "==> Writing [Menu] video_mode=$mode and disabling main=MiSTer_MagiK"
-  awk -v mode="$mode" -f "$AWK" "$before" >"$mode_ini"
-  awk '
-    {
-      sub(/\r$/, "", $0)
-      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock UI video-mode probe"
-      else print
-    }
-  ' "$mode_ini" >"$stock_ini"
+  mister ini-edit-local menu-mode "$mode" "$before" "$mode_ini"
+  mister ini-edit-local comment-main "$mode_ini" "$stock_ini"
   mister put "$stock_ini" "$REMOTE_INI"
 
   echo "==> Rebooting into stock MiSTer mode label=$label mode=$mode"
@@ -593,27 +530,8 @@ stock_ui_auto_probe() {
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
   echo "==> Commenting [Menu] video_mode for EDID/native stock MiSTer probe"
-  awk '
-    BEGIN { section = "" }
-    {
-      sub(/\r$/, "", $0)
-      if ($0 ~ /^\[/) {
-        section = tolower($0)
-      }
-      if (section == "[menu]" && $0 ~ /^[[:space:]]*video_mode[[:space:]]*=/) {
-        print ";" $0 " ; stock UI EDID/native video-mode probe"
-      } else {
-        print
-      }
-    }
-  ' "$before" >"$auto_ini"
-  awk '
-    {
-      sub(/\r$/, "", $0)
-      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock UI EDID/native probe"
-      else print
-    }
-  ' "$auto_ini" >"$stock_ini"
+  mister ini-edit-local menu-auto "$before" "$auto_ini"
+  mister ini-edit-local comment-main "$auto_ini" "$stock_ini"
   mister put "$stock_ini" "$REMOTE_INI"
 
   echo "==> Rebooting into stock MiSTer EDID/native mode"
@@ -625,13 +543,7 @@ stock_ui_auto_probe() {
 comment_main_for_probe() {
   local in_file="$1"
   local out_file="$2"
-  awk '
-    {
-      sub(/\r$/, "", $0)
-      if ($0 == "main=MiSTer_MagiK") print ";main=MiSTer_MagiK ; stock CRT/direct-video probe"
-      else print
-    }
-  ' "$in_file" >"$out_file"
+  mister ini-edit-local comment-main "$in_file" "$out_file"
 }
 
 crt_smoke() {

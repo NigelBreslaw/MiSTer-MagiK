@@ -29,10 +29,11 @@ This is not an official MiSTer-devel build. The experiment binary is deployed as
 - Like Zaparoo, the fork uses an `agetty` handoff on `tty2`: it writes
   `/tmp/mister_magik_launcher`, starts `/sbin/agetty -l` against that script,
   switches to VT2, calls `video_fb_enable(1)`, and hides any open menu OSD.
-- `MiSTer.ini` must have one `[MiSTer]` section with `direct_video=0` and
-  `main=MiSTer_MagiK`, plus `[Menu] video_mode=8`. A duplicate `[MiSTer]`
-  section and `direct_video=1` produced blank HDMI even when `/dev/fb0` captured
-  a correct 1920x1080 Slint frame.
+- `MiSTer.ini` must keep global `[MiSTer] direct_video=0` for stable launcher
+  boot. Normal arcade original-timing output belongs in `[arcade]
+  direct_video=1`. Rotated arcade games must use `[arcade_vertical]
+  direct_video=0` and `video_mode=8`, because the external scaler cannot rotate
+  direct-video timings.
 - Main exposes a minimal launch command through `/dev/MiSTer_cmd`:
 
 ```text
@@ -68,15 +69,17 @@ Stock `/media/fat/MiSTer` remains the canonical boot binary. It reads
 `main=` hook. This keeps `update_all` working normally and lets MiSTer MagiK
 become an update_all-managed add-on later.
 
-`scripts/restore-stock-boot.sh` returns boot to stock by restoring
-`/media/fat/MiSTer.ini.before-mister-magik-main` and ensuring `inittab` still
-boots `/media/fat/MiSTer`.
+`scripts/restore-stock-boot.sh` returns boot to stock by copying
+`/media/fat/MiSTer.ini.bak` back to `/media/fat/MiSTer.ini` and ensuring
+`inittab` still boots `/media/fat/MiSTer`.
 
 `scripts/deploy-main-mister-experiment.sh` and `scripts/install-slint-boot.sh`
-upload `scripts/mister-magik/repair-boot-ini.awk` to the device before editing
-`MiSTer.ini`. That helper normalizes CRLF, collapses duplicate `[MiSTer]`
-sections, sets `direct_video=0`, installs `main=MiSTer_MagiK`, comments
-unsupported VRR min/max keys, and ensures `[Menu] video_mode=8`.
+use the Rust comment-preserving INI mutator in `scripts/mister`; do not edit
+`MiSTer.ini` with ad hoc shell or AWK. The mutator installs
+`main=MiSTer_MagiK` in `[MiSTer]`, keeps launcher-safe `[MiSTer]
+direct_video=0`, sets `[Menu] direct_video=0` / `video_mode=8`, and can repair
+arcade video sections to `[arcade] direct_video=1` plus `[arcade_vertical]
+direct_video=0` / `video_mode=8`.
 
 ## Build
 
@@ -128,7 +131,12 @@ Current intended boot result:
 
 - `/etc/inittab` boots `/media/fat/MiSTer`.
 - `[MiSTer] main=MiSTer_MagiK` hands off to the fork before the stock menu loop.
-- `[MiSTer] direct_video=0` is required for the verified HDMI TV path.
+- `[MiSTer] direct_video=0`, `[Menu] direct_video=0`, and `[Menu] video_mode=8`
+  are used for the launcher path.
+- `[arcade] direct_video=1` gives normal arcade games original timings for the
+  external scaler.
+- `[arcade_vertical] direct_video=0` and `video_mode=8` force vertical arcade
+  games through MiSTer's 1080p scaler/rotation path.
 - `/media/fat/MiSTer_MagiK` initializes the menu core and starts
   `/media/fat/mister-magik/mister-magik-fb ui launcher 0`.
 - `mister_magik_launch <path>` shuts down the Slint child and launches through

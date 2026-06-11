@@ -75,10 +75,6 @@ MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   "$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
 
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$ROOT/scripts/mister" put "$ROOT/scripts/mister-magik/repair-boot-ini.awk" /tmp/mister-magik-repair-boot-ini.awk
-
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
@@ -86,14 +82,7 @@ MISTER_PASS="${MISTER_PASS:-1}" \
 set -e
 mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
-cp -n "$INI" "$INI.before-mister-magik-main" 2>/dev/null || true
-
-# Normalize CRLF, collapse duplicate [MiSTer] sections, set HDMI-safe
-# direct_video=0, and install the native main= handoff to the fork.
-tmp="$INI.new"
-awk -f /tmp/mister-magik-repair-boot-ini.awk "$INI" > "$tmp"
-mv "$tmp" "$INI"
-echo "MiSTer.ini boot/display keys repaired"
+cp -n "$INI" "$INI.bak" 2>/dev/null || true
 
 tmp=/tmp/inittab.magik
 awk '"'"'
@@ -118,13 +107,18 @@ sync
 
 echo "=== post-install inittab ==="
 grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
-echo "=== post-install MiSTer.ini boot keys ==="
-awk '"'"'BEGIN{s="global"} /^\[/ {s=$0} /^[[:space:]]*(main|video_mode|direct_video)[[:space:]]*=/ {print s " " NR ":" $0}'"'"' "$INI"
 echo "=== post-install processes ==="
 ps | grep -E "[M]iSTer|[M]iSTer_MagiK|[m]ister-magik-fb" || true
 echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
+
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  "$ROOT/scripts/mister" ini-repair-boot
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  "$ROOT/scripts/mister" ini-repair-arcade-video
 
 echo "==> Installed. Reboot to let stock MiSTer hand off to MiSTer_MagiK via MiSTer.ini main=."
 echo "    Restore stock with scripts/restore-stock-boot.sh."

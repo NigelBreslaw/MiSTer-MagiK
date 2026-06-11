@@ -15,7 +15,7 @@ Commands:
   fmt-fix   Run cargo fmt
   test      Run fast host logic tests without Slint/UI
   check     Compile the host-testable library without Slint/UI
-  host-tools  Run cheap host-side script/AWK/Python checks
+  host-tools  Run cheap host-side script/Rust checks
   check-arm-lib      Cross-check host-testable library for ARM, without Slint/UI
   check-arm-ui       Cross-check launcher/controller Slint UI for ARM
   check-ui           Alias for check-arm-ui

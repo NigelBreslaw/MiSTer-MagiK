@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cheap host-side checks for retained shell/AWK/Rust tooling.
+# Cheap host-side checks for retained shell/Rust tooling.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +11,10 @@ cat >"$TMP/MiSTer.ini" <<'EOF'
 direct_video=1
 main=mister-magik-fb
 
+[arcade_vertical]
+direct_video=0
+video_mode=14
+
 [Menu]
 video_mode=4
 
@@ -18,10 +22,13 @@ video_mode=4
 fb_terminal=1
 EOF
 
-awk -f "$ROOT/scripts/mister-magik/repair-boot-ini.awk" "$TMP/MiSTer.ini" >"$TMP/repaired.ini"
-test "$(grep -c '^\[MiSTer\]' "$TMP/repaired.ini")" -eq 1
+cargo run --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet -- \
+  ini-edit-local magik-boot "$TMP/MiSTer.ini" "$TMP/repaired.ini"
 grep -q '^direct_video=0$' "$TMP/repaired.ini"
 grep -q '^main=MiSTer_MagiK$' "$TMP/repaired.ini"
+grep -q '^\[arcade_vertical\]$' "$TMP/repaired.ini"
+grep -q '^video_mode=14$' "$TMP/repaired.ini"
+grep -q '^direct_video=0$' "$TMP/repaired.ini"
 grep -q '^video_mode=8$' "$TMP/repaired.ini"
 
 for script in \

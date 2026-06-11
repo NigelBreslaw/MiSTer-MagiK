@@ -127,6 +127,27 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             display_read(&sess, unsafe_spi, json_out)?;
         }
+        "ini-repair-boot" => {
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let sess = connect(10)?;
+            edit_remote_ini(&sess, IniEdit::MagikBoot, dry_run)?;
+        }
+        "ini-repair-arcade-video" => {
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let sess = connect(10)?;
+            edit_remote_ini(&sess, IniEdit::ArcadeVideo, dry_run)?;
+        }
+        "ini-edit-local" => {
+            validate_ini_edit_local_args(&args)?;
+            let edit = parse_ini_edit_args(&args)?;
+            let input = args
+                .get(args.len() - 2)
+                .ok_or("ini-edit-local needs <input> <output>")?;
+            let output = args.last().ok_or("ini-edit-local needs <input> <output>")?;
+            let text = fs::read_to_string(input)?;
+            let edited = edit_mister_ini(&text, edit);
+            fs::write(output, edited)?;
+        }
         "profile-summary" => {
             let path = args
                 .first()
@@ -162,7 +183,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|profile-summary|raw-to-png|recover> ..."
+        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-edit-local|profile-summary|raw-to-png|recover> ..."
     );
 }
 
@@ -268,6 +289,13 @@ fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
     Ok(())
 }
 
+fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
+    let sftp = sess.sftp()?;
+    let mut dst = sftp.create(Path::new(remote))?;
+    dst.write_all(bytes)?;
+    Ok(())
+}
+
 fn port_open(timeout: Duration) -> bool {
     let Ok(mut addrs) = format!("{}:22", host()).to_socket_addrs() else {
         return false;
@@ -339,6 +367,252 @@ fn remote_read(sess: &Session, path: &str) -> Option<String> {
 
 fn remote_trim(sess: &Session, path: &str) -> Option<String> {
     remote_read(sess, path).map(|s| s.trim().to_string())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum IniEdit {
+    MagikBoot,
+    ArcadeVideo,
+    MenuMode(String),
+    MenuAuto,
+    Crt {
+        direct_video: String,
+        menu_pal: String,
+        forced_scandoubler: String,
+    },
+    CommentMain,
+}
+
+fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
+    match args.first().map(String::as_str) {
+        Some("magik-boot") => Ok(IniEdit::MagikBoot),
+        Some("arcade-video") => Ok(IniEdit::ArcadeVideo),
+        Some("menu-mode") => {
+            let mode = args.get(1).ok_or("menu-mode needs <mode>")?;
+            Ok(IniEdit::MenuMode(mode.clone()))
+        }
+        Some("menu-auto") => Ok(IniEdit::MenuAuto),
+        Some("crt") => {
+            if args.len() < 4 {
+                return Err("crt needs <direct_video> <menu_pal> <forced_scandoubler>".into());
+            }
+            Ok(IniEdit::Crt {
+                direct_video: args[1].clone(),
+                menu_pal: args[2].clone(),
+                forced_scandoubler: args[3].clone(),
+            })
+        }
+        Some("comment-main") => Ok(IniEdit::CommentMain),
+        Some(other) => Err(format!("unknown ini edit: {other}").into()),
+        None => Err("ini edit mode is required".into()),
+    }
+}
+
+fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
+    let expected = match args.first().map(String::as_str) {
+        Some("magik-boot" | "arcade-video" | "menu-auto" | "comment-main") => 3,
+        Some("menu-mode") => 4,
+        Some("crt") => 6,
+        Some(other) => return Err(format!("unknown ini edit: {other}").into()),
+        None => return Err("ini edit mode is required".into()),
+    };
+    if args.len() != expected {
+        return Err(
+            "ini-edit-local needs <magik-boot|arcade-video|menu-mode|menu-auto|crt|comment-main> ... <input> <output>"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn edit_remote_ini(sess: &Session, edit: IniEdit, dry_run: bool) -> Result<()> {
+    const INI: &str = "/media/fat/MiSTer.ini";
+    let input = remote_read(sess, INI).ok_or("could not read /media/fat/MiSTer.ini")?;
+    let edited = edit_mister_ini(&input, edit);
+    if dry_run {
+        print!("{edited}");
+        return Ok(());
+    }
+    let tmp = "/media/fat/MiSTer.ini.mister-tool-new";
+    remote_write(sess, tmp, edited.as_bytes())?;
+    let out = exec(sess, &format!("mv {} {} && sync", sh(tmp), sh(INI)), true)?;
+    if out.rc != 0 {
+        return Err(format!("failed to replace {INI}: {}", out.stdout).into());
+    }
+    println!("MiSTer.ini edited with comment-preserving Rust mutator");
+    Ok(())
+}
+
+fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
+    let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines: Vec<String> = input
+        .lines()
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect();
+
+    match edit {
+        IniEdit::MagikBoot => {
+            set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
+            set_ini_key(&mut lines, "MiSTer", "main", "MiSTer_MagiK");
+            set_ini_key(&mut lines, "Menu", "direct_video", "0");
+            set_ini_key(&mut lines, "Menu", "video_mode", "8");
+        }
+        IniEdit::ArcadeVideo => {
+            set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
+            set_ini_key(&mut lines, "arcade", "direct_video", "1");
+            set_ini_key(&mut lines, "arcade_vertical", "direct_video", "0");
+            set_ini_key(&mut lines, "arcade_vertical", "video_mode", "8");
+            set_ini_key(&mut lines, "arcade_vertical", "vscale_mode", "1");
+        }
+        IniEdit::MenuMode(mode) => {
+            set_ini_key(&mut lines, "Menu", "video_mode", &mode);
+        }
+        IniEdit::MenuAuto => {
+            comment_ini_key(
+                &mut lines,
+                Some("Menu"),
+                "video_mode",
+                "MiSTer MagiK EDID/native video-mode probe",
+            );
+        }
+        IniEdit::Crt {
+            direct_video,
+            menu_pal,
+            forced_scandoubler,
+        } => {
+            set_ini_key(
+                &mut lines,
+                "MiSTer",
+                "forced_scandoubler",
+                &forced_scandoubler,
+            );
+            set_ini_key(&mut lines, "MiSTer", "menu_pal", &menu_pal);
+            set_ini_key(&mut lines, "MiSTer", "direct_video", &direct_video);
+        }
+        IniEdit::CommentMain => {
+            comment_ini_key(
+                &mut lines,
+                Some("MiSTer"),
+                "main",
+                "MiSTer MagiK disabled for stock probe",
+            );
+        }
+    }
+
+    let mut out = lines.join(newline);
+    if input.ends_with('\n') {
+        out.push_str(newline);
+    }
+    out
+}
+
+fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
+    let mut current = String::from("global");
+    let mut saw_section = false;
+    let mut changed = false;
+    let mut insert_at = None;
+
+    for idx in 0..lines.len() {
+        if let Some(name) = section_name(&lines[idx]) {
+            if current.eq_ignore_ascii_case(section) && insert_at.is_none() {
+                insert_at = Some(idx);
+            }
+            current = name;
+            if current.eq_ignore_ascii_case(section) {
+                saw_section = true;
+            }
+            continue;
+        }
+
+        if current.eq_ignore_ascii_case(section) && active_key_eq(&lines[idx], key) {
+            lines[idx] = replace_assignment_value(&lines[idx], value);
+            changed = true;
+        }
+    }
+
+    if changed {
+        return;
+    }
+
+    if current.eq_ignore_ascii_case(section) && insert_at.is_none() {
+        insert_at = Some(lines.len());
+    }
+
+    if saw_section {
+        lines.insert(insert_at.unwrap_or(lines.len()), format!("{key}={value}"));
+    } else {
+        if !lines.last().map(|l| l.trim().is_empty()).unwrap_or(true) {
+            lines.push(String::new());
+        }
+        lines.push(format!("[{section}]"));
+        lines.push(format!("{key}={value}"));
+    }
+}
+
+fn comment_ini_key(lines: &mut [String], section: Option<&str>, key: &str, reason: &str) {
+    let mut current = String::from("global");
+    for line in lines {
+        if let Some(name) = section_name(line) {
+            current = name;
+            continue;
+        }
+        let section_matches = section
+            .map(|name| current.eq_ignore_ascii_case(name))
+            .unwrap_or(true);
+        if section_matches && active_key_eq(line, key) {
+            *line = format!(";{} ; {}", line, reason);
+        }
+    }
+}
+
+fn section_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with(';') || trimmed.starts_with('#') || !trimmed.starts_with('[') {
+        return None;
+    }
+    let end = trimmed.find(']')?;
+    Some(trimmed[1..end].trim().to_string())
+}
+
+fn active_key_eq(line: &str, expected: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') {
+        return false;
+    }
+    let Some((key, _)) = trimmed.split_once('=') else {
+        return false;
+    };
+    key.trim().eq_ignore_ascii_case(expected)
+}
+
+fn replace_assignment_value(line: &str, value: &str) -> String {
+    let Some(eq) = line.find('=') else {
+        return line.to_string();
+    };
+    let after_eq = &line[eq + 1..];
+    let value_start = after_eq
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(after_eq.len());
+    let after_value_start = &after_eq[value_start..];
+    let comment_pos = after_value_start
+        .char_indices()
+        .find(|(_, ch)| *ch == ';' || *ch == '#')
+        .map(|(idx, _)| idx);
+    let suffix = comment_pos
+        .map(|pos| {
+            let before_comment = &after_value_start[..pos];
+            let whitespace_start = before_comment
+                .char_indices()
+                .rev()
+                .find(|(_, ch)| !ch.is_whitespace())
+                .map(|(idx, ch)| idx + ch.len_utf8())
+                .unwrap_or(0);
+            &after_value_start[whitespace_start..]
+        })
+        .unwrap_or("");
+    format!("{}{}{}", &line[..eq + 1 + value_start], value, suffix)
 }
 
 fn collect_status(sess: &Session) -> Result<Value> {
@@ -754,10 +1028,17 @@ fn print_status_summary(status: &Value) {
         visual["hash"].as_str().unwrap_or("?")
     );
     println!(
-        "  boot:      [MiSTer] main={} direct_video={} [Menu] video_mode={}",
+        "  boot:      [MiSTer] main={} direct_video={} [Menu] direct_video={} video_mode={}",
         ini_value(status, "MiSTer", "main").unwrap_or("?"),
         ini_value(status, "MiSTer", "direct_video").unwrap_or("?"),
+        ini_value(status, "Menu", "direct_video").unwrap_or("?"),
         ini_value(status, "Menu", "video_mode").unwrap_or("?")
+    );
+    println!(
+        "  arcade:   [arcade] direct_video={} [arcade_vertical] direct_video={} video_mode={}",
+        ini_value(status, "arcade", "direct_video").unwrap_or("?"),
+        ini_value(status, "arcade_vertical", "direct_video").unwrap_or("?"),
+        ini_value(status, "arcade_vertical", "video_mode").unwrap_or("?")
     );
     for name in ["MiSTer", "MiSTer_MagiK", "mister-magik-fb"] {
         let pid = status["processes"][name]
@@ -809,10 +1090,36 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
         findings.push(("error".into(), "[MiSTer] main is not MiSTer_MagiK".into()));
     }
     if ini_value(status, "MiSTer", "direct_video") != Some("0") {
-        findings.push(("error".into(), "[MiSTer] direct_video is not 0".into()));
+        findings.push((
+            "warn".into(),
+            "[MiSTer] direct_video is not 0; launcher boot may use direct-video timings".into(),
+        ));
+    }
+    if ini_value(status, "arcade", "direct_video") != Some("1") {
+        findings.push((
+            "warn".into(),
+            "[arcade] direct_video is not 1; normal arcade games will use scaler output".into(),
+        ));
+    }
+    if ini_value(status, "Menu", "direct_video") != Some("0") {
+        findings.push(("error".into(), "[Menu] direct_video is not 0".into()));
     }
     if ini_value(status, "Menu", "video_mode") != Some("8") {
         findings.push(("warn".into(), "[Menu] video_mode is not 8".into()));
+    }
+    if ini_value(status, "arcade_vertical", "direct_video") != Some("0") {
+        findings.push((
+            "warn".into(),
+            "[arcade_vertical] direct_video is not 0; rotated games may bypass MiSTer rotation"
+                .into(),
+        ));
+    }
+    if ini_value(status, "arcade_vertical", "video_mode") != Some("8") {
+        findings.push((
+            "warn".into(),
+            "[arcade_vertical] video_mode is not 8; rotated games should use 1080p scaler mode"
+                .into(),
+        ));
     }
     for name in ["MiSTer_MagiK", "mister-magik-fb"] {
         if status["processes"][name]
@@ -1185,7 +1492,15 @@ mod tests {
                         "main": {"value": "MiSTer_MagiK"},
                         "direct_video": {"value": "0"}
                     },
+                    "arcade": {
+                        "direct_video": {"value": "1"}
+                    },
+                    "arcade_vertical": {
+                        "direct_video": {"value": "0"},
+                        "video_mode": {"value": "8"}
+                    },
                     "Menu": {
+                        "direct_video": {"value": "0"},
                         "video_mode": {"value": "8"}
                     }
                 }
@@ -1272,6 +1587,77 @@ video_mode=14
         assert_eq!(parsed["Menu"]["video_mode"]["value"], "8");
         assert_eq!(parsed["arcade_vertical"]["video_mode"]["value"], "14");
         assert!(parsed["MiSTer"].get("unknown").is_none());
+    }
+
+    #[test]
+    fn magik_boot_edit_sets_launcher_safe_video_without_touching_arcade_vertical() {
+        let ini = "[MiSTer]\r\n; keep original core output for external scaler\r\ndirect_video=1\r\nmain=mister-magik-fb ; old handoff\r\n\r\n[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1\r\n\r\n[Menu]\r\ndirect_video=0\r\nvideo_mode=4 ; menu probe\r\n";
+
+        let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
+
+        assert!(edited.contains("direct_video=0\r\nmain=MiSTer_MagiK ; old handoff"));
+        assert!(edited
+            .contains("[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1"));
+        assert!(edited.contains("[Menu]\r\ndirect_video=0\r\nvideo_mode=8 ; menu probe"));
+        assert!(edited.contains("; keep original core output for external scaler"));
+    }
+
+    #[test]
+    fn magik_boot_edit_adds_menu_section_and_sets_global_direct_video_off() {
+        let ini = "[MiSTer]\ndirect_video=1\n";
+        let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
+
+        assert!(edited.contains("[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK"));
+        assert!(edited.contains("[Menu]\ndirect_video=0\nvideo_mode=8"));
+    }
+
+    #[test]
+    fn local_probe_edits_use_preserving_mutator() {
+        let ini = "[MiSTer]\nmain=MiSTer_MagiK\nforced_scandoubler=0\nmenu_pal=0\ndirect_video=1\n\n[Menu]\nvideo_mode=8\n";
+        let crt = edit_mister_ini(
+            ini,
+            IniEdit::Crt {
+                direct_video: "2".into(),
+                menu_pal: "1".into(),
+                forced_scandoubler: "1".into(),
+            },
+        );
+        assert!(crt.contains("forced_scandoubler=1\nmenu_pal=1\ndirect_video=2"));
+
+        let stock = edit_mister_ini(&crt, IniEdit::CommentMain);
+        assert!(stock.contains(";main=MiSTer_MagiK ; MiSTer MagiK disabled for stock probe"));
+
+        let auto = edit_mister_ini(&stock, IniEdit::MenuAuto);
+        assert!(auto.contains(";video_mode=8 ; MiSTer MagiK EDID/native video-mode probe"));
+    }
+
+    #[test]
+    fn arcade_video_edit_sets_normal_direct_and_vertical_1080p() {
+        let ini = "[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK\n\n[arcade_vertical]\ndirect_video=0\nvideo_mode=14\nvscale_mode=1\n";
+
+        let edited = edit_mister_ini(ini, IniEdit::ArcadeVideo);
+
+        assert!(edited.contains("[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK"));
+        assert!(edited.contains("[arcade]\ndirect_video=1"));
+        assert!(edited.contains("[arcade_vertical]\ndirect_video=0\nvideo_mode=8\nvscale_mode=1"));
+    }
+
+    #[test]
+    fn validates_local_ini_edit_argument_counts() {
+        let args = vec!["menu-mode".into(), "8".into(), "in".into(), "out".into()];
+        assert!(validate_ini_edit_local_args(&args).is_ok());
+
+        let missing_mode = vec!["menu-mode".into(), "in".into(), "out".into()];
+        assert!(validate_ini_edit_local_args(&missing_mode).is_err());
+
+        let missing_crt_value = vec![
+            "crt".into(),
+            "1".into(),
+            "0".into(),
+            "in".into(),
+            "out".into(),
+        ];
+        assert!(validate_ini_edit_local_args(&missing_crt_value).is_err());
     }
 
     #[test]
@@ -1383,6 +1769,8 @@ H: Handlers=sysrq kbd event7
         let mut status = status_fixture();
         status["boot"]["ini_keys"]["MiSTer"]["main"]["value"] = json!("mister-magik-fb");
         status["boot"]["ini_keys"]["MiSTer"]["direct_video"]["value"] = json!("1");
+        status["boot"]["ini_keys"]["arcade"]["direct_video"]["value"] = json!("0");
+        status["boot"]["ini_keys"]["Menu"]["direct_video"]["value"] = json!("1");
         status["boot"]["ini_keys"]["Menu"]["video_mode"]["value"] = json!("6");
         status["processes"]["mister-magik-fb"] = json!([]);
         status["display"]["active_vt"] = json!("tty1");
@@ -1393,7 +1781,13 @@ H: Handlers=sysrq kbd event7
         let findings = doctor_findings(&status);
         let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
         assert!(texts.contains(&"[MiSTer] main is not MiSTer_MagiK"));
-        assert!(texts.contains(&"[MiSTer] direct_video is not 0"));
+        assert!(texts.contains(
+            &"[MiSTer] direct_video is not 0; launcher boot may use direct-video timings"
+        ));
+        assert!(texts.contains(
+            &"[arcade] direct_video is not 1; normal arcade games will use scaler output"
+        ));
+        assert!(texts.contains(&"[Menu] direct_video is not 0"));
         assert!(texts.contains(&"[Menu] video_mode is not 8"));
         assert!(texts.contains(&"mister-magik-fb is not running"));
         assert!(texts.contains(&"/dev/fb0 samples as mostly_black"));

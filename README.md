@@ -52,8 +52,13 @@ See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork exp
 Production boot: `/etc/inittab` keeps
 booting stock `/media/fat/MiSTer`, and `[MiSTer] main=MiSTer_MagiK` hands off to
 the Main_MiSTer fork. This preserves `update_all` and makes rollback simple.
-For the verified HDMI TV path, the scripts also repair `MiSTer.ini` so it has
-one `[MiSTer]` section with `direct_video=0` and one `[Menu] video_mode=8`.
+Before editing, the scripts copy `/media/fat/MiSTer.ini` to
+`/media/fat/MiSTer.ini.bak`. `MiSTer.ini` edits go through the Rust
+comment-preserving mutator in `scripts/mister`: it installs
+`[MiSTer] main=MiSTer_MagiK` and launcher-specific `[Menu]` video settings
+without using ad hoc shell edits. Normal arcade direct-video output is configured
+with `[arcade] direct_video=1`; vertical arcade stays scaler-based with
+`[arcade_vertical] direct_video=0` and `video_mode=8` so MiSTer can rotate it.
 
 Build and deploy the fork + Slint child:
 
@@ -67,8 +72,8 @@ Or install the boot handoff after deploying binaries:
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
 ```
 
-Restore stock menu by restoring `/media/fat/MiSTer.ini.before-mister-magik-main`
-and ensuring `inittab` boots stock MiSTer:
+Restore stock menu by copying `/media/fat/MiSTer.ini.bak` back to
+`/media/fat/MiSTer.ini` and ensuring `inittab` boots stock MiSTer:
 
 ```bash
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh

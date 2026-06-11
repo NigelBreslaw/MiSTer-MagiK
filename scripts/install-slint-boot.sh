@@ -10,9 +10,6 @@ cd "$ROOT"
 MISTER_IP="${MISTER_IP:?Set MISTER_IP}"
 MISTER_PASS="${MISTER_PASS:-1}"
 
-MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" \
-  scripts/mister put scripts/mister-magik/repair-boot-ini.awk /tmp/mister-magik-repair-boot-ini.awk
-
 echo "==> Configure device (stock inittab + MiSTer.ini main=MiSTer_MagiK)"
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister run '
 set -e
@@ -32,14 +29,7 @@ ps > "$SNAP/ps.txt" 2>/dev/null || true
 cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || true
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
-if [ ! -f "$INI.before-mister-magik-main" ]; then cp "$INI" "$INI.before-mister-magik-main"; fi
-
-# Normalize CRLF, collapse duplicate [MiSTer] sections, set HDMI-safe
-# direct_video=0, and install the native main= handoff to the fork.
-tmp="$INI.new"
-awk -f /tmp/mister-magik-repair-boot-ini.awk "$INI" > "$tmp"
-mv "$tmp" "$INI"
-echo "MiSTer.ini boot/display keys repaired"
+if [ ! -f "$INI.bak" ]; then cp "$INI" "$INI.bak"; fi
 
 # Stock MiSTer starts first, then MiSTer.ini main= hands off to MiSTer_MagiK.
 mount -o remount,rw / 2>/dev/null || true
@@ -66,13 +56,14 @@ sync
 
 echo "=== post-install inittab ==="
 grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
-echo "=== post-install MiSTer.ini boot keys ==="
-awk '"'"'BEGIN{s="global"} /^\[/ {s=$0} /^[[:space:]]*(main|video_mode|direct_video)[[:space:]]*=/ {print s " " NR ":" $0}'"'"' "$INI"
 echo "=== post-install processes ==="
 ps | grep -E "[M]iSTer|[M]iSTer_MagiK|[m]ister-magik-fb" || true
 echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
+
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister ini-repair-boot
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister ini-repair-arcade-video
 
 echo "==> Reboot to apply"
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister reboot-wait
