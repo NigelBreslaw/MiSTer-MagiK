@@ -169,6 +169,9 @@ struct ScreensaverRenderState {
     attract_wall_next: Vec<Rgb565Pixel>,
     attract_wall_page: usize,
     attract_wall_valid: bool,
+    color_clash_contact: Vec<Rgb565Pixel>,
+    color_clash_contact_start: usize,
+    color_clash_contact_valid: bool,
 }
 
 impl ScreensaverRenderState {
@@ -188,6 +191,9 @@ impl ScreensaverRenderState {
             attract_wall_next: vec![Rgb565Pixel(0); w * h],
             attract_wall_page: usize::MAX,
             attract_wall_valid: false,
+            color_clash_contact: vec![Rgb565Pixel(0); w * h],
+            color_clash_contact_start: usize::MAX,
+            color_clash_contact_valid: false,
         }
     }
 }
@@ -346,6 +352,7 @@ fn render_screensaver_frame(
             | ScreensaverMode::TilemapMuseum
             | ScreensaverMode::PhosphorGrid
             | ScreensaverMode::RandomAccessLoader
+            | ScreensaverMode::ColorClashGallery
     ) {
         clear(dst, color565(2, 4, 10));
     }
@@ -373,7 +380,7 @@ fn render_screensaver_frame(
         ScreensaverMode::RandomAccessLoader => {
             render_random_loader(dst, state, w, h, images, frame)
         }
-        ScreensaverMode::ColorClashGallery => render_color_clash(dst, w, h, images, frame),
+        ScreensaverMode::ColorClashGallery => render_color_clash(dst, state, w, h, images, frame),
         ScreensaverMode::IdleMegademo => {
             let sub =
                 ScreensaverMode::ALL[((frame / 240) as usize) % (ScreensaverMode::ALL.len() - 1)];
@@ -1206,6 +1213,7 @@ fn render_random_loader(
 
 fn render_color_clash(
     dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
     w: usize,
     h: usize,
     images: &[SaverImage],
@@ -1235,6 +1243,64 @@ fn render_color_clash(
         }
     }
     if frame % 240 > 180 {
-        render_contact_sheet(dst, w, h, images, frame, 3, 2, false);
+        let cols = 3usize;
+        let rows = 2usize;
+        let cell_w = w / cols;
+        let cell_h = h / rows;
+        let contact_start = (frame / 90) as usize;
+        if !state.color_clash_contact_valid
+            || state.color_clash_contact_start != contact_start
+            || state.color_clash_contact.len() != dst.len()
+        {
+            state.color_clash_contact.resize(dst.len(), Rgb565Pixel(0));
+            clear(&mut state.color_clash_contact, Rgb565Pixel(0));
+            for row in 0..rows {
+                for col in 0..cols {
+                    if let Some(img) = image_at(images, contact_start + row * cols + col) {
+                        let x = col * cell_w + 8;
+                        let y = row * cell_h + 8;
+                        let out_w = cell_w.saturating_sub(16);
+                        let out_h = cell_h.saturating_sub(16);
+                        blit_scaled(
+                            &mut state.color_clash_contact,
+                            w,
+                            h,
+                            img,
+                            x as isize,
+                            y as isize,
+                            out_w,
+                            out_h,
+                            230,
+                        );
+                        stroke_rect(
+                            &mut state.color_clash_contact,
+                            w,
+                            h,
+                            x,
+                            y,
+                            out_w,
+                            out_h,
+                            color565(40, 250, 220),
+                        );
+                    }
+                }
+            }
+            state.color_clash_contact_start = contact_start;
+            state.color_clash_contact_valid = true;
+        }
+        for row in 0..rows {
+            for col in 0..cols {
+                copy_rect(
+                    dst,
+                    &state.color_clash_contact,
+                    w,
+                    h,
+                    col * cell_w + 8,
+                    row * cell_h + 8,
+                    cell_w.saturating_sub(16),
+                    cell_h.saturating_sub(16),
+                );
+            }
+        }
     }
 }

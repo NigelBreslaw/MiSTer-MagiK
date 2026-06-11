@@ -238,3 +238,23 @@ current wall, reveal from the retained next wall, and redraw the active border.
 
 `attract-wall` is now inside the p95 60fps target. Remaining >20ms frames are
 page rebuild spikes.
+
+## Round 10 - Cached color-clash contact overlay
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-COLOR-CLASH-R10-20260612 --deploy-fast --mode color-clash-gallery --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This keeps the animated color-clash cell fill, but caches the late-cycle 3x2
+contact-sheet overlay that previously rescaled six thumbnails during the slow
+part of the effect.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R9 mega color-clash segment | 155 | 19206 | 23799 | 23892 | 64 | 59 | 26216 |
+| round 10 focused color-clash | 721 | 16512 | 16578 | 17132 | 18 | 4 | 27476 |
+
+`color-clash-gallery` is now inside the p95 60fps target. Remaining >20ms frames
+are contact-overlay rebuild spikes.
