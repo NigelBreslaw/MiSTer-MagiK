@@ -716,6 +716,14 @@ fn blend_rgb(from: (u8, u8, u8), to: (u8, u8, u8), alpha: u8) -> (u8, u8, u8) {
     )
 }
 
+fn brighten_rgb(rgb: (u8, u8, u8), add: u8) -> (u8, u8, u8) {
+    (
+        rgb.0.saturating_add(add),
+        rgb.1.saturating_add(add),
+        rgb.2.saturating_add(add),
+    )
+}
+
 fn hash2_u8(x: usize, y: usize) -> u8 {
     let mut v = (x as u32).wrapping_mul(0x45d9f3b) ^ (y as u32).wrapping_mul(0x119de1f3);
     v ^= v >> 16;
@@ -795,6 +803,31 @@ fn darken_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     let g = (((v >> 5) & 0x3f) * 5) / 8;
     let b = ((v & 0x1f) * 5) / 8;
     Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
+}
+
+fn brighten_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
+    let v = pixel.0 as u32;
+    let r = ((v >> 11) & 0x1f).saturating_add(8).min(0x1f);
+    let g = ((v >> 5) & 0x3f).saturating_add(16).min(0x3f);
+    let b = (v & 0x1f).saturating_add(8).min(0x1f);
+    Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
+}
+
+fn mosaic_block_size(progress: f32) -> usize {
+    let p = progress.clamp(0.0, 1.0);
+    if p >= 0.96 {
+        1
+    } else if p >= 0.78 {
+        2
+    } else if p >= 0.58 {
+        4
+    } else if p >= 0.38 {
+        8
+    } else if p >= 0.18 {
+        16
+    } else {
+        32
+    }
 }
 
 fn blit_transition_565_fast(
@@ -888,6 +921,31 @@ fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::CrtBeamWipe => {
+                    let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
+                    let dy = local_y as isize - beam_y;
+                    let base = if dy <= 0 {
+                        curr
+                    } else if dy <= 10 {
+                        blend_565(prev, curr, 220u8.saturating_sub((dy as u8) * 18))
+                    } else {
+                        prev
+                    };
+                    if dy.abs() <= 2 {
+                        brighten_565(base)
+                    } else {
+                        base
+                    }
+                }
+                PreviewTransitionEffect::MosaicResolve => {
+                    let block = mosaic_block_size(progress);
+                    let sample_x = (screen.x0 + (local_x / block) * block + block / 2)
+                        .min(screen.x1.saturating_sub(1));
+                    let sample_y = (screen.y0 + (local_y / block) * block + block / 2)
+                        .min(screen.y1.saturating_sub(1));
+                    let chunky = sample_raw565(&current, sample_x, sample_y).unwrap_or(curr);
+                    blend_565(prev, chunky, alpha)
+                }
             };
         }
     }
@@ -976,6 +1034,33 @@ fn transition_rgb(
             } else {
                 prev
             }
+        }
+        PreviewTransitionEffect::CrtBeamWipe => {
+            let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
+            let dy = local_y as isize - beam_y;
+            let base = if dy <= 0 {
+                current
+            } else if dy <= 10 {
+                blend_rgb(prev, current, 220u8.saturating_sub((dy as u8) * 18))
+            } else {
+                prev
+            };
+            if dy.abs() <= 2 {
+                brighten_rgb(base, 72)
+            } else {
+                base
+            }
+        }
+        PreviewTransitionEffect::MosaicResolve => {
+            let block = mosaic_block_size(progress);
+            let sample_x = (screen.x0 + (local_x / block) * block + block / 2)
+                .min(screen.x1.saturating_sub(1));
+            let sample_y = (screen.y0 + (local_y / block) * block + block / 2)
+                .min(screen.y1.saturating_sub(1));
+            let chunky =
+                sample_preview_rgb(&frame.current, screen, sample_x, sample_y, 0, 1024, 1024)
+                    .unwrap_or(current);
+            blend_rgb(prev, chunky, alpha)
         }
     }
 }

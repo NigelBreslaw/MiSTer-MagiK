@@ -268,7 +268,9 @@ full-list copy. See `history/2026-6-8/arcade-band-copy-trial.md`.
 Screenshot transitions live on the real `ui arcade` surface. Default preview
 changes use `fade`; use `scripts/profile-preview-transition-mega.sh LABEL
 --deploy-fast` to run every raw-preview transition and summarize the trace by
-`transition_effect`. For visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
+`transition_effect`. Add new transition experiments as additional
+`MISTER_PREVIEW_TRANSITION` names instead of replacing existing effects. For
+visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

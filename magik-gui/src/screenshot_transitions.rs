@@ -14,10 +14,12 @@ pub(crate) enum PreviewTransitionEffect {
     Scanline,
     Checker,
     Dissolve,
+    CrtBeamWipe,
+    MosaicResolve,
 }
 
 impl PreviewTransitionEffect {
-    const MEGA: [Self; 8] = [
+    const MEGA: [Self; 10] = [
         Self::Cut,
         Self::Fade,
         Self::Wipe,
@@ -26,6 +28,8 @@ impl PreviewTransitionEffect {
         Self::Scanline,
         Self::Checker,
         Self::Dissolve,
+        Self::CrtBeamWipe,
+        Self::MosaicResolve,
     ];
 
     pub(crate) fn label(self) -> &'static str {
@@ -38,6 +42,8 @@ impl PreviewTransitionEffect {
             Self::Scanline => "scanline",
             Self::Checker => "checker",
             Self::Dissolve => "dissolve",
+            Self::CrtBeamWipe => "crt-beam-wipe",
+            Self::MosaicResolve => "mosaic-resolve",
         }
     }
 
@@ -51,6 +57,8 @@ impl PreviewTransitionEffect {
             "scanline" | "scanlines" | "scan" => Some(Self::Scanline),
             "checker" | "checkerboard" => Some(Self::Checker),
             "dissolve" | "noise" => Some(Self::Dissolve),
+            "crt-beam" | "crt-beam-wipe" | "beam" | "beam-wipe" => Some(Self::CrtBeamWipe),
+            "mosaic" | "mosaic-resolve" | "chunky" | "chunky-resolve" => Some(Self::MosaicResolve),
             _ => None,
         }
     }
@@ -110,7 +118,7 @@ impl PreviewTransitionDemo {
                     effects.push(effect);
                 } else {
                     eprintln!(
-                        "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; use cut|fade|wipe|slide|zoom|scanline|checker|dissolve|mega"
+                        "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; use cut|fade|wipe|slide|zoom|scanline|checker|dissolve|crt-beam-wipe|mosaic-resolve|mega"
                     );
                 }
             }
