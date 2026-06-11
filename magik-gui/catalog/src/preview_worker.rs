@@ -254,21 +254,30 @@ fn preview_thread(rx: mpsc::Receiver<PreviewCommand>, tx: mpsc::Sender<PreviewRe
     lower_thread_priority();
     let mut queue: Vec<PreviewRequest> = Vec::new();
     loop {
-        match rx.recv() {
-            Ok(command) => enqueue_command(&mut queue, command),
-            Err(_) => break,
+        if queue.is_empty() {
+            match rx.recv() {
+                Ok(command) => enqueue_command(&mut queue, command),
+                Err(_) => break,
+            }
         }
         while let Ok(command) = rx.try_recv() {
             enqueue_command(&mut queue, command);
         }
-        queue.sort_by_key(|req| (req.priority.rank(), req.requested_at));
-        if let Some(req) = queue.first().cloned() {
-            queue.remove(0);
+        if let Some(req) = pop_next_preview_request(&mut queue) {
             let result = load_preview(req);
             if tx.send(result).is_err() {
                 break;
             }
         }
+    }
+}
+
+fn pop_next_preview_request(queue: &mut Vec<PreviewRequest>) -> Option<PreviewRequest> {
+    queue.sort_by_key(|req| (req.priority.rank(), req.requested_at));
+    if queue.is_empty() {
+        None
+    } else {
+        Some(queue.remove(0))
     }
 }
 
@@ -846,6 +855,40 @@ mod tests {
         ];
         let paths = preview_window_paths(&items, 2, 3, |p| *p);
         assert_eq!(paths, vec!["b", "a", "c", "d"]);
+    }
+
+    #[test]
+    fn preview_queue_pops_selected_before_prefetch_and_keeps_remaining_work() {
+        let now = Instant::now();
+        let mut queue = vec![
+            PreviewRequest {
+                generation: 1,
+                title: "near".to_string(),
+                image_path: "near.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Prefetch { distance: 1 },
+            },
+            PreviewRequest {
+                generation: 2,
+                title: "selected".to_string(),
+                image_path: "selected.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Selected,
+            },
+            PreviewRequest {
+                generation: 3,
+                title: "far".to_string(),
+                image_path: "far.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Prefetch { distance: 4 },
+            },
+        ];
+
+        assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 2);
+        assert_eq!(queue.len(), 2);
+        assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 1);
+        assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 3);
+        assert!(pop_next_preview_request(&mut queue).is_none());
     }
 
     #[test]
