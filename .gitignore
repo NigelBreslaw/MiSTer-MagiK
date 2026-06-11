@@ -38,10 +38,9 @@ htmlcov/
 /history/toolchain-bench/*.png
 /history/toolchain-bench/*-ui.log
 
-# Rust build output (the native frontend crate)
-/magik-gui/target/
+# Rust build output
+target/
 /magik-gui/build/
-/magik-gui/catalog/target/
 
 # Main_MiSTer fork build output
 /main-mister/bin/
