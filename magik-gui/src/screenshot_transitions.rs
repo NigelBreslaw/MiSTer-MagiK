@@ -90,6 +90,7 @@ impl Default for PreviewTransitionTrace {
 
 pub(crate) struct PreviewTransitionDemo {
     effects: Vec<PreviewTransitionEffect>,
+    picker_index: Option<usize>,
     pub(crate) segment: Duration,
     pub(crate) duration: Duration,
     last_transition_id: u64,
@@ -102,10 +103,12 @@ impl PreviewTransitionDemo {
         let spec = std::env::var("MISTER_PREVIEW_TRANSITION").unwrap_or_default();
         let mut effects = Vec::new();
         let trimmed = spec.trim();
-        let label_overlay = !trimmed.is_empty();
+        let picker_enabled = transition_picker_enabled();
+        let label_overlay = picker_enabled || !trimmed.is_empty();
         if trimmed.eq_ignore_ascii_case("mega")
             || trimmed.eq_ignore_ascii_case("all")
             || trimmed.eq_ignore_ascii_case("demo")
+            || (picker_enabled && trimmed.is_empty())
         {
             effects.extend(PreviewTransitionEffect::MEGA);
         } else if !trimmed.is_empty() {
@@ -126,6 +129,12 @@ impl PreviewTransitionDemo {
         if effects.is_empty() {
             effects.push(PreviewTransitionEffect::Fade);
         }
+        let picker_index = picker_enabled.then_some(
+            effects
+                .iter()
+                .position(|effect| *effect == PreviewTransitionEffect::Fade)
+                .unwrap_or(0),
+        );
         let segment_secs = std::env::var("MISTER_PREVIEW_TRANSITION_SEGMENT_SECS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -138,6 +147,7 @@ impl PreviewTransitionDemo {
             .clamp(1, 2_000);
         Self {
             effects,
+            picker_index,
             segment: Duration::from_secs(segment_secs),
             duration: Duration::from_millis(duration_ms),
             last_transition_id: u64::MAX,
@@ -158,9 +168,38 @@ impl PreviewTransitionDemo {
         if self.effects.is_empty() {
             return PreviewTransitionEffect::Fade;
         }
+        if let Some(idx) = self.picker_index {
+            return self.effects[idx.min(self.effects.len() - 1)];
+        }
         let segment_us = self.segment.as_micros().max(1);
         let idx = ((elapsed.as_micros() / segment_us) as usize) % self.effects.len();
         self.effects[idx]
+    }
+
+    pub(crate) fn picker_enabled(&self) -> bool {
+        self.picker_index.is_some()
+    }
+
+    pub(crate) fn current_label(&self, elapsed: Duration) -> &'static str {
+        self.current_effect(elapsed).label()
+    }
+
+    pub(crate) fn cycle_picker(&mut self, delta: isize) -> bool {
+        let Some(idx) = self.picker_index else {
+            return false;
+        };
+        if self.effects.is_empty() {
+            return false;
+        }
+        let len = self.effects.len() as isize;
+        let next = (idx as isize + delta).rem_euclid(len) as usize;
+        if next == idx {
+            return false;
+        }
+        self.picker_index = Some(next);
+        self.active = None;
+        self.last_transition_id = u64::MAX;
+        true
     }
 
     pub(crate) fn label_overlay_enabled(&self) -> bool {
@@ -225,6 +264,17 @@ impl PreviewTransitionDemo {
             active: false,
         }
     }
+}
+
+fn transition_picker_enabled() -> bool {
+    std::env::var("MISTER_PREVIEW_TRANSITION_PICKER")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {

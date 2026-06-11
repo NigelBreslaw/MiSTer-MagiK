@@ -4127,6 +4127,9 @@ fn run_launcher_loop(
     let mut effect_label_overlay = preview_transition
         .label_overlay_enabled()
         .then(EffectLabelOverlay::new);
+    let transition_picker_enabled = preview_transition.picker_enabled();
+    let mut transition_picker_prev_left = false;
+    let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let cpu = cpu_profile::start();
     let mut bridge_models = LauncherBridgeModels::default();
@@ -4479,6 +4482,27 @@ fn run_launcher_loop(
                 }
                 if !setup.is_active() {
                     let nav_before = LauncherBridgeKey::from_nav(&nav);
+                    if transition_picker_enabled && nav.screen == Screen::Arcade {
+                        let left = state.dpad_left && !transition_picker_prev_left;
+                        let right = state.dpad_right && !transition_picker_prev_right;
+                        let changed = if left {
+                            preview_transition.cycle_picker(-1)
+                        } else if right {
+                            preview_transition.cycle_picker(1)
+                        } else {
+                            false
+                        };
+                        if changed {
+                            println!(
+                                "preview_transition_picker={}",
+                                preview_transition
+                                    .current_label(frame_now.duration_since(run_start))
+                            );
+                            window.request_redraw();
+                        }
+                    }
+                    transition_picker_prev_left = state.dpad_left;
+                    transition_picker_prev_right = state.dpad_right;
                     if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
                         match event.action {
                             LauncherAction::ExitToMister => {
