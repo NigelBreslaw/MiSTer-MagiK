@@ -258,3 +258,23 @@ part of the effect.
 
 `color-clash-gallery` is now inside the p95 60fps target. Remaining >20ms frames
 are contact-overlay rebuild spikes.
+
+## Round 11 - Cached scanner contact sheet
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-SCANNER-R11-20260612 --deploy-fast --mode scanner-contact-sheet --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `scanner-contact-sheet` from rebuilding the 7x4 screenshot contact
+sheet every frame to retaining it for the active contact page. The scan beam and
+central preview remain live.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R10 mega scanner segment | 137 | 21824 | 21874 | 23648 | 137 | 137 | 27444 |
+| round 11 focused scanner | 721 | 16522 | 16573 | 17011 | 13 | 2 | 28252 |
+
+`scanner-contact-sheet` is now inside the p95 60fps target. Remaining >20ms
+frames are contact-sheet rebuild spikes.

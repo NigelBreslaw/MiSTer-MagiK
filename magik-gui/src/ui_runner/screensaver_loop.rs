@@ -172,6 +172,9 @@ struct ScreensaverRenderState {
     color_clash_contact: Vec<Rgb565Pixel>,
     color_clash_contact_start: usize,
     color_clash_contact_valid: bool,
+    scanner_contact: Vec<Rgb565Pixel>,
+    scanner_contact_start: usize,
+    scanner_contact_valid: bool,
 }
 
 impl ScreensaverRenderState {
@@ -194,6 +197,9 @@ impl ScreensaverRenderState {
             color_clash_contact: vec![Rgb565Pixel(0); w * h],
             color_clash_contact_start: usize::MAX,
             color_clash_contact_valid: false,
+            scanner_contact: vec![Rgb565Pixel(0); w * h],
+            scanner_contact_start: usize::MAX,
+            scanner_contact_valid: false,
         }
     }
 }
@@ -351,6 +357,7 @@ fn render_screensaver_frame(
         ScreensaverMode::AttractWall
             | ScreensaverMode::TilemapMuseum
             | ScreensaverMode::PhosphorGrid
+            | ScreensaverMode::ScannerContactSheet
             | ScreensaverMode::RandomAccessLoader
             | ScreensaverMode::ColorClashGallery
     ) {
@@ -374,7 +381,7 @@ fn render_screensaver_frame(
         ScreensaverMode::PhosphorGrid => render_phosphor_grid(dst, state, w, h, images, frame),
         ScreensaverMode::WarpTunnel => render_warp(dst, w, h, images, frame),
         ScreensaverMode::Mode7Floor => render_mode7(dst, w, h, images, frame),
-        ScreensaverMode::ScannerContactSheet => render_scanner(dst, w, h, images, frame),
+        ScreensaverMode::ScannerContactSheet => render_scanner(dst, state, w, h, images, frame),
         ScreensaverMode::SpriteMultiplexParade => render_parade(dst, w, h, images, frame),
         ScreensaverMode::CabinetMarquee => render_marquee(dst, w, h, images, frame),
         ScreensaverMode::RandomAccessLoader => {
@@ -1075,8 +1082,62 @@ fn render_mode7(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImag
     }
 }
 
-fn render_scanner(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
-    render_contact_sheet(dst, w, h, images, frame / 5, 7, 4, false);
+fn render_scanner(
+    dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
+    w: usize,
+    h: usize,
+    images: &[SaverImage],
+    frame: u64,
+) {
+    let cols = 7usize;
+    let rows = 4usize;
+    let cell_w = w / cols;
+    let cell_h = h / rows;
+    let contact_frame = frame / 5;
+    let contact_start = (contact_frame / 90) as usize;
+    if !state.scanner_contact_valid
+        || state.scanner_contact_start != contact_start
+        || state.scanner_contact.len() != dst.len()
+    {
+        state.scanner_contact.resize(dst.len(), Rgb565Pixel(0));
+        clear(&mut state.scanner_contact, color565(2, 4, 10));
+        for row in 0..rows {
+            for col in 0..cols {
+                if let Some(img) = image_at(images, contact_start + row * cols + col) {
+                    let x = col * cell_w + 8;
+                    let y = row * cell_h + 8;
+                    let out_w = cell_w.saturating_sub(16);
+                    let out_h = cell_h.saturating_sub(16);
+                    blit_scaled(
+                        &mut state.scanner_contact,
+                        w,
+                        h,
+                        img,
+                        x as isize,
+                        y as isize,
+                        out_w,
+                        out_h,
+                        230,
+                    );
+                    stroke_rect(
+                        &mut state.scanner_contact,
+                        w,
+                        h,
+                        x,
+                        y,
+                        out_w,
+                        out_h,
+                        color565(40, 250, 220),
+                    );
+                }
+            }
+        }
+        state.scanner_contact_start = contact_start;
+        state.scanner_contact_valid = true;
+    }
+
+    dst.copy_from_slice(&state.scanner_contact);
     let scan_y = (frame as usize * 5) % h;
     for y in scan_y.saturating_sub(3)..(scan_y + 4).min(h) {
         for x in 0..w {
