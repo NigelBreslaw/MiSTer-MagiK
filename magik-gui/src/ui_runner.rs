@@ -579,6 +579,117 @@ fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Optio
     (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
 }
 
+struct PresentProbe {
+    pixels: Vec<Pixel>,
+}
+
+impl PresentProbe {
+    const X: usize = 12;
+    const Y: usize = 12;
+    const W: usize = 208;
+    const H: usize = 72;
+
+    fn from_env() -> Option<Self> {
+        matches!(
+            std::env::var("MISTER_PRESENT_PROBE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+        .then(|| Self {
+            pixels: vec![Pixel(0); Self::W * Self::H],
+        })
+    }
+
+    fn present(&mut self, disp: &mut Display, frame: u64) -> u32 {
+        self.draw(frame);
+        disp.copy_rect_from(Self::X, Self::Y, Self::W, Self::H, &self.pixels);
+        Self::H as u32
+    }
+
+    fn draw(&mut self, frame: u64) {
+        self.pixels.fill(Pixel::from_rgb(0, 0, 0));
+        let edge = if frame & 1 == 0 {
+            Pixel::from_rgb(0, 255, 255)
+        } else {
+            Pixel::from_rgb(255, 0, 255)
+        };
+        self.fill_rect(0, 0, Self::W, Self::H, Pixel::from_rgb(8, 8, 14));
+        self.stroke_rect(0, 0, Self::W, Self::H, edge);
+
+        let flash = if frame & 1 == 0 {
+            Pixel::from_rgb(255, 255, 255)
+        } else {
+            Pixel::from_rgb(0, 0, 0)
+        };
+        self.fill_rect(6, 6, 36, 36, flash);
+        self.stroke_rect(6, 6, 36, 36, edge);
+
+        let marker_x = 48 + (frame as usize % 150);
+        self.fill_rect(marker_x, 4, 3, Self::H - 8, Pixel::from_rgb(255, 40, 40));
+
+        let mut value = (frame % 10_000) as u16;
+        let mut digits = [0u8; 4];
+        for digit in digits.iter_mut().rev() {
+            *digit = (value % 10) as u8;
+            value /= 10;
+        }
+        for (i, digit) in digits.into_iter().enumerate() {
+            self.draw_digit(58 + i * 28, 9, digit, Pixel::from_rgb(255, 242, 96));
+        }
+
+        for bit in 0..8 {
+            let on = ((frame >> (7 - bit)) & 1) != 0;
+            let color = if on {
+                Pixel::from_rgb(64, 255, 96)
+            } else {
+                Pixel::from_rgb(32, 44, 40)
+            };
+            self.fill_rect(8 + bit * 24, 52, 18, 12, color);
+            self.stroke_rect(8 + bit * 24, 52, 18, 12, Pixel::from_rgb(160, 160, 160));
+        }
+    }
+
+    fn draw_digit(&mut self, x: usize, y: usize, digit: u8, color: Pixel) {
+        const SEGMENTS: [u8; 10] = [
+            0b1111110, 0b0110000, 0b1101101, 0b1111001, 0b0110011, 0b1011011, 0b1011111, 0b1110000,
+            0b1111111, 0b1111011,
+        ];
+        let mask = SEGMENTS[digit as usize];
+        let seg = |this: &mut Self, bit: u8, rx: usize, ry: usize, rw: usize, rh: usize| {
+            if (mask & (1 << bit)) != 0 {
+                this.fill_rect(x + rx, y + ry, rw, rh, color);
+            }
+        };
+        seg(self, 6, 3, 0, 18, 4);
+        seg(self, 5, 20, 3, 4, 14);
+        seg(self, 4, 20, 21, 4, 14);
+        seg(self, 3, 3, 36, 18, 4);
+        seg(self, 2, 0, 21, 4, 14);
+        seg(self, 1, 0, 3, 4, 14);
+        seg(self, 0, 3, 18, 18, 4);
+    }
+
+    fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
+        let x1 = (x + w).min(Self::W);
+        let y1 = (y + h).min(Self::H);
+        for yy in y..y1 {
+            let row = yy * Self::W;
+            for xx in x..x1 {
+                self.pixels[row + xx] = color;
+            }
+        }
+    }
+
+    fn stroke_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.fill_rect(x, y, w, 1, color);
+        self.fill_rect(x, y + h - 1, w, 1, color);
+        self.fill_rect(x, y, 1, h, color);
+        self.fill_rect(x + w - 1, y, 1, h, color);
+    }
+}
+
 pub(crate) enum UiFrameTarget {
     Xrgb8888 { cached: Vec<Pixel> },
     Rgb565 { cached: Vec<Rgb565Pixel> },
@@ -3634,6 +3745,7 @@ fn run_preview_scroll_bench_loop(
 
     let mut pacer = VsyncPacer::from_env();
     let mut target = UiFrameTarget::cached(ui);
+    let mut present_probe = PresentProbe::from_env();
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let mut preview = PreviewState::new();
     request_arcade_preview(&bridge, &games, nav.arcade.selected, &mut preview);
@@ -3658,7 +3770,7 @@ fn run_preview_scroll_bench_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
@@ -3737,13 +3849,19 @@ fn run_preview_scroll_bench_loop(
                 copy_arcade_list_update(&mut target, disp, ui, &mut arcade_list_renderer, update);
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
+        let mut present_probe_frame_us = 0u128;
+        if let Some(probe) = present_probe.as_mut() {
+            let probe_copy_start = Instant::now();
+            copied_rows += probe.present(disp, frames);
+            present_probe_frame_us = probe_copy_start.elapsed().as_micros();
+        }
         let frame_t4 = Instant::now();
         if let Some(file) = frame_trace.as_mut() {
             let cache_state = preview.trace_cache_state();
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     frame_start.duration_since(start).as_micros(),
                     nav.arcade.selected,
@@ -3758,6 +3876,7 @@ fn run_preview_scroll_bench_loop(
                     (frame_t4 - frame_t3).as_micros(),
                     cached_present_frame_us,
                     overlay_present_frame_us,
+                    present_probe_frame_us,
                     (frame_t4 - frame_start).as_micros()
                 ),
             );
@@ -3872,6 +3991,7 @@ fn run_launcher_loop(
         }
     }
     let mut pacer = VsyncPacer::from_env();
+    let mut present_probe = PresentProbe::from_env();
     let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
     let mut arcade_list_renderer = ArcadeListRenderer::new();
@@ -3886,7 +4006,7 @@ fn run_launcher_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
@@ -4478,13 +4598,19 @@ fn run_launcher_loop(
                 copy_arcade_list_update(target, disp, ui, &mut arcade_list_renderer, update);
             overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
         }
+        let mut present_probe_frame_us = 0u128;
+        if let Some(probe) = present_probe.as_mut() {
+            let probe_copy_start = Instant::now();
+            copied_rows += probe.present(disp, frames);
+            present_probe_frame_us = probe_copy_start.elapsed().as_micros();
+        }
         let frame_t4 = Instant::now();
         if let Some(file) = preview_scroll_trace.as_mut() {
             let cache_state = preview.trace_cache_state();
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     loop_start.duration_since(start).as_micros(),
                     nav.arcade.selected,
@@ -4499,6 +4625,7 @@ fn run_launcher_loop(
                     (frame_t4 - frame_t3).as_micros(),
                     cached_present_frame_us,
                     overlay_present_frame_us,
+                    present_probe_frame_us,
                     (frame_t4 - loop_start).as_micros()
                 ),
             );
