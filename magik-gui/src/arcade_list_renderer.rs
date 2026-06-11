@@ -35,13 +35,11 @@ pub(crate) struct CachedArcadeRow {
     pub(crate) pixels: Vec<Pixel>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ArcadeListDrawKey {
     len: usize,
     visual_px: i32,
-    anchor_system_id: String,
-    anchor_mra_path: String,
-    anchor_title: String,
+    anchor_hash: u64,
 }
 
 pub(crate) enum ArcadeListUpdate {
@@ -85,22 +83,11 @@ impl ArcadeListRenderer {
         let anchor = visual_index
             .round()
             .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
-        let previous = self.last_draw.clone();
+        let previous = self.last_draw;
         let key = ArcadeListDrawKey {
             len: games.len(),
             visual_px,
-            anchor_system_id: games
-                .get(anchor)
-                .map(|game| game.system_id.clone())
-                .unwrap_or_default(),
-            anchor_mra_path: games
-                .get(anchor)
-                .map(|game| game.mra_path.clone())
-                .unwrap_or_default(),
-            anchor_title: games
-                .get(anchor)
-                .map(|game| game.title.clone())
-                .unwrap_or_default(),
+            anchor_hash: arcade_anchor_hash(games.get(anchor)),
         };
         if !force && self.last_draw.as_ref() == Some(&key) {
             return None;
@@ -429,6 +416,28 @@ impl ArcadeListRenderer {
     }
 }
 
+fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    fn add_bytes(hash: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *hash ^= *byte as u64;
+            *hash = hash.wrapping_mul(PRIME);
+        }
+        *hash ^= 0xff;
+        *hash = hash.wrapping_mul(PRIME);
+    }
+
+    let mut hash = OFFSET;
+    if let Some(game) = game {
+        add_bytes(&mut hash, game.system_id.as_bytes());
+        add_bytes(&mut hash, game.mra_path.as_bytes());
+        add_bytes(&mut hash, game.title.as_bytes());
+    }
+    hash
+}
+
 pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
     let bg = if idx % 2 == 0 {
         Pixel(0x001a1424)
@@ -516,4 +525,47 @@ fn clipped_title(title: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arcade_anchor_hash_changes_for_anchor_identity_fields() {
+        let base = game("arcade", "/media/fat/_Arcade/a.mra", "Alpha");
+
+        assert_ne!(
+            arcade_anchor_hash(Some(&base)),
+            arcade_anchor_hash(Some(&game("console", "/media/fat/_Arcade/a.mra", "Alpha")))
+        );
+        assert_ne!(
+            arcade_anchor_hash(Some(&base)),
+            arcade_anchor_hash(Some(&game("arcade", "/media/fat/_Arcade/b.mra", "Alpha")))
+        );
+        assert_ne!(
+            arcade_anchor_hash(Some(&base)),
+            arcade_anchor_hash(Some(&game("arcade", "/media/fat/_Arcade/a.mra", "Beta")))
+        );
+    }
+
+    #[test]
+    fn arcade_anchor_hash_is_stable_for_same_anchor() {
+        let base = game("arcade", "/media/fat/_Arcade/a.mra", "Alpha");
+
+        assert_eq!(
+            arcade_anchor_hash(Some(&base)),
+            arcade_anchor_hash(Some(&base))
+        );
+    }
+
+    fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
+        ArcadeGameEntry {
+            title: title.to_string(),
+            mra_path: mra_path.to_string(),
+            image_path: String::new(),
+            has_image: false,
+            system_id: system_id.to_string(),
+        }
+    }
 }

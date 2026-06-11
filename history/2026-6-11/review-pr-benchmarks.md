@@ -49,3 +49,27 @@ Summary from `history/toolchain-bench/results.tsv`:
 Both runs appended timing rows but failed the mid-run framebuffer capture gate
 with `capture-fail,visual_ok=no`, so the comparison is useful for present timing
 only. The code fix is covered by host unit tests for offscreen and clipped rects.
+
+## PR 5: Avoid Cloning Arcade Draw Keys
+
+Commit under test: `fb97b9f` before benchmark-note amend.
+
+Commands:
+
+```bash
+scripts/profile-arcade-scroll.sh 30 REVIEW-PR5-BEFORE-20260611 --skip-build
+scripts/profile-arcade-scroll.sh 30 REVIEW-PR5-AFTER-20260611 --deploy-fast
+```
+
+Summary from `build/arcade-scroll-profiles/`:
+
+| Metric | Before | After | Result |
+| --- | ---: | ---: | --- |
+| frames | 1799 | 1799 | same |
+| custom_draw_us avg | 8607.1 | 8155.0 | improved |
+| custom_draw_us p95 | 9629 | 9345 | improved |
+| wall_us p95 | 16501 | 16484 | neutral |
+| wall_us max | 18943 | 18045 | improved |
+
+The change is small but removes per-frame string allocation/cloning from the
+arcade-list draw key path.
