@@ -177,3 +177,24 @@ the retained mosaic and draw the phosphor grid/flash overlays.
 `phosphor-grid` is now inside the p95 60fps target. The remaining >20ms frames
 line up with retained-mosaic rebuilds and can be targeted separately if they
 show up in p99-heavy matrix runs.
+
+## Round 7 - Cached random-access loader tiles
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-RANDOM-LOADER-R07-20260612 --deploy-fast --mode random-access-loader --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `random-access-loader` from scaling an increasing number of
+screenshots every frame to retaining a full RGB565 tile sheet for the active
+page. Normal frames fill the loader background cells and reveal loaded tiles
+with row copies from the retained sheet.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R6 mega random-loader segment | 143 | 20779 | 30144 | 31468 | 80 | 66 | 21432 |
+| round 7 focused random-loader | 720 | 16536 | 16602 | 17164 | 24 | 4 | 22460 |
+
+`random-access-loader` is now inside the p95 60fps target. The remaining >20ms
+frames are page rebuild spikes rather than steady-state frame cost.

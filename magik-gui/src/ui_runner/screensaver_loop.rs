@@ -158,6 +158,9 @@ struct ScreensaverRenderState {
     phosphor_grid: Vec<Rgb565Pixel>,
     phosphor_grid_page: usize,
     phosphor_grid_valid: bool,
+    random_loader: Vec<Rgb565Pixel>,
+    random_loader_page: usize,
+    random_loader_valid: bool,
 }
 
 impl ScreensaverRenderState {
@@ -166,6 +169,9 @@ impl ScreensaverRenderState {
             phosphor_grid: vec![Rgb565Pixel(0); w * h],
             phosphor_grid_page: usize::MAX,
             phosphor_grid_valid: false,
+            random_loader: vec![Rgb565Pixel(0); w * h],
+            random_loader_page: usize::MAX,
+            random_loader_valid: false,
         }
     }
 }
@@ -318,7 +324,12 @@ fn render_screensaver_frame(
     mode: ScreensaverMode,
     frame: u64,
 ) {
-    clear(dst, color565(2, 4, 10));
+    if !matches!(
+        mode,
+        ScreensaverMode::PhosphorGrid | ScreensaverMode::RandomAccessLoader
+    ) {
+        clear(dst, color565(2, 4, 10));
+    }
     match mode {
         ScreensaverMode::AttractWall => render_attract_wall(dst, w, h, images, frame),
         ScreensaverMode::MvsCarousel => render_carousel(dst, w, h, images, frame),
@@ -340,7 +351,9 @@ fn render_screensaver_frame(
         ScreensaverMode::ScannerContactSheet => render_scanner(dst, w, h, images, frame),
         ScreensaverMode::SpriteMultiplexParade => render_parade(dst, w, h, images, frame),
         ScreensaverMode::CabinetMarquee => render_marquee(dst, w, h, images, frame),
-        ScreensaverMode::RandomAccessLoader => render_random_loader(dst, w, h, images, frame),
+        ScreensaverMode::RandomAccessLoader => {
+            render_random_loader(dst, state, w, h, images, frame)
+        }
         ScreensaverMode::ColorClashGallery => render_color_clash(dst, w, h, images, frame),
         ScreensaverMode::IdleMegademo => {
             let sub =
@@ -482,6 +495,24 @@ fn fill_rect(
     let y1 = (y + h).min(screen_h);
     for yy in y.min(screen_h)..y1 {
         dst[yy * screen_w + x.min(screen_w)..yy * screen_w + x1].fill(color);
+    }
+}
+
+fn copy_rect(
+    dst: &mut [Rgb565Pixel],
+    src: &[Rgb565Pixel],
+    screen_w: usize,
+    screen_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+) {
+    let x1 = (x + w).min(screen_w);
+    let y1 = (y + h).min(screen_h);
+    for yy in y.min(screen_h)..y1 {
+        let row = yy * screen_w;
+        dst[row + x.min(screen_w)..row + x1].copy_from_slice(&src[row + x.min(screen_w)..row + x1]);
     }
 }
 
@@ -974,6 +1005,7 @@ fn render_marquee(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverIm
 
 fn render_random_loader(
     dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
     w: usize,
     h: usize,
     images: &[SaverImage],
@@ -981,6 +1013,35 @@ fn render_random_loader(
 ) {
     let tiles_x = 15;
     let tiles_y = 9;
+    let page = frame as usize / 180;
+    if !state.random_loader_valid
+        || state.random_loader_page != page
+        || state.random_loader.len() != dst.len()
+    {
+        state.random_loader.resize(dst.len(), Rgb565Pixel(0));
+        clear(&mut state.random_loader, color565(0, 18, 30));
+        for ty in 0..tiles_y {
+            for tx in 0..tiles_x {
+                let tile_idx = tx + ty * tiles_x;
+                if let Some(img) = image_at(images, page + tile_idx) {
+                    blit_scaled(
+                        &mut state.random_loader,
+                        w,
+                        h,
+                        img,
+                        (tx * w / tiles_x) as isize,
+                        (ty * h / tiles_y) as isize,
+                        w / tiles_x,
+                        h / tiles_y,
+                        240,
+                    );
+                }
+            }
+        }
+        state.random_loader_page = page;
+        state.random_loader_valid = true;
+    }
+
     for ty in 0..tiles_y {
         for tx in 0..tiles_x {
             let idx = tx + ty * tiles_x + frame as usize / 30;
@@ -989,30 +1050,32 @@ fn render_random_loader(
             } else {
                 color565(20, 180, 210)
             };
-            for y in ty * h / tiles_y..(ty + 1) * h / tiles_y {
-                for x in tx * w / tiles_x..(tx + 1) * w / tiles_x {
-                    dst[y * w + x] = color;
-                }
-            }
+            fill_rect(
+                dst,
+                w,
+                h,
+                tx * w / tiles_x,
+                ty * h / tiles_y,
+                w / tiles_x,
+                h / tiles_y,
+                color,
+            );
         }
     }
     let loaded_tiles = ((frame as usize * 3) % (tiles_x * tiles_y)).max(1);
     for tile_idx in 0..loaded_tiles {
         let tx = tile_idx % tiles_x;
         let ty = tile_idx / tiles_x;
-        if let Some(img) = image_at(images, tile_idx + frame as usize / 180) {
-            blit_scaled(
-                dst,
-                w,
-                h,
-                img,
-                (tx * w / tiles_x) as isize,
-                (ty * h / tiles_y) as isize,
-                w / tiles_x,
-                h / tiles_y,
-                240,
-            );
-        }
+        copy_rect(
+            dst,
+            &state.random_loader,
+            w,
+            h,
+            tx * w / tiles_x,
+            ty * h / tiles_y,
+            w / tiles_x,
+            h / tiles_y,
+        );
     }
 }
 
