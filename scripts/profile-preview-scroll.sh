@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--transition cut|fade|wipe|slide|zoom|scanline|checker|dissolve|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs the real launcher-backed arcade screen:
@@ -20,6 +20,9 @@ with MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 worker so list-renderer changes can be measured without preview/catalog noise.
 --fb-format selects the framebuffer format passed to the UI.
 --preview-blitter selects Slint Image rendering or the raw post-render blitter.
+--transition selects raw-preview screenshot transitions. Default is fade; `cut`
+disables animation; `mega` cycles all effects. --transition-segment-secs controls
+the benchmark window per effect.
 --visual-captures captures fixed arcade indices from the real arcade screen after the
 benchmark, storing before/after PNG evidence under <label>-visuals.
 --preview-visual-pct scales screenshot display area. 100 is the current size;
@@ -44,6 +47,9 @@ preview_resize_max=""
 preview_format=""
 fb_format="8888"
 preview_blitter="slint"
+transition=""
+transition_segment_secs=""
+transition_ms=""
 visual_captures="4"
 positionals=()
 
@@ -55,6 +61,9 @@ while [[ $# -gt 0 ]]; do
     --list-only) list_only="1"; shift ;;
     --fb-format) fb_format="${2:-}"; shift 2 ;;
     --preview-blitter) preview_blitter="${2:-}"; shift 2 ;;
+    --transition) transition="${2:-}"; shift 2 ;;
+    --transition-segment-secs) transition_segment_secs="${2:-}"; shift 2 ;;
+    --transition-ms) transition_ms="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     --preview-visual-pct) preview_visual_pct="${2:-}"; shift 2 ;;
     --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
@@ -100,6 +109,9 @@ if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ 
 case "$preview_format" in ""|png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be png, derived-png, raw-rgb, or raw-rgb565" >&2; exit 2 ;; esac
 case "$fb_format" in 8888|565) ;; *) echo "--fb-format must be 8888 or 565" >&2; exit 2 ;; esac
 case "$preview_blitter" in slint|raw) ;; *) echo "--preview-blitter must be slint or raw" >&2; exit 2 ;; esac
+case "$transition" in ""|cut|none|off|fade|crossfade|wipe|wipe-left|slide|slide-left|zoom|pop|scanline|scanlines|checker|checkerboard|dissolve|noise|mega|all|demo) ;; *) echo "--transition must be cut, fade, wipe, slide, zoom, scanline, checker, dissolve, or mega" >&2; exit 2 ;; esac
+if [[ -n "$transition_segment_secs" && ! "$transition_segment_secs" =~ ^[0-9]+$ ]]; then echo "--transition-segment-secs must be an integer" >&2; exit 2; fi
+if [[ -n "$transition_ms" && ! "$transition_ms" =~ ^[0-9]+$ ]]; then echo "--transition-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
@@ -123,6 +135,15 @@ fi
 if [[ -n "$preview_format" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_FORMAT=$preview_format"
 fi
+if [[ -n "$transition" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION=$transition"
+fi
+if [[ -n "$transition_segment_secs" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION_SEGMENT_SECS=$transition_segment_secs"
+fi
+if [[ -n "$transition_ms" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION_MS=$transition_ms"
+fi
 if [[ -z "$preview_format" && -z "$preview_resize_filter" && -z "$preview_resize_max" ]]; then
   run_label="default derived-png nearest 320x320"
 else
@@ -144,7 +165,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format preview_blitter=$preview_blitter list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format preview_blitter=$preview_blitter transition=${transition:-fade} list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -267,6 +288,55 @@ summarize_trace() {
   done
 }
 
+summarize_trace_by_effect() {
+  local tsv="$1"
+  awk '
+    BEGIN { FS="\t" }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      has_effect = ("transition_effect" in col)
+      next
+    }
+    NF && has_effect {
+      effect = $(col["transition_effect"])
+      idx = ++n[effect]
+      wall = $(col["wall_us"]) + 0
+      walls[effect, idx] = wall
+      sum[effect] += wall
+      if (wall > 16667) slow16[effect]++
+      if (wall > 20000) slow20[effect]++
+      if (!(effect in seen)) {
+        seen[effect] = 1
+        order[++order_n] = effect
+      }
+    }
+    END {
+      if (!has_effect) exit
+      for (oi = 1; oi <= order_n; oi++) {
+        effect = order[oi]
+        count = n[effect]
+        for (i = 1; i <= count; i++) {
+          sorted[i] = walls[effect, i]
+        }
+        for (i = 1; i <= count; i++) {
+          for (j = i + 1; j <= count; j++) {
+            if (sorted[j] < sorted[i]) {
+              tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp
+            }
+          }
+        }
+        p95_i = int(count * 0.95)
+        if (p95_i < 1) p95_i = 1
+        if (p95_i > count) p95_i = count
+        printf "%s\t%d\t%.0f\t%d\t%d\t%d\n",
+          effect, count, sum[effect] / count, sorted[p95_i],
+          slow16[effect] + 0, slow20[effect] + 0
+        delete sorted
+      }
+    }
+  ' "$tsv"
+}
+
 check_velocity_motion() {
   local name="$1"
   local tsv="$2"
@@ -306,6 +376,10 @@ arcade_log="$OUT_DIR/${label}-arcade.log"
 echo
 echo $'case\tframes\tavg_wall_us\tp95_wall_us\tslow_gt_16_7ms\tslow_gt_20ms\texact\tcached\tstale\tplaceholder\trss_hwm_kb'
 summarize_trace arcade "$arcade_tsv" "$arcade_log"
+
+echo
+echo $'transition_effect\tframes\tavg_wall_us\tp95_wall_us\tslow_gt_16_7ms\tslow_gt_20ms'
+summarize_trace_by_effect "$arcade_tsv"
 
 echo
 echo $'motion_check\tframes\tfractional_visual_index_frames\tmoving_frames'

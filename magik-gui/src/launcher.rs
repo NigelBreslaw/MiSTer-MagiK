@@ -12,6 +12,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,17 @@ const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
 
 static LAUNCH_STATE: AtomicU8 = AtomicU8::new(LAUNCH_IDLE);
+
+fn arcade_scroll_speed_div() -> i32 {
+    static VALUE: OnceLock<i32> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_ARCADE_SCROLL_SPEED_DIV")
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok())
+            .map(|value| value.clamp(1, 12))
+            .unwrap_or(1)
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchError {
@@ -196,7 +208,9 @@ impl ArcadeNav {
             ARCADE_TURBO_PX_PER_FRAME
         } else {
             ARCADE_NORMAL_PX_PER_FRAME
-        };
+        }
+        .saturating_div(arcade_scroll_speed_div())
+        .max(1);
         let movement = delta.signum() * step.min(delta.abs());
         let before_row = self.scroll.visual_px.div_euclid(ARCADE_ROW_HEIGHT);
         self.scroll.visual_px =

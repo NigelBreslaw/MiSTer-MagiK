@@ -36,6 +36,7 @@ mod launcher;
 mod mr_audio;
 mod preview_state;
 mod runtime_status;
+mod screenshot_transitions;
 mod setup_nav;
 mod ui_blend_velocity;
 mod ui_display;

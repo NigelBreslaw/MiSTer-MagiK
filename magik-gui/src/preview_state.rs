@@ -229,6 +229,8 @@ pub(crate) struct PreviewState {
     cache: PreviewImageCache,
     has_visible_preview: bool,
     visible_path: String,
+    previous_image: Option<PreviewImage>,
+    raw_transition_id: u64,
     window_paths: Vec<String>,
     pending_prefetch_paths: HashSet<String>,
     raw_dirty: bool,
@@ -240,6 +242,12 @@ pub(crate) struct PreviewRawFrame<'a> {
     pub(crate) source_h: u32,
     pub(crate) display_w: u32,
     pub(crate) display_h: u32,
+}
+
+pub(crate) struct PreviewRawTransitionFrame<'a> {
+    pub(crate) previous: Option<PreviewRawFrame<'a>>,
+    pub(crate) current: PreviewRawFrame<'a>,
+    pub(crate) transition_id: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -261,6 +269,8 @@ impl PreviewState {
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
             visible_path: String::new(),
+            previous_image: None,
+            raw_transition_id: 0,
             window_paths: Vec::new(),
             pending_prefetch_paths: HashSet::new(),
             raw_dirty: false,
@@ -277,6 +287,8 @@ impl PreviewState {
             self.current_generation = 0;
             self.has_visible_preview = false;
             self.visible_path.clear();
+            self.previous_image = None;
+            self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
             self.window_paths.clear();
             self.pending_prefetch_paths.clear();
             self.raw_dirty = false;
@@ -311,12 +323,8 @@ impl PreviewState {
         dirty
     }
 
-    pub(crate) fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
-        if !preview_raw_blitter_enabled() || !self.has_visible_preview {
-            return None;
-        }
-        let image = self.cache.peek(&self.visible_path)?;
-        Some(PreviewRawFrame {
+    fn raw_frame_from_image(image: &PreviewImage) -> PreviewRawFrame<'_> {
+        PreviewRawFrame {
             pixels: match &image.pixels {
                 PreviewImagePixels::Rgb8(rgb) => PreviewRawPixels::Rgb8(rgb),
                 PreviewImagePixels::Rgb565 {
@@ -331,6 +339,35 @@ impl PreviewState {
             source_h: image.source_h,
             display_w: image.display_w,
             display_h: image.display_h,
+        }
+    }
+
+    fn begin_raw_transition_to(&mut self, next_path: &str) {
+        if self.visible_path == next_path {
+            return;
+        }
+        self.previous_image = if self.has_visible_preview {
+            self.cache.peek(&self.visible_path).cloned()
+        } else {
+            None
+        };
+        self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
+    }
+
+    pub(crate) fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
+        if !preview_raw_blitter_enabled() || !self.has_visible_preview {
+            return None;
+        }
+        let image = self.cache.peek(&self.visible_path)?;
+        Some(Self::raw_frame_from_image(image))
+    }
+
+    pub(crate) fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
+        let current = self.raw_frame()?;
+        Some(PreviewRawTransitionFrame {
+            previous: self.previous_image.as_ref().map(Self::raw_frame_from_image),
+            current,
+            transition_id: self.raw_transition_id,
         })
     }
 }
@@ -383,6 +420,7 @@ pub(crate) fn request_arcade_preview_window(
                     bridge.set_arcade_preview_title(game.title.clone().into());
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
+                    preview.begin_raw_transition_to(&path);
                     preview.visible_path = path;
                     preview.raw_dirty = true;
                     apply_preview_image_bridge(bridge, &image);
@@ -420,6 +458,7 @@ pub(crate) fn request_arcade_preview_window(
                     game.title, game.image_path
                 );
             }
+            preview.begin_raw_transition_to(&game.image_path);
             preview.visible_path = game.image_path.clone();
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &image);
@@ -446,6 +485,8 @@ pub(crate) fn request_arcade_preview_window(
     preview.selected_image_path = None;
     preview.has_visible_preview = false;
     preview.visible_path.clear();
+    preview.previous_image = None;
+    preview.raw_transition_id = preview.raw_transition_id.wrapping_add(1);
     bridge.set_arcade_preview_placeholder_visible(true);
     clear_preview_image_bridge(bridge);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -625,6 +666,7 @@ pub(crate) fn apply_ready_preview(
                 preview.current_generation = 0;
                 bridge.set_arcade_preview_title(result.title.into());
                 preview.has_visible_preview = true;
+                preview.begin_raw_transition_to(&image_path);
                 preview.visible_path = image_path;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
@@ -642,6 +684,8 @@ pub(crate) fn apply_ready_preview(
                 preview.current_generation = 0;
                 preview.has_visible_preview = false;
                 preview.visible_path.clear();
+                preview.previous_image = None;
+                preview.raw_transition_id = preview.raw_transition_id.wrapping_add(1);
                 clear_preview_image_bridge(&bridge);
                 bridge.set_arcade_preview_status(PreviewStatus::Empty);
                 dirty = true;

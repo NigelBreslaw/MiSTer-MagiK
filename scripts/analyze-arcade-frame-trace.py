@@ -14,8 +14,8 @@ import csv
 from pathlib import Path
 
 
-FLOAT_COLUMNS = {"visual_index"}
-STRING_COLUMNS = {"update", "arcade_update", "cache_state"}
+FLOAT_COLUMNS = {"visual_index", "transition_progress"}
+STRING_COLUMNS = {"update", "arcade_update", "cache_state", "transition_effect"}
 PHASES = [
     "prepare_us",
     "slint_render_us",
@@ -99,12 +99,20 @@ def main() -> int:
         print_stats(f"update={update}", group)
         print()
 
+    if rows and "transition_effect" in rows[0]:
+        for effect in sorted({str(row["transition_effect"]) for row in rows}):
+            group = [row for row in rows if row["transition_effect"] == effect]
+            print_stats(f"transition_effect={effect}", group)
+            print()
+
     print(f"worst wall_us ({args.worst})")
     for row in sorted(rows, key=lambda item: int(item["wall_us"]), reverse=True)[: args.worst]:
         fields = [
             "frame",
             "selected",
             "visual_index",
+            "transition_effect",
+            "transition_progress",
             "update",
             "rows",
             "prepare_us",

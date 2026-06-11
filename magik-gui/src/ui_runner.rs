@@ -26,7 +26,6 @@ use crate::arcade_list_renderer::{
     ArcadeListRenderer, ArcadeListUpdate, ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X,
     ARCADE_LIST_Y,
 };
-#[cfg(mister_bench_scenes)]
 use crate::bitmap_text::ConsoleFont;
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
@@ -39,11 +38,14 @@ use crate::library_db;
 use crate::preview_state::{
     apply_ready_preview, preview_raw_blitter_enabled, preview_visual_pct,
     request_arcade_preview_window, schedule_arcade_preview_window, PreviewRawFrame,
-    PreviewRawPixels, PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W,
-    ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
+    PreviewRawPixels, PreviewRawTransitionFrame, PreviewState, ARCADE_PREVIEW_BOX_H,
+    ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
 use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};
+use crate::screenshot_transitions::{
+    PreviewTransitionDemo, PreviewTransitionEffect, PreviewTransitionTrace,
+};
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
@@ -562,6 +564,18 @@ fn rgb565_to_pixel(pixel: Rgb565Pixel) -> Pixel {
     Pixel((r << 16) | (g << 8) | b)
 }
 
+fn pixel_to_rgb(pixel: Pixel) -> (u8, u8, u8) {
+    (
+        ((pixel.0 >> 16) & 0xff) as u8,
+        ((pixel.0 >> 8) & 0xff) as u8,
+        (pixel.0 & 0xff) as u8,
+    )
+}
+
+fn rgb565_to_rgb(pixel: Rgb565Pixel) -> (u8, u8, u8) {
+    pixel_to_rgb(rgb565_to_pixel(pixel))
+}
+
 fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Option<DirtyRect> {
     if frame.source_w == 0 || frame.source_h == 0 || frame.display_w == 0 || frame.display_h == 0 {
         return None;
@@ -600,6 +614,370 @@ fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Optio
         .min(ui.render_h());
 
     (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
+}
+
+fn sample_preview_rgb(
+    frame: &PreviewRawFrame<'_>,
+    screen: DirtyRect,
+    x: usize,
+    y: usize,
+    offset_x: isize,
+    scale_num: u32,
+    scale_den: u32,
+) -> Option<(u8, u8, u8)> {
+    if frame.source_w == 0
+        || frame.source_h == 0
+        || frame.display_w == 0
+        || frame.display_h == 0
+        || scale_den == 0
+    {
+        return None;
+    }
+    if scale_num == scale_den
+        && frame.display_w == frame.source_w
+        && frame.display_h == frame.source_h
+    {
+        let image_x = screen.x0 as isize
+            + (ARCADE_PREVIEW_BOX_W as isize - frame.source_w as isize) / 2
+            + offset_x;
+        let image_y =
+            screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - frame.source_h as isize) / 2;
+        let src_x = x as isize - image_x;
+        let src_y = y as isize - image_y;
+        if src_x < 0
+            || src_y < 0
+            || src_x >= frame.source_w as isize
+            || src_y >= frame.source_h as isize
+        {
+            return None;
+        }
+        let src_x = src_x as usize;
+        let src_y = src_y as usize;
+        return match frame.pixels {
+            PreviewRawPixels::Rgb8(rgb) => {
+                let si = (src_y * frame.source_w as usize + src_x) * 3;
+                (si + 2 < rgb.len()).then(|| (rgb[si], rgb[si + 1], rgb[si + 2]))
+            }
+            PreviewRawPixels::Rgb565 {
+                pixels,
+                stride_pixels,
+            } => {
+                let idx = src_y * stride_pixels + src_x;
+                (idx < pixels.len()).then(|| rgb565_to_rgb(pixels[idx]))
+            }
+        };
+    }
+    let scaled_w = ((frame.display_w as u64 * scale_num as u64) / scale_den as u64)
+        .max(1)
+        .min(isize::MAX as u64) as isize;
+    let scaled_h = ((frame.display_h as u64 * scale_num as u64) / scale_den as u64)
+        .max(1)
+        .min(isize::MAX as u64) as isize;
+    let center_x = screen.x0 as isize + ARCADE_PREVIEW_BOX_W as isize / 2 + offset_x;
+    let center_y = screen.y0 as isize + ARCADE_PREVIEW_BOX_H as isize / 2;
+    let image_x = center_x - scaled_w / 2;
+    let image_y = center_y - scaled_h / 2;
+    let local_x = x as isize - image_x;
+    let local_y = y as isize - image_y;
+    if local_x < 0 || local_y < 0 || local_x >= scaled_w || local_y >= scaled_h {
+        return None;
+    }
+    let src_w = frame.source_w as usize;
+    let src_h = frame.source_h as usize;
+    let src_x = ((local_x as u64 * frame.source_w as u64) / scaled_w as u64)
+        .min(frame.source_w.saturating_sub(1) as u64) as usize;
+    let src_y = ((local_y as u64 * frame.source_h as u64) / scaled_h as u64)
+        .min(frame.source_h.saturating_sub(1) as u64) as usize;
+    match frame.pixels {
+        PreviewRawPixels::Rgb8(rgb) => {
+            let si = (src_y * src_w + src_x) * 3;
+            (si + 2 < rgb.len()).then(|| (rgb[si], rgb[si + 1], rgb[si + 2]))
+        }
+        PreviewRawPixels::Rgb565 {
+            pixels,
+            stride_pixels,
+        } => {
+            if src_x >= src_w || src_y >= src_h || src_y * stride_pixels + src_x >= pixels.len() {
+                None
+            } else {
+                Some(rgb565_to_rgb(pixels[src_y * stride_pixels + src_x]))
+            }
+        }
+    }
+}
+
+fn blend_rgb(from: (u8, u8, u8), to: (u8, u8, u8), alpha: u8) -> (u8, u8, u8) {
+    let a = alpha as u16;
+    let ia = 255u16.saturating_sub(a);
+    (
+        ((from.0 as u16 * ia + to.0 as u16 * a) / 255) as u8,
+        ((from.1 as u16 * ia + to.1 as u16 * a) / 255) as u8,
+        ((from.2 as u16 * ia + to.2 as u16 * a) / 255) as u8,
+    )
+}
+
+fn hash2_u8(x: usize, y: usize) -> u8 {
+    let mut v = (x as u32).wrapping_mul(0x45d9f3b) ^ (y as u32).wrapping_mul(0x119de1f3);
+    v ^= v >> 16;
+    v = v.wrapping_mul(0x45d9f3b);
+    (v >> 24) as u8
+}
+
+struct Raw565View<'a> {
+    pixels: &'a [Rgb565Pixel],
+    stride_pixels: usize,
+    w: usize,
+    h: usize,
+    x: isize,
+    y: isize,
+}
+
+fn raw565_view<'a>(
+    frame: &'a PreviewRawFrame<'a>,
+    screen: DirtyRect,
+    offset_x: isize,
+) -> Option<Raw565View<'a>> {
+    if frame.display_w != frame.source_w || frame.display_h != frame.source_h {
+        return None;
+    }
+    let PreviewRawPixels::Rgb565 {
+        pixels,
+        stride_pixels,
+    } = frame.pixels
+    else {
+        return None;
+    };
+    let w = frame.source_w as usize;
+    let h = frame.source_h as usize;
+    if w == 0 || h == 0 || stride_pixels < w || pixels.len() < stride_pixels * h {
+        return None;
+    }
+    Some(Raw565View {
+        pixels,
+        stride_pixels,
+        w,
+        h,
+        x: screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - w as isize) / 2 + offset_x,
+        y: screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - h as isize) / 2,
+    })
+}
+
+fn sample_raw565(view: &Raw565View<'_>, x: usize, y: usize) -> Option<Rgb565Pixel> {
+    let sx = x as isize - view.x;
+    let sy = y as isize - view.y;
+    if sx < 0 || sy < 0 || sx >= view.w as isize || sy >= view.h as isize {
+        None
+    } else {
+        Some(view.pixels[sy as usize * view.stride_pixels + sx as usize])
+    }
+}
+
+fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
+    let a = alpha as u32;
+    let ia = 255u32.saturating_sub(a);
+    let f = from.0 as u32;
+    let t = to.0 as u32;
+    let fr = (f >> 11) & 0x1f;
+    let fg = (f >> 5) & 0x3f;
+    let fb = f & 0x1f;
+    let tr = (t >> 11) & 0x1f;
+    let tg = (t >> 5) & 0x3f;
+    let tb = t & 0x1f;
+    let r = (fr * ia + tr * a) / 255;
+    let g = (fg * ia + tg * a) / 255;
+    let b = (fb * ia + tb * a) / 255;
+    Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
+}
+
+fn darken_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
+    let v = pixel.0 as u32;
+    let r = (((v >> 11) & 0x1f) * 5) / 8;
+    let g = (((v >> 5) & 0x3f) * 5) / 8;
+    let b = ((v & 0x1f) * 5) / 8;
+    Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
+}
+
+fn blit_transition_565_fast(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawTransitionFrame<'_>,
+    effect: PreviewTransitionEffect,
+    progress: f32,
+) -> Option<()> {
+    let current = raw565_view(&frame.current, screen, 0)?;
+    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    let prev_offset = -((progress * screen.width() as f32).round() as isize);
+    let current_offset = ((1.0 - progress) * screen.width() as f32).round() as isize;
+    let previous = frame
+        .previous
+        .as_ref()
+        .and_then(|prev| raw565_view(prev, screen, 0));
+    let slide_previous = frame
+        .previous
+        .as_ref()
+        .and_then(|prev| raw565_view(prev, screen, prev_offset));
+    let slide_current = raw565_view(&frame.current, screen, current_offset);
+    let reveal_w = ((screen.width() as f32) * progress).round() as usize;
+    let reveal_h = ((screen.rows() as f32) * progress).round() as usize;
+    let cx = screen.width() / 2;
+    let cy = screen.rows() as usize / 2;
+    let zoom_w = reveal_w / 2;
+    let zoom_h = reveal_h / 2;
+
+    for y in screen.y0..screen.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        let local_y = y - screen.y0;
+        for x in screen.x0..screen.x1.min(ui.render_w()) {
+            let local_x = x - screen.x0;
+            let prev = previous
+                .as_ref()
+                .and_then(|view| sample_raw565(view, x, y))
+                .unwrap_or(black);
+            let curr = sample_raw565(&current, x, y).unwrap_or(black);
+            cached[row + x] = match effect {
+                PreviewTransitionEffect::Cut => curr,
+                PreviewTransitionEffect::Fade => blend_565(prev, curr, alpha),
+                PreviewTransitionEffect::Wipe => {
+                    if local_x < reveal_w {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
+                PreviewTransitionEffect::Slide => slide_current
+                    .as_ref()
+                    .and_then(|view| sample_raw565(view, x, y))
+                    .or_else(|| {
+                        slide_previous
+                            .as_ref()
+                            .and_then(|view| sample_raw565(view, x, y))
+                    })
+                    .unwrap_or(black),
+                PreviewTransitionEffect::Zoom => {
+                    if local_x.abs_diff(cx) <= zoom_w && local_y.abs_diff(cy) <= zoom_h {
+                        blend_565(prev, curr, alpha)
+                    } else {
+                        prev
+                    }
+                }
+                PreviewTransitionEffect::Scanline => {
+                    if local_y < reveal_h {
+                        let blended = blend_565(prev, curr, alpha);
+                        if local_y & 3 == 0 {
+                            darken_565(blended)
+                        } else {
+                            blended
+                        }
+                    } else {
+                        prev
+                    }
+                }
+                PreviewTransitionEffect::Checker => {
+                    if hash2_u8(local_x / 16, local_y / 16) <= alpha {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
+                PreviewTransitionEffect::Dissolve => {
+                    if hash2_u8(local_x / 2, local_y / 2) <= alpha {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
+            };
+        }
+    }
+    Some(())
+}
+
+fn transition_rgb(
+    frame: &PreviewRawTransitionFrame<'_>,
+    screen: DirtyRect,
+    effect: PreviewTransitionEffect,
+    progress: f32,
+    x: usize,
+    y: usize,
+) -> (u8, u8, u8) {
+    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let local_x = x.saturating_sub(screen.x0);
+    let local_y = y.saturating_sub(screen.y0);
+    let prev = frame
+        .previous
+        .as_ref()
+        .and_then(|prev| sample_preview_rgb(prev, screen, x, y, 0, 1024, 1024))
+        .unwrap_or((0, 0, 0));
+    let current =
+        sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024).unwrap_or((0, 0, 0));
+
+    match effect {
+        PreviewTransitionEffect::Cut => current,
+        PreviewTransitionEffect::Fade => blend_rgb(prev, current, alpha),
+        PreviewTransitionEffect::Wipe => {
+            let reveal_w = ((screen.width() as f32) * progress).round() as usize;
+            if local_x < reveal_w {
+                current
+            } else {
+                prev
+            }
+        }
+        PreviewTransitionEffect::Slide => {
+            let pane_w = screen.width() as isize;
+            let offset = ((1.0 - progress) * pane_w as f32).round() as isize;
+            let prev_offset = -((progress * pane_w as f32).round() as isize);
+            let sliding_current =
+                sample_preview_rgb(&frame.current, screen, x, y, offset, 1024, 1024);
+            let sliding_prev = frame
+                .previous
+                .as_ref()
+                .and_then(|prev| sample_preview_rgb(prev, screen, x, y, prev_offset, 1024, 1024));
+            sliding_current.or(sliding_prev).unwrap_or((0, 0, 0))
+        }
+        PreviewTransitionEffect::Zoom => {
+            let cx = screen.width() / 2;
+            let cy = screen.rows() as usize / 2;
+            let reveal_w = ((screen.width() as f32) * progress).round() as usize / 2;
+            let reveal_h = ((screen.rows() as f32) * progress).round() as usize / 2;
+            if local_x.abs_diff(cx) <= reveal_w && local_y.abs_diff(cy) <= reveal_h {
+                blend_rgb(prev, current, alpha)
+            } else {
+                prev
+            }
+        }
+        PreviewTransitionEffect::Scanline => {
+            let mut rgb = blend_rgb(prev, current, alpha);
+            if local_y & 3 == 0 {
+                rgb.0 = ((rgb.0 as u16 * 5) / 8) as u8;
+                rgb.1 = ((rgb.1 as u16 * 5) / 8) as u8;
+                rgb.2 = ((rgb.2 as u16 * 5) / 8) as u8;
+            }
+            if local_y < ((screen.rows() as f32) * progress).round() as usize {
+                rgb
+            } else {
+                prev
+            }
+        }
+        PreviewTransitionEffect::Checker => {
+            let tile = 16usize;
+            let gate = hash2_u8(local_x / tile, local_y / tile);
+            if gate <= alpha {
+                current
+            } else {
+                prev
+            }
+        }
+        PreviewTransitionEffect::Dissolve => {
+            let gate = hash2_u8(local_x / 2, local_y / 2);
+            if gate <= alpha {
+                current
+            } else {
+                prev
+            }
+        }
+    }
 }
 
 struct PresentProbe {
@@ -689,6 +1067,64 @@ impl PresentProbe {
         seg(self, 2, 0, 21, 4, 14);
         seg(self, 1, 0, 3, 4, 14);
         seg(self, 0, 3, 18, 18, 4);
+    }
+
+    fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
+        let x1 = (x + w).min(Self::W);
+        let y1 = (y + h).min(Self::H);
+        for yy in y..y1 {
+            let row = yy * Self::W;
+            for xx in x..x1 {
+                self.pixels[row + xx] = color;
+            }
+        }
+    }
+
+    fn stroke_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.fill_rect(x, y, w, 1, color);
+        self.fill_rect(x, y + h - 1, w, 1, color);
+        self.fill_rect(x, y, 1, h, color);
+        self.fill_rect(x + w - 1, y, 1, h, color);
+    }
+}
+
+struct EffectLabelOverlay {
+    font: ConsoleFont,
+    pixels: Vec<Pixel>,
+}
+
+impl EffectLabelOverlay {
+    const X: usize = 10;
+    const Y: usize = 10;
+    const W: usize = 260;
+    const H: usize = 26;
+
+    fn new() -> Self {
+        Self {
+            font: ConsoleFont::new(10.0),
+            pixels: vec![Pixel(0); Self::W * Self::H],
+        }
+    }
+
+    fn draw(&mut self, target: &mut UiFrameTarget, ui: &UiDisplay, effect: &str) -> DirtyRect {
+        self.pixels.fill(Pixel::from_rgb(0, 0, 0));
+        self.fill_rect(1, 1, Self::W - 2, Self::H - 2, Pixel::from_rgb(10, 14, 20));
+        self.stroke_rect(0, 0, Self::W, Self::H, Pixel::from_rgb(69, 229, 255));
+        self.font.draw_text_clipped(
+            &mut self.pixels,
+            Self::W,
+            Self::W,
+            0,
+            Self::H,
+            8,
+            18,
+            &format!("EFFECT: {}", effect.to_ascii_uppercase()),
+            Pixel::from_rgb(255, 244, 126),
+        );
+        target.blit_pixel_rect(ui, Self::X, Self::Y, Self::W, Self::H, &self.pixels)
     }
 
     fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
@@ -891,6 +1327,80 @@ impl UiFrameTarget {
         Some(if clear_screen { screen } else { rect })
     }
 
+    fn blit_raw_preview_transition(
+        &mut self,
+        ui: &UiDisplay,
+        frame: &PreviewRawTransitionFrame<'_>,
+        effect: PreviewTransitionEffect,
+        progress: f32,
+    ) -> DirtyRect {
+        let screen = preview_screen_rect(ui);
+        match self {
+            Self::Xrgb8888 { cached } => {
+                for y in screen.y0..screen.y1.min(ui.render_h()) {
+                    let row = y * ui.render_w();
+                    for x in screen.x0..screen.x1.min(ui.render_w()) {
+                        let rgb = transition_rgb(frame, screen, effect, progress, x, y);
+                        cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
+                    }
+                }
+            }
+            Self::Rgb565 { cached } => {
+                if blit_transition_565_fast(cached, ui, screen, frame, effect, progress).is_some() {
+                    return screen;
+                }
+                for y in screen.y0..screen.y1.min(ui.render_h()) {
+                    let row = y * ui.render_w();
+                    for x in screen.x0..screen.x1.min(ui.render_w()) {
+                        let rgb = transition_rgb(frame, screen, effect, progress, x, y);
+                        cached[row + x] =
+                            <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
+                    }
+                }
+            }
+        }
+        screen
+    }
+
+    fn blit_pixel_rect(
+        &mut self,
+        ui: &UiDisplay,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Pixel],
+    ) -> DirtyRect {
+        let w = w.min(ui.render_w().saturating_sub(x));
+        let h = h.min(ui.render_h().saturating_sub(y));
+        match self {
+            Self::Xrgb8888 { cached } => {
+                for yy in 0..h {
+                    let dst = (y + yy) * ui.render_w() + x;
+                    let src_idx = yy * w;
+                    cached[dst..dst + w].copy_from_slice(&src[src_idx..src_idx + w]);
+                }
+            }
+            Self::Rgb565 { cached } => {
+                for yy in 0..h {
+                    let dst = (y + yy) * ui.render_w() + x;
+                    let src_idx = yy * w;
+                    for xx in 0..w {
+                        let rgb = pixel_to_rgb(src[src_idx + xx]);
+                        cached[dst + xx] =
+                            <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
+                    }
+                }
+            }
+        }
+        DirtyRect {
+            x0: x,
+            y0: y,
+            x1: x + w,
+            y1: y + h,
+        }
+    }
+
     fn present_rows(
         &mut self,
         f: &mut Fpga,
@@ -926,21 +1436,35 @@ fn blit_raw_preview_if_needed(
     target: &mut UiFrameTarget,
     ui: &UiDisplay,
     preview: &mut PreviewState,
+    transition: &mut PreviewTransitionDemo,
+    elapsed: Duration,
     slint_dirty: Option<DirtyRect>,
-) -> Option<DirtyRect> {
+) -> (Option<DirtyRect>, PreviewTransitionTrace) {
     let raw_dirty = preview.take_raw_dirty();
     let slint_touched_preview = slint_dirty
         .and_then(|rect| rect.intersection(preview_screen_rect(ui)))
         .is_some();
-    if !raw_dirty && !slint_touched_preview {
-        return None;
+    let transition_frame = preview.raw_transition_frame();
+    let trace = transition.update(transition_frame.as_ref(), elapsed);
+    if !raw_dirty && !slint_touched_preview && !trace.active {
+        return (None, trace);
     }
-    let frame = preview.raw_frame()?;
-    let raw_rect = target.blit_raw_preview(ui, &frame, raw_dirty)?;
-    if slint_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
-        None
+    let Some(transition_frame) = transition_frame else {
+        return (None, trace);
+    };
+    let raw_rect = if trace.active {
+        target.blit_raw_preview_transition(ui, &transition_frame, trace.effect, trace.progress)
     } else {
-        Some(raw_rect)
+        let Some(raw_rect) = target.blit_raw_preview(ui, &transition_frame.current, raw_dirty)
+        else {
+            return (None, trace);
+        };
+        raw_rect
+    };
+    if slint_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
+        (None, trace)
+    } else {
+        (Some(raw_rect), trace)
     }
 }
 
@@ -1711,6 +2235,7 @@ enum LauncherBenchScenario {
     RapidTaps,
     HeldScroll,
     TurboHold,
+    PreviewStepHold,
     ModelSync,
     PreviewChanges,
 }
@@ -1735,6 +2260,9 @@ impl LauncherBenchScenario {
             "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
             "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
             "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
+            "preview-step-hold" | "preview_step_hold" | "step-hold" | "step_hold" => {
+                Some(Self::PreviewStepHold)
+            }
             "model-sync" | "model_sync" => Some(Self::ModelSync),
             "preview" | "preview-changes" | "preview_changes" => Some(Self::PreviewChanges),
             _ => None,
@@ -1753,6 +2281,7 @@ impl LauncherBenchScenario {
             Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
             Self::TurboHold => "turbo-hold",
+            Self::PreviewStepHold => "preview-step-hold",
             Self::ModelSync => "model-sync",
             Self::PreviewChanges => "preview-changes",
         }
@@ -1767,10 +2296,26 @@ impl LauncherBenchScenario {
             Self::StressScroll => Duration::from_millis(60),
             Self::CacheWarm => Duration::from_millis(120),
             Self::ModelSync => Duration::from_millis(300),
-            Self::QuickTap | Self::RapidTaps | Self::HeldScroll | Self::TurboHold => Duration::ZERO,
+            Self::QuickTap
+            | Self::RapidTaps
+            | Self::HeldScroll
+            | Self::TurboHold
+            | Self::PreviewStepHold => Duration::ZERO,
             Self::PreviewChanges => Duration::from_millis(500),
         }
     }
+}
+
+fn preview_step_hold_frames() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let secs = std::env::var("MISTER_PREVIEW_STEP_HOLD_SECS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(5)
+            .clamp(1, 60);
+        secs.saturating_mul(60).max(1)
+    })
 }
 
 fn launcher_bench_step(
@@ -1871,6 +2416,21 @@ fn launcher_bench_step(
             nav.screen = Screen::Arcade;
             let previous_dir = if step == 0 { 0 } else { 1 };
             nav.arcade.bench_direction_tick(1, previous_dir, count, now);
+            true
+        }
+        LauncherBenchScenario::PreviewStepHold => {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
+                return false;
+            };
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Arcade;
+            if step % preview_step_hold_frames() == 0 {
+                nav.arcade.handle_direction_input(1, 0, now, count);
+            }
+            nav.arcade.tick(count);
             true
         }
         LauncherBenchScenario::QuickTap => {
@@ -3478,6 +4038,10 @@ fn run_launcher_loop(
     let mut present_probe = PresentProbe::from_env();
     let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
+    let mut preview_transition = PreviewTransitionDemo::from_env();
+    let mut effect_label_overlay = preview_transition
+        .label_overlay_enabled()
+        .then(EffectLabelOverlay::new);
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let cpu = cpu_profile::start();
     let mut bridge_models = LauncherBridgeModels::default();
@@ -3490,7 +4054,7 @@ fn run_launcher_loop(
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\twall_us\n",
+                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
@@ -3509,6 +4073,12 @@ fn run_launcher_loop(
         } else {
             "slint"
         }
+    );
+    println!(
+        "preview_transition={} segment_secs={} duration_ms={}",
+        preview_transition.labels(),
+        preview_transition.segment.as_secs(),
+        preview_transition.duration.as_millis()
     );
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
@@ -4081,7 +4651,20 @@ fn run_launcher_loop(
         } else {
             None
         };
-        let raw_preview_rect = blit_raw_preview_if_needed(target, ui, &mut preview, this_rect);
+        let (raw_preview_rect, preview_transition_trace) = blit_raw_preview_if_needed(
+            target,
+            ui,
+            &mut preview,
+            &mut preview_transition,
+            loop_start.duration_since(run_start),
+            this_rect,
+        );
+        if preview_transition_trace.active {
+            window.request_redraw();
+        }
+        let effect_label_rect = effect_label_overlay
+            .as_mut()
+            .map(|overlay| overlay.draw(target, ui, preview_transition_trace.effect.label()));
         let custom_draw_done = Instant::now();
         if !first_render_logged {
             first_render_logged = true;
@@ -4123,6 +4706,13 @@ fn run_launcher_loop(
             copied_rows += target.present_rect(f, disp, ui, rect);
             cached_present_frame_us += cached_copy_start.elapsed().as_micros();
         }
+        if let Some(rect) = effect_label_rect {
+            if !this_rect.is_some_and(|slint_rect| slint_rect.contains(rect)) {
+                let cached_copy_start = Instant::now();
+                copied_rows += target.present_rect(f, disp, ui, rect);
+                cached_present_frame_us += cached_copy_start.elapsed().as_micros();
+            }
+        }
         let arcade_update_label = match arcade_list_rect.as_ref() {
             Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
             Some(ArcadeListUpdate::Scroll { delta_y }) => format!("scroll:{delta_y}"),
@@ -4147,12 +4737,14 @@ fn run_launcher_loop(
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frames,
                     loop_start.duration_since(run_start).as_micros(),
                     nav.arcade.selected,
                     nav.arcade.visual_index,
                     cache_state,
+                    preview_transition_trace.effect.label(),
+                    preview_transition_trace.progress,
                     arcade_update_label,
                     copied_rows,
                     prepare_us,
