@@ -356,6 +356,16 @@ fn preview_visual_pct() -> u32 {
     })
 }
 
+fn catalog_refresh_requested() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_CATALOG_REFRESH").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 fn arcade_scroll_present_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -2154,10 +2164,7 @@ fn active_system_games(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<Arcade
         .unwrap_or_default()
 }
 
-fn start_library_catalog_worker(
-    root: String,
-    cached_catalog_ready: bool,
-) -> mpsc::Receiver<CatalogWorkerMessage> {
+fn start_library_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("library-catalog".to_string())
@@ -2170,6 +2177,28 @@ fn start_library_catalog_worker(
                     detail: detail.to_string(),
                 });
             };
+            let mut cached_catalog_ready = false;
+            match library_db::load_arcade_catalog_from_sqlite(&root) {
+                Ok(loaded) => {
+                    cached_catalog_ready = !loaded.catalog.games.is_empty();
+                    let _ = tx.send(CatalogWorkerMessage::Ready {
+                        catalog: loaded.catalog,
+                        summary: None,
+                        load_us: loaded.us,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("library catalog cache load failed: {e}");
+                    let _ = tx.send(CatalogWorkerMessage::Progress {
+                        title: "Indexing library".to_string(),
+                        detail: "No cached catalog; scanning library...".to_string(),
+                    });
+                }
+            }
+            if cached_catalog_ready && !catalog_refresh_requested() {
+                let _ = tx.send(CatalogWorkerMessage::Done);
+                return;
+            }
             let summary = match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
                 Ok(summary) => Some(summary),
                 Err(e) => {
@@ -2229,6 +2258,7 @@ enum CatalogWorkerMessage {
     Unchanged {
         summary: library_db::LibraryRefreshSummary,
     },
+    Done,
 }
 
 fn lower_background_priority() {
@@ -5832,10 +5862,7 @@ fn run_launcher_loop(
     let catalog_refresh = true;
     print_startup_event(start, "catalog_cache_load_deferred", &arcade_root);
     print_startup_event(start, "catalog_worker_start", &arcade_root);
-    let catalog_rx = Some(start_library_catalog_worker(
-        arcade_root.clone(),
-        catalog_ready,
-    ));
+    let catalog_rx = Some(start_library_catalog_worker(arcade_root.clone()));
     let mut catalog_refresh_done = false;
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_game_systems(slint_game_systems(&catalog));
@@ -5918,7 +5945,8 @@ fn run_launcher_loop(
                         catalog = ready_catalog;
                         active_arcade_games_cache_key = None;
                         catalog_ready = true;
-                        catalog_refresh_done = true;
+                        let cached_before_refresh = summary.is_none();
+                        catalog_refresh_done = !cached_before_refresh;
                         print_startup_event(
                             start,
                             "library_ready",
@@ -5947,8 +5975,15 @@ fn run_launcher_loop(
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
-                        bridge.set_catalog_scan_title("".into());
-                        bridge.set_catalog_scan_detail("".into());
+                        if cached_before_refresh {
+                            bridge.set_catalog_scan_title("Refreshing library".into());
+                            bridge.set_catalog_scan_detail(
+                                format!("Using cached {} games", catalog.len()).into(),
+                            );
+                        } else {
+                            bridge.set_catalog_scan_title("".into());
+                            bridge.set_catalog_scan_detail("".into());
+                        }
                         sync_bridge_launcher(
                             &app,
                             &pad,
@@ -5977,6 +6012,14 @@ fn run_launcher_loop(
                                 summary.entries
                             ),
                         );
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_scan_title("".into());
+                        bridge.set_catalog_scan_detail("".into());
+                        full_bridge_dirty = true;
+                    }
+                    CatalogWorkerMessage::Done => {
+                        catalog_refresh_done = true;
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
                         bridge.set_catalog_scan_title("".into());
