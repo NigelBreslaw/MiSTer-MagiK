@@ -136,3 +136,23 @@ the shared blitter tint and reserves the bright flash for sparse scan lines.
 
 This is a modest but measured improvement. `phosphor-grid` still needs a more
 structural retained/atlas approach to reach 60fps.
+
+## Round 5 - Low-res plasma collage tiles
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-PLASMA-R05-20260612 --deploy-fast --mode preview-plasma-collage --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This makes `preview-plasma-collage` match the intended low-res plasma mask:
+each 16x16 cell selects one screenshot sample and fills the cell, instead of
+resampling every pixel inside the cell.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| current deployed mega plasma segment | 30 | 31457 | 31444 | 31573 | 30 | 30 | 20548 |
+| round 5 focused plasma | 721 | 16521 | 16583 | 16906 | 19 | 0 | 19976 |
+
+`preview-plasma-collage` is now inside the p95 60fps target and has no >20ms
+frames in the focused run.

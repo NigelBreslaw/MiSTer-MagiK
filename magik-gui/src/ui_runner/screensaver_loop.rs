@@ -755,16 +755,8 @@ fn render_plasma_collage(
             if let Some(img) = image_at(images, page + selector / 32) {
                 let sx = (x * img.w / w + selector) % img.w;
                 let sy = (y * img.h / h + selector / 2) % img.h;
-                for yy in 0..tile.min(h - y) {
-                    for xx in 0..tile.min(w - x) {
-                        let px = sample_image(
-                            img,
-                            (sx + xx * img.w / w.max(1)).min(img.w - 1),
-                            (sy + yy * img.h / h.max(1)).min(img.h - 1),
-                        );
-                        dst[(y + yy) * w + x + xx] = px;
-                    }
-                }
+                let px = sample_image(img, sx, sy);
+                fill_rect(dst, w, h, x, y, tile, tile, px);
             }
         }
     }
