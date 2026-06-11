@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore stock MiSTer boot.
 #
-# Keep stock /media/fat/MiSTer in inittab and restore /media/fat/MiSTer.ini.bak.
+# Keep stock /media/fat/MiSTer in inittab and disable MagiK's MiSTer.ini handoff.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -24,12 +24,6 @@ cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || t
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
 
-if [ ! -f "$BACKUP" ]; then
-  echo "ERROR: missing stock MiSTer.ini backup: $BACKUP"
-  echo "Cannot safely restore MiSTer.ini without the original copy."
-  exit 1
-fi
-
 tmp=/tmp/inittab.stock
 awk '"'"'
 BEGIN { wrote = 0 }
@@ -49,9 +43,6 @@ END {
 '"'"' /etc/inittab > "$tmp"
 cp "$tmp" /etc/inittab
 
-cp "$BACKUP" "$INI"
-echo "MiSTer.ini restored from $BACKUP"
-
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
 sync
@@ -60,5 +51,6 @@ echo "=== restored inittab ==="
 grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
 '
 
+MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister ini-restore-stock
 MISTER_IP="$MISTER_IP" MISTER_PASS="$MISTER_PASS" scripts/mister reboot-wait
-echo "Stock MiSTer boot restored."
+echo "Stock MiSTer boot restored. MiSTer.ini backup left untouched at /media/fat/MiSTer.ini.bak if present."

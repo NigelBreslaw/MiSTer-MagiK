@@ -137,6 +137,11 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             edit_remote_ini(&sess, IniEdit::ArcadeVideo, dry_run)?;
         }
+        "ini-restore-stock" => {
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let sess = connect(10)?;
+            edit_remote_ini(&sess, IniEdit::StockBoot, dry_run)?;
+        }
         "ini-edit-local" => {
             validate_ini_edit_local_args(&args)?;
             let edit = parse_ini_edit_args(&args)?;
@@ -183,7 +188,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-edit-local|profile-summary|raw-to-png|recover> ..."
+        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-edit-local|profile-summary|raw-to-png|recover> ..."
     );
 }
 
@@ -381,6 +386,7 @@ enum IniEdit {
         forced_scandoubler: String,
     },
     CommentMain,
+    StockBoot,
 }
 
 fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
@@ -403,6 +409,7 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
             })
         }
         Some("comment-main") => Ok(IniEdit::CommentMain),
+        Some("stock-boot") => Ok(IniEdit::StockBoot),
         Some(other) => Err(format!("unknown ini edit: {other}").into()),
         None => Err("ini edit mode is required".into()),
     }
@@ -410,7 +417,7 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
 
 fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     let expected = match args.first().map(String::as_str) {
-        Some("magik-boot" | "arcade-video" | "menu-auto" | "comment-main") => 3,
+        Some("magik-boot" | "arcade-video" | "menu-auto" | "comment-main" | "stock-boot") => 3,
         Some("menu-mode") => 4,
         Some("crt") => 6,
         Some(other) => return Err(format!("unknown ini edit: {other}").into()),
@@ -418,7 +425,7 @@ fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     };
     if args.len() != expected {
         return Err(
-            "ini-edit-local needs <magik-boot|arcade-video|menu-mode|menu-auto|crt|comment-main> ... <input> <output>"
+            "ini-edit-local needs <magik-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
                 .into(),
         );
     }
@@ -496,6 +503,15 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
                 Some("MiSTer"),
                 "main",
                 "MiSTer MagiK disabled for stock probe",
+            );
+        }
+        IniEdit::StockBoot => {
+            comment_ini_key_if_value(
+                &mut lines,
+                Some("MiSTer"),
+                "main",
+                &["MiSTer_MagiK", "mister-magik-fb"],
+                "MiSTer MagiK stock boot restore",
             );
         }
     }
@@ -595,6 +611,35 @@ fn comment_ini_key(lines: &mut [String], section: Option<&str>, key: &str, reaso
     }
 }
 
+fn comment_ini_key_if_value(
+    lines: &mut [String],
+    section: Option<&str>,
+    key: &str,
+    values: &[&str],
+    reason: &str,
+) {
+    let mut current = String::from("global");
+    for line in lines {
+        if let Some(name) = section_name(line) {
+            current = name;
+            continue;
+        }
+        let section_matches = section
+            .map(|name| current.eq_ignore_ascii_case(name))
+            .unwrap_or(true);
+        if section_matches
+            && active_key_eq(line, key)
+            && assignment_value(line).is_some_and(|value| {
+                values
+                    .iter()
+                    .any(|expected| value.eq_ignore_ascii_case(expected))
+            })
+        {
+            *line = format!(";{} ; {}", line, reason);
+        }
+    }
+}
+
 fn section_name(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if trimmed.starts_with(';') || trimmed.starts_with('#') || !trimmed.starts_with('[') {
@@ -643,6 +688,17 @@ fn replace_assignment_value(line: &str, value: &str) -> String {
         })
         .unwrap_or("");
     format!("{}{}{}", &line[..eq + 1 + value_start], value, suffix)
+}
+
+fn assignment_value(line: &str) -> Option<String> {
+    let (_, after_eq) = line.split_once('=')?;
+    let value = after_eq
+        .split([';', '#'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    Some(value)
 }
 
 fn collect_status(sess: &Session) -> Result<Value> {
@@ -1675,6 +1731,42 @@ video_mode=14
 
         let auto = edit_mister_ini(&stock, IniEdit::MenuAuto);
         assert!(auto.contains(";video_mode=8 ; MiSTer MagiK EDID/native video-mode probe"));
+    }
+
+    #[test]
+    fn stock_boot_restore_comments_only_magik_main_with_crlf_and_inline_comment() {
+        let ini = "[MiSTer]\r\nmain=MiSTer_MagiK ; keep note\r\ndirect_video=1\r\n\r\n[Menu]\r\nvideo_mode=8\r\n";
+
+        let edited = edit_mister_ini(ini, IniEdit::StockBoot);
+
+        assert!(
+            edited.contains(";main=MiSTer_MagiK ; keep note ; MiSTer MagiK stock boot restore\r\n")
+        );
+        assert!(edited.contains("direct_video=1\r\n"));
+        assert!(edited.contains("[Menu]\r\nvideo_mode=8\r\n"));
+    }
+
+    #[test]
+    fn stock_boot_restore_leaves_missing_or_unrelated_main_alone() {
+        let missing = "[Menu]\nvideo_mode=8\n";
+        assert_eq!(edit_mister_ini(missing, IniEdit::StockBoot), missing);
+
+        let unrelated = "[MiSTer]\nmain=Some_Other_Menu\n";
+        assert_eq!(edit_mister_ini(unrelated, IniEdit::StockBoot), unrelated);
+    }
+
+    #[test]
+    fn stock_boot_restore_is_idempotent_for_commented_main() {
+        let ini = "[MiSTer]\n;main=MiSTer_MagiK ; already disabled\n";
+        assert_eq!(edit_mister_ini(ini, IniEdit::StockBoot), ini);
+    }
+
+    #[test]
+    fn stock_boot_restore_comments_legacy_direct_slint_handoff() {
+        let ini = "[MiSTer]\nmain=mister-magik-fb\n";
+        let edited = edit_mister_ini(ini, IniEdit::StockBoot);
+
+        assert!(edited.contains(";main=mister-magik-fb ; MiSTer MagiK stock boot restore"));
     }
 
     #[test]
