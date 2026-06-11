@@ -41,12 +41,12 @@ fn preview_loading_enabled() -> bool {
 
 pub(crate) fn preview_raw_blitter_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_PREVIEW_BLITTER").as_deref(),
-            Ok("raw") | Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    })
+    *VALUE.get_or_init(
+        || match std::env::var("MISTER_PREVIEW_BLITTER").as_deref() {
+            Ok("slint") | Ok("image") | Ok("0") | Ok("off") | Ok("false") | Ok("no") => false,
+            _ => true,
+        },
+    )
 }
 
 pub(crate) fn preview_visual_pct() -> u32 {

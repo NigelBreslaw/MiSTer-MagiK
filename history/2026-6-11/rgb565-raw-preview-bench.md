@@ -49,6 +49,9 @@ Findings:
 - Turbo-hold and screenshot-stress both kept applying previews during motion.
   Raw mode reduced Slint p95 by an order of magnitude in both scenarios and cut
   >20 ms frames from 3 to 1.
+- After this pass, normal launcher defaults were changed to RGB565 framebuffer
+  plus raw preview blitter. Use `MISTER_FB_FORMAT=8888` and
+  `MISTER_PREVIEW_BLITTER=slint` to force the old path.
 
 Artifacts:
 

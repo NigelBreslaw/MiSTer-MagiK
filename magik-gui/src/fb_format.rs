@@ -53,7 +53,7 @@ impl FramebufferFormat {
             .ok()
             .as_deref()
             .and_then(Self::from_label)
-            .unwrap_or(Self::Xrgb8888)
+            .unwrap_or(Self::Rgb565)
     }
 
     pub fn rb_from_env(self) -> bool {
