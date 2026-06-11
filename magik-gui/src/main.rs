@@ -97,7 +97,6 @@ fn main() {
         "effect-bench" => ui_runner::run_effect_bench(&mut f),
         "input" => run_input(),
         "library-scan-bench" => library_db::run_scan_bench(),
-        "preview-cache" => run_preview_cache(),
         "audio-tone" => run_audio_tone(&mut f),
         other => {
             eprintln!(

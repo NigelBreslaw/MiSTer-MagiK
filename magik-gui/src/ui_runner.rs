@@ -1485,6 +1485,8 @@ fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     bridge.set_confirm_visible(false);
     bridge.set_confirm_title("".into());
     bridge.set_confirm_message("".into());
+    bridge.set_confirm_left_label("".into());
+    bridge.set_confirm_right_label("".into());
     bridge.set_confirm_selected(0);
     bridge.set_game_systems(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::GameSystem,
@@ -1540,6 +1542,38 @@ fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
     sync_bridge_pad_controller(&app.global::<slint_ui::controller::MisterBridge>(), pad);
 }
 
+fn sync_confirm_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    action: Option<launcher::ConfirmAction>,
+) {
+    match action {
+        Some(launcher::ConfirmAction::ExitToMister) => {
+            bridge.set_confirm_title("Exit to MiSTer".into());
+            bridge.set_confirm_message("Use the stock MiSTer menu until reboot.".into());
+            bridge.set_confirm_left_label("Exit to MiSTer".into());
+            bridge.set_confirm_right_label("Return to MiSTer MagiK".into());
+        }
+        Some(launcher::ConfirmAction::ResetDatabase) => {
+            bridge.set_confirm_title("Reset Database?".into());
+            bridge.set_confirm_message("Delete the library database and reboot the MiSTer?".into());
+            bridge.set_confirm_left_label("Cancel".into());
+            bridge.set_confirm_right_label("Confirm".into());
+        }
+        Some(launcher::ConfirmAction::Restart) => {
+            bridge.set_confirm_title("Restart MiSTer?".into());
+            bridge.set_confirm_message("Reboot the MiSTer now?".into());
+            bridge.set_confirm_left_label("Cancel".into());
+            bridge.set_confirm_right_label("Confirm".into());
+        }
+        None => {
+            bridge.set_confirm_title("".into());
+            bridge.set_confirm_message("".into());
+            bridge.set_confirm_left_label("".into());
+            bridge.set_confirm_right_label("".into());
+        }
+    }
+}
+
 fn sync_bridge_launcher(
     app: &slint_ui::launcher::Launcher,
     pad: &PadPool,
@@ -1580,32 +1614,7 @@ fn sync_bridge_launcher(
     }
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
-    match nav.confirm_action {
-        Some(launcher::ConfirmAction::ExitToMister) => {
-            bridge.set_confirm_title("Exit to Mister".into());
-            bridge.set_confirm_message("Use the stock MiSTer menu until reboot.".into());
-            bridge.set_confirm_left_label("Exit to Mister".into());
-            bridge.set_confirm_right_label("Return to Magik".into());
-        }
-        Some(launcher::ConfirmAction::ResetDatabase) => {
-            bridge.set_confirm_title("Reset Database?".into());
-            bridge.set_confirm_message("Delete the library database and reboot the MiSTer?".into());
-            bridge.set_confirm_left_label("Cancel".into());
-            bridge.set_confirm_right_label("Confirm".into());
-        }
-        Some(launcher::ConfirmAction::Restart) => {
-            bridge.set_confirm_title("Restart MiSTer?".into());
-            bridge.set_confirm_message("Reboot the MiSTer now?".into());
-            bridge.set_confirm_left_label("Cancel".into());
-            bridge.set_confirm_right_label("Confirm".into());
-        }
-        None => {
-            bridge.set_confirm_title("".into());
-            bridge.set_confirm_message("".into());
-            bridge.set_confirm_left_label("".into());
-            bridge.set_confirm_right_label("".into());
-        }
-    }
+    sync_confirm_bridge(&bridge, nav.confirm_action);
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
@@ -1644,6 +1653,7 @@ fn sync_bridge_launcher_light(
     bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
+    sync_confirm_bridge(&bridge, nav.confirm_action);
     bridge.set_loading_message(loading_message.into());
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
@@ -2164,7 +2174,10 @@ fn active_system_games(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<Arcade
     active_system_game_slice(catalog, nav).to_vec()
 }
 
-fn active_system_game_slice<'a>(catalog: &'a ArcadeCatalog, nav: &LauncherNav) -> &'a [ArcadeGameEntry] {
+fn active_system_game_slice<'a>(
+    catalog: &'a ArcadeCatalog,
+    nav: &LauncherNav,
+) -> &'a [ArcadeGameEntry] {
     active_system(catalog, nav)
         .map(|system| catalog.system_preview_game_slice(&system.id))
         .unwrap_or(&[])
@@ -6201,14 +6214,14 @@ fn run_launcher_loop(
                     if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
                         match event.action {
                             LauncherAction::ExitToMister => {
-                                loading_title = "Exit to Mister".to_string();
+                                loading_title = "Exit to MiSTer".to_string();
                                 sync_bridge_launcher(
                                     &app,
                                     &pad,
                                     &nav,
                                     &setup,
                                     &loading_title,
-                                    "Return to Magik after reboot",
+                                    "Return to MiSTer MagiK after reboot",
                                     Some(&catalog),
                                     &mut preview,
                                     &mut bridge_models,
@@ -6719,12 +6732,8 @@ mod tests {
     #[test]
     fn effect_half_target_allows_640x448_at_native_scale() {
         let ui = UiDisplay::for_framebuffer(1920, 1080);
-        let target = EffectTarget::new(
-            EffectFill::Half,
-            EffectSize { w: 640, h: 448 },
-            &ui,
-        )
-        .expect("640x448 should fit in half-fill benchmark mode");
+        let target = EffectTarget::new(EffectFill::Half, EffectSize { w: 640, h: 448 }, &ui)
+            .expect("640x448 should fit in half-fill benchmark mode");
 
         assert_eq!(target.physical_w, 640);
         assert_eq!(target.physical_h, 448);
