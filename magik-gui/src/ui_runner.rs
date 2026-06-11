@@ -39,9 +39,9 @@ use crate::library_db;
 #[cfg(not(mister_ui_scope_launcher))]
 use crate::preview_state::request_arcade_preview;
 use crate::preview_state::{
-    apply_ready_preview, preview_visual_pct, request_arcade_preview_window,
-    schedule_arcade_preview_window, PreviewRawFrame, PreviewState, ARCADE_PREVIEW_BOX_H,
-    ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
+    apply_ready_preview, preview_raw_blitter_enabled, preview_visual_pct,
+    request_arcade_preview_window, schedule_arcade_preview_window, PreviewRawFrame, PreviewState,
+    ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
 use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};
@@ -264,6 +264,10 @@ impl DirtyRect {
 
     fn is_full_width(self, render_w: usize) -> bool {
         self.x0 == 0 && self.x1 >= render_w
+    }
+
+    fn contains(self, other: DirtyRect) -> bool {
+        self.x0 <= other.x0 && self.y0 <= other.y0 && self.x1 >= other.x1 && self.y1 >= other.y1
     }
 
     pub(crate) fn intersection(self, other: DirtyRect) -> Option<DirtyRect> {
@@ -612,6 +616,7 @@ impl UiFrameTarget {
         &mut self,
         ui: &UiDisplay,
         frame: &PreviewRawFrame<'_>,
+        clear_screen: bool,
     ) -> Option<DirtyRect> {
         let rect = raw_preview_image_rect(ui, frame)?;
         let screen = preview_screen_rect(ui);
@@ -626,6 +631,14 @@ impl UiFrameTarget {
 
         match self {
             Self::Xrgb8888 { cached } => {
+                if clear_screen {
+                    for y in screen.y0..screen.y1.min(ui.render_h()) {
+                        let row = y * ui.render_w();
+                        for x in screen.x0..screen.x1.min(ui.render_w()) {
+                            cached[row + x] = Pixel(0);
+                        }
+                    }
+                }
                 for y in rect.y0..rect.y1 {
                     let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
                     let row = y * ui.render_w();
@@ -639,6 +652,15 @@ impl UiFrameTarget {
                 }
             }
             Self::Rgb565 { cached } => {
+                if clear_screen {
+                    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+                    for y in screen.y0..screen.y1.min(ui.render_h()) {
+                        let row = y * ui.render_w();
+                        for x in screen.x0..screen.x1.min(ui.render_w()) {
+                            cached[row + x] = black;
+                        }
+                    }
+                }
                 for y in rect.y0..rect.y1 {
                     let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
                     let row = y * ui.render_w();
@@ -655,7 +677,7 @@ impl UiFrameTarget {
                 }
             }
         }
-        Some(rect)
+        Some(if clear_screen { screen } else { rect })
     }
 
     fn present_rows(
@@ -703,11 +725,8 @@ fn blit_raw_preview_if_needed(
         return None;
     }
     let frame = preview.raw_frame()?;
-    let raw_rect = target.blit_raw_preview(ui, &frame)?;
-    if slint_dirty
-        .and_then(|rect| rect.intersection(raw_rect))
-        .is_some()
-    {
+    let raw_rect = target.blit_raw_preview(ui, &frame, raw_dirty)?;
+    if slint_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
         None
     } else {
         Some(raw_rect)
@@ -3492,9 +3511,14 @@ fn run_preview_scroll_bench_loop(
     println!("preview_scroll_bench running {label}");
     println!("launcher_bench_scenario={}", scenario.label());
     println!(
-        "preview_stress={} preview_visual_pct={}",
+        "preview_stress={} preview_visual_pct={} preview_blitter={}",
         if preview_stress { "on" } else { "off" },
-        preview_visual_pct()
+        preview_visual_pct(),
+        if preview_raw_blitter_enabled() {
+            "raw"
+        } else {
+            "slint"
+        }
     );
 
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
@@ -3796,9 +3820,14 @@ fn run_launcher_loop(
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let preview_stress = preview_stress_enabled();
     println!(
-        "preview_stress={} preview_visual_pct={}",
+        "preview_stress={} preview_visual_pct={} preview_blitter={}",
         if preview_stress { "on" } else { "off" },
-        preview_visual_pct()
+        preview_visual_pct(),
+        if preview_raw_blitter_enabled() {
+            "raw"
+        } else {
+            "slint"
+        }
     );
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
