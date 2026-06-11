@@ -161,6 +161,10 @@ struct ScreensaverRenderState {
     random_loader: Vec<Rgb565Pixel>,
     random_loader_page: usize,
     random_loader_valid: bool,
+    tilemap_normal: Vec<Rgb565Pixel>,
+    tilemap_bright: Vec<Rgb565Pixel>,
+    tilemap_page: usize,
+    tilemap_valid: bool,
 }
 
 impl ScreensaverRenderState {
@@ -172,6 +176,10 @@ impl ScreensaverRenderState {
             random_loader: vec![Rgb565Pixel(0); w * h],
             random_loader_page: usize::MAX,
             random_loader_valid: false,
+            tilemap_normal: vec![Rgb565Pixel(0); w * h],
+            tilemap_bright: vec![Rgb565Pixel(0); w * h],
+            tilemap_page: usize::MAX,
+            tilemap_valid: false,
         }
     }
 }
@@ -326,7 +334,9 @@ fn render_screensaver_frame(
 ) {
     if !matches!(
         mode,
-        ScreensaverMode::PhosphorGrid | ScreensaverMode::RandomAccessLoader
+        ScreensaverMode::TilemapMuseum
+            | ScreensaverMode::PhosphorGrid
+            | ScreensaverMode::RandomAccessLoader
     ) {
         clear(dst, color565(2, 4, 10));
     }
@@ -339,7 +349,7 @@ fn render_screensaver_frame(
             render_contact_sheet(dst, w, h, images, frame / 2, 5, 3, true);
         }
         ScreensaverMode::ScreenshotRain => render_rain(dst, w, h, images, frame),
-        ScreensaverMode::TilemapMuseum => render_tilemap(dst, w, h, images, frame),
+        ScreensaverMode::TilemapMuseum => render_tilemap(dst, state, w, h, images, frame),
         ScreensaverMode::RasterGallery => render_raster_gallery(dst, w, h, images, frame),
         ScreensaverMode::KefrensScreenshotBars => render_kefrens(dst, w, h, images, frame),
         ScreensaverMode::PreviewPlasmaCollage => {
@@ -701,27 +711,75 @@ fn render_rain(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage
     }
 }
 
-fn render_tilemap(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverImage], frame: u64) {
+fn render_tilemap(
+    dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
+    w: usize,
+    h: usize,
+    images: &[SaverImage],
+    frame: u64,
+) {
     let cols = 12usize;
     let rows = 8usize;
     let cell_w = w / cols;
     let cell_h = h / rows;
     let page = (frame / 180) as usize;
+    if !state.tilemap_valid || state.tilemap_page != page || state.tilemap_normal.len() != dst.len()
+    {
+        state.tilemap_normal.resize(dst.len(), Rgb565Pixel(0));
+        state.tilemap_bright.resize(dst.len(), Rgb565Pixel(0));
+        clear(&mut state.tilemap_normal, color565(2, 4, 10));
+        clear(&mut state.tilemap_bright, color565(2, 4, 10));
+        for ty in 0..rows {
+            for tx in 0..cols {
+                if let Some(img) = image_at(images, page + ty * cols + tx) {
+                    let x = (tx * cell_w) as isize;
+                    let y = (ty * cell_h) as isize;
+                    let out_w = cell_w.saturating_sub(2);
+                    let out_h = cell_h.saturating_sub(2);
+                    blit_scaled(
+                        &mut state.tilemap_normal,
+                        w,
+                        h,
+                        img,
+                        x,
+                        y,
+                        out_w,
+                        out_h,
+                        185,
+                    );
+                    blit_scaled(
+                        &mut state.tilemap_bright,
+                        w,
+                        h,
+                        img,
+                        x,
+                        y,
+                        out_w,
+                        out_h,
+                        255,
+                    );
+                }
+            }
+        }
+        state.tilemap_page = page;
+        state.tilemap_valid = true;
+    }
+
+    dst.copy_from_slice(&state.tilemap_normal);
     for ty in 0..rows {
         for tx in 0..cols {
-            if let Some(img) = image_at(images, page + ty * cols + tx) {
-                let flash = hash2_u8(tx + page, ty) < (frame as u8).wrapping_mul(3);
-                let tint = if flash { 255 } else { 185 };
-                blit_scaled(
+            let flash = hash2_u8(tx + page, ty) < (frame as u8).wrapping_mul(3);
+            if flash {
+                copy_rect(
                     dst,
+                    &state.tilemap_bright,
                     w,
                     h,
-                    img,
-                    (tx * cell_w) as isize,
-                    (ty * cell_h) as isize,
+                    tx * cell_w,
+                    ty * cell_h,
                     cell_w.saturating_sub(2),
                     cell_h.saturating_sub(2),
-                    tint,
                 );
             }
         }

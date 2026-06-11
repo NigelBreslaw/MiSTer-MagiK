@@ -198,3 +198,23 @@ with row copies from the retained sheet.
 
 `random-access-loader` is now inside the p95 60fps target. The remaining >20ms
 frames are page rebuild spikes rather than steady-state frame cost.
+
+## Round 8 - Cached tilemap museum brightness layers
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-TILEMAP-R08-20260612 --deploy-fast --mode tilemap-museum --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This changes `tilemap-museum` from scaling 96 screenshots every frame to
+retaining normal and bright RGB565 tilemap layers for the active page. Normal
+frames copy the dim layer and reveal bright cells with row copies.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R7 mega tilemap segment | 148 | 20117 | 25237 | 26211 | 118 | 69 | 22584 |
+| round 8 focused tilemap | 717 | 16608 | 16581 | 17132 | 20 | 4 | 23784 |
+
+`tilemap-museum` is now inside the p95 60fps target. As with the other retained
+mosaics, the remaining >20ms frames are page rebuild spikes.
