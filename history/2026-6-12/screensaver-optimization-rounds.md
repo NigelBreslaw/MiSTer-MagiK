@@ -156,3 +156,24 @@ resampling every pixel inside the cell.
 
 `preview-plasma-collage` is now inside the p95 60fps target and has no >20ms
 frames in the focused run.
+
+## Round 6 - Retained phosphor-grid mosaic
+
+Command:
+
+```bash
+scripts/profile-screensaver.sh SCREENSAVER-PHOSPHOR-R06-20260612 --deploy-fast --mode phosphor-grid --secs 12 --segment-secs 12 --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+This replaces the per-frame 12x8 screenshot scaling pass with a retained RGB565
+mosaic that rebuilds only when the screenshot page changes. Normal frames copy
+the retained mosaic and draw the phosphor grid/flash overlays.
+
+| run | frames | avg wall us | p95 wall us | p99 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| post-R5 mega phosphor segment | 108 | 27716 | 27826 | 29906 | 108 | 108 | 20272 |
+| round 6 focused phosphor | 719 | 16559 | 16570 | 17070 | 20 | 3 | 21040 |
+
+`phosphor-grid` is now inside the p95 60fps target. The remaining >20ms frames
+line up with retained-mosaic rebuilds and can be targeted separately if they
+show up in p99-heavy matrix runs.

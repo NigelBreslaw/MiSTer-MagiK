@@ -154,6 +154,22 @@ struct SaverImage {
     stride: usize,
 }
 
+struct ScreensaverRenderState {
+    phosphor_grid: Vec<Rgb565Pixel>,
+    phosphor_grid_page: usize,
+    phosphor_grid_valid: bool,
+}
+
+impl ScreensaverRenderState {
+    fn new(w: usize, h: usize) -> Self {
+        Self {
+            phosphor_grid: vec![Rgb565Pixel(0); w * h],
+            phosphor_grid_page: usize::MAX,
+            phosphor_grid_valid: false,
+        }
+    }
+}
+
 pub(super) fn run_screensaver_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -177,6 +193,7 @@ pub(super) fn run_screensaver_loop(
     );
 
     let mut backbuffer = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
+    let mut render_state = ScreensaverRenderState::new(ui.render_w(), ui.render_h());
     let mut xrgb_scratch =
         (fb_format == FramebufferFormat::Xrgb8888).then(|| vec![Pixel(0); backbuffer.len()]);
     let mut pacer = VsyncPacer::from_env();
@@ -192,6 +209,7 @@ pub(super) fn run_screensaver_loop(
         let draw_start = Instant::now();
         render_screensaver_frame(
             &mut backbuffer,
+            &mut render_state,
             ui.render_w(),
             ui.render_h(),
             &images,
@@ -293,6 +311,7 @@ fn read_raw565_image(path: &Path) -> Result<SaverImage, String> {
 
 fn render_screensaver_frame(
     dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
     w: usize,
     h: usize,
     images: &[SaverImage],
@@ -315,7 +334,7 @@ fn render_screensaver_frame(
         ScreensaverMode::PreviewPlasmaCollage => {
             render_plasma_collage(dst, w, h, images, frame);
         }
-        ScreensaverMode::PhosphorGrid => render_phosphor_grid(dst, w, h, images, frame),
+        ScreensaverMode::PhosphorGrid => render_phosphor_grid(dst, state, w, h, images, frame),
         ScreensaverMode::WarpTunnel => render_warp(dst, w, h, images, frame),
         ScreensaverMode::Mode7Floor => render_mode7(dst, w, h, images, frame),
         ScreensaverMode::ScannerContactSheet => render_scanner(dst, w, h, images, frame),
@@ -326,7 +345,7 @@ fn render_screensaver_frame(
         ScreensaverMode::IdleMegademo => {
             let sub =
                 ScreensaverMode::ALL[((frame / 240) as usize) % (ScreensaverMode::ALL.len() - 1)];
-            render_screensaver_frame(dst, w, h, images, sub, frame);
+            render_screensaver_frame(dst, state, w, h, images, sub, frame);
         }
     }
 }
@@ -764,35 +783,54 @@ fn render_plasma_collage(
 
 fn render_phosphor_grid(
     dst: &mut [Rgb565Pixel],
+    state: &mut ScreensaverRenderState,
     w: usize,
     h: usize,
     images: &[SaverImage],
     frame: u64,
 ) {
-    fill_rect(dst, w, h, 0, 0, w, h, color565(0, 18, 14));
     let cols = 12usize;
     let rows = 8usize;
     let cell_w = w / cols;
     let cell_h = h / rows;
     let page = frame as usize / 240;
-    let tint = if frame % 180 < 12 { 190 } else { 105 };
-    for ty in 0..rows {
-        for tx in 0..cols {
-            if let Some(img) = image_at(images, page + ty * cols + tx) {
-                blit_scaled(
-                    dst,
-                    w,
-                    h,
-                    img,
-                    (tx * cell_w) as isize,
-                    (ty * cell_h) as isize,
-                    cell_w.saturating_sub(2),
-                    cell_h.saturating_sub(2),
-                    tint,
-                );
+    if !state.phosphor_grid_valid
+        || state.phosphor_grid_page != page
+        || state.phosphor_grid.len() != dst.len()
+    {
+        state.phosphor_grid.resize(dst.len(), Rgb565Pixel(0));
+        fill_rect(
+            &mut state.phosphor_grid,
+            w,
+            h,
+            0,
+            0,
+            w,
+            h,
+            color565(0, 18, 14),
+        );
+        for ty in 0..rows {
+            for tx in 0..cols {
+                if let Some(img) = image_at(images, page + ty * cols + tx) {
+                    blit_scaled(
+                        &mut state.phosphor_grid,
+                        w,
+                        h,
+                        img,
+                        (tx * cell_w) as isize,
+                        (ty * cell_h) as isize,
+                        cell_w.saturating_sub(2),
+                        cell_h.saturating_sub(2),
+                        105,
+                    );
+                }
             }
         }
+        state.phosphor_grid_page = page;
+        state.phosphor_grid_valid = true;
     }
+
+    dst.copy_from_slice(&state.phosphor_grid);
     for y in (0..h).step_by(24) {
         fill_rect(dst, w, h, 0, y, w, 1, color565(30, 255, 180));
     }
