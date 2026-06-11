@@ -261,6 +261,10 @@ leading us to the wrong optimizations. Use velocity-scroll scenarios instead:
 `held-scroll` for normal continuous motion, `turbo-hold` for fast continuous
 motion, and `scripts/profile-preview-scroll.sh` / `scripts/profile-arcade-scroll.sh`
 for preview/list benchmark work. `velocity-scroll` is an alias for `held-scroll`.
+Do not reintroduce the old live-framebuffer arcade scroll-present path
+(`MISTER_ARCADE_SCROLL_PRESENT` / `--scroll-present`): a 2026-06-11 MiSTer A/B
+showed it roughly doubled framebuffer present cost versus the normal cached-RAM
+full-list copy. See `history/2026-6-8/arcade-band-copy-trial.md`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

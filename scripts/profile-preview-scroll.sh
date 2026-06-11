@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--scroll-present] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs both:
@@ -19,8 +19,6 @@ with matching MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 
 --list-only disables screenshot loading and the real launcher's catalog refresh
 worker so list-renderer changes can be measured without preview/catalog noise.
---scroll-present enables the experimental live-framebuffer scroll/patched-band
-present path. Default keeps the normal full arcade-list present path.
 --preview-visual-pct scales screenshot display area. 100 is the current size;
 50 renders screenshots at half the current visual area.
 --preview-resize-filter enables runtime resize before Slint image creation.
@@ -37,7 +35,6 @@ scenario="velocity-scroll"
 label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 list_only="0"
-scroll_present="0"
 preview_visual_pct=""
 preview_resize_filter=""
 preview_resize_max=""
@@ -50,12 +47,12 @@ while [[ $# -gt 0 ]]; do
     --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --list-only) list_only="1"; shift ;;
-    --scroll-present) scroll_present="1"; shift ;;
     --preview-visual-pct) preview_visual_pct="${2:-}"; shift 2 ;;
     --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
     --preview-resize-max) preview_resize_max="${2:-}"; shift 2 ;;
     --preview-format) preview_format="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
+    --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
   esac
 done
@@ -102,9 +99,6 @@ fi
 if [[ "$preview_stress" == "1" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_STRESS=1 MISTER_CATALOG_REFRESH=off"
 fi
-if [[ "$scroll_present" == "1" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_ARCADE_SCROLL_PRESENT=1"
-fi
 if [[ -n "$preview_visual_pct" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_VISUAL_PCT=$preview_visual_pct"
 fi
@@ -138,7 +132,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only scroll_present=$scroll_present preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true

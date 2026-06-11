@@ -56,3 +56,31 @@ list copy path:
 Do not reintroduce live framebuffer scroll/blit for this list unless a future
 path avoids reading from `/dev/fb0`, for example by shifting a cached RAM
 composite buffer and only writing the final dirty pixels to the framebuffer.
+
+## Follow-up: scroll-present A/B - 2026-06-11
+
+We re-tested the later `MISTER_ARCADE_SCROLL_PRESENT=1` path on the MiSTer after
+reviewing whether the disabled path might actually be worth keeping. It was not.
+The path scrolled portions of the already-presented arcade list in live
+`/dev/fb0`, then patched the exposed bands and overlays. That kept the same bad
+memory pattern as the original band-copy trial: read-modify-write against the
+write-combined framebuffer.
+
+Trace files are in `build/preview-scroll-profiles/`:
+
+| Case | Path | Avg wall | P95 wall | Slow >16.7 ms | Slow >20 ms | Avg fb-present | P95 fb-present |
+|---|---|---:|---:|---:|---:|---:|---:|
+| list-only standalone | normal | 16428 us | 16522 us | 22 | 1 | 1806 us | 1998 us |
+| list-only standalone | scroll-present | 16452 us | 16569 us | 24 | 1 | 4033 us | 4356 us |
+| list-only real launcher | normal | 16422 us | 16570 us | 20 | 2 | 1686 us | 1957 us |
+| list-only real launcher | scroll-present | 16437 us | 16562 us | 30 | 2 | 3820 us | 4323 us |
+| preview standalone | normal | 16415 us | 17346 us | 158 | 2 | 2031 us | 2893 us |
+| preview standalone | scroll-present | 16462 us | 17320 us | 163 | 4 | 3881 us | 4808 us |
+| preview real launcher | normal | 16434 us | 17312 us | 161 | 3 | 1821 us | 2804 us |
+| preview real launcher | scroll-present | 16459 us | 17329 us | 166 | 5 | 3823 us | 5022 us |
+
+The wall-frame cadence remained near 60 Hz because vsync absorbs some of the
+extra work, but the presentation cost roughly doubled and p95 framebuffer
+present time reached about 5 ms with previews enabled. The slow path and its
+`MISTER_ARCADE_SCROLL_PRESENT` / `--scroll-present` toggles were removed after
+this run so future profiling cannot accidentally compare against it again.

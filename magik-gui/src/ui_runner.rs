@@ -337,16 +337,6 @@ fn catalog_refresh_requested() -> bool {
     })
 }
 
-fn arcade_scroll_present_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_ARCADE_SCROLL_PRESENT").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    })
-}
-
 fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -1119,20 +1109,6 @@ impl UiFrameTarget {
         let _ = ui;
         disp.copy_rect_from(x, y, w, h, src);
     }
-
-    pub(crate) fn scroll_rect_y(
-        &mut self,
-        disp: &mut Display,
-        ui: &UiDisplay,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        dy: isize,
-    ) {
-        let _ = ui;
-        disp.scroll_rect_y(x, y, w, h, dy);
-    }
 }
 
 fn copy_arcade_list_update(
@@ -1147,13 +1123,9 @@ fn copy_arcade_list_update(
             renderer.copy_layer_to_target(target, disp, ui);
             rect.rows()
         }
-        ArcadeListUpdate::Scroll { delta_y } => {
-            if arcade_scroll_present_enabled() {
-                renderer.copy_scrolled_layer_to_target(target, disp, ui, delta_y)
-            } else {
-                renderer.copy_layer_to_target(target, disp, ui);
-                ArcadeListRenderer::dirty_rect().rows()
-            }
+        ArcadeListUpdate::Scroll { .. } => {
+            renderer.copy_layer_to_target(target, disp, ui);
+            ArcadeListRenderer::dirty_rect().rows()
         }
     }
 }
