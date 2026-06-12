@@ -7,6 +7,7 @@ use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
 use std::fmt;
+use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant};
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
+const VIRTUAL_LAUNCH_CACHE_DIR: &str = "/media/fat/mister-magik/launch-cache";
 const ARCADE_NORMAL_PX_PER_FRAME: i32 = 6;
 const ARCADE_TURBO_PX_PER_FRAME: i32 = 12;
 const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
@@ -631,6 +633,7 @@ fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
 }
 
 trait LaunchIo {
+    fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String>;
     fn target_exists(&mut self, path: &str) -> bool;
     fn mister_running(&mut self) -> bool;
     fn magik_running(&mut self) -> bool;
@@ -643,6 +646,14 @@ trait LaunchIo {
 struct SystemLaunchIo;
 
 impl LaunchIo for SystemLaunchIo {
+    fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
+        if launch_ref.starts_with("magik-plan:") {
+            materialize_virtual_launch_ref(launch_ref)
+        } else {
+            Ok(launch_ref.to_string())
+        }
+    }
+
     fn target_exists(&mut self, path: &str) -> bool {
         Path::new(path).exists()
     }
@@ -727,6 +738,66 @@ fn write_mister_command(cmd: &str) -> Result<(), String> {
     write_mister_command_nonblocking(cmd)
 }
 
+fn materialize_virtual_launch_ref(launch_ref: &str) -> Result<String, String> {
+    let plan = library_db::load_virtual_launch_plan(launch_ref)?
+        .ok_or_else(|| format!("virtual launch plan not found: {launch_ref}"))?;
+    if plan.payload_path.trim().is_empty() {
+        return Err(format!("virtual launch plan has no payload: {launch_ref}"));
+    }
+    let dir = Path::new(VIRTUAL_LAUNCH_CACHE_DIR);
+    fs::create_dir_all(dir).map_err(|e| format!("create virtual launch cache: {e}"))?;
+    let path = dir.join(format!("{}.mgl", sanitize_launch_ref(launch_ref)));
+    let content = virtual_mgl_content(&plan);
+    let should_write = fs::read_to_string(&path)
+        .map(|existing| existing != content)
+        .unwrap_or(true);
+    if should_write {
+        fs::write(&path, content).map_err(|e| format!("write virtual launch mgl: {e}"))?;
+    }
+    Ok(path.display().to_string())
+}
+
+fn virtual_mgl_content(plan: &library_db::VirtualLaunchPlan) -> String {
+    let file_type = match plan.mount_kind.as_str() {
+        "load-file" => "f",
+        "mount-image" => "s",
+        _ => "s",
+    };
+    format!(
+        concat!(
+            "<mistergamedescription>\n",
+            "  <name>{}</name>\n",
+            "  <rbf>{}</rbf>\n",
+            "  <file delay=\"{}\" type=\"{}\" index=\"{}\" path=\"{}\"/>\n",
+            "</mistergamedescription>\n"
+        ),
+        xml_escape(&plan.title),
+        xml_escape(&plan.core_path),
+        plan.mount_delay_secs,
+        file_type,
+        plan.mount_index,
+        xml_escape(&plan.payload_path)
+    )
+}
+
+fn sanitize_launch_ref(launch_ref: &str) -> String {
+    launch_ref
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 pub fn exit_to_mister() -> Result<(), String> {
     restore_menu_wallpaper();
 
@@ -773,9 +844,12 @@ pub fn execute_game_launch(launch_ref: &str) -> Result<bool, LaunchError> {
 }
 
 fn execute_game_launch_with(launch_ref: &str, io: &mut impl LaunchIo) -> Result<bool, LaunchError> {
-    if !io.target_exists(launch_ref) {
+    let launch_target = io
+        .prepare_launch_ref(launch_ref)
+        .map_err(|e| LaunchError::new(e, false))?;
+    if !io.target_exists(&launch_target) {
         return Err(LaunchError::new(
-            format!("launch target not found: {launch_ref}"),
+            format!("launch target not found: {launch_target}"),
             false,
         ));
     }
@@ -802,9 +876,9 @@ fn execute_game_launch_with(launch_ref: &str, io: &mut impl LaunchIo) -> Result<
     }
 
     let cmd = if io.magik_running() {
-        format!("mister_magik_launch {launch_ref}\n")
+        format!("mister_magik_launch {launch_target}\n")
     } else {
-        format!("load_core {launch_ref}\n")
+        format!("load_core {launch_target}\n")
     };
     println!("launch: {}", cmd.trim_end());
     io.write_mister_command(&cmd)
@@ -852,11 +926,24 @@ mod tests {
         started_ready: bool,
         fifo_ready: bool,
         write_result: Result<(), String>,
+        prepared_launch_ref: Option<String>,
+        prepare_result: Result<(), String>,
         start_calls: usize,
         commands: Vec<String>,
     }
 
     impl LaunchIo for FakeLaunchIo {
+        fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
+            self.prepared_launch_ref = Some(launch_ref.to_string());
+            self.prepare_result.clone().map(|_| {
+                if launch_ref.starts_with("magik-plan:") {
+                    "/tmp/mister-magik-virtual-test.mgl".to_string()
+                } else {
+                    launch_ref.to_string()
+                }
+            })
+        }
+
         fn target_exists(&mut self, _path: &str) -> bool {
             self.target_exists
         }
@@ -897,6 +984,8 @@ mod tests {
             started_ready: true,
             fifo_ready: true,
             write_result: Ok(()),
+            prepared_launch_ref: None,
+            prepare_result: Ok(()),
             start_calls: 0,
             commands: Vec::new(),
         }
@@ -1195,5 +1284,46 @@ mod tests {
         assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
         assert!(launch_in_progress());
         reset_launch();
+    }
+
+    #[test]
+    fn virtual_launch_ref_is_materialized_before_fifo_command() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+
+        let spawned = execute_game_launch_with("magik-plan:payload-saturn-test", &mut io)
+            .expect("launch succeeds");
+
+        assert!(!spawned);
+        assert_eq!(
+            io.prepared_launch_ref.as_deref(),
+            Some("magik-plan:payload-saturn-test")
+        );
+        assert_eq!(
+            io.commands,
+            vec!["mister_magik_launch /tmp/mister-magik-virtual-test.mgl\n"]
+        );
+        reset_launch();
+    }
+
+    #[test]
+    fn virtual_mgl_content_mounts_payload_with_core_path() {
+        let plan = library_db::VirtualLaunchPlan {
+            launch_ref: "magik-plan:payload-saturn-test".to_string(),
+            title: "NiGHTS & Dreams".to_string(),
+            core_path: "_Console/Saturn".to_string(),
+            payload_path: "/media/fat/games/Saturn/Nights.chd".to_string(),
+            mount_kind: "mount-image".to_string(),
+            mount_index: 0,
+            mount_delay_secs: 1,
+        };
+
+        let content = virtual_mgl_content(&plan);
+
+        assert!(content.contains("<rbf>_Console/Saturn</rbf>"));
+        assert!(content.contains("type=\"s\" index=\"0\""));
+        assert!(content.contains("path=\"/media/fat/games/Saturn/Nights.chd\""));
+        assert!(content.contains("<name>NiGHTS &amp; Dreams</name>"));
     }
 }

@@ -5,8 +5,8 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use crate::launch_profiles::{
-    self, IgnoreReason, LaunchProfile, MountKind, PayloadDisposition, PayloadRule, ProfilePathClass,
-    RuleProvenance, RuleSourceKind,
+    self, IgnoreReason, LaunchProfile, MountKind, PayloadDisposition, PayloadRule,
+    ProfilePathClass, RuleProvenance, RuleSourceKind,
 };
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -38,7 +38,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -114,6 +114,17 @@ pub struct LibraryRefreshSummary {
     pub containers: usize,
     pub entries: usize,
     pub discoveries: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VirtualLaunchPlan {
+    pub launch_ref: String,
+    pub title: String,
+    pub core_path: String,
+    pub payload_path: String,
+    pub mount_kind: String,
+    pub mount_index: u8,
+    pub mount_delay_secs: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -288,6 +299,66 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
         Err(e) => return Err(format!("failed to delete {}: {e}", path.display())),
     }
     Ok(())
+}
+
+pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunchPlan>, String> {
+    let path = default_sqlite_path();
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open library db: {e}"))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn
+        .prepare(
+            "SELECT launch_plans.launch_ref,
+                    games.title,
+                    COALESCE(profiles.core_path, launch_plans.core_id),
+                    COALESCE(launch_plans.payload_path, ''),
+                    COALESCE(payloads.mount_kind, 'mount-image'),
+                    COALESCE(payloads.mount_index, 0),
+                    COALESCE(payloads.mount_delay_secs, 1)
+             FROM launch_plans
+             JOIN games ON games.game_id = launch_plans.game_id
+             LEFT JOIN profiles ON profiles.profile_id = launch_plans.profile_id
+             LEFT JOIN payloads
+                    ON payloads.file_path = launch_plans.payload_path
+                   AND payloads.profile_id = launch_plans.profile_id
+             WHERE launch_plans.launch_ref = ?1
+               AND launch_plans.launch_kind = 'virtual-mgl'",
+        )
+        .map_err(|e| format!("prepare virtual launch query: {e}"))?;
+    let mut rows = stmt
+        .query([launch_ref])
+        .map_err(|e| format!("query virtual launch: {e}"))?;
+    let Some(row) = rows
+        .next()
+        .map_err(|e| format!("read virtual launch: {e}"))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(VirtualLaunchPlan {
+        launch_ref: row
+            .get::<_, String>(0)
+            .map_err(|e| format!("read launch_ref: {e}"))?,
+        title: row
+            .get::<_, String>(1)
+            .map_err(|e| format!("read title: {e}"))?,
+        core_path: row
+            .get::<_, String>(2)
+            .map_err(|e| format!("read core_path: {e}"))?,
+        payload_path: row
+            .get::<_, String>(3)
+            .map_err(|e| format!("read payload_path: {e}"))?,
+        mount_kind: row
+            .get::<_, String>(4)
+            .map_err(|e| format!("read mount_kind: {e}"))?,
+        mount_index: row
+            .get::<_, i64>(5)
+            .map_err(|e| format!("read mount_index: {e}"))?
+            .clamp(0, u8::MAX as i64) as u8,
+        mount_delay_secs: row
+            .get::<_, i64>(6)
+            .map_err(|e| format!("read mount_delay_secs: {e}"))?
+            .clamp(0, u8::MAX as i64) as u8,
+    }))
 }
 
 pub fn load_arcade_catalog_from_sqlite(
@@ -711,13 +782,7 @@ fn scan_library_with_progress(
                     ),
                 });
             }
-            Some((
-                profile,
-                ProfilePathClass::Ignored {
-                    reason,
-                    provenance,
-                },
-            )) => {
+            Some((profile, ProfilePathClass::Ignored { reason, provenance })) => {
                 ignored_files.push(LibraryIgnoredFile {
                     path: f.path.display().to_string(),
                     profile_id: profile.id.to_string(),
@@ -775,10 +840,7 @@ fn classify_profile_path<'a>(
     Some((profile, profile.classify_path(path)))
 }
 
-fn profile_for_path<'a>(
-    profiles: &'a [LaunchProfile],
-    path: &Path,
-) -> Option<&'a LaunchProfile> {
+fn profile_for_path<'a>(profiles: &'a [LaunchProfile], path: &Path) -> Option<&'a LaunchProfile> {
     let components = path
         .components()
         .filter_map(|component| component.as_os_str().to_str())
@@ -1477,6 +1539,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             category TEXT NOT NULL,
             title TEXT NOT NULL,
             core_name TEXT NOT NULL,
+            core_path TEXT,
             source_kind TEXT NOT NULL,
             source_detail TEXT NOT NULL
         ) WITHOUT ROWID;
@@ -1598,8 +1661,8 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO profiles(profile_id,system_id,category,title,core_name,source_kind,source_detail)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO profiles(profile_id,system_id,category,title,core_name,core_path,source_kind,source_detail)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare profile insert: {e}"))?;
         for profile in launch_profiles::builtin_profiles() {
@@ -1609,6 +1672,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 profile.category,
                 profile.title,
                 profile.core_name,
+                profile.core_path,
                 source_kind_name(profile.provenance.kind),
                 profile.provenance.detail
             ])
@@ -1660,11 +1724,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             .map_err(|e| format!("prepare payload insert: {e}"))?;
         for payload in &scan.normal_files {
             let path = &payload.path;
-            let (size, mtime_secs) = scan
-                .file_fingerprints
-                .get(path)
-                .copied()
-                .unwrap_or((0, 0));
+            let (size, mtime_secs) = scan.file_fingerprints.get(path).copied().unwrap_or((0, 0));
             stmt.execute(params![
                 format!("file:{path}"),
                 path.as_str(),
@@ -1699,7 +1759,10 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 } else {
                     "support"
                 },
-                entry.uncompressed_size.or(entry.compressed_size).unwrap_or(0) as i64,
+                entry
+                    .uncompressed_size
+                    .or(entry.compressed_size)
+                    .unwrap_or(0) as i64,
                 0i64,
                 "archive-toc",
                 "ZIP central directory header"
@@ -1785,7 +1848,9 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             let launcher_path = match discovery.source_kind {
-                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => Some(discovery.launch_ref.as_str()),
+                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => {
+                    Some(discovery.launch_ref.as_str())
+                }
                 DiscoverySourceKind::PayloadFile => None,
             };
             let payload_path = if launcher_path.is_none() {
@@ -2221,12 +2286,16 @@ fn region_from_text(text: &str) -> Option<&'static str> {
         Some("usa")
     } else if contains_any(
         &lower,
-        &["(europe", "(eu", "(e)", "[europe", "[eu]", " europe", " pal"],
+        &[
+            "(europe", "(eu", "(e)", "[europe", "[eu]", " europe", " pal",
+        ],
     ) {
         Some("europe")
     } else if contains_any(
         &lower,
-        &["(japan", "(jp", "(j)", "[japan", "[jp]", " japan", " ntsc-j"],
+        &[
+            "(japan", "(jp", "(j)", "[japan", "[jp]", " japan", " ntsc-j",
+        ],
     ) {
         Some("japan")
     } else if contains_any(&lower, &["(world", "(w)", "[world", " world"]) {
@@ -2257,7 +2326,10 @@ fn system_title_for_discovery(discovery: &GameDiscovery, system_id: &str) -> Str
 fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: &str) -> bool {
     matches!(
         classify_profile_path(profiles, path),
-        Some((_, ProfilePathClass::Payload { .. } | ProfilePathClass::Ignored { .. }))
+        Some((
+            _,
+            ProfilePathClass::Payload { .. } | ProfilePathClass::Ignored { .. }
+        ))
     ) || path
         .file_name()
         .and_then(|s| s.to_str())
@@ -2407,16 +2479,13 @@ mod tests {
     fn menu_mgl_launchers_are_not_profile_candidates() {
         let profiles = launch_profiles::builtin_profiles();
 
-        assert!(classify_profile_path(
-            &profiles,
-            Path::new("/media/fat/_Computer/Amiga.mgl")
-        )
-        .is_none());
-        assert!(classify_profile_path(
-            &profiles,
-            Path::new("/media/fat/_Console/Game Gear.mgl")
-        )
-        .is_none());
+        assert!(
+            classify_profile_path(&profiles, Path::new("/media/fat/_Computer/Amiga.mgl")).is_none()
+        );
+        assert!(
+            classify_profile_path(&profiles, Path::new("/media/fat/_Console/Game Gear.mgl"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -2567,10 +2636,8 @@ mod tests {
         );
         let fingerprint = fingerprint_with_manifest(manifest);
 
-        let validated = validate_or_rebuild_directory_manifest(
-            std::slice::from_ref(&root_key),
-            &fingerprint,
-        );
+        let validated =
+            validate_or_rebuild_directory_manifest(std::slice::from_ref(&root_key), &fingerprint);
 
         assert_eq!(validated, Some(DirectoryManifest::new()));
         let _ = std::fs::remove_dir_all(root);
