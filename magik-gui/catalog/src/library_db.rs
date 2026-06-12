@@ -1812,11 +1812,12 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                     confidence_str(discovery.confidence)
                 ])
                 .map_err(|e| format!("insert launch plan: {e}"))?;
+            let region = infer_region_metadata(discovery);
             region_stmt
                 .execute(params![
                     key.as_str(),
-                    Option::<&str>::None,
-                    "unknown",
+                    region.region,
+                    region.confidence,
                     Option::<&str>::None
                 ])
                 .map_err(|e| format!("insert region metadata: {e}"))?;
@@ -2142,6 +2143,99 @@ fn payload_disposition_str(disposition: PayloadDisposition) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RegionInference {
+    region: Option<&'static str>,
+    confidence: &'static str,
+}
+
+fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInference {
+    if discovery.platform_id != "saturn" {
+        return RegionInference {
+            region: None,
+            confidence: "unknown",
+        };
+    }
+
+    if let Some(region) = region_from_filename(&discovery.source_path) {
+        return RegionInference {
+            region: Some(region),
+            confidence: "filename-high",
+        };
+    }
+    if let Some(region) = region_from_folder(&discovery.source_path) {
+        return RegionInference {
+            region: Some(region),
+            confidence: "folder-medium",
+        };
+    }
+    if let Some(region) = region_from_text(&discovery.title) {
+        return RegionInference {
+            region: Some(region),
+            confidence: "metadata-low",
+        };
+    }
+
+    RegionInference {
+        region: None,
+        confidence: "unknown",
+    }
+}
+
+fn region_from_filename(path: &str) -> Option<&'static str> {
+    let stem = Path::new(path.split("::").next().unwrap_or(path))
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    region_from_text(stem)
+}
+
+fn region_from_folder(path: &str) -> Option<&'static str> {
+    Path::new(path.split("::").next().unwrap_or(path))
+        .parent()?
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .rev()
+        .find_map(region_from_text)
+}
+
+fn region_from_text(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    let token = lower.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+    if matches!(token, "usa" | "us" | "u") {
+        return Some("usa");
+    }
+    if matches!(token, "europe" | "eu" | "e") {
+        return Some("europe");
+    }
+    if matches!(token, "japan" | "jp" | "j") {
+        return Some("japan");
+    }
+    if matches!(token, "world" | "w") {
+        return Some("world");
+    }
+    if contains_any(
+        &lower,
+        &["(usa", "(us)", "(u)", "[usa", "[us]", " usa", " ntsc-u"],
+    ) {
+        Some("usa")
+    } else if contains_any(
+        &lower,
+        &["(europe", "(eu", "(e)", "[europe", "[eu]", " europe", " pal"],
+    ) {
+        Some("europe")
+    } else if contains_any(
+        &lower,
+        &["(japan", "(jp", "(j)", "[japan", "[jp]", " japan", " ntsc-j"],
+    ) {
+        Some("japan")
+    } else if contains_any(&lower, &["(world", "(w)", "[world", " world"]) {
+        Some("world")
+    } else {
+        None
+    }
+}
+
 fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
     if discovery.category == "Arcade" {
         "arcade".to_string()
@@ -2252,6 +2346,45 @@ mod tests {
         ];
 
         assert_eq!(unique_discovery_count(&discoveries), 2);
+    }
+
+    #[test]
+    fn saturn_region_prefers_filename_markers() {
+        let discovery = saturn_payload("/media/fat/games/Saturn/Nights into Dreams (USA).chd");
+
+        assert_eq!(
+            infer_region_metadata(&discovery),
+            RegionInference {
+                region: Some("usa"),
+                confidence: "filename-high"
+            }
+        );
+    }
+
+    #[test]
+    fn saturn_region_uses_folder_when_filename_has_no_marker() {
+        let discovery = saturn_payload("/media/fat/games/Saturn/Japan/Princess Crown.chd");
+
+        assert_eq!(
+            infer_region_metadata(&discovery),
+            RegionInference {
+                region: Some("japan"),
+                confidence: "folder-medium"
+            }
+        );
+    }
+
+    #[test]
+    fn saturn_region_stays_unknown_without_evidence() {
+        let discovery = saturn_payload("/media/fat/games/Saturn/Clockwork Knight.chd");
+
+        assert_eq!(
+            infer_region_metadata(&discovery),
+            RegionInference {
+                region: None,
+                confidence: "unknown"
+            }
+        );
     }
 
     #[test]
@@ -2521,6 +2654,27 @@ mod tests {
             platform_id: "unknown".to_string(),
             core_id: "unknown".to_string(),
             hardware_id: "unknown".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::PayloadPath,
+        }
+    }
+
+    fn saturn_payload(path: &str) -> GameDiscovery {
+        GameDiscovery {
+            source_path: path.to_string(),
+            launch_ref: path.to_string(),
+            source_kind: DiscoverySourceKind::PayloadFile,
+            title: title_from_path(path),
+            category: "Console".to_string(),
+            platform_id: "saturn".to_string(),
+            core_id: "Saturn".to_string(),
+            hardware_id: "saturn".to_string(),
             manufacturer: None,
             genre: None,
             year: None,
