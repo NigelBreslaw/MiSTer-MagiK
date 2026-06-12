@@ -953,6 +953,17 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::SuperScalerPop => {
+                    let d =
+                        dist2_from_center(local_x, local_y, screen.width(), screen.rows() as usize);
+                    let r = (screen.width().min(screen.rows() as usize) as f32
+                        * (0.08 + progress * 0.92)) as u64;
+                    if d <= r * r {
+                        blend_565(prev, curr, alpha)
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;

@@ -155,3 +155,22 @@ the same row phase as the generic gate.
 | round 22 focused row-scroll-parallax | 720 | 16391 | 16511 | 16 | 2 | 28712 |
 
 `row-scroll-parallax` is now inside the p95 60fps target.
+
+## Round 23 - Direct super-scaler-pop transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-SUPER-SCALER-R23-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition super-scaler-pop --transition-ms 220 --visual-captures 0
+```
+
+This moves `super-scaler-pop` into a direct RGB565 arm. It still uses the same
+integer distance mask and alpha blend as the generic gate, but avoids the
+generic gate/blend/decorate path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R22 mega super-scaler-pop segment | 70 | 41780 | 51631 | 54 | 54 | 32588 |
+| round 23 focused super-scaler-pop | 721 | 16356 | 16476 | 21 | 1 | 28172 |
+
+`super-scaler-pop` is now inside the p95 60fps target.
