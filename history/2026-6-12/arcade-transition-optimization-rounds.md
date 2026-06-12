@@ -270,3 +270,22 @@ gate and decoration path.
 
 `palette-cycle` is much closer to the 60fps target, though it still needs a
 second pass for p95.
+
+## Round 29 - Direct plasma-mask transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-PLASMA-MASK-R29-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition plasma-mask --transition-ms 220 --visual-captures 0
+```
+
+This moves `plasma-mask` into a direct RGB565 binary selection arm using the
+same plasma gate as the generic path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega plasma-mask segment | 80 | 38799 | 44935 | 70 | 70 | 32892 |
+| round 29 focused plasma-mask | 664 | 17778 | 19752 | 599 | 26 | 26740 |
+
+`plasma-mask` is much closer to the 60fps target, though it still needs a second
+pass for p95.

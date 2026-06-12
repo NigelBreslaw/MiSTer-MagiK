@@ -1026,6 +1026,13 @@ pub(super) fn blit_transition_565_fast(
                         base
                     }
                 }
+                PreviewTransitionEffect::PlasmaMask => {
+                    if plasma_gate(local_x, local_y, alpha) <= alpha {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;
