@@ -364,3 +364,21 @@ same precomputed angle map as the generic path.
 
 `clock-wipe` is much closer to the 60fps target, though it still needs a
 second pass for p95.
+
+## Round 34 - Direct sprite-strips transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-SPRITE-STRIPS-R34-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition sprite-strips --transition-ms 220 --visual-captures 0
+```
+
+This moves `sprite-strips` into a direct RGB565 binary selection arm while
+preserving the per-strip horizontal skew.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega sprite-strips segment | 88 | 33150 | 38343 | 77 | 77 | 32892 |
+| round 34 focused sprite-strips | 720 | 16392 | 16536 | 19 | 1 | 28776 |
+
+`sprite-strips` is now inside the p95 60fps target.

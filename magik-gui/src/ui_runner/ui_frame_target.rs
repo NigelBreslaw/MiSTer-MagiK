@@ -932,6 +932,15 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::SpriteStrips => {
+                    let strip = local_y / 24;
+                    let skew = (strip * 19) % screen.width().max(1);
+                    if (local_x + skew) % screen.width().max(1) < reveal_w {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::VenetianCopper => {
                     let open = ((20.0 * progress).round() as usize).min(20);
                     let gate =
