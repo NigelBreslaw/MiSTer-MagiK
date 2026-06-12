@@ -842,6 +842,12 @@ pub(super) fn blit_transition_565_fast(
     let cy = screen.rows() as usize / 2;
     let zoom_w = reveal_w / 2;
     let zoom_h = reveal_h / 2;
+    let iris_r2 = {
+        let max_r2 = ((screen.width() * screen.width()
+            + screen.rows() as usize * screen.rows() as usize)
+            / 4) as u64;
+        (max_r2 as f32 * progress * progress) as u64
+    };
 
     for y in screen.y0..screen.y1.min(ui.render_h()) {
         let row = y * ui.render_w();
@@ -904,6 +910,15 @@ pub(super) fn blit_transition_565_fast(
                 PreviewTransitionEffect::VenetianBlinds => {
                     let open = ((16.0 * progress).round() as usize).min(16);
                     if local_x % 16 < open {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
+                PreviewTransitionEffect::Iris => {
+                    if dist2_from_center(local_x, local_y, screen.width(), screen.rows() as usize)
+                        <= iris_r2
+                    {
                         curr
                     } else {
                         prev
