@@ -21,6 +21,12 @@ const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
 const VIRTUAL_LAUNCH_CACHE_DIR: &str = "/media/fat/mister-magik/launch-cache";
+const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
+const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
+const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
+const AMIGAVISION_HDF_PATH: &str = "/media/fat/games/Amiga/AmigaVision.hdf";
+const AMIGAVISION_SHARED_DIR: &str = "/media/fat/games/Amiga/shared";
+const AMIGAVISION_AGS_BOOT: &str = "/media/fat/games/Amiga/shared/ags_boot";
 const ARCADE_NORMAL_PX_PER_FRAME: i32 = 6;
 const ARCADE_TURBO_PX_PER_FRAME: i32 = 12;
 const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
@@ -649,6 +655,10 @@ impl LaunchIo for SystemLaunchIo {
     fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
         if launch_ref.starts_with("magik-plan:") {
             materialize_virtual_launch_ref(launch_ref)
+        } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
+            materialize_amigavision_game_launch_ref(launch_ref)
+        } else if launch_ref == AMIGAVISION_LAUNCHER_REF {
+            materialize_amigavision_launcher_ref()
         } else {
             Ok(launch_ref.to_string())
         }
@@ -757,6 +767,75 @@ fn materialize_virtual_launch_ref(launch_ref: &str) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
+fn materialize_amigavision_launcher_ref() -> Result<String, String> {
+    materialize_amigavision_launcher_ref_at(
+        Path::new(AMIGAVISION_MGL_PATH),
+        Path::new(AMIGAVISION_HDF_PATH),
+        Path::new(AMIGAVISION_SHARED_DIR),
+        Path::new(AMIGAVISION_AGS_BOOT),
+    )
+}
+
+fn materialize_amigavision_game_launch_ref(launch_ref: &str) -> Result<String, String> {
+    let encoded = launch_ref
+        .strip_prefix(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        .ok_or_else(|| format!("invalid AmigaVision launch ref: {launch_ref}"))?;
+    let title = decode_launch_component(encoded)?;
+    materialize_amigavision_game_launch_ref_at(
+        &title,
+        Path::new(AMIGAVISION_MGL_PATH),
+        Path::new(AMIGAVISION_HDF_PATH),
+        Path::new(AMIGAVISION_SHARED_DIR),
+        Path::new(AMIGAVISION_AGS_BOOT),
+    )
+}
+
+fn materialize_amigavision_launcher_ref_at(
+    mgl_path: &Path,
+    hdf_path: &Path,
+    shared_dir: &Path,
+    ags_boot_path: &Path,
+) -> Result<String, String> {
+    validate_amigavision_install(mgl_path, hdf_path)?;
+    fs::create_dir_all(shared_dir).map_err(|e| format!("create AmigaVision shared dir: {e}"))?;
+    match fs::remove_file(ags_boot_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove stale AmigaVision ags_boot: {e}")),
+    }
+    Ok(mgl_path.display().to_string())
+}
+
+fn materialize_amigavision_game_launch_ref_at(
+    title: &str,
+    mgl_path: &Path,
+    hdf_path: &Path,
+    shared_dir: &Path,
+    ags_boot_path: &Path,
+) -> Result<String, String> {
+    validate_amigavision_install(mgl_path, hdf_path)?;
+    fs::create_dir_all(shared_dir).map_err(|e| format!("create AmigaVision shared dir: {e}"))?;
+    fs::write(ags_boot_path, format!("{title}\n"))
+        .map_err(|e| format!("write AmigaVision ags_boot: {e}"))?;
+    Ok(mgl_path.display().to_string())
+}
+
+fn validate_amigavision_install(mgl_path: &Path, hdf_path: &Path) -> Result<(), String> {
+    if !mgl_path.is_file() {
+        return Err(format!(
+            "AmigaVision launcher is not installed: {}",
+            mgl_path.display()
+        ));
+    }
+    if !hdf_path.is_file() {
+        return Err(format!(
+            "AmigaVision HDF is not installed: {}. Extract the AmigaVision MiSTer archive first.",
+            hdf_path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn virtual_mgl_content(plan: &library_db::VirtualLaunchPlan) -> String {
     let file_type = match plan.mount_kind.as_str() {
         "load-file" => "f",
@@ -778,6 +857,38 @@ fn virtual_mgl_content(plan: &library_db::VirtualLaunchPlan) -> String {
         plan.mount_index,
         xml_escape(&plan.payload_path)
     )
+}
+
+fn decode_launch_component(value: &str) -> Result<String, String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let input = value.as_bytes();
+    let mut idx = 0usize;
+    while idx < input.len() {
+        if input[idx] == b'%' {
+            if idx + 2 >= input.len() {
+                return Err("invalid percent escape in launch ref".to_string());
+            }
+            let hi = hex_value(input[idx + 1])
+                .ok_or_else(|| "invalid percent escape in launch ref".to_string())?;
+            let lo = hex_value(input[idx + 2])
+                .ok_or_else(|| "invalid percent escape in launch ref".to_string())?;
+            bytes.push((hi << 4) | lo);
+            idx += 3;
+        } else {
+            bytes.push(input[idx]);
+            idx += 1;
+        }
+    }
+    String::from_utf8(bytes).map_err(|e| format!("invalid UTF-8 in launch ref: {e}"))
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn sanitize_launch_ref(launch_ref: &str) -> String {
@@ -1026,6 +1137,14 @@ mod tests {
         )
     }
 
+    fn unique_temp_dir(label: &str) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("mister-magik-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
     #[test]
     fn arcade_opens_with_first_row_selected() {
         let nav = ArcadeNav::new();
@@ -1058,6 +1177,83 @@ mod tests {
 
         assert_eq!(event.action, LauncherAction::LaunchGame);
         assert_eq!(event.path.as_deref(), Some("magik-plan:amiga-agony"));
+    }
+
+    #[test]
+    fn amigavision_game_launch_ref_writes_ags_boot() {
+        let root = unique_temp_dir("amigavision-launch");
+        let mgl = root.join("_Computer/Amiga.mgl");
+        let hdf = root.join("games/Amiga/AmigaVision.hdf");
+        let shared = root.join("games/Amiga/shared");
+        let ags_boot = shared.join("ags_boot");
+        std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
+        std::fs::create_dir_all(hdf.parent().unwrap()).expect("create hdf dir");
+        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+        std::fs::write(&hdf, "hdf").expect("write hdf");
+
+        let target = materialize_amigavision_game_launch_ref_at(
+            "4th & Inches (OCS)[en]",
+            &mgl,
+            &hdf,
+            &shared,
+            &ags_boot,
+        )
+        .expect("materialize AmigaVision game");
+
+        assert_eq!(target, mgl.display().to_string());
+        assert_eq!(
+            std::fs::read_to_string(&ags_boot).expect("read ags_boot"),
+            "4th & Inches (OCS)[en]\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_launcher_ref_removes_stale_ags_boot() {
+        let root = unique_temp_dir("amigavision-launcher");
+        let mgl = root.join("_Computer/Amiga.mgl");
+        let hdf = root.join("games/Amiga/AmigaVision.hdf");
+        let shared = root.join("games/Amiga/shared");
+        let ags_boot = shared.join("ags_boot");
+        std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
+        std::fs::create_dir_all(&shared).expect("create shared dir");
+        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+        std::fs::write(&hdf, "hdf").expect("write hdf");
+        std::fs::write(&ags_boot, "Agony\n").expect("write stale ags_boot");
+
+        let target = materialize_amigavision_launcher_ref_at(&mgl, &hdf, &shared, &ags_boot)
+            .expect("materialize AmigaVision launcher");
+
+        assert_eq!(target, mgl.display().to_string());
+        assert!(!ags_boot.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_launch_ref_reports_missing_hdf() {
+        let root = unique_temp_dir("amigavision-missing-hdf");
+        let mgl = root.join("_Computer/Amiga.mgl");
+        let hdf = root.join("games/Amiga/AmigaVision.hdf");
+        let shared = root.join("games/Amiga/shared");
+        let ags_boot = shared.join("ags_boot");
+        std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
+        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+
+        let err =
+            materialize_amigavision_game_launch_ref_at("Agony", &mgl, &hdf, &shared, &ags_boot)
+                .expect_err("missing HDF should fail");
+
+        assert!(err.contains("AmigaVision HDF is not installed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn percent_decodes_amigavision_launch_title() {
+        assert_eq!(
+            decode_launch_component("4th%20%26%20Inches%20%28OCS%29%5Ben%5D")
+                .expect("decode title"),
+            "4th & Inches (OCS)[en]"
+        );
     }
 
     #[test]

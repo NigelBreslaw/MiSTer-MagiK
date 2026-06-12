@@ -39,9 +39,11 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
+const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
@@ -1288,6 +1290,9 @@ fn collection_discoveries_from_container(
     rule: &CollectionRule,
 ) -> Vec<GameDiscovery> {
     let mut out = Vec::new();
+    if is_amigavision_archive_path(&file.path.display().to_string()) {
+        out.push(amigavision_launcher_discovery(file, profile));
+    }
     for listing in rule.listings {
         let text = match collection_listing_text(file, listing) {
             Some(text) => text,
@@ -1298,6 +1303,27 @@ fn collection_discoveries_from_container(
         ));
     }
     out
+}
+
+fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> GameDiscovery {
+    GameDiscovery {
+        source_path: file.path.display().to_string(),
+        launch_ref: AMIGAVISION_LAUNCHER_REF.to_string(),
+        source_kind: DiscoverySourceKind::CatalogEntry,
+        title: "AmigaVision".to_string(),
+        category: profile.category.to_string(),
+        platform_id: profile.system_id.to_string(),
+        core_id: profile.core_name.to_string(),
+        hardware_id: profile.system_id.to_string(),
+        manufacturer: Some("Commodore".to_string()),
+        genre: Some("Launcher".to_string()),
+        year: None,
+        setname: None,
+        parent: None,
+        image_path: None,
+        has_image: false,
+        confidence: DiscoveryConfidence::CatalogMetadata,
+    }
 }
 
 fn collection_listing_text(file: &FoundFile, listing: &CollectionListing) -> Option<String> {
@@ -1325,7 +1351,7 @@ fn collection_discoveries_from_listing_text(
         .filter(|line| !line.is_empty())
         .map(|title| GameDiscovery {
             source_path: format!("{}::{}::{title}", file.path.display(), listing.entry_path),
-            launch_ref: file.path.display().to_string(),
+            launch_ref: amigavision_game_launch_ref(title),
             source_kind: DiscoverySourceKind::CatalogEntry,
             title: title.to_string(),
             category: profile.category.to_string(),
@@ -2483,6 +2509,26 @@ fn virtual_launch_ref(game_id: &str) -> String {
     format!("magik-plan:{game_id}")
 }
 
+fn amigavision_game_launch_ref(title: &str) -> String {
+    format!(
+        "{AMIGAVISION_GAME_LAUNCH_PREFIX}{}",
+        encode_launch_component(title)
+    )
+}
+
+fn encode_launch_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn profile_id_for_discovery(discovery: &GameDiscovery) -> Option<&str> {
     if discovery.platform_id == "unknown" || discovery.platform_id.is_empty() {
         None
@@ -2492,12 +2538,14 @@ fn profile_id_for_discovery(discovery: &GameDiscovery) -> Option<&str> {
 }
 
 fn is_launcher_launch_ref(path: &str) -> bool {
-    if path.starts_with("magik-plan:") {
+    if path.starts_with("magik-plan:")
+        || path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        || path == AMIGAVISION_LAUNCHER_REF
+    {
         return true;
     }
     match path_ext(path).as_deref() {
         Some("mra" | "mgl") => !path.contains("::"),
-        Some("7z") => is_amigavision_archive_path(path),
         _ => false,
     }
 }
@@ -3073,6 +3121,11 @@ mod tests {
         );
 
         assert_eq!(unique_discovery_count(&discoveries), 2);
+        assert!(discoveries
+            .iter()
+            .all(|discovery| discovery
+                .launch_ref
+                .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries)).expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
@@ -3088,7 +3141,45 @@ mod tests {
             .systems
             .iter()
             .any(|system| system.id == "amiga" && system.count == 2));
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .all(|game| game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_collection_adds_launcher_entry() {
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "amiga")
+            .expect("amiga profile");
+        let file = FoundFile {
+            path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+            ext: "7z".to_string(),
+            size: 5_208_842_481,
+            mtime_secs: 1,
+        };
+
+        let discoveries =
+            collection_discoveries_from_container(&file, profile, &profile.collection_rules[0]);
+
+        assert!(discoveries.iter().any(|discovery| {
+            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
+        }));
+    }
+
+    #[test]
+    fn amigavision_archive_itself_is_not_a_launch_ref() {
+        assert!(!is_launcher_launch_ref(
+            "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"
+        ));
+        assert!(is_launcher_launch_ref(AMIGAVISION_LAUNCHER_REF));
+        assert!(is_launcher_launch_ref(&amigavision_game_launch_ref(
+            "4th & Inches (OCS)[en]"
+        )));
     }
 
     #[test]
