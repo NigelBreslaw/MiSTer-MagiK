@@ -310,6 +310,15 @@ uses the camera-effect timing buckets and adds `sprite_count`, `sprite_pixels`,
 `particle_count`, and `flicker_skip_count`. Baseline results append to
 `history/toolchain-bench/results-sprite-effects.tsv`; see
 `history/2026-6-13/sprite-effects-catalog.md`.
+Classic full-screen arcade/game and Amiga demo text effect experiments live in
+`ui text-effects`; list labels with `mister-magik-fb text-effects`, browse
+interactively with `scripts/run-rust.sh text-effects 0`, and benchmark with
+`scripts/profile-text-effects.sh LABEL --mode mega --segment-secs N`. The trace
+uses the camera-effect timing buckets and adds `glyph_count`, `glyph_pixels`,
+`tile_count`, `vector_segment_count`, `bob_count`, `palette_step_count`,
+`hidden_glyph_count`, and `scroll_offset`. Baseline results append to
+`history/toolchain-bench/results-text-effects.tsv`; see
+`history/2026-6-13/text-effects-catalog.md`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

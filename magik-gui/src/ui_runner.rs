@@ -71,6 +71,7 @@ mod launcher_bridge;
 mod launcher_loop;
 mod screensaver_loop;
 mod sprite_effects_loop;
+mod text_effects_loop;
 pub(crate) mod ui_boot;
 #[cfg(mister_bench_scenes)]
 mod ui_frame_loop;
@@ -89,6 +90,7 @@ use launcher_bridge::*;
 use launcher_loop::*;
 use screensaver_loop::*;
 use sprite_effects_loop::run_sprite_effects_loop;
+use text_effects_loop::run_text_effects_loop;
 use ui_boot::*;
 #[cfg(mister_bench_scenes)]
 use ui_frame_loop::*;
@@ -143,6 +145,7 @@ pub const UI_SCENES: &[&str] = &[
     "screensaver",
     "camera-effects",
     "sprite-effects",
+    "text-effects",
     "blend_velocity",
     #[cfg(not(mister_ui_scope_launcher))]
     "demo",
@@ -210,6 +213,10 @@ pub fn print_camera_effects() {
 
 pub fn print_sprite_effects() {
     sprite_effects_loop::print_sprite_effects();
+}
+
+pub fn print_text_effects() {
+    text_effects_loop::print_text_effects();
 }
 
 macro_rules! with_scene_app {
@@ -360,6 +367,11 @@ pub fn run_ui(f: &mut Fpga) {
 
     if scene == "sprite-effects" {
         run_sprite_effects_loop(secs, &ui, &mut disp, fb_format);
+        return;
+    }
+
+    if scene == "text-effects" {
+        run_text_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 
