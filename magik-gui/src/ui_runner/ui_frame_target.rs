@@ -941,6 +941,29 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::RacingBeam => {
+                    let beam = reveal_w as isize;
+                    let dx = local_x as isize - beam;
+                    let gate = if dx <= 0 {
+                        255
+                    } else if dx < 28 {
+                        255u8.saturating_sub((dx as u8) * 8)
+                    } else {
+                        0
+                    };
+                    let base = if gate == 255 {
+                        curr
+                    } else if gate == 0 {
+                        prev
+                    } else {
+                        blend_565(prev, curr, gate)
+                    };
+                    if gate > 0 && ((local_y + alpha as usize / 8) & 15 == 0 || gate > 220) {
+                        brighten_565(base)
+                    } else {
+                        base
+                    }
+                }
                 PreviewTransitionEffect::VenetianCopper => {
                     let open = ((20.0 * progress).round() as usize).min(20);
                     let gate =

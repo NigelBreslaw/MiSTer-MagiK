@@ -382,3 +382,21 @@ preserving the per-strip horizontal skew.
 | round 34 focused sprite-strips | 720 | 16392 | 16536 | 19 | 1 | 28776 |
 
 `sprite-strips` is now inside the p95 60fps target.
+
+## Round 35 - Direct racing-beam transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-RACING-BEAM-R35-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition racing-beam --transition-ms 220 --visual-captures 0
+```
+
+This moves `racing-beam` into a direct RGB565 arm while preserving the bright
+lead beam and copper-row highlights.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega racing-beam segment | 89 | 34146 | 35235 | 88 | 88 | 32892 |
+| round 35 focused racing-beam | 720 | 16370 | 16539 | 25 | 1 | 28712 |
+
+`racing-beam` is now inside the p95 60fps target.
