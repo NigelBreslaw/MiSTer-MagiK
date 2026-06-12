@@ -400,3 +400,22 @@ lead beam and copper-row highlights.
 | round 35 focused racing-beam | 720 | 16370 | 16539 | 25 | 1 | 28712 |
 
 `racing-beam` is now inside the p95 60fps target.
+
+## Round 36 - Direct tec-tec transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-TEC-TEC-R36-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition tec-tec --transition-ms 220 --visual-captures 0
+```
+
+This moves `tec-tec` into a direct RGB565 arm while preserving the per-row
+triangle-wave horizontal reveal.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega tec-tec segment | 80 | 35395 | 36543 | 80 | 80 | 32892 |
+| round 36 focused tec-tec | 561 | 21103 | 32849 | 334 | 244 | 25808 |
+
+`tec-tec` is measurably faster but still misses the 60fps target and needs a
+second pass.

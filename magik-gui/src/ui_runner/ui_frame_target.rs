@@ -964,6 +964,14 @@ pub(super) fn blit_transition_565_fast(
                         base
                     }
                 }
+                PreviewTransitionEffect::TecTec => {
+                    let wave = triangle_wave_u8(local_y / 2, alpha);
+                    if local_x.saturating_add(wave as usize / 2) < reveal_w + screen.width() / 8 {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::VenetianCopper => {
                     let open = ((20.0 * progress).round() as usize).min(20);
                     let gate =
