@@ -609,6 +609,15 @@ static void stay_in_magik_mode(const char *reason)
 	analytics_state("stay_in_magik_mode", "reason=%s", reason ? reason : "unknown");
 }
 
+static void allow_launcher_child_all_cpus(void)
+{
+	cpu_set_t set;
+	CPU_ZERO(&set);
+	CPU_SET(0, &set);
+	CPU_SET(1, &set);
+	sched_setaffinity(0, sizeof(set), &set);
+}
+
 static bool write_launcher_script(const launcher_command_t *launcher_cmd)
 {
 	char cmd[2048];
@@ -722,10 +731,7 @@ static void spawn(void)
 	{
 		setenv("MISTER_MAGIK_PATH", path, 1);
 		setenv("MISTER_MAGIK_SCENE", launcher_cmd.scene, 1);
-		cpu_set_t set;
-		CPU_ZERO(&set);
-		CPU_SET(0, &set);
-		sched_setaffinity(0, sizeof(set), &set);
+		allow_launcher_child_all_cpus();
 		setsid();
 		execl("/sbin/agetty", "/sbin/agetty", "-a", "root", "-l",
 		      s_script_path, "-i", "--nohostname", "-L", s_tty, "linux", NULL);
