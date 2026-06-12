@@ -61,6 +61,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
 
+mod camera_effects_loop;
 mod catalog_worker;
 #[cfg(mister_bench_scenes)]
 mod console_scroll_loop;
@@ -77,6 +78,7 @@ pub(crate) mod ui_platform;
 #[cfg(all(feature = "video", mister_bench_scenes))]
 mod video_loop;
 
+use camera_effects_loop::run_camera_effects_loop;
 use catalog_worker::*;
 #[cfg(mister_bench_scenes)]
 use console_scroll_loop::*;
@@ -137,6 +139,7 @@ pub const UI_SCENES: &[&str] = &[
     "launcher",
     "arcade",
     "screensaver",
+    "camera-effects",
     "blend_velocity",
     #[cfg(not(mister_ui_scope_launcher))]
     "demo",
@@ -196,6 +199,10 @@ pub fn print_effects() {
             println!("  {w}x{h}");
         }
     }
+}
+
+pub fn print_camera_effects() {
+    camera_effects_loop::print_camera_effects();
 }
 
 macro_rules! with_scene_app {
@@ -336,6 +343,11 @@ pub fn run_ui(f: &mut Fpga) {
 
     if scene == "screensaver" {
         run_screensaver_loop(secs, &ui, &mut disp, fb_format);
+        return;
+    }
+
+    if scene == "camera-effects" {
+        run_camera_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 

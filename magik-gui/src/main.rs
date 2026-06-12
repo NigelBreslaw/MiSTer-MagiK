@@ -17,6 +17,7 @@
 //!   Benchmarks:
 //!     scenes             list Slint scene names
 //!     effects            list framebuffer effect benchmark names
+//!     camera-effects     list classic camera/background effect labels
 //!     preview-transitions list screenshot transition labels
 //!     effect-bench       run framebuffer effect benchmarks
 //!     library-scan-bench benchmark cold scan, import, cached load, no-op rescan
@@ -101,6 +102,11 @@ fn main() {
 
     if cmd == "preview-transitions" {
         print_preview_transitions();
+        return;
+    }
+
+    if cmd == "camera-effects" {
+        ui_runner::print_camera_effects();
         return;
     }
 

@@ -294,6 +294,14 @@ changes use `fade`; use `scripts/profile-preview-transition-mega.sh LABEL
 `transition_effect`. Add new transition experiments as additional
 `MISTER_PREVIEW_TRANSITION` names instead of replacing existing effects. For
 visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
+Classic full-screen camera/background effect experiments live in
+`ui camera-effects`; list labels with `mister-magik-fb camera-effects`, browse
+interactively with `scripts/run-rust.sh camera-effects 0`, and benchmark with
+`scripts/profile-camera-effects.sh LABEL --mode mega --segment-secs N`. The
+trace includes CPU plus `clear/background/projection/image_blit/sprite/post/hud`
+timing buckets. Baseline results append to
+`history/toolchain-bench/results-camera-effects.tsv`; see
+`history/2026-6-13/camera-effects-catalog.md`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

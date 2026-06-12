@@ -7,6 +7,7 @@
 #   scripts/run-rust.sh                  # real arcade screen, forever
 #   scripts/run-rust.sh launcher 0       # full launcher, forever
 #   scripts/run-rust.sh arcade-effects 0 # arcade screen with left/right effect picker
+#   scripts/run-rust.sh camera-effects 0 # full-screen classic camera effect picker
 #   scripts/run-rust.sh console_scroll 15
 set -euo pipefail
 
@@ -23,6 +24,9 @@ case "$SCENE" in
   arcade-effects)
     REMOTE_SCENE="arcade"
     EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_BLITTER=raw MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_PREVIEW_TRANSITION_PICKER=1 MISTER_PREVIEW_TRANSITION_MS=900"
+    ;;
+  camera-effects)
+    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_CAMERA_EFFECTS_HUD=1"
     ;;
   -h|--help)
     sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
