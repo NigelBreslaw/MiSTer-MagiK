@@ -9,6 +9,7 @@ pub const COMMANDS: &[&str] = &[
     "scenes",
     "effects",
     "camera-effects",
+    "sprite-effects",
     "preview-transitions",
     "effect-bench",
     "vsync-probe",

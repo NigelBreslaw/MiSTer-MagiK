@@ -302,6 +302,14 @@ trace includes CPU plus `clear/background/projection/image_blit/sprite/post/hud`
 timing buckets. Baseline results append to
 `history/toolchain-bench/results-camera-effects.tsv`; see
 `history/2026-6-13/camera-effects-catalog.md`.
+Classic full-screen sprite/object effect experiments live in
+`ui sprite-effects`; list labels with `mister-magik-fb sprite-effects`, browse
+interactively with `scripts/run-rust.sh sprite-effects 0`, and benchmark with
+`scripts/profile-sprite-effects.sh LABEL --mode mega --segment-secs N`. The trace
+uses the camera-effect timing buckets and adds `sprite_count`, `sprite_pixels`,
+`particle_count`, and `flicker_skip_count`. Baseline results append to
+`history/toolchain-bench/results-sprite-effects.tsv`; see
+`history/2026-6-13/sprite-effects-catalog.md`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

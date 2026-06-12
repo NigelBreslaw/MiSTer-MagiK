@@ -15,6 +15,7 @@ pub mod input_repeat;
 pub mod input_state;
 pub mod launcher;
 pub mod runtime_status;
+pub mod sprite_effects;
 pub mod vsync_pacer;
 
 pub use mister_magik_catalog::{arcade_catalog, library_bench, library_db, preview_worker};
