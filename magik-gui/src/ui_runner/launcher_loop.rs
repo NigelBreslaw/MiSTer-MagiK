@@ -398,7 +398,7 @@ pub(super) fn run_launcher_loop(
         launcher_mode.enforce(&mut nav);
 
         if !launching {
-            let pad_changed = pad.poll();
+            let pad_changed = pad.poll_with_debug_labels(setup_active);
             let frame_now = Instant::now();
             let state = pad.state();
             let active_idx = pad.active_idx();

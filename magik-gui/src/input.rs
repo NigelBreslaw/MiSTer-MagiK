@@ -177,6 +177,11 @@ impl PadPool {
 
     /// Drain all pads; returns true if merged state changed.
     pub fn poll(&mut self) -> bool {
+        self.poll_with_debug_labels(false)
+    }
+
+    /// Drain all pads; returns true if merged state changed.
+    pub fn poll_with_debug_labels(&mut self, debug_labels: bool) -> bool {
         let mut changed = false;
 
         if self.last_rescan.elapsed() >= PAD_RESCAN_INTERVAL {
@@ -186,7 +191,7 @@ impl PadPool {
 
         let mut i = 0;
         while i < self.pads.len() {
-            match self.pads[i].poll() {
+            match self.pads[i].poll_with_debug_labels(debug_labels) {
                 Ok(true) => {
                     self.active_idx = i;
                     changed = true;
@@ -249,13 +254,18 @@ impl PadPool {
         let active_raw = self
             .pads
             .get(active_idx)
+            .and_then(|pad| pad.state.last_raw_event);
+        let active_raw_label = self
+            .pads
+            .get(active_idx)
             .map(|pad| pad.state.last_raw.clone());
         let active_label = self
             .pads
             .get(active_idx)
             .map(|pad| pad.state.last_event_label.clone());
         self.merged = merge_pad_states(&states);
-        if let Some(last_raw) = active_raw {
+        self.merged.last_raw_event = active_raw;
+        if let Some(last_raw) = active_raw_label {
             self.merged.last_raw = last_raw;
         }
         if let Some(last_event_label) = active_label {
@@ -332,7 +342,13 @@ impl PadReader {
     }
 
     /// Drain pending events; returns true if state changed.
+    #[allow(dead_code)]
     pub fn poll(&mut self) -> io::Result<bool> {
+        self.poll_with_debug_labels(false)
+    }
+
+    /// Drain pending events; returns true if state changed.
+    pub fn poll_with_debug_labels(&mut self, debug_labels: bool) -> io::Result<bool> {
         let mut buf = [0u8; JS_EVENT_SIZE];
         let mut changed = false;
         loop {
@@ -345,7 +361,7 @@ impl PadReader {
                     let value = i16::from_le_bytes([buf[4], buf[5]]);
                     if self
                         .state
-                        .apply_event(self.layout, event_type, number, value)
+                        .apply_event(self.layout, event_type, number, value, debug_labels)
                     {
                         changed = true;
                     }
@@ -379,9 +395,28 @@ fn pad_index_error(idx: usize) -> io::Error {
 }
 
 trait PadStateEventExt {
-    fn apply_event(&mut self, layout: PadLayout, event_type: u8, number: u8, value: i16) -> bool;
-    fn apply_event_dpad_axes_45(&mut self, event_type: u8, number: u8, value: i16) -> bool;
-    fn apply_event_generic(&mut self, event_type: u8, number: u8, value: i16) -> bool;
+    fn apply_event(
+        &mut self,
+        layout: PadLayout,
+        event_type: u8,
+        number: u8,
+        value: i16,
+        debug_labels: bool,
+    ) -> bool;
+    fn apply_event_dpad_axes_45(
+        &mut self,
+        event_type: u8,
+        number: u8,
+        value: i16,
+        debug_labels: bool,
+    ) -> bool;
+    fn apply_event_generic(
+        &mut self,
+        event_type: u8,
+        number: u8,
+        value: i16,
+        debug_labels: bool,
+    ) -> bool;
     fn apply_dpad_x(&mut self, v: f32, label: &'static str) -> &'static str;
     fn apply_dpad_y(&mut self, v: f32, label: &'static str) -> &'static str;
     fn apply_hat_x(&mut self, v: f32);
@@ -390,15 +425,30 @@ trait PadStateEventExt {
 }
 
 impl PadStateEventExt for PadState {
-    fn apply_event(&mut self, layout: PadLayout, event_type: u8, number: u8, value: i16) -> bool {
+    fn apply_event(
+        &mut self,
+        layout: PadLayout,
+        event_type: u8,
+        number: u8,
+        value: i16,
+        debug_labels: bool,
+    ) -> bool {
+        self.record_raw_event(event_type, number, value, debug_labels);
         match layout {
-            PadLayout::DpadAxes45 => self.apply_event_dpad_axes_45(event_type, number, value),
-            PadLayout::Generic => self.apply_event_generic(event_type, number, value),
+            PadLayout::DpadAxes45 => {
+                self.apply_event_dpad_axes_45(event_type, number, value, debug_labels)
+            }
+            PadLayout::Generic => self.apply_event_generic(event_type, number, value, debug_labels),
         }
     }
 
-    fn apply_event_dpad_axes_45(&mut self, event_type: u8, number: u8, value: i16) -> bool {
-        self.last_raw = format!("type={event_type} num={number} val={value}");
+    fn apply_event_dpad_axes_45(
+        &mut self,
+        event_type: u8,
+        number: u8,
+        value: i16,
+        debug_labels: bool,
+    ) -> bool {
         let changed = match event_type {
             JS_EVENT_BUTTON => {
                 let pressed = value != 0;
@@ -460,18 +510,22 @@ impl PadStateEventExt for PadState {
                         "Capture"
                     }
                     _ => {
-                        self.last_event_label = format!(
-                            "unknown btn {number} {}",
-                            if pressed { "down" } else { "up" }
-                        );
+                        self.set_debug_event_label(debug_labels, || {
+                            format!(
+                                "unknown btn {number} {}",
+                                if pressed { "down" } else { "up" }
+                            )
+                        });
                         self.rebuild_pressed_now();
                         return false;
                     }
                 };
-                self.last_event_label = format!(
-                    "{label} {} (js btn {number})",
-                    if pressed { "down" } else { "up" }
-                );
+                self.set_debug_event_label(debug_labels, || {
+                    format!(
+                        "{label} {} (js btn {number})",
+                        if pressed { "down" } else { "up" }
+                    )
+                });
                 true
             }
             JS_EVENT_AXIS => {
@@ -496,13 +550,17 @@ impl PadStateEventExt for PadState {
                     4 => self.apply_dpad_x(v, "D-pad X"),
                     5 => self.apply_dpad_y(v, "D-pad Y"),
                     _ => {
-                        self.last_event_label = format!("unknown axis {number} val={value}");
+                        self.set_debug_event_label(debug_labels, || {
+                            format!("unknown axis {number} val={value}")
+                        });
                         self.rebuild_pressed_now();
                         return false;
                     }
                 };
                 if number <= 3 {
-                    self.last_event_label = format!("{label} axis {number} = {value}");
+                    self.set_debug_event_label(debug_labels, || {
+                        format!("{label} axis {number} = {value}")
+                    });
                 }
                 true
             }
@@ -512,8 +570,13 @@ impl PadStateEventExt for PadState {
         changed
     }
 
-    fn apply_event_generic(&mut self, event_type: u8, number: u8, value: i16) -> bool {
-        self.last_raw = format!("type={event_type} num={number} val={value}");
+    fn apply_event_generic(
+        &mut self,
+        event_type: u8,
+        number: u8,
+        value: i16,
+        debug_labels: bool,
+    ) -> bool {
         let changed = match event_type {
             JS_EVENT_BUTTON => {
                 let pressed = value != 0;
@@ -563,18 +626,22 @@ impl PadStateEventExt for PadState {
                         "Home"
                     }
                     _ => {
-                        self.last_event_label = format!(
-                            "unknown btn {number} {}",
-                            if pressed { "down" } else { "up" }
-                        );
+                        self.set_debug_event_label(debug_labels, || {
+                            format!(
+                                "unknown btn {number} {}",
+                                if pressed { "down" } else { "up" }
+                            )
+                        });
                         self.rebuild_pressed_now();
                         return false;
                     }
                 };
-                self.last_event_label = format!(
-                    "{label} {} (js btn {number})",
-                    if pressed { "down" } else { "up" }
-                );
+                self.set_debug_event_label(debug_labels, || {
+                    format!(
+                        "{label} {} (js btn {number})",
+                        if pressed { "down" } else { "up" }
+                    )
+                });
                 true
             }
             JS_EVENT_AXIS => {
@@ -607,12 +674,14 @@ impl PadStateEventExt for PadState {
                         self.apply_hat_y(v);
                     }
                     _ => {
-                        self.last_event_label = format!("unknown axis {number} val={value}");
+                        self.set_debug_event_label(debug_labels, || {
+                            format!("unknown axis {number} val={value}")
+                        });
                         self.rebuild_pressed_now();
                         return false;
                     }
                 };
-                self.last_event_label = format!("axis {number} = {value}");
+                self.set_debug_event_label(debug_labels, || format!("axis {number} = {value}"));
                 true
             }
             _ => return false,
@@ -783,6 +852,9 @@ fn merge_pad_states(states: &[&PadState]) -> PadState {
         }
         if s.right_y.abs() > out.right_y.abs() {
             out.right_y = s.right_y;
+        }
+        if s.last_raw_event.is_some() {
+            out.last_raw_event = s.last_raw_event;
         }
         if !s.last_event_label.is_empty() {
             out.last_raw = s.last_raw.clone();
@@ -1271,7 +1343,7 @@ fn read_one_event(
             let event_type = buf[6] & !JS_EVENT_INIT;
             let number = buf[7];
             let value = i16::from_le_bytes([buf[4], buf[5]]);
-            state.apply_event(layout, event_type, number, value)
+            state.apply_event(layout, event_type, number, value, true)
         }
         _ => false,
     }
@@ -1280,6 +1352,7 @@ fn read_one_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input_state::PadRawEvent;
 
     fn empty_pool() -> PadPool {
         PadPool {
@@ -1325,6 +1398,48 @@ mod tests {
             .unwrap_err()
             .kind(),
             io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn normal_event_polling_stores_compact_raw_without_debug_strings() {
+        let mut state = PadState::default();
+
+        assert!(state.apply_event(PadLayout::Generic, JS_EVENT_BUTTON, 0, 1, false));
+
+        assert!(state.btn_a);
+        assert_eq!(
+            state.last_raw_event,
+            Some(PadRawEvent {
+                event_type: JS_EVENT_BUTTON,
+                number: 0,
+                value: 1,
+            })
+        );
+        assert!(state.last_raw.is_empty());
+        assert!(state.last_event_label.is_empty());
+
+        let merged = merge_pad_states(&[&state]);
+        assert_eq!(merged.last_raw_event, state.last_raw_event);
+        assert!(merged.last_raw.is_empty());
+        assert!(merged.last_event_label.is_empty());
+    }
+
+    #[test]
+    fn debug_event_polling_formats_raw_and_event_labels() {
+        let mut state = PadState::default();
+
+        assert!(state.apply_event(PadLayout::Generic, JS_EVENT_BUTTON, 0, 1, true));
+
+        assert_eq!(state.last_raw, "type=1 num=0 val=1");
+        assert_eq!(state.last_event_label, "A down (js btn 0)");
+        assert_eq!(
+            state.last_raw_event,
+            Some(PadRawEvent {
+                event_type: JS_EVENT_BUTTON,
+                number: 0,
+                value: 1,
+            })
         );
     }
 }

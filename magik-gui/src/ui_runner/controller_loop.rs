@@ -23,7 +23,7 @@ pub(super) fn run_controller_loop(
         pad.len()
     );
     while secs == 0 || start.elapsed().as_secs() < secs {
-        if pad.poll() {
+        if pad.poll_with_debug_labels(true) {
             sync_bridge(&app, &pad);
             window.request_redraw();
         }
