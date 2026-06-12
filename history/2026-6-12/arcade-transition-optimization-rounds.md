@@ -119,3 +119,21 @@ bit-mask expression as the generic transition gate.
 | round 20 focused mask-blit | 720 | 16391 | 16515 | 14 | 1 | 28644 |
 
 `mask-blit` is now inside the p95 60fps target.
+
+## Round 21 - Direct sprite-multiplex transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-SPRITE-MULTIPLEX-R21-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition sprite-multiplex --transition-ms 220 --visual-captures 0
+```
+
+This moves `sprite-multiplex` into a direct RGB565 binary selection arm using
+the same multiplex hash as the generic gate.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| transition mega scan sprite-multiplex segment | 88 | 33306 | 34629 | 88 | 88 | 32388 |
+| round 21 focused sprite-multiplex | 720 | 16386 | 16489 | 16 | 1 | 28712 |
+
+`sprite-multiplex` is now inside the p95 60fps target.
