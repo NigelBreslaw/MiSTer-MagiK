@@ -223,7 +223,7 @@ pub(super) fn slint_game_systems(
         .map(|system| slint_ui::launcher::GameSystem {
             id: system.id.clone().into(),
             title: system.title.clone().into(),
-            count: catalog.system_preview_game_count(&system.id) as i32,
+            count: catalog.system_game_count(&system.id) as i32,
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
@@ -245,7 +245,7 @@ pub(super) fn active_system_game_slice<'a>(
     nav: &LauncherNav,
 ) -> &'a [ArcadeGameEntry] {
     active_system(catalog, nav)
-        .map(|system| catalog.system_preview_game_slice(&system.id))
+        .map(|system| catalog.system_game_slice(&system.id))
         .unwrap_or(&[])
 }
 

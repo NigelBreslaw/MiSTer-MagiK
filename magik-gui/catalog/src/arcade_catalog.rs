@@ -72,16 +72,19 @@ pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Vec<ArcadeGameEntry>,
     pub systems: Vec<GameSystemEntry>,
+    games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
     preview_games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
 }
 
 impl ArcadeCatalog {
     pub fn new(root: PathBuf, games: Vec<ArcadeGameEntry>, systems: Vec<GameSystemEntry>) -> Self {
+        let games_by_system = games_by_system(&games);
         let preview_games_by_system = preview_games_by_system(&games);
         Self {
             root,
             games,
             systems,
+            games_by_system,
             preview_games_by_system,
         }
     }
@@ -103,25 +106,22 @@ impl ArcadeCatalog {
     }
 
     pub fn system_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
-        self.games
-            .iter()
-            .filter(|g| g.system_id == system_id)
-            .cloned()
-            .collect()
+        self.system_game_slice(system_id).to_vec()
     }
 
     pub fn system_game_count(&self, system_id: &str) -> usize {
-        self.games
-            .iter()
-            .filter(|g| g.system_id == system_id)
-            .count()
+        self.system_game_slice(system_id).len()
     }
 
     pub fn system_game_at(&self, system_id: &str, index: usize) -> Option<&ArcadeGameEntry> {
-        self.games
-            .iter()
-            .filter(|g| g.system_id == system_id)
-            .nth(index)
+        self.system_game_slice(system_id).get(index)
+    }
+
+    pub fn system_game_slice(&self, system_id: &str) -> &[ArcadeGameEntry] {
+        self.games_by_system
+            .get(system_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
@@ -142,6 +142,17 @@ impl ArcadeCatalog {
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
+}
+
+fn games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
+    let mut by_system: HashMap<String, Vec<ArcadeGameEntry>> = HashMap::new();
+    for game in games {
+        by_system
+            .entry(game.system_id.clone())
+            .or_default()
+            .push(game.clone());
+    }
+    by_system
 }
 
 fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
@@ -1107,6 +1118,28 @@ mod tests {
             catalog.system_preview_game_at("arcade", 1).map(|game| game.title),
             Some("1943".into())
         );
+    }
+
+    #[test]
+    fn system_game_count_includes_games_without_preview_images() {
+        let root = PathBuf::from("/media/fat/_Arcade");
+        let systems = vec![GameSystemEntry {
+            id: "amiga".into(),
+            title: "Amiga".into(),
+            count: 1,
+        }];
+        let games = vec![ArcadeGameEntry {
+            title: "Agony".into(),
+            mra_path: "magik-plan:amiga-agony".into(),
+            image_path: String::new(),
+            has_image: false,
+            system_id: "amiga".into(),
+        }];
+        let catalog = ArcadeCatalog::new(root, games, systems);
+
+        assert_eq!(catalog.system_game_count("amiga"), 1);
+        assert_eq!(catalog.system_game_slice("amiga").len(), 1);
+        assert_eq!(catalog.system_preview_game_count("amiga"), 0);
     }
 
     #[test]

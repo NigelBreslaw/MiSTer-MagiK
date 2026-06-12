@@ -422,7 +422,7 @@ impl LauncherNav {
             .get(self.selected)
             .map(|system| system.id.as_str())
             .unwrap_or("");
-        let count = catalog.system_preview_game_count(system_id);
+        let count = catalog.system_game_count(system_id);
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Home;
@@ -447,7 +447,7 @@ impl LauncherNav {
 
         if rising(now.btn_a, self.prev.btn_a) {
             return catalog
-                .system_preview_game_at(system_id, self.arcade.selected)
+                .system_game_at(system_id, self.arcade.selected)
                 .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
                     path: Some(game.mra_path.clone()),
@@ -914,6 +914,7 @@ pub fn reboot_mister() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arcade_catalog::{ArcadeGameEntry, GameSystemEntry};
     use std::sync::Mutex;
 
     static LAUNCH_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -1007,12 +1008,56 @@ mod tests {
         assert!(nav.is_settled(), "arcade nav did not settle");
     }
 
+    fn image_less_amiga_catalog() -> ArcadeCatalog {
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            vec![ArcadeGameEntry {
+                title: "Agony".into(),
+                mra_path: "magik-plan:amiga-agony".into(),
+                image_path: String::new(),
+                has_image: false,
+                system_id: "amiga".into(),
+            }],
+            vec![GameSystemEntry {
+                id: "amiga".into(),
+                title: "Amiga".into(),
+                count: 1,
+            }],
+        )
+    }
+
     #[test]
     fn arcade_opens_with_first_row_selected() {
         let nav = ArcadeNav::new();
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.visual_index, 0.0);
         assert_eq!(nav.scroll_y, 0);
+    }
+
+    #[test]
+    fn launcher_launches_image_less_system_games() {
+        let catalog = image_less_amiga_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+
+        let mut press_a = PadState::default();
+        press_a.btn_a = true;
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.screen, Screen::Arcade);
+
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(16),
+                &catalog
+            )
+            .is_none());
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
+            .expect("image-less game should launch");
+
+        assert_eq!(event.action, LauncherAction::LaunchGame);
+        assert_eq!(event.path.as_deref(), Some("magik-plan:amiga-agony"));
     }
 
     #[test]

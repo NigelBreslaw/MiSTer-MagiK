@@ -136,7 +136,7 @@ pub(super) fn launcher_bench_step(
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             } else {
                 nav.screen = Screen::Arcade;
-                let game_count = catalog.system_preview_game_count(&catalog.systems[selected].id);
+                let game_count = catalog.system_game_count(&catalog.systems[selected].id);
                 nav.arcade.selected = nav.arcade.selected.min(game_count.saturating_sub(1));
                 nav.arcade.snap_to_selected();
                 keep_bench_arcade_visible(
@@ -281,7 +281,7 @@ pub(super) fn launcher_bench_active_game_count(
         return Some(count);
     }
     let system = catalog.systems.get(nav.selected)?;
-    Some(catalog.system_preview_game_count(&system.id))
+    Some(catalog.system_game_count(&system.id))
 }
 
 pub(super) fn keep_bench_home_visible(scroll_x: &mut i32, selected: usize, count: usize) {
