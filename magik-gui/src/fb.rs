@@ -19,7 +19,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ const PAL_VSYNC_FALLBACK_US: u64 = 20_000;
 const VSYNC_GRACE_US: u64 = 1_500;
 const PERIOD_ALPHA_NUM: u64 = 1;
 const PERIOD_ALPHA_DEN: u64 = 8;
+const VSYNC_WORKER_QUEUE_DEPTH: usize = 1;
 
 #[derive(Clone, Debug)]
 pub enum VsyncWaitStatus {
@@ -133,26 +134,10 @@ impl VsyncPacer {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3);
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(VSYNC_WORKER_QUEUE_DEPTH);
         thread::Builder::new()
             .name("mister-vsync".into())
-            .spawn(move || {
-                let fb0 = match OpenOptions::new().read(true).write(true).open("/dev/fb0") {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let _ = tx.send(VsyncWaitStatus::Error {
-                            wait_us: 0,
-                            message: format!("open /dev/fb0: {e}"),
-                        });
-                        return;
-                    }
-                };
-                loop {
-                    if tx.send(wait_vsync_fd(fb0.as_raw_fd())).is_err() {
-                        break;
-                    }
-                }
-            })
+            .spawn(move || run_vsync_worker(tx, period_us))
             .expect("spawn vsync worker");
 
         Self {
@@ -284,6 +269,36 @@ impl VsyncPacer {
             miss_streak: self.miss_streak,
             message,
         }
+    }
+}
+
+fn run_vsync_worker(tx: SyncSender<VsyncWaitStatus>, fallback_period_us: u64) {
+    let fb0 = match OpenOptions::new().read(true).write(true).open("/dev/fb0") {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tx.send(VsyncWaitStatus::Error {
+                wait_us: 0,
+                message: format!("open /dev/fb0: {e}"),
+            });
+            return;
+        }
+    };
+    loop {
+        let status = wait_vsync_fd(fb0.as_raw_fd());
+        let backoff = vsync_worker_backoff(&status, fallback_period_us);
+        if tx.send(status).is_err() {
+            break;
+        }
+        if let Some(backoff) = backoff {
+            thread::sleep(backoff);
+        }
+    }
+}
+
+fn vsync_worker_backoff(status: &VsyncWaitStatus, fallback_period_us: u64) -> Option<Duration> {
+    match status {
+        VsyncWaitStatus::Error { .. } => Some(Duration::from_micros(fallback_period_us)),
+        VsyncWaitStatus::Hit { .. } | VsyncWaitStatus::Timeout { .. } => None,
     }
 }
 
@@ -1312,6 +1327,82 @@ mod tests {
             errors: 0,
             fallback_frames: 0,
         }
+    }
+
+    #[test]
+    fn vsync_worker_channel_is_bounded() {
+        let (tx, _rx) = mpsc::sync_channel::<VsyncWaitStatus>(VSYNC_WORKER_QUEUE_DEPTH);
+        tx.try_send(VsyncWaitStatus::Timeout { wait_us: 1 })
+            .expect("first status fits");
+        assert!(
+            tx.try_send(VsyncWaitStatus::Timeout { wait_us: 2 })
+                .is_err(),
+            "second status must not queue behind an unread frame"
+        );
+    }
+
+    #[test]
+    fn vsync_worker_backs_off_only_after_errors() {
+        assert_eq!(
+            vsync_worker_backoff(
+                &VsyncWaitStatus::Error {
+                    wait_us: 0,
+                    message: "ioctl failed".to_string()
+                },
+                DEFAULT_VSYNC_FALLBACK_US
+            ),
+            Some(Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US))
+        );
+        assert_eq!(
+            vsync_worker_backoff(&VsyncWaitStatus::Timeout { wait_us: 16_667 }, 123),
+            None
+        );
+        assert_eq!(
+            vsync_worker_backoff(
+                &VsyncWaitStatus::Hit {
+                    wait_us: 16_000,
+                    at: Instant::now()
+                },
+                123
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn repeated_vsync_errors_use_fallback_pace() {
+        let (tx, rx) = mpsc::sync_channel(VSYNC_WORKER_QUEUE_DEPTH);
+        let mut pacer = VsyncPacer {
+            rx,
+            period_us: DEFAULT_VSYNC_FALLBACK_US,
+            last_hit_at: None,
+            last_frame_at: Instant::now() - Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US),
+            miss_streak: 0,
+            max_miss_streak: 3,
+            observed_max_miss_streak: 0,
+            hits: 0,
+            timeouts: 0,
+            errors: 0,
+            fallback_frames: 0,
+        };
+
+        for expected in 1..=3 {
+            tx.try_send(VsyncWaitStatus::Error {
+                wait_us: 0,
+                message: format!("ioctl failed {expected}"),
+            })
+            .expect("queue is drained every wait");
+            pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
+            let pace = pacer.wait();
+            assert_eq!(pace.source, VsyncPaceSource::Error);
+            assert_eq!(pace.miss_streak, expected);
+            let expected_message = format!("ioctl failed {expected}");
+            assert_eq!(pace.message.as_deref(), Some(expected_message.as_str()));
+        }
+
+        assert_eq!(pacer.errors(), 3);
+        assert_eq!(pacer.fallback_frames(), 3);
+        assert_eq!(pacer.max_miss_streak(), 3);
     }
 
     #[test]
