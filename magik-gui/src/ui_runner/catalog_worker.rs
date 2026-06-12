@@ -13,27 +13,47 @@ pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<Catal
                     detail: detail.to_string(),
                 });
             };
-            let mut cached_catalog_ready = false;
+            let refresh_requested = catalog_refresh_requested();
+            let mut cache_state = CatalogCacheState::Missing;
             match library_db::load_arcade_catalog_from_sqlite(&root) {
                 Ok(loaded) => {
-                    cached_catalog_ready = !loaded.catalog.games.is_empty();
-                    let _ = tx.send(CatalogWorkerMessage::Ready {
-                        catalog: loaded.catalog,
-                        summary: None,
-                        load_us: loaded.us,
-                    });
+                    if loaded.catalog.games.is_empty() {
+                        cache_state = CatalogCacheState::Empty;
+                    } else {
+                        cache_state = CatalogCacheState::Ready;
+                        let _ = tx.send(CatalogWorkerMessage::Ready {
+                            catalog: loaded.catalog,
+                            summary: None,
+                            load_us: loaded.us,
+                        });
+                    }
                 }
                 Err(e) => {
                     eprintln!("library catalog cache load failed: {e}");
-                    let _ = tx.send(CatalogWorkerMessage::Progress {
-                        title: "Indexing library".to_string(),
-                        detail: "No cached catalog; scanning library...".to_string(),
-                    });
                 }
             }
-            if cached_catalog_ready && !catalog_refresh_requested() {
-                let _ = tx.send(CatalogWorkerMessage::Done);
-                return;
+            match catalog_worker_plan(cache_state, refresh_requested) {
+                CatalogWorkerPlan::UseCacheOnly => {
+                    let _ = tx.send(CatalogWorkerMessage::Done);
+                    return;
+                }
+                CatalogWorkerPlan::ReportMissingCache { title } => {
+                    let _ = tx.send(CatalogWorkerMessage::Progress {
+                        title: title.to_string(),
+                        detail: "Run mister-magik-fb library-refresh to build the library cache."
+                            .to_string(),
+                    });
+                    let _ = tx.send(CatalogWorkerMessage::Done);
+                    return;
+                }
+                CatalogWorkerPlan::RefreshInProcess => {
+                    if cache_state != CatalogCacheState::Ready {
+                        let _ = tx.send(CatalogWorkerMessage::Progress {
+                            title: "Indexing library".to_string(),
+                            detail: "No cached catalog; scanning library...".to_string(),
+                        });
+                    }
+                }
             }
             let summary = match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
                 Ok(summary) => Some(summary),
@@ -47,7 +67,7 @@ pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<Catal
                 }
             };
             if let Some(summary) = summary.as_ref().filter(|summary| summary.skipped) {
-                if cached_catalog_ready {
+                if cache_state == CatalogCacheState::Ready {
                     let _ = tx.send(CatalogWorkerMessage::Unchanged {
                         summary: summary.clone(),
                     });
@@ -81,6 +101,38 @@ pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<Catal
     rx
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogCacheState {
+    Ready,
+    Empty,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogWorkerPlan {
+    UseCacheOnly,
+    ReportMissingCache { title: &'static str },
+    RefreshInProcess,
+}
+
+fn catalog_worker_plan(
+    cache_state: CatalogCacheState,
+    refresh_requested: bool,
+) -> CatalogWorkerPlan {
+    if refresh_requested {
+        return CatalogWorkerPlan::RefreshInProcess;
+    }
+    match cache_state {
+        CatalogCacheState::Ready => CatalogWorkerPlan::UseCacheOnly,
+        CatalogCacheState::Empty => CatalogWorkerPlan::ReportMissingCache {
+            title: "Library cache empty",
+        },
+        CatalogCacheState::Missing => CatalogWorkerPlan::ReportMissingCache {
+            title: "Library cache missing",
+        },
+    }
+}
+
 pub(super) enum CatalogWorkerMessage {
     Progress {
         title: String,
@@ -109,4 +161,47 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
     let detail = detail.to_string();
     boot_analytics::event(name, format!("since_run_ui_ms={elapsed_ms} {detail}"));
     println!("startup_timing\t{name}\t{}ms\t{detail}", elapsed_ms);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_worker_uses_cached_database_without_refresh() {
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Ready, false),
+            CatalogWorkerPlan::UseCacheOnly
+        );
+    }
+
+    #[test]
+    fn catalog_worker_reports_missing_cache_without_refresh() {
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Missing, false),
+            CatalogWorkerPlan::ReportMissingCache {
+                title: "Library cache missing"
+            }
+        );
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Empty, false),
+            CatalogWorkerPlan::ReportMissingCache {
+                title: "Library cache empty"
+            }
+        );
+    }
+
+    #[test]
+    fn catalog_worker_refreshes_only_when_requested() {
+        for state in [
+            CatalogCacheState::Ready,
+            CatalogCacheState::Empty,
+            CatalogCacheState::Missing,
+        ] {
+            assert_eq!(
+                catalog_worker_plan(state, true),
+                CatalogWorkerPlan::RefreshInProcess
+            );
+        }
+    }
 }

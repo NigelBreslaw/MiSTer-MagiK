@@ -663,6 +663,11 @@ static bool write_launcher_script(const launcher_command_t *launcher_cmd)
 		         "export MISTER_PROFILE=summary\n"
 		         "export MISTER_PROFILE_FILE=/tmp/mister-magik-frame-profile.tsv\n"
 		         "export MISTER_BOOT_FRAME_PROFILE_FILE=/tmp/mister-magik-launcher-frame-profile.tsv\n"
+		         "if [ -s /media/fat/mister-magik/library.sqlite3 ]; then\n"
+		         "  nice -n 10 \"$MISTER_MAGIK_PATH\" library-refresh >/tmp/mister-magik-library-refresh.log 2>&1 &\n"
+		         "else\n"
+		         "  \"$MISTER_MAGIK_PATH\" library-refresh >/tmp/mister-magik-library-refresh.log 2>&1 || true\n"
+		         "fi\n"
 		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
 		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-slint.log 2>&1\n",
 		         launcher_cmd->scene, launcher_cmd->secs);
@@ -674,6 +679,11 @@ static bool write_launcher_script(const launcher_command_t *launcher_cmd)
 		         "export LC_ALL=en_US.UTF-8\n"
 		         "export HOME=/root\n"
 		         "export MISTER_MAGIK_PARENT=main-mister\n"
+		         "if [ -s /media/fat/mister-magik/library.sqlite3 ]; then\n"
+		         "  nice -n 10 \"$MISTER_MAGIK_PATH\" library-refresh >/tmp/mister-magik-library-refresh.log 2>&1 &\n"
+		         "else\n"
+		         "  \"$MISTER_MAGIK_PATH\" library-refresh >/tmp/mister-magik-library-refresh.log 2>&1 || true\n"
+		         "fi\n"
 		         "printf '\\033[0m\\033[?25l\\033[37m\\033[40m\\033[2J\\033[H'\n"
 		         "exec \"$MISTER_MAGIK_PATH\" ui \"%s\" \"%s\" >/tmp/mister-magik-slint.log 2>&1\n",
 		         launcher_cmd->scene, launcher_cmd->secs);

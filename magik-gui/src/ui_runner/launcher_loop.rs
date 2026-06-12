@@ -192,13 +192,17 @@ pub(super) fn run_launcher_loop(
         } else {
             "".into()
         }
-    } else {
+    } else if catalog_refresh {
         "Indexing library".into()
+    } else {
+        "Library cache missing".into()
     });
     bridge.set_catalog_scan_detail(if catalog_ready {
         format!("Using cached {} games", catalog.len()).into()
-    } else {
+    } else if catalog_refresh {
         "Starting scan...".into()
+    } else {
+        "Run mister-magik-fb library-refresh to build the library cache.".into()
     });
     sync_bridge_launcher(
         &app,
@@ -354,11 +358,13 @@ pub(super) fn run_launcher_loop(
                     }
                     CatalogWorkerMessage::Done => {
                         catalog_refresh_done = true;
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_catalog_scan_visible(false);
-                        bridge.set_catalog_scan_title("".into());
-                        bridge.set_catalog_scan_detail("".into());
-                        full_bridge_dirty = true;
+                        if catalog_ready {
+                            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                            bridge.set_catalog_scan_visible(false);
+                            bridge.set_catalog_scan_title("".into());
+                            bridge.set_catalog_scan_detail("".into());
+                            full_bridge_dirty = true;
+                        }
                     }
                 }
             }

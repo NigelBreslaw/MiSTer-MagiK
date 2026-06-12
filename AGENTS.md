@@ -233,6 +233,12 @@ scripts/run-rust.sh launcher 0
 # Prefer scripts/run-rust.sh for dev runs; it stops stale owners and starts the
 # already-deployed binary without rebuilding or copying.
 
+# Build/update the SQLite library cache outside the UI hot path. Production
+# MiSTer_MagiK launcher scripts block for the first missing cache, then run
+# later refreshes in the background before execing the Slint UI; the UI process
+# refreshes in-process only with MISTER_CATALOG_REFRESH=1.
+scripts/mister run "/media/fat/mister-magik/mister-magik-fb library-refresh"
+
 # Restore stock MiSTer menu boot
 scripts/restore-stock-boot.sh
 

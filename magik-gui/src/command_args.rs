@@ -13,6 +13,7 @@ pub const COMMANDS: &[&str] = &[
     "vsync-probe",
     "cpu-profile-smoke",
     "input",
+    "library-refresh",
     "library-scan-bench",
     "preview-cache",
     "audio-tone",
@@ -65,6 +66,7 @@ mod tests {
 
     #[test]
     fn recognizes_explicit_commands() {
+        assert!(COMMANDS.contains(&"library-refresh"));
         for command in COMMANDS {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),

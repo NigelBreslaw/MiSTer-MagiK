@@ -13,6 +13,7 @@
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
 //!     preview-cache      build resized/raw screenshot cache assets
+//!     library-refresh    build/update the SQLite library cache
 //!   Benchmarks:
 //!     scenes             list Slint scene names
 //!     effects            list framebuffer effect benchmark names
@@ -93,6 +94,11 @@ fn main() {
         return;
     }
 
+    if cmd == "library-refresh" {
+        run_library_refresh();
+        return;
+    }
+
     if cmd == "preview-transitions" {
         print_preview_transitions();
         return;
@@ -135,6 +141,31 @@ fn print_preview_transitions() {
         "{}",
         screenshot_transitions::PreviewTransitionEffect::labels()
     );
+}
+
+fn run_library_refresh() {
+    let mut progress = |title: &str, detail: &str| {
+        println!("library_refresh\tprogress\t{title}\t{detail}");
+    };
+    match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
+        Ok(summary) => {
+            println!(
+                "library_refresh\tdone\tskipped={} bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                summary.skipped,
+                summary.bytes,
+                summary.scan_us,
+                summary.import_us,
+                summary.discoveries,
+                summary.normal_files,
+                summary.containers,
+                summary.entries
+            );
+        }
+        Err(e) => {
+            eprintln!("library_refresh\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn run_cpu_profile_smoke() {
