@@ -98,6 +98,20 @@ pub enum PayloadDisposition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CollectionListing {
+    pub entry_path: &'static str,
+    pub genre: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CollectionRule {
+    pub archive_extensions: &'static [&'static str],
+    pub file_name_contains: &'static [&'static str],
+    pub listings: &'static [CollectionListing],
+    pub provenance: RuleProvenance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IgnoreReason {
     Bios,
     CueTrack,
@@ -132,6 +146,8 @@ pub struct LaunchProfile {
     pub core_path: Option<&'static str>,
     pub game_dirs: Vec<&'static str>,
     pub payload_rules: Vec<PayloadRule>,
+    pub archive_entry_rules: Vec<PayloadRule>,
+    pub collection_rules: Vec<CollectionRule>,
     pub ignore_rules: Vec<IgnoreRule>,
     pub provenance: RuleProvenance,
 }
@@ -140,6 +156,9 @@ pub struct LaunchProfile {
 pub enum ProfilePathClass {
     Payload {
         rule: PayloadRule,
+    },
+    Collection {
+        rule: CollectionRule,
     },
     Ignored {
         reason: IgnoreReason,
@@ -159,6 +178,12 @@ impl LaunchProfile {
             }
         }
 
+        for rule in &self.collection_rules {
+            if rule.matches(path) {
+                return ProfilePathClass::Collection { rule: *rule };
+            }
+        }
+
         let ext = path_ext(path);
         for rule in &self.payload_rules {
             if ext
@@ -170,6 +195,14 @@ impl LaunchProfile {
         }
 
         ProfilePathClass::NotMatched
+    }
+
+    pub fn classify_archive_entry(&self, path: &Path) -> Option<PayloadRule> {
+        let ext = path_ext(path)?;
+        self.archive_entry_rules
+            .iter()
+            .find(|rule| contains_ignore_ascii_case(rule.extensions, &ext))
+            .copied()
     }
 }
 
@@ -189,6 +222,25 @@ impl IgnoreRule {
     }
 }
 
+impl CollectionRule {
+    fn matches(&self, path: &Path) -> bool {
+        let Some(ext) = path_ext(path) else {
+            return false;
+        };
+        if !contains_ignore_ascii_case(self.archive_extensions, &ext) {
+            return false;
+        }
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        self.file_name_contains
+            .iter()
+            .all(|needle| name.contains(&needle.to_ascii_lowercase()))
+    }
+}
+
 pub fn builtin_profiles() -> Vec<LaunchProfile> {
     vec![
         mra_profile(),
@@ -196,6 +248,8 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
         saturn_profile(),
         psx_profile(),
         ao486_profile(),
+        amiga_profile(),
+        neogeo_profile(),
         cartridge_profile(
             "nes",
             "nes",
@@ -291,6 +345,8 @@ fn mra_profile() -> LaunchProfile {
         core_path: None,
         game_dirs: vec!["_Arcade"],
         payload_rules: vec![launcher_payload_rule()],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
         ignore_rules: Vec::new(),
         provenance: RuleProvenance::mra("Main mra_loader parses .mra as launch XML"),
     }
@@ -306,6 +362,8 @@ fn mgl_profile() -> LaunchProfile {
         core_path: None,
         game_dirs: vec!["_Games", "_DOS Games", "_Console (autoboot)"],
         payload_rules: vec![launcher_payload_rule()],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
         ignore_rules: Vec::new(),
         provenance: RuleProvenance::mgl("Main mra_loader parses .mgl file mount actions"),
     }
@@ -326,6 +384,8 @@ fn saturn_profile() -> LaunchProfile {
             disposition: PayloadDisposition::Playable,
             provenance: RuleProvenance::main("support/saturn/saturncdd.cpp accepts .cue and .chd"),
         }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
         ignore_rules: vec![
             IgnoreRule {
                 file_names: &["boot.rom", "cd_bios.rom"],
@@ -365,6 +425,8 @@ fn psx_profile() -> LaunchProfile {
                 "menu.cpp routes PSX disc images through psx_mount_cd",
             ),
         }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
         ignore_rules: vec![
             IgnoreRule {
                 file_names: &["boot.rom", "boot1.rom", "boot2.rom"],
@@ -402,6 +464,8 @@ fn ao486_profile() -> LaunchProfile {
                 "AO486 game MGLs attach disk media to slots rather than making raw media primary games",
             ),
         }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
         ignore_rules: vec![IgnoreRule {
             file_names: &["boot0.rom", "boot1.rom", "boot1_opensource.rom"],
             extensions: &[],
@@ -411,6 +475,110 @@ fn ao486_profile() -> LaunchProfile {
             ),
         }],
         provenance: RuleProvenance::main("Main detects AO486 by core name and routes image mounts through x86_set_image"),
+    }
+}
+
+fn amiga_profile() -> LaunchProfile {
+    LaunchProfile {
+        id: "amiga",
+        system_id: "amiga",
+        category: "Computer",
+        title: "Amiga",
+        core_name: "Minimig",
+        core_path: Some("_Computer/Minimig"),
+        game_dirs: vec!["Amiga"],
+        payload_rules: vec![
+            PayloadRule {
+                extensions: &["adf"],
+                mount: MountSpec::mount_image(0),
+                disposition: PayloadDisposition::Playable,
+                provenance: RuleProvenance::main(
+                    "menu.cpp Minimig floppy picker sets fs_pFileExt=ADF",
+                ),
+            },
+            PayloadRule {
+                extensions: &["hdf", "vhd", "img", "dsk", "iso", "cue", "chd"],
+                mount: MountSpec::mount_image(0),
+                disposition: PayloadDisposition::Playable,
+                provenance: RuleProvenance::main(
+                    "menu.cpp Minimig hardfile picker accepts HDF/VHD/IMG/DSK and ISO/CUE/CHD media",
+                ),
+            },
+        ],
+        archive_entry_rules: Vec::new(),
+        collection_rules: vec![CollectionRule {
+            archive_extensions: &["7z"],
+            file_name_contains: &["amigavision"],
+            listings: &[
+                CollectionListing {
+                    entry_path: "games/Amiga/listings/games.txt",
+                    genre: "AmigaVision",
+                },
+                CollectionListing {
+                    entry_path: "games/Amiga/listings/demos.txt",
+                    genre: "AmigaVision demos",
+                },
+            ],
+            provenance: RuleProvenance::magik(
+                "Explicit MagiK profile for AmigaVision archives: listings/games.txt and demos.txt enumerate launchable titles",
+            ),
+        }],
+        ignore_rules: vec![IgnoreRule {
+            file_names: &[
+                "kick.rom",
+                "kick13.rom",
+                "kick20.rom",
+                "kick31.rom",
+                "kickstart.rom",
+                "hrtmon.rom",
+            ],
+            extensions: &[],
+            reason: IgnoreReason::Bios,
+            provenance: RuleProvenance::main(
+                "support/minimig/minimig_config.cpp loads Kickstart/HRTmon ROMs as support files",
+            ),
+        }],
+        provenance: RuleProvenance::main(
+            "Main identifies the Minimig core and exposes Amiga floppy/hardfile media pickers",
+        ),
+    }
+}
+
+fn neogeo_profile() -> LaunchProfile {
+    let neo_rule = PayloadRule {
+        extensions: &["neo"],
+        mount: MountSpec::load_file(1),
+        disposition: PayloadDisposition::Playable,
+        provenance: RuleProvenance::mgl(
+            "Installed NeoGeo organizer MGLs use type=f index=1 for .neo payloads inside ZIPs",
+        ),
+    };
+
+    LaunchProfile {
+        id: "neogeo",
+        system_id: "neogeo",
+        category: "Arcade",
+        title: "NeoGeo",
+        core_name: "NeoGeo",
+        core_path: Some("_Console/NeoGeo"),
+        game_dirs: vec!["NEOGEO", "NeoGeo"],
+        payload_rules: vec![
+            PayloadRule {
+                extensions: &["zip"],
+                mount: MountSpec::load_file(1),
+                disposition: PayloadDisposition::Playable,
+                provenance: RuleProvenance::main(
+                    "menu.cpp enables SCANO_NEOGEO; file_io.cpp treats .zip sets as selectable NeoGeo entries",
+                ),
+            },
+            neo_rule,
+        ],
+        archive_entry_rules: vec![neo_rule],
+        collection_rules: Vec::new(),
+        ignore_rules: Vec::new(),
+        provenance: RuleProvenance::main(
+            "Main routes NeoGeo file selection through SCANO_NEOGEO and neogeo_romset_tx",
+        ),
     }
 }
 
@@ -440,6 +608,8 @@ fn cartridge_profile(
                 "Existing organizer MGLs use type=f index=1 for cartridge payloads",
             ),
         }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
         ignore_rules: Vec::new(),
         provenance: RuleProvenance::magik(
             "Explicit MagiK profile derived from Main game paths and installed MGL examples",
@@ -555,6 +725,60 @@ mod tests {
                     ..
                 }
             }
+        ));
+    }
+
+    #[test]
+    fn neogeo_profile_accepts_compressed_romsets_and_neo_entries() {
+        let profiles = builtin_profiles();
+        let neogeo = profile_for_game_dir(&profiles, "NEOGEO").expect("neogeo profile");
+
+        assert!(matches!(
+            neogeo.classify_path(Path::new(
+                "/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack.zip"
+            )),
+            ProfilePathClass::Payload { .. }
+        ));
+        assert!(matches!(
+            neogeo.classify_path(Path::new("/media/fat/games/NEOGEO/mslug3.neo")),
+            ProfilePathClass::Payload {
+                rule: PayloadRule {
+                    disposition: PayloadDisposition::Playable,
+                    mount: MountSpec {
+                        kind: MountKind::LoadFile,
+                        index: 1,
+                        ..
+                    },
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn amiga_profile_accepts_minimig_media_and_amigavision_collection() {
+        let profiles = builtin_profiles();
+        let amiga = profile_for_game_dir(&profiles, "Amiga").expect("amiga profile");
+
+        assert!(matches!(
+            amiga.classify_path(Path::new("/media/fat/games/Amiga/WheelDriverAkiko.adf")),
+            ProfilePathClass::Payload {
+                rule: PayloadRule {
+                    disposition: PayloadDisposition::Playable,
+                    mount: MountSpec {
+                        kind: MountKind::MountImage,
+                        index: 0,
+                        ..
+                    },
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            amiga.classify_path(Path::new(
+                "/media/fat/games/Amiga/AmigaVision-MiSTer-2026.04.26.7z"
+            )),
+            ProfilePathClass::Collection { .. }
         ));
     }
 

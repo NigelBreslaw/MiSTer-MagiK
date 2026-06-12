@@ -38,3 +38,33 @@ Device launch validation:
   `/media/fat/games/Saturn/sega-saturn-roms-a-d-chd/Akumajou Dracula X - Gekka no Yasoukyoku PT-BR V1.0.chd`.
 - Device was rebooted after each validation launch and returned with
   `mister-magik-fb`, `MiSTer_MagiK`, and `/dev/MiSTer_cmd` present.
+
+## Compressed Set Follow-Up
+
+After adding profile-scoped compressed set support, schema `13` rebuilt on the
+MiSTer with:
+
+- `normal_files=26585`, `containers=155`, `entries=281`,
+  `discoveries=10088`.
+- Full device refresh: `scan_us=51952828`, `import_us=42875639`.
+- No-change refresh after rebuild: `skipped=true`, `scan_us=15703382`.
+
+Final catalog counts from `/media/fat/mister-magik/library.sqlite3`:
+
+| System | Count |
+| --- | ---: |
+| `amiga` | 1562 |
+| `neogeo` | 281 |
+| `saturn` | 152 |
+| `arcade` | 2687 |
+
+Compressed sources verified:
+
+- AmigaVision:
+  `catalog-entry|amiga|1561`, launch ref
+  `/media/fat/games/Amiga/AmigaVision-MiSTer-2026.04.26.7z`.
+- NeoGeo:
+  `payloads profile_id='neogeo' entry_path IS NOT NULL` -> `281` ZIP64
+  `.neo` entries from `/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack.zip`.
+  Existing organizer MGLs cover those payloads, so final launch plans prefer the
+  `mgl` launchers instead of generating duplicate virtual plans.

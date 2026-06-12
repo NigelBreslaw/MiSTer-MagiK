@@ -5,14 +5,15 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use crate::launch_profiles::{
-    self, IgnoreReason, LaunchProfile, MountKind, PayloadDisposition, PayloadRule,
-    ProfilePathClass, RuleProvenance, RuleSourceKind,
+    self, CollectionListing, CollectionRule, IgnoreReason, LaunchProfile, MountKind,
+    PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
 };
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -38,7 +39,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 13;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -58,6 +59,8 @@ pub struct LibraryContainerEntry {
     pub file_path: String,
     pub entry_path: String,
     pub normalized_title: String,
+    pub profile_id: String,
+    pub rule: PayloadRule,
     pub compressed_size: Option<u64>,
     pub uncompressed_size: Option<u64>,
     pub crc32: Option<u32>,
@@ -73,6 +76,20 @@ pub enum ArchiveFormat {
     Lzh,
     Rar,
     Chd,
+}
+
+impl ArchiveFormat {
+    fn from_ext(ext: &str) -> Option<Self> {
+        match ext {
+            "zip" => Some(Self::Zip),
+            "7z" => Some(Self::SevenZip),
+            "lha" => Some(Self::Lha),
+            "lzh" => Some(Self::Lzh),
+            "rar" => Some(Self::Rar),
+            "chd" => Some(Self::Chd),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +203,8 @@ enum DiscoverySourceKind {
     Mra,
     Mgl,
     PayloadFile,
+    ArchiveEntry,
+    CatalogEntry,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -194,6 +213,8 @@ enum DiscoveryConfidence {
     MraCore,
     PayloadPath,
     Extension,
+    ArchiveToc,
+    CatalogMetadata,
 }
 
 #[derive(Clone)]
@@ -202,6 +223,11 @@ struct FoundFile {
     ext: String,
     size: u64,
     mtime_secs: i64,
+}
+
+struct ArchiveScan {
+    container: LibraryContainer,
+    entries: Vec<LibraryContainerEntry>,
 }
 
 pub fn run_scan_bench() {
@@ -319,7 +345,7 @@ pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunch
              JOIN games ON games.game_id = launch_plans.game_id
              LEFT JOIN profiles ON profiles.profile_id = launch_plans.profile_id
              LEFT JOIN payloads
-                    ON payloads.file_path = launch_plans.payload_path
+                    ON payloads.launch_ref = launch_plans.payload_path
                    AND payloads.profile_id = launch_plans.profile_id
              WHERE launch_plans.launch_ref = ?1
                AND launch_plans.launch_kind = 'virtual-mgl'",
@@ -390,11 +416,12 @@ fn load_arcade_catalog_from_sqlite_at(
              FROM games
              JOIN launch_plans ON launch_plans.game_id = games.game_id
              WHERE launch_plans.launch_ref != ''
-               AND launch_plans.launch_kind IN ('mra','mgl','virtual-mgl')
+               AND launch_plans.launch_kind IN ('mra','mgl','virtual-mgl','catalog-entry')
                AND (
                  lower(launch_plans.launch_ref) LIKE '%.mra'
                  OR lower(launch_plans.launch_ref) LIKE '%.mgl'
                  OR launch_plans.launch_kind='virtual-mgl'
+                 OR launch_plans.launch_kind='catalog-entry'
                )
              ORDER BY lower(games.title)",
         )
@@ -469,6 +496,13 @@ fn catalog_variant_group_key(row: &CatalogRow) -> String {
             return format!("mra:set:{}", normalize_id(group));
         }
         return format!("mra:title:{}", canonical_variant_title(&row.game.title));
+    }
+    if row.source_kind == "catalog-entry" {
+        return format!(
+            "catalog-entry:{}:{}",
+            row.game.mra_path,
+            normalize_id(&row.game.title)
+        );
     }
     format!("{}:{}", row.source_kind, row.game.mra_path)
 }
@@ -702,8 +736,8 @@ fn scan_library_with_progress(
     }
 
     let mut normal_files = Vec::new();
-    let containers = Vec::new();
-    let entries = Vec::new();
+    let mut containers = Vec::new();
+    let mut entries = Vec::new();
     let mut ignored_files = Vec::new();
     let mut discoveries = Vec::new();
     let classify_t = Instant::now();
@@ -746,6 +780,23 @@ fn scan_library_with_progress(
                         },
                 },
             )) => {
+                let mut has_archive_entries = false;
+                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                    let scan = scan_archive_toc(&f, format, profile);
+                    has_archive_entries = !scan.entries.is_empty();
+                    for entry in scan.entries {
+                        discoveries.push(discovery_from_profile_archive_entry(
+                            &entry,
+                            profile,
+                            &entry.rule,
+                        ));
+                        entries.push(entry);
+                    }
+                    containers.push(scan.container);
+                }
+                if has_archive_entries {
+                    continue;
+                }
                 normal_files.push(LibraryPayloadFile {
                     path: f.path.display().to_string(),
                     profile_id: profile.id.to_string(),
@@ -778,9 +829,15 @@ fn scan_library_with_progress(
                     profile_id: profile.id.to_string(),
                     reason: IgnoreReason::SupportArchive,
                     provenance: RuleProvenance::magik(
-                        "Attached media is indexed as payload support until a launcher references it",
+                    "Attached media is indexed as payload support until a launcher references it",
                     ),
                 });
+            }
+            Some((profile, ProfilePathClass::Collection { rule })) => {
+                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                    containers.push(scan_container_header(&f, format));
+                }
+                discoveries.extend(collection_discoveries_from_container(&f, profile, &rule));
             }
             Some((profile, ProfilePathClass::Ignored { reason, provenance })) => {
                 ignored_files.push(LibraryIgnoredFile {
@@ -1066,6 +1123,227 @@ fn build_directory_manifest(
         .collect()
 }
 
+fn scan_archive_toc(file: &FoundFile, format: ArchiveFormat, profile: &LaunchProfile) -> ArchiveScan {
+    let t = Instant::now();
+    let (status, entries) = match format {
+        ArchiveFormat::Zip => match scan_zip_central_directory(file, profile) {
+            Ok(entries) => (ArchiveScanStatus::Ok, entries),
+            Err(e) => (ArchiveScanStatus::Error(e), Vec::new()),
+        },
+        ArchiveFormat::SevenZip | ArchiveFormat::Lha | ArchiveFormat::Lzh | ArchiveFormat::Rar => {
+            (ArchiveScanStatus::Unsupported, Vec::new())
+        }
+        ArchiveFormat::Chd => (ArchiveScanStatus::HeaderOnly, Vec::new()),
+    };
+    ArchiveScan {
+        container: LibraryContainer {
+            file_path: file.path.display().to_string(),
+            format,
+            size: file.size,
+            mtime_secs: file.mtime_secs,
+            entry_count: entries.len() as u32,
+            scan_status: status,
+            scan_us: t.elapsed().as_micros() as u64,
+        },
+        entries,
+    }
+}
+
+fn scan_container_header(file: &FoundFile, format: ArchiveFormat) -> LibraryContainer {
+    LibraryContainer {
+        file_path: file.path.display().to_string(),
+        format,
+        size: file.size,
+        mtime_secs: file.mtime_secs,
+        entry_count: 0,
+        scan_status: ArchiveScanStatus::HeaderOnly,
+        scan_us: 0,
+    }
+}
+
+fn scan_zip_central_directory(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+) -> Result<Vec<LibraryContainerEntry>, String> {
+    let mut f = File::open(&file.path).map_err(|e| format!("open zip: {e}"))?;
+    let len = f.metadata().map_err(|e| format!("stat zip: {e}"))?.len();
+    if len < 22 {
+        return Err("zip too small".to_string());
+    }
+
+    let tail_len = len.min(66_000) as usize;
+    f.seek(SeekFrom::End(-(tail_len as i64)))
+        .map_err(|e| format!("seek zip tail: {e}"))?;
+    let mut tail = vec![0u8; tail_len];
+    f.read_exact(&mut tail)
+        .map_err(|e| format!("read zip tail: {e}"))?;
+    let Some(eocd) = find_eocd(&tail) else {
+        return Err("zip EOCD not found".to_string());
+    };
+
+    let mut cd_entries = le_u16(&tail[eocd + 10..eocd + 12]) as usize;
+    let mut cd_size = le_u32(&tail[eocd + 12..eocd + 16]) as u64;
+    let mut cd_offset = le_u32(&tail[eocd + 16..eocd + 20]) as u64;
+    if cd_offset == u32::MAX as u64
+        || cd_size == u32::MAX as u64
+        || cd_entries == u16::MAX as usize
+    {
+        let zip64 = read_zip64_central_directory_location(&mut f, &tail, eocd)?;
+        cd_entries = zip64.entries;
+        cd_size = zip64.size;
+        cd_offset = zip64.offset;
+    }
+    if cd_offset + cd_size > len {
+        return Err("zip central directory outside file".to_string());
+    }
+    let cd_size_usize = usize::try_from(cd_size)
+        .map_err(|_| "zip central directory too large to index".to_string())?;
+
+    f.seek(SeekFrom::Start(cd_offset))
+        .map_err(|e| format!("seek zip central directory: {e}"))?;
+    let mut cd = vec![0u8; cd_size_usize];
+    f.read_exact(&mut cd)
+        .map_err(|e| format!("read zip central directory: {e}"))?;
+
+    let mut entries = Vec::new();
+    let mut pos = 0usize;
+    let mut scanned = 0usize;
+    while pos + 46 <= cd.len() && scanned < cd_entries {
+        if le_u32(&cd[pos..pos + 4]) != 0x0201_4b50 {
+            return Err(format!("bad central directory signature at {pos}"));
+        }
+        scanned += 1;
+        let crc32 = le_u32(&cd[pos + 16..pos + 20]);
+        let compressed = le_u32(&cd[pos + 20..pos + 24]) as u64;
+        let uncompressed = le_u32(&cd[pos + 24..pos + 28]) as u64;
+        let name_len = le_u16(&cd[pos + 28..pos + 30]) as usize;
+        let extra_len = le_u16(&cd[pos + 30..pos + 32]) as usize;
+        let comment_len = le_u16(&cd[pos + 32..pos + 34]) as usize;
+        let name_start = pos + 46;
+        let name_end = name_start + name_len;
+        if name_end > cd.len() {
+            return Err("zip entry name outside central directory".to_string());
+        }
+        let name = String::from_utf8_lossy(&cd[name_start..name_end]).into_owned();
+        if !name.ends_with('/') && !name.starts_with("__MACOSX/") {
+            if let Some(rule) = profile.classify_archive_entry(Path::new(&name)) {
+                entries.push(LibraryContainerEntry {
+                    file_path: file.path.display().to_string(),
+                    entry_path: name.clone(),
+                    normalized_title: normalize_title(&name),
+                    profile_id: profile.id.to_string(),
+                    rule,
+                    compressed_size: Some(compressed),
+                    uncompressed_size: Some(uncompressed),
+                    crc32: Some(crc32),
+                    launchable: true,
+                    launch_ref: format!("{}/{}", file.path.display(), name),
+                });
+            }
+        }
+        pos = name_end + extra_len + comment_len;
+    }
+    Ok(entries)
+}
+
+struct ZipCentralDirectoryLocation {
+    entries: usize,
+    size: u64,
+    offset: u64,
+}
+
+fn read_zip64_central_directory_location(
+    f: &mut File,
+    tail: &[u8],
+    eocd: usize,
+) -> Result<ZipCentralDirectoryLocation, String> {
+    let locator = tail[..eocd]
+        .windows(4)
+        .rposition(|bytes| bytes == [0x50, 0x4b, 0x06, 0x07])
+        .ok_or_else(|| "zip64 EOCD locator not found".to_string())?;
+    if locator + 20 > tail.len() {
+        return Err("zip64 EOCD locator truncated".to_string());
+    }
+    let zip64_eocd_offset = le_u64(&tail[locator + 8..locator + 16]);
+    f.seek(SeekFrom::Start(zip64_eocd_offset))
+        .map_err(|e| format!("seek zip64 EOCD: {e}"))?;
+    let mut record = [0u8; 56];
+    f.read_exact(&mut record)
+        .map_err(|e| format!("read zip64 EOCD: {e}"))?;
+    if le_u32(&record[0..4]) != 0x0606_4b50 {
+        return Err("zip64 EOCD signature not found".to_string());
+    }
+    let entries = usize::try_from(le_u64(&record[32..40]))
+        .map_err(|_| "zip64 entry count too large to index".to_string())?;
+    Ok(ZipCentralDirectoryLocation {
+        entries,
+        size: le_u64(&record[40..48]),
+        offset: le_u64(&record[48..56]),
+    })
+}
+
+fn collection_discoveries_from_container(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+    rule: &CollectionRule,
+) -> Vec<GameDiscovery> {
+    let mut out = Vec::new();
+    for listing in rule.listings {
+        let text = match collection_listing_text(file, listing) {
+            Some(text) => text,
+            None => continue,
+        };
+        out.extend(collection_discoveries_from_listing_text(
+            file, profile, listing, &text,
+        ));
+    }
+    out
+}
+
+fn collection_listing_text(file: &FoundFile, listing: &CollectionListing) -> Option<String> {
+    let tool = std::env::var("MISTER_7ZA").unwrap_or_else(|_| "/media/fat/linux/7za".to_string());
+    let output = Command::new(tool)
+        .args(["e", "-so"])
+        .arg(&file.path)
+        .arg(listing.entry_path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn collection_discoveries_from_listing_text(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+    listing: &CollectionListing,
+    text: &str,
+) -> Vec<GameDiscovery> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|title| GameDiscovery {
+            source_path: format!("{}::{}::{title}", file.path.display(), listing.entry_path),
+            launch_ref: file.path.display().to_string(),
+            source_kind: DiscoverySourceKind::CatalogEntry,
+            title: title.to_string(),
+            category: profile.category.to_string(),
+            platform_id: profile.system_id.to_string(),
+            core_id: profile.core_name.to_string(),
+            hardware_id: profile.system_id.to_string(),
+            manufacturer: Some("Commodore".to_string()),
+            genre: Some(listing.genre.to_string()),
+            year: None,
+            setname: None,
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::CatalogMetadata,
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 struct GamelistMetadata {
     title: Option<String>,
@@ -1230,6 +1508,21 @@ fn match_stem(path: &str) -> String {
     )
 }
 
+fn parenthesized_setname(path: &str) -> Option<String> {
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    let open = stem.rfind('(')?;
+    let close = stem[open + 1..].find(')')? + open + 1;
+    let value = stem[open + 1..close].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(normalize_id(value))
+    }
+}
+
 fn discovery_from_profile_file(
     file: &FoundFile,
     profile: &LaunchProfile,
@@ -1326,6 +1619,38 @@ fn discovery_from_profile_file(
         image_path: None,
         has_image: false,
         confidence: profile_confidence(rule),
+    }
+}
+
+fn discovery_from_profile_archive_entry(
+    entry: &LibraryContainerEntry,
+    profile: &LaunchProfile,
+    rule: &PayloadRule,
+) -> GameDiscovery {
+    GameDiscovery {
+        source_path: format!("{}::{}", entry.file_path, entry.entry_path),
+        launch_ref: entry.launch_ref.clone(),
+        source_kind: DiscoverySourceKind::ArchiveEntry,
+        title: title_from_path(&entry.entry_path),
+        category: profile.category.to_string(),
+        platform_id: profile.system_id.to_string(),
+        core_id: profile.core_name.to_string(),
+        hardware_id: profile.system_id.to_string(),
+        manufacturer: None,
+        genre: None,
+        year: None,
+        setname: parenthesized_setname(&entry.entry_path),
+        parent: None,
+        image_path: None,
+        has_image: false,
+        confidence: match rule.provenance.kind {
+            RuleSourceKind::MainSource | RuleSourceKind::Mgl | RuleSourceKind::Mra => {
+                DiscoveryConfidence::ArchiveToc
+            }
+            RuleSourceKind::ConfStr | RuleSourceKind::MagikProfile => {
+                profile_confidence(rule)
+            }
+        },
     }
 }
 
@@ -1477,6 +1802,8 @@ fn confidence_str(confidence: DiscoveryConfidence) -> &'static str {
         DiscoveryConfidence::MraCore => "mra-core",
         DiscoveryConfidence::PayloadPath => "payload-path",
         DiscoveryConfidence::Extension => "extension",
+        DiscoveryConfidence::ArchiveToc => "archive-toc",
+        DiscoveryConfidence::CatalogMetadata => "catalog-metadata",
     }
 }
 
@@ -1749,11 +2076,11 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 entry.file_path.as_str(),
                 entry.entry_path.as_str(),
                 entry.launch_ref.as_str(),
-                Option::<&str>::None,
+                entry.profile_id.as_str(),
                 entry.normalized_title.as_str(),
-                Option::<&str>::None,
-                Option::<i64>::None,
-                Option::<i64>::None,
+                mount_kind_str(entry.rule.mount.kind),
+                entry.rule.mount.index as i64,
+                entry.rule.mount.delay_secs as i64,
                 if entry.launchable {
                     "candidate"
                 } else {
@@ -1764,8 +2091,8 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                     .or(entry.compressed_size)
                     .unwrap_or(0) as i64,
                 0i64,
-                "archive-toc",
-                "ZIP central directory header"
+                source_kind_name(entry.rule.provenance.kind),
+                entry.rule.provenance.detail
             ])
             .map_err(|e| format!("insert payload entry: {e}"))?;
         }
@@ -1851,7 +2178,9 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => {
                     Some(discovery.launch_ref.as_str())
                 }
-                DiscoverySourceKind::PayloadFile => None,
+                DiscoverySourceKind::PayloadFile
+                | DiscoverySourceKind::ArchiveEntry
+                | DiscoverySourceKind::CatalogEntry => None,
             };
             let payload_path = if launcher_path.is_none() {
                 Some(discovery.launch_ref.as_str())
@@ -2087,6 +2416,8 @@ fn discovery_unique_key(d: &GameDiscovery) -> String {
         }
         DiscoverySourceKind::Mgl => format!("payload:{}", d.launch_ref),
         DiscoverySourceKind::PayloadFile => format!("payload:{}", d.launch_ref),
+        DiscoverySourceKind::ArchiveEntry => format!("archive:{}", d.launch_ref),
+        DiscoverySourceKind::CatalogEntry => format!("catalog:{}:{}", d.launch_ref, d.title),
     }
 }
 
@@ -2102,9 +2433,10 @@ fn is_playable_discovery_with_coverage(
     match d.source_kind {
         DiscoverySourceKind::Mra => true,
         DiscoverySourceKind::Mgl => is_launcher_launch_ref(&d.launch_ref),
-        DiscoverySourceKind::PayloadFile => {
+        DiscoverySourceKind::PayloadFile | DiscoverySourceKind::ArchiveEntry => {
             !covered_payloads.contains(&normalize_launch_path(&d.launch_ref))
         }
+        DiscoverySourceKind::CatalogEntry => is_launcher_launch_ref(&d.launch_ref),
     }
 }
 
@@ -2131,14 +2463,19 @@ fn launch_kind_for_discovery(discovery: &GameDiscovery) -> &'static str {
     match discovery.source_kind {
         DiscoverySourceKind::Mra => "mra",
         DiscoverySourceKind::Mgl => "mgl",
-        DiscoverySourceKind::PayloadFile => "virtual-mgl",
+        DiscoverySourceKind::PayloadFile | DiscoverySourceKind::ArchiveEntry => "virtual-mgl",
+        DiscoverySourceKind::CatalogEntry => "catalog-entry",
     }
 }
 
 fn launch_ref_for_discovery(game_id: &str, discovery: &GameDiscovery) -> String {
     match discovery.source_kind {
-        DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => discovery.launch_ref.clone(),
-        DiscoverySourceKind::PayloadFile => virtual_launch_ref(game_id),
+        DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry => {
+            discovery.launch_ref.clone()
+        }
+        DiscoverySourceKind::PayloadFile | DiscoverySourceKind::ArchiveEntry => {
+            virtual_launch_ref(game_id)
+        }
     }
 }
 
@@ -2160,8 +2497,14 @@ fn is_launcher_launch_ref(path: &str) -> bool {
     }
     match path_ext(path).as_deref() {
         Some("mra" | "mgl") => !path.contains("::"),
+        Some("7z") => is_amigavision_archive_path(path),
         _ => false,
     }
+}
+
+fn is_amigavision_archive_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.contains("/games/amiga/") && lower.contains("amigavision") && lower.ends_with(".7z")
 }
 
 fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
@@ -2169,6 +2512,8 @@ fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
         DiscoverySourceKind::Mra => "mra",
         DiscoverySourceKind::Mgl => "mgl",
         DiscoverySourceKind::PayloadFile => "payload",
+        DiscoverySourceKind::ArchiveEntry => "archive-entry",
+        DiscoverySourceKind::CatalogEntry => "catalog-entry",
     }
 }
 
@@ -2306,7 +2651,9 @@ fn region_from_text(text: &str) -> Option<&'static str> {
 }
 
 fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
-    if discovery.category == "Arcade" {
+    if discovery.platform_id == "arcade"
+        || (discovery.category == "Arcade" && discovery.source_kind == DiscoverySourceKind::Mra)
+    {
         "arcade".to_string()
     } else if discovery.platform_id.is_empty() {
         "unknown".to_string()
@@ -2315,12 +2662,8 @@ fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
     }
 }
 
-fn system_title_for_discovery(discovery: &GameDiscovery, system_id: &str) -> String {
-    if discovery.core_id.trim().is_empty() || discovery.core_id == "unknown" {
-        system_id.to_string()
-    } else {
-        discovery.core_id.clone()
-    }
+fn system_title_for_discovery(_discovery: &GameDiscovery, system_id: &str) -> String {
+    arcade_catalog::system_title(system_id)
 }
 
 fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: &str) -> bool {
@@ -2328,7 +2671,9 @@ fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: &str) -> bo
         classify_profile_path(profiles, path),
         Some((
             _,
-            ProfilePathClass::Payload { .. } | ProfilePathClass::Ignored { .. }
+            ProfilePathClass::Payload { .. }
+                | ProfilePathClass::Collection { .. }
+                | ProfilePathClass::Ignored { .. }
         ))
     ) || path
         .file_name()
@@ -2373,6 +2718,29 @@ fn path_ext(path: &str) -> Option<String> {
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
+}
+
+fn find_eocd(buf: &[u8]) -> Option<usize> {
+    if buf.len() < 22 {
+        return None;
+    }
+    (0..=buf.len() - 22)
+        .rev()
+        .find(|&idx| buf[idx..idx + 4] == [0x50, 0x4b, 0x05, 0x06])
+}
+
+fn le_u16(bytes: &[u8]) -> u16 {
+    u16::from_le_bytes([bytes[0], bytes[1]])
+}
+
+fn le_u32(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn le_u64(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ])
 }
 
 fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
@@ -2615,6 +2983,115 @@ mod tests {
     }
 
     #[test]
+    fn catalog_entries_with_shared_collection_launch_ref_stay_separate() {
+        let rows = vec![
+            catalog_entry_row("Agony", "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+            catalog_entry_row("Alien Breed", "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+        ];
+
+        let games = collapse_catalog_variants(rows);
+
+        assert_eq!(games.len(), 2);
+        assert!(games.iter().any(|game| game.title == "Agony"));
+        assert!(games.iter().any(|game| game.title == "Alien Breed"));
+    }
+
+    #[test]
+    fn neogeo_zip_entries_generate_virtual_launches_and_system() {
+        let root = unique_temp_dir("neogeo-zip-entries");
+        let neogeo_dir = root.join("games/NEOGEO");
+        std::fs::create_dir_all(&neogeo_dir).expect("create neogeo dir");
+        let zip_path = neogeo_dir.join("Neo Geo Mister FGPA Ultra Pack.zip");
+        write_stored_zip(
+            &zip_path,
+            &[
+                (
+                    "Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo",
+                    b"neo",
+                ),
+                ("Neo Geo Mister FGPA Ultra Pack/readme.txt", b"ignore"),
+            ],
+        );
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+            optional_catalogs: false,
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.containers.len(), 1);
+        assert_eq!(scan.entries.len(), 1);
+        assert!(scan.normal_files.is_empty());
+        let discovery = scan
+            .discoveries
+            .iter()
+            .find(|d| d.source_kind == DiscoverySourceKind::ArchiveEntry)
+            .expect("archive entry discovery");
+        assert_eq!(discovery.platform_id, "neogeo");
+        assert!(discovery.launch_ref.ends_with(
+            "Neo Geo Mister FGPA Ultra Pack.zip/Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo"
+        ));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(loaded.rows, 1);
+        assert_eq!(loaded.catalog.games[0].system_id, "neogeo");
+        assert!(loaded.catalog.games[0].mra_path.starts_with("magik-plan:"));
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "neogeo" && system.count == 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_listing_entries_generate_visible_collection_games() {
+        let root = unique_temp_dir("amigavision-listing");
+        let db = root.join("library.sqlite3");
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "amiga")
+            .expect("amiga profile");
+        let listing = profile.collection_rules[0].listings[0];
+        let file = FoundFile {
+            path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+            ext: "7z".to_string(),
+            size: 5_208_842_481,
+            mtime_secs: 1,
+        };
+        let discoveries = collection_discoveries_from_listing_text(
+            &file,
+            profile,
+            &listing,
+            "Agony\nAlien Breed\n",
+        );
+
+        assert_eq!(unique_discovery_count(&discoveries), 2);
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries)).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(loaded.rows, 2);
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .all(|game| game.system_id == "amiga"));
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "amiga" && system.count == 2));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn directory_manifest_validation_recomputes_child_signature() {
         let root = unique_temp_dir("manifest-child-signature");
         let rom_dir = root.join("games/NES");
@@ -2781,6 +3258,100 @@ mod tests {
             setname: String::new(),
             parent: String::new(),
         }
+    }
+
+    fn catalog_entry_row(title: &str, path: &str) -> CatalogRow {
+        CatalogRow {
+            game: ArcadeGameEntry {
+                title: title.to_string(),
+                mra_path: path.to_string(),
+                image_path: String::new(),
+                has_image: false,
+                system_id: "amiga".to_string(),
+            },
+            source_kind: "catalog-entry".to_string(),
+            setname: String::new(),
+            parent: String::new(),
+        }
+    }
+
+    fn write_stored_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let mut out = Vec::new();
+        let mut central = Vec::new();
+        for (name, data) in entries {
+            let local_offset = out.len() as u32;
+            push_u32(&mut out, 0x0403_4b50);
+            push_u16(&mut out, 20);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u32(&mut out, 0);
+            push_u32(&mut out, data.len() as u32);
+            push_u32(&mut out, data.len() as u32);
+            push_u16(&mut out, name.len() as u16);
+            push_u16(&mut out, 0);
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(data);
+
+            push_u32(&mut central, 0x0201_4b50);
+            push_u16(&mut central, 20);
+            push_u16(&mut central, 20);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u32(&mut central, 0);
+            push_u32(&mut central, data.len() as u32);
+            push_u32(&mut central, data.len() as u32);
+            push_u16(&mut central, name.len() as u16);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u32(&mut central, 0);
+            push_u32(&mut central, local_offset);
+            central.extend_from_slice(name.as_bytes());
+        }
+        let central_offset = out.len() as u32;
+        let central_size = central.len() as u32;
+        out.extend_from_slice(&central);
+        let zip64_eocd_offset = out.len() as u64;
+        push_u32(&mut out, 0x0606_4b50);
+        push_u64(&mut out, 44);
+        push_u16(&mut out, 45);
+        push_u16(&mut out, 45);
+        push_u32(&mut out, 0);
+        push_u32(&mut out, 0);
+        push_u64(&mut out, entries.len() as u64);
+        push_u64(&mut out, entries.len() as u64);
+        push_u64(&mut out, central_size as u64);
+        push_u64(&mut out, central_offset as u64);
+        push_u32(&mut out, 0x0706_4b50);
+        push_u32(&mut out, 0);
+        push_u64(&mut out, zip64_eocd_offset);
+        push_u32(&mut out, 1);
+        push_u32(&mut out, 0x0605_4b50);
+        push_u16(&mut out, 0);
+        push_u16(&mut out, 0);
+        push_u16(&mut out, u16::MAX);
+        push_u16(&mut out, u16::MAX);
+        push_u32(&mut out, u32::MAX);
+        push_u32(&mut out, u32::MAX);
+        push_u16(&mut out, 0);
+        std::fs::write(path, out).expect("write zip fixture");
+    }
+
+    fn push_u16(out: &mut Vec<u8>, value: u16) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u64(out: &mut Vec<u8>, value: u64) {
+        out.extend_from_slice(&value.to_le_bytes());
     }
 
     fn mgl(source_path: &str, launch_ref: &str) -> GameDiscovery {
