@@ -311,9 +311,16 @@ pub fn load_arcade_catalog_from_sqlite(
     root: impl AsRef<Path>,
 ) -> Result<LibraryCatalogLoad, String> {
     let path = default_sqlite_path();
+    load_arcade_catalog_from_sqlite_at(root, &path)
+}
+
+fn load_arcade_catalog_from_sqlite_at(
+    root: impl AsRef<Path>,
+    path: &Path,
+) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let t = Instant::now();
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
@@ -336,8 +343,13 @@ pub fn load_arcade_catalog_from_sqlite(
                     COALESCE(parent,'')
              FROM discoveries
              WHERE launch_ref != ''
-             ORDER BY lower(title)
-             LIMIT 20000",
+               AND source_kind IN ('mra','mgl','catalog-entry')
+               AND (
+                 lower(CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END) LIKE '%.mra'
+                 OR lower(CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END) LIKE '%.mgl'
+                 OR lower(CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END) LIKE '%.7z'
+               )
+             ORDER BY lower(title)",
         )
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
@@ -3019,6 +3031,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn sqlite_arcade_load_returns_launchables_beyond_old_cap() {
+        const ROWS: usize = 20_005;
+        let root = unique_temp_dir("sqlite-arcade-no-cap");
+        let db = root.join("library.sqlite3");
+        let discoveries = (0..ROWS)
+            .map(|idx| mra_discovery(idx, &format!("Game {idx:05}")))
+            .collect::<Vec<_>>();
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries))
+            .expect("write large arcade database");
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load arcade catalog");
+
+        assert_eq!(loaded.rows, ROWS);
+        assert_eq!(loaded.catalog.games.len(), ROWS);
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .any(|game| game.title == "Game 20004"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn payload(path: &str) -> GameDiscovery {
         let ext = path_ext(path).unwrap_or_default();
         let taxonomy = taxonomy_from_path(path, &ext);
@@ -3114,6 +3150,28 @@ mod tests {
         }
     }
 
+    fn mra_discovery(idx: usize, title: &str) -> GameDiscovery {
+        let path = format!("/media/fat/_Arcade/{title}.mra");
+        GameDiscovery {
+            source_path: path.clone(),
+            launch_ref: path,
+            source_kind: DiscoverySourceKind::Mra,
+            title: title.to_string(),
+            category: "Arcade".to_string(),
+            platform_id: "arcade".to_string(),
+            core_id: "arcade".to_string(),
+            hardware_id: "arcade-unknown".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: Some(format!("game{idx:05}")),
+            parent: None,
+            image_path: None,
+            has_image: false,
+            confidence: DiscoveryConfidence::MraCore,
+        }
+    }
+
     fn sqlite_scan_with_normal_files(paths: &[&str]) -> LibraryScan {
         LibraryScan {
             version: SCHEMA_VERSION,
@@ -3124,6 +3182,21 @@ mod tests {
             containers: Vec::new(),
             entries: Vec::new(),
             discoveries: Vec::new(),
+            discover_us: 0,
+            classify_us: 0,
+        }
+    }
+
+    fn sqlite_scan_with_discoveries(discoveries: Vec<GameDiscovery>) -> LibraryScan {
+        LibraryScan {
+            version: SCHEMA_VERSION,
+            scanned_at_unix: 1,
+            file_fingerprints: FileFingerprint::default(),
+            directory_manifest: DirectoryManifest::new(),
+            normal_files: Vec::new(),
+            containers: Vec::new(),
+            entries: Vec::new(),
+            discoveries,
             discover_us: 0,
             classify_us: 0,
         }
