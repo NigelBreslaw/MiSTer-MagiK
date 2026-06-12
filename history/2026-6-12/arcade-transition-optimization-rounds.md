@@ -174,3 +174,22 @@ generic gate/blend/decorate path.
 | round 23 focused super-scaler-pop | 721 | 16356 | 16476 | 21 | 1 | 28172 |
 
 `super-scaler-pop` is now inside the p95 60fps target.
+
+## Round 24 - Direct venetian-copper transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-VENETIAN-COPPER-R24-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition venetian-copper --transition-ms 220 --visual-captures 0
+```
+
+This moves `venetian-copper` into a direct RGB565 selection arm. It preserves
+the venetian/copper reveal and bright scanline flourish while avoiding the
+generic gate and nested decoration match.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R22 mega venetian-copper segment | 78 | 39974 | 50961 | 60 | 60 | 32588 |
+| round 24 focused venetian-copper | 721 | 16367 | 16522 | 21 | 2 | 28716 |
+
+`venetian-copper` is now inside the p95 60fps target.

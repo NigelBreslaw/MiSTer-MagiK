@@ -909,6 +909,17 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::VenetianCopper => {
+                    let open = ((20.0 * progress).round() as usize).min(20);
+                    let gate =
+                        local_x % 20 < open || ((local_y / 9 + alpha as usize / 18) & 3) == 0;
+                    let base = if gate { curr } else { prev };
+                    if gate && ((local_y + alpha as usize / 8) & 15 == 0 || alpha > 220) {
+                        brighten_565(base)
+                    } else {
+                        base
+                    }
+                }
                 PreviewTransitionEffect::Checker => {
                     if hash2_u8(local_x / 16, local_y / 16) <= alpha {
                         curr
