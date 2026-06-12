@@ -945,6 +945,14 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::RowScrollParallax => {
+                    let row_phase = ((local_y / 12) * 17) % screen.width().max(1);
+                    if (local_x + row_phase) % screen.width().max(1) < reveal_w {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;

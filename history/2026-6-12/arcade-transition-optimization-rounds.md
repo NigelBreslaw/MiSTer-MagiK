@@ -137,3 +137,21 @@ the same multiplex hash as the generic gate.
 | round 21 focused sprite-multiplex | 720 | 16386 | 16489 | 16 | 1 | 28712 |
 
 `sprite-multiplex` is now inside the p95 60fps target.
+
+## Round 22 - Direct row-scroll-parallax transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-ROW-SCROLL-R22-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition row-scroll-parallax --transition-ms 220 --visual-captures 0
+```
+
+This moves `row-scroll-parallax` into a direct RGB565 binary selection arm using
+the same row phase as the generic gate.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| transition mega scan row-scroll-parallax segment | 88 | 32862 | 36105 | 80 | 80 | 32388 |
+| round 22 focused row-scroll-parallax | 720 | 16391 | 16511 | 16 | 2 | 28712 |
+
+`row-scroll-parallax` is now inside the p95 60fps target.
