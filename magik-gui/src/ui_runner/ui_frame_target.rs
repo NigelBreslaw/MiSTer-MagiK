@@ -924,6 +924,14 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::ClockWipe => {
+                    if angle_byte(local_x, local_y, screen.width(), screen.rows() as usize) <= alpha
+                    {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::VenetianCopper => {
                     let open = ((20.0 * progress).round() as usize).min(20);
                     let gate =

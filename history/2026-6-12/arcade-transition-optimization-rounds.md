@@ -345,3 +345,22 @@ This precomputes the iris radius threshold once per transition frame and moves
 | round 32 focused iris | 720 | 16374 | 16588 | 31 | 4 | 28232 |
 
 `iris` is now inside the p95 60fps target.
+
+## Round 33 - Direct clock-wipe transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-CLOCK-WIPE-R33C-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition clock-wipe --transition-ms 220 --visual-captures 0
+```
+
+This moves `clock-wipe` into a direct RGB565 binary selection arm using the
+same precomputed angle map as the generic path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega clock-wipe segment | 88 | 35078 | 40749 | 77 | 77 | 32892 |
+| round 33 focused clock-wipe | 704 | 16790 | 18102 | 252 | 3 | 27952 |
+
+`clock-wipe` is much closer to the 60fps target, though it still needs a
+second pass for p95.
