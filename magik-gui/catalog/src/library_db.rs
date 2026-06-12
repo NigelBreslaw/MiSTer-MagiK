@@ -1936,12 +1936,48 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
-    match std::fs::remove_file(path) {
+
+    let tmp_path = sqlite_temp_path(path);
+    match std::fs::remove_file(&tmp_path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("remove old sqlite: {e}")),
+        Err(e) => return Err(format!("remove stale sqlite temp: {e}")),
     }
 
+    if let Err(e) = write_sqlite_scan(&tmp_path, scan) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    File::open(&tmp_path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| format!("sync sqlite temp: {e}"))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("replace sqlite: {e}")
+    })?;
+    sync_parent_dir(path);
+    std::fs::metadata(path)
+        .map(|m| m.len())
+        .map_err(|e| format!("stat sqlite: {e}"))
+}
+
+fn sqlite_temp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("library.sqlite3");
+    path.with_file_name(format!(".{name}.tmp.{}", std::process::id()))
+}
+
+fn sync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+}
+
+fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     conn.execute_batch(
         r#"
@@ -2190,10 +2226,7 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
             .map_err(|e| format!("insert directory manifest: {e}"))?;
         }
     }
-    tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))?;
-    std::fs::metadata(path)
-        .map(|m| m.len())
-        .map_err(|e| format!("stat sqlite: {e}"))
+    tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))
 }
 
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
@@ -2958,6 +2991,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn sqlite_save_keeps_previous_database_when_replacement_fails() {
+        let root = unique_temp_dir("sqlite-atomic-replace");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(&db, &sqlite_scan_with_normal_files(&["/old/game.mra"]))
+            .expect("write old database");
+        let old_fingerprint = read_sqlite_fingerprint(&db).expect("old database readable");
+        assert_eq!(old_fingerprint.normal_files, 1);
+
+        let err = save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_normal_files(&["/new/game.mra", "/new/game.mra"]),
+        )
+        .expect_err("duplicate normal_files row should fail temp import");
+
+        assert!(
+            err.contains("insert normal file"),
+            "unexpected error: {err}"
+        );
+        let still_old = read_sqlite_fingerprint(&db).expect("old database survived failed import");
+        assert_eq!(still_old.normal_files, 1);
+        assert!(
+            !sqlite_temp_path(&db).exists(),
+            "failed temp database should be cleaned up"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn payload(path: &str) -> GameDiscovery {
         let ext = path_ext(path).unwrap_or_default();
         let taxonomy = taxonomy_from_path(path, &ext);
@@ -3050,6 +3111,21 @@ mod tests {
             image_path: None,
             has_image: false,
             confidence: DiscoveryConfidence::ArchiveToc,
+        }
+    }
+
+    fn sqlite_scan_with_normal_files(paths: &[&str]) -> LibraryScan {
+        LibraryScan {
+            version: SCHEMA_VERSION,
+            scanned_at_unix: 1,
+            file_fingerprints: FileFingerprint::default(),
+            directory_manifest: DirectoryManifest::new(),
+            normal_files: paths.iter().map(|path| path.to_string()).collect(),
+            containers: Vec::new(),
+            entries: Vec::new(),
+            discoveries: Vec::new(),
+            discover_us: 0,
+            classify_us: 0,
         }
     }
 
