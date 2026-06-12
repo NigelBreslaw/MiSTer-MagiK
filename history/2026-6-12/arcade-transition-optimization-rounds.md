@@ -193,3 +193,22 @@ generic gate and nested decoration match.
 | round 24 focused venetian-copper | 721 | 16367 | 16522 | 21 | 2 | 28716 |
 
 `venetian-copper` is now inside the p95 60fps target.
+
+## Round 25 - Direct copper-bars transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-COPPER-BARS-R25-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition copper-bars --transition-ms 220 --visual-captures 0
+```
+
+This moves `copper-bars` into a direct RGB565 selection arm. It preserves the
+horizontal copper-bar reveal and bright scanline flourish while avoiding the
+generic gate and decoration path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R22 mega copper-bars segment | 79 | 38660 | 44704 | 67 | 67 | 32588 |
+| round 25 focused copper-bars | 720 | 16392 | 16493 | 17 | 1 | 28712 |
+
+`copper-bars` is now inside the p95 60fps target.

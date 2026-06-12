@@ -920,6 +920,16 @@ pub(super) fn blit_transition_565_fast(
                         base
                     }
                 }
+                PreviewTransitionEffect::CopperBars => {
+                    let bar = ((local_y / 10 + alpha as usize / 7) & 7) as u8;
+                    let gate = local_x < reveal_w || bar <= (alpha >> 5);
+                    let base = if gate { curr } else { prev };
+                    if gate && ((local_y + alpha as usize / 8) & 15 == 0 || alpha > 220) {
+                        brighten_565(base)
+                    } else {
+                        base
+                    }
+                }
                 PreviewTransitionEffect::Checker => {
                     if hash2_u8(local_x / 16, local_y / 16) <= alpha {
                         curr
