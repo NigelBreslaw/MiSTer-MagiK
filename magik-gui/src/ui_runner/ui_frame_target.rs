@@ -901,6 +901,14 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::VenetianBlinds => {
+                    let open = ((16.0 * progress).round() as usize).min(16);
+                    if local_x % 16 < open {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::Checker => {
                     if hash2_u8(local_x / 16, local_y / 16) <= alpha {
                         curr

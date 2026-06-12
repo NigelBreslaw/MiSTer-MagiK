@@ -65,3 +65,21 @@ binary current/previous selection in the RGB565 transition loop.
 | round 17 focused barn-door | 721 | 16386 | 16516 | 15 | 1 | 28076 |
 
 `barn-door` is now inside the p95 60fps target.
+
+## Round 18 - Direct venetian-blinds transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-VENETIAN-R18-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition venetian-blinds --transition-ms 220 --visual-captures 0
+```
+
+This moves `venetian-blinds` out of the generic transition gate and into a
+direct binary current/previous selection in the RGB565 loop.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| transition mega scan venetian-blinds segment | 80 | 37158 | 43551 | 70 | 70 | 32388 |
+| round 18 focused venetian-blinds | 721 | 16374 | 16462 | 14 | 1 | 28644 |
+
+`venetian-blinds` is now inside the p95 60fps target.
