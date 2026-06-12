@@ -39,11 +39,21 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 17;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
+const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
+    CollectionListing {
+        entry_path: "listings/games.txt",
+        genre: "AmigaVision",
+    },
+    CollectionListing {
+        entry_path: "listings/demos.txt",
+        genre: "AmigaVision demos",
+    },
+];
 
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
@@ -782,6 +792,29 @@ fn scan_library_with_progress(
                         },
                 },
             )) => {
+                if is_amigavision_save_media_path(&f.path) {
+                    ignored_files.push(LibraryIgnoredFile {
+                        path: f.path.display().to_string(),
+                        profile_id: profile.id.to_string(),
+                        reason: IgnoreReason::SaveMedia,
+                        provenance: RuleProvenance::magik(
+                            "AmigaVision-Saves.hdf is save/support media for the AmigaVision launcher environment",
+                        ),
+                    });
+                    continue;
+                }
+                if let Some(installed) = installed_amigavision_discoveries_from_hdf(&f, profile) {
+                    ignored_files.push(LibraryIgnoredFile {
+                        path: f.path.display().to_string(),
+                        profile_id: profile.id.to_string(),
+                        reason: IgnoreReason::SupportArchive,
+                        provenance: RuleProvenance::magik(
+                            "AmigaVision.hdf is the launcher environment backing _Computer/Amiga.mgl, not a raw game payload",
+                        ),
+                    });
+                    discoveries.extend(installed);
+                    continue;
+                }
                 let mut has_archive_entries = false;
                 if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
                     let scan = scan_archive_toc(&f, format, profile);
@@ -1303,6 +1336,45 @@ fn collection_discoveries_from_container(
         ));
     }
     out
+}
+
+fn installed_amigavision_discoveries_from_hdf(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+) -> Option<Vec<GameDiscovery>> {
+    if !is_amigavision_installed_hdf_path(&file.path) {
+        return None;
+    }
+    let mut out = vec![amigavision_launcher_discovery(file, profile)];
+    for listing in AMIGAVISION_INSTALLED_LISTINGS {
+        let Some(listing_path) = installed_amigavision_listing_path(&file.path, listing) else {
+            continue;
+        };
+        let Some(text) = read_lossy_text(&listing_path) else {
+            continue;
+        };
+        out.extend(collection_discoveries_from_listing_text(
+            file, profile, listing, &text,
+        ));
+    }
+    Some(out)
+}
+
+fn installed_amigavision_listing_path(
+    hdf_path: &Path,
+    listing: &CollectionListing,
+) -> Option<PathBuf> {
+    let base = hdf_path.parent()?;
+    let relative = listing
+        .entry_path
+        .strip_prefix("games/Amiga/")
+        .unwrap_or(listing.entry_path);
+    Some(base.join(relative))
+}
+
+fn read_lossy_text(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> GameDiscovery {
@@ -2555,6 +2627,21 @@ fn is_amigavision_archive_path(path: &str) -> bool {
     lower.contains("/games/amiga/") && lower.contains("amigavision") && lower.ends_with(".7z")
 }
 
+fn is_amigavision_installed_hdf_path(path: &Path) -> bool {
+    normalize_match_path(&path.display().to_string()).ends_with("/games/amiga/amigavision.hdf")
+}
+
+fn is_amigavision_save_media_path(path: &Path) -> bool {
+    normalize_match_path(&path.display().to_string())
+        .ends_with("/games/amiga/amigavision-saves.hdf")
+}
+
+fn is_amigavision_listing_path(path: &Path) -> bool {
+    let path = normalize_match_path(&path.display().to_string());
+    path.ends_with("/games/amiga/listings/games.txt")
+        || path.ends_with("/games/amiga/listings/demos.txt")
+}
+
 fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
     match kind {
         DiscoverySourceKind::Mra => "mra",
@@ -2723,7 +2810,8 @@ fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: &str) -> bo
                 | ProfilePathClass::Collection { .. }
                 | ProfilePathClass::Ignored { .. }
         ))
-    ) || path
+    ) || is_amigavision_listing_path(path)
+        || path
         .file_name()
         .and_then(|s| s.to_str())
         .map(|s| s.eq_ignore_ascii_case("gamelist.xml"))
@@ -3169,6 +3257,69 @@ mod tests {
         assert!(discoveries.iter().any(|discovery| {
             discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
         }));
+    }
+
+    #[test]
+    fn installed_amigavision_hdf_uses_launcher_and_listings() {
+        let root = unique_temp_dir("amigavision-installed");
+        let amiga_dir = root.join("games/Amiga");
+        let listings_dir = amiga_dir.join("listings");
+        std::fs::create_dir_all(&listings_dir).expect("create listings dir");
+        std::fs::write(amiga_dir.join("AmigaVision.hdf"), "hdf").expect("write hdf");
+        std::fs::write(amiga_dir.join("AmigaVision-Saves.hdf"), "saves").expect("write saves");
+        std::fs::write(
+            listings_dir.join("games.txt"),
+            b"Agony (OCS)[en]\nAlien Breed (OCS)[en]\nInvalid \xff Title (OCS)[en]\n",
+        )
+        .expect("write games listing");
+        std::fs::write(listings_dir.join("demos.txt"), "State of the Art (OCS)[demo]\n")
+            .expect("write demos listing");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+            optional_catalogs: false,
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert_eq!(scan.ignored_files.len(), 2);
+        assert!(scan
+            .file_fingerprints
+            .contains_key(&listings_dir.join("games.txt").display().to_string()));
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
+        }));
+        assert_eq!(
+            scan.discoveries
+                .iter()
+                .filter(|discovery| discovery
+                    .launch_ref
+                    .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX))
+                .count(),
+            4
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.ends_with("AmigaVision.hdf")));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(loaded.rows, 5);
+        assert!(loaded.catalog.games.iter().all(|game| {
+            game.mra_path == AMIGAVISION_LAUNCHER_REF
+                || game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        }));
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "amiga" && system.count == 5));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

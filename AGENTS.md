@@ -488,6 +488,8 @@ Important gotchas:
   game launches work by writing a title from `games/Amiga/listings/games.txt` to
   `games/Amiga/shared/ags_boot` before loading `_Computer/Amiga.mgl`; AmigaVision's
   startup sequence consumes that file and runs the matching AGS launch script.
+  Parse `games/Amiga/listings/*.txt` lossily because the extracted lists may
+  contain non-UTF-8 title bytes.
   Do not treat the top-level `AmigaVision*.7z` itself as a playable launch
   target. The upstream MiSTer package removes `games/Amiga/Visuals`, so screenshots
   for MagiK need a separate source such as upstream `data/img/*.iff` conversion or
