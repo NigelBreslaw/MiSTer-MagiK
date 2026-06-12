@@ -250,3 +250,23 @@ redraw gate and sparse vector-line reveal while avoiding the generic gate path.
 | round 27 focused vector-redraw | 721 | 16358 | 16497 | 19 | 2 | 28048 |
 
 `vector-redraw` is now inside the p95 60fps target.
+
+## Round 28 - Direct palette-cycle transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-PALETTE-CYCLE-R28-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition palette-cycle --transition-ms 220 --visual-captures 0
+```
+
+This moves `palette-cycle` into a direct RGB565 arm. It preserves the alternating
+half-alpha palette blocks and sparse brightened pixels while avoiding the generic
+gate and decoration path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega palette-cycle segment | 86 | 36487 | 45386 | 66 | 66 | 32892 |
+| round 28 focused palette-cycle | 681 | 17343 | 19796 | 346 | 28 | 26864 |
+
+`palette-cycle` is much closer to the 60fps target, though it still needs a
+second pass for p95.

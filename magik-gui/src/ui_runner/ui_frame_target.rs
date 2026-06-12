@@ -1013,6 +1013,19 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::PaletteCycle => {
+                    let gate = if ((local_x / 12 + local_y / 12 + alpha as usize / 16) & 3) == 0 {
+                        alpha / 2
+                    } else {
+                        alpha
+                    };
+                    let base = blend_565(prev, curr, gate);
+                    if ((local_x + local_y) & 7) == 0 {
+                        brighten_565(base)
+                    } else {
+                        base
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;
