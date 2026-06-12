@@ -39,3 +39,8 @@ REVIEW-PR2-AFTER-20260611	3	cold_scan	31157971	discover_us=19817566
 REVIEW-PR2-AFTER-20260611	3	import	13246036	bytes=18735104
 REVIEW-PR2-AFTER-20260611	3	cached_arcade_load	854287	rows=6891
 REVIEW-PR2-AFTER-20260611	3	no_change_manifest	12789223	changed=false
+LIB-SCAN-BASELINE-20260612	1	cold_scan	57394772	discover_us=38996489
+LIB-SCAN-BASELINE-20260612	1	import	15051557	bytes=18759680
+LIB-SCAN-BASELINE-20260612	1	cached_arcade_load	972733	rows=6892
+LIB-SCAN-BASELINE-20260612	1	no_change_manifest	17418163	changed=false
+LIB-SCAN-BASELINE-20260612	post-reboot	post_reboot_rescan	73109748	skipped=true bytes=18759680 scan_us=73109748 import_us=0 discoveries=9018 normal_files=27067 containers=1388 entries=30515

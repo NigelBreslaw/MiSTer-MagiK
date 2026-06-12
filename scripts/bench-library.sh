@@ -19,11 +19,12 @@ LABEL="LIB-BENCH"
 DO_CLEAN=0
 SKIP_BUILD=0
 REPLACE_LABEL=0
+POST_REBOOT=0
 
 usage() {
   sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
-  echo "Options: --clean  --skip-build  --replace-label  --device  --iterations N  -h"
+  echo "Options: --clean  --skip-build  --replace-label  --device  --iterations N  --post-reboot  -h"
   exit "${1:-0}"
 }
 
@@ -35,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --device) BUILD_PROFILE=release-device; BUILD_FLAG=(--device); shift ;;
     --iterations) ITERATIONS="${2:?}"; shift 2 ;;
+    --post-reboot) POST_REBOOT=1; shift ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
@@ -69,4 +71,24 @@ OUT=$("$HERE/scripts/mister" run "chmod +x $REMOTE; MISTER_LIBRARY_BENCH_LABEL=$
 echo "$OUT"
 
 echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
+if [[ "$POST_REBOOT" -eq 1 ]]; then
+  echo "== post-reboot no-change refresh =="
+  "$HERE/scripts/mister" reboot-wait
+  OUT=$("$HERE/scripts/mister" run "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-refresh" 2>&1) || true
+  echo "$OUT"
+  echo "$OUT" | awk -v label="$LABEL" -F '\t' '
+    $1 == "library_refresh" && $2 == "done" {
+      notes = $3
+      us = ""
+      n = split($3, parts, " ")
+      for (i = 1; i <= n; i++) {
+        if (parts[i] ~ /^scan_us=/) {
+          us = parts[i]
+          sub(/^scan_us=/, "", us)
+        }
+      }
+      if (us != "") print label "\tpost-reboot\tpost_reboot_rescan\t" us "\t" notes
+    }
+  ' >> "$TSV"
+fi
 echo "appended to $TSV"
