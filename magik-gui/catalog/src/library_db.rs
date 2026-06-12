@@ -4,6 +4,7 @@
 //! decompress full game libraries just to make the launcher searchable.
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
+use crate::launch_profiles::{self, RuleSourceKind};
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
@@ -41,7 +42,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -91,16 +92,6 @@ impl ArchiveFormat {
         }
     }
 
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Zip => "zip",
-            Self::SevenZip => "7z",
-            Self::Lha => "lha",
-            Self::Lzh => "lzh",
-            Self::Rar => "rar",
-            Self::Chd => "chd",
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -325,31 +316,24 @@ fn load_arcade_catalog_from_sqlite_at(
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
         .prepare(
-            "SELECT title,
-                    CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END,
-                    COALESCE(image_path,''), has_image,
-                    CASE
-                      WHEN category='Arcade'
-                       AND (platform_id='neogeo'
-                         OR lower(core_id) IN ('neogeo', 'neo geo', 'neo-geo')
-                         OR hardware_id='snk-neo-geo'
-                         OR lower(hardware_id) LIKE '%neo%geo%') THEN 'neogeo'
-                      WHEN category='Arcade' THEN 'arcade'
-                      WHEN platform_id='' THEN 'unknown'
-                      ELSE platform_id
-                    END,
-                    source_kind,
-                    COALESCE(setname,''),
-                    COALESCE(parent,'')
-             FROM discoveries
-             WHERE launch_ref != ''
-               AND source_kind IN ('mra','mgl','catalog-entry')
+            "SELECT games.title,
+                    launch_plans.launch_ref,
+                    COALESCE(games.image_path,''),
+                    games.has_image,
+                    COALESCE(games.system_id,'unknown'),
+                    launch_plans.launch_kind,
+                    COALESCE(launch_plans.setname,''),
+                    COALESCE(launch_plans.parent,'')
+             FROM games
+             JOIN launch_plans ON launch_plans.game_id = games.game_id
+             WHERE launch_plans.launch_ref != ''
+               AND launch_plans.launch_kind IN ('mra','mgl','catalog-entry')
                AND (
-                 lower(CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END) LIKE '%.mra'
-                 OR lower(CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END) LIKE '%.mgl'
-                 OR lower(CASE WHEN source_kind='mgl' THEN source_path ELSE launch_ref END) LIKE '%.7z'
+                 lower(launch_plans.launch_ref) LIKE '%.mra'
+                 OR lower(launch_plans.launch_ref) LIKE '%.mgl'
+                 OR lower(launch_plans.launch_ref) LIKE '%.7z'
                )
-             ORDER BY lower(title)",
+             ORDER BY lower(games.title)",
         )
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
@@ -546,11 +530,14 @@ pub fn refresh_default_sqlite_database(
                 "Directory manifest changed; rebuilding database...",
             );
         }
-    } else if let Some(report) = progress.as_mut() {
-        report(
-            "Indexing library",
-            "No usable database fingerprint; full scan...",
-        );
+    } else {
+        let _ = std::fs::remove_file(&cfg.sqlite_path);
+        if let Some(report) = progress.as_mut() {
+            report(
+                "Indexing library",
+                "No usable database fingerprint; full scan...",
+            );
+        }
     }
 
     let scan = match progress.as_mut() {
@@ -1924,15 +1911,6 @@ fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
         .len()
 }
 
-fn archive_status_str(status: &ArchiveScanStatus) -> &'static str {
-    match status {
-        ArchiveScanStatus::Ok => "ok",
-        ArchiveScanStatus::HeaderOnly => "header-only",
-        ArchiveScanStatus::Unsupported => "unsupported",
-        ArchiveScanStatus::Error(_) => "error",
-    }
-}
-
 fn confidence_str(confidence: DiscoveryConfidence) -> &'static str {
     match confidence {
         DiscoveryConfidence::MraHardware => "mra-hardware",
@@ -1997,52 +1975,98 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         PRAGMA synchronous=OFF;
         PRAGMA temp_store=MEMORY;
         PRAGMA locking_mode=EXCLUSIVE;
-        CREATE TABLE normal_files (
-            path TEXT PRIMARY KEY
+        CREATE TABLE profiles (
+            profile_id TEXT PRIMARY KEY,
+            system_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            core_name TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_detail TEXT NOT NULL
         ) WITHOUT ROWID;
-        CREATE TABLE containers (
-            file_path TEXT PRIMARY KEY,
+        CREATE TABLE files (
+            path TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
             mtime_secs INTEGER NOT NULL,
-            format TEXT NOT NULL,
-            entry_count INTEGER NOT NULL,
-            scan_status TEXT NOT NULL,
-            scan_us INTEGER NOT NULL
+            extension TEXT NOT NULL,
+            role TEXT NOT NULL,
+            profile_id TEXT
         ) WITHOUT ROWID;
-        CREATE TABLE entries (
-            launch_ref TEXT PRIMARY KEY,
+        CREATE TABLE launchers (
+            launcher_id TEXT PRIMARY KEY,
             file_path TEXT NOT NULL,
-            entry_path TEXT NOT NULL,
+            launcher_kind TEXT NOT NULL,
+            profile_id TEXT,
             title TEXT NOT NULL,
-            launchable INTEGER NOT NULL,
-            compressed_size INTEGER,
-            uncompressed_size INTEGER,
-            crc32 INTEGER
-        ) WITHOUT ROWID;
-        CREATE TABLE discoveries (
-            key TEXT PRIMARY KEY,
-            source_path TEXT NOT NULL,
-            launch_ref TEXT NOT NULL,
             source_kind TEXT NOT NULL,
+            source_detail TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE payloads (
+            payload_id TEXT PRIMARY KEY,
+            file_path TEXT NOT NULL,
+            entry_path TEXT,
+            launch_ref TEXT NOT NULL,
+            profile_id TEXT,
             title TEXT NOT NULL,
-            category TEXT NOT NULL,
-            platform_id TEXT NOT NULL,
-            core_id TEXT NOT NULL,
-            hardware_id TEXT NOT NULL,
+            mount_kind TEXT,
+            mount_index INTEGER,
+            mount_delay_secs INTEGER,
+            disposition TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            mtime_secs INTEGER NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_detail TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE ignored_files (
+            file_path TEXT NOT NULL,
+            profile_id TEXT,
+            reason TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_detail TEXT NOT NULL,
+            PRIMARY KEY(file_path, profile_id, reason)
+        ) WITHOUT ROWID;
+        CREATE TABLE systems (
+            system_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE games (
+            game_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            sort_title TEXT NOT NULL,
+            system_id TEXT NOT NULL,
             manufacturer TEXT,
             genre TEXT,
             year INTEGER,
+            image_path TEXT,
+            has_image INTEGER NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE launch_plans (
+            plan_id TEXT PRIMARY KEY,
+            game_id TEXT NOT NULL,
+            profile_id TEXT,
+            launch_kind TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            launch_ref TEXT NOT NULL,
+            launcher_path TEXT,
+            payload_path TEXT,
+            core_id TEXT NOT NULL,
+            hardware_id TEXT NOT NULL,
             setname TEXT,
             parent TEXT,
-            image_path TEXT,
-            has_image INTEGER NOT NULL,
+            priority INTEGER NOT NULL,
             confidence TEXT NOT NULL
         ) WITHOUT ROWID;
-        CREATE VIRTUAL TABLE discoveries_fts USING fts5(
-            key UNINDEXED,
+        CREATE TABLE region_metadata (
+            game_id TEXT PRIMARY KEY,
+            inferred_region TEXT,
+            confidence TEXT NOT NULL,
+            override_region TEXT
+        ) WITHOUT ROWID;
+        CREATE VIRTUAL TABLE games_fts USING fts5(
+            game_id UNINDEXED,
             title,
             launch_ref,
-            platform_id,
+            system_id,
             core_id,
             hardware_id
         );
@@ -2076,67 +2100,159 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
     {
         let mut stmt = tx
-            .prepare("INSERT INTO normal_files(path) VALUES (?1)")
-            .map_err(|e| format!("prepare normal insert: {e}"))?;
-        for path in &scan.normal_files {
-            stmt.execute([path.as_str()])
-                .map_err(|e| format!("insert normal file: {e}"))?;
-        }
-    }
-    {
-        let mut stmt = tx
             .prepare(
-                "INSERT INTO containers(file_path,size,mtime_secs,format,entry_count,scan_status,scan_us)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            )
-            .map_err(|e| format!("prepare container insert: {e}"))?;
-        for container in &scan.containers {
-            stmt.execute(params![
-                container.file_path.as_str(),
-                container.size as i64,
-                container.mtime_secs,
-                container.format.as_str(),
-                container.entry_count as i64,
-                archive_status_str(&container.scan_status),
-                container.scan_us as i64
-            ])
-            .map_err(|e| format!("insert container: {e}"))?;
-        }
-    }
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO entries(launch_ref,file_path,entry_path,title,launchable,compressed_size,uncompressed_size,crc32)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            )
-            .map_err(|e| format!("prepare entry insert: {e}"))?;
-        for entry in &scan.entries {
-            stmt.execute(params![
-                entry.launch_ref.as_str(),
-                entry.file_path.as_str(),
-                entry.entry_path.as_str(),
-                entry.normalized_title.as_str(),
-                if entry.launchable { 1 } else { 0 },
-                entry.compressed_size.map(|n| n as i64),
-                entry.uncompressed_size.map(|n| n as i64),
-                entry.crc32.map(|n| n as i64)
-            ])
-            .map_err(|e| format!("insert entry: {e}"))?;
-        }
-    }
-    {
-        let mut row_stmt = tx
-            .prepare(
-                "INSERT INTO discoveries(key,source_path,launch_ref,source_kind,title,category,platform_id,core_id,hardware_id,manufacturer,genre,year,setname,parent,image_path,has_image,confidence)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
-            )
-            .map_err(|e| format!("prepare discovery insert: {e}"))?;
-        let mut fts_stmt = tx
-            .prepare(
-                "INSERT INTO discoveries_fts(key,title,launch_ref,platform_id,core_id,hardware_id)
+                "INSERT INTO profiles(profile_id,system_id,title,core_name,source_kind,source_detail)
                  VALUES (?1,?2,?3,?4,?5,?6)",
             )
-            .map_err(|e| format!("prepare discovery fts insert: {e}"))?;
+            .map_err(|e| format!("prepare profile insert: {e}"))?;
+        for profile in launch_profiles::builtin_profiles() {
+            stmt.execute(params![
+                profile.id,
+                profile.system_id,
+                profile.title,
+                profile.core_name,
+                source_kind_name(profile.provenance.kind),
+                profile.provenance.detail
+            ])
+            .map_err(|e| format!("insert profile: {e}"))?;
+        }
+    }
+    {
+        let normal_paths = scan.normal_files.iter().cloned().collect::<HashSet<_>>();
+        let container_paths = scan
+            .containers
+            .iter()
+            .map(|container| container.file_path.clone())
+            .collect::<HashSet<_>>();
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO files(path,size,mtime_secs,extension,role,profile_id)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+            )
+            .map_err(|e| format!("prepare file fact insert: {e}"))?;
+        for (path, (size, mtime_secs)) in &scan.file_fingerprints {
+            let role = if container_paths.contains(path) {
+                "container"
+            } else if normal_paths.contains(path) {
+                "candidate"
+            } else {
+                "fact"
+            };
+            stmt.execute(params![
+                path.as_str(),
+                *size as i64,
+                *mtime_secs,
+                path_ext(path).unwrap_or_default(),
+                role,
+                Option::<&str>::None
+            ])
+            .map_err(|e| format!("insert file fact: {e}"))?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO payloads(payload_id,file_path,entry_path,launch_ref,profile_id,title,mount_kind,mount_index,mount_delay_secs,disposition,size,mtime_secs,source_kind,source_detail)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            )
+            .map_err(|e| format!("prepare payload insert: {e}"))?;
+        for path in &scan.normal_files {
+            let (size, mtime_secs) = scan
+                .file_fingerprints
+                .get(path)
+                .copied()
+                .unwrap_or((0, 0));
+            stmt.execute(params![
+                format!("file:{path}"),
+                path.as_str(),
+                Option::<&str>::None,
+                path.as_str(),
+                Option::<&str>::None,
+                title_from_path(path),
+                Option::<&str>::None,
+                Option::<i64>::None,
+                Option::<i64>::None,
+                "unknown",
+                size as i64,
+                mtime_secs,
+                "scanner",
+                "legacy scanner candidate before profile classification"
+            ])
+            .map_err(|e| format!("insert payload file: {e}"))?;
+        }
+        for entry in &scan.entries {
+            stmt.execute(params![
+                format!("entry:{}", entry.launch_ref),
+                entry.file_path.as_str(),
+                entry.entry_path.as_str(),
+                entry.launch_ref.as_str(),
+                Option::<&str>::None,
+                entry.normalized_title.as_str(),
+                Option::<&str>::None,
+                Option::<i64>::None,
+                Option::<i64>::None,
+                if entry.launchable {
+                    "candidate"
+                } else {
+                    "support"
+                },
+                entry.uncompressed_size.or(entry.compressed_size).unwrap_or(0) as i64,
+                0i64,
+                "archive-toc",
+                "ZIP central directory header"
+            ])
+            .map_err(|e| format!("insert payload entry: {e}"))?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO ignored_files(file_path,profile_id,reason,source_kind,source_detail)
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .map_err(|e| format!("prepare ignored file insert: {e}"))?;
+        for path in &scan.normal_files {
+            if !is_support_file_path(path) {
+                continue;
+            }
+            stmt.execute(params![
+                path.as_str(),
+                Option::<&str>::None,
+                "support-file",
+                "scanner",
+                "legacy support-file filter before profile classification"
+            ])
+            .map_err(|e| format!("insert ignored file: {e}"))?;
+        }
+    }
+    {
+        let mut system_stmt = tx
+            .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
+            .map_err(|e| format!("prepare system insert: {e}"))?;
+        let mut game_stmt = tx
+            .prepare(
+                "INSERT INTO games(game_id,title,sort_title,system_id,manufacturer,genre,year,image_path,has_image)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            )
+            .map_err(|e| format!("prepare game insert: {e}"))?;
+        let mut plan_stmt = tx
+            .prepare(
+                "INSERT INTO launch_plans(plan_id,game_id,profile_id,launch_kind,source_path,launch_ref,launcher_path,payload_path,core_id,hardware_id,setname,parent,priority,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            )
+            .map_err(|e| format!("prepare launch plan insert: {e}"))?;
+        let mut region_stmt = tx
+            .prepare(
+                "INSERT INTO region_metadata(game_id,inferred_region,confidence,override_region)
+                 VALUES (?1,?2,?3,?4)",
+            )
+            .map_err(|e| format!("prepare region metadata insert: {e}"))?;
+        let mut fts_stmt = tx
+            .prepare(
+                "INSERT INTO games_fts(game_id,title,launch_ref,system_id,core_id,hardware_id)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+            )
+            .map_err(|e| format!("prepare game fts insert: {e}"))?;
         let mut seen = HashSet::<String>::new();
         for discovery in &scan.discoveries {
             if !is_playable_discovery(discovery) {
@@ -2146,37 +2262,106 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             if !seen.insert(key.clone()) {
                 continue;
             }
-            row_stmt
+            let system_id = catalog_system_id_for_discovery(discovery);
+            system_stmt
+                .execute(params![
+                    system_id.as_str(),
+                    system_title_for_discovery(discovery, &system_id),
+                    discovery.category.as_str()
+                ])
+                .map_err(|e| format!("insert system: {e}"))?;
+            game_stmt
                 .execute(params![
                     key.as_str(),
-                    discovery.source_path.as_str(),
-                    discovery.launch_ref.as_str(),
-                    source_kind_str(discovery.source_kind),
                     discovery.title.as_str(),
-                    discovery.category.as_str(),
-                    discovery.platform_id.as_str(),
-                    discovery.core_id.as_str(),
-                    discovery.hardware_id.as_str(),
+                    normalize_title(&discovery.title),
+                    system_id.as_str(),
                     discovery.manufacturer.as_deref(),
                     discovery.genre.as_deref(),
                     discovery.year.map(|n| n as i64),
+                    discovery.image_path.as_deref(),
+                    if discovery.has_image { 1 } else { 0 }
+                ])
+                .map_err(|e| format!("insert game: {e}"))?;
+            let launcher_path = match discovery.source_kind {
+                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry => {
+                    Some(discovery.launch_ref.as_str())
+                }
+                DiscoverySourceKind::PayloadFile
+                | DiscoverySourceKind::ArchiveEntry
+                | DiscoverySourceKind::Container => None,
+            };
+            let payload_path = if launcher_path.is_none() {
+                Some(discovery.launch_ref.as_str())
+            } else {
+                None
+            };
+            plan_stmt
+                .execute(params![
+                    format!("plan:{key}"),
+                    key.as_str(),
+                    Option::<&str>::None,
+                    source_kind_str(discovery.source_kind),
+                    discovery.source_path.as_str(),
+                    discovery.launch_ref.as_str(),
+                    launcher_path,
+                    payload_path,
+                    discovery.core_id.as_str(),
+                    discovery.hardware_id.as_str(),
                     discovery.setname.as_deref(),
                     discovery.parent.as_deref(),
-                    discovery.image_path.as_deref(),
-                    if discovery.has_image { 1 } else { 0 },
+                    0i64,
                     confidence_str(discovery.confidence)
                 ])
-                .map_err(|e| format!("insert discovery: {e}"))?;
+                .map_err(|e| format!("insert launch plan: {e}"))?;
+            region_stmt
+                .execute(params![
+                    key.as_str(),
+                    Option::<&str>::None,
+                    "unknown",
+                    Option::<&str>::None
+                ])
+                .map_err(|e| format!("insert region metadata: {e}"))?;
             fts_stmt
                 .execute(params![
                     key.as_str(),
                     discovery.title.as_str(),
                     discovery.launch_ref.as_str(),
-                    discovery.platform_id.as_str(),
+                    system_id.as_str(),
                     discovery.core_id.as_str(),
                     discovery.hardware_id.as_str()
                 ])
-                .map_err(|e| format!("insert discovery fts: {e}"))?;
+                .map_err(|e| format!("insert game fts: {e}"))?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO launchers(launcher_id,file_path,launcher_kind,profile_id,title,source_kind,source_detail)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )
+            .map_err(|e| format!("prepare launcher insert: {e}"))?;
+        let mut seen = HashSet::<String>::new();
+        for discovery in &scan.discoveries {
+            if !matches!(
+                discovery.source_kind,
+                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry
+            ) {
+                continue;
+            }
+            if !seen.insert(discovery.launch_ref.clone()) {
+                continue;
+            }
+            stmt.execute(params![
+                format!("launcher:{}", discovery.launch_ref),
+                discovery.launch_ref.as_str(),
+                source_kind_str(discovery.source_kind),
+                Option::<&str>::None,
+                discovery.title.as_str(),
+                source_kind_str(discovery.source_kind),
+                "legacy launcher discovery before profile classification"
+            ])
+            .map_err(|e| format!("insert launcher: {e}"))?;
         }
     }
     {
@@ -2474,6 +2659,46 @@ fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
         DiscoverySourceKind::ArchiveEntry => "archive-entry",
         DiscoverySourceKind::Container => "container",
         DiscoverySourceKind::CatalogEntry => "catalog-entry",
+    }
+}
+
+fn source_kind_name(kind: RuleSourceKind) -> &'static str {
+    match kind {
+        RuleSourceKind::MainSource => "main-source",
+        RuleSourceKind::Mgl => "mgl",
+        RuleSourceKind::Mra => "mra",
+        RuleSourceKind::ConfStr => "conf-str",
+        RuleSourceKind::MagikProfile => "magik-profile",
+    }
+}
+
+fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
+    if discovery.category == "Arcade"
+        && (discovery.platform_id == "neogeo"
+            || discovery.core_id.eq_ignore_ascii_case("neogeo")
+            || discovery.core_id.eq_ignore_ascii_case("neo geo")
+            || discovery.core_id.eq_ignore_ascii_case("neo-geo")
+            || discovery.hardware_id == "snk-neo-geo"
+            || discovery
+                .hardware_id
+                .to_ascii_lowercase()
+                .contains("neo-geo"))
+    {
+        "neogeo".to_string()
+    } else if discovery.category == "Arcade" {
+        "arcade".to_string()
+    } else if discovery.platform_id.is_empty() {
+        "unknown".to_string()
+    } else {
+        discovery.platform_id.clone()
+    }
+}
+
+fn system_title_for_discovery(discovery: &GameDiscovery, system_id: &str) -> String {
+    if discovery.core_id.trim().is_empty() || discovery.core_id == "unknown" {
+        system_id.to_string()
+    } else {
+        discovery.core_id.clone()
     }
 }
 
@@ -3019,7 +3244,7 @@ mod tests {
         .expect_err("duplicate normal_files row should fail temp import");
 
         assert!(
-            err.contains("insert normal file"),
+            err.contains("insert payload file"),
             "unexpected error: {err}"
         );
         let still_old = read_sqlite_fingerprint(&db).expect("old database survived failed import");
