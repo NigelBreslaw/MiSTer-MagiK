@@ -170,7 +170,7 @@ struct LibraryPayloadFile {
     rule: PayloadRule,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiscoverySourceKind {
     Mra,
     Mgl,
@@ -319,10 +319,11 @@ fn load_arcade_catalog_from_sqlite_at(
              FROM games
              JOIN launch_plans ON launch_plans.game_id = games.game_id
              WHERE launch_plans.launch_ref != ''
-               AND launch_plans.launch_kind IN ('mra','mgl')
+               AND launch_plans.launch_kind IN ('mra','mgl','virtual-mgl')
                AND (
                  lower(launch_plans.launch_ref) LIKE '%.mra'
                  OR lower(launch_plans.launch_ref) LIKE '%.mgl'
+                 OR launch_plans.launch_kind='virtual-mgl'
                )
              ORDER BY lower(games.title)",
         )
@@ -1151,6 +1152,13 @@ fn normalize_match_path(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn normalize_launch_path(path: &str) -> String {
+    path.replace("/./", "/")
+        .trim()
+        .trim_start_matches("./")
+        .to_ascii_lowercase()
+}
+
 fn match_stem(path: &str) -> String {
     normalize_id(
         Path::new(path.split("::").next().unwrap_or(path))
@@ -1264,14 +1272,18 @@ fn profile_for_mgl_payload<'a>(
     mgl_path: &Path,
     payload: &str,
 ) -> Option<&'a LaunchProfile> {
-    let path = if payload.starts_with('/') {
+    let path = resolve_mgl_payload_path(mgl_path, payload);
+    profile_for_path(profiles, &path)
+}
+
+fn resolve_mgl_payload_path(mgl_path: &Path, payload: &str) -> PathBuf {
+    if payload.starts_with('/') {
         PathBuf::from(payload)
     } else if payload.starts_with("games/") {
         PathBuf::from("/media/fat").join(payload)
     } else {
         mgl_path.parent().unwrap_or(Path::new("/")).join(payload)
-    };
-    profile_for_path(profiles, &path)
+    }
 }
 
 fn profile_confidence(rule: &PayloadRule) -> DiscoveryConfidence {
@@ -1388,9 +1400,10 @@ fn normalize_id(value: &str) -> String {
 }
 
 fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
+    let covered_payloads = covered_payload_paths(discoveries);
     discoveries
         .iter()
-        .filter(|d| is_playable_discovery(d))
+        .filter(|d| is_playable_discovery_with_coverage(d, &covered_payloads))
         .map(discovery_unique_key)
         .collect::<HashSet<_>>()
         .len()
@@ -1740,9 +1753,10 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                  VALUES (?1,?2,?3,?4,?5,?6)",
             )
             .map_err(|e| format!("prepare game fts insert: {e}"))?;
+        let covered_payloads = covered_payload_paths(&scan.discoveries);
         let mut seen = HashSet::<String>::new();
         for discovery in &scan.discoveries {
-            if !is_playable_discovery(discovery) {
+            if !is_playable_discovery_with_coverage(discovery, &covered_payloads) {
                 continue;
             }
             let key = discovery_unique_key(discovery);
@@ -1771,9 +1785,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             let launcher_path = match discovery.source_kind {
-                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => {
-                    Some(discovery.launch_ref.as_str())
-                }
+                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => Some(discovery.launch_ref.as_str()),
                 DiscoverySourceKind::PayloadFile => None,
             };
             let payload_path = if launcher_path.is_none() {
@@ -1781,14 +1793,15 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             } else {
                 None
             };
+            let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
             plan_stmt
                 .execute(params![
                     format!("plan:{key}"),
                     key.as_str(),
-                    Option::<&str>::None,
-                    source_kind_str(discovery.source_kind),
+                    profile_id_for_discovery(discovery),
+                    launch_kind_for_discovery(discovery),
                     discovery.source_path.as_str(),
-                    discovery.launch_ref.as_str(),
+                    plan_launch_ref.as_str(),
                     launcher_path,
                     payload_path,
                     discovery.core_id.as_str(),
@@ -1811,7 +1824,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 .execute(params![
                     key.as_str(),
                     discovery.title.as_str(),
-                    discovery.launch_ref.as_str(),
+                    plan_launch_ref.as_str(),
                     system_id.as_str(),
                     discovery.core_id.as_str(),
                     discovery.hardware_id.as_str()
@@ -2011,15 +2024,74 @@ fn discovery_unique_key(d: &GameDiscovery) -> String {
     }
 }
 
+#[cfg(test)]
 fn is_playable_discovery(d: &GameDiscovery) -> bool {
+    is_playable_discovery_with_coverage(d, &HashSet::new())
+}
+
+fn is_playable_discovery_with_coverage(
+    d: &GameDiscovery,
+    covered_payloads: &HashSet<String>,
+) -> bool {
     match d.source_kind {
         DiscoverySourceKind::Mra => true,
         DiscoverySourceKind::Mgl => is_launcher_launch_ref(&d.launch_ref),
-        DiscoverySourceKind::PayloadFile => false,
+        DiscoverySourceKind::PayloadFile => {
+            !covered_payloads.contains(&normalize_launch_path(&d.launch_ref))
+        }
+    }
+}
+
+fn covered_payload_paths(discoveries: &[GameDiscovery]) -> HashSet<String> {
+    let mut covered = HashSet::new();
+    for discovery in discoveries {
+        if discovery.source_kind != DiscoverySourceKind::Mgl {
+            continue;
+        }
+        let path = Path::new(&discovery.source_path);
+        let Some(mgl) = read_mgl_metadata(path) else {
+            continue;
+        };
+        let Some(payload) = mgl.file_path.as_deref() else {
+            continue;
+        };
+        let resolved = resolve_mgl_payload_path(path, payload);
+        covered.insert(normalize_launch_path(&resolved.display().to_string()));
+    }
+    covered
+}
+
+fn launch_kind_for_discovery(discovery: &GameDiscovery) -> &'static str {
+    match discovery.source_kind {
+        DiscoverySourceKind::Mra => "mra",
+        DiscoverySourceKind::Mgl => "mgl",
+        DiscoverySourceKind::PayloadFile => "virtual-mgl",
+    }
+}
+
+fn launch_ref_for_discovery(game_id: &str, discovery: &GameDiscovery) -> String {
+    match discovery.source_kind {
+        DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => discovery.launch_ref.clone(),
+        DiscoverySourceKind::PayloadFile => virtual_launch_ref(game_id),
+    }
+}
+
+fn virtual_launch_ref(game_id: &str) -> String {
+    format!("magik-plan:{game_id}")
+}
+
+fn profile_id_for_discovery(discovery: &GameDiscovery) -> Option<&str> {
+    if discovery.platform_id == "unknown" || discovery.platform_id.is_empty() {
+        None
+    } else {
+        Some(discovery.platform_id.as_str())
     }
 }
 
 fn is_launcher_launch_ref(path: &str) -> bool {
+    if path.starts_with("magik-plan:") {
+        return true;
+    }
     match path_ext(path).as_deref() {
         Some("mra" | "mgl") => !path.contains("::"),
         _ => false,
@@ -2157,48 +2229,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn support_roms_do_not_count_as_games() {
-        let discoveries = vec![
-            payload("/media/fat/games/Saturn/boot.rom"),
-            payload("/media/fat/games/PSX/bios/scph5501.bin"),
-            payload("/media/fat/games/Amiga/Kickstart.rom"),
-            payload("/media/fat/games/3DO/kanji.rom"),
-            payload("/media/fat/games/ARCHIE/riscos.rom"),
-            payload("/media/fat/games/C64/DolphinDOS_2.0.rom"),
-            payload("/media/fat/games/MACPLUS/Disk605.dsk"),
-            payload("/media/fat/games/NeoGeo-CD/uni-bioscd.rom"),
-            payload("/media/fat/games/SGB/Super Game Boy.sfc"),
-            payload("/media/fat/games/X68000/boot3.vhd"),
-            payload("/media/fat/games/Altair8800/basic4k32.rom"),
-            payload("/media/fat/games/Tamagotchi/background_gen2.bin"),
-            payload("/media/fat/games/AmigaCD32/CD32.rom"),
-        ];
+    fn profile_ignored_support_files_do_not_become_payloads() {
+        let profiles = launch_profiles::builtin_profiles();
 
-        assert_eq!(unique_discovery_count(&discoveries), 0);
+        assert!(matches!(
+            classify_profile_path(&profiles, Path::new("/media/fat/games/Saturn/boot.rom")),
+            Some((profile, ProfilePathClass::Ignored { reason: IgnoreReason::Bios, .. }))
+                if profile.id == "saturn"
+        ));
+        assert!(matches!(
+            classify_profile_path(&profiles, Path::new("/media/fat/games/AO486/boot1.rom")),
+            Some((profile, ProfilePathClass::Ignored { reason: IgnoreReason::Bios, .. }))
+                if profile.id == "ao486"
+        ));
     }
 
     #[test]
-    fn raw_payloads_do_not_count_as_launchable_games() {
+    fn raw_profile_payloads_generate_virtual_games() {
         let discoveries = vec![
             payload("/media/fat/games/NES/Super Mario Bros.nes"),
-            payload("/media/fat/games/MegaDrive/Bio-Hazard Battle.md"),
             payload("/media/fat/games/Saturn/Guardian Heroes.cue"),
-            payload("/media/fat/games/NES/Boot Hill.nes"),
         ];
 
-        assert_eq!(unique_discovery_count(&discoveries), 0);
+        assert_eq!(unique_discovery_count(&discoveries), 2);
     }
 
     #[test]
-    fn rbf_cores_do_not_count_as_games() {
-        let discoveries = vec![
-            payload("/media/fat/_Computer/AcornAtom_20251001.rbf"),
-            payload("/media/fat/_Console/Gameboy_20250618.rbf"),
-            payload("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf"),
-            payload("/media/fat/_YCArcade/cores/Arkanoid_20220517.rbf"),
-        ];
+    fn rbf_cores_are_not_profile_candidates() {
+        let profiles = launch_profiles::builtin_profiles();
 
-        assert_eq!(unique_discovery_count(&discoveries), 0);
+        assert!(classify_profile_path(
+            &profiles,
+            Path::new("/media/fat/_Computer/AcornAtom_20251001.rbf")
+        )
+        .is_none());
+        assert!(classify_profile_path(
+            &profiles,
+            Path::new("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf")
+        )
+        .is_none());
     }
 
     #[test]
@@ -2255,6 +2324,26 @@ mod tests {
         assert_eq!(discovery.source_path, path.display().to_string());
         assert_eq!(discovery.launch_ref, path.display().to_string());
         assert_eq!(discovery.platform_id, "nes");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn mgl_covered_payload_does_not_get_virtual_duplicate() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-mgl-dedupe-test-{}.mgl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><file delay="1" type="f" path="games/NES/Mario.nes"/></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+        let discoveries = vec![
+            mgl(&path.display().to_string(), &path.display().to_string()),
+            payload("/media/fat/games/NES/Mario.nes"),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 1);
         let _ = std::fs::remove_file(path);
     }
 
