@@ -985,6 +985,22 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::StarfieldWarp => {
+                    let d =
+                        dist2_from_center(local_x, local_y, screen.width(), screen.rows() as usize);
+                    let noise = hash2_u8(local_x / 4, local_y / 4) as u64;
+                    let max_r2 = ((screen.width() * screen.width()
+                        + screen.rows() as usize * screen.rows() as usize)
+                        / 4) as u64;
+                    if d.saturating_add(noise * 48) <= (max_r2 as f32 * progress * progress) as u64
+                    {
+                        curr
+                    } else if noise as u8 > 244u8.saturating_sub(alpha / 8) {
+                        brighten_565(prev)
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;

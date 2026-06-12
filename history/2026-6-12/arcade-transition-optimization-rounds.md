@@ -212,3 +212,23 @@ generic gate and decoration path.
 | round 25 focused copper-bars | 720 | 16392 | 16493 | 17 | 1 | 28712 |
 
 `copper-bars` is now inside the p95 60fps target.
+
+## Round 26 - Direct starfield-warp transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-STARFIELD-WARP-R26-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition starfield-warp --transition-ms 220 --visual-captures 0
+```
+
+This moves `starfield-warp` into a direct RGB565 arm. It preserves the distance
+plus hash-noise reveal and bright star sparkle while avoiding the generic
+gate/blend/decorate path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R25 mega starfield-warp segment | 71 | 41224 | 52061 | 54 | 54 | 32216 |
+| round 26 focused starfield-warp | 717 | 16424 | 18181 | 147 | 6 | 27892 |
+
+`starfield-warp` is much closer to the 60fps target, though it still needs a
+second pass for p95.
