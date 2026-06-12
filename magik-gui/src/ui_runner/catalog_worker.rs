@@ -37,15 +37,6 @@ pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<Catal
                     let _ = tx.send(CatalogWorkerMessage::Done);
                     return;
                 }
-                CatalogWorkerPlan::ReportMissingCache { title } => {
-                    let _ = tx.send(CatalogWorkerMessage::Progress {
-                        title: title.to_string(),
-                        detail: "Run mister-magik-fb library-refresh to build the library cache."
-                            .to_string(),
-                    });
-                    let _ = tx.send(CatalogWorkerMessage::Done);
-                    return;
-                }
                 CatalogWorkerPlan::RefreshInProcess => {
                     if cache_state != CatalogCacheState::Ready {
                         let _ = tx.send(CatalogWorkerMessage::Progress {
@@ -111,7 +102,6 @@ enum CatalogCacheState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatalogWorkerPlan {
     UseCacheOnly,
-    ReportMissingCache { title: &'static str },
     RefreshInProcess,
 }
 
@@ -124,12 +114,9 @@ fn catalog_worker_plan(
     }
     match cache_state {
         CatalogCacheState::Ready => CatalogWorkerPlan::UseCacheOnly,
-        CatalogCacheState::Empty => CatalogWorkerPlan::ReportMissingCache {
-            title: "Library cache empty",
-        },
-        CatalogCacheState::Missing => CatalogWorkerPlan::ReportMissingCache {
-            title: "Library cache missing",
-        },
+        CatalogCacheState::Empty | CatalogCacheState::Missing => {
+            CatalogWorkerPlan::RefreshInProcess
+        }
     }
 }
 
@@ -176,18 +163,14 @@ mod tests {
     }
 
     #[test]
-    fn catalog_worker_reports_missing_cache_without_refresh() {
+    fn catalog_worker_refreshes_missing_or_empty_cache_without_refresh() {
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Missing, false),
-            CatalogWorkerPlan::ReportMissingCache {
-                title: "Library cache missing"
-            }
+            CatalogWorkerPlan::RefreshInProcess
         );
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Empty, false),
-            CatalogWorkerPlan::ReportMissingCache {
-                title: "Library cache empty"
-            }
+            CatalogWorkerPlan::RefreshInProcess
         );
     }
 

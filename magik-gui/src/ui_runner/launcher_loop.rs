@@ -192,17 +192,13 @@ pub(super) fn run_launcher_loop(
         } else {
             "".into()
         }
-    } else if catalog_refresh {
-        "Indexing library".into()
     } else {
-        "Library cache missing".into()
+        "Indexing library".into()
     });
     bridge.set_catalog_scan_detail(if catalog_ready {
         format!("Using cached {} games", catalog.len()).into()
-    } else if catalog_refresh {
-        "Starting scan...".into()
     } else {
-        "Run mister-magik-fb library-refresh to build the library cache.".into()
+        "No cached catalog; scanning library...".into()
     });
     sync_bridge_launcher(
         &app,
