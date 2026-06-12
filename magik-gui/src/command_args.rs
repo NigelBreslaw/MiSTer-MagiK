@@ -4,6 +4,7 @@ pub const COMMANDS: &[&str] = &[
     "fb",
     "fb-current",
     "fb-format-smoke",
+    "early-black",
     "ui",
     "scenes",
     "effects",

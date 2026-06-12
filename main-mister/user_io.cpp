@@ -1490,6 +1490,10 @@ void user_io_init(const char *path, const char *xml)
 	}
 
 	video_init();
+	if (is_menu() && mister_magik_launcher_configured())
+	{
+		mister_magik_launcher_route_early_black();
+	}
 	if (strlen(cfg.font)) LoadFont(cfg.font);
 	load_volume();
 
@@ -1540,7 +1544,10 @@ void user_io_init(const char *path, const char *xml)
 			else if (is_menu())
 			{
 				user_io_status_set("[4]", (cfg.menu_pal) ? 1 : 0);
-				if (mister_magik_launcher_configured()) mister_magik_launcher_init_for_menu();
+				if (mister_magik_launcher_configured())
+				{
+					mister_magik_launcher_init_for_menu();
+				}
 				else
 				if (cfg.fb_terminal) video_menu_bg(user_io_status_get("[3:1]"));
 				else user_io_status_set("[3:1]", 0);

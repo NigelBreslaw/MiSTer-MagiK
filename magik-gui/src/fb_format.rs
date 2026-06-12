@@ -19,6 +19,13 @@ impl FramebufferFormat {
         }
     }
 
+    pub const fn from_bits_per_pixel(bits_per_pixel: u32) -> Self {
+        match bits_per_pixel {
+            16 => Self::Rgb565,
+            _ => Self::Xrgb8888,
+        }
+    }
+
     pub const fn fpga_format_bits(self) -> u16 {
         match self {
             Self::Xrgb8888 => FB_FMT_8888,
@@ -71,15 +78,19 @@ impl FramebufferFormat {
         align16(width * self.bytes_per_pixel())
     }
 
-    #[cfg(test)]
-    pub fn mode_line(self, width: usize, height: usize, rb: bool) -> String {
+    pub fn mode_line(self, width: usize, height: usize, stride_bytes: usize, rb: bool) -> String {
+        let stride_bytes = if stride_bytes == 0 {
+            self.stride_bytes(width)
+        } else {
+            stride_bytes
+        };
         format!(
             "{} {} {} {} {}",
             self.mister_mode_format(),
             if rb { 1 } else { 0 },
             width,
             height,
-            self.stride_bytes(width)
+            stride_bytes
         )
     }
 }
@@ -106,12 +117,36 @@ mod tests {
     #[test]
     fn mode_lines_include_format_and_rb() {
         assert_eq!(
-            FramebufferFormat::Xrgb8888.mode_line(960, 540, true),
+            FramebufferFormat::Xrgb8888.mode_line(960, 540, 0, true),
             "8888 1 960 540 3840"
         );
         assert_eq!(
-            FramebufferFormat::Rgb565.mode_line(960, 540, true),
+            FramebufferFormat::Rgb565.mode_line(960, 540, 0, true),
             "565 1 960 540 1920"
+        );
+    }
+
+    #[test]
+    fn mode_lines_preserve_reported_stride() {
+        assert_eq!(
+            FramebufferFormat::Xrgb8888.mode_line(960, 540, 3840, true),
+            "8888 1 960 540 3840"
+        );
+        assert_eq!(
+            FramebufferFormat::Rgb565.mode_line(960, 540, 1920, true),
+            "565 1 960 540 1920"
+        );
+    }
+
+    #[test]
+    fn format_can_be_restored_from_framebuffer_bpp() {
+        assert_eq!(
+            FramebufferFormat::from_bits_per_pixel(16).mode_line(960, 540, 1920, true),
+            "565 1 960 540 1920"
+        );
+        assert_eq!(
+            FramebufferFormat::from_bits_per_pixel(32).mode_line(960, 540, 3840, true),
+            "8888 1 960 540 3840"
         );
     }
 }

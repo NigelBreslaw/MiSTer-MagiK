@@ -501,7 +501,7 @@ void OsdClear(void)
 // enable displaying of OSD
 void OsdEnable(unsigned char mode)
 {
-	if (mister_magik_launcher_active())
+	if (mister_magik_launcher_osd_suppressed())
 	{
 		mister_magik_note_osd_suppressed();
 		mister_magik_boot_analytics_event("main-osd", "OsdEnable_suppressed", "mode=%u", mode);
@@ -517,7 +517,7 @@ void OsdEnable(unsigned char mode)
 
 void InfoEnable(int x, int y, int width, int height)
 {
-	if (mister_magik_launcher_active())
+	if (mister_magik_launcher_osd_suppressed())
 	{
 		mister_magik_note_osd_suppressed();
 		mister_magik_boot_analytics_event(
@@ -558,7 +558,7 @@ void OsdDisable()
 
 void OsdMenuCtl(int en)
 {
-	if (mister_magik_launcher_active())
+	if (mister_magik_launcher_osd_suppressed())
 	{
 		mister_magik_note_osd_suppressed();
 		mister_magik_boot_analytics_event("main-osd", "OsdMenuCtl_suppressed", "en=%d", en);
@@ -701,7 +701,7 @@ void OsdUpdate()
 	}
 	if (dirty_lines)
 	{
-		if (mister_magik_launcher_active())
+		if (mister_magik_launcher_osd_suppressed())
 		{
 			mister_magik_note_osd_suppressed();
 			mister_magik_boot_analytics_event(

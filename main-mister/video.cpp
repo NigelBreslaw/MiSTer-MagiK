@@ -3270,6 +3270,16 @@ void video_mode_adjust(bool force)
 
 static void fb_write_module_params()
 {
+	if (mister_magik_launcher_active())
+	{
+		mister_magik_boot_analytics_event(
+		    "main-video",
+		    "fb_write_module_params_suppressed",
+		    "fb_width=%d fb_height=%d stride=%d",
+		    fb_width, fb_height, fb_width * 4);
+		return;
+	}
+
 	int width = fb_width;
 	int height = fb_height;
 	offload_add_work([=]
@@ -3286,6 +3296,17 @@ static void fb_write_module_params()
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
+
+	if (mister_magik_launcher_active())
+	{
+		mister_magik_boot_analytics_event(
+		    "main-video",
+		    "video_fb_enable_suppressed",
+		    "requested_enable=%d requested_n=%d fb_enabled=%d fb_num=%d fb_width=%d fb_height=%d direct_video=%d is_menu=%d menu_bg=%d menu_bgn=%d",
+		    enable, n, fb_enabled, fb_num, fb_width, fb_height, cfg.direct_video, is_menu(),
+		    menu_bg, menu_bgn);
+		return;
+	}
 
 	if (fb_base)
 	{

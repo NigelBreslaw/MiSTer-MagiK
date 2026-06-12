@@ -1,7 +1,7 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
-use crate::fb::{Display, Pixel, VsyncPacer};
+use crate::fb::{Display, VsyncPacer};
 use crate::fb_format::FramebufferFormat;
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
@@ -249,7 +249,17 @@ pub fn run_ui(f: &mut Fpga) {
     };
     let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
     println!("{}", ui.log_line());
-    disp.record_visual_sample("after_display_open_before_initial_route");
+    disp.clear_black();
+    boot_analytics::event(
+        "early_black_frame_copied",
+        format!(
+            "format={} w={} h={}",
+            fb_format.label(),
+            disp.width(),
+            disp.height()
+        ),
+    );
+    disp.record_visual_sample("after_early_black_frame_before_initial_route");
     let display_config = match DisplayConfig::detect(f, disp.info(), &ui) {
         Ok(config) => config,
         Err(e) => {
@@ -295,6 +305,17 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event(
         "initial_fb_enable_direct_done",
         format!("support_flag={flag}"),
+    );
+    boot_analytics::event(
+        "rust_framebuffer_route_completed",
+        format!(
+            "format={} w={} h={} scan={}x{} support_flag={flag}",
+            fb_format.label(),
+            disp.width(),
+            disp.height(),
+            UI_HDMI_W,
+            UI_HDMI_H
+        ),
     );
     disp.record_visual_sample("after_initial_route_before_slint_draw");
     match f.set_audio_volume(0) {

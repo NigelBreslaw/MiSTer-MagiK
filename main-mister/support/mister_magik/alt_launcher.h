@@ -3,6 +3,8 @@
 void mister_magik_launcher_cfg_apply(void);
 bool mister_magik_launcher_configured(void);
 bool mister_magik_launcher_active(void);
+bool mister_magik_launcher_osd_suppressed(void);
+void mister_magik_launcher_route_early_black(void);
 void mister_magik_launcher_init_for_menu(void);
 void mister_magik_launcher_poll(void);
 void mister_magik_launcher_shutdown(void);

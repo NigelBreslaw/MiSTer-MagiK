@@ -29,6 +29,10 @@ screen, controller input).
 - ✅ **Production boot** — update_all-compatible handoff:
   `/etc/inittab` boots stock `/media/fat/MiSTer`, then `[MiSTer]
   main=MiSTer_MagiK` re-execs the Main fork, which launches Slint as its child.
+- ✅ **Slint-owned MagiK framebuffer handoff** — Main initializes HDMI, then
+  Rust clears and routes `/dev/fb0` with the selected `MISTER_FB_FORMAT`
+  before the full Slint UI starts. Main no longer writes the MagiK launcher
+  framebuffer mode or generic 8888 route while Slint is active.
 - ✅ **HDMI boot verified** — `MiSTer.ini` is edited through the Rust
   comment-preserving mutator, with `[MiSTer] main=MiSTer_MagiK` and
   launcher-specific `[Menu] direct_video=0` / `video_mode=8`. Keep global
@@ -135,7 +139,8 @@ the Slint binary runs before `video_init()` and the TV gets no HDMI signal (§7)
 
 To show Slint on HDMI we need:
 
-1. **`video_fb_enable(1, 0)`** — FPGA SPI (`SET_FBUF`) pointing scan-out at buffer 0.
+1. **Rust-owned `SET_FBUF`** — `magik-gui/src/fpga.rs` points scan-out at
+   buffer 0 with the Slint-selected format/stride.
 2. **Correct launcher HDMI mode** — the launcher path uses global `[MiSTer]
    direct_video=0`, plus `[Menu] direct_video=0` and `[Menu] video_mode=8`.
    Normal arcade games use `[arcade] direct_video=1`; vertical arcade games use
@@ -144,11 +149,14 @@ To show Slint on HDMI we need:
 3. **A render loop** — custom Slint `Platform`, vsync pacing, dirty-row copy into
    write-combined `/dev/fb0` (§9.7).
 
-The Main fork spawn Slint through `agetty` on
-`tty2`, switch to VT2, call Main's `video_fb_enable(1)`, and let the Slint child
-continue rendering to `/dev/fb0`. Slint also has Rust SPI diagnostics
-(`magik-gui/src/fpga.rs`) for reading/reasserting framebuffer state. Games launch
-by spawning MiSTer briefly and writing fifo `load_core` (§7). Do
+The Main fork spawns Slint through `agetty` on `tty2`, switches to VT2, releases
+Main's input grab, suppresses the stock OSD/menu path, and leaves framebuffer
+mode/routing to Rust. After `video_init()`, Main runs
+`mister-magik-fb early-black` once; that helper writes the selected
+`/dev/fb0` mode, clears a black frame, and routes buffer 0. The full Slint child
+then repeats the same ownership step before drawing UI. Slint also has Rust SPI
+diagnostics (`magik-gui/src/fpga.rs`) for reading/reasserting framebuffer state.
+Games launch by spawning MiSTer briefly and writing fifo `load_core` (§7). Do
 **not** use external `rbf_load` from Slint — bricks HDMI.
 
 **F9 / keep-MiSTer-running was tried and rejected:** MiSTer keeps `EVIOCGRAB`
@@ -326,10 +334,14 @@ can later be managed by update_all. Rollback is simple: remove
 
 Like Zaparoo, the fork must suppress the normal menu path as soon as the
 alternate launcher is configured. The fork writes a tiny `/tmp/mister_magik_launcher`
-script, starts it through `/sbin/agetty` on `tty2`, switches to VT2, calls
-`video_fb_enable(1)`, and hides any visible menu OSD. This exact sequence fixed
-the blank/static/zoomed HDMI path once `MiSTer.ini` used the launcher-specific
-`[Menu] direct_video=0` / `video_mode=8` settings.
+script, starts it through `/sbin/agetty` on `tty2`, switches to VT2, releases
+Main's input grab, and hides any visible menu OSD. Main must not write
+`/sys/module/MiSTer_fb/parameters/mode` or send its generic 8888
+`video_fb_enable(1)` while the MagiK launcher is active; Rust owns the
+framebuffer format/stride and `SET_FBUF` route. The one intentional pre-UI frame
+is Rust-owned black from `mister-magik-fb early-black`, run after Main's
+`video_init()` and before the child launcher is spawned. This path depends on
+the launcher-specific `[Menu] direct_video=0` / `video_mode=8` settings.
 
 **Game launch:** Slint spawns MiSTer if needed, writes `load_core <path.mra>` to
 `/dev/MiSTer_cmd`, then exits when the arcade core is detected. On launch failure,
@@ -508,14 +520,20 @@ Important gotchas:
   Slint was already rendering. It also found the old fixed-mode reassert loop
   and right-edge `/dev/fb0` changes. See
   `history/2026-6-5/boot-flicker-analytics.md`.
-- **Boot black screen is currently self-inflicted by timing.** Whole-boot
-  analytics showed Main routes HDMI to `/dev/fb0` while the buffer is still
-  black, then Slint waits on cached arcade catalog load before its first render.
-  In the `2026-06-07` capture, `fb0` was routed at boot `5114ms`, Slint first
-  copied at `7420ms`, and the catalog cache load consumed about `1.24s`. Static
-  visible before `MiSTer_MagiK main_start` is outside the fork lifetime, likely
-  stock `/media/fat/MiSTer` before `main=` reexec. See
+- **Boot black screen was caused by routing an unpainted framebuffer.**
+  Whole-boot analytics showed Main routing HDMI to `/dev/fb0` while the buffer
+  was still black, then Slint waiting on cached arcade catalog load before its
+  first render. The current handoff makes Rust clear a black frame and route
+  `/dev/fb0` itself before constructing the full UI. Static visible before
+  `MiSTer_MagiK main_start` is outside the fork lifetime, likely stock
+  `/media/fat/MiSTer` before `main=` reexec. See
   `history/2026-6-7/whole-boot-visual-analytics.md`.
+- **Do not mark the launcher runtime-active before `video_init()`.** That was
+  tried while diagnosing boot static and broke Rust `SET_FBUF` support reads
+  (`support_flag=0` / zeroed UIO reads). Early suppression before the child
+  starts must be OSD-only; framebuffer ownership begins with the Rust
+  `early-black` helper after Main has initialized video. See
+  `history/2026-6-12/slint-owned-magik-framebuffer.md`.
 
 ---
 

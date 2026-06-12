@@ -28,7 +28,12 @@ This is not an official MiSTer-devel build. The experiment binary is deployed as
 - Main keeps polling while Slint is a child process.
 - Like Zaparoo, the fork uses an `agetty` handoff on `tty2`: it writes
   `/tmp/mister_magik_launcher`, starts `/sbin/agetty -l` against that script,
-  switches to VT2, calls `video_fb_enable(1)`, and hides any open menu OSD.
+  switches to VT2, releases Main's input grab, and hides any open menu OSD.
+- Main does not route the MagiK launcher framebuffer with its generic
+  `video_fb_enable(1)` path. After `video_init()`, it runs
+  `mister-magik-fb early-black` once so Rust writes the selected `/dev/fb0`
+  mode, clears black, and sends the `SET_FBUF` route before the full Slint child
+  starts. The Slint child repeats that ownership step before drawing UI.
 - `MiSTer.ini` must keep global `[MiSTer] direct_video=0` for stable launcher
   boot. Normal arcade original-timing output belongs in `[arcade]
   direct_video=1`. Rotated arcade games must use `[arcade_vertical]
@@ -48,7 +53,10 @@ and then uses Main's existing `xml_load` / `fpga_load_rbf` path.
 - `support/mister_magik/alt_launcher.cpp`: Zaparoo-style Slint child lifecycle.
 - `cfg.cpp`: applies launcher-friendly config when the child binary exists.
 - `scheduler.cpp`: polls the launcher child.
-- `user_io.cpp`: starts the launcher after the menu core is initialized.
+- `user_io.cpp`: runs the Rust early-black helper after `video_init()`, then
+  starts the launcher after the menu core is initialized.
+- `video.cpp`: suppresses Main framebuffer mode/route writes while the launcher
+  is active.
 - `input.cpp`: handles `mister_magik_launch`.
 
 ## Install model

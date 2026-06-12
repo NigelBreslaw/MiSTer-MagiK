@@ -17,6 +17,7 @@
 #include "cfg.h"
 #include "file_io.h"
 #include "hardware.h"
+#include "input.h"
 #include "menu.h"
 #include "osd.h"
 #include "user_io.h"
@@ -45,6 +46,7 @@ static bool s_gave_up = false;
 static bool s_escaped = false;
 static bool s_last_spawn_was_bench = false;
 static bool s_stock_menu_enabled = false;
+static bool s_osd_suppression_intended = false;
 static bool s_deploy_lock_waiting = false;
 static unsigned long s_analytics_seq = 0;
 static bool s_analytics_header_written = false;
@@ -163,6 +165,7 @@ void mister_magik_status_write(void)
 	fprintf(f, "\"escaped\":%s,", s_escaped ? "true" : "false");
 	fprintf(f, "\"bench_active\":%s,", s_last_spawn_was_bench ? "true" : "false");
 	fprintf(f, "\"stock_menu_enabled\":%s,", s_stock_menu_enabled ? "true" : "false");
+	fprintf(f, "\"osd_suppression_intended\":%s,", s_osd_suppression_intended ? "true" : "false");
 	fprintf(f, "\"deploy_locked\":%s,", deploy_lock_active() ? "true" : "false");
 	fprintf(f, "\"tty_ready\":%s,", (s_pid && launcher_tty_ready(s_pid)) ? "true" : "false");
 	fprintf(f, "\"active_vt\":");
@@ -380,9 +383,9 @@ static void analytics_state(const char *event, const char *extra_fmt = NULL, ...
 		sanitize_detail(extra);
 	}
 
-	analytics_event(event, "pid=%d crash_count=%d respawn_timer=%lu init_pending=%d gave_up=%d escaped=%d deploy_locked=%d tty_ready=%d active_vt=%s fb_mode=%s%s%s",
+	analytics_event(event, "pid=%d crash_count=%d respawn_timer=%lu init_pending=%d gave_up=%d escaped=%d osd_suppression_intended=%d deploy_locked=%d tty_ready=%d active_vt=%s fb_mode=%s%s%s",
 	                s_pid, s_crash_count, s_respawn_timer, s_init_pending, s_gave_up,
-	                s_escaped, deploy_lock_active() ? 1 : 0,
+	                s_escaped, s_osd_suppression_intended, deploy_lock_active() ? 1 : 0,
 	                s_pid ? launcher_tty_ready(s_pid) : 0,
 	                active_vt[0] ? active_vt : "unknown",
 	                fb_mode[0] ? fb_mode : "unknown",
@@ -405,8 +408,68 @@ void mister_magik_launcher_cfg_apply(void)
 
 	// Same production assumption as Zaparoo: the fork is single-purpose while
 	// the frontend is installed, so keep the Linux framebuffer path available.
+	if (!s_osd_suppression_intended)
+	{
+		s_osd_suppression_intended = true;
+		analytics_event("launcher_osd_suppression_begin", "path=%s", s_launcher_path);
+		mister_magik_status_write();
+	}
 	cfg.fb_terminal = 1;
 	cfg.recents = 1;
+}
+
+void mister_magik_launcher_route_early_black(void)
+{
+	if (!mister_magik_launcher_configured())
+		return;
+
+	if (!FileExists(s_launcher_path, 0))
+	{
+		analytics_event("early_black_missing_launcher", "path=%s", s_launcher_path);
+		return;
+	}
+
+	char path[2100];
+	strncpy(path, getFullPath(s_launcher_path), sizeof(path) - 1);
+	path[sizeof(path) - 1] = '\0';
+
+	analytics_event("early_black_spawn", "path=%s", path);
+	pid_t pid = fork();
+	if (pid < 0)
+	{
+		analytics_event("early_black_fork_failed", "errno=%d error=%s", errno, strerror(errno));
+		return;
+	}
+
+	if (!pid)
+	{
+		setenv("MISTER_MAGIK_PARENT", "main-mister", 1);
+		if (analytics_enabled()) setenv("MISTER_BOOT_ANALYTICS", "1", 1);
+		execl(path, path, "early-black", NULL);
+		_exit(127);
+	}
+
+	int status = 0;
+	for (int i = 0; i < 100; i++)
+	{
+		if (waitpid(pid, &status, WNOHANG) == pid)
+		{
+			analytics_event(
+			    "early_black_exit",
+			    "pid=%d exited=%d status=%d signaled=%d signal=%d",
+			    pid,
+			    WIFEXITED(status) ? 1 : 0,
+			    WIFEXITED(status) ? WEXITSTATUS(status) : 0,
+			    WIFSIGNALED(status) ? 1 : 0,
+			    WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+			return;
+		}
+		usleep(10000);
+	}
+
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+	analytics_event("early_black_timeout", "pid=%d", pid);
 }
 
 static void clear_launcher_tty(void)
@@ -517,6 +580,7 @@ static void wait_launcher_stopped(pid_t pid)
 static void return_to_normal_mode(void)
 {
 	analytics_state("return_to_normal_mode_start");
+	s_osd_suppression_intended = false;
 	s_stock_menu_enabled = true;
 	s_escaped = true;
 	user_io_osd_key_enable(1);
@@ -532,6 +596,7 @@ static void return_to_normal_mode(void)
 
 static void stay_in_magik_mode(const char *reason)
 {
+	s_osd_suppression_intended = false;
 	s_stock_menu_enabled = false;
 	s_escaped = false;
 	s_respawn_timer = 0;
@@ -677,9 +742,9 @@ static void spawn(void)
 	analytics_state("tty_ready");
 	video_chvt(s_vt);
 	analytics_state("chvt_tty2");
-	video_fb_enable(1);
+	input_switch(0);
 	mister_magik_status_write();
-	analytics_state("video_fb_enable_on");
+	analytics_state("fb_route_deferred_to_slint");
 	if (menu_present()) MenuHide();
 	OsdDisable();
 	analytics_state("menu_hide", "menu_present_after=%d", menu_present());
@@ -688,6 +753,17 @@ static void spawn(void)
 bool mister_magik_launcher_active(void)
 {
 	return launcher_runtime_active();
+}
+
+bool mister_magik_launcher_osd_suppressed(void)
+{
+	if (launcher_runtime_active())
+		return true;
+	if (s_stock_menu_enabled || s_gave_up || s_escaped)
+		return false;
+	if (!s_osd_suppression_intended)
+		return false;
+	return true;
 }
 
 bool mister_magik_boot_analytics_enabled(void)
@@ -739,10 +815,10 @@ void mister_magik_launcher_init_for_menu(void)
 	s_stock_menu_enabled = false;
 	user_io_osd_key_enable(0);
 	OsdDisable();
-	video_fb_enable(1);
+	input_switch(0);
 	log_msg("init_for_menu");
 	mister_magik_status_write();
-	analytics_state("init_for_menu");
+	analytics_state("init_for_menu", "fb_route=deferred_to_slint");
 }
 
 void mister_magik_launcher_poll(void)
@@ -855,6 +931,7 @@ void mister_magik_launcher_shutdown(void)
 	s_escaped = false;
 	s_last_spawn_was_bench = false;
 	s_stock_menu_enabled = false;
+	s_osd_suppression_intended = false;
 	user_io_osd_key_enable(0);
 	video_fb_enable(0);
 	reset_launcher_tty();

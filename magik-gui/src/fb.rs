@@ -351,12 +351,12 @@ impl FbInfo {
     pub fn mode_line(self) -> String {
         let w = self.visible_w.max(1);
         let h = self.visible_h.max(1);
-        let stride = if self.stride_bytes != 0 {
-            self.stride_bytes
-        } else {
-            w * 4
-        };
-        format!("8888 1 {w} {h} {stride}")
+        FramebufferFormat::from_bits_per_pixel(self.bits_per_pixel).mode_line(
+            w,
+            h,
+            self.stride_bytes,
+            true,
+        )
     }
 }
 
@@ -736,6 +736,13 @@ impl Display {
     #[allow(dead_code)]
     pub fn clear(&mut self, color: Pixel) {
         self.buffer_mut().fill(color);
+    }
+
+    pub fn clear_black(&mut self) {
+        match self.format {
+            FramebufferFormat::Xrgb8888 => self.buffer_mut().fill(Pixel(0)),
+            FramebufferFormat::Rgb565 => self.buffer_565_mut().fill(Rgb565Pixel(0)),
+        }
     }
 
     pub fn right_edge_signature(&self, cols: usize) -> (u64, u32) {
@@ -1264,6 +1271,31 @@ fn boot_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fb_info(bits_per_pixel: u32, stride_bytes: usize) -> FbInfo {
+        FbInfo {
+            visible_w: 960,
+            visible_h: 540,
+            virtual_w: 960,
+            virtual_h: 540,
+            stride_bytes,
+            bits_per_pixel,
+            red_offset: if bits_per_pixel == 16 { 11 } else { 16 },
+            green_offset: if bits_per_pixel == 16 { 5 } else { 8 },
+            blue_offset: 0,
+            transp_offset: 0,
+        }
+    }
+
+    #[test]
+    fn mode_line_preserves_rgb565_framebuffer_mode() {
+        assert_eq!(fb_info(16, 1920).mode_line(), "565 1 960 540 1920");
+    }
+
+    #[test]
+    fn mode_line_preserves_xrgb8888_framebuffer_mode() {
+        assert_eq!(fb_info(32, 3840).mode_line(), "8888 1 960 540 3840");
+    }
 
     fn test_pacer(period_us: u64) -> VsyncPacer {
         let (_tx, rx) = mpsc::channel();

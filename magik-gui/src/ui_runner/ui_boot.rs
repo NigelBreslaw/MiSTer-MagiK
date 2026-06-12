@@ -72,7 +72,7 @@ extern "C" fn restore_fb_mode_at_exit() {
     }
 }
 
-pub(super) fn ui_fpga_scaled_mode() -> Mode {
+pub(crate) fn ui_fpga_scaled_mode() -> Mode {
     Mode {
         hact: UI_HDMI_W,
         hbp: 3,

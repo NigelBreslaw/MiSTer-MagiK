@@ -60,6 +60,8 @@ use fb::{Display, Pixel, VsyncPacer};
 use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::FramebufferFormat;
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
+use ui_display::{UI_FB_H, UI_FB_W};
+use ui_runner::ui_boot::ui_fpga_scaled_mode;
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
@@ -110,6 +112,7 @@ fn main() {
         "fb" => fb_current_probe(&mut f),
         "fb-current" => fb_current_probe(&mut f),
         "fb-format-smoke" => fb_format_smoke(&mut f),
+        "early-black" => early_black_route(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
         "effects" => ui_runner::print_effects(),
@@ -473,6 +476,72 @@ fn route_framebuffer(f: &mut Fpga) {
         }
     };
     println!("route: fb0 {w}x{h} -> HDMI support_flag={flag}");
+}
+
+fn early_black_route(f: &mut Fpga) {
+    let format = FramebufferFormat::from_env();
+    if let Err(e) =
+        Display::write_mister_mode_format(format, UI_FB_W, UI_FB_H, format.stride_bytes(UI_FB_W))
+    {
+        eprintln!("early-black: failed to set framebuffer mode: {e}");
+        std::process::exit(1);
+    }
+
+    let mut disp = match Display::open_with_format(UI_FB_W, UI_FB_H, format) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("early-black: failed to open /dev/fb0: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    disp.clear_black();
+    boot_analytics::event(
+        "early_black_route_frame_copied",
+        format!(
+            "format={} w={} h={}",
+            format.label(),
+            disp.width(),
+            disp.height()
+        ),
+    );
+
+    let route_mode = ui_fpga_scaled_mode();
+    let flag = match f.fb_enable_format(
+        0,
+        disp.width() as u16,
+        disp.height() as u16,
+        route_mode,
+        Some(0),
+        Some(0),
+        std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+        format,
+    ) {
+        Ok(flag) => flag,
+        Err(e) => {
+            eprintln!("early-black: failed to route framebuffer: {e}");
+            std::process::exit(1);
+        }
+    };
+    boot_analytics::event(
+        "early_black_route_completed",
+        format!(
+            "format={} w={} h={} scan={}x{} support_flag={flag}",
+            format.label(),
+            disp.width(),
+            disp.height(),
+            route_mode.hact,
+            route_mode.vact
+        ),
+    );
+    println!(
+        "early-black: routed {} {}x{} -> {}x{} support_flag={flag}",
+        format.label(),
+        disp.width(),
+        disp.height(),
+        route_mode.hact,
+        route_mode.vact
+    );
 }
 
 fn fb_current_probe(f: &mut Fpga) {
