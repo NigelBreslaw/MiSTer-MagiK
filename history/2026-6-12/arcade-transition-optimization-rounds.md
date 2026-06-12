@@ -101,3 +101,21 @@ same tile hash as the generic gate.
 | round 19 focused tile-loader | 721 | 16368 | 16545 | 16 | 1 | 28644 |
 
 `tile-loader` is now inside the p95 60fps target.
+
+## Round 20 - Direct mask-blit transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-MASK-BLIT-R20-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition mask-blit --transition-ms 220 --visual-captures 0
+```
+
+This moves `mask-blit` into a direct RGB565 binary selection arm using the same
+bit-mask expression as the generic transition gate.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| transition mega scan mask-blit segment | 97 | 32360 | 33764 | 96 | 96 | 32388 |
+| round 20 focused mask-blit | 720 | 16391 | 16515 | 14 | 1 | 28644 |
+
+`mask-blit` is now inside the p95 60fps target.

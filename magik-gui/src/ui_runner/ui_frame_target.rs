@@ -930,6 +930,14 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::MaskBlit => {
+                    let mask = ((local_x ^ local_y) + (local_x / 7) + (local_y / 11)) & 255;
+                    if mask <= alpha as usize {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;
