@@ -289,3 +289,22 @@ same plasma gate as the generic path.
 
 `plasma-mask` is much closer to the 60fps target, though it still needs a second
 pass for p95.
+
+## Round 30 - Direct moire-rings transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-MOIRE-RINGS-R30-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition moire-rings --transition-ms 220 --visual-captures 0
+```
+
+This moves `moire-rings` into a direct RGB565 binary selection arm using the
+same distance-ring gate as the generic path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R27 mega moire-rings segment | 88 | 33862 | 44254 | 73 | 73 | 32892 |
+| round 30 focused moire-rings | 648 | 18218 | 20551 | 641 | 73 | 27508 |
+
+`moire-rings` is much closer to the 60fps target, though it still needs a
+second pass for p95.

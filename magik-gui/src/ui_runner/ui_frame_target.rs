@@ -1033,6 +1033,20 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::MoireRings => {
+                    let ring = ((dist2_from_center(
+                        local_x,
+                        local_y,
+                        screen.width(),
+                        screen.rows() as usize,
+                    ) / 96)
+                        & 255) as u8;
+                    if ring <= alpha || ring.abs_diff(alpha) < 12 {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;
