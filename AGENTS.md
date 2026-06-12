@@ -481,6 +481,17 @@ Important gotchas:
   Also treat raw `.rbf` core binaries and menu-level `.mgl` launchers in
   `_Computer` / `_Console` / `_Other` / `_Utility` as helpers, while preserving
   DOS game `.mgl` files whose payload is under `media/...`.
+- **AmigaVision is a launcher HDF, not a raw compressed-game set.** The MiSTer
+  entry is `_Computer/Amiga.mgl` (`setname=Amiga`) and requires the extracted
+  `games/Amiga/AmigaVision.hdf`, ROM/config files, listings, and optional
+  `games/Amiga/shared` directory from the AmigaVision MiSTer archive. Individual
+  game launches work by writing a title from `games/Amiga/listings/games.txt` to
+  `games/Amiga/shared/ags_boot` before loading `_Computer/Amiga.mgl`; AmigaVision's
+  startup sequence consumes that file and runs the matching AGS launch script.
+  Do not treat the top-level `AmigaVision*.7z` itself as a playable launch
+  target. The upstream MiSTer package removes `games/Amiga/Visuals`, so screenshots
+  for MagiK need a separate source such as upstream `data/img/*.iff` conversion or
+  HDF/AGS extraction if present.
 - **Perf runs can be contaminated by a 30fps cadence.** We observed benchmark
   scenes sometimes starting in a bad 30fps/vsync phase after repeated Slint
   restarts or immediately after deploy/reboot, then recovering later. For
