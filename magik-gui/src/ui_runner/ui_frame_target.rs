@@ -923,6 +923,13 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::TileLoader => {
+                    if hash2_u8(local_x / 24, local_y / 24) <= alpha {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;

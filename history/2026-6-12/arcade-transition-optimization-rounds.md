@@ -83,3 +83,21 @@ direct binary current/previous selection in the RGB565 loop.
 | round 18 focused venetian-blinds | 721 | 16374 | 16462 | 14 | 1 | 28644 |
 
 `venetian-blinds` is now inside the p95 60fps target.
+
+## Round 19 - Direct tile-loader transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-TILE-LOADER-R19-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition tile-loader --transition-ms 220 --visual-captures 0
+```
+
+This moves `tile-loader` into a direct RGB565 binary selection arm using the
+same tile hash as the generic gate.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| transition mega scan tile-loader segment | 88 | 33096 | 34398 | 88 | 88 | 32388 |
+| round 19 focused tile-loader | 721 | 16368 | 16545 | 16 | 1 | 28644 |
+
+`tile-loader` is now inside the p95 60fps target.
