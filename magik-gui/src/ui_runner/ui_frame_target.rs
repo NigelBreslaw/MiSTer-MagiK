@@ -891,6 +891,16 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::BarnDoor => {
+                    let half = reveal_w / 2;
+                    if local_x >= cx.saturating_sub(half)
+                        && local_x <= (cx + half).min(screen.width())
+                    {
+                        curr
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::Checker => {
                     if hash2_u8(local_x / 16, local_y / 16) <= alpha {
                         curr

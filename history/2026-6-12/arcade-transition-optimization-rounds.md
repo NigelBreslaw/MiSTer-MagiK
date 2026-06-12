@@ -47,3 +47,21 @@ shape while removing libm work from the inner loop.
 
 `clock-wipe` is still too expensive for 60fps, but this is a large measured
 first cut and removes the worst per-pixel operation.
+
+## Round 17 - Direct barn-door transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-BARN-R17-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition barn-door --transition-ms 220 --visual-captures 0
+```
+
+This moves `barn-door` out of the generic gate/blend path and into a direct
+binary current/previous selection in the RGB565 transition loop.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| transition mega scan barn-door segment | 80 | 37237 | 44696 | 70 | 70 | 32388 |
+| round 17 focused barn-door | 721 | 16386 | 16516 | 15 | 1 | 28076 |
+
+`barn-door` is now inside the p95 60fps target.
