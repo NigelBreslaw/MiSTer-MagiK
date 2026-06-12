@@ -1033,6 +1033,13 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::PhosphorDecay => {
+                    if local_y < reveal_h {
+                        curr
+                    } else {
+                        darken_565(blend_565(prev, curr, alpha / 2))
+                    }
+                }
                 PreviewTransitionEffect::MoireRings => {
                     let ring = ((dist2_from_center(
                         local_x,
