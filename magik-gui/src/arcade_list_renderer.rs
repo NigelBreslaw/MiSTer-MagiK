@@ -40,6 +40,7 @@ struct ArcadeListDrawKey {
     len: usize,
     visual_px: i32,
     anchor_hash: u64,
+    visible_hash: u64,
 }
 
 pub(crate) enum ArcadeListUpdate {
@@ -88,19 +89,26 @@ impl ArcadeListRenderer {
             len: games.len(),
             visual_px,
             anchor_hash: arcade_anchor_hash(games.get(anchor)),
+            visible_hash: arcade_visible_window_hash(games, visual_index),
         };
         if !force && self.last_draw.as_ref() == Some(&key) {
             return None;
         }
-        let same_game_set = previous
-            .as_ref()
-            .is_some_and(|previous| previous.len == key.len);
-        self.last_draw = Some(key);
         let content_delta = previous
             .as_ref()
             .map(|previous| previous.visual_px - visual_px)
             .unwrap_or(0);
-        if force || previous.is_none() || !same_game_set || games.is_empty() {
+        let same_len = previous
+            .as_ref()
+            .is_some_and(|previous| previous.len == key.len);
+        let visible_content_changed_at_same_position = previous.as_ref().is_some_and(|previous| {
+            previous.len == key.len
+                && previous.visual_px == key.visual_px
+                && previous.visible_hash != key.visible_hash
+        });
+        let can_reuse_scrolled_surface = same_len && !visible_content_changed_at_same_position;
+        self.last_draw = Some(key);
+        if force || previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
             self.surface_y = 0;
             self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
         } else if content_delta == 0 {
@@ -122,7 +130,7 @@ impl ArcadeListRenderer {
         if previous.is_none() {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
-        if !same_game_set {
+        if !can_reuse_scrolled_surface {
             return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
         }
         if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
@@ -181,9 +189,11 @@ impl ArcadeListRenderer {
         }
         let row_h = ARCADE_ROW_HEIGHT as isize;
         let local_anchor_y = Self::selection_y() as isize;
-        let first = ((visual_index.floor() as isize) - 7).max(0) as usize;
-        let last = ((visual_index.ceil() as isize) + 8).max(0) as usize;
-        let end = last.min(games.len().saturating_sub(1));
+        let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
+            self.copy_band_to_surface(&band, band_y, band_h);
+            self.band_scratch = band;
+            return;
+        };
         for idx in first..=end {
             let y =
                 local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
@@ -416,26 +426,58 @@ impl ArcadeListRenderer {
     }
 }
 
+const ARCADE_LIST_HASH_OFFSET: u64 = 0xcbf29ce484222325;
+const ARCADE_LIST_HASH_PRIME: u64 = 0x100000001b3;
+
 fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
-    const OFFSET: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-
-    fn add_bytes(hash: &mut u64, bytes: &[u8]) {
-        for byte in bytes {
-            *hash ^= *byte as u64;
-            *hash = hash.wrapping_mul(PRIME);
-        }
-        *hash ^= 0xff;
-        *hash = hash.wrapping_mul(PRIME);
-    }
-
-    let mut hash = OFFSET;
+    let mut hash = ARCADE_LIST_HASH_OFFSET;
     if let Some(game) = game {
-        add_bytes(&mut hash, game.system_id.as_bytes());
-        add_bytes(&mut hash, game.mra_path.as_bytes());
-        add_bytes(&mut hash, game.title.as_bytes());
+        arcade_hash_game(&mut hash, game);
     }
     hash
+}
+
+fn arcade_visible_window_hash(games: &[ArcadeGameEntry], visual_index: f32) -> u64 {
+    let mut hash = ARCADE_LIST_HASH_OFFSET;
+    let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
+        return hash;
+    };
+    arcade_hash_usize(&mut hash, first);
+    arcade_hash_usize(&mut hash, end);
+    for idx in first..=end {
+        arcade_hash_usize(&mut hash, idx);
+        arcade_hash_game(&mut hash, &games[idx]);
+    }
+    hash
+}
+
+fn arcade_visible_window_range(len: usize, visual_index: f32) -> Option<(usize, usize)> {
+    if len == 0 {
+        return None;
+    }
+    let first = ((visual_index.floor() as isize) - 7).max(0) as usize;
+    let last = ((visual_index.ceil() as isize) + 8).max(0) as usize;
+    Some((first.min(len - 1), last.min(len - 1)))
+}
+
+fn arcade_hash_game(hash: &mut u64, game: &ArcadeGameEntry) {
+    arcade_hash_bytes(hash, game.system_id.as_bytes());
+    arcade_hash_bytes(hash, game.mra_path.as_bytes());
+    arcade_hash_bytes(hash, game.image_path.as_bytes());
+    arcade_hash_bytes(hash, game.title.as_bytes());
+}
+
+fn arcade_hash_usize(hash: &mut u64, value: usize) {
+    arcade_hash_bytes(hash, &(value as u64).to_le_bytes());
+}
+
+fn arcade_hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= *byte as u64;
+        *hash = hash.wrapping_mul(ARCADE_LIST_HASH_PRIME);
+    }
+    *hash ^= 0xff;
+    *hash = hash.wrapping_mul(ARCADE_LIST_HASH_PRIME);
 }
 
 pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
@@ -557,6 +599,33 @@ mod tests {
             arcade_anchor_hash(Some(&base)),
             arcade_anchor_hash(Some(&base))
         );
+    }
+
+    #[test]
+    fn redraws_when_visible_non_anchor_row_changes() {
+        let mut renderer = ArcadeListRenderer::new();
+        let mut games = (0..20)
+            .map(|idx| {
+                game(
+                    "arcade",
+                    &format!("/media/fat/_Arcade/{idx}.mra"),
+                    &format!("Game {idx}"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            renderer.draw(&games, 7.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        assert!(renderer.draw(&games, 7.0, false).is_none());
+
+        games[3].title = "Changed visible row".to_string();
+
+        assert!(matches!(
+            renderer.draw(&games, 7.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
     }
 
     fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
