@@ -1,7 +1,7 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
-use crate::fb::{Display, VsyncPacer};
+use crate::fb::{Display, Pixel, VsyncPacer};
 use crate::fb_format::FramebufferFormat;
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;

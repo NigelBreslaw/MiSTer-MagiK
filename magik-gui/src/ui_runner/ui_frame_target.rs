@@ -395,6 +395,7 @@ pub(super) fn blend_rgb(from: (u8, u8, u8), to: (u8, u8, u8), alpha: u8) -> (u8,
     )
 }
 
+#[cfg(mister_bench_scenes)]
 pub(super) fn brighten_rgb(rgb: (u8, u8, u8), add: u8) -> (u8, u8, u8) {
     (
         rgb.0.saturating_add(add),
@@ -476,6 +477,7 @@ pub(super) fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565
     Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
 }
 
+#[cfg(mister_bench_scenes)]
 pub(super) fn darken_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     let v = pixel.0 as u32;
     let r = (((v >> 11) & 0x1f) * 5) / 8;
@@ -492,6 +494,7 @@ pub(super) fn brighten_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
 }
 
+#[cfg(mister_bench_scenes)]
 pub(super) fn mosaic_block_size(progress: f32) -> usize {
     let p = progress.clamp(0.0, 1.0);
     if p >= 0.96 {
@@ -509,6 +512,7 @@ pub(super) fn mosaic_block_size(progress: f32) -> usize {
     }
 }
 
+#[cfg(mister_bench_scenes)]
 fn progress_u8(progress: f32) -> u8 {
     (progress.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -525,6 +529,7 @@ pub(super) fn plasma_gate(x: usize, y: usize, phase: u8) -> u8 {
     ((a as u16 + b as u16) / 2) as u8
 }
 
+#[cfg(mister_bench_scenes)]
 fn dist2_from_center(local_x: usize, local_y: usize, w: usize, h: usize) -> u64 {
     let cx = w as i64 / 2;
     let cy = h as i64 / 2;
@@ -533,6 +538,7 @@ fn dist2_from_center(local_x: usize, local_y: usize, w: usize, h: usize) -> u64 
     (dx * dx + dy * dy) as u64
 }
 
+#[cfg(mister_bench_scenes)]
 fn angle_byte(local_x: usize, local_y: usize, w: usize, h: usize) -> u8 {
     let cx = w as isize / 2;
     let cy = h as isize / 2;
@@ -550,6 +556,7 @@ fn angle_byte(local_x: usize, local_y: usize, w: usize, h: usize) -> u8 {
     }
 }
 
+#[cfg(mister_bench_scenes)]
 fn transition_gate(
     effect: PreviewTransitionEffect,
     progress: f32,
@@ -814,6 +821,124 @@ fn transition_gate(
     }
 }
 
+fn blit_transition_rgb_cut(
+    cached: &mut [Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawTransitionFrame<'_>,
+) {
+    for y in screen.y0..screen.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        for x in screen.x0..screen.x1.min(ui.render_w()) {
+            let rgb = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
+                .unwrap_or((0, 0, 0));
+            cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
+        }
+    }
+}
+
+fn blit_transition_rgb_fade(
+    cached: &mut [Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawTransitionFrame<'_>,
+    progress: f32,
+) {
+    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    for y in screen.y0..screen.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        for x in screen.x0..screen.x1.min(ui.render_w()) {
+            let prev = frame
+                .previous
+                .as_ref()
+                .and_then(|prev| sample_preview_rgb(prev, screen, x, y, 0, 1024, 1024))
+                .unwrap_or((0, 0, 0));
+            let current = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
+                .unwrap_or((0, 0, 0));
+            let rgb = blend_rgb(prev, current, alpha);
+            cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
+        }
+    }
+}
+
+fn blit_transition_565_cut(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawTransitionFrame<'_>,
+) -> Option<()> {
+    let current = raw565_view(&frame.current, screen, 0)?;
+    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    for y in screen.y0..screen.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        for x in screen.x0..screen.x1.min(ui.render_w()) {
+            cached[row + x] = sample_raw565(&current, x, y).unwrap_or(black);
+        }
+    }
+    Some(())
+}
+
+fn blit_transition_565_fade(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawTransitionFrame<'_>,
+    progress: f32,
+) -> Option<()> {
+    let current = raw565_view(&frame.current, screen, 0)?;
+    let previous = frame
+        .previous
+        .as_ref()
+        .and_then(|prev| raw565_view(prev, screen, 0));
+    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    for y in screen.y0..screen.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        for x in screen.x0..screen.x1.min(ui.render_w()) {
+            let prev = previous
+                .as_ref()
+                .and_then(|view| sample_raw565(view, x, y))
+                .unwrap_or(black);
+            let curr = sample_raw565(&current, x, y).unwrap_or(black);
+            cached[row + x] = blend_565(prev, curr, alpha);
+        }
+    }
+    Some(())
+}
+
+fn blit_transition_565_via_rgb(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawTransitionFrame<'_>,
+    effect: PreviewTransitionEffect,
+    progress: f32,
+) {
+    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    for y in screen.y0..screen.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        for x in screen.x0..screen.x1.min(ui.render_w()) {
+            let current = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
+                .unwrap_or((0, 0, 0));
+            let rgb = match effect {
+                PreviewTransitionEffect::Cut => current,
+                PreviewTransitionEffect::Fade => {
+                    let prev = frame
+                        .previous
+                        .as_ref()
+                        .and_then(|prev| sample_preview_rgb(prev, screen, x, y, 0, 1024, 1024))
+                        .unwrap_or((0, 0, 0));
+                    blend_rgb(prev, current, alpha)
+                }
+                #[cfg(mister_bench_scenes)]
+                _ => unreachable!("non-production transitions use bench blitters"),
+            };
+            cached[row + x] = <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
+        }
+    }
+}
+
+#[cfg(mister_bench_scenes)]
 pub(super) fn blit_transition_565_fast(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
@@ -1181,6 +1306,7 @@ pub(super) fn blit_transition_565_fast(
     Some(())
 }
 
+#[cfg(mister_bench_scenes)]
 pub(super) fn transition_rgb(
     frame: &PreviewRawTransitionFrame<'_>,
     screen: DirtyRect,
@@ -1690,28 +1816,50 @@ impl UiFrameTarget {
     ) -> DirtyRect {
         let screen = preview_screen_rect(ui);
         match self {
-            Self::Xrgb8888 { cached } => {
-                for y in screen.y0..screen.y1.min(ui.render_h()) {
-                    let row = y * ui.render_w();
-                    for x in screen.x0..screen.x1.min(ui.render_w()) {
-                        let rgb = transition_rgb(frame, screen, effect, progress, x, y);
-                        cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
+            Self::Xrgb8888 { cached } => match effect {
+                PreviewTransitionEffect::Cut => blit_transition_rgb_cut(cached, ui, screen, frame),
+                PreviewTransitionEffect::Fade => {
+                    blit_transition_rgb_fade(cached, ui, screen, frame, progress)
+                }
+                #[cfg(mister_bench_scenes)]
+                _ => {
+                    for y in screen.y0..screen.y1.min(ui.render_h()) {
+                        let row = y * ui.render_w();
+                        for x in screen.x0..screen.x1.min(ui.render_w()) {
+                            let rgb = transition_rgb(frame, screen, effect, progress, x, y);
+                            cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
+                        }
                     }
                 }
-            }
-            Self::Rgb565 { cached } => {
-                if blit_transition_565_fast(cached, ui, screen, frame, effect, progress).is_some() {
-                    return screen;
-                }
-                for y in screen.y0..screen.y1.min(ui.render_h()) {
-                    let row = y * ui.render_w();
-                    for x in screen.x0..screen.x1.min(ui.render_w()) {
-                        let rgb = transition_rgb(frame, screen, effect, progress, x, y);
-                        cached[row + x] =
-                            <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
+            },
+            Self::Rgb565 { cached } => match effect {
+                PreviewTransitionEffect::Cut => {
+                    if blit_transition_565_cut(cached, ui, screen, frame).is_none() {
+                        blit_transition_565_via_rgb(cached, ui, screen, frame, effect, progress);
                     }
                 }
-            }
+                PreviewTransitionEffect::Fade => {
+                    if blit_transition_565_fade(cached, ui, screen, frame, progress).is_none() {
+                        blit_transition_565_via_rgb(cached, ui, screen, frame, effect, progress);
+                    }
+                }
+                #[cfg(mister_bench_scenes)]
+                _ => {
+                    if blit_transition_565_fast(cached, ui, screen, frame, effect, progress)
+                        .is_some()
+                    {
+                        return screen;
+                    }
+                    for y in screen.y0..screen.y1.min(ui.render_h()) {
+                        let row = y * ui.render_w();
+                        for x in screen.x0..screen.x1.min(ui.render_w()) {
+                            let rgb = transition_rgb(frame, screen, effect, progress, x, y);
+                            cached[row + x] =
+                                <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
+                        }
+                    }
+                }
+            },
         }
         screen
     }
