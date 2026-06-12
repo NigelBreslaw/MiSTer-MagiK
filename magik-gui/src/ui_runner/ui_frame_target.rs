@@ -534,10 +534,20 @@ fn dist2_from_center(local_x: usize, local_y: usize, w: usize, h: usize) -> u64 
 }
 
 fn angle_byte(local_x: usize, local_y: usize, w: usize, h: usize) -> u8 {
-    let cx = w as f32 / 2.0;
-    let cy = h as f32 / 2.0;
-    let a = (local_y as f32 - cy).atan2(local_x as f32 - cx);
-    (((a + std::f32::consts::PI) / (std::f32::consts::PI * 2.0)) * 255.0) as u8
+    let cx = w as isize / 2;
+    let cy = h as isize / 2;
+    let dx = local_x as isize - cx;
+    let dy = local_y as isize - cy;
+    let ax = dx.unsigned_abs();
+    let ay = dy.unsigned_abs();
+    let denom = (ax + ay).max(1);
+    let turn = ((ay * 64) / denom).min(64) as u8;
+    match (dx >= 0, dy >= 0) {
+        (true, true) => 128u8.saturating_add(turn),
+        (true, false) => 128u8.saturating_sub(turn),
+        (false, true) => 255u8.saturating_sub(turn),
+        (false, false) => turn,
+    }
 }
 
 fn transition_gate(
