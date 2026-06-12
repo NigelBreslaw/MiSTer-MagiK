@@ -4,13 +4,15 @@
 //! decompress full game libraries just to make the launcher searchable.
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
-use crate::launch_profiles::{self, RuleSourceKind};
+use crate::launch_profiles::{
+    self, IgnoreReason, LaunchProfile, MountKind, PayloadDisposition, PayloadRule, ProfilePathClass,
+    RuleProvenance, RuleSourceKind,
+};
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -31,18 +33,12 @@ const DEFAULT_ROOTS: &[&str] = &[
 
 pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
 
-const NORMAL_LAUNCH_EXTS: &[&str] = &[
-    "mra", "mgl", "rbf", "rom", "bin", "cue", "iso", "img", "dsk", "vhd", "hdf", "adf", "ipf",
-    "st", "msa", "tap", "tzx", "z80", "sna", "nes", "fds", "smc", "sfc", "gb", "gbc", "gba", "gg",
-    "sms", "md", "gen", "32x", "pce", "vec", "n64", "z64", "v64", "neo", "chd",
-];
-
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 9;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -79,21 +75,6 @@ pub enum ArchiveFormat {
     Chd,
 }
 
-impl ArchiveFormat {
-    fn from_ext(ext: &str) -> Option<Self> {
-        match ext {
-            "zip" => Some(Self::Zip),
-            "7z" => Some(Self::SevenZip),
-            "lha" => Some(Self::Lha),
-            "lzh" => Some(Self::Lzh),
-            "rar" => Some(Self::Rar),
-            "chd" => Some(Self::Chd),
-            _ => None,
-        }
-    }
-
-}
-
 #[derive(Clone, Debug)]
 pub enum ArchiveScanStatus {
     Ok,
@@ -108,9 +89,10 @@ struct LibraryScan {
     scanned_at_unix: i64,
     file_fingerprints: FileFingerprint,
     directory_manifest: DirectoryManifest,
-    normal_files: Vec<String>,
+    normal_files: Vec<LibraryPayloadFile>,
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
+    ignored_files: Vec<LibraryIgnoredFile>,
     discoveries: Vec<GameDiscovery>,
     discover_us: u64,
     classify_us: u64,
@@ -173,14 +155,26 @@ struct GameDiscovery {
     confidence: DiscoveryConfidence,
 }
 
+#[derive(Clone, Debug)]
+struct LibraryIgnoredFile {
+    path: String,
+    profile_id: String,
+    reason: IgnoreReason,
+    provenance: RuleProvenance,
+}
+
+#[derive(Clone, Debug)]
+struct LibraryPayloadFile {
+    path: String,
+    profile_id: String,
+    rule: PayloadRule,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DiscoverySourceKind {
     Mra,
     Mgl,
     PayloadFile,
-    ArchiveEntry,
-    Container,
-    CatalogEntry,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -189,8 +183,6 @@ enum DiscoveryConfidence {
     MraCore,
     PayloadPath,
     Extension,
-    ArchiveToc,
-    CatalogMetadata,
 }
 
 #[derive(Clone)]
@@ -327,11 +319,10 @@ fn load_arcade_catalog_from_sqlite_at(
              FROM games
              JOIN launch_plans ON launch_plans.game_id = games.game_id
              WHERE launch_plans.launch_ref != ''
-               AND launch_plans.launch_kind IN ('mra','mgl','catalog-entry')
+               AND launch_plans.launch_kind IN ('mra','mgl')
                AND (
                  lower(launch_plans.launch_ref) LIKE '%.mra'
                  OR lower(launch_plans.launch_ref) LIKE '%.mgl'
-                 OR lower(launch_plans.launch_ref) LIKE '%.7z'
                )
              ORDER BY lower(games.title)",
         )
@@ -356,9 +347,7 @@ fn load_arcade_catalog_from_sqlite_at(
     for row in rows {
         rows_out.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
-    rows_out.retain(|row| {
-        is_launcher_launch_ref(&row.game.mra_path) && !is_support_file_path(&row.game.mra_path)
-    });
+    rows_out.retain(|row| is_launcher_launch_ref(&row.game.mra_path));
     let games = collapse_catalog_variants(rows_out);
     let rows = games.len();
     let systems = arcade_catalog::systems_from_games(&games);
@@ -619,11 +608,6 @@ fn env_bool(name: &str) -> bool {
     )
 }
 
-struct ArchiveScan {
-    container: LibraryContainer,
-    entries: Vec<LibraryContainerEntry>,
-}
-
 fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     scan_library_with_progress(cfg, None)
 }
@@ -634,6 +618,7 @@ fn scan_library_with_progress(
 ) -> LibraryScan {
     let discover_t = Instant::now();
     let rx = discover_files_pipelined(cfg.roots.clone());
+    let profiles = launch_profiles::builtin_profiles();
     let mut discover_us = 0;
     let mut file_fingerprints = FileFingerprint::new();
     let mut directory_manifest = DirectoryManifest::new();
@@ -645,8 +630,9 @@ fn scan_library_with_progress(
     }
 
     let mut normal_files = Vec::new();
-    let mut containers = Vec::new();
-    let mut entries = Vec::new();
+    let containers = Vec::new();
+    let entries = Vec::new();
+    let mut ignored_files = Vec::new();
     let mut discoveries = Vec::new();
     let classify_t = Instant::now();
     let mut idx = 0usize;
@@ -677,42 +663,68 @@ fn scan_library_with_progress(
             }
         }
         idx += 1;
-        if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-            let scan = scan_archive_toc(&f, format);
-            if containers.len() % 10 == 0 {
-                if let Some(report) = progress.as_mut() {
-                    report(
-                        "Scanning archive TOCs",
-                        &format!(
-                            "{} archives; {} entries; {}",
-                            containers.len() + 1,
-                            entries.len() + scan.entries.len(),
-                            f.path.display()
-                        ),
-                    );
-                }
+        match classify_profile_path(&profiles, &f.path) {
+            Some((
+                profile,
+                ProfilePathClass::Payload {
+                    rule:
+                        payload_rule @ PayloadRule {
+                            disposition: PayloadDisposition::Playable,
+                            ..
+                        },
+                },
+            )) => {
+                normal_files.push(LibraryPayloadFile {
+                    path: f.path.display().to_string(),
+                    profile_id: profile.id.to_string(),
+                    rule: payload_rule,
+                });
+                discoveries.push(discovery_from_profile_file(
+                    &f,
+                    profile,
+                    &payload_rule,
+                    &profiles,
+                ));
             }
-            if format == ArchiveFormat::Chd || is_launchable_container(&f, format) {
-                discoveries.push(discovery_from_file(&f, DiscoverySourceKind::Container));
+            Some((
+                profile,
+                ProfilePathClass::Payload {
+                    rule:
+                        payload_rule @ PayloadRule {
+                            disposition: PayloadDisposition::AttachedMedia,
+                            ..
+                        },
+                },
+            )) => {
+                normal_files.push(LibraryPayloadFile {
+                    path: f.path.display().to_string(),
+                    profile_id: profile.id.to_string(),
+                    rule: payload_rule,
+                });
+                ignored_files.push(LibraryIgnoredFile {
+                    path: f.path.display().to_string(),
+                    profile_id: profile.id.to_string(),
+                    reason: IgnoreReason::SupportArchive,
+                    provenance: RuleProvenance::magik(
+                        "Attached media is indexed as payload support until a launcher references it",
+                    ),
+                });
             }
-            if cfg.optional_catalogs {
-                let catalog_discoveries = catalog_discoveries_from_container(&f, format);
-                discoveries.extend(catalog_discoveries);
+            Some((
+                profile,
+                ProfilePathClass::Ignored {
+                    reason,
+                    provenance,
+                },
+            )) => {
+                ignored_files.push(LibraryIgnoredFile {
+                    path: f.path.display().to_string(),
+                    profile_id: profile.id.to_string(),
+                    reason,
+                    provenance,
+                });
             }
-            if !archive_entries_are_rom_parts(&f, format) {
-                discoveries.extend(
-                    scan.entries
-                        .iter()
-                        .filter(|e| e.launchable)
-                        .map(discovery_from_archive_entry),
-                );
-            }
-            containers.push(scan.container);
-            entries.extend(scan.entries);
-        } else if is_normal_launchable(&f.ext) {
-            normal_files.push(f.path.display().to_string());
-            let discovery = discovery_from_file(&f, source_kind_for_ext(&f.ext));
-            discoveries.push(discovery);
+            Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
     }
     if discover_us == 0 {
@@ -747,10 +759,46 @@ fn scan_library_with_progress(
         normal_files,
         containers,
         entries,
+        ignored_files,
         discoveries,
         discover_us,
         classify_us: classify_t.elapsed().as_micros() as u64,
     }
+}
+
+fn classify_profile_path<'a>(
+    profiles: &'a [LaunchProfile],
+    path: &Path,
+) -> Option<(&'a LaunchProfile, ProfilePathClass)> {
+    let profile = profile_for_path(profiles, path)?;
+    Some((profile, profile.classify_path(path)))
+}
+
+fn profile_for_path<'a>(
+    profiles: &'a [LaunchProfile],
+    path: &Path,
+) -> Option<&'a LaunchProfile> {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+
+    for window in components.windows(2) {
+        if window[0].eq_ignore_ascii_case("games") {
+            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, window[1]) {
+                return Some(profile);
+            }
+        }
+    }
+
+    profiles.iter().find(|profile| {
+        components.iter().any(|component| {
+            profile
+                .game_dirs
+                .iter()
+                .any(|dir| component.eq_ignore_ascii_case(dir))
+        })
+    })
 }
 
 fn validate_or_rebuild_directory_manifest(
@@ -867,6 +915,7 @@ fn build_directory_manifest(
     tx: Option<&mpsc::SyncSender<DiscoveryEvent>>,
 ) -> DirectoryManifest {
     let mut manifest_builders = BTreeMap::<String, DirectorySignatureBuilder>::new();
+    let profiles = launch_profiles::builtin_profiles();
     for root in roots {
         let path = Path::new(root);
         if path.is_dir() {
@@ -922,7 +971,7 @@ fn build_directory_manifest(
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                if !is_index_candidate(p, &ext) {
+                if !is_index_candidate(&profiles, p, &ext) {
                     continue;
                 }
                 let Ok(meta) = entry.metadata() else {
@@ -954,131 +1003,6 @@ fn build_directory_manifest(
         .collect()
 }
 
-fn scan_archive_toc(file: &FoundFile, format: ArchiveFormat) -> ArchiveScan {
-    let t = Instant::now();
-    let (status, entries) = match format {
-        ArchiveFormat::Zip => match scan_zip_central_directory(file) {
-            Ok(entries) => (ArchiveScanStatus::Ok, entries),
-            Err(e) => (ArchiveScanStatus::Error(e), Vec::new()),
-        },
-        ArchiveFormat::Chd => (ArchiveScanStatus::HeaderOnly, Vec::new()),
-        ArchiveFormat::SevenZip | ArchiveFormat::Lha | ArchiveFormat::Lzh | ArchiveFormat::Rar => {
-            (ArchiveScanStatus::Unsupported, Vec::new())
-        }
-    };
-    let scan_us = t.elapsed().as_micros() as u64;
-    ArchiveScan {
-        container: LibraryContainer {
-            file_path: file.path.display().to_string(),
-            format,
-            size: file.size,
-            mtime_secs: file.mtime_secs,
-            entry_count: entries.len() as u32,
-            scan_status: status,
-            scan_us,
-        },
-        entries,
-    }
-}
-
-fn source_kind_for_ext(ext: &str) -> DiscoverySourceKind {
-    match ext {
-        "mra" => DiscoverySourceKind::Mra,
-        "mgl" => DiscoverySourceKind::Mgl,
-        _ => DiscoverySourceKind::PayloadFile,
-    }
-}
-
-fn is_launchable_container(file: &FoundFile, format: ArchiveFormat) -> bool {
-    let path = file.path.to_string_lossy().to_ascii_lowercase();
-    matches!(
-        format,
-        ArchiveFormat::Zip | ArchiveFormat::Lha | ArchiveFormat::Lzh
-    ) && (path.contains("/games/mame/")
-        || path.contains("/games/hbmame/")
-        || path.contains("/games/neogeo/"))
-}
-
-fn archive_entries_are_rom_parts(file: &FoundFile, format: ArchiveFormat) -> bool {
-    let path = file.path.to_string_lossy().to_ascii_lowercase();
-    matches!(
-        format,
-        ArchiveFormat::Zip | ArchiveFormat::Lha | ArchiveFormat::Lzh
-    ) && (path.contains("/games/mame/")
-        || path.contains("/games/hbmame/")
-        || path.contains("/games/neogeo/"))
-}
-
-fn catalog_discoveries_from_container(
-    file: &FoundFile,
-    format: ArchiveFormat,
-) -> Vec<GameDiscovery> {
-    if format != ArchiveFormat::SevenZip {
-        return Vec::new();
-    }
-    let path = file.path.to_string_lossy();
-    if !path
-        .to_ascii_lowercase()
-        .contains("/games/amiga/amigavision")
-    {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    out.extend(amigavision_listing_discoveries(
-        file,
-        "games/Amiga/listings/games.txt",
-        "AmigaVision",
-    ));
-    out.extend(amigavision_listing_discoveries(
-        file,
-        "games/Amiga/listings/demos.txt",
-        "AmigaVision demos",
-    ));
-    out
-}
-
-fn amigavision_listing_discoveries(
-    file: &FoundFile,
-    entry_path: &str,
-    genre: &str,
-) -> Vec<GameDiscovery> {
-    let tool = std::env::var("MISTER_7ZA").unwrap_or_else(|_| "/media/fat/linux/7za".to_string());
-    let Ok(output) = Command::new(tool)
-        .args(["e", "-so"])
-        .arg(&file.path)
-        .arg(entry_path)
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|title| GameDiscovery {
-            source_path: format!("{}::{entry_path}::{title}", file.path.display()),
-            launch_ref: file.path.display().to_string(),
-            source_kind: DiscoverySourceKind::CatalogEntry,
-            title: title.to_string(),
-            category: "Computer".to_string(),
-            platform_id: "amiga".to_string(),
-            core_id: "AmigaVision".to_string(),
-            hardware_id: "commodore-amiga".to_string(),
-            manufacturer: Some("Commodore".to_string()),
-            genre: Some(genre.to_string()),
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::CatalogMetadata,
-        })
-        .collect()
-}
-
 #[derive(Clone, Debug)]
 struct GamelistMetadata {
     title: Option<String>,
@@ -1093,7 +1017,6 @@ fn enrich_discoveries_from_gamelists(
 ) -> usize {
     let mut by_path = HashMap::<String, GamelistMetadata>::new();
     let mut by_stem = HashMap::<String, GamelistMetadata>::new();
-    let neogeo_media = build_neogeo_media_index(roots);
     let mut xml_files = 0usize;
     let mut xml_games = 0usize;
     for root in roots {
@@ -1156,8 +1079,7 @@ fn enrich_discoveries_from_gamelists(
             .get(&normalize_match_path(&discovery.source_path))
             .or_else(|| by_path.get(&normalize_match_path(&discovery.launch_ref)))
             .or_else(|| by_stem.get(&match_stem(&discovery.source_path)))
-            .or_else(|| by_stem.get(&match_stem(&discovery.launch_ref)))
-            .or_else(|| lookup_neogeo_media(&neogeo_media, discovery));
+            .or_else(|| by_stem.get(&match_stem(&discovery.launch_ref)));
         let Some(meta) = meta else {
             continue;
         };
@@ -1171,146 +1093,6 @@ fn enrich_discoveries_from_gamelists(
         matched += 1;
     }
     matched
-}
-
-fn build_neogeo_media_index(roots: &[String]) -> HashMap<String, GamelistMetadata> {
-    let mut by_setname = HashMap::new();
-    for dir in neogeo_media_dirs(roots) {
-        let screenshots = dir.join("screenshots");
-        if let Ok(entries) = fs::read_dir(&screenshots) {
-            for entry in entries.filter_map(Result::ok) {
-                let path = entry.path();
-                if !path.is_file() || path_ext_path(&path).as_deref() != Some("png") {
-                    continue;
-                }
-                let Some(setname) = path.file_stem().and_then(|s| s.to_str()).map(normalize_id)
-                else {
-                    continue;
-                };
-                by_setname
-                    .entry(setname)
-                    .or_insert_with(|| GamelistMetadata {
-                        title: None,
-                        image_path: Some(path.display().to_string()),
-                        has_image: true,
-                    });
-            }
-        }
-
-        for (game_path, meta) in parse_gamelist_metadata(&dir.join("gamelist.xml"), &dir) {
-            let setname = match_stem(&game_path);
-            let fallback = screenshots.join(format!("{setname}.png"));
-            let image_path = if meta.has_image {
-                meta.image_path
-            } else if fallback.is_file() {
-                Some(fallback.display().to_string())
-            } else {
-                meta.image_path
-            };
-            let has_image = image_path
-                .as_deref()
-                .map(|p| Path::new(p).is_file())
-                .unwrap_or(false);
-            by_setname.insert(
-                setname,
-                GamelistMetadata {
-                    title: meta.title,
-                    image_path,
-                    has_image,
-                },
-            );
-        }
-    }
-    by_setname
-}
-
-fn neogeo_media_dirs(roots: &[String]) -> Vec<PathBuf> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for root in roots {
-        let path = Path::new(root);
-        for candidate in [
-            path.to_path_buf(),
-            path.join("NEOGEO"),
-            path.join("games/NEOGEO"),
-        ] {
-            if !candidate.is_dir() {
-                continue;
-            }
-            let Some(name) = candidate.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if !name.eq_ignore_ascii_case("NEOGEO") {
-                continue;
-            }
-            let key = candidate.display().to_string();
-            if seen.insert(key) {
-                out.push(candidate);
-            }
-        }
-    }
-    out
-}
-
-fn lookup_neogeo_media<'a>(
-    by_setname: &'a HashMap<String, GamelistMetadata>,
-    discovery: &GameDiscovery,
-) -> Option<&'a GamelistMetadata> {
-    if by_setname.is_empty() || !is_neogeo_discovery(discovery) {
-        return None;
-    }
-    neogeo_setname_candidates(discovery)
-        .into_iter()
-        .find_map(|setname| by_setname.get(&setname))
-}
-
-fn is_neogeo_discovery(discovery: &GameDiscovery) -> bool {
-    discovery.platform_id == "neogeo"
-        || discovery.core_id.eq_ignore_ascii_case("neogeo")
-        || discovery.hardware_id == "snk-neo-geo"
-        || discovery
-            .source_path
-            .to_ascii_lowercase()
-            .contains("/games/neogeo/")
-}
-
-fn neogeo_setname_candidates(discovery: &GameDiscovery) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Some(setname) = discovery.setname.as_deref() {
-        push_setname_candidate(&mut out, setname);
-    }
-    push_parenthesized_setname(&mut out, &discovery.source_path);
-    push_parenthesized_setname(&mut out, &discovery.launch_ref);
-    push_setname_candidate(&mut out, &match_stem(&discovery.source_path));
-    push_setname_candidate(&mut out, &match_stem(&discovery.launch_ref));
-    out
-}
-
-fn push_parenthesized_setname(out: &mut Vec<String>, path: &str) {
-    let stem = Path::new(path.split("::").next().unwrap_or(path))
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(path);
-    if let Some(open) = stem.rfind('(') {
-        if let Some(close) = stem[open + 1..].find(')') {
-            push_setname_candidate(out, &stem[open + 1..open + 1 + close]);
-        }
-    }
-}
-
-fn push_setname_candidate(out: &mut Vec<String>, raw: &str) {
-    let setname = normalize_id(raw);
-    if setname == "unknown"
-        || setname.len() > 32
-        || !setname
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        return;
-    }
-    if !out.iter().any(|existing| existing == &setname) {
-        out.push(setname);
-    }
 }
 
 fn parse_gamelist_metadata(path: &Path, base: &Path) -> Vec<(String, GamelistMetadata)> {
@@ -1378,50 +1160,37 @@ fn match_stem(path: &str) -> String {
     )
 }
 
-fn path_ext_path(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
-}
-
-fn discovery_from_archive_entry(entry: &LibraryContainerEntry) -> GameDiscovery {
-    let mut taxonomy = taxonomy_from_path(&entry.entry_path, "");
-    taxonomy.confidence = DiscoveryConfidence::ArchiveToc;
-    GameDiscovery {
-        source_path: format!("{}::{}", entry.file_path, entry.entry_path),
-        launch_ref: entry.launch_ref.clone(),
-        source_kind: DiscoverySourceKind::ArchiveEntry,
-        title: title_from_path(&entry.entry_path),
-        category: taxonomy.category,
-        platform_id: taxonomy.platform_id,
-        core_id: taxonomy.core_id,
-        hardware_id: taxonomy.hardware_id,
-        manufacturer: None,
-        genre: None,
-        year: None,
-        setname: None,
-        parent: None,
-        image_path: None,
-        has_image: false,
-        confidence: taxonomy.confidence,
-    }
-}
-
-fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> GameDiscovery {
+fn discovery_from_profile_file(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+    rule: &PayloadRule,
+    profiles: &[LaunchProfile],
+) -> GameDiscovery {
     if file.ext == "mra" {
         if let Some(mra) = read_mra_metadata(&file.path) {
-            let taxonomy = taxonomy_from_mra(&mra, &file.path.display().to_string());
+            let core_id = mra
+                .rbf
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(normalize_id)
+                .unwrap_or_else(|| profile.core_name.to_string());
+            let hardware_id = mra
+                .platform
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(normalize_id)
+                .unwrap_or_else(|| core_id.clone());
             return GameDiscovery {
                 source_path: file.path.display().to_string(),
                 launch_ref: file.path.display().to_string(),
-                source_kind,
+                source_kind: DiscoverySourceKind::Mra,
                 title: mra
                     .name
                     .unwrap_or_else(|| title_from_path(&file.path.display().to_string())),
-                category: taxonomy.category,
-                platform_id: taxonomy.platform_id,
-                core_id: taxonomy.core_id,
-                hardware_id: taxonomy.hardware_id,
+                category: profile.category.to_string(),
+                platform_id: profile.system_id.to_string(),
+                core_id,
+                hardware_id,
                 manufacturer: mra.manufacturer,
                 genre: mra.category.or(mra.catver),
                 year: mra.year.and_then(|s| s.parse::<u16>().ok()),
@@ -1429,22 +1198,35 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
                 parent: mra.parent,
                 image_path: None,
                 has_image: false,
-                confidence: taxonomy.confidence,
+                confidence: if mra.platform.is_some() {
+                    DiscoveryConfidence::MraHardware
+                } else {
+                    DiscoveryConfidence::MraCore
+                },
             };
         }
     }
     if file.ext == "mgl" {
         if let Some(mgl) = read_mgl_metadata(&file.path) {
-            let taxonomy = taxonomy_from_mgl(&mgl, &file.path.display().to_string());
+            let payload_profile = mgl
+                .file_path
+                .as_deref()
+                .and_then(|payload| profile_for_mgl_payload(profiles, &file.path, payload));
+            let profile = payload_profile.unwrap_or(profile);
             return GameDiscovery {
                 source_path: file.path.display().to_string(),
                 launch_ref: file.path.display().to_string(),
-                source_kind,
+                source_kind: DiscoverySourceKind::Mgl,
                 title: title_from_path(&file.path.display().to_string()),
-                category: taxonomy.category,
-                platform_id: taxonomy.platform_id,
-                core_id: taxonomy.core_id,
-                hardware_id: taxonomy.hardware_id,
+                category: profile.category.to_string(),
+                platform_id: profile.system_id.to_string(),
+                core_id: mgl
+                    .rbf
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(normalize_id)
+                    .unwrap_or_else(|| profile.core_name.to_string()),
+                hardware_id: profile.system_id.to_string(),
                 manufacturer: None,
                 genre: None,
                 year: None,
@@ -1452,21 +1234,20 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
                 parent: None,
                 image_path: None,
                 has_image: false,
-                confidence: taxonomy.confidence,
+                confidence: DiscoveryConfidence::PayloadPath,
             };
         }
     }
 
-    let taxonomy = taxonomy_from_path(&file.path.display().to_string(), &file.ext);
     GameDiscovery {
         source_path: file.path.display().to_string(),
         launch_ref: file.path.display().to_string(),
-        source_kind,
+        source_kind: DiscoverySourceKind::PayloadFile,
         title: title_from_path(&file.path.display().to_string()),
-        category: taxonomy.category,
-        platform_id: taxonomy.platform_id,
-        core_id: taxonomy.core_id,
-        hardware_id: taxonomy.hardware_id,
+        category: profile.category.to_string(),
+        platform_id: profile.system_id.to_string(),
+        core_id: profile.core_name.to_string(),
+        hardware_id: profile.system_id.to_string(),
         manufacturer: None,
         genre: None,
         year: None,
@@ -1474,8 +1255,37 @@ fn discovery_from_file(file: &FoundFile, source_kind: DiscoverySourceKind) -> Ga
         parent: None,
         image_path: None,
         has_image: false,
-        confidence: taxonomy.confidence,
+        confidence: profile_confidence(rule),
     }
+}
+
+fn profile_for_mgl_payload<'a>(
+    profiles: &'a [LaunchProfile],
+    mgl_path: &Path,
+    payload: &str,
+) -> Option<&'a LaunchProfile> {
+    let path = if payload.starts_with('/') {
+        PathBuf::from(payload)
+    } else if payload.starts_with("games/") {
+        PathBuf::from("/media/fat").join(payload)
+    } else {
+        mgl_path.parent().unwrap_or(Path::new("/")).join(payload)
+    };
+    profile_for_path(profiles, &path)
+}
+
+fn profile_confidence(rule: &PayloadRule) -> DiscoveryConfidence {
+    match rule.provenance.kind {
+        RuleSourceKind::Mra => DiscoveryConfidence::MraCore,
+        RuleSourceKind::Mgl | RuleSourceKind::MainSource | RuleSourceKind::MagikProfile => {
+            DiscoveryConfidence::PayloadPath
+        }
+        RuleSourceKind::ConfStr => DiscoveryConfidence::Extension,
+    }
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
 }
 
 #[derive(Default)]
@@ -1495,14 +1305,6 @@ struct MraMetadata {
 struct MglMetadata {
     rbf: Option<String>,
     file_path: Option<String>,
-}
-
-struct Taxonomy {
-    category: String,
-    platform_id: String,
-    core_id: String,
-    hardware_id: String,
-    confidence: DiscoveryConfidence,
 }
 
 fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
@@ -1563,248 +1365,6 @@ fn html_unescape_minimal(value: &str) -> String {
         .replace("&gt;", ">")
 }
 
-fn taxonomy_from_mra(mra: &MraMetadata, path: &str) -> Taxonomy {
-    let raw = format!(
-        "{} {} {}",
-        mra.rbf.as_deref().unwrap_or(""),
-        mra.platform.as_deref().unwrap_or(""),
-        path
-    );
-    let mut taxonomy = taxonomy_from_arcade_hint(&raw);
-    if taxonomy.hardware_id == "arcade-unknown" {
-        taxonomy.core_id = normalize_id(mra.rbf.as_deref().unwrap_or("arcade"));
-        taxonomy.hardware_id = mra
-            .platform
-            .as_deref()
-            .filter(|p| !p.trim().is_empty())
-            .map(normalize_id)
-            .unwrap_or_else(|| taxonomy.core_id.clone());
-        taxonomy.confidence = if mra.platform.is_some() {
-            DiscoveryConfidence::MraHardware
-        } else {
-            DiscoveryConfidence::MraCore
-        };
-    }
-    taxonomy
-}
-
-fn taxonomy_from_mgl(mgl: &MglMetadata, path: &str) -> Taxonomy {
-    let payload = mgl.file_path.as_deref().unwrap_or(path);
-    let mut taxonomy = taxonomy_from_path(payload, path_ext(payload).as_deref().unwrap_or(""));
-    if taxonomy.platform_id == "unknown" {
-        taxonomy = taxonomy_from_path(path, "mgl");
-    }
-    if let Some(rbf) = mgl.rbf.as_deref() {
-        if taxonomy.core_id == taxonomy.platform_id || taxonomy.core_id == "unknown" {
-            taxonomy.core_id = normalize_id(rbf);
-        }
-    }
-    taxonomy
-}
-
-fn taxonomy_from_arcade_hint(raw: &str) -> Taxonomy {
-    let hint = raw.to_ascii_lowercase();
-    let (core, hardware, confidence) =
-        if contains_any(&hint, &["cps2", "cps-2", "cps ii", "cps-ii"]) {
-            ("CPS2", "capcom-cps2", DiscoveryConfidence::MraHardware)
-        } else if contains_any(&hint, &["cps1", "cps-1", "cps i", "cps-i"]) {
-            ("CPS1", "capcom-cps1", DiscoveryConfidence::MraHardware)
-        } else if contains_any(&hint, &["cps3", "cps-3", "cps iii", "cps-iii"]) {
-            ("CPS3", "capcom-cps3", DiscoveryConfidence::MraHardware)
-        } else if contains_any(&hint, &["neogeo", "neo geo", "neo-geo"]) {
-            ("NeoGeo", "snk-neo-geo", DiscoveryConfidence::MraHardware)
-        } else if contains_any(&hint, &["irem m92", "m92 hardware", "irem-m92"]) {
-            ("M92", "irem-m92", DiscoveryConfidence::MraHardware)
-        } else if contains_any(&hint, &["irem m72", "irem-m72"]) {
-            ("M72", "irem-m72", DiscoveryConfidence::MraHardware)
-        } else if contains_any(&hint, &["system 16", "system16"]) {
-            (
-                "System16",
-                "sega-system16",
-                DiscoveryConfidence::MraHardware,
-            )
-        } else if contains_any(&hint, &["system 18", "system18"]) {
-            (
-                "System18",
-                "sega-system18",
-                DiscoveryConfidence::MraHardware,
-            )
-        } else if contains_any(&hint, &["toaplan", "twin cobra", "fshark"]) {
-            ("Toaplan", "toaplan", DiscoveryConfidence::MraHardware)
-        } else {
-            ("arcade", "arcade-unknown", DiscoveryConfidence::MraCore)
-        };
-
-    Taxonomy {
-        category: "Arcade".to_string(),
-        platform_id: "arcade".to_string(),
-        core_id: core.to_string(),
-        hardware_id: hardware.to_string(),
-        confidence,
-    }
-}
-
-fn taxonomy_from_path(path: &str, ext: &str) -> Taxonomy {
-    let lower = path.to_ascii_lowercase();
-    if lower.contains("/_arcade/") || lower.contains("/games/mame/") || ext == "mra" {
-        return taxonomy_from_arcade_hint(path);
-    }
-    if lower.contains("/games/hbmame/") {
-        return simple_taxonomy("Arcade", "hbmame", "hbmame", "arcade-homebrew");
-    }
-    if lower.contains("/games/ao486/") {
-        return simple_taxonomy("Computer", "ao486", "ao486", "pc-compatible");
-    }
-    if lower.contains("/games/saturn/") {
-        return simple_taxonomy("Console", "saturn", "Saturn", "sega-saturn");
-    }
-    if lower.contains("/games/amiga/") || lower.contains("/_amiga/") {
-        return simple_taxonomy("Computer", "amiga", "Amiga", "commodore-amiga");
-    }
-    if lower.contains("/games/neogeo/") || lower.contains("neo geo") {
-        return simple_taxonomy("Arcade", "neogeo", "NeoGeo", "snk-neo-geo");
-    }
-    if lower.contains("/games/gba/") {
-        return simple_taxonomy("Handheld", "gba", "GBA", "nintendo-gba");
-    }
-    if lower.contains("/games/snes/") {
-        return simple_taxonomy("Console", "snes", "SNES", "nintendo-snes");
-    }
-    if lower.contains("/games/nes/") {
-        return simple_taxonomy("Console", "nes", "NES", "nintendo-nes");
-    }
-    if lower.contains("/games/megadrive/") {
-        return simple_taxonomy("Console", "megadrive", "MegaDrive", "sega-mega-drive");
-    }
-    if lower.contains("/games/n64/") {
-        return simple_taxonomy("Console", "n64", "N64", "nintendo-n64");
-    }
-    if lower.contains("/games/gbc/") {
-        return simple_taxonomy("Handheld", "gbc", "GBC", "nintendo-gbc");
-    }
-    if lower.contains("/games/gamegear/") {
-        return simple_taxonomy("Handheld", "gamegear", "GameGear", "sega-game-gear");
-    }
-    if let Some(taxonomy) = taxonomy_from_games_folder(&lower) {
-        return taxonomy;
-    }
-
-    Taxonomy {
-        category: category_from_ext(ext).to_string(),
-        platform_id: platform_from_ext(ext).to_string(),
-        core_id: platform_from_ext(ext).to_string(),
-        hardware_id: platform_from_ext(ext).to_string(),
-        confidence: DiscoveryConfidence::Extension,
-    }
-}
-
-fn taxonomy_from_games_folder(lower_path: &str) -> Option<Taxonomy> {
-    let folder = games_folder(lower_path)?;
-    let row = match folder {
-        "3do" => ("Console", "3do", "3DO", "panasonic-3do"),
-        "apple-i" => ("Computer", "apple-i", "Apple I", "apple-i"),
-        "apple-ii" => ("Computer", "apple-ii", "Apple II", "apple-ii"),
-        "apple-iigs" => ("Computer", "apple-iigs", "Apple IIGS", "apple-iigs"),
-        "archie" => ("Computer", "archie", "Archimedes", "acorn-archimedes"),
-        "atari2600" => ("Console", "atari2600", "Atari2600", "atari-2600"),
-        "atari5200" => ("Console", "atari5200", "Atari5200", "atari-5200"),
-        "atari7800" => ("Console", "atari7800", "Atari7800", "atari-7800"),
-        "atari800" => ("Computer", "atari800", "Atari800", "atari-8-bit"),
-        "atarilynx" => ("Handheld", "atarilynx", "AtariLynx", "atari-lynx"),
-        "atarist" => ("Computer", "atarist", "AtariST", "atari-st"),
-        "bbcmicro" => ("Computer", "bbcmicro", "BBCMicro", "bbc-micro"),
-        "c128" => ("Computer", "c128", "C128", "commodore-c128"),
-        "c16" => ("Computer", "c16", "C16", "commodore-c16"),
-        "c64" => ("Computer", "c64", "C64", "commodore-c64"),
-        "cd-i" => ("Console", "cdi", "CD-i", "philips-cdi"),
-        "coleco" => ("Console", "coleco", "ColecoVision", "colecovision"),
-        "gameboy" => ("Handheld", "gb", "Gameboy", "nintendo-game-boy"),
-        "gameboy2p" => ("Handheld", "gb", "Gameboy", "nintendo-game-boy"),
-        "jaguar" => ("Console", "jaguar", "Jaguar", "atari-jaguar"),
-        "macplus" => ("Computer", "macplus", "MacPlus", "apple-macintosh"),
-        "megacd" => ("Console", "megacd", "MegaCD", "sega-mega-cd"),
-        "megaduck" => ("Handheld", "megaduck", "MegaDuck", "megaduck"),
-        "msx" => ("Computer", "msx", "MSX", "msx"),
-        "msx1" => ("Computer", "msx", "MSX", "msx"),
-        "neogeo-cd" => ("Console", "neogeo-cd", "NeoGeoCD", "snk-neo-geo-cd"),
-        "neogeopocket" => ("Handheld", "ngp", "NeoGeoPocket", "snk-neo-geo-pocket"),
-        "odyssey2" => ("Console", "odyssey2", "Odyssey2", "magnavox-odyssey2"),
-        "openbor" => ("Engine", "openbor", "OpenBOR", "openbor"),
-        "pc8801" => ("Computer", "pc8801", "PC-8801", "nec-pc8801"),
-        "pico-8" => ("Engine", "pico-8", "PICO-8", "pico-8"),
-        "psx" => ("Console", "psx", "PlayStation", "sony-playstation"),
-        "s32x" => ("Console", "s32x", "S32X", "sega-32x"),
-        "sgb" => ("Console", "sgb", "SuperGameBoy", "nintendo-super-game-boy"),
-        "sms" => ("Console", "sms", "MasterSystem", "sega-master-system"),
-        "spectrum" => ("Computer", "spectrum", "Spectrum", "zx-spectrum"),
-        "tgfx16" => ("Console", "tgfx16", "TurboGrafx16", "nec-pc-engine"),
-        "tgfx16-cd" => ("Console", "tgfx16-cd", "TurboGrafx16CD", "nec-pc-engine-cd"),
-        "trs-80" => ("Computer", "trs-80", "TRS-80", "trs-80"),
-        "tsconf" => ("Computer", "tsconf", "TSConf", "tsconf"),
-        "vic20" => ("Computer", "vic20", "VIC20", "commodore-vic20"),
-        "vectrex" => ("Console", "vectrex", "Vectrex", "vectrex"),
-        "wonderswan" => ("Handheld", "wonderswan", "WonderSwan", "bandai-wonderswan"),
-        "wonderswancolor" => (
-            "Handheld",
-            "wonderswancolor",
-            "WonderSwanColor",
-            "bandai-wonderswan-color",
-        ),
-        "x68000" => ("Computer", "x68000", "X68000", "sharp-x68000"),
-        "zx81" => ("Computer", "zx81", "ZX81", "zx81"),
-        "zxnext" => ("Computer", "zxnext", "ZXNext", "zx-spectrum-next"),
-        _ => return None,
-    };
-    Some(simple_taxonomy(row.0, row.1, row.2, row.3))
-}
-
-fn games_folder(lower_path: &str) -> Option<&str> {
-    let rest = lower_path.split("/games/").nth(1)?;
-    rest.split('/').next()
-}
-
-fn simple_taxonomy(category: &str, platform: &str, core: &str, hardware: &str) -> Taxonomy {
-    Taxonomy {
-        category: category.to_string(),
-        platform_id: platform.to_string(),
-        core_id: core.to_string(),
-        hardware_id: hardware.to_string(),
-        confidence: DiscoveryConfidence::PayloadPath,
-    }
-}
-
-fn category_from_ext(ext: &str) -> &'static str {
-    match ext {
-        "gb" | "gbc" | "gba" | "gg" => "Handheld",
-        "adf" | "hdf" | "dsk" | "vhd" | "st" | "msa" | "tap" | "tzx" | "z80" | "sna" => "Computer",
-        "mra" => "Arcade",
-        _ => "Unknown",
-    }
-}
-
-fn platform_from_ext(ext: &str) -> &'static str {
-    match ext {
-        "nes" | "fds" => "nes",
-        "smc" | "sfc" => "snes",
-        "gb" => "gb",
-        "gbc" => "gbc",
-        "gba" => "gba",
-        "gg" => "gamegear",
-        "sms" => "mastersystem",
-        "md" | "gen" => "megadrive",
-        "n64" | "z64" | "v64" => "n64",
-        "neo" => "neogeo",
-        "adf" | "hdf" => "amiga",
-        "chd" => "disc",
-        "mra" => "arcade",
-        _ => "unknown",
-    }
-}
-
-fn contains_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
-
 fn normalize_id(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -1827,81 +1387,6 @@ fn normalize_id(value: &str) -> String {
     }
 }
 
-fn scan_zip_central_directory(file: &FoundFile) -> Result<Vec<LibraryContainerEntry>, String> {
-    let mut f = File::open(&file.path).map_err(|e| format!("open zip: {e}"))?;
-    let len = f.metadata().map_err(|e| format!("stat zip: {e}"))?.len();
-    if len < 22 {
-        return Err("zip too small".to_string());
-    }
-
-    let tail_len = len.min(66_000) as usize;
-    f.seek(SeekFrom::End(-(tail_len as i64)))
-        .map_err(|e| format!("seek zip tail: {e}"))?;
-    let mut tail = vec![0u8; tail_len];
-    f.read_exact(&mut tail)
-        .map_err(|e| format!("read zip tail: {e}"))?;
-    let Some(eocd) = find_eocd(&tail) else {
-        return Err("zip EOCD not found".to_string());
-    };
-
-    let cd_entries = le_u16(&tail[eocd + 10..eocd + 12]) as usize;
-    let cd_size = le_u32(&tail[eocd + 12..eocd + 16]) as u64;
-    let cd_offset = le_u32(&tail[eocd + 16..eocd + 20]) as u64;
-    if cd_offset == u32::MAX as u64 || cd_size == u32::MAX as u64 || cd_entries == u16::MAX as usize
-    {
-        return Err("zip64 central directory is not supported yet".to_string());
-    }
-    if cd_offset + cd_size > len {
-        return Err("zip central directory outside file".to_string());
-    }
-
-    f.seek(SeekFrom::Start(cd_offset))
-        .map_err(|e| format!("seek zip central directory: {e}"))?;
-    let mut cd = vec![0u8; cd_size as usize];
-    f.read_exact(&mut cd)
-        .map_err(|e| format!("read zip central directory: {e}"))?;
-
-    let mut entries = Vec::with_capacity(cd_entries);
-    let mut pos = 0usize;
-    while pos + 46 <= cd.len() && entries.len() < cd_entries {
-        if le_u32(&cd[pos..pos + 4]) != 0x0201_4b50 {
-            return Err(format!("bad central directory signature at {pos}"));
-        }
-        let crc32 = le_u32(&cd[pos + 16..pos + 20]);
-        let compressed = le_u32(&cd[pos + 20..pos + 24]) as u64;
-        let uncompressed = le_u32(&cd[pos + 24..pos + 28]) as u64;
-        let name_len = le_u16(&cd[pos + 28..pos + 30]) as usize;
-        let extra_len = le_u16(&cd[pos + 30..pos + 32]) as usize;
-        let comment_len = le_u16(&cd[pos + 32..pos + 34]) as usize;
-        let name_start = pos + 46;
-        let name_end = name_start + name_len;
-        if name_end > cd.len() {
-            return Err("zip entry name outside central directory".to_string());
-        }
-        let name = String::from_utf8_lossy(&cd[name_start..name_end]).into_owned();
-        if !name.ends_with('/') && !name.starts_with("__MACOSX/") {
-            let ext = Path::new(&name)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let launchable = is_normal_launchable(&ext);
-            entries.push(LibraryContainerEntry {
-                file_path: file.path.display().to_string(),
-                entry_path: name.clone(),
-                normalized_title: normalize_title(&name),
-                compressed_size: Some(compressed),
-                uncompressed_size: Some(uncompressed),
-                crc32: Some(crc32),
-                launchable,
-                launch_ref: format!("{}::{name}", file.path.display()),
-            });
-        }
-        pos = name_end + extra_len + comment_len;
-    }
-    Ok(entries)
-}
-
 fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
     discoveries
         .iter()
@@ -1917,8 +1402,6 @@ fn confidence_str(confidence: DiscoveryConfidence) -> &'static str {
         DiscoveryConfidence::MraCore => "mra-core",
         DiscoveryConfidence::PayloadPath => "payload-path",
         DiscoveryConfidence::Extension => "extension",
-        DiscoveryConfidence::ArchiveToc => "archive-toc",
-        DiscoveryConfidence::CatalogMetadata => "catalog-metadata",
     }
 }
 
@@ -1978,6 +1461,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         CREATE TABLE profiles (
             profile_id TEXT PRIMARY KEY,
             system_id TEXT NOT NULL,
+            category TEXT NOT NULL,
             title TEXT NOT NULL,
             core_name TEXT NOT NULL,
             source_kind TEXT NOT NULL,
@@ -2101,14 +1585,15 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO profiles(profile_id,system_id,title,core_name,source_kind,source_detail)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO profiles(profile_id,system_id,category,title,core_name,source_kind,source_detail)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )
             .map_err(|e| format!("prepare profile insert: {e}"))?;
         for profile in launch_profiles::builtin_profiles() {
             stmt.execute(params![
                 profile.id,
                 profile.system_id,
+                profile.category,
                 profile.title,
                 profile.core_name,
                 source_kind_name(profile.provenance.kind),
@@ -2118,7 +1603,11 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         }
     }
     {
-        let normal_paths = scan.normal_files.iter().cloned().collect::<HashSet<_>>();
+        let normal_paths = scan
+            .normal_files
+            .iter()
+            .map(|payload| payload.path.clone())
+            .collect::<HashSet<_>>();
         let container_paths = scan
             .containers
             .iter()
@@ -2156,7 +1645,8 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             )
             .map_err(|e| format!("prepare payload insert: {e}"))?;
-        for path in &scan.normal_files {
+        for payload in &scan.normal_files {
+            let path = &payload.path;
             let (size, mtime_secs) = scan
                 .file_fingerprints
                 .get(path)
@@ -2167,16 +1657,16 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 path.as_str(),
                 Option::<&str>::None,
                 path.as_str(),
-                Option::<&str>::None,
+                payload.profile_id.as_str(),
                 title_from_path(path),
-                Option::<&str>::None,
-                Option::<i64>::None,
-                Option::<i64>::None,
-                "unknown",
+                mount_kind_str(payload.rule.mount.kind),
+                payload.rule.mount.index as i64,
+                payload.rule.mount.delay_secs as i64,
+                payload_disposition_str(payload.rule.disposition),
                 size as i64,
                 mtime_secs,
-                "scanner",
-                "legacy scanner candidate before profile classification"
+                source_kind_name(payload.rule.provenance.kind),
+                payload.rule.provenance.detail
             ])
             .map_err(|e| format!("insert payload file: {e}"))?;
         }
@@ -2211,16 +1701,13 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                  VALUES (?1,?2,?3,?4,?5)",
             )
             .map_err(|e| format!("prepare ignored file insert: {e}"))?;
-        for path in &scan.normal_files {
-            if !is_support_file_path(path) {
-                continue;
-            }
+        for ignored in &scan.ignored_files {
             stmt.execute(params![
-                path.as_str(),
-                Option::<&str>::None,
-                "support-file",
-                "scanner",
-                "legacy support-file filter before profile classification"
+                ignored.path.as_str(),
+                ignored.profile_id.as_str(),
+                ignore_reason_str(ignored.reason),
+                source_kind_name(ignored.provenance.kind),
+                ignored.provenance.detail
             ])
             .map_err(|e| format!("insert ignored file: {e}"))?;
         }
@@ -2284,12 +1771,10 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             let launcher_path = match discovery.source_kind {
-                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry => {
+                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => {
                     Some(discovery.launch_ref.as_str())
                 }
-                DiscoverySourceKind::PayloadFile
-                | DiscoverySourceKind::ArchiveEntry
-                | DiscoverySourceKind::Container => None,
+                DiscoverySourceKind::PayloadFile => None,
             };
             let payload_path = if launcher_path.is_none() {
                 Some(discovery.launch_ref.as_str())
@@ -2345,7 +1830,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         for discovery in &scan.discoveries {
             if !matches!(
                 discovery.source_kind,
-                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry
+                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl
             ) {
                 continue;
             }
@@ -2522,133 +2007,23 @@ fn discovery_unique_key(d: &GameDiscovery) -> String {
             }
         }
         DiscoverySourceKind::Mgl => format!("payload:{}", d.launch_ref),
-        DiscoverySourceKind::PayloadFile | DiscoverySourceKind::Container => {
-            format!("payload:{}", d.launch_ref)
-        }
-        DiscoverySourceKind::ArchiveEntry => format!("archive:{}", d.launch_ref),
-        DiscoverySourceKind::CatalogEntry => format!("catalog:{}:{}", d.launch_ref, d.title),
+        DiscoverySourceKind::PayloadFile => format!("payload:{}", d.launch_ref),
     }
 }
 
 fn is_playable_discovery(d: &GameDiscovery) -> bool {
     match d.source_kind {
-        DiscoverySourceKind::Mra => !is_support_file_path(&d.launch_ref),
-        DiscoverySourceKind::Mgl | DiscoverySourceKind::CatalogEntry => {
-            is_launcher_launch_ref(&d.launch_ref) && !is_support_file_path(&d.launch_ref)
-        }
-        DiscoverySourceKind::PayloadFile
-        | DiscoverySourceKind::ArchiveEntry
-        | DiscoverySourceKind::Container => false,
+        DiscoverySourceKind::Mra => true,
+        DiscoverySourceKind::Mgl => is_launcher_launch_ref(&d.launch_ref),
+        DiscoverySourceKind::PayloadFile => false,
     }
 }
 
 fn is_launcher_launch_ref(path: &str) -> bool {
     match path_ext(path).as_deref() {
         Some("mra" | "mgl") => !path.contains("::"),
-        Some("7z") => is_amigavision_archive_path(path),
         _ => false,
     }
-}
-
-fn is_amigavision_archive_path(path: &str) -> bool {
-    path.to_ascii_lowercase()
-        .contains("/games/amiga/amigavision")
-}
-
-fn is_support_file_path(path: &str) -> bool {
-    path.split("::").any(is_support_file_part)
-}
-
-fn is_support_file_part(path: &str) -> bool {
-    let ext = path_ext(path).unwrap_or_default();
-    if ext == "mra" {
-        return false;
-    }
-    if ext == "rbf" || is_menu_launcher_path(path, &ext) {
-        return true;
-    }
-
-    let file_stem = Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let key = support_name_key(&file_stem);
-    if is_boot_helper_key(&key)
-        || matches!(
-            key.as_str(),
-            "bios"
-                | "backgroundgen2"
-                | "basic4k32"
-                | "blank"
-                | "bootloader"
-                | "bootrom"
-                | "cdbios"
-                | "cd32"
-                | "disk605"
-                | "dolphindos20"
-                | "empty"
-                | "emptyhdd"
-                | "firmware"
-                | "fw"
-                | "ipl"
-                | "iplrom"
-                | "kanji"
-                | "kick"
-                | "kick13"
-                | "kick20"
-                | "kick31"
-                | "kickstart"
-                | "misterboot"
-                | "neocd"
-                | "os"
-                | "riscos"
-                | "speeddosplus27"
-                | "supergameboy"
-                | "supergameboy2"
-                | "system"
-                | "topsp1"
-                | "unibioscd"
-        )
-        || key.contains("bios")
-    {
-        return true;
-    }
-
-    let lower = path.to_ascii_lowercase();
-    lower.split('/').any(|component| {
-        let component = support_name_key(component);
-        matches!(
-            component.as_str(),
-            "bios" | "boot" | "bootloader" | "firmware" | "fw" | "kickstart"
-        )
-    })
-}
-
-fn is_menu_launcher_path(path: &str, ext: &str) -> bool {
-    if ext != "mgl" {
-        return false;
-    }
-    let lower = path.to_ascii_lowercase();
-    lower.starts_with("/media/fat/_computer/")
-        || lower.starts_with("/media/fat/_console/")
-        || lower.starts_with("/media/fat/_other/")
-        || lower.starts_with("/media/fat/_utility/")
-}
-
-fn support_name_key(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect()
-}
-
-fn is_boot_helper_key(key: &str) -> bool {
-    key == "boot"
-        || key
-            .strip_prefix("boot")
-            .map(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
-            .unwrap_or(false)
 }
 
 fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
@@ -2656,9 +2031,6 @@ fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
         DiscoverySourceKind::Mra => "mra",
         DiscoverySourceKind::Mgl => "mgl",
         DiscoverySourceKind::PayloadFile => "payload",
-        DiscoverySourceKind::ArchiveEntry => "archive-entry",
-        DiscoverySourceKind::Container => "container",
-        DiscoverySourceKind::CatalogEntry => "catalog-entry",
     }
 }
 
@@ -2672,20 +2044,34 @@ fn source_kind_name(kind: RuleSourceKind) -> &'static str {
     }
 }
 
+fn ignore_reason_str(reason: IgnoreReason) -> &'static str {
+    match reason {
+        IgnoreReason::Bios => "bios",
+        IgnoreReason::CueTrack => "cue-track",
+        IgnoreReason::CoreBinary => "core-binary",
+        IgnoreReason::SaveMedia => "save-media",
+        IgnoreReason::SupportArchive => "support-archive",
+    }
+}
+
+fn mount_kind_str(kind: MountKind) -> &'static str {
+    match kind {
+        MountKind::Launcher => "launcher",
+        MountKind::LoadFile => "load-file",
+        MountKind::MountImage => "mount-image",
+        MountKind::Core => "core",
+    }
+}
+
+fn payload_disposition_str(disposition: PayloadDisposition) -> &'static str {
+    match disposition {
+        PayloadDisposition::Playable => "playable",
+        PayloadDisposition::AttachedMedia => "attached-media",
+    }
+}
+
 fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
-    if discovery.category == "Arcade"
-        && (discovery.platform_id == "neogeo"
-            || discovery.core_id.eq_ignore_ascii_case("neogeo")
-            || discovery.core_id.eq_ignore_ascii_case("neo geo")
-            || discovery.core_id.eq_ignore_ascii_case("neo-geo")
-            || discovery.hardware_id == "snk-neo-geo"
-            || discovery
-                .hardware_id
-                .to_ascii_lowercase()
-                .contains("neo-geo"))
-    {
-        "neogeo".to_string()
-    } else if discovery.category == "Arcade" {
+    if discovery.category == "Arcade" {
         "arcade".to_string()
     } else if discovery.platform_id.is_empty() {
         "unknown".to_string()
@@ -2702,35 +2088,15 @@ fn system_title_for_discovery(discovery: &GameDiscovery, system_id: &str) -> Str
     }
 }
 
-fn find_eocd(buf: &[u8]) -> Option<usize> {
-    if buf.len() < 22 {
-        return None;
-    }
-    (0..=buf.len() - 4)
-        .rev()
-        .find(|&i| buf[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])
-}
-
-fn le_u16(bytes: &[u8]) -> u16 {
-    u16::from_le_bytes([bytes[0], bytes[1]])
-}
-
-fn le_u32(bytes: &[u8]) -> u32 {
-    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
-}
-
-fn is_normal_launchable(ext: &str) -> bool {
-    NORMAL_LAUNCH_EXTS.contains(&ext)
-}
-
-fn is_index_candidate(path: &Path, ext: &str) -> bool {
-    is_normal_launchable(ext)
-        || ArchiveFormat::from_ext(ext).is_some()
-        || path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("gamelist.xml"))
-            .unwrap_or(false)
+fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: &str) -> bool {
+    matches!(
+        classify_profile_path(profiles, path),
+        Some((_, ProfilePathClass::Payload { .. } | ProfilePathClass::Ignored { .. }))
+    ) || path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("gamelist.xml"))
+        .unwrap_or(false)
 }
 
 fn should_ignore_path(path: &Path) -> bool {
@@ -2791,22 +2157,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eocd_search_finds_last_signature() {
-        let mut data = b"PK\x05\x06 noise".to_vec();
-        data.extend_from_slice(&[0; 22]);
-        data.extend_from_slice(b"abcPK\x05\x06");
-        assert_eq!(find_eocd(&data), Some(data.len() - 4));
-    }
-
-    #[test]
-    fn archive_format_from_ext() {
-        assert_eq!(ArchiveFormat::from_ext("zip"), Some(ArchiveFormat::Zip));
-        assert_eq!(ArchiveFormat::from_ext("7z"), Some(ArchiveFormat::SevenZip));
-        assert_eq!(ArchiveFormat::from_ext("chd"), Some(ArchiveFormat::Chd));
-        assert_eq!(ArchiveFormat::from_ext("mra"), None);
-    }
-
-    #[test]
     fn support_roms_do_not_count_as_games() {
         let discoveries = vec![
             payload("/media/fat/games/Saturn/boot.rom"),
@@ -2852,19 +2202,19 @@ mod tests {
     }
 
     #[test]
-    fn menu_mgl_launchers_do_not_count_as_games() {
-        let discoveries = vec![
-            mgl(
-                "/media/fat/_Computer/Amiga.mgl",
-                "/media/fat/_Computer/Amiga.mgl",
-            ),
-            mgl(
-                "/media/fat/_Console/Game Gear.mgl",
-                "/media/fat/_Console/Game Gear.mgl",
-            ),
-        ];
+    fn menu_mgl_launchers_are_not_profile_candidates() {
+        let profiles = launch_profiles::builtin_profiles();
 
-        assert_eq!(unique_discovery_count(&discoveries), 0);
+        assert!(classify_profile_path(
+            &profiles,
+            Path::new("/media/fat/_Computer/Amiga.mgl")
+        )
+        .is_none());
+        assert!(classify_profile_path(
+            &profiles,
+            Path::new("/media/fat/_Console/Game Gear.mgl")
+        )
+        .is_none());
     }
 
     #[test]
@@ -2894,234 +2244,22 @@ mod tests {
             mtime_secs: mtime_secs(&meta),
         };
 
-        let discovery = discovery_from_file(&file, DiscoverySourceKind::Mgl);
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "mgl")
+            .expect("mgl profile");
+        let payload_rule = profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
 
         assert_eq!(discovery.source_path, path.display().to_string());
         assert_eq!(discovery.launch_ref, path.display().to_string());
+        assert_eq!(discovery.platform_id, "nes");
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn neogeo_mgl_uses_setname_screenshot_from_neogeo_folder() {
-        let root = unique_temp_dir("neogeo-media");
-        let neogeo = root.join("games/NEOGEO");
-        let screenshots = neogeo.join("screenshots");
-        std::fs::create_dir_all(&screenshots).expect("create screenshots");
-        std::fs::write(screenshots.join("mslug3.png"), b"png").expect("write screenshot");
-        std::fs::write(
-            neogeo.join("gamelist.xml"),
-            r#"
-            <gameList>
-              <game>
-                <path>./mslug3.zip</path>
-                <name>Metal Slug 3</name>
-                <image>./../../../../Volumes/MiSTer_Data/games/NEOGEO/screenshots/mslug3.png</image>
-              </game>
-            </gameList>
-            "#,
-        )
-        .expect("write gamelist");
-        let mut discoveries = vec![GameDiscovery {
-            source_path:
-                "/media/fat/_Games/_Neo Geo MVS & AES/_ World A-Z/Metal Slug 3 (mslug3).mgl"
-                    .to_string(),
-            launch_ref:
-                "/media/fat/_Games/_Neo Geo MVS & AES/_ World A-Z/Metal Slug 3 (mslug3).mgl"
-                    .to_string(),
-            source_kind: DiscoverySourceKind::Mgl,
-            title: "Metal Slug 3 (mslug3)".to_string(),
-            category: "Arcade".to_string(),
-            platform_id: "neogeo".to_string(),
-            core_id: "NeoGeo".to_string(),
-            hardware_id: "snk-neo-geo".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::PayloadPath,
-        }];
-
-        let matched = enrich_discoveries_from_gamelists(
-            &mut discoveries,
-            &[root.join("games").display().to_string()],
-            None,
-        );
-
-        assert_eq!(matched, 1);
-        assert_eq!(discoveries[0].title, "Metal Slug 3");
-        assert_eq!(
-            discoveries[0].image_path.as_deref(),
-            Some(
-                screenshots
-                    .join("mslug3.png")
-                    .display()
-                    .to_string()
-                    .as_str()
-            )
-        );
-        assert!(discoveries[0].has_image);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn neogeo_mgl_can_use_screenshot_file_without_gamelist_row() {
-        let root = unique_temp_dir("neogeo-screenshot-only");
-        let screenshots = root.join("NEOGEO/screenshots");
-        std::fs::create_dir_all(&screenshots).expect("create screenshots");
-        std::fs::write(screenshots.join("aof2a.png"), b"png").expect("write screenshot");
-        let mut discoveries = vec![GameDiscovery {
-            source_path: "/media/fat/_Games/_Neo Geo MVS & AES/Art of Fighting 2 (AES) (aof2a).mgl"
-                .to_string(),
-            launch_ref: "/media/fat/_Games/_Neo Geo MVS & AES/Art of Fighting 2 (AES) (aof2a).mgl"
-                .to_string(),
-            source_kind: DiscoverySourceKind::Mgl,
-            title: "Art of Fighting 2 (AES) (aof2a)".to_string(),
-            category: "Arcade".to_string(),
-            platform_id: "neogeo".to_string(),
-            core_id: "NeoGeo".to_string(),
-            hardware_id: "snk-neo-geo".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::PayloadPath,
-        }];
-
-        let matched = enrich_discoveries_from_gamelists(
-            &mut discoveries,
-            &[root.display().to_string()],
-            None,
-        );
-
-        assert_eq!(matched, 1);
-        assert_eq!(
-            discoveries[0].image_path.as_deref(),
-            Some(screenshots.join("aof2a.png").display().to_string().as_str())
-        );
-        assert!(discoveries[0].has_image);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn neogeo_setname_does_not_need_digits() {
-        let root = unique_temp_dir("neogeo-no-digit-setname");
-        let screenshots = root.join("NEOGEO/screenshots");
-        std::fs::create_dir_all(&screenshots).expect("create screenshots");
-        std::fs::write(screenshots.join("samsho.png"), b"png").expect("write screenshot");
-        let mut discoveries = vec![GameDiscovery {
-            source_path: "/media/fat/_Games/_Neo Geo MVS & AES/Samurai Shodown (samsho).mgl"
-                .to_string(),
-            launch_ref: "/media/fat/_Games/_Neo Geo MVS & AES/Samurai Shodown (samsho).mgl"
-                .to_string(),
-            source_kind: DiscoverySourceKind::Mgl,
-            title: "Samurai Shodown (samsho)".to_string(),
-            category: "Arcade".to_string(),
-            platform_id: "neogeo".to_string(),
-            core_id: "NeoGeo".to_string(),
-            hardware_id: "snk-neo-geo".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::PayloadPath,
-        }];
-
-        let matched = enrich_discoveries_from_gamelists(
-            &mut discoveries,
-            &[root.display().to_string()],
-            None,
-        );
-
-        assert_eq!(matched, 1);
-        assert_eq!(
-            discoveries[0].image_path.as_deref(),
-            Some(
-                screenshots
-                    .join("samsho.png")
-                    .display()
-                    .to_string()
-                    .as_str()
-            )
-        );
-        assert!(discoveries[0].has_image);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn amigavision_catalog_entries_count_as_games() {
-        let mut discovery = GameDiscovery {
-            source_path: "/media/fat/games/Amiga/AmigaVision.7z::games.txt::Agony".to_string(),
-            launch_ref: "/media/fat/games/Amiga/AmigaVision.7z".to_string(),
-            source_kind: DiscoverySourceKind::CatalogEntry,
-            title: "Agony".to_string(),
-            category: "Computer".to_string(),
-            platform_id: "amiga".to_string(),
-            core_id: "AmigaVision".to_string(),
-            hardware_id: "commodore-amiga".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::CatalogMetadata,
-        };
-
-        assert!(is_playable_discovery(&discovery));
-        assert_eq!(unique_discovery_count(&[discovery.clone()]), 1);
-
-        discovery.launch_ref = "/media/fat/games/Other/System.7z".to_string();
-        assert!(!is_playable_discovery(&discovery));
-
-        discovery.launch_ref = "/media/fat/games/Amiga/Agony.mgl".to_string();
-        assert!(is_playable_discovery(&discovery));
-    }
-
-    #[test]
-    fn support_archive_entries_do_not_count_as_games() {
-        let discoveries = vec![archive_entry(
-            "/media/fat/games/MACPLUS/empty_hdd.zip::boot.vhd",
-        )];
-
-        assert_eq!(unique_discovery_count(&discoveries), 0);
-    }
-
-    #[test]
-    fn mgl_boot_helpers_do_not_count_as_games() {
-        let discovery = GameDiscovery {
-            source_path: "/media/fat/games/TGFX16/mister-boot.mgl".to_string(),
-            launch_ref: "/media/fat/games/TGFX16/mister-boot.pce".to_string(),
-            source_kind: DiscoverySourceKind::Mgl,
-            title: "mister-boot".to_string(),
-            category: "Console".to_string(),
-            platform_id: "tgfx16".to_string(),
-            core_id: "TurboGrafx16".to_string(),
-            hardware_id: "nec-pc-engine".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::PayloadPath,
-        };
-
-        assert!(!is_playable_discovery(&discovery));
-    }
-
-    #[test]
-    fn mra_files_are_not_filtered_by_support_names() {
+    fn mra_files_remain_playable_launchers() {
         let discovery = GameDiscovery {
             source_path: "/media/fat/_Arcade/BIOS.mra".to_string(),
             launch_ref: "/media/fat/_Arcade/BIOS.mra".to_string(),
@@ -3188,7 +2326,9 @@ mod tests {
     #[test]
     fn directory_manifest_validation_recomputes_child_signature() {
         let root = unique_temp_dir("manifest-child-signature");
-        let rom = root.join("same-second.nes");
+        let rom_dir = root.join("games/NES");
+        std::fs::create_dir_all(&rom_dir).expect("create rom dir");
+        let rom = rom_dir.join("same-second.nes");
         std::fs::write(&rom, b"rom").expect("write rom");
         let root_key = root.display().to_string();
         let current = build_directory_manifest(std::slice::from_ref(&root_key), None);
@@ -3217,7 +2357,9 @@ mod tests {
     #[test]
     fn directory_manifest_validation_keeps_unchanged_manifest() {
         let root = unique_temp_dir("manifest-unchanged");
-        std::fs::write(root.join("unchanged.nes"), b"rom").expect("write rom");
+        let rom_dir = root.join("games/NES");
+        std::fs::create_dir_all(&rom_dir).expect("create rom dir");
+        std::fs::write(rom_dir.join("unchanged.nes"), b"rom").expect("write rom");
         let root_key = root.display().to_string();
         let manifest = build_directory_manifest(std::slice::from_ref(&root_key), None);
         let fingerprint = fingerprint_with_manifest(manifest.clone());
@@ -3281,17 +2423,15 @@ mod tests {
     }
 
     fn payload(path: &str) -> GameDiscovery {
-        let ext = path_ext(path).unwrap_or_default();
-        let taxonomy = taxonomy_from_path(path, &ext);
         GameDiscovery {
             source_path: path.to_string(),
             launch_ref: path.to_string(),
             source_kind: DiscoverySourceKind::PayloadFile,
             title: title_from_path(path),
-            category: taxonomy.category,
-            platform_id: taxonomy.platform_id,
-            core_id: taxonomy.core_id,
-            hardware_id: taxonomy.hardware_id,
+            category: "Unknown".to_string(),
+            platform_id: "unknown".to_string(),
+            core_id: "unknown".to_string(),
+            hardware_id: "unknown".to_string(),
             manufacturer: None,
             genre: None,
             year: None,
@@ -3354,27 +2494,6 @@ mod tests {
         }
     }
 
-    fn archive_entry(path: &str) -> GameDiscovery {
-        GameDiscovery {
-            source_path: path.to_string(),
-            launch_ref: path.to_string(),
-            source_kind: DiscoverySourceKind::ArchiveEntry,
-            title: title_from_path(path),
-            category: "Unknown".to_string(),
-            platform_id: "unknown".to_string(),
-            core_id: "unknown".to_string(),
-            hardware_id: "unknown".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            image_path: None,
-            has_image: false,
-            confidence: DiscoveryConfidence::ArchiveToc,
-        }
-    }
-
     fn mra_discovery(idx: usize, title: &str) -> GameDiscovery {
         let path = format!("/media/fat/_Arcade/{title}.mra");
         GameDiscovery {
@@ -3403,9 +2522,22 @@ mod tests {
             scanned_at_unix: 1,
             file_fingerprints: FileFingerprint::default(),
             directory_manifest: DirectoryManifest::new(),
-            normal_files: paths.iter().map(|path| path.to_string()).collect(),
+            normal_files: paths
+                .iter()
+                .map(|path| LibraryPayloadFile {
+                    path: path.to_string(),
+                    profile_id: "mgl".to_string(),
+                    rule: PayloadRule {
+                        extensions: &["mgl"],
+                        mount: launch_profiles::MountSpec::launcher(),
+                        disposition: PayloadDisposition::Playable,
+                        provenance: RuleProvenance::mgl("test fixture launcher payload"),
+                    },
+                })
+                .collect(),
             containers: Vec::new(),
             entries: Vec::new(),
+            ignored_files: Vec::new(),
             discoveries: Vec::new(),
             discover_us: 0,
             classify_us: 0,
@@ -3421,6 +2553,7 @@ mod tests {
             normal_files: Vec::new(),
             containers: Vec::new(),
             entries: Vec::new(),
+            ignored_files: Vec::new(),
             discoveries,
             discover_us: 0,
             classify_us: 0,

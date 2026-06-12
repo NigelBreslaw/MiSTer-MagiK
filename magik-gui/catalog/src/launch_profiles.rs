@@ -126,6 +126,7 @@ pub struct IgnoreRule {
 pub struct LaunchProfile {
     pub id: &'static str,
     pub system_id: &'static str,
+    pub category: &'static str,
     pub title: &'static str,
     pub core_name: &'static str,
     pub game_dirs: Vec<&'static str>,
@@ -194,13 +195,22 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
         saturn_profile(),
         psx_profile(),
         ao486_profile(),
-        cartridge_profile("nes", "nes", "NES", "NES", &["NES"], &["nes", "fds"]),
-        cartridge_profile("snes", "snes", "SNES", "SNES", &["SNES"], &["sfc", "smc"]),
-        cartridge_profile("gba", "gba", "GBA", "GBA", &["GBA"], &["gba"]),
-        cartridge_profile("gbc", "gbc", "Game Boy Color", "GBC", &["GBC"], &["gbc"]),
+        cartridge_profile("nes", "nes", "Console", "NES", "NES", &["NES"], &["nes", "fds"]),
+        cartridge_profile("snes", "snes", "Console", "SNES", "SNES", &["SNES"], &["sfc", "smc"]),
+        cartridge_profile("gba", "gba", "Handheld", "GBA", "GBA", &["GBA"], &["gba"]),
+        cartridge_profile(
+            "gbc",
+            "gbc",
+            "Handheld",
+            "Game Boy Color",
+            "GBC",
+            &["GBC"],
+            &["gbc"],
+        ),
         cartridge_profile(
             "gamegear",
             "gamegear",
+            "Handheld",
             "Game Gear",
             "GameGear",
             &["GameGear"],
@@ -209,6 +219,7 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
         cartridge_profile(
             "megadrive",
             "megadrive",
+            "Console",
             "Mega Drive",
             "MegaDrive",
             &["MegaDrive"],
@@ -217,6 +228,7 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
         cartridge_profile(
             "n64",
             "n64",
+            "Console",
             "Nintendo 64",
             "N64",
             &["N64"],
@@ -241,6 +253,7 @@ fn mra_profile() -> LaunchProfile {
     LaunchProfile {
         id: "mra",
         system_id: "arcade",
+        category: "Arcade",
         title: "MRA Launcher",
         core_name: "MRA",
         game_dirs: vec!["_Arcade"],
@@ -254,6 +267,7 @@ fn mgl_profile() -> LaunchProfile {
     LaunchProfile {
         id: "mgl",
         system_id: "launcher",
+        category: "Launcher",
         title: "MGL Launcher",
         core_name: "MGL",
         game_dirs: vec!["_Games", "_DOS Games", "_Console (autoboot)"],
@@ -267,6 +281,7 @@ fn saturn_profile() -> LaunchProfile {
     LaunchProfile {
         id: "saturn",
         system_id: "saturn",
+        category: "Console",
         title: "Saturn",
         core_name: "Saturn",
         game_dirs: vec!["Saturn"],
@@ -302,6 +317,7 @@ fn psx_profile() -> LaunchProfile {
     LaunchProfile {
         id: "psx",
         system_id: "psx",
+        category: "Console",
         title: "PlayStation",
         core_name: "PSX",
         game_dirs: vec!["PSX"],
@@ -337,6 +353,7 @@ fn ao486_profile() -> LaunchProfile {
     LaunchProfile {
         id: "ao486",
         system_id: "ao486",
+        category: "Computer",
         title: "AO486",
         core_name: "AO486",
         game_dirs: vec!["AO486"],
@@ -363,6 +380,7 @@ fn ao486_profile() -> LaunchProfile {
 fn cartridge_profile(
     id: &'static str,
     system_id: &'static str,
+    category: &'static str,
     title: &'static str,
     core_name: &'static str,
     game_dirs: &'static [&'static str],
@@ -371,6 +389,7 @@ fn cartridge_profile(
     LaunchProfile {
         id,
         system_id,
+        category,
         title,
         core_name,
         game_dirs: game_dirs.to_vec(),
