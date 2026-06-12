@@ -232,3 +232,21 @@ gate/blend/decorate path.
 
 `starfield-warp` is much closer to the 60fps target, though it still needs a
 second pass for p95.
+
+## Round 27 - Direct vector-redraw transition fast path
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 12 held-scroll TRANSITION-VECTOR-REDRAW-R27-20260612 --deploy-fast --fb-format 565 --preview-blitter raw --preview-format raw-rgb565 --transition vector-redraw --transition-ms 220 --visual-captures 0
+```
+
+This moves `vector-redraw` into a direct RGB565 arm. It preserves the diagonal
+redraw gate and sparse vector-line reveal while avoiding the generic gate path.
+
+| run | frames | avg wall us | p95 wall us | >16.7 ms | >20 ms | rss hwm kb |
+|---|---:|---:|---:|---:|---:|---:|
+| post-R25 mega vector-redraw segment | 72 | 39340 | 49389 | 54 | 54 | 32216 |
+| round 27 focused vector-redraw | 721 | 16358 | 16497 | 19 | 2 | 28048 |
+
+`vector-redraw` is now inside the p95 60fps target.

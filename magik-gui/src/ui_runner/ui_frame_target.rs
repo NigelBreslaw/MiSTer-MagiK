@@ -1001,6 +1001,18 @@ pub(super) fn blit_transition_565_fast(
                         prev
                     }
                 }
+                PreviewTransitionEffect::VectorRedraw => {
+                    let diag = local_x + local_y;
+                    if diag
+                        < ((screen.width() + screen.rows() as usize) as f32 * progress).round()
+                            as usize
+                        || local_x % 37 == local_y % 29
+                    {
+                        blend_565(prev, curr, alpha)
+                    } else {
+                        prev
+                    }
+                }
                 PreviewTransitionEffect::CrtBeamWipe => {
                     let beam_y = (progress * (screen.rows() as f32 + 4.0)).round() as isize - 2;
                     let dy = local_y as isize - beam_y;
