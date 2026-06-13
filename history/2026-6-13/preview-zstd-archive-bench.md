@@ -294,6 +294,24 @@ Result: keep automatic archive discovery. It moves the production/no-env path
 from separate raw files to the RAM-backed raw pack when the pack exists, cutting
 preview-worker load by about 9.5 ms per decoded preview in this run.
 
+### Profile script default framebuffer format
+
+The app already defaults to RGB565 when `MISTER_FB_FORMAT` is unset, but
+`scripts/profile-preview-scroll.sh` was forcing `8888` by default. Follow-up
+changed the profiling script default to `565` so turbo/fade measurements match
+the app default unless a benchmark explicitly asks for `--fb-format 8888`.
+
+Same 20 second `turbo-hold` + fade benchmark with automatic archive discovery:
+
+| script default | decoded previews | avg load us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders | RSS HWM KB |
+|----------------|------------------|-------------|-------------------|-------------------|------------|--------------|------------|
+| 8888 before | 130 | 667 | 16378 | 17246 | 15 | 1 | 180308 |
+| 565 after | 131 | 544 | 16361 | 16974 | 15 | 1 | 179592 |
+
+Result: keep the script default change. It is primarily benchmark hygiene, but
+it also avoids measuring future arcade preview work through a slower framebuffer
+format than the app's normal default.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and
