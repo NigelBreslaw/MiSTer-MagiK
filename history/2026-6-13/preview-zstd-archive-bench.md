@@ -257,6 +257,24 @@ at a cost of about 144 MB additional RSS for the 147.7 MB raw pack. Lazy preload
 was rejected because it caused 34 placeholder frames; preloading at worker start
 restored placeholder behavior to baseline.
 
+### Preview-loader priority tuning
+
+Follow-up optimization changed the preview-loader thread from nice +10 to nice
++5. Nice 0 was also tested and rejected because it competed too aggressively
+with the UI/apply path.
+
+Same 20 second `turbo-hold` + fade benchmark with raw pack and archive preload:
+
+| build | decoded previews | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders | RSS HWM KB |
+|-------|------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|------------|
+| nice +10 before | 130 | 737 | 2 | 712 | 16379 | 17244 | 15 | 1 | 180428 |
+| nice 0 rejected | 131 | 705 | 2 | 680 | 16369 | 17299 | 13 | 180 | 180076 |
+| nice +5 after | 130 | 589 | 2 | 562 | 16350 | 17233 | 16 | 1 | 180464 |
+
+Result: keep nice +5. It cut preview-worker load by about 148 us per decoded
+preview versus nice +10 without increasing placeholders or frame wall time. Nice
+0 was rejected despite lower load time because placeholder frames jumped to 180.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and

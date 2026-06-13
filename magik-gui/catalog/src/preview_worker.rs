@@ -860,7 +860,7 @@ fn preview_trace_enabled() -> bool {
 fn lower_thread_priority() {
     #[cfg(target_os = "linux")]
     unsafe {
-        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 5);
     }
 }
 
