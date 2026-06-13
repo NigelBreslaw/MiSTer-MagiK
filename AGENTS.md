@@ -242,6 +242,15 @@ scripts/mister run "/media/fat/mister-magik/mister-magik-fb library-refresh"
 # Restore stock MiSTer menu boot
 scripts/restore-stock-boot.sh
 
+# Temporary comparison boot: switch main= to the installed Zaparoo fork/frontend
+# at /media/fat/zaparoo/{MiSTer_Zaparoo,frontend}, then reboot.
+scripts/mister ini-zaparoo-boot
+scripts/mister reboot-wait
+
+# Switch back to MiSTer MagiK production boot.
+scripts/install-slint-boot.sh
+scripts/mister reboot-wait
+
 # Device comms
 scripts/mister run "uname -a"
 scripts/mister reboot
