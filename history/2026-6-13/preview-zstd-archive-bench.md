@@ -157,6 +157,24 @@ Turbo/fade conclusion matches held-scroll: frame timing is effectively tied, but
 the raw file path is faster inside the preview worker when the runtime cache is
 warm. The archive path slightly increases placeholder frames in this single run.
 
+### LZ4 archive scratch-buffer optimization
+
+Follow-up optimization reused the archive loader's compressed and decompressed
+scratch buffers and switched LZ4 block decode to `decompress_into`, avoiding two
+fresh `Vec<u8>` allocations per screenshot. Same scenario: 20 second
+`turbo-hold` with `MISTER_PREVIEW_TRANSITION=fade` and the LZ4-block archive.
+
+| build | decoded previews | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders |
+|-------|------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|
+| before | 132 | 2743 | 99 | 2633 | 16351 | 17268 | 16 | 4 |
+| after run 1 | 130 | 2733 | 97 | 2625 | 16372 | 17281 | 15 | 1 |
+| after run 2 | 130 | 2598 | 108 | 2478 | 16356 | 17271 | 15 | 1 |
+
+Result: keep the scratch-buffer change. The second after-run cut preview-worker
+load time by about 145 us per decoded preview versus the fresh archive baseline,
+and both after-runs reduced placeholder frames from 4 to 1. Frame wall timing
+remained vsync-bound.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and

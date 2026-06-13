@@ -498,7 +498,14 @@ struct PreviewArchiveEntry {
 
 struct PreviewArchive {
     file: Mutex<File>,
+    scratch: Mutex<PreviewArchiveScratch>,
     entries: HashMap<String, PreviewArchiveEntry>,
+}
+
+#[derive(Default)]
+struct PreviewArchiveScratch {
+    compressed: Vec<u8>,
+    raw: Vec<u8>,
 }
 
 fn preview_archive() -> Result<Option<&'static PreviewArchive>, String> {
@@ -547,6 +554,7 @@ impl PreviewArchive {
         }
         Ok(Self {
             file: Mutex::new(file),
+            scratch: Mutex::new(PreviewArchiveScratch::default()),
             entries,
         })
     }
@@ -557,7 +565,11 @@ impl PreviewArchive {
         };
         let total_t = Instant::now();
         let read_t = Instant::now();
-        let mut compressed = vec![0u8; entry.compressed_len];
+        let mut scratch = self
+            .scratch
+            .lock()
+            .map_err(|_| "preview archive scratch lock poisoned".to_string())?;
+        scratch.compressed.resize(entry.compressed_len, 0);
         {
             let mut file = self
                 .file
@@ -565,13 +577,14 @@ impl PreviewArchive {
                 .map_err(|_| "preview archive file lock poisoned".to_string())?;
             file.seek(SeekFrom::Start(entry.offset))
                 .map_err(|e| format!("preview archive seek {name}: {e}"))?;
-            file.read_exact(&mut compressed)
+            file.read_exact(&mut scratch.compressed)
                 .map_err(|e| format!("preview archive read {name}: {e}"))?;
         }
         let read_us = read_t.elapsed().as_micros() as u64;
 
         let decode_t = Instant::now();
-        let data = decode_lz4_block_entry(&compressed, entry.raw_len)
+        let PreviewArchiveScratch { compressed, raw } = &mut *scratch;
+        let data = decode_lz4_block_entry_into(compressed, entry.raw_len, raw)
             .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
         let image = decode_raw565_preview_bytes(&data)?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
@@ -583,7 +596,7 @@ impl PreviewArchive {
                 decode_us,
                 resize_us: 0,
                 total_us,
-                encoded_bytes: compressed.len(),
+                encoded_bytes: entry.compressed_len,
                 decoded_bytes,
                 source_width: image.width(),
                 source_height: image.height(),
@@ -593,12 +606,25 @@ impl PreviewArchive {
     }
 }
 
-fn decode_lz4_block_entry(data: &[u8], raw_len: usize) -> Result<Vec<u8>, String> {
+fn decode_lz4_block_entry_into<'a>(
+    data: &'a [u8],
+    raw_len: usize,
+    out: &'a mut Vec<u8>,
+) -> Result<&'a [u8], String> {
     let (&flag, block) = data
         .split_first()
         .ok_or_else(|| "empty lz4 block entry".to_string())?;
     match flag {
-        0 => lz4_flex::block::decompress(block, raw_len).map_err(|e| e.to_string()),
+        0 => {
+            out.resize(raw_len, 0);
+            let len = lz4_flex::block::decompress_into(block, out).map_err(|e| e.to_string())?;
+            if len != raw_len {
+                return Err(format!(
+                    "lz4 block length mismatch got={len} expected={raw_len}"
+                ));
+            }
+            Ok(&out[..len])
+        }
         1 => {
             if block.len() != raw_len {
                 return Err(format!(
@@ -606,7 +632,7 @@ fn decode_lz4_block_entry(data: &[u8], raw_len: usize) -> Result<Vec<u8>, String
                     block.len()
                 ));
             }
-            Ok(block.to_vec())
+            Ok(block)
         }
         other => Err(format!("bad lz4 block flag {other}")),
     }
