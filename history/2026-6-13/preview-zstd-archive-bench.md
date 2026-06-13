@@ -275,6 +275,25 @@ Result: keep nice +5. It cut preview-worker load by about 148 us per decoded
 preview versus nice +10 without increasing placeholders or frame wall time. Nice
 0 was rejected despite lower load time because placeholder frames jumped to 180.
 
+### Automatic archive discovery
+
+Follow-up optimization made archive use automatic for the default arcade preview
+cache. Explicit `MISTER_PREVIEW_ARCHIVE` still wins. Without it, the loader looks
+under the preview cache root for `raw565-<cache>-rawpack.mmraw` first and then
+`raw565-<cache>-lz4block-12.mmlz4b`. Set `MISTER_PREVIEW_ARCHIVE_AUTO=0` to
+force the old separate-file path.
+
+Same 20 second `turbo-hold` + fade benchmark with no `MISTER_PREVIEW_ARCHIVE`:
+
+| build | decoded previews | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders | RSS HWM KB |
+|-------|------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|------------|
+| before auto | 130 | 10215 | 9799 | 400 | 16341 | 17247 | 16 | 1 | 36020 |
+| after auto | 130 | 667 | 2 | 646 | 16378 | 17246 | 15 | 1 | 180308 |
+
+Result: keep automatic archive discovery. It moves the production/no-env path
+from separate raw files to the RAM-backed raw pack when the pack exists, cutting
+preview-worker load by about 9.5 ms per decoded preview in this run.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and

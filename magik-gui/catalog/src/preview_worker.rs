@@ -593,9 +593,9 @@ struct PreviewArchiveScratch {
 fn preview_archive() -> Result<Option<&'static PreviewArchive>, String> {
     static ARCHIVE: OnceLock<Option<Result<PreviewArchive, String>>> = OnceLock::new();
     let value = ARCHIVE.get_or_init(|| {
-        let path = match std::env::var("MISTER_PREVIEW_ARCHIVE") {
-            Ok(path) if !path.is_empty() => path,
-            _ => return None,
+        let path = match preview_archive_path_from_env().or_else(auto_preview_archive_path) {
+            Some(path) => path,
+            None => return None,
         };
         Some(PreviewArchive::open(Path::new(&path)))
     });
@@ -604,6 +604,36 @@ fn preview_archive() -> Result<Option<&'static PreviewArchive>, String> {
         Some(Err(err)) => Err(err.clone()),
         None => Ok(None),
     }
+}
+
+fn preview_archive_path_from_env() -> Option<String> {
+    match std::env::var("MISTER_PREVIEW_ARCHIVE") {
+        Ok(path) if !path.is_empty() => Some(path),
+        _ => None,
+    }
+}
+
+fn auto_preview_archive_path() -> Option<String> {
+    if matches!(
+        std::env::var("MISTER_PREVIEW_ARCHIVE_AUTO").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    ) {
+        return None;
+    }
+    let cache_label = PreviewResizeSpec::from_env().cache_label();
+    let root = std::env::var("MISTER_PREVIEW_CACHE_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/media/fat/_Arcade/media/screenshot-magik"));
+    let raw = root.join(format!("raw565-{cache_label}-rawpack.mmraw"));
+    if raw.exists() {
+        return Some(raw.display().to_string());
+    }
+    let lz4 = root.join(format!("raw565-{cache_label}-lz4block-12.mmlz4b"));
+    if lz4.exists() {
+        return Some(lz4.display().to_string());
+    }
+    None
 }
 
 impl PreviewArchive {
