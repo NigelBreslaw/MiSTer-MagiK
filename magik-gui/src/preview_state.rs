@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use mister_magik_ui as slint_ui;
 use slint::platform::software_renderer::Rgb565Pixel;
-use slint::{ComponentHandle, Image, Rgb8Pixel, SharedPixelBuffer};
+use slint::{ComponentHandle, Image};
 use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::ArcadeGameEntry;
@@ -62,11 +62,6 @@ pub(crate) fn preview_visual_pct() -> u32 {
     })
 }
 
-fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
-    let buffer = SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(&rgb, width, height);
-    Image::from_rgb8(buffer)
-}
-
 struct PreviewImage {
     image: Image,
     pixels: PreviewImagePixels,
@@ -77,7 +72,6 @@ struct PreviewImage {
 }
 
 enum PreviewImagePixels {
-    Rgb8(Vec<u8>),
     Rgb565 {
         pixels: Vec<Rgb565Pixel>,
         stride_pixels: usize,
@@ -259,6 +253,7 @@ pub(crate) struct PreviewRawTransitionFrame<'a> {
 #[derive(Clone, Copy)]
 pub(crate) enum PreviewRawPixels<'a> {
     Empty,
+    #[allow(dead_code)]
     Rgb8(&'a [u8]),
     Rgb565 {
         pixels: &'a [Rgb565Pixel],
@@ -335,7 +330,6 @@ impl PreviewState {
     fn raw_frame_from_image(image: &PreviewImage) -> PreviewRawFrame<'_> {
         PreviewRawFrame {
             pixels: match &image.pixels {
-                PreviewImagePixels::Rgb8(rgb) => PreviewRawPixels::Rgb8(rgb),
                 PreviewImagePixels::Rgb565 {
                     pixels,
                     stride_pixels,
@@ -707,14 +701,6 @@ pub(crate) fn apply_ready_preview(
             );
             let slint_image_t = Instant::now();
             let (slint_image, pixels) = match image {
-                PreviewPixels::Rgb8(image) => {
-                    let slint_image = if preview_raw_blitter_enabled() {
-                        Image::default()
-                    } else {
-                        png_to_slint_image(source_w, source_h, image.rgb.clone())
-                    };
-                    (slint_image, PreviewImagePixels::Rgb8(image.rgb))
-                }
                 PreviewPixels::Rgb565 {
                     stride_bytes,
                     words,
@@ -870,7 +856,10 @@ mod tests {
         let mut cache = PreviewImageCache::default();
         let image = Arc::new(PreviewImage {
             image: Image::default(),
-            pixels: PreviewImagePixels::Rgb8(vec![1, 2, 3]),
+            pixels: PreviewImagePixels::Rgb565 {
+                pixels: vec![Rgb565Pixel(0xffff)],
+                stride_pixels: 1,
+            },
             source_w: 1,
             source_h: 1,
             display_w: 1,
@@ -890,7 +879,10 @@ mod tests {
         let mut preview = PreviewState::new();
         let visible_image = Arc::new(PreviewImage {
             image: Image::default(),
-            pixels: PreviewImagePixels::Rgb8(vec![255, 0, 0]),
+            pixels: PreviewImagePixels::Rgb565 {
+                pixels: vec![Rgb565Pixel(0xf800)],
+                stride_pixels: 1,
+            },
             source_w: 1,
             source_h: 1,
             display_w: 1,
@@ -944,7 +936,7 @@ mod tests {
             decoded_bytes: 0,
             source_width: 0,
             source_height: 0,
-            storage_format: crate::preview_worker::PreviewStorageFormat::Png,
+            storage_format: crate::preview_worker::PreviewStorageFormat::RawRgb565,
             resize_filter: crate::preview_worker::PreviewResizeFilter::Off,
             priority,
         }

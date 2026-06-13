@@ -17,6 +17,11 @@ The resized PNGs are for human inspection only. Do not copy them to the MiSTer
 unless deliberately debugging a PNG path. The launcher should load the prebuilt
 `.rgb565` files.
 
+As of 2026-06-13, MiSTer MagiK no longer decodes original PNG/JPG screenshots,
+resizes previews, or writes preview caches on the MiSTer. Runtime preview
+loading is raw565-only. If a `.rgb565` file is missing or malformed, regenerate
+and redeploy the cache from the Mac instead of expecting a device-side fallback.
+
 Legacy cache directories seen on the MiSTer:
 
 - `/media/fat/_Arcade/media/screenshot-magik/png-nearest-320x320`
@@ -116,7 +121,8 @@ Store each `u16` word little-endian.
 
 - Local generated `.rgb565` count matches the real source image count.
 - MiSTer deployed `.rgb565` count matches the local generated count.
-- Arcade UI loads previews with `MISTER_PREVIEW_FORMAT=raw-rgb565`.
+- Arcade UI loads previews from `.rgb565` files; `MISTER_PREVIEW_FORMAT` is no
+  longer a format selector.
 - `/media/fat/_Arcade/media/screenshot` remains unchanged.
 
 ## Rust builder

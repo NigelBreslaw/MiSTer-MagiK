@@ -307,7 +307,9 @@ Arcade screenshot cache update workflow is documented in
 `history/2026-6-13/arcade-screenshot-cache-workflow.md`: originals live in
 `/media/fat/_Arcade/media/screenshot`, generated caches live under
 `/media/fat/_Arcade/media/screenshot-magik`, and only cache directories should be
-deleted/recreated.
+deleted/recreated. MiSTer MagiK runtime preview loading is raw565-only; build
+and deploy `.rgb565` caches from the Mac with `tools/mister preview-cache-build`
+instead of reintroducing device-side decode/resize/cache-writing paths.
 Classic full-screen camera/background effect experiments live in
 `ui camera-effects`; list labels with `mister-magik-fb camera-effects`, browse
 interactively with `scripts/run-rust.sh camera-effects 0`, and benchmark with

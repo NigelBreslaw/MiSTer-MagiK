@@ -329,6 +329,74 @@ pub fn default_sqlite_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH))
 }
 
+pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
+    let mut path = default_sqlite_path();
+    let mut query_parts = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--path" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("library-sql: --path needs a value".into());
+                };
+                path = PathBuf::from(value);
+                i += 2;
+            }
+            other => {
+                query_parts.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    if query_parts.is_empty() {
+        return Err("usage: library-sql [--path PATH] SELECT ...".into());
+    }
+    let query = query_parts.join(" ");
+    let trimmed = query.trim_start().to_ascii_lowercase();
+    if !trimmed.starts_with("select") && !trimmed.starts_with("with") {
+        return Err("library-sql only allows read-only SELECT/WITH queries".into());
+    }
+
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("prepare query: {e}"))?;
+    let column_count = stmt.column_count();
+    let mut out = String::new();
+    if column_count > 0 {
+        out.push_str(&stmt.column_names().join("\t"));
+        out.push('\n');
+    }
+    let mut rows = stmt.query([]).map_err(|e| format!("run query: {e}"))?;
+    while let Some(row) = rows.next().map_err(|e| format!("read row: {e}"))? {
+        for col in 0..column_count {
+            if col > 0 {
+                out.push('\t');
+            }
+            out.push_str(&sqlite_cell_to_string(row, col)?);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> Result<String, String> {
+    use rusqlite::types::ValueRef;
+
+    match row
+        .get_ref(col)
+        .map_err(|e| format!("read column {col}: {e}"))?
+    {
+        ValueRef::Null => Ok(String::new()),
+        ValueRef::Integer(value) => Ok(value.to_string()),
+        ValueRef::Real(value) => Ok(value.to_string()),
+        ValueRef::Text(value) => Ok(String::from_utf8_lossy(value).into_owned()),
+        ValueRef::Blob(value) => Ok(format!("<blob:{}>", value.len())),
+    }
+}
+
 pub fn remove_default_sqlite_database() -> Result<(), String> {
     let path = default_sqlite_path();
     match std::fs::remove_file(&path) {
