@@ -142,6 +142,11 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             edit_remote_ini(&sess, IniEdit::StockBoot, dry_run)?;
         }
+        "ini-zaparoo-boot" => {
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let sess = connect(10)?;
+            edit_remote_ini(&sess, IniEdit::ZaparooBoot, dry_run)?;
+        }
         "ini-edit-local" => {
             validate_ini_edit_local_args(&args)?;
             let edit = parse_ini_edit_args(&args)?;
@@ -188,7 +193,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-edit-local|profile-summary|raw-to-png|recover> ..."
+        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|recover> ..."
     );
 }
 
@@ -377,6 +382,7 @@ fn remote_trim(sess: &Session, path: &str) -> Option<String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum IniEdit {
     MagikBoot,
+    ZaparooBoot,
     ArcadeVideo,
     MenuMode(String),
     MenuAuto,
@@ -392,6 +398,7 @@ enum IniEdit {
 fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
     match args.first().map(String::as_str) {
         Some("magik-boot") => Ok(IniEdit::MagikBoot),
+        Some("zaparoo-boot") => Ok(IniEdit::ZaparooBoot),
         Some("arcade-video") => Ok(IniEdit::ArcadeVideo),
         Some("menu-mode") => {
             let mode = args.get(1).ok_or("menu-mode needs <mode>")?;
@@ -417,7 +424,10 @@ fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
 
 fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     let expected = match args.first().map(String::as_str) {
-        Some("magik-boot" | "arcade-video" | "menu-auto" | "comment-main" | "stock-boot") => 3,
+        Some(
+            "magik-boot" | "zaparoo-boot" | "arcade-video" | "menu-auto" | "comment-main"
+            | "stock-boot",
+        ) => 3,
         Some("menu-mode") => 4,
         Some("crt") => 6,
         Some(other) => return Err(format!("unknown ini edit: {other}").into()),
@@ -425,7 +435,7 @@ fn validate_ini_edit_local_args(args: &[String]) -> Result<()> {
     };
     if args.len() != expected {
         return Err(
-            "ini-edit-local needs <magik-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
+            "ini-edit-local needs <magik-boot|zaparoo-boot|arcade-video|menu-mode|menu-auto|crt|comment-main|stock-boot> ... <input> <output>"
                 .into(),
         );
     }
@@ -461,6 +471,12 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         IniEdit::MagikBoot => {
             set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
             set_ini_key(&mut lines, "MiSTer", "main", "MiSTer_MagiK");
+            set_ini_key(&mut lines, "Menu", "direct_video", "0");
+            set_ini_key(&mut lines, "Menu", "video_mode", "8");
+        }
+        IniEdit::ZaparooBoot => {
+            set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
+            set_ini_key(&mut lines, "MiSTer", "main", "zaparoo/MiSTer_Zaparoo");
             set_ini_key(&mut lines, "Menu", "direct_video", "0");
             set_ini_key(&mut lines, "Menu", "video_mode", "8");
         }
@@ -1711,6 +1727,17 @@ video_mode=14
 
         assert!(edited.contains("[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK"));
         assert!(edited.contains("[Menu]\ndirect_video=0\nvideo_mode=8"));
+    }
+
+    #[test]
+    fn zaparoo_boot_edit_selects_zaparoo_fork_and_launcher_safe_video() {
+        let ini = "[MiSTer]\r\nmain=MiSTer_MagiK ; current launcher\r\ndirect_video=1\r\n\r\n[Menu]\r\nvideo_mode=6\r\n";
+
+        let edited = edit_mister_ini(ini, IniEdit::ZaparooBoot);
+
+        assert!(edited.contains("main=zaparoo/MiSTer_Zaparoo ; current launcher\r\n"));
+        assert!(edited.contains("direct_video=0\r\n"));
+        assert!(edited.contains("[Menu]\r\nvideo_mode=8\r\n"));
     }
 
     #[test]
