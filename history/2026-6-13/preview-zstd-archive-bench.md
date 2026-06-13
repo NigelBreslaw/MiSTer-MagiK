@@ -349,3 +349,39 @@ Charts:
 
 - `build/arcade-screenshot-cache/hybrid-20260613/ten-screenshot-total-bars.png`
 - `build/arcade-screenshot-cache/hybrid-20260613/ten-screenshot-lz4-phase-bars.png`
+
+## Final deployed real-app verification
+
+After committing the raw-pack preload, automatic archive discovery, worker-cache,
+decode-buffer reuse, raw565 bulk-copy, nice +5 preview worker, and RGB565
+profile-default changes, the production ARM binary was rebuilt with:
+
+```bash
+magik-gui/build-arm.sh --fast --ui-scope arcade
+```
+
+The resulting binary was deployed to:
+
+```text
+/media/fat/mister-magik/mister-magik-fb
+```
+
+The final verification used the deployed binary, default archive auto-detection
+(no `MISTER_PREVIEW_ARCHIVE`), RGB565 framebuffer, `turbo-hold`, and fade:
+
+```bash
+scripts/profile-preview-scroll.sh 10 turbo-hold LOCKED-REALAPP-20260613 \
+  --skip-build --transition fade --preview-format raw-rgb565 --visual-captures 2
+```
+
+Result:
+
+| run | frames | avg frame wall us | p95 frame wall us | slow >20ms | fresh decodes | avg load us | avg read us | avg decode us | placeholders | RSS HWM KB |
+|-----|--------|-------------------|-------------------|------------|---------------|-------------|-------------|---------------|--------------|------------|
+| deployed real app | 602 | 16345 | 16971 | 6 | 59 | 671 | 4 | 658 | 1 | 178620 |
+
+The trace also reported 60 preview apply events, 601 moving frames, and 454
+fractional visual-index frames over 10 seconds. Visual captures:
+
+- `build/preview-scroll-profiles/LOCKED-REALAPP-20260613-visuals/565-idx000.png`
+- `build/preview-scroll-profiles/LOCKED-REALAPP-20260613-visuals/565-idx007.png`
