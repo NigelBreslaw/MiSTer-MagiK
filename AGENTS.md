@@ -319,6 +319,15 @@ uses the camera-effect timing buckets and adds `glyph_count`, `glyph_pixels`,
 `hidden_glyph_count`, and `scroll_offset`. Baseline results append to
 `history/toolchain-bench/results-text-effects.tsv`; see
 `history/2026-6-13/text-effects-catalog.md`.
+Classic full-screen raster/palette effect experiments live in
+`ui raster-effects`; list labels with `mister-magik-fb raster-effects`, browse
+interactively with `scripts/run-rust.sh raster-effects 0`, and benchmark with
+`scripts/profile-raster-effects.sh LABEL --mode mega --segment-secs N`. The trace
+uses the camera-effect timing buckets and adds `palette_step_count`,
+`lut_lookup_count`, `row_op_count`, `dither_pixel_count`, `flash_pixel_count`,
+`trail_pixel_count`, `indexed_pixel_count`, and `reflection_row_count`. Baseline
+results append to `history/toolchain-bench/results-raster-effects.tsv`; see
+`history/2026-6-13/raster-effects-catalog.md`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

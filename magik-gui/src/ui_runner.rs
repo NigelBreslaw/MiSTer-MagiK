@@ -69,6 +69,7 @@ mod controller_loop;
 mod launcher_bench;
 mod launcher_bridge;
 mod launcher_loop;
+mod raster_effects_loop;
 mod screensaver_loop;
 mod sprite_effects_loop;
 mod text_effects_loop;
@@ -88,6 +89,7 @@ use controller_loop::*;
 use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_loop::*;
+use raster_effects_loop::run_raster_effects_loop;
 use screensaver_loop::*;
 use sprite_effects_loop::run_sprite_effects_loop;
 use text_effects_loop::run_text_effects_loop;
@@ -146,6 +148,7 @@ pub const UI_SCENES: &[&str] = &[
     "camera-effects",
     "sprite-effects",
     "text-effects",
+    "raster-effects",
     "blend_velocity",
     #[cfg(not(mister_ui_scope_launcher))]
     "demo",
@@ -217,6 +220,10 @@ pub fn print_sprite_effects() {
 
 pub fn print_text_effects() {
     text_effects_loop::print_text_effects();
+}
+
+pub fn print_raster_effects() {
+    raster_effects_loop::print_raster_effects();
 }
 
 macro_rules! with_scene_app {
@@ -372,6 +379,11 @@ pub fn run_ui(f: &mut Fpga) {
 
     if scene == "text-effects" {
         run_text_effects_loop(secs, &ui, &mut disp, fb_format);
+        return;
+    }
+
+    if scene == "raster-effects" {
+        run_raster_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 

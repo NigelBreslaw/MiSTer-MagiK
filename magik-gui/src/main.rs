@@ -20,6 +20,7 @@
 //!     camera-effects     list classic camera/background effect labels
 //!     sprite-effects     list classic sprite/object effect labels
 //!     text-effects       list classic game/Amiga text effect labels
+//!     raster-effects     list classic raster/palette effect labels
 //!     preview-transitions list screenshot transition labels
 //!     effect-bench       run framebuffer effect benchmarks
 //!     library-scan-bench benchmark cold scan, import, cached load, no-op rescan
@@ -119,6 +120,11 @@ fn main() {
 
     if cmd == "text-effects" {
         ui_runner::print_text_effects();
+        return;
+    }
+
+    if cmd == "raster-effects" {
+        ui_runner::print_raster_effects();
         return;
     }
 
