@@ -282,6 +282,7 @@ where
 fn preview_thread(rx: mpsc::Receiver<PreviewCommand>, tx: mpsc::Sender<PreviewResult>) {
     lower_thread_priority();
     let mut queue: Vec<PreviewRequest> = Vec::new();
+    let mut decoded_cache = PreviewDecodedCache::new(preview_decoded_cache_cap());
     loop {
         if queue.is_empty() {
             match rx.recv() {
@@ -293,12 +294,63 @@ fn preview_thread(rx: mpsc::Receiver<PreviewCommand>, tx: mpsc::Sender<PreviewRe
             enqueue_command(&mut queue, command);
         }
         if let Some(req) = pop_next_preview_request(&mut queue) {
-            let result = load_preview(req);
+            let result = load_preview(req, &mut decoded_cache);
             if tx.send(result).is_err() {
                 break;
             }
         }
     }
+}
+
+struct PreviewDecodedCache {
+    cap: usize,
+    entries: Vec<(String, LoadedPreviewPixels)>,
+}
+
+impl PreviewDecodedCache {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            entries: Vec::new(),
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<LoadedPreviewPixels> {
+        let idx = self.entries.iter().position(|(entry_key, _)| entry_key == key)?;
+        let (key, loaded) = self.entries.remove(idx);
+        let clone_t = Instant::now();
+        let mut out = loaded.clone();
+        out.timing.read_us = 0;
+        out.timing.decode_us = 0;
+        out.timing.resize_us = 0;
+        out.timing.encoded_bytes = 0;
+        out.timing.total_us = clone_t.elapsed().as_micros() as u64;
+        self.entries.push((key, loaded));
+        Some(out)
+    }
+
+    fn insert(&mut self, key: String, loaded: &LoadedPreviewPixels) {
+        if self.cap == 0 {
+            return;
+        }
+        if let Some(idx) = self.entries.iter().position(|(entry_key, _)| *entry_key == key) {
+            self.entries.remove(idx);
+        }
+        self.entries.push((key, loaded.clone()));
+        while self.entries.len() > self.cap {
+            self.entries.remove(0);
+        }
+    }
+}
+
+fn preview_decoded_cache_cap() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("MISTER_PREVIEW_DECODED_CACHE_CAP")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PREVIEW_CACHE_CAP * 3)
+    })
 }
 
 fn pop_next_preview_request(queue: &mut Vec<PreviewRequest>) -> Option<PreviewRequest> {
@@ -331,15 +383,36 @@ fn enqueue_command(queue: &mut Vec<PreviewRequest>, command: PreviewCommand) {
     }
 }
 
-fn load_preview(req: PreviewRequest) -> PreviewResult {
+fn preview_cache_key(image_path: &str, resize: PreviewResizeSpec) -> String {
+    format!(
+        "{}|{}|{}x{}",
+        image_path,
+        resize.filter.label(),
+        resize.max_w,
+        resize.max_h
+    )
+}
+
+fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) -> PreviewResult {
     let resize = PreviewResizeSpec::from_env();
     let storage = PreviewStorageFormat::from_env();
-    match load_preview_pixels(&req.image_path, resize) {
+    let cache_key = preview_cache_key(&req.image_path, resize);
+    let mut cache_hit = false;
+    let loaded_result = if let Some(loaded) = decoded_cache.get(&cache_key) {
+        cache_hit = true;
+        Ok(loaded)
+    } else {
+        load_preview_pixels(&req.image_path, resize).inspect(|loaded| {
+            decoded_cache.insert(cache_key, loaded);
+        })
+    };
+    match loaded_result {
         Ok(loaded) => {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace decoded generation={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    "preview_trace decoded generation={} cache_hit={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
                     req.generation,
+                    if cache_hit { 1 } else { 0 },
                     storage.label(),
                     resize.filter.label(),
                     loaded.timing.source_width,

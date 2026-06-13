@@ -175,6 +175,25 @@ load time by about 145 us per decoded preview versus the fresh archive baseline,
 and both after-runs reduced placeholder frames from 4 to 1. Frame wall timing
 remained vsync-bound.
 
+### Worker decoded-cache optimization
+
+Follow-up optimization added a small worker-side decoded preview cache. This is
+separate from the UI preview cache: it lets later selected/prefetch requests
+reuse pixels already decoded by the preview worker, even if the UI did not apply
+that result before the selection moved on. Same 20 second `turbo-hold` + fade +
+LZ4-block archive benchmark.
+
+| build | decoded previews | worker cache hits | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders | RSS HWM KB |
+|-------|------------------|-------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|------------|
+| scratch-buffer before | 130 | 0 | 2598 | 108 | 2478 | 16356 | 17271 | 15 | 1 | 29528 |
+| decoded-cache run 1 | 132 | 4 | 2420 | 85 | 2314 | 16346 | 17289 | 15 | 4 | 36572 |
+| decoded-cache run 2 | 130 | 2 | 2505 | 103 | 2384 | 16367 | 17234 | 16 | 1 | 36324 |
+
+Result: keep the decoded-cache change as a CPU-for-memory trade. It cut
+preview-worker load by about 93-178 us per decoded preview versus the best
+scratch-buffer run, while adding about 6.8-7.0 MB RSS in this scenario. Frame
+wall timing remained vsync-bound, and placeholder count was mixed across runs.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and
