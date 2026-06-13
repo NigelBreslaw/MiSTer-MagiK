@@ -26,7 +26,7 @@ kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
 kill -9 \$(pidof MiSTer) 2>/dev/null || true
 REMOTE='$REMOTE'
 test -x \$REMOTE || chmod +x \$REMOTE
-for FILTER in nearest box lanczos; do
+for FILTER in nearest box lanczos hybrid; do
   echo preview_resize_demo filter=\$FILTER max='$MAX_SIZE'
   MISTER_PREVIEW_STRESS=1 \
   MISTER_CATALOG_REFRESH=off \

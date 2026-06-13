@@ -60,6 +60,7 @@ pub enum PreviewResizeFilter {
     Nearest,
     Box,
     Lanczos,
+    Hybrid,
 }
 
 impl PreviewResizeFilter {
@@ -69,6 +70,7 @@ impl PreviewResizeFilter {
             Self::Nearest => "nearest",
             Self::Box => "box",
             Self::Lanczos => "lanczos",
+            Self::Hybrid => "hybrid",
         }
     }
 
@@ -77,6 +79,7 @@ impl PreviewResizeFilter {
             "nearest" | "nearest-neighbor" => Self::Nearest,
             "box" | "area" | "box-area" => Self::Box,
             "lanczos" | "lanczos3" => Self::Lanczos,
+            "hybrid" | "hybrid-arcade" => Self::Hybrid,
             _ => Self::Off,
         }
     }
@@ -103,7 +106,7 @@ impl PreviewResizeSpec {
             .or_else(|_| std::env::var("MISTER_PREVIEW_RESIZE"))
             .ok()
             .map(|s| PreviewResizeFilter::from_label(&s))
-            .unwrap_or(PreviewResizeFilter::Nearest);
+            .unwrap_or(PreviewResizeFilter::Hybrid);
         if filter == PreviewResizeFilter::Off {
             return Self::off();
         }
@@ -921,6 +924,13 @@ fn resize_rgb8(
         PreviewResizeFilter::Nearest => resize_nearest(src, sw, sh, dw, dh),
         PreviewResizeFilter::Box => resize_box(src, sw, sh, dw, dh),
         PreviewResizeFilter::Lanczos => resize_lanczos(src, sw, sh, dw, dh),
+        PreviewResizeFilter::Hybrid => {
+            if dw > sw || dh > sh {
+                resize_nearest(src, sw, sh, dw, dh)
+            } else {
+                resize_lanczos(src, sw, sh, dw, dh)
+            }
+        }
         PreviewResizeFilter::Off => src.to_vec(),
     }
 }
@@ -1148,6 +1158,12 @@ mod tests {
         assert_eq!(resize_target(640, 480, 320, 320), Some((320, 240)));
         assert_eq!(resize_target(224, 384, 320, 320), Some((187, 320)));
         assert_eq!(resize_target(320, 240, 320, 320), None);
+    }
+
+    #[test]
+    fn hybrid_filter_uses_nearest_for_upscale_and_lanczos_for_downscale_labels() {
+        assert_eq!(PreviewResizeFilter::from_label("hybrid"), PreviewResizeFilter::Hybrid);
+        assert_eq!(PreviewResizeFilter::Hybrid.label(), "hybrid");
     }
 
     #[test]

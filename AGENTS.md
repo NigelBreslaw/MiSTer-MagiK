@@ -303,6 +303,11 @@ changes use `fade`; use `scripts/profile-preview-transition-mega.sh LABEL
 `transition_effect`. Add new transition experiments as additional
 `MISTER_PREVIEW_TRANSITION` names instead of replacing existing effects. For
 visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
+Arcade screenshot cache update workflow is documented in
+`history/2026-6-13/arcade-screenshot-cache-workflow.md`: originals live in
+`/media/fat/_Arcade/media/screenshot`, generated caches live under
+`/media/fat/_Arcade/media/screenshot-magik`, and only cache directories should be
+deleted/recreated.
 Classic full-screen camera/background effect experiments live in
 `ui camera-effects`; list labels with `mister-magik-fb camera-effects`, browse
 interactively with `scripts/run-rust.sh camera-effects 0`, and benchmark with

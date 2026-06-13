@@ -260,7 +260,7 @@ fn run_preview_cache() {
     let sub = args.first().map(String::as_str).unwrap_or("help");
     if sub != "build" {
         eprintln!(
-            "usage: preview-cache build [--filter nearest|box|lanczos] [--format derived-png|raw-rgb|raw-rgb565] [--max 320x320] [--root /media/fat/_Arcade] [--limit N]"
+            "usage: preview-cache build [--filter nearest|box|lanczos|hybrid] [--format derived-png|raw-rgb|raw-rgb565] [--max 320x320] [--root /media/fat/_Arcade] [--limit N]"
         );
         std::process::exit(2);
     }
@@ -282,7 +282,7 @@ fn run_preview_cache() {
                 };
                 filter = preview_worker::PreviewResizeFilter::from_label(value);
                 if filter == preview_worker::PreviewResizeFilter::Off {
-                    eprintln!("preview-cache: filter must be nearest, box, or lanczos");
+                    eprintln!("preview-cache: filter must be nearest, box, lanczos, or hybrid");
                     std::process::exit(2);
                 }
                 i += 2;

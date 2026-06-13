@@ -1,3 +1,5 @@
+use image::{imageops::FilterType, RgbImage};
+use rayon::prelude::*;
 use serde_json::{json, Value};
 use ssh2::{ExtendedData, Session};
 use std::env;
@@ -172,6 +174,9 @@ fn run_cli() -> Result<()> {
             let height = args[2].parse::<usize>()?;
             raw_to_png(Path::new(&args[0]), width, height, Path::new(&args[3]))?;
         }
+        "preview-cache-build" => {
+            preview_cache_build(&args)?;
+        }
         "recover" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             if !dry_run {
@@ -193,8 +198,269 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|recover> ..."
+        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|recover> ..."
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewResizeChoice {
+    Nearest,
+    Lanczos,
+    Unchanged,
+}
+
+impl PreviewResizeChoice {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Nearest => "nearest",
+            Self::Lanczos => "lanczos",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PreviewCacheJob {
+    input: PathBuf,
+    stem: String,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewCacheResult {
+    file: String,
+    source_w: u32,
+    source_h: u32,
+    output_w: u32,
+    output_h: u32,
+    resize: PreviewResizeChoice,
+    raw_bytes: u64,
+}
+
+fn preview_cache_build(args: &[String]) -> Result<()> {
+    let input = option_value(args, "--input")
+        .or_else(|| option_value(args, "-i"))
+        .ok_or("preview-cache-build needs --input <dir>")?;
+    let output = option_value(args, "--output")
+        .or_else(|| option_value(args, "-o"))
+        .ok_or("preview-cache-build needs --output <dir>")?;
+    let max_size = option_value(args, "--max")
+        .as_deref()
+        .unwrap_or("320")
+        .parse::<u32>()?;
+    if max_size == 0 {
+        return Err("--max must be greater than zero".into());
+    }
+
+    let input = PathBuf::from(input);
+    let output = PathBuf::from(output);
+    let png_dir = output.join(format!("png-hybrid-{max_size}x{max_size}"));
+    let raw_dir = output.join(format!("raw565-hybrid-{max_size}x{max_size}"));
+    fs::create_dir_all(&png_dir)?;
+    fs::create_dir_all(&raw_dir)?;
+
+    let jobs = preview_cache_jobs(&input)?;
+    let total_t = Instant::now();
+    let results: Vec<_> = jobs
+        .par_iter()
+        .map(|job| build_preview_cache_one(job, &png_dir, &raw_dir, max_size))
+        .collect();
+
+    let mut ok = Vec::with_capacity(results.len());
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(result) => ok.push(result),
+            Err(err) => errors.push(err),
+        }
+    }
+    if !errors.is_empty() {
+        for err in &errors {
+            eprintln!("preview-cache-build: {err}");
+        }
+        return Err(format!("{} preview cache conversion(s) failed", errors.len()).into());
+    }
+
+    ok.sort_by(|a, b| a.file.cmp(&b.file));
+    let nearest = ok
+        .iter()
+        .filter(|r| r.resize == PreviewResizeChoice::Nearest)
+        .count();
+    let lanczos = ok
+        .iter()
+        .filter(|r| r.resize == PreviewResizeChoice::Lanczos)
+        .count();
+    let unchanged = ok
+        .iter()
+        .filter(|r| r.resize == PreviewResizeChoice::Unchanged)
+        .count();
+    let raw_bytes: u64 = ok.iter().map(|r| r.raw_bytes).sum();
+
+    println!(
+        "preview_cache_build input={} output={} max={} threads={}",
+        input.display(),
+        output.display(),
+        max_size,
+        rayon::current_num_threads()
+    );
+    println!("file\tsource_w\tsource_h\toutput_w\toutput_h\tfilter\traw_bytes");
+    for result in &ok {
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            result.file,
+            result.source_w,
+            result.source_h,
+            result.output_w,
+            result.output_h,
+            result.resize.label(),
+            result.raw_bytes
+        );
+    }
+    println!(
+        "preview_cache_summary ok={} failed=0 elapsed_ms={} nearest={} lanczos={} unchanged={} raw_bytes={} png_dir={} raw565_dir={}",
+        ok.len(),
+        total_t.elapsed().as_millis(),
+        nearest,
+        lanczos,
+        unchanged,
+        raw_bytes,
+        png_dir.display(),
+        raw_dir.display()
+    );
+    Ok(())
+}
+
+fn preview_cache_jobs(input: &Path) -> Result<Vec<PreviewCacheJob>> {
+    let mut jobs = Vec::new();
+    let mut stems = std::collections::HashSet::new();
+    for entry in fs::read_dir(input)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.starts_with("._") {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("non-utf8 source stem: {}", path.display()))?
+            .to_string();
+        if !stems.insert(stem.clone()) {
+            return Err(format!("duplicate source stem: {stem}").into());
+        }
+        jobs.push(PreviewCacheJob { input: path, stem });
+    }
+    jobs.sort_by(|a, b| a.input.cmp(&b.input));
+    Ok(jobs)
+}
+
+fn build_preview_cache_one(
+    job: &PreviewCacheJob,
+    png_dir: &Path,
+    raw_dir: &Path,
+    max_size: u32,
+) -> std::result::Result<PreviewCacheResult, String> {
+    let image = image::open(&job.input)
+        .map_err(|e| format!("decode {}: {e}", job.input.display()))?
+        .to_rgb8();
+    let source_w = image.width();
+    let source_h = image.height();
+    let (resized, resize) = resize_preview_image(image, max_size);
+
+    let png_path = png_dir.join(format!("{}.png", job.stem));
+    resized
+        .save(&png_path)
+        .map_err(|e| format!("write {}: {e}", png_path.display()))?;
+
+    let raw_path = raw_dir.join(format!("{}.rgb565", job.stem));
+    let raw = encode_raw565_preview(&resized);
+    fs::write(&raw_path, &raw).map_err(|e| format!("write {}: {e}", raw_path.display()))?;
+
+    Ok(PreviewCacheResult {
+        file: job
+            .input
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&job.stem)
+            .to_string(),
+        source_w,
+        source_h,
+        output_w: resized.width(),
+        output_h: resized.height(),
+        resize,
+        raw_bytes: raw.len() as u64,
+    })
+}
+
+fn resize_preview_image(image: RgbImage, max_size: u32) -> (RgbImage, PreviewResizeChoice) {
+    let Some((target_w, target_h, scale)) =
+        preview_target_size(image.width(), image.height(), max_size)
+    else {
+        return (image, PreviewResizeChoice::Unchanged);
+    };
+    if scale > 1.0 {
+        (
+            image::imageops::resize(&image, target_w, target_h, FilterType::Nearest),
+            PreviewResizeChoice::Nearest,
+        )
+    } else {
+        (
+            image::imageops::resize(&image, target_w, target_h, FilterType::Lanczos3),
+            PreviewResizeChoice::Lanczos,
+        )
+    }
+}
+
+fn preview_target_size(width: u32, height: u32, max_size: u32) -> Option<(u32, u32, f64)> {
+    let scale = (max_size as f64 / width as f64).min(max_size as f64 / height as f64);
+    let target_w = ((width as f64 * scale).round() as u32).max(1);
+    let target_h = ((height as f64 * scale).round() as u32).max(1);
+    if target_w == width && target_h == height {
+        None
+    } else {
+        Some((target_w, target_h, scale))
+    }
+}
+
+fn encode_raw565_preview(image: &RgbImage) -> Vec<u8> {
+    let stride_bytes = align16(image.width() as usize * 2);
+    let payload_len = stride_bytes * image.height() as usize;
+    let mut bytes = Vec::with_capacity(20 + payload_len);
+    bytes.extend_from_slice(b"MM56501\0");
+    bytes.extend_from_slice(&image.width().to_le_bytes());
+    bytes.extend_from_slice(&image.height().to_le_bytes());
+    bytes.extend_from_slice(&(stride_bytes as u32).to_le_bytes());
+    bytes.resize(20 + payload_len, 0);
+    for y in 0..image.height() as usize {
+        let dst_row = 20 + y * stride_bytes;
+        for x in 0..image.width() as usize {
+            let pixel = image.get_pixel(x as u32, y as u32).0;
+            let word = rgb8_to_rgb565_word(pixel[0], pixel[1], pixel[2]);
+            let dst = dst_row + x * 2;
+            bytes[dst..dst + 2].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn rgb8_to_rgb565_word(r: u8, g: u8, b: u8) -> u16 {
+    ((r as u16 & 0xf8) << 8) | ((g as u16 & 0xfc) << 3) | (b as u16 >> 3)
+}
+
+fn align16(n: usize) -> usize {
+    (n + 15) & !15
 }
 
 fn host() -> String {
@@ -2044,6 +2310,48 @@ H: Handlers=sysrq kbd event7
         assert!(err.to_string().contains("expected at least 36"));
         let _ = fs::remove_file(&raw_path);
         let _ = fs::remove_file(&png_path);
+    }
+
+    #[test]
+    fn preview_target_size_matches_arcade_cache_policy() {
+        assert_eq!(preview_target_size(224, 256, 320), Some((280, 320, 1.25)));
+        let downscale = preview_target_size(384, 224, 320).unwrap();
+        assert_eq!((downscale.0, downscale.1), (320, 187));
+        assert!(downscale.2 < 1.0);
+        assert_eq!(preview_target_size(320, 240, 320), None);
+        assert_eq!(
+            preview_target_size(224, 384, 320).map(|v| (v.0, v.1)),
+            Some((187, 320))
+        );
+    }
+
+    #[test]
+    fn raw565_preview_header_and_stride_match_runtime_format() {
+        let image = RgbImage::from_raw(
+            3,
+            1,
+            vec![
+                255, 0, 0, // red
+                0, 255, 0, // green
+                0, 0, 255, // blue
+            ],
+        )
+        .unwrap();
+        let bytes = encode_raw565_preview(&image);
+        assert_eq!(&bytes[..8], b"MM56501\0");
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 16);
+        assert_eq!(bytes.len(), 20 + 16);
+        assert_eq!(
+            &bytes[20..26],
+            &[
+                0x00, 0xf8, // red
+                0xe0, 0x07, // green
+                0x1f, 0x00, // blue
+            ]
+        );
+        assert!(bytes[26..].iter().all(|b| *b == 0));
     }
 
     #[test]
