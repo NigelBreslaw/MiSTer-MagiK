@@ -156,7 +156,10 @@ pub(super) fn run_launcher_loop(
                 );
                 if catalog_refresh {
                     print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    catalog_rx = Some(start_library_catalog_worker(arcade_root.clone()));
+                    catalog_rx = Some(start_library_catalog_worker(
+                        arcade_root.clone(),
+                        catalog_refresh,
+                    ));
                 } else {
                     catalog_rx = None;
                     catalog_refresh_done = true;
@@ -169,26 +172,35 @@ pub(super) fn run_launcher_loop(
                     format!("games={} load_us={}", loaded.catalog.len(), loaded.us),
                 );
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(arcade_root.clone()));
+                catalog_rx = Some(start_library_catalog_worker(
+                    arcade_root.clone(),
+                    catalog_refresh,
+                ));
             }
             Err(e) => {
                 eprintln!("arcade catalog cache load failed: {e}");
                 print_startup_event(start, "catalog_cache_load_failed", e);
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(arcade_root.clone()));
+                catalog_rx = Some(start_library_catalog_worker(
+                    arcade_root.clone(),
+                    catalog_refresh,
+                ));
             }
         }
     } else {
         print_startup_event(start, "catalog_cache_load_deferred", &arcade_root);
         print_startup_event(start, "catalog_worker_start", &arcade_root);
-        catalog_rx = Some(start_library_catalog_worker(arcade_root.clone()));
+        catalog_rx = Some(start_library_catalog_worker(
+            arcade_root.clone(),
+            catalog_refresh,
+        ));
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version));
     bridge.set_catalog_scan_visible(!catalog_ready);
     bridge.set_catalog_scan_title(if catalog_ready {
         if catalog_refresh {
-            "Refreshing library".into()
+            "Validating library".into()
         } else {
             "".into()
         }
@@ -308,9 +320,13 @@ pub(super) fn run_launcher_loop(
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
                         if cached_before_refresh {
-                            bridge.set_catalog_scan_title("Refreshing library".into());
+                            bridge.set_catalog_scan_title("Validating library".into());
                             bridge.set_catalog_scan_detail(
-                                format!("Using cached {} games", catalog.len()).into(),
+                                format!(
+                                    "Using cached {} games while checking for changes",
+                                    catalog.len()
+                                )
+                                .into(),
                             );
                         } else {
                             bridge.set_catalog_scan_title("".into());

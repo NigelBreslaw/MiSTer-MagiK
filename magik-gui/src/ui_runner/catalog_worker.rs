@@ -1,6 +1,9 @@
 use super::*;
 
-pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<CatalogWorkerMessage> {
+pub(super) fn start_library_catalog_worker(
+    root: String,
+    refresh_requested: bool,
+) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("library-catalog".to_string())
@@ -13,7 +16,6 @@ pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<Catal
                     detail: detail.to_string(),
                 });
             };
-            let refresh_requested = catalog_refresh_requested();
             let mut cache_state = CatalogCacheState::Missing;
             match library_db::load_arcade_catalog_from_sqlite(&root) {
                 Ok(loaded) => {
@@ -38,12 +40,18 @@ pub(super) fn start_library_catalog_worker(root: String) -> mpsc::Receiver<Catal
                     return;
                 }
                 CatalogWorkerPlan::RefreshInProcess => {
-                    if cache_state != CatalogCacheState::Ready {
-                        let _ = tx.send(CatalogWorkerMessage::Progress {
-                            title: "Indexing library".to_string(),
-                            detail: "No cached catalog; scanning library...".to_string(),
-                        });
-                    }
+                    let (title, detail) = if cache_state == CatalogCacheState::Ready {
+                        (
+                            "Validating library",
+                            "Using cached catalog while checking for changed files...",
+                        )
+                    } else {
+                        ("Indexing library", "No cached catalog; scanning library...")
+                    };
+                    let _ = tx.send(CatalogWorkerMessage::Progress {
+                        title: title.to_string(),
+                        detail: detail.to_string(),
+                    });
                 }
             }
             let summary = match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
