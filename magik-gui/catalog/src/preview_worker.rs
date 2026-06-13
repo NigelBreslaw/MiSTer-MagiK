@@ -572,7 +572,14 @@ struct PreviewArchiveEntry {
 struct PreviewArchive {
     file: Mutex<File>,
     scratch: Mutex<PreviewArchiveScratch>,
+    codec: PreviewArchiveCodec,
     entries: HashMap<String, PreviewArchiveEntry>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PreviewArchiveCodec {
+    Lz4Block,
+    Raw,
 }
 
 #[derive(Default)]
@@ -598,16 +605,20 @@ fn preview_archive() -> Result<Option<&'static PreviewArchive>, String> {
 }
 
 impl PreviewArchive {
-    const MAGIC: &'static [u8; 8] = b"MMLZ4B1\0";
+    const LZ4_BLOCK_MAGIC: &'static [u8; 8] = b"MMLZ4B1\0";
+    const RAW_MAGIC: &'static [u8; 8] = b"MMRAWP1\0";
 
     fn open(path: &Path) -> Result<Self, String> {
-        let mut file = File::open(path).map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
+        let mut file = File::open(path)
+            .map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
         let mut magic = [0u8; 8];
         file.read_exact(&mut magic)
             .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-        if &magic != Self::MAGIC {
-            return Err(format!("{}: bad preview archive magic", path.display()));
-        }
+        let codec = match &magic {
+            Self::LZ4_BLOCK_MAGIC => PreviewArchiveCodec::Lz4Block,
+            Self::RAW_MAGIC => PreviewArchiveCodec::Raw,
+            _ => return Err(format!("{}: bad preview archive magic", path.display())),
+        };
         let count = read_u32(&mut file)? as usize;
         let mut entries = HashMap::with_capacity(count);
         for _ in 0..count {
@@ -618,7 +629,8 @@ impl PreviewArchive {
             let mut name = vec![0u8; name_len];
             file.read_exact(&mut name)
                 .map_err(|e| format!("read preview archive entry name: {e}"))?;
-            let name = String::from_utf8(name).map_err(|e| format!("preview archive entry name utf8: {e}"))?;
+            let name = String::from_utf8(name)
+                .map_err(|e| format!("preview archive entry name utf8: {e}"))?;
             entries.insert(name, PreviewArchiveEntry {
                 raw_len,
                 compressed_len,
@@ -628,6 +640,7 @@ impl PreviewArchive {
         Ok(Self {
             file: Mutex::new(file),
             scratch: Mutex::new(PreviewArchiveScratch::default()),
+            codec,
             entries,
         })
     }
@@ -657,8 +670,22 @@ impl PreviewArchive {
 
         let decode_t = Instant::now();
         let PreviewArchiveScratch { compressed, raw } = &mut *scratch;
-        let data = decode_lz4_block_entry_into(compressed, entry.raw_len, raw)
-            .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
+        let data = match self.codec {
+            PreviewArchiveCodec::Lz4Block => {
+                decode_lz4_block_entry_into(compressed, entry.raw_len, raw)
+                    .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?
+            }
+            PreviewArchiveCodec::Raw => {
+                if compressed.len() != entry.raw_len {
+                    return Err(format!(
+                        "preview archive raw length mismatch {name}: got={} expected={}",
+                        compressed.len(),
+                        entry.raw_len
+                    ));
+                }
+                compressed.as_slice()
+            }
+        };
         let image = decode_raw565_preview_bytes(&data)?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let total_us = total_t.elapsed().as_micros() as u64;

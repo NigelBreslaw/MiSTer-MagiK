@@ -6,18 +6,18 @@ import { tmpdir } from "node:os";
 
 const [srcDir, outPath, codecArg = "zstd", levelArgRaw] = process.argv.slice(2);
 if (!srcDir || !outPath) {
-  console.error("usage: scripts/build-preview-zstd-archive.mjs <raw565-dir> <out.mmzst|out.mmlz4> [zstd|lz4|lz4-block] [level]");
+  console.error("usage: scripts/build-preview-zstd-archive.mjs <raw565-dir> <out> [zstd|lz4|lz4-block|raw] [level]");
   process.exit(2);
 }
 
 const codec = codecArg.toLowerCase();
-if (codec !== "zstd" && codec !== "lz4" && codec !== "lz4-block") {
-  console.error("codec must be zstd, lz4, or lz4-block");
+if (codec !== "zstd" && codec !== "lz4" && codec !== "lz4-block" && codec !== "raw") {
+  console.error("codec must be zstd, lz4, lz4-block, or raw");
   process.exit(2);
 }
 const levelArg = levelArgRaw ?? (codec === "zstd" ? "3" : "9");
 const level = Number.parseInt(levelArg, 10);
-if (!Number.isInteger(level) || level < 1 || level > (codec === "zstd" ? 22 : 12)) {
+if (codec !== "raw" && (!Number.isInteger(level) || level < 1 || level > (codec === "zstd" ? 22 : 12))) {
   console.error(`${codec} level is out of range`);
   process.exit(2);
 }
@@ -37,21 +37,26 @@ try {
   for (const name of files) {
     const input = join(srcDir, name);
     const output = join(tempDir, codec === "zstd" ? `${name}.zst` : `${name}.lz4`);
-    const cmd =
-      codec === "zstd"
-        ? ["zstd", [`-${level}`, "-q", "-f", input, "-o", output]]
-        : ["lz4", [`-${level}`, "-q", "-f", input, output]];
-    const child = spawnSync(cmd[0], cmd[1], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (child.status !== 0) {
-      process.stderr.write(child.stderr);
-      throw new Error(`${codec} failed for ${input}`);
-    }
-    let compressed = readFileSync(output);
+    let compressed;
     const rawLen = statSync(input).size;
-    if (codec === "lz4-block") {
-      compressed = extractLz4BlockPayload(compressed, rawLen, name);
+    if (codec === "raw") {
+      compressed = readFileSync(input);
+    } else {
+      const cmd =
+        codec === "zstd"
+          ? ["zstd", [`-${level}`, "-q", "-f", input, "-o", output]]
+          : ["lz4", [`-${level}`, "-q", "-f", input, output]];
+      const child = spawnSync(cmd[0], cmd[1], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (child.status !== 0) {
+        process.stderr.write(child.stderr);
+        throw new Error(`${codec} failed for ${input}`);
+      }
+      compressed = readFileSync(output);
+      if (codec === "lz4-block") {
+        compressed = extractLz4BlockPayload(compressed, rawLen, name);
+      }
     }
     const nameBytes = Buffer.from(name, "utf8");
     if (nameBytes.length > 0xffff) {
@@ -77,7 +82,13 @@ try {
   const header = Buffer.alloc(indexLen);
   let p = 0;
   header.write(
-    codec === "zstd" ? "MMZST01\0" : codec === "lz4" ? "MMLZ401\0" : "MMLZ4B1\0",
+    codec === "zstd"
+      ? "MMZST01\0"
+      : codec === "lz4"
+        ? "MMLZ401\0"
+        : codec === "lz4-block"
+          ? "MMLZ4B1\0"
+          : "MMRAWP1\0",
     p,
     "binary",
   );

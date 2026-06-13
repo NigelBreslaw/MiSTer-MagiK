@@ -194,6 +194,28 @@ preview-worker load by about 93-178 us per decoded preview versus the best
 scratch-buffer run, while adding about 6.8-7.0 MB RSS in this scenario. Frame
 wall timing remained vsync-bound, and placeholder count was mixed across runs.
 
+### Uncompressed indexed raw pack
+
+Follow-up optimization added a `MMRAWP1\0` indexed packfile codec to the same
+single-file archive path. This stores the original `.rgb565` payloads
+uncompressed in one file, avoiding both exFAT many-file lookup and LZ4
+decompression. The generated pack was 147,705,910 bytes, so this intentionally
+misses the old 25 MB target.
+
+Same 20 second `turbo-hold` + fade benchmark:
+
+| build | archive bytes | decoded previews | worker cache hits | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders | RSS HWM KB |
+|-------|---------------|------------------|-------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|------------|
+| LZ4 decoded-cache run 1 | 19,351,762 | 132 | 4 | 2420 | 85 | 2314 | 16346 | 17289 | 15 | 4 | 36572 |
+| LZ4 decoded-cache run 2 | 19,351,762 | 130 | 2 | 2505 | 103 | 2384 | 16367 | 17234 | 16 | 1 | 36324 |
+| raw pack run 1 | 147,705,910 | 129 | 1 | 2086 | 629 | 1439 | 16352 | 17373 | 16 | 1 | 36148 |
+| raw pack run 2 | 147,705,910 | 130 | 2 | 2274 | 779 | 1475 | 16358 | 17266 | 16 | 1 | 36352 |
+
+Result: keep raw-pack support. It is not a storage optimization, but it was the
+best real-app CPU result so far: about 231-419 us faster per decoded preview
+than the LZ4 decoded-cache runs, and about 203-391 us faster than the fresh
+separate raw-file turbo/fade baseline. Frame wall timing remained vsync-bound.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and
