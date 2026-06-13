@@ -1,6 +1,6 @@
 #![allow(clippy::all, unused_imports)]
 
-#[cfg(not(mister_ui_scope_launcher))]
+#[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
 pub mod app {
     include!(concat!(env!("OUT_DIR"), "/app.rs"));
 }

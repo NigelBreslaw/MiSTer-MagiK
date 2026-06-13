@@ -1689,6 +1689,7 @@ impl UiFrameTarget {
         }
     }
 
+    #[cfg(mister_bench_scenes)]
     pub(super) fn label(&self) -> &'static str {
         match self {
             Self::Xrgb8888 { .. } => "cached-8888",
@@ -2033,6 +2034,7 @@ pub(super) fn copy_arcade_list_update(
     }
 }
 
+#[cfg(mister_bench_scenes)]
 pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
     FrameRect {
         x0: rect.x0 as u32,

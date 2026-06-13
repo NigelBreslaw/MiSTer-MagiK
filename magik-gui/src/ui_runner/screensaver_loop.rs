@@ -629,55 +629,6 @@ fn image_at(images: &[SaverImage], idx: usize) -> Option<&SaverImage> {
     }
 }
 
-fn render_contact_sheet(
-    dst: &mut [Rgb565Pixel],
-    w: usize,
-    h: usize,
-    images: &[SaverImage],
-    frame: u64,
-    cols: usize,
-    rows: usize,
-    drift: bool,
-) {
-    let cell_w = w / cols.max(1);
-    let cell_h = h / rows.max(1);
-    let start = (frame / 90) as usize;
-    for row in 0..rows {
-        for col in 0..cols {
-            if let Some(img) = image_at(images, start + row * cols + col) {
-                let ox = if drift {
-                    ((frame as usize + row * 13) & 31) as isize - 16
-                } else {
-                    0
-                };
-                let x = (col * cell_w + 8) as isize + ox;
-                let y = (row * cell_h + 8) as isize;
-                blit_scaled(
-                    dst,
-                    w,
-                    h,
-                    img,
-                    x,
-                    y,
-                    cell_w.saturating_sub(16),
-                    cell_h.saturating_sub(16),
-                    230,
-                );
-                stroke_rect(
-                    dst,
-                    w,
-                    h,
-                    x.max(0) as usize,
-                    y.max(0) as usize,
-                    cell_w.saturating_sub(16),
-                    cell_h.saturating_sub(16),
-                    color565(40, 250, 220),
-                );
-            }
-        }
-    }
-}
-
 fn render_attract_wall(
     dst: &mut [Rgb565Pixel],
     state: &mut ScreensaverRenderState,
@@ -1036,15 +987,6 @@ fn render_kefrens(dst: &mut [Rgb565Pixel], w: usize, h: usize, images: &[SaverIm
             tail[..w].copy_from_slice(&head[row..row + w]);
         }
         y += 2;
-    }
-}
-
-fn render_plasma(dst: &mut [Rgb565Pixel], w: usize, h: usize, frame: u64) {
-    for y in 0..h {
-        for x in 0..w {
-            let p = plasma_gate(x, y, frame as u8);
-            dst[y * w + x] = color565(p / 5, p.saturating_add(40), 180u8.saturating_sub(p / 3));
-        }
     }
 }
 

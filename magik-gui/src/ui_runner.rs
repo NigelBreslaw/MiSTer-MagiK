@@ -31,9 +31,8 @@ use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::display_config::DisplayConfig;
-use crate::frame_profile::FrameRect;
 #[cfg(mister_bench_scenes)]
-use crate::frame_profile::{FrameProfiler, FrameSample};
+use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
@@ -153,7 +152,7 @@ pub const UI_SCENES: &[&str] = &[
     "raster-effects",
     "transition-effects",
     "blend_velocity",
-    #[cfg(not(mister_ui_scope_launcher))]
+    #[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
     "demo",
     "controller_test",
     #[cfg(mister_bench_scenes)]
@@ -410,7 +409,7 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
-        #[cfg(not(mister_ui_scope_launcher))]
+        #[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
         "demo" => {
             with_scene_app!(app::AppWindow, &ui, &window, app, {
                 app.show().expect("show");

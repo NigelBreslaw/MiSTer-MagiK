@@ -2611,7 +2611,6 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "lz4_flex",
- "png 0.18.1",
  "quick-xml 0.40.1",
  "rusqlite",
  "walkdir",

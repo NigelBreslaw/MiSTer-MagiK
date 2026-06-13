@@ -39,7 +39,7 @@ mod cpu_profile;
 mod display_config;
 mod fb;
 mod fpga;
-#[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#[cfg(mister_bench_scenes)]
 mod frame_profile;
 mod input;
 mod launcher;

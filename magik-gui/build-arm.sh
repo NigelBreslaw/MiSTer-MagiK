@@ -12,6 +12,9 @@
 #   ./build-arm.sh --all-scenes → release with every Slint bench scene
 #   ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark
 #
+# Every build emits a Cargo timing report under target/cargo-timings/ so we can
+# spot expensive crates and accidental target/feature creep.
+#
 # Wraps `cross` with the settings the toolchain needs on an Apple-Silicon host
 # (see AGENTS.md §12).
 #
@@ -139,7 +142,7 @@ fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
-BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+BUILD_ARGS=(--locked --timings --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
 if [ -n "$BIN_TARGET" ]; then
   BUILD_ARGS+=(--bin "$BIN_TARGET")
 fi
@@ -167,6 +170,10 @@ if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
   exit 1
 fi
 echo "==> cross build OK"
+TIMING_REPORT="$(find "$PWD/target/cargo-timings" -type f -name 'cargo-timing*.html' -print 2>/dev/null | sort | tail -1 || true)"
+if [ -n "$TIMING_REPORT" ]; then
+  echo "==> Cargo timing report: $TIMING_REPORT"
+fi
 
 BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"

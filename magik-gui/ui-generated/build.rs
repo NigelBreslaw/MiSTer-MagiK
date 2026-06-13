@@ -25,7 +25,7 @@ fn main() {
     }
 
     let mut sources = vec!["../ui/controller_test.slint", "../ui/launcher.slint"];
-    if !launcher_only {
+    if !launcher_only && bench_scenes {
         sources.push("../ui/app.slint");
     }
     if bench_scenes {
@@ -55,7 +55,7 @@ fn main() {
         "../ui/fonts/PressStart2P-Regular.ttf",
         "../ui/icons/settings.svg",
     ];
-    if !launcher_only {
+    if !launcher_only && bench_scenes {
         inputs.push("../ui/app.slint");
     }
     if bench_scenes {
