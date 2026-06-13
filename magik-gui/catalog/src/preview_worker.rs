@@ -1,8 +1,11 @@
 //! Background arcade preview image loader.
 
 use crate::arcade_catalog::ImageLoadTiming;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -455,6 +458,13 @@ fn load_raw565_preview_timed(
     resize: PreviewResizeSpec,
 ) -> Result<LoadedPreviewPixels, String> {
     let path = raw565_preview_cache_path(image_path, resize);
+    if let Some(archive) = preview_archive()? {
+        if let Some(stem) = Path::new(&path).file_name().and_then(|s| s.to_str()) {
+            if let Some(loaded) = archive.load_timed(stem)? {
+                return Ok(loaded);
+            }
+        }
+    }
     let total_t = Instant::now();
     let read_t = Instant::now();
     let data = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
@@ -477,6 +487,147 @@ fn load_raw565_preview_timed(
         },
         image,
     })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreviewArchiveEntry {
+    raw_len: usize,
+    compressed_len: usize,
+    offset: u64,
+}
+
+struct PreviewArchive {
+    file: Mutex<File>,
+    entries: HashMap<String, PreviewArchiveEntry>,
+}
+
+fn preview_archive() -> Result<Option<&'static PreviewArchive>, String> {
+    static ARCHIVE: OnceLock<Option<Result<PreviewArchive, String>>> = OnceLock::new();
+    let value = ARCHIVE.get_or_init(|| {
+        let path = match std::env::var("MISTER_PREVIEW_ARCHIVE") {
+            Ok(path) if !path.is_empty() => path,
+            _ => return None,
+        };
+        Some(PreviewArchive::open(Path::new(&path)))
+    });
+    match value {
+        Some(Ok(archive)) => Ok(Some(archive)),
+        Some(Err(err)) => Err(err.clone()),
+        None => Ok(None),
+    }
+}
+
+impl PreviewArchive {
+    const MAGIC: &'static [u8; 8] = b"MMLZ4B1\0";
+
+    fn open(path: &Path) -> Result<Self, String> {
+        let mut file = File::open(path).map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
+        let mut magic = [0u8; 8];
+        file.read_exact(&mut magic)
+            .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
+        if &magic != Self::MAGIC {
+            return Err(format!("{}: bad preview archive magic", path.display()));
+        }
+        let count = read_u32(&mut file)? as usize;
+        let mut entries = HashMap::with_capacity(count);
+        for _ in 0..count {
+            let name_len = read_u16(&mut file)? as usize;
+            let raw_len = read_u32(&mut file)? as usize;
+            let compressed_len = read_u32(&mut file)? as usize;
+            let offset = read_u64(&mut file)?;
+            let mut name = vec![0u8; name_len];
+            file.read_exact(&mut name)
+                .map_err(|e| format!("read preview archive entry name: {e}"))?;
+            let name = String::from_utf8(name).map_err(|e| format!("preview archive entry name utf8: {e}"))?;
+            entries.insert(name, PreviewArchiveEntry {
+                raw_len,
+                compressed_len,
+                offset,
+            });
+        }
+        Ok(Self {
+            file: Mutex::new(file),
+            entries,
+        })
+    }
+
+    fn load_timed(&self, name: &str) -> Result<Option<LoadedPreviewPixels>, String> {
+        let Some(entry) = self.entries.get(name).copied() else {
+            return Ok(None);
+        };
+        let total_t = Instant::now();
+        let read_t = Instant::now();
+        let mut compressed = vec![0u8; entry.compressed_len];
+        {
+            let mut file = self
+                .file
+                .lock()
+                .map_err(|_| "preview archive file lock poisoned".to_string())?;
+            file.seek(SeekFrom::Start(entry.offset))
+                .map_err(|e| format!("preview archive seek {name}: {e}"))?;
+            file.read_exact(&mut compressed)
+                .map_err(|e| format!("preview archive read {name}: {e}"))?;
+        }
+        let read_us = read_t.elapsed().as_micros() as u64;
+
+        let decode_t = Instant::now();
+        let data = decode_lz4_block_entry(&compressed, entry.raw_len)
+            .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
+        let image = decode_raw565_preview_bytes(&data)?;
+        let decode_us = decode_t.elapsed().as_micros() as u64;
+        let total_us = total_t.elapsed().as_micros() as u64;
+        let decoded_bytes = image.decoded_bytes();
+        Ok(Some(LoadedPreviewPixels {
+            timing: ImageLoadTiming {
+                read_us,
+                decode_us,
+                resize_us: 0,
+                total_us,
+                encoded_bytes: compressed.len(),
+                decoded_bytes,
+                source_width: image.width(),
+                source_height: image.height(),
+            },
+            image,
+        }))
+    }
+}
+
+fn decode_lz4_block_entry(data: &[u8], raw_len: usize) -> Result<Vec<u8>, String> {
+    let (&flag, block) = data
+        .split_first()
+        .ok_or_else(|| "empty lz4 block entry".to_string())?;
+    match flag {
+        0 => lz4_flex::block::decompress(block, raw_len).map_err(|e| e.to_string()),
+        1 => {
+            if block.len() != raw_len {
+                return Err(format!(
+                    "raw lz4 block length mismatch got={} expected={raw_len}",
+                    block.len()
+                ));
+            }
+            Ok(block.to_vec())
+        }
+        other => Err(format!("bad lz4 block flag {other}")),
+    }
+}
+
+fn read_u16(file: &mut File) -> Result<u16, String> {
+    let mut buf = [0u8; 2];
+    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(u16::from_le_bytes(buf))
+}
+
+fn read_u32(file: &mut File) -> Result<u32, String> {
+    let mut buf = [0u8; 4];
+    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(u32::from_le_bytes(buf))
+}
+
+fn read_u64(file: &mut File) -> Result<u64, String> {
+    let mut buf = [0u8; 8];
+    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(u64::from_le_bytes(buf))
 }
 
 fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {

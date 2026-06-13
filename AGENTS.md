@@ -317,6 +317,12 @@ Arcade screenshot cache update workflow is documented in
 deleted/recreated. MiSTer MagiK runtime preview loading is raw565-only; build
 and deploy `.rgb565` caches from the Mac with `tools/mister preview-cache-build`
 instead of reintroducing device-side decode/resize/cache-writing paths.
+Single-file preview-cache benchmark results live in
+`history/2026-6-13/preview-zstd-archive-bench.md`: per-entry LZ4 block archives
+were the best measured Cortex-A9 fit for cold shuffled bulk reads, cutting 910
+reads from ~8.5s as separate raw files to ~2.0s while staying under 25MB. In the
+optimized real arcade UI path, warm raw files remained slightly faster in the
+preview worker and frame timing was effectively tied.
 Classic full-screen camera/background effect experiments live in
 `ui camera-effects`; list labels with `mister-magik-fb camera-effects`, browse
 interactively with `scripts/run-rust.sh camera-effects 0`, and benchmark with

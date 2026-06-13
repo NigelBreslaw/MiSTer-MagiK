@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--preview-blitter slint|raw] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--preview-archive PATH]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs the real launcher-backed arcade screen:
@@ -30,6 +30,7 @@ benchmark, storing before/after PNG evidence under <label>-visuals.
 --preview-resize-filter enables runtime resize before Slint image creation.
 --preview-resize-max sets the resize target box; default runtime code uses 320x320.
 --preview-format selects original PNG, derived resized PNG, raw RGB, or raw RGB565 cache.
+--preview-archive selects a single preview archive for runtime loading experiments.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -45,6 +46,7 @@ preview_visual_pct=""
 preview_resize_filter=""
 preview_resize_max=""
 preview_format=""
+preview_archive=""
 fb_format="8888"
 preview_blitter="slint"
 transition=""
@@ -69,6 +71,7 @@ while [[ $# -gt 0 ]]; do
     --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
     --preview-resize-max) preview_resize_max="${2:-}"; shift 2 ;;
     --preview-format) preview_format="${2:-}"; shift 2 ;;
+    --preview-archive) preview_archive="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
@@ -107,6 +110,7 @@ if [[ -n "$preview_visual_pct" && ! "$preview_visual_pct" =~ ^[0-9]+$ ]]; then e
 case "$preview_resize_filter" in ""|off|nearest|box|lanczos|hybrid) ;; *) echo "--preview-resize-filter must be off, nearest, box, lanczos, or hybrid" >&2; exit 2 ;; esac
 if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ ]]; then echo "--preview-resize-max must look like 320x320" >&2; exit 2; fi
 case "$preview_format" in ""|png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be png, derived-png, raw-rgb, or raw-rgb565" >&2; exit 2 ;; esac
+if [[ -n "$preview_archive" && ! "$preview_archive" =~ ^[A-Za-z0-9_./:-]+$ ]]; then echo "--preview-archive contains unsupported characters" >&2; exit 2; fi
 case "$fb_format" in 8888|565) ;; *) echo "--fb-format must be 8888 or 565" >&2; exit 2 ;; esac
 case "$preview_blitter" in slint|raw) ;; *) echo "--preview-blitter must be slint or raw" >&2; exit 2 ;; esac
 if [[ -n "$transition" && ! "$transition" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--transition must be a comma-separated transition label list or mega" >&2; exit 2; fi
@@ -134,6 +138,9 @@ if [[ -n "$preview_resize_max" ]]; then
 fi
 if [[ -n "$preview_format" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_FORMAT=$preview_format"
+fi
+if [[ -n "$preview_archive" ]]; then
+  remote_extra_env="$remote_extra_env MISTER_PREVIEW_ARCHIVE=$preview_archive"
 fi
 if [[ -n "$transition" ]]; then
   remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION=$transition"
@@ -165,7 +172,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format preview_blitter=$preview_blitter transition=${transition:-fade} list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default}"
+  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format preview_blitter=$preview_blitter transition=${transition:-fade} list_only=$list_only preview_stress=$preview_stress preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none}"
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true

@@ -10,6 +10,7 @@
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --fast       → alias for release
 #   ./build-arm.sh --all-scenes → release with every Slint bench scene
+#   ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark
 #
 # Wraps `cross` with the settings the toolchain needs on an Apple-Silicon host
 # (see AGENTS.md §12).
@@ -24,6 +25,7 @@ cd "$(dirname "$0")"
 PROFILE=release
 FEATURES=(ui)
 FEATURE_LIST=""
+BIN_TARGET=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
 add_feature() {
   local feature="$1"
@@ -49,6 +51,10 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
+    --preview-archive-bench)
+      FEATURES=(preview-archive-bench)
+      BIN_TARGET=preview-archive-bench
+      ;;
     --fast|--release) PROFILE=release ;;
     --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
@@ -64,6 +70,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       sed -n '4,12p' ./build-arm.sh | sed 's/^# \{0,1\}//'
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
+      echo "  ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark"
       exit 0
       ;;
   esac
@@ -133,6 +140,9 @@ fi
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
 BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+if [ -n "$BIN_TARGET" ]; then
+  BUILD_ARGS+=(--bin "$BIN_TARGET")
+fi
 if [ "${#FEATURES[@]}" -gt 0 ]; then
   FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
   BUILD_ARGS+=(--features "$FEATURE_LIST")
