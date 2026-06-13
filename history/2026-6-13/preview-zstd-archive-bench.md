@@ -216,6 +216,27 @@ best real-app CPU result so far: about 231-419 us faster per decoded preview
 than the LZ4 decoded-cache runs, and about 203-391 us faster than the fresh
 separate raw-file turbo/fade baseline. Frame wall timing remained vsync-bound.
 
+### Bulk raw565 decode copy
+
+Follow-up optimization changed raw565 decode on little-endian targets from a
+per-pixel `u16::from_le_bytes` push loop to one bulk byte copy into the final
+`Vec<u16>`. Big-endian targets keep the old conversion loop. Same 20 second
+`turbo-hold` + fade benchmark.
+
+| path | build | decoded previews | worker cache hits | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders |
+|------|-------|------------------|-------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|
+| raw pack | before run 1 | 129 | 1 | 2086 | 629 | 1439 | 16352 | 17373 | 16 | 1 |
+| raw pack | before run 2 | 130 | 2 | 2274 | 779 | 1475 | 16358 | 17266 | 16 | 1 |
+| raw pack | after run 1 | 130 | 2 | 1545 | 741 | 778 | 16363 | 17253 | 16 | 1 |
+| raw pack | after run 2 | 130 | 2 | 1477 | 673 | 784 | 16359 | 17261 | 15 | 1 |
+| LZ4 block | after | 130 | 2 | 1916 | 93 | 1807 | 16351 | 17229 | 16 | 1 |
+
+Result: keep the bulk decode change. On raw-pack it cut raw565 decode by about
+660-690 us per decoded preview and total preview-worker load by about 609-797
+us versus raw-pack before the change. The compressed LZ4-block path also improved
+to 1916 us average load, making it faster than the original separate raw-file
+turbo/fade baseline while keeping the small 19.35 MB archive.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and

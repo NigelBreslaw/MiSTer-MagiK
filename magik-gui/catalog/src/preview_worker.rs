@@ -778,9 +778,26 @@ fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
             expected
         ));
     }
+    #[cfg(target_endian = "little")]
+    let words = {
+        let mut words = Vec::with_capacity(expected / 2);
+        unsafe {
+            words.set_len(expected / 2);
+            std::ptr::copy_nonoverlapping(
+                data[20..].as_ptr(),
+                words.as_mut_ptr() as *mut u8,
+                expected,
+            );
+        }
+        words
+    };
+    #[cfg(not(target_endian = "little"))]
     let mut words = Vec::with_capacity(expected / 2);
-    for chunk in data[20..].chunks_exact(2) {
-        words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+    #[cfg(not(target_endian = "little"))]
+    {
+        for chunk in data[20..].chunks_exact(2) {
+            words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
     }
     Ok(PreviewPixels::Rgb565 {
         width,
