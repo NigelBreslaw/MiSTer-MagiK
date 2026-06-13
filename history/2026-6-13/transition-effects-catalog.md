@@ -43,9 +43,19 @@ traces and logs go under `build/transition-effect-profiles/`.
 10. `tunnel-zoom-transition`
 11. `screen-shake-flash`
 12. `crt-power-off-vertical-collapse`
-13. `burn-in-ghost-crossfade`
-14. `glitchy-sprite-priority-reveal`
-15. `cabinet-marquee-light-sweep`
+13. `crt-power-off-fast-snap`
+14. `crt-power-off-hot-line`
+15. `crt-power-off-center-dot`
+16. `crt-power-off-phosphor-bloom`
+17. `crt-power-off-wobble-collapse`
+18. `burn-in-ghost-crossfade`
+19. `glitchy-sprite-priority-reveal`
+20. `cabinet-marquee-light-sweep`
+
+The extra CRT power-off variants are a small gallery for finding which pieces of
+the classic tube shutdown feel work best on the RGB565 framebuffer: fast
+deflection snap, lingering hot line, center-dot bloom, phosphor afterglow, and
+wobbly deflection collapse.
 
 ## Runtime Env
 
@@ -54,6 +64,13 @@ traces and logs go under `build/transition-effect-profiles/`.
 - `MISTER_TRANSITION_EFFECTS_SEGMENT_SECS=N`
 - `MISTER_TRANSITION_EFFECTS_HUD=1`
 - `MISTER_TRANSITION_EFFECTS_TRACE=/tmp/file.tsv`
+
+Focused CRT-off gallery:
+
+```bash
+MISTER_TRANSITION_EFFECTS=crt-power-off-vertical-collapse,crt-power-off-fast-snap,crt-power-off-hot-line,crt-power-off-center-dot,crt-power-off-phosphor-bloom,crt-power-off-wobble-collapse \
+MISTER_TRANSITION_EFFECTS_HUD=1 mister-magik-fb ui transition-effects 0
+```
 
 ## Benchmark Counters
 
@@ -81,6 +98,8 @@ Transition-specific counters:
 - Two source frames are rendered from cached raw RGB565 previews when available,
   with deterministic synthetic fallback art.
 - Mask-heavy effects use rows, blocks, and spans instead of per-pixel blends.
+- The transition HUD uses a fixed 5x7 bitmap label font so long effect names stay
+  readable while cycling variants.
 - Burn-in ghost keeps a retained RGB565 buffer in renderer state.
 
 ## Baseline
