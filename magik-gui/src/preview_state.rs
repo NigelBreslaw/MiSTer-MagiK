@@ -1,5 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use mister_magik_ui as slint_ui;
@@ -67,7 +67,6 @@ fn png_to_slint_image(width: u32, height: u32, rgb: Vec<u8>) -> Image {
     Image::from_rgb8(buffer)
 }
 
-#[derive(Clone)]
 struct PreviewImage {
     image: Image,
     pixels: PreviewImagePixels,
@@ -77,7 +76,6 @@ struct PreviewImage {
     display_h: u32,
 }
 
-#[derive(Clone)]
 enum PreviewImagePixels {
     Rgb8(Vec<u8>),
     Rgb565 {
@@ -88,22 +86,28 @@ enum PreviewImagePixels {
 
 #[derive(Default)]
 struct PreviewImageCache {
-    entries: VecDeque<(String, PreviewImage)>,
+    entries: VecDeque<(String, Arc<PreviewImage>)>,
     failed_paths: VecDeque<String>,
 }
 
 impl PreviewImageCache {
     const FAILED_CAP: usize = 128;
 
-    fn get(&mut self, path: &str) -> Option<PreviewImage> {
+    fn get(&mut self, path: &str) -> Option<Arc<PreviewImage>> {
         let idx = self.entries.iter().position(|(p, _)| p == path)?;
         let (_, image) = self.entries.remove(idx)?;
-        let out = image.clone();
+        let out = Arc::clone(&image);
         self.entries.push_back((path.to_string(), image));
         Some(out)
     }
 
     fn peek(&self, path: &str) -> Option<&PreviewImage> {
+        self.entries
+            .iter()
+            .find_map(|(p, image)| (p == path).then_some(image.as_ref()))
+    }
+
+    fn peek_shared(&self, path: &str) -> Option<&Arc<PreviewImage>> {
         self.entries
             .iter()
             .find_map(|(p, image)| (p == path).then_some(image))
@@ -112,7 +116,7 @@ impl PreviewImageCache {
     fn insert(
         &mut self,
         path: String,
-        image: PreviewImage,
+        image: Arc<PreviewImage>,
         window_paths: &[String],
         visible_path: Option<&str>,
     ) {
@@ -230,7 +234,7 @@ pub(crate) struct PreviewState {
     cache: PreviewImageCache,
     has_visible_preview: bool,
     visible_path: String,
-    previous_image: Option<PreviewImage>,
+    previous_image: Option<Arc<PreviewImage>>,
     raw_transition_id: u64,
     window_paths: Vec<String>,
     pending_prefetch_paths: HashSet<String>,
@@ -351,7 +355,7 @@ impl PreviewState {
             return;
         }
         self.previous_image = if self.has_visible_preview {
-            self.cache.peek(&self.visible_path).cloned()
+            self.cache.peek_shared(&self.visible_path).map(Arc::clone)
         } else {
             None
         };
@@ -369,7 +373,10 @@ impl PreviewState {
     pub(crate) fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
         let current = self.raw_frame()?;
         Some(PreviewRawTransitionFrame {
-            previous: self.previous_image.as_ref().map(Self::raw_frame_from_image),
+            previous: self
+                .previous_image
+                .as_ref()
+                .map(|image| Self::raw_frame_from_image(image)),
             current,
             transition_id: self.raw_transition_id,
         })
@@ -700,18 +707,18 @@ pub(crate) fn apply_ready_preview(
                     result.image_path
                 );
             }
-            let image = PreviewImage {
+            let image = Arc::new(PreviewImage {
                 image: slint_image,
                 pixels,
                 source_w,
                 source_h,
                 display_w: display.w,
                 display_h: display.h,
-            };
+            });
             let image_path = result.image_path;
             preview.cache.insert(
                 image_path.clone(),
-                image.clone(),
+                Arc::clone(&image),
                 &preview.window_paths,
                 Some(&preview.visible_path),
             );
@@ -825,6 +832,26 @@ mod tests {
             next_ready_result_index(&backlog, 99, Some("selected.png"), false, 1),
             None
         );
+    }
+
+    #[test]
+    fn preview_cache_hits_share_image_payload() {
+        let mut cache = PreviewImageCache::default();
+        let image = Arc::new(PreviewImage {
+            image: Image::default(),
+            pixels: PreviewImagePixels::Rgb8(vec![1, 2, 3]),
+            source_w: 1,
+            source_h: 1,
+            display_w: 1,
+            display_h: 1,
+        });
+
+        cache.insert("preview.png".into(), Arc::clone(&image), &[], None);
+        let first_hit = cache.get("preview.png").expect("first cache hit");
+        let second_hit = cache.get("preview.png").expect("second cache hit");
+
+        assert!(Arc::ptr_eq(&image, &first_hit));
+        assert!(Arc::ptr_eq(&first_hit, &second_hit));
     }
 
     fn preview_result(
