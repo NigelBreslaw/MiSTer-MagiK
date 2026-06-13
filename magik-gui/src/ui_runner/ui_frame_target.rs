@@ -256,6 +256,9 @@ pub(super) fn raw_preview_scaled_rect(
     ui: &UiDisplay,
     frame: &PreviewRawFrame<'_>,
 ) -> Option<DirtyRect> {
+    if matches!(frame.pixels, PreviewRawPixels::Empty) {
+        return Some(preview_screen_rect(ui));
+    }
     if frame.source_w == 0 || frame.source_h == 0 || frame.display_w == 0 || frame.display_h == 0 {
         return None;
     }
@@ -304,6 +307,9 @@ pub(super) fn sample_preview_rgb(
     scale_num: u32,
     scale_den: u32,
 ) -> Option<(u8, u8, u8)> {
+    if matches!(frame.pixels, PreviewRawPixels::Empty) {
+        return Some((0, 0, 0));
+    }
     if frame.source_w == 0
         || frame.source_h == 0
         || frame.display_w == 0
@@ -333,6 +339,7 @@ pub(super) fn sample_preview_rgb(
         let src_x = src_x as usize;
         let src_y = src_y as usize;
         return match frame.pixels {
+            PreviewRawPixels::Empty => Some((0, 0, 0)),
             PreviewRawPixels::Rgb8(rgb) => {
                 let si = (src_y * frame.source_w as usize + src_x) * 3;
                 (si + 2 < rgb.len()).then(|| (rgb[si], rgb[si + 1], rgb[si + 2]))
@@ -368,6 +375,7 @@ pub(super) fn sample_preview_rgb(
     let src_y = ((local_y as u64 * frame.source_h as u64) / scaled_h as u64)
         .min(frame.source_h.saturating_sub(1) as u64) as usize;
     match frame.pixels {
+        PreviewRawPixels::Empty => Some((0, 0, 0)),
         PreviewRawPixels::Rgb8(rgb) => {
             let si = (src_y * src_w + src_x) * 3;
             (si + 2 < rgb.len()).then(|| (rgb[si], rgb[si + 1], rgb[si + 2]))
@@ -867,6 +875,16 @@ fn blit_transition_565_cut(
     screen: DirtyRect,
     frame: &PreviewRawTransitionFrame<'_>,
 ) -> Option<()> {
+    if matches!(frame.current.pixels, PreviewRawPixels::Empty) {
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        for y in screen.y0..screen.y1.min(ui.render_h()) {
+            let row = y * ui.render_w();
+            for x in screen.x0..screen.x1.min(ui.render_w()) {
+                cached[row + x] = black;
+            }
+        }
+        return Some(());
+    }
     let current = raw565_view(&frame.current, screen, 0)?;
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
     for y in screen.y0..screen.y1.min(ui.render_h()) {
@@ -885,7 +903,12 @@ fn blit_transition_565_fade(
     frame: &PreviewRawTransitionFrame<'_>,
     progress: f32,
 ) -> Option<()> {
-    let current = raw565_view(&frame.current, screen, 0)?;
+    let current_empty = matches!(frame.current.pixels, PreviewRawPixels::Empty);
+    let current = if current_empty {
+        None
+    } else {
+        Some(raw565_view(&frame.current, screen, 0)?)
+    };
     let previous = frame
         .previous
         .as_ref()
@@ -899,7 +922,10 @@ fn blit_transition_565_fade(
                 .as_ref()
                 .and_then(|view| sample_raw565(view, x, y))
                 .unwrap_or(black);
-            let curr = sample_raw565(&current, x, y).unwrap_or(black);
+            let curr = current
+                .as_ref()
+                .and_then(|view| sample_raw565(view, x, y))
+                .unwrap_or(black);
             cached[row + x] = blend_565(prev, curr, alpha);
         }
     }
@@ -1713,6 +1739,14 @@ impl UiFrameTarget {
                     }
                 }
                 match frame.pixels {
+                    PreviewRawPixels::Empty => {
+                        for y in screen.y0..screen.y1.min(ui.render_h()) {
+                            let row = y * ui.render_w();
+                            for x in screen.x0..screen.x1.min(ui.render_w()) {
+                                cached[row + x] = Pixel(0);
+                            }
+                        }
+                    }
                     PreviewRawPixels::Rgb8(rgb) => {
                         for y in rect.y0..rect.y1 {
                             let src_y =
@@ -1756,6 +1790,15 @@ impl UiFrameTarget {
                     }
                 }
                 match frame.pixels {
+                    PreviewRawPixels::Empty => {
+                        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+                        for y in screen.y0..screen.y1.min(ui.render_h()) {
+                            let row = y * ui.render_w();
+                            for x in screen.x0..screen.x1.min(ui.render_w()) {
+                                cached[row + x] = black;
+                            }
+                        }
+                    }
                     PreviewRawPixels::Rgb565 {
                         pixels,
                         stride_pixels,
@@ -1949,6 +1992,7 @@ pub(super) fn blit_raw_preview_if_needed(
     let transition_frame = preview.raw_transition_frame();
     let trace = transition.update(transition_frame.as_ref(), elapsed);
     if !raw_dirty && !slint_touched_preview && !trace.active {
+        preview.finish_raw_empty_transition_if_idle();
         return (None, trace);
     }
     let Some(transition_frame) = transition_frame else {
@@ -2003,4 +2047,41 @@ pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow
         ui.render_w() as u32,
         ui.render_h() as u32,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_raw_preview_blit_clears_preview_screen() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let mut target = UiFrameTarget::cached_with_format(&ui, FramebufferFormat::Xrgb8888);
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Empty,
+            source_w: 1,
+            source_h: 1,
+            display_w: ARCADE_PREVIEW_BOX_W,
+            display_h: ARCADE_PREVIEW_BOX_H,
+        };
+
+        if let UiFrameTarget::Xrgb8888 { cached } = &mut target {
+            cached.fill(Pixel(0x00ff00));
+        }
+
+        let rect = target
+            .blit_raw_preview(&ui, &frame, true)
+            .expect("empty preview rect");
+        let screen = preview_screen_rect(&ui);
+
+        assert_eq!(rect.x0, screen.x0);
+        assert_eq!(rect.y0, screen.y0);
+        assert_eq!(rect.x1, screen.x1);
+        assert_eq!(rect.y1, screen.y1);
+        if let UiFrameTarget::Xrgb8888 { cached } = target {
+            let center =
+                ((screen.y0 + screen.y1) / 2) * ui.render_w() + (screen.x0 + screen.x1) / 2;
+            assert_eq!(cached[center].0, 0);
+        }
+    }
 }

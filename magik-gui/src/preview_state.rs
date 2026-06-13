@@ -258,6 +258,7 @@ pub(crate) struct PreviewRawTransitionFrame<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) enum PreviewRawPixels<'a> {
+    Empty,
     Rgb8(&'a [u8]),
     Rgb565 {
         pixels: &'a [Rgb565Pixel],
@@ -362,6 +363,30 @@ impl PreviewState {
         self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
     }
 
+    fn begin_raw_transition_to_empty(&mut self) {
+        self.previous_image = if self.has_visible_preview {
+            self.cache.peek_shared(&self.visible_path).map(Arc::clone)
+        } else {
+            None
+        };
+        self.has_visible_preview = false;
+        self.visible_path.clear();
+        self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
+        self.raw_dirty = true;
+    }
+
+    fn select_empty_preview(&mut self) {
+        self.current_generation = 0;
+        self.selected_image_path = None;
+        self.begin_raw_transition_to_empty();
+    }
+
+    pub(crate) fn finish_raw_empty_transition_if_idle(&mut self) {
+        if !self.has_visible_preview && self.visible_path.is_empty() && !self.raw_dirty {
+            self.previous_image = None;
+        }
+    }
+
     pub(crate) fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
         if !preview_raw_blitter_enabled() || !self.has_visible_preview {
             return None;
@@ -371,7 +396,22 @@ impl PreviewState {
     }
 
     pub(crate) fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
-        let current = self.raw_frame()?;
+        if !preview_raw_blitter_enabled() {
+            return None;
+        }
+        let current = if self.has_visible_preview {
+            self.raw_frame()?
+        } else if self.previous_image.is_some() || self.raw_dirty {
+            PreviewRawFrame {
+                pixels: PreviewRawPixels::Empty,
+                source_w: 1,
+                source_h: 1,
+                display_w: ARCADE_PREVIEW_BOX_W,
+                display_h: ARCADE_PREVIEW_BOX_H,
+            }
+        } else {
+            return None;
+        };
         Some(PreviewRawTransitionFrame {
             previous: self
                 .previous_image
@@ -470,7 +510,7 @@ pub(crate) fn request_arcade_preview_window(
                     return true;
                 }
                 if preview.cache.contains_failed(&path) {
-                    preview.current_generation = 0;
+                    preview.select_empty_preview();
                     bridge.set_arcade_preview_status(PreviewStatus::Empty);
                     request_preview_prefetches(games, selected, preview);
                     return true;
@@ -486,7 +526,7 @@ pub(crate) fn request_arcade_preview_window(
     if game.has_image {
         preview.selected_image_path = Some(game.image_path.clone());
         if preview.cache.contains_failed(&game.image_path) {
-            preview.current_generation = 0;
+            preview.select_empty_preview();
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             request_preview_prefetches(games, selected, preview);
             return true;
@@ -523,12 +563,7 @@ pub(crate) fn request_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return true;
     }
-    preview.current_generation = 0;
-    preview.selected_image_path = None;
-    preview.has_visible_preview = false;
-    preview.visible_path.clear();
-    preview.previous_image = None;
-    preview.raw_transition_id = preview.raw_transition_id.wrapping_add(1);
+    preview.select_empty_preview();
     bridge.set_arcade_preview_placeholder_visible(true);
     clear_preview_image_bridge(bridge);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
@@ -741,11 +776,7 @@ pub(crate) fn apply_ready_preview(
                 );
             }
             if is_selected_result {
-                preview.current_generation = 0;
-                preview.has_visible_preview = false;
-                preview.visible_path.clear();
-                preview.previous_image = None;
-                preview.raw_transition_id = preview.raw_transition_id.wrapping_add(1);
+                preview.select_empty_preview();
                 clear_preview_image_bridge(&bridge);
                 bridge.set_arcade_preview_status(PreviewStatus::Empty);
                 dirty = true;
@@ -852,6 +883,46 @@ mod tests {
 
         assert!(Arc::ptr_eq(&image, &first_hit));
         assert!(Arc::ptr_eq(&first_hit, &second_hit));
+    }
+
+    #[test]
+    fn empty_preview_transition_keeps_previous_frame_for_fade_out() {
+        let mut preview = PreviewState::new();
+        let visible_image = Arc::new(PreviewImage {
+            image: Image::default(),
+            pixels: PreviewImagePixels::Rgb8(vec![255, 0, 0]),
+            source_w: 1,
+            source_h: 1,
+            display_w: 1,
+            display_h: 1,
+        });
+        preview.cache.insert(
+            "visible.png".into(),
+            Arc::clone(&visible_image),
+            &[],
+            Some("visible.png"),
+        );
+        preview.selected_image_path = Some("visible.png".into());
+        preview.has_visible_preview = true;
+        preview.visible_path = "visible.png".into();
+        let previous_transition_id = preview.raw_transition_id;
+
+        preview.select_empty_preview();
+
+        assert_eq!(preview.selected_image_path, None);
+        assert!(!preview.has_visible_preview);
+        assert!(preview.visible_path.is_empty());
+        assert!(preview.raw_dirty);
+        assert_eq!(
+            preview.raw_transition_id,
+            previous_transition_id.wrapping_add(1)
+        );
+
+        let frame = preview
+            .raw_transition_frame()
+            .expect("empty preview transition frame");
+        assert!(frame.previous.is_some());
+        assert!(matches!(frame.current.pixels, PreviewRawPixels::Empty));
     }
 
     fn preview_result(
