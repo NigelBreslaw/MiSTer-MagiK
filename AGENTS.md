@@ -337,6 +337,17 @@ uses the camera-effect timing buckets and adds `palette_step_count`,
 `trail_pixel_count`, `indexed_pixel_count`, and `reflection_row_count`. Baseline
 results append to `history/toolchain-bench/results-raster-effects.tsv`; see
 `history/2026-6-13/raster-effects-catalog.md`.
+Classic full-screen screen/transition effect experiments live in
+`ui transition-effects`; list labels with `mister-magik-fb transition-effects`,
+browse interactively with `scripts/run-rust.sh transition-effects 0`, and
+benchmark with `scripts/profile-transition-effects.sh LABEL --mode mega
+--segment-secs N`. The trace uses the camera-effect timing buckets and adds
+`mask_cell_count`, `revealed_pixel_count`, `hidden_pixel_count`,
+`source_a_pixel_count`, `source_b_pixel_count`, `shake_offset_px`,
+`flash_pixel_count`, `warp_sample_count`, `ghost_pixel_count`, and
+`glitch_band_count`. Baseline results append to
+`history/toolchain-bench/results-transition-effects.tsv`; see
+`history/2026-6-13/transition-effects-catalog.md`.
 
 **Debug trick — see Slint without HDMI routing:** dump `/dev/fb0` and convert to
 PNG **while `mister-magik-fb ui` is running**. After exit, fbcon shows `login:` and

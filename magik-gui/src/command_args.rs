@@ -12,6 +12,7 @@ pub const COMMANDS: &[&str] = &[
     "sprite-effects",
     "text-effects",
     "raster-effects",
+    "transition-effects",
     "preview-transitions",
     "effect-bench",
     "vsync-probe",

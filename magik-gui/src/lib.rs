@@ -18,6 +18,7 @@ pub mod raster_effects;
 pub mod runtime_status;
 pub mod sprite_effects;
 pub mod text_effects;
+pub mod transition_effects;
 pub mod vsync_pacer;
 
 pub use mister_magik_catalog::{arcade_catalog, library_bench, library_db, preview_worker};
