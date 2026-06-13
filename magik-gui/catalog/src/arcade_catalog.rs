@@ -220,7 +220,11 @@ fn has_preview_image(game: &ArcadeGameEntry) -> bool {
         && Path::new(&game.image_path)
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+            .is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("png")
+                    || ext.eq_ignore_ascii_case("jpg")
+                    || ext.eq_ignore_ascii_case("jpeg")
+            })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1110,10 +1114,11 @@ mod tests {
         let catalog = ArcadeCatalog::new(root, games, systems);
 
         let games = catalog.system_preview_games("arcade");
-        assert_eq!(games.len(), 2);
-        assert_eq!(catalog.system_preview_game_count("arcade"), 2);
+        assert_eq!(games.len(), 3);
+        assert_eq!(catalog.system_preview_game_count("arcade"), 3);
         assert_eq!(games[0].title, "1941: Counter Attack (Japan)");
         assert_eq!(games[1].title, "1943");
+        assert_eq!(games[2].title, "Astra SuperStars");
         assert_eq!(
             catalog.system_preview_game_at("arcade", 1).map(|game| game.title),
             Some("1943".into())

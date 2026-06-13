@@ -518,11 +518,10 @@ pub fn preview_cache_path(
     resize: PreviewResizeSpec,
 ) -> PathBuf {
     let source = Path::new(image_path);
-    let filename = source
-        .file_name()
+    let stem = source
+        .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("preview.png");
-    let stem = filename.strip_suffix(".png").unwrap_or(filename);
+        .unwrap_or("preview");
     let (dir_prefix, ext) = match storage {
         PreviewStorageFormat::Png | PreviewStorageFormat::DerivedPng => ("png", "png"),
         PreviewStorageFormat::RawRgb => ("raw", "rgb"),
@@ -1198,6 +1197,23 @@ mod tests {
         assert_ne!(raw, PathBuf::from(original));
         assert_ne!(raw565, PathBuf::from(original));
         assert_ne!(derived, PathBuf::from(original));
+    }
+
+    #[test]
+    fn cache_path_uses_source_stem_for_jpg_originals() {
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Hybrid,
+            max_w: 320,
+            max_h: 320,
+        };
+        let original = "/media/fat/_Arcade/media/screenshot/astrass.jpg";
+        let raw565 = raw565_preview_cache_path(original, resize);
+        assert_eq!(
+            raw565,
+            PathBuf::from(
+                "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320/astrass.rgb565"
+            )
+        );
     }
 
     #[test]
