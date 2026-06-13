@@ -239,6 +239,13 @@ scripts/run-rust.sh launcher 0
 # refreshes in-process only with MISTER_CATALOG_REFRESH=1.
 scripts/mister run "/media/fat/mister-magik/mister-magik-fb library-refresh"
 
+# Inspect the SQLite library cache directly on the MiSTer. The device does not
+# ship sqlite3(1); use the MagiK binary's bundled rusqlite support instead of
+# pulling /media/fat/mister-magik/library.sqlite3 back to the host.
+scripts/mister db
+scripts/mister db "SELECT count(*) FROM games"
+scripts/mister db "SELECT system_id, count(*) FROM games GROUP BY system_id ORDER BY count(*) DESC LIMIT 20"
+
 # Restore stock MiSTer menu boot
 scripts/restore-stock-boot.sh
 

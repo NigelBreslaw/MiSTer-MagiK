@@ -65,6 +65,10 @@ fn run_cli() -> Result<()> {
             get(&sess, &args[0], Path::new(&args[1]))?;
             println!("get {} -> {}", args[0], args[1]);
         }
+        "db" | "library-db" => {
+            let sess = connect(10)?;
+            run_library_db_query(&sess, &args)?;
+        }
         "wait" => {
             let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
             std::process::exit(wait_up(secs)?);
@@ -198,7 +202,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|recover> ..."
+        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|recover> ..."
     );
 }
 
@@ -563,6 +567,38 @@ fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
     let mut dst = File::create(local)?;
     io::copy(&mut src, &mut dst)?;
     Ok(())
+}
+
+fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
+    let query_args = if args.is_empty() {
+        vec![
+            "SELECT".to_string(),
+            "type,name,tbl_name".to_string(),
+            "FROM".to_string(),
+            "sqlite_schema".to_string(),
+            "WHERE".to_string(),
+            "type".to_string(),
+            "IN".to_string(),
+            "('table','view')".to_string(),
+            "ORDER".to_string(),
+            "BY".to_string(),
+            "type,name".to_string(),
+        ]
+    } else {
+        args.to_vec()
+    };
+    let quoted_args = query_args
+        .iter()
+        .map(|arg| sh(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = format!("/media/fat/mister-magik/mister-magik-fb library-sql {quoted_args}");
+    let out = exec(sess, &command, true)?;
+    print!("{}", out.stdout);
+    if !out.stderr.trim().is_empty() {
+        eprint!("[stderr] {}", out.stderr);
+    }
+    std::process::exit(out.rc);
 }
 
 fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {

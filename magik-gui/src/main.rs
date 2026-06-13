@@ -82,7 +82,9 @@ fn main() {
 
     let cmd = command_args::resolve_command(&args);
 
-    println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+    if cmd != "library-sql" {
+        println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+    }
 
     if cmd == "vsync-probe" {
         run_vsync_probe();
