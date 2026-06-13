@@ -281,6 +281,7 @@ where
 
 fn preview_thread(rx: mpsc::Receiver<PreviewCommand>, tx: mpsc::Sender<PreviewResult>) {
     lower_thread_priority();
+    let _ = preview_archive();
     let mut queue: Vec<PreviewRequest> = Vec::new();
     let mut decoded_cache = PreviewDecodedCache::new(preview_decoded_cache_cap());
     loop {
@@ -573,6 +574,7 @@ struct PreviewArchive {
     file: Mutex<File>,
     scratch: Mutex<PreviewArchiveScratch>,
     codec: PreviewArchiveCodec,
+    bytes: Option<Vec<u8>>,
     entries: HashMap<String, PreviewArchiveEntry>,
 }
 
@@ -638,6 +640,9 @@ impl PreviewArchive {
             });
         }
         Ok(Self {
+            bytes: preview_archive_preload_enabled()
+                .then(|| read_archive_bytes(path))
+                .transpose()?,
             file: Mutex::new(file),
             scratch: Mutex::new(PreviewArchiveScratch::default()),
             codec,
@@ -655,35 +660,46 @@ impl PreviewArchive {
             .scratch
             .lock()
             .map_err(|_| "preview archive scratch lock poisoned".to_string())?;
-        scratch.compressed.resize(entry.compressed_len, 0);
-        {
-            let mut file = self
-                .file
-                .lock()
-                .map_err(|_| "preview archive file lock poisoned".to_string())?;
-            file.seek(SeekFrom::Start(entry.offset))
-                .map_err(|e| format!("preview archive seek {name}: {e}"))?;
-            file.read_exact(&mut scratch.compressed)
-                .map_err(|e| format!("preview archive read {name}: {e}"))?;
-        }
+        let PreviewArchiveScratch { compressed, raw } = &mut *scratch;
+        let compressed_slice = if let Some(bytes) = &self.bytes {
+            let start = entry.offset as usize;
+            let end = start
+                .checked_add(entry.compressed_len)
+                .ok_or_else(|| format!("preview archive offset overflow {name}"))?;
+            bytes
+                .get(start..end)
+                .ok_or_else(|| format!("preview archive slice out of range {name}"))?
+        } else {
+            compressed.resize(entry.compressed_len, 0);
+            {
+                let mut file = self
+                    .file
+                    .lock()
+                    .map_err(|_| "preview archive file lock poisoned".to_string())?;
+                file.seek(SeekFrom::Start(entry.offset))
+                    .map_err(|e| format!("preview archive seek {name}: {e}"))?;
+                file.read_exact(compressed)
+                    .map_err(|e| format!("preview archive read {name}: {e}"))?;
+            }
+            compressed.as_slice()
+        };
         let read_us = read_t.elapsed().as_micros() as u64;
 
         let decode_t = Instant::now();
-        let PreviewArchiveScratch { compressed, raw } = &mut *scratch;
         let data = match self.codec {
             PreviewArchiveCodec::Lz4Block => {
-                decode_lz4_block_entry_into(compressed, entry.raw_len, raw)
+                decode_lz4_block_entry_into(compressed_slice, entry.raw_len, raw)
                     .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?
             }
             PreviewArchiveCodec::Raw => {
-                if compressed.len() != entry.raw_len {
+                if compressed_slice.len() != entry.raw_len {
                     return Err(format!(
                         "preview archive raw length mismatch {name}: got={} expected={}",
-                        compressed.len(),
+                        compressed_slice.len(),
                         entry.raw_len
                     ));
                 }
-                compressed.as_slice()
+                compressed_slice
             }
         };
         let image = decode_raw565_preview_bytes(&data)?;
@@ -704,6 +720,25 @@ impl PreviewArchive {
             image,
         }))
     }
+}
+
+fn preview_archive_preload_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_PREVIEW_ARCHIVE_PRELOAD").as_deref(),
+            Ok("0") | Ok("off") | Ok("false") | Ok("no")
+        )
+    })
+}
+
+fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file = File::open(path)
+        .map_err(|e| format!("preload preview archive {}: {e}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("read preview archive {}: {e}", path.display()))?;
+    Ok(bytes)
 }
 
 fn decode_lz4_block_entry_into<'a>(

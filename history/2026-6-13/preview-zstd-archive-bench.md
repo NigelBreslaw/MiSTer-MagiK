@@ -237,6 +237,26 @@ us versus raw-pack before the change. The compressed LZ4-block path also improve
 to 1916 us average load, making it faster than the original separate raw-file
 turbo/fade baseline while keeping the small 19.35 MB archive.
 
+### RAM-heavy archive preload
+
+Follow-up optimization preloaded the selected archive into process memory when
+the preview-loader thread starts. This is controlled by
+`MISTER_PREVIEW_ARCHIVE_PRELOAD` and defaults on for archive runs; set it to `0`
+to force the older per-entry file seek/read path. Same 20 second `turbo-hold` +
+fade benchmark with raw pack.
+
+| build | decoded previews | worker cache hits | avg load us | avg read us | avg decode us | avg frame wall us | p95 frame wall us | slow >20ms | placeholders | RSS HWM KB |
+|-------|------------------|-------------------|-------------|-------------|---------------|-------------------|-------------------|------------|--------------|------------|
+| before | 130 | 2 | 1527 | 760 | 744 | 16382 | 17224 | 16 | 1 | 36364 |
+| preload lazy | 133 | 5 | 763 | 3 | 725 | 16357 | 17258 | 16 | 34 | 180420 |
+| preload at worker start | 130 | 2 | 737 | 2 | 712 | 16379 | 17244 | 15 | 1 | 180428 |
+
+Result: keep early archive preload. It roughly halved preview-worker load time
+for raw-pack by removing per-preview `/media/fat` reads from the scroll path,
+at a cost of about 144 MB additional RSS for the 147.7 MB raw pack. Lazy preload
+was rejected because it caused 34 placeholder frames; preloading at worker start
+restored placeholder behavior to baseline.
+
 ## Ten-screenshot drill-down
 
 Follow-up command, run five times with page-cache drops before each raw read and
