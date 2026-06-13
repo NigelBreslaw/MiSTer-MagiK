@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/cpu-flamegraph-scene.sh SCENE [SECS] [LABEL]
 
-Builds `magik-gui/build-arm.sh --profile`, deploys that profiling binary, runs
+Builds a `magik-gui/build-arm.sh --profile` binary, deploys it, runs
 an in-process CPU sampling smoke test, then runs the scene with
 `MISTER_PPROF=1` and pulls the SVG flamegraph.
 
@@ -50,9 +50,18 @@ local_log="$OUT_DIR/${label}-cpu-profile.log"
 local_smoke_svg="$OUT_DIR/${label}-cpu-smoke.svg"
 local_smoke_log="$OUT_DIR/${label}-cpu-smoke.log"
 bin="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+build_args=(--profile)
+case "$scene" in
+  launcher|arcade|controller_test)
+    build_args+=(--ui-scope arcade)
+    ;;
+  *)
+    build_args+=(--all-scenes)
+    ;;
+esac
 
 echo "==> Build profiling binary"
-"$RUST_DIR/build-arm.sh" --profile
+"$RUST_DIR/build-arm.sh" "${build_args[@]}"
 
 echo "==> Deploy profiling binary"
 "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
