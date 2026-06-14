@@ -33,6 +33,7 @@ grep -q '^video_mode=8$' "$TMP/repaired.ini"
 
 for script in \
   "$ROOT/scripts/bench-toolchain.sh" \
+  "$ROOT/scripts/build-neogeo-screenshot-pack.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/install-slint-boot.sh" \
