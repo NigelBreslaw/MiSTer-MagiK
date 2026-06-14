@@ -2404,63 +2404,76 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
     .map_err(|e| format!("materialize arcade ui projections: {e}"))
 }
 
-fn register_preview_asset_pack(
+fn register_preview_asset_packs(
     tx: &rusqlite::Transaction<'_>,
     mame_metadata: &HashMap<String, MameMachineMetadata>,
-    index: Option<&preview_worker::PreviewArchiveIndex>,
+    indexes: &[preview_worker::PreviewArchiveIndex],
 ) -> Result<(), String> {
-    let Some(index) = index else {
-        return Ok(());
-    };
-    tx.execute(
-        "INSERT INTO asset_packs(pack_id,platform_id,asset_type,local_path,codec,version)
-         VALUES (?1,?2,?3,?4,?5,?6)",
-        params![
-            "arcade-screenshot-v1",
-            "arcade",
-            "screenshot",
-            index.path.as_str(),
-            index.codec,
-            "v1"
-        ],
-    )
-    .map_err(|e| format!("insert preview asset pack: {e}"))?;
-    let mut stmt = tx
+    let mut pack_stmt = tx
+        .prepare(
+            "INSERT INTO asset_packs(pack_id,platform_id,asset_type,local_path,codec,version)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+        )
+        .map_err(|e| format!("prepare preview asset pack insert: {e}"))?;
+    let mut entry_stmt = tx
         .prepare(
             "INSERT INTO asset_entries(pack_id,asset_key,identity_namespace,identity_id,family_id,width,height)
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
         )
         .map_err(|e| format!("prepare preview asset entry insert: {e}"))?;
-    for entry in &index.entries {
-        let identity_id = normalize_id(entry);
-        let family_id = mame_metadata
-            .get(&identity_id)
-            .and_then(|machine| machine.parent_setname.as_deref())
-            .filter(|parent| !parent.trim().is_empty())
-            .unwrap_or(identity_id.as_str())
-            .to_string();
-        stmt.execute(params![
-            "arcade-screenshot-v1",
-            identity_id.as_str(),
-            "mame",
-            identity_id.as_str(),
-            family_id.as_str(),
-            Option::<i64>::None,
-            Option::<i64>::None
-        ])
-        .map_err(|e| format!("insert preview asset entry: {e}"))?;
+    for (idx, index) in indexes.iter().enumerate() {
+        let platform = if index.path.to_ascii_lowercase().contains("neogeo") {
+            "neogeo"
+        } else {
+            "arcade"
+        };
+        let pack_id = if idx == 0 {
+            format!("{platform}-screenshot-v1")
+        } else {
+            format!("{platform}-screenshot-v1-{idx}")
+        };
+        pack_stmt
+            .execute(params![
+                pack_id.as_str(),
+                platform,
+                "screenshot",
+                index.path.as_str(),
+                index.codec,
+                "v1"
+            ])
+            .map_err(|e| format!("insert preview asset pack: {e}"))?;
+        for entry in &index.entries {
+            let identity_id = normalize_id(entry);
+            let family_id = mame_metadata
+                .get(&identity_id)
+                .and_then(|machine| machine.parent_setname.as_deref())
+                .filter(|parent| !parent.trim().is_empty())
+                .unwrap_or(identity_id.as_str())
+                .to_string();
+            entry_stmt
+                .execute(params![
+                    pack_id.as_str(),
+                    identity_id.as_str(),
+                    "mame",
+                    identity_id.as_str(),
+                    family_id.as_str(),
+                    Option::<i64>::None,
+                    Option::<i64>::None
+                ])
+                .map_err(|e| format!("insert preview asset entry: {e}"))?;
+        }
     }
     Ok(())
 }
 
 fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
-    let preview_asset_pack = preview_worker::preview_archive_index_from_env()
+    let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
         .map_err(|e| format!("preview archive index: {e}"))?;
     write_sqlite_scan_with_sources(
         path,
         scan,
         &default_mame_sqlite_path(),
-        preview_asset_pack.as_ref(),
+        &preview_asset_packs,
     )
 }
 
@@ -2470,7 +2483,7 @@ fn write_sqlite_scan_with_mame(
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, None)
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, &[])
 }
 
 #[cfg(test)]
@@ -2480,14 +2493,19 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
     mame_sqlite_path: &Path,
     preview_asset_pack: &preview_worker::PreviewArchiveIndex,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, Some(preview_asset_pack))
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        mame_sqlite_path,
+        std::slice::from_ref(preview_asset_pack),
+    )
 }
 
 fn write_sqlite_scan_with_sources(
     path: &Path,
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
-    preview_asset_pack: Option<&preview_worker::PreviewArchiveIndex>,
+    preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
 ) -> Result<(), String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     conn.execute_batch(
@@ -2708,7 +2726,7 @@ fn write_sqlite_scan_with_sources(
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
-    register_preview_asset_pack(&tx, &mame_metadata, preview_asset_pack)?;
+    register_preview_asset_packs(&tx, &mame_metadata, preview_asset_packs)?;
     {
         let mut stmt = tx
             .prepare(

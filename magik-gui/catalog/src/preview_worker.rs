@@ -288,7 +288,7 @@ where
 
 fn preview_thread(rx: mpsc::Receiver<PreviewCommand>, tx: mpsc::Sender<PreviewResult>) {
     lower_thread_priority();
-    let _ = preview_archive();
+    let _ = preview_archives();
     let mut queue: Vec<PreviewRequest> = Vec::new();
     let mut decoded_cache = PreviewDecodedCache::new(preview_decoded_cache_cap());
     loop {
@@ -546,10 +546,12 @@ fn load_raw565_preview_timed(
     resize: PreviewResizeSpec,
 ) -> Result<LoadedPreviewPixels, String> {
     let path = raw565_preview_cache_path(image_path, resize);
-    if let Some(archive) = preview_archive()? {
+    if let Some(archives) = preview_archives()? {
         if let Some(stem) = Path::new(&path).file_name().and_then(|s| s.to_str()) {
-            if let Some(loaded) = archive.load_timed(stem)? {
-                return Ok(loaded);
+            for archive in archives {
+                if let Some(loaded) = archive.load_timed(stem)? {
+                    return Ok(loaded);
+                }
             }
         }
     }
@@ -604,20 +606,50 @@ struct PreviewArchiveScratch {
     raw: Vec<u8>,
 }
 
-fn preview_archive() -> Result<Option<&'static PreviewArchive>, String> {
-    static ARCHIVE: OnceLock<Option<Result<PreviewArchive, String>>> = OnceLock::new();
-    let value = ARCHIVE.get_or_init(|| {
-        let path = match preview_archive_path_from_env().or_else(auto_preview_archive_path) {
-            Some(path) => path,
-            None => return None,
-        };
-        Some(PreviewArchive::open(Path::new(&path)))
+fn preview_archives() -> Result<Option<&'static Vec<PreviewArchive>>, String> {
+    static ARCHIVES: OnceLock<Option<Result<Vec<PreviewArchive>, String>>> = OnceLock::new();
+    let value = ARCHIVES.get_or_init(|| {
+        let paths = preview_archive_paths_from_env();
+        if paths.is_empty() {
+            return None;
+        }
+        let mut archives = Vec::with_capacity(paths.len());
+        for path in paths {
+            match PreviewArchive::open(Path::new(&path)) {
+                Ok(archive) => archives.push(archive),
+                Err(err) => return Some(Err(err)),
+            }
+        }
+        Some(Ok(archives))
     });
     match value {
-        Some(Ok(archive)) => Ok(Some(archive)),
+        Some(Ok(archives)) => Ok(Some(archives)),
         Some(Err(err)) => Err(err.clone()),
         None => Ok(None),
     }
+}
+
+fn preview_archive_paths_from_env() -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Ok(value) = std::env::var("MISTER_PREVIEW_ARCHIVES") {
+        for path in value.split(':').map(str::trim).filter(|path| !path.is_empty()) {
+            paths.push(path.to_string());
+        }
+    }
+    if let Some(path) = preview_archive_path_from_env() {
+        paths.push(path);
+    }
+    if let Some(path) = auto_preview_archive_path() {
+        paths.push(path);
+    }
+    if let Some(path) = neogeo_preview_archive_path_from_env().or_else(auto_neogeo_archive_path) {
+        paths.push(path);
+    }
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
 }
 
 fn preview_archive_path_from_env() -> Option<String> {
@@ -628,17 +660,30 @@ fn preview_archive_path_from_env() -> Option<String> {
 }
 
 pub fn preview_archive_entry_stems_from_env() -> Result<Option<HashSet<String>>, String> {
-    let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
+    let indexes = preview_archive_indexes_from_env()?;
+    if indexes.is_empty() {
         return Ok(None);
-    };
-    preview_archive_entry_stems(Path::new(&path)).map(Some)
+    }
+    Ok(Some(
+        indexes
+            .into_iter()
+            .flat_map(|index| index.entries.into_iter())
+            .collect(),
+    ))
 }
 
 pub fn preview_archive_index_from_env() -> Result<Option<PreviewArchiveIndex>, String> {
-    let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
+    let Some(path) = preview_archive_paths_from_env().into_iter().next() else {
         return Ok(None);
     };
     preview_archive_index(Path::new(&path)).map(Some)
+}
+
+pub fn preview_archive_indexes_from_env() -> Result<Vec<PreviewArchiveIndex>, String> {
+    preview_archive_paths_from_env()
+        .into_iter()
+        .map(|path| preview_archive_index(Path::new(&path)))
+        .collect()
 }
 
 pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64)>, String> {
@@ -656,6 +701,7 @@ pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64
     Ok(Some((path, meta.len(), mtime_secs)))
 }
 
+#[cfg(test)]
 fn preview_archive_entry_stems(path: &Path) -> Result<HashSet<String>, String> {
     Ok(preview_archive_index(path)?.entries.into_iter().collect())
 }
@@ -717,6 +763,18 @@ fn auto_preview_archive_path() -> Option<String> {
         return Some(lz4.display().to_string());
     }
     None
+}
+
+fn neogeo_preview_archive_path_from_env() -> Option<String> {
+    match std::env::var("MISTER_NEOGEO_PREVIEW_ARCHIVE") {
+        Ok(path) if !path.is_empty() => Some(path),
+        _ => None,
+    }
+}
+
+fn auto_neogeo_archive_path() -> Option<String> {
+    let path = PathBuf::from("/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b");
+    path.exists().then(|| path.display().to_string())
 }
 
 impl PreviewArchive {
