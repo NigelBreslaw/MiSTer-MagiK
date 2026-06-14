@@ -189,11 +189,13 @@ magik-gui/                   native armv7 frontend — see §12
   src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy, boot retry
   build-arm.sh          ARM build entrypoint (Apple container locally, cross in CI); see magik-gui/BUILD.md
   BUILD.md              ARM build profiles
-main-mister/            buildable Main_MiSTer fork experiments — see docs/main-mister-fork.md
-  build-docker.sh       Dockerized Main build with ARM GCC 10.2
 ```
 
-On the device the binary lives at `/media/fat/mister-magik/mister-magik-fb`.
+The maintained Main_MiSTer fork now lives outside this repo, normally as a
+sibling checkout at `../mister-main-magik`; override with `MISTER_MAIN_DIR`.
+Its rebuild ledger is `MAGIK_PATCHSET.md`. On the device the Slint binary lives
+at `/media/fat/mister-magik/mister-magik-fb` and the fork binary lives at
+`/media/fat/MiSTer_MagiK`.
 
 ---
 
@@ -223,8 +225,14 @@ cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warning
 # One-time: boot into MiSTer_MagiK through stock MiSTer main= handoff
 scripts/install-slint-boot.sh
 
-# Re-deploy binary + fork after code changes
+# Re-deploy Slint only after Rust/UI code changes
 scripts/deploy-rust.sh
+
+# Re-deploy Slint + external Main fork after ownership/handoff changes
+# Defaults to ../mister-main-magik; export MISTER_MAIN_DIR to override.
+scripts/deploy-main-mister-experiment.sh
+# Add --clean-main only when stale Main objects are suspected.
+scripts/deploy-main-mister-experiment.sh --clean-main
 
 # Restart the already-deployed Rust UI with no build/copy
 scripts/run-rust.sh arcade 0
@@ -474,24 +482,27 @@ MiSTer briefly, sends `load_core` via fifo, shows loading overlay until core run
 
 ### Main fork experiment — Main as parent of Slint
 
-`main-mister/` is a buildable Main_MiSTer fork for coexistence experiments. The
-device deploys it as `/media/fat/MiSTer_MagiK` and selects it through
-`[MiSTer] main=MiSTer_MagiK`, while `magik-gui/` stays the separate Slint binary
-project.
+The maintained Main_MiSTer fork lives in the external sibling repo
+`../mister-main-magik` (or `MISTER_MAIN_DIR`). This app repo deploys it as
+`/media/fat/MiSTer_MagiK` and selects it through `[MiSTer]
+main=MiSTer_MagiK`, while `magik-gui/` stays the separate Slint binary project.
 Use `scripts/deploy-main-mister-experiment.sh` to build/deploy both.
 
-Current intended flow (2026-06-06): `/etc/inittab` starts stock
+Current intended flow (2026-06-14): `/etc/inittab` starts stock
 `/media/fat/MiSTer`; `MiSTer.ini main=MiSTer_MagiK` hands off to the fork; the
-fork initializes the menu core, then starts
-`/media/fat/mister-magik/mister-magik-fb ui launcher 0` as a child through the
-Zaparoo-style `agetty`/tty2 handoff. The command
-`mister_magik_launch <absolute .mgl/.mra path>` on `/dev/MiSTer_cmd` shuts down
-the Slint child and launches through Main's existing path.
+fork initializes video, then enters a dormant parent mode while Slint owns the
+launcher UI. It starts `/media/fat/mister-magik/mister-magik-fb ui launcher 0`
+as a child through the `agetty`/tty2 handoff. Explicit commands on
+`/dev/MiSTer_cmd` are the only handoff seams:
+`mister_magik_launch <absolute .mgl/.mra path>` and
+`mister_magik_exit_to_menu`.
 
-Fork baseline policy: pin `main-mister/` to upstream Main_MiSTer release commits
-named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`, not arbitrary
-development commits. Current baseline is `Release 20260603`
-(`c73802332ff9c73659410084b6319ccd29f0b3aa`).
+Fork baseline policy: pin `mister-main-magik` to upstream Main_MiSTer release
+commits named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`, not
+arbitrary development commits. Current baseline is `Release 20260603`
+(`c73802332ff9c73659410084b6319ccd29f0b3aa`). The fork's
+`MAGIK_PATCHSET.md` lists the intended features, approved patch surface, tests,
+and rebuild-from-scratch checklist.
 
 Important gotchas:
 
@@ -502,8 +513,8 @@ Important gotchas:
   `/media/fat/MiSTer.ini` to `/media/fat/MiSTer.ini.bak` if needed, then edit
   `MiSTer.ini` only through the Rust comment-preserving mutator in
   `scripts/mister`. Do not use AWK/sed/ad hoc shell to edit `MiSTer.ini`.
-- Main clean rebuilds matter. If `main-mister/bin/MiSTer` is stale, new
-  `support/mister_magik/*.cpp` files may not be reflected in the deployed binary.
+- `scripts/deploy-main-mister-experiment.sh` no longer forces a clean Main build
+  by default. Use `--clean-main` when stale Main objects are suspected.
 
 ### TODO
 
