@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUI_DIR="$ROOT/magik-gui"
-MAIN_DIR="${MISTER_MAIN_DIR:-$ROOT/../mister-main-magik}"
+MAIN_DIR="${MISTER_MAIN_DIR:-$ROOT/../Main_MiSTer}"
 GUI_REMOTE="/media/fat/mister-magik/mister-magik-fb"
 MAIN_REMOTE="/media/fat/MiSTer_MagiK"
 GUI_PROFILE=release-device
@@ -24,8 +24,8 @@ Options:
   -h, --help     Show this help.
 
 Environment:
-  MISTER_MAIN_DIR  Path to the external mister-main-magik checkout.
-                   Defaults to ../mister-main-magik.
+  MISTER_MAIN_DIR  Path to the external Main_MiSTer checkout.
+                   Defaults to ../Main_MiSTer.
 EOF
 }
 
@@ -58,9 +58,9 @@ ERROR: Main_MiSTer fork checkout not found.
 
 Expected: $MAIN_DIR
 
-Create or clone the external fork at ../mister-main-magik, or set:
+Create or clone the external fork at ../Main_MiSTer, or set:
 
-  MISTER_MAIN_DIR=/path/to/mister-main-magik $0
+  MISTER_MAIN_DIR=/path/to/Main_MiSTer $0
 EOF
   exit 1
 fi

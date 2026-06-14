@@ -6,18 +6,20 @@ checkout layout is:
 ```text
 slint/
   mister-slint/        # Rust/Slint app and deploy tooling
-  mister-main-magik/   # Main_MiSTer fork
+  Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
 `scripts/deploy-main-mister-experiment.sh` defaults to
-`../mister-main-magik`. Set `MISTER_MAIN_DIR` when the fork lives elsewhere.
+`../Main_MiSTer`. Set `MISTER_MAIN_DIR` when the fork lives elsewhere.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
 
 ## Fork Source Of Truth
 
-The maintained fork repo is `mister-main-magik`.
+The maintained fork repo is `NigelBreslaw/Main_MiSTer`, a real GitHub fork of
+`MiSTer-devel/Main_MiSTer`. The long-lived MiSTer MagiK branch is
+`mister-magik`.
 
 - Upstream project: `MiSTer-devel/Main_MiSTer`
 - Baseline commit: `c73802332ff9c73659410084b6319ccd29f0b3aa`
@@ -76,7 +78,7 @@ unexpected event. Idle launcher operation should not produce those events.
 Build the fork directly from the fork repo:
 
 ```bash
-cd ../mister-main-magik
+cd ../Main_MiSTer
 ./build-docker.sh
 scripts/test-magik-state.sh
 scripts/check-magik-patch-surface.sh
@@ -91,7 +93,7 @@ scripts/deploy-main-mister-experiment.sh
 Use a non-default fork checkout:
 
 ```bash
-export MISTER_MAIN_DIR=/path/to/mister-main-magik
+export MISTER_MAIN_DIR=/path/to/Main_MiSTer
 scripts/deploy-main-mister-experiment.sh
 ```
 
@@ -112,11 +114,11 @@ The script deploys:
 
 Do not stack branches.
 
-1. Merge each fork repo PR to `mister-main-magik/main`.
+1. Merge each fork repo PR to `Main_MiSTer/mister-magik`.
 2. Run the fork host tests, patch-surface check, and Docker build.
 3. Merge app repo deploy/docs changes to `mister-slint/main`.
 4. Deploy from `mister-slint` with the fork checkout available at
-   `../mister-main-magik` or `MISTER_MAIN_DIR`.
+   `../Main_MiSTer` or `MISTER_MAIN_DIR`.
 5. Record device smoke results in the fork `MAGIK_PATCHSET.md`.
 
 ## Historical Notes
