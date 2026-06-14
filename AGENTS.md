@@ -267,6 +267,11 @@ scripts/mister wait
 scripts/bench-toolchain.sh A0 --clean --replace-label
 ```
 
+Library scan benchmarks include a cached no-change manifest check by default.
+Set `MISTER_LIBRARY_BENCH_CHANGED_REFRESH=1` only on disposable roots when you
+need changed-refresh timings; it creates a synthetic candidate file under the
+first configured library root before measuring the rebuild path.
+
 `bench-toolchain.sh` keeps the historical TSV schema, but new rows append
 display metadata to `notes`: `ini_mode`, `physical_mode`, `fb_size`,
 `render_size`, `fb_scale`, `pixel_repetition`, and `uio_fb`.
