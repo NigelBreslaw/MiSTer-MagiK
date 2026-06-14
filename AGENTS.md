@@ -335,6 +335,11 @@ MiSTer turbo-scroll + fade measurements: separate files loaded previews in
 one-placeholder behavior and vsync-bound frame pacing. The raw pack is large
 (~147.7MB for the hybrid 320x320 cache); the LZ4 archive stays small (~19.4MB)
 and measured ~1.6ms per preview in the same real-app path.
+The library scanner must not read `gamelist.xml`, walk screenshot/cache media
+directories, or probe normal PNG/JPG screenshot files for preview metadata.
+Preview availability comes from the compressed preview archive index plus MRA
+`<setname>` virtual keys. See
+`history/2026-6-14/library-scanner-preview-archive-pruning.md`.
 Classic full-screen camera/background effect experiments live in
 `ui camera-effects`; list labels with `mister-magik-fb camera-effects`, browse
 interactively with `scripts/run-rust.sh camera-effects 0`, and benchmark with
