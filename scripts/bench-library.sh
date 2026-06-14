@@ -8,8 +8,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
-BUILD_PROFILE=release
-BUILD_FLAG=()
+BUILD_PROFILE=release-device
+BUILD_FLAG=(--device)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_SQLITE="/media/fat/mister-magik/library-scan-bench.sqlite3"
 BENCH_DIR="$HERE/history/toolchain-bench"
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
     --clean) DO_CLEAN=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
-    --device) BUILD_PROFILE=release-device; BUILD_FLAG=(--device); shift ;;
+    --device) BUILD_PROFILE=release-device; shift ;;
     --iterations) ITERATIONS="${2:?}"; shift 2 ;;
     --post-reboot) POST_REBOOT=1; shift ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;

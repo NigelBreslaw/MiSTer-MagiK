@@ -2,16 +2,14 @@
 # Cross-build the Rust frontend and deploy the binary to the MiSTer.
 #
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
-#   MISTER_IP=... scripts/deploy-rust.sh --fast    # thin LTO, quicker build
-#   MISTER_IP=... scripts/deploy-rust.sh --fast-dev
 #   MISTER_IP=... scripts/deploy-rust.sh --opt2
 #   MISTER_IP=... scripts/deploy-rust.sh --opts
 #   MISTER_IP=... scripts/deploy-rust.sh --incr
-#   MISTER_IP=... scripts/deploy-rust.sh --fast --all-scenes
-#   MISTER_IP=... scripts/deploy-rust.sh --fast --ui-scope arcade
-#   MISTER_IP=... scripts/deploy-rust.sh --fast --video
+#   MISTER_IP=... scripts/deploy-rust.sh --all-scenes
+#   MISTER_IP=... scripts/deploy-rust.sh --ui-scope arcade
+#   MISTER_IP=... scripts/deploy-rust.sh --video
 #
-# Default installs the release-device (A3) binary — use --fast for daily iteration.
+# Default installs the release-device (A3) binary.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR="/media/fat/mister-magik"
@@ -37,8 +35,6 @@ ARGS=("$@")
 for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
-    --fast) PROFILE=release; BUILD_FLAG=(--fast) ;;
-    --fast-dev) PROFILE=release-fast-dev; BUILD_FLAG=(--fast-dev) ;;
     --opt2) PROFILE=release-opt2; BUILD_FLAG=(--opt2) ;;
     --opts) PROFILE=release-opts; BUILD_FLAG=(--opts) ;;
     --incr) PROFILE=release-incr; BUILD_FLAG=(--incr) ;;
@@ -55,8 +51,12 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BUILD_FLAG+=(--ui-scope "${ARGS[$i]}")
       ;;
     -h|--help)
-      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      exit 2
       ;;
   esac
 done

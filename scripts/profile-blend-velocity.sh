@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-blend-velocity.sh [SECS] [LABEL] [VARIANT] [--skip-build|--deploy-fast|--deploy-device]
+Usage: scripts/profile-blend-velocity.sh [SECS] [LABEL] [VARIANT] [--skip-build|--deploy-device]
 
 Runs `ui blend_velocity` with `MISTER_BLEND_BENCH_TRACE`, pulls the raw TSV/log,
 then prints split phase timing summaries.
@@ -36,7 +36,6 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
-    --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -92,7 +91,6 @@ local_tsv="$OUT_DIR/${label}-blend-velocity.tsv"
 local_log="$OUT_DIR/${label}-blend-velocity.log"
 
 case "$deploy" in
-  fast) "$HERE/scripts/deploy-rust.sh" --fast ;;
   device) "$HERE/scripts/deploy-rust.sh" --device ;;
   skip) ;;
 esac

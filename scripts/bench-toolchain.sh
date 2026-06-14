@@ -9,10 +9,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
-BUILD_PROFILE=release
+BUILD_PROFILE=release-device
 # Toolchain benchmarks need the Slint bench scene set even though ordinary UI
 # builds now omit it for faster local iteration.
-BUILD_FLAG=(--all-scenes)
+BUILD_FLAG=(--device --all-scenes)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
@@ -55,7 +55,7 @@ usage() {
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
   echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
-  echo "         --device (build profile release-device / A3)  --video  --scene NAME  -h"
+  echo "         --device (default; build profile release-device / A3)  --video  --scene NAME  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
   echo "         --launcher-scenario idle|home-nav|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|model-sync|preview-changes"
@@ -77,7 +77,7 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-device) SKIP_DEVICE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
-    --device) BUILD_PROFILE=release-device; BUILD_FLAG+=(--device); shift ;;
+    --device) BUILD_PROFILE=release-device; shift ;;
     --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
     --scene)
       SCENE_FILTER=1

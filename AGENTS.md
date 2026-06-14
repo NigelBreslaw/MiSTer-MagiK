@@ -187,8 +187,8 @@ magik-gui/                   native armv7 frontend — see §12
   src/launcher.rs       nav state machine + launch_mra
   src/fpga.rs           SPI + fb_enable_direct + set_vga_fb
   src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy, boot retry
-  build-arm.sh          cross build (--fast | --device); see magik-gui/BUILD.md
-  BUILD.md              release vs release-device profiles
+  build-arm.sh          cross build (release-device default); see magik-gui/BUILD.md
+  BUILD.md              ARM build profiles
 main-mister/            buildable Main_MiSTer fork experiments — see docs/main-mister-fork.md
   build-docker.sh       Dockerized Main build with ARM GCC 10.2
 ```
@@ -206,11 +206,8 @@ The wrapper and workflow scripts default to `MISTER_IP=192.168.1.117` and
 intentionally targeting a different MiSTer.
 
 ```bash
-# Build + deploy (default = release-device / A3, ~1.6 MB)
+# Build + deploy (default = release-device / A3, ~5.6 MiB)
 scripts/deploy-rust.sh
-
-# Fast daily build + deploy (thin LTO, ~3 min clean)
-scripts/deploy-rust.sh --fast
 
 # Build only: magik-gui/build-arm.sh  |  magik-gui/build-arm.sh --device
 # Profiles: magik-gui/BUILD.md
@@ -226,7 +223,7 @@ cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warning
 scripts/install-slint-boot.sh
 
 # Re-deploy binary + fork after code changes
-scripts/deploy-rust.sh --fast
+scripts/deploy-rust.sh
 
 # Restart the already-deployed Rust UI with no build/copy
 scripts/run-rust.sh arcade 0
@@ -284,7 +281,7 @@ otherwise-approved device commands look like new, unapproved commands. To avoid
 the common "Operation not permitted, rerunning with approval" loop:
 
 - Prefer direct commands such as `scripts/mister ...`,
-  `scripts/deploy-rust.sh --fast`, and `scripts/bench-toolchain.sh ...`.
+  `scripts/deploy-rust.sh`, and `scripts/bench-toolchain.sh ...`.
 - When device/network work is required, request escalation on the direct workflow
   command the first time, with a scoped prefix like `scripts/mister`,
   `scripts/deploy-rust.sh`, `scripts/deploy-main-mister-experiment.sh`, or
@@ -312,7 +309,7 @@ held-scroll check measured RGB565 at p95 17.1 ms with 1 frame >20 ms while 8888
 measured p95 28.7 ms with 150 frames >20 ms over the same 10 s run.
 Screenshot transitions live on the real `ui arcade` surface. Default preview
 changes use `fade`; use `scripts/profile-preview-transition-mega.sh LABEL
---deploy-fast` to run every raw-preview transition and summarize the trace by
+--deploy-device` to run every raw-preview transition and summarize the trace by
 `transition_effect`. Add new transition experiments as additional
 `MISTER_PREVIEW_TRANSITION` names instead of replacing existing effects. For
 visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
@@ -470,7 +467,7 @@ MiSTer briefly, sends `load_core` via fifo, shows loading overlay until core run
 device deploys it as `/media/fat/MiSTer_MagiK` and selects it through
 `[MiSTer] main=MiSTer_MagiK`, while `magik-gui/` stays the separate Slint binary
 project.
-Use `scripts/deploy-main-mister-experiment.sh --fast` to build/deploy both.
+Use `scripts/deploy-main-mister-experiment.sh` to build/deploy both.
 
 Current intended flow (2026-06-06): `/etc/inittab` starts stock
 `/media/fat/MiSTer`; `MiSTer.ini main=MiSTer_MagiK` hands off to the fork; the
@@ -844,8 +841,7 @@ Apple-Silicon host runs on the MiSTer (`arch=arm, os=linux, glibc 2.31`).
 
 ```bash
 scripts/deploy-rust.sh                   # release-device (full MiSTer build)
-scripts/deploy-rust.sh --fast            # release (faster compile)
-scripts/deploy-rust.sh --fast --video    # includes minimal static FFmpeg + video asset
+scripts/deploy-rust.sh --video           # includes minimal static FFmpeg + video asset
 # or manually:
 magik-gui/build-arm.sh --device
 magik-gui/build-arm.sh --device --video
@@ -862,7 +858,7 @@ that touches Rust code or CI, also run strict Clippy for both Rust crates:
 --all-targets -- -D warnings`. These checks run the host-testable Rust library
 with `--no-default-features`, so pure logic tests do not compile the Slint UI
 binary or macOS AppKit code. Use `scripts/dev-rust build-ui` or
-`magik-gui/build-arm.sh --fast` when you need the ARM Slint binary.
+`magik-gui/build-arm.sh` when you need the ARM Slint binary.
 
 Every `magik-gui/build-arm.sh` run prints the binary size and appends a local,
 gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the
@@ -870,7 +866,7 @@ formal benchmark/size history in `history/toolchain-bench/results.tsv` via
 `scripts/bench-toolchain.sh`.
 
 GitHub Actions CI lives in `.github/workflows/rust-arm.yml`. It builds
-`--fast`, `--device`, `--fast --video`, and `--device --video`, uploads the ARM
+`--device` and `--device --video`, uploads the ARM
 binaries and size TSVs, and runs `magik-gui/scripts/check-arm-shared-libs.sh` so
 video builds fail if FFmpeg becomes a runtime `libav*` dependency.
 

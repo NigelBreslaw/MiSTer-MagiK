@@ -1,18 +1,16 @@
 # Cross-build profiles (`mister-magik-fb`)
 
-Two **release** profiles separate quick iteration compiles from the binary we ship to the MiSTer.
+`release-device` is the normal MiSTer build. The old thin-LTO fast deploy path was removed because the build-time win was too small to justify a second deployable binary.
 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
-| **`release`** | `build-arm.sh` or `--fast` | thin (`lto = "thin"`) | 16 (default) | cortex-a9 | ~25s Rust edit loop | ~5.7 MB | Daily launcher iteration, quick deploy |
-| **`release-fast-dev`** | `build-arm.sh --fast-dev` | off | 64 | cortex-a9 | ~10s Rust edit loop | ~10.7 MB | Fastest local Rust edit loop |
 | **`release-incr`** | `build-arm.sh --incr` | thin | 16 (default) | cortex-a9 | ~18s Rust edit loop | ~5.6 MB | Faster local optimized edit loop |
 | **`release-opt2`** | `build-arm.sh --opt2` | thin | 16 (default) | cortex-a9 | ~25s Rust edit loop | ~5.2 MB | Smaller local optimized smoke binary |
 | **`release-opts`** | `build-arm.sh --opts` | thin | 16 (default) | cortex-a9 | ~24s Rust edit loop | ~4.2 MB | Smallest local optimized smoke binary |
-| **`release-device`** | `build-arm.sh --device` | fat | 1 | cortex-a9 | ~5 min | ~1.61 MB | SD card / bench / production |
+| **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 | ~4 min | ~5.6 MB | SD card / bench / production |
 | **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
-Benchmark labels: **A0** ≈ `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
+Historical benchmark labels: **A0** ≈ old thin-LTO `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
 
 ## Daily host checks
 
@@ -31,7 +29,7 @@ scripts/dev-rust check-ui            # alias: ARM launcher/controller UI check
 scripts/dev-rust check-arm-ui-full   # ARM all-scenes UI check
 scripts/dev-rust check-ui-full       # alias: ARM all-scenes UI check
 scripts/dev-rust build-arm-debug     # ARM launcher/controller debug binary
-scripts/dev-rust build-ui  # magik-gui/build-arm.sh --fast
+scripts/dev-rust build-ui  # magik-gui/build-arm.sh
 ```
 
 The host-testable library contains pure catalog/controller/repeat logic. The
@@ -69,8 +67,8 @@ scripts/dev-rust check-ui
 scripts/dev-rust check-ui-full
 
 # Only when a device binary is needed.
+magik-gui/build-arm.sh            # release-device
 magik-gui/build-arm.sh --incr     # optimized, faster edit-loop deploy
-magik-gui/build-arm.sh --fast-dev # fastest Rust edit-loop deploy, larger binary
 ```
 
 Measured check-loop anchors from
@@ -118,16 +116,12 @@ changes, and summarize failed experiment branches rather than merging them.
 ## Commands
 
 ```bash
-# Fast — default for bare build-arm.sh, still Cortex-A9 tuned.
-# Builds launcher-scoped Slint by default for local iteration.
+# Full MiSTer release (fat LTO + Cortex-A9)
 magik-gui/build-arm.sh
-# → target/armv7-unknown-linux-gnueabihf/release/mister-magik-fb
+# → target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
-# Fast but compile every Slint benchmark scene (adds feature `bench-scenes`).
-magik-gui/build-arm.sh --fast --all-scenes
-
-# Experimental local profile: no LTO, high CGUs, incremental.
-magik-gui/build-arm.sh --fast-dev
+# Compile every Slint benchmark scene (adds feature `bench-scenes`).
+magik-gui/build-arm.sh --all-scenes
 
 # Local optimized profile with incremental reuse.
 magik-gui/build-arm.sh --incr
@@ -142,7 +136,7 @@ magik-gui/build-arm.sh --opts
 # linux/aarch64 Rust host toolchain, armv7 target.
 magik-gui/build-arm64-docker.sh --opts
 
-# Full MiSTer release (fat LTO + Cortex-A9)
+# Explicit spelling for the same release-device build.
 magik-gui/build-arm.sh --device
 # → target/.../release-device/mister-magik-fb
 
@@ -152,7 +146,7 @@ magik-gui/build-arm.sh --profile
 # Run on device: scripts/cpu-flamegraph-scene.sh full_motion 10 FM-CPU
 
 # Video/audio benchmark build
-magik-gui/build-arm.sh --fast --video
+magik-gui/build-arm.sh --video
 # Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
 # Video builds force all-scenes UI scope because video_playback.slint is a bench scene.
 # Default media path on MiSTer: /media/fat/mister-magik/mslug3.mov
@@ -160,11 +154,8 @@ magik-gui/build-arm.sh --fast --video
 # Deploy (default = release-device)
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
-# Deploy after a fast build (same path on device, thin LTO + Cortex-A9)
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast
-
-# Deploy a fast build with every Slint scene included.
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --fast --all-scenes
+# Deploy with every Slint scene included.
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --all-scenes
 ```
 
 Every `build-arm.sh` run prints the binary size and appends a local row to
@@ -223,7 +214,7 @@ H.264 decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
 `/dev/MrAudio`, so AAC and swresample stay out of V1. avfilter, avdevice,
 programs, and autodetected libraries are disabled.
 
-`scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release`**. Current release builds are Cortex-A9 tuned; older A0 history used the same profile shape before that fast-path tuning was added.
+`scripts/bench-toolchain.sh` calls `build-arm.sh` with no flags → **`release-device`**. Older A0 history used the removed thin-LTO fast path.
 
 ## CI
 
@@ -231,9 +222,7 @@ GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
 
 The matrix covers the local build modes that matter:
 
-- `magik-gui/build-arm.sh --fast`
 - `magik-gui/build-arm.sh --device`
-- `magik-gui/build-arm.sh --fast --video`
 - `magik-gui/build-arm.sh --device --all-scenes --video`
 
 Each job installs pinned `cross` 0.2.5, uses `magik-gui/Dockerfile.cross-armv7` via

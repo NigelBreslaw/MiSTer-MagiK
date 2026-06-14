@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--segment-secs N] [--transition-ms N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
+Usage: scripts/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-device] [--segment-secs N] [--transition-ms N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
 
 Runs the real `ui arcade` surface with `MISTER_PREVIEW_TRANSITION=mega`.
 Each effect gets --segment-secs seconds of held-scroll, then the trace is
@@ -26,7 +26,6 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="--skip-build"; shift ;;
-    --deploy-fast) deploy="--deploy-fast"; shift ;;
     --deploy-device) deploy="--deploy-device"; shift ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
     --transition-ms) transition_ms="${2:-}"; shift 2 ;;

@@ -75,7 +75,7 @@ The fade target is the same constant arcade/list background color used by the
 real renderer, not pure black.
 
 ```bash
-scripts/profile-blend-velocity.sh 15 BLENDVEL baseline --deploy-fast
+scripts/profile-blend-velocity.sh 15 BLENDVEL baseline --deploy-device
 scripts/profile-blend-velocity.sh 15 BLENDVEL-TEXT real-text --skip-build
 scripts/profile-blend-velocity.sh 15 BLENDVEL-COPY copy-only --skip-build
 scripts/profile-blend-velocity.sh 15 BLENDVEL-NOFADE no-fade --skip-build

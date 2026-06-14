@@ -25,10 +25,9 @@ Options:
   --scenario NAME   all | arm-check-lib | arm-check-launcher | arm-check-arcade |
                     arm-check-launcher-sccache |
                     arm-check-full | arm-build-launcher | arm-build-arcade |
-                    arm-build-full | build-ui-fast | build-ui-fast-dev |
+                    arm-build-full |
                     build-ui-opt2 | build-ui-opts | build-ui-incr |
                     build-ui-opts-sccache |
-                    build-ui-fast-launcher | build-ui-fast-arcade |
                     build-ui-device
   --state NAME      noop-warm | touch-rust-bin | touch-rust-lib |
                     touch-rust-catalog | touch-rust-core |
@@ -128,14 +127,10 @@ command_spec() {
     arm-build-launcher) echo "scripts/dev-rust build-arm-debug" ;;
     arm-build-arcade) echo "scripts/dev-rust build-arm-arcade-debug" ;;
     arm-build-full) echo "scripts/dev-rust build-arm-debug-full" ;;
-    build-ui-fast) echo "magik-gui/build-arm.sh --fast" ;;
-    build-ui-fast-dev) echo "magik-gui/build-arm.sh --fast-dev" ;;
     build-ui-opt2) echo "magik-gui/build-arm.sh --opt2" ;;
     build-ui-opts) echo "magik-gui/build-arm.sh --opts" ;;
     build-ui-opts-sccache) echo "cd magik-gui && CROSS_CONFIG=Cross.sccache.toml DOCKER_DEFAULT_PLATFORM=linux/amd64 MISTER_UI_BUILD_SCOPE=launcher SCCACHE_DIR=/target/sccache SCCACHE_IDLE_TIMEOUT=0 RUSTFLAGS='-C target-cpu=cortex-a9 -C target-feature=+neon' cross build --target armv7-unknown-linux-gnueabihf --profile release-opts --features ui --timings --locked" ;;
     build-ui-incr) echo "magik-gui/build-arm.sh --incr" ;;
-    build-ui-fast-launcher) echo "MISTER_UI_BUILD_SCOPE=launcher magik-gui/build-arm.sh --fast" ;;
-    build-ui-fast-arcade) echo "MISTER_UI_BUILD_SCOPE=arcade magik-gui/build-arm.sh --fast" ;;
     build-ui-device) echo "magik-gui/build-arm.sh --device" ;;
     *) return 1 ;;
   esac
@@ -150,16 +145,14 @@ scenario_commands() {
         arm-check-arcade \
         arm-check-full \
         arm-build-launcher \
-        build-ui-fast \
-        build-ui-fast-dev \
         build-ui-opt2 \
         build-ui-opts \
         build-ui-incr \
-        build-ui-fast-launcher
+        build-ui-device
       ;;
     arm-check-lib|arm-check-launcher|arm-check-launcher-sccache|arm-check-arcade|arm-check-full|\
-    arm-build-launcher|arm-build-arcade|arm-build-full|build-ui-fast|\
-    build-ui-fast-dev|build-ui-opt2|build-ui-opts|build-ui-opts-sccache|build-ui-incr|build-ui-fast-launcher|build-ui-fast-arcade|build-ui-device)
+    arm-build-launcher|arm-build-arcade|arm-build-full|\
+    build-ui-opt2|build-ui-opts|build-ui-opts-sccache|build-ui-incr|build-ui-device)
       printf '%s\n' "$scenario"
       ;;
     *)
@@ -312,11 +305,9 @@ binary_size_for_command() {
   local profile=""
   case "$cmd" in
     build-ui-device) profile="release-device" ;;
-    build-ui-fast-dev) profile="release-fast-dev" ;;
     build-ui-opt2) profile="release-opt2" ;;
     build-ui-opts|build-ui-opts-sccache) profile="release-opts" ;;
     build-ui-incr) profile="release-incr" ;;
-    build-ui-fast|build-ui-fast-launcher|build-ui-fast-arcade) profile="release" ;;
     *) profile="debug" ;;
   esac
 

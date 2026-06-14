@@ -46,8 +46,7 @@ slint = { git = "https://github.com/slint-ui/slint", branch = "master" }
 slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
 
 [profile.release]
-# Daily dev / quick deploy: thin LTO, parallel codegen, Cortex-A9 via build-arm.sh.
-# See magik-gui/BUILD.md and `build-arm.sh --fast`.
+# Base optimized Cargo profile. MiSTer builds use release-device by default.
 opt-level = 3
 lto = "thin"
 strip = true
@@ -59,15 +58,6 @@ panic = "abort"
 inherits = "release"
 lto = "fat"
 codegen-units = 1
-
-[profile.release-fast-dev]
-# Local-only deployable iteration profile: keep ARM tuning from build-arm.sh but
-# avoid LTO/strip work and favor parallel codegen/incremental rebuilds.
-inherits = "release"
-lto = false
-codegen-units = 64
-strip = false
-incremental = true
 
 [profile.release-opt2]
 inherits = "release"

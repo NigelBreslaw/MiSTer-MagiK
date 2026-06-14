@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [SECS] [LABEL] [--skip-build|--deploy-fast|--deploy-device]
+Usage: scripts/profile-arcade-scroll.sh [SECS] [LABEL] [--skip-build|--deploy-device]
 
 Runs `ui arcade` with `MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll` and
 `MISTER_PREVIEW_SCROLL_TRACE`, pulls the raw TSV/log, then prints frame timing
@@ -30,7 +30,6 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
-    --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -68,7 +67,6 @@ local_tsv="$OUT_DIR/${label}-arcade-scroll.tsv"
 local_log="$OUT_DIR/${label}-arcade-scroll.log"
 
 case "$deploy" in
-  fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
   skip) : ;;
 esac

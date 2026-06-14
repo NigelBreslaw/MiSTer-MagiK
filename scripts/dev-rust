@@ -25,7 +25,7 @@ Commands:
   build-arm-debug       Cross-build launcher/controller ARM debug binary
   build-arm-arcade-debug Cross-build launcher-backed arcade ARM debug binary
   build-arm-debug-full  Cross-build all-scene ARM debug binary
-  build-ui  Build the ARM Slint binary via magik-gui/build-arm.sh --fast
+  build-ui  Build the optimized ARM Slint binary via magik-gui/build-arm.sh
 EOF
 }
 
@@ -133,7 +133,7 @@ case "$cmd" in
       --locked
     ;;
   build-ui)
-    "$RUST_DIR/build-arm.sh" --fast
+    "$RUST_DIR/build-arm.sh"
     ;;
   -h|--help|help|"")
     usage
