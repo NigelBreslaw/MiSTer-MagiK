@@ -777,7 +777,9 @@ fn refresh_sqlite_database(
         }
         let current_manifest = validate_or_rebuild_directory_manifest(&cfg.roots, &existing);
         let scan_us = scan_t.elapsed().as_micros() as u64;
-        if current_manifest == Some(existing.directory_manifest.clone()) {
+        if current_manifest == Some(existing.directory_manifest.clone())
+            && preview_archive_fingerprint_unchanged(&existing)
+        {
             if let Some(report) = progress.as_mut() {
                 report(
                     "Library unchanged",
@@ -1047,6 +1049,10 @@ fn scan_library_with_progress(
             Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
     }
+    if let Ok(Some((path, size, mtime_secs))) = preview_worker::preview_archive_fingerprint_from_env()
+    {
+        file_fingerprints.insert(path, (size, mtime_secs));
+    }
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
     }
@@ -1121,6 +1127,38 @@ fn validate_or_rebuild_directory_manifest(
     } else {
         Some(DirectoryManifest::new())
     }
+}
+
+fn preview_archive_fingerprint_unchanged(existing: &DbFingerprint) -> bool {
+    match preview_worker::preview_archive_fingerprint_from_env() {
+        Ok(current) => preview_archive_fingerprint_matches(existing, current),
+        Err(_) => false,
+    }
+}
+
+fn preview_archive_fingerprint_matches(
+    existing: &DbFingerprint,
+    current: Option<(String, u64, i64)>,
+) -> bool {
+    match current {
+        Some((path, size, mtime_secs)) => existing
+            .file_fingerprints
+            .get(&path)
+            .is_some_and(|fingerprint| *fingerprint == (size, mtime_secs)),
+        None => !existing
+            .file_fingerprints
+            .keys()
+            .any(|path| is_preview_archive_fingerprint_path(path)),
+    }
+}
+
+fn is_preview_archive_fingerprint_path(path: &str) -> bool {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name.starts_with("raw565-") && (name.ends_with(".mmraw") || name.ends_with(".mmlz4b"))
 }
 
 fn directory_manifest_metadata_changed(existing: &DirectoryManifest) -> bool {
@@ -3570,6 +3608,45 @@ mod tests {
     }
 
     #[test]
+    fn preview_archive_paths_are_recognized_as_fingerprint_inputs() {
+        assert!(is_preview_archive_fingerprint_path(
+            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw"
+        ));
+        assert!(is_preview_archive_fingerprint_path(
+            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-lz4block-12.mmlz4b"
+        ));
+        assert!(!is_preview_archive_fingerprint_path(
+            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320/mpatrol.rgb565"
+        ));
+    }
+
+    #[test]
+    fn preview_archive_added_after_old_database_forces_catalog_refresh() {
+        let fingerprint = fingerprint_with_files(&[]);
+
+        assert!(!preview_archive_fingerprint_matches(
+            &fingerprint,
+            Some((
+                "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw"
+                    .to_string(),
+                1024,
+                42,
+            )),
+        ));
+    }
+
+    #[test]
+    fn matching_preview_archive_fingerprint_allows_catalog_refresh_skip() {
+        let path = "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw";
+        let fingerprint = fingerprint_with_files(&[(path, 1024, 42)]);
+
+        assert!(preview_archive_fingerprint_matches(
+            &fingerprint,
+            Some((path.to_string(), 1024, 42)),
+        ));
+    }
+
+    #[test]
     fn directory_manifest_metadata_check_detects_missing_directory() {
         let root = unique_temp_dir("manifest-metadata-missing");
         let rom_dir = root.join("games/NES");
@@ -3943,5 +4020,14 @@ mod tests {
             container_fingerprints: BTreeMap::new(),
             directory_manifest,
         }
+    }
+
+    fn fingerprint_with_files(files: &[(&str, u64, i64)]) -> DbFingerprint {
+        let mut fingerprint = fingerprint_with_manifest(DirectoryManifest::new());
+        fingerprint.file_fingerprints = files
+            .iter()
+            .map(|(path, size, mtime_secs)| (path.to_string(), (*size, *mtime_secs)))
+            .collect();
+        fingerprint
     }
 }

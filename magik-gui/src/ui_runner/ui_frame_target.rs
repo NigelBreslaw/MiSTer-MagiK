@@ -2038,6 +2038,17 @@ pub(super) fn copy_arcade_list_update(
     }
 }
 
+pub(super) fn arcade_list_needs_forced_redraw(
+    slint_dirty: Option<DirtyRect>,
+    full_frame_present: bool,
+) -> bool {
+    full_frame_present
+        || slint_dirty.is_some_and(|rect| {
+            rect.intersection(ArcadeListRenderer::dirty_rect())
+                .is_some()
+        })
+}
+
 #[cfg(mister_bench_scenes)]
 pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
     FrameRect {
@@ -2058,6 +2069,30 @@ pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcade_list_overlay_redraws_when_full_frame_present_overwrites_stationary_text() {
+        assert!(arcade_list_needs_forced_redraw(None, true));
+    }
+
+    #[test]
+    fn arcade_list_overlay_redraws_when_slint_dirty_touches_list() {
+        let rect = ArcadeListRenderer::dirty_rect();
+
+        assert!(arcade_list_needs_forced_redraw(Some(rect), false));
+    }
+
+    #[test]
+    fn arcade_list_overlay_stays_idle_for_unrelated_slint_dirty_rect() {
+        let rect = DirtyRect {
+            x0: ARCADE_LIST_X + ARCADE_LIST_W + 1,
+            y0: ARCADE_LIST_Y,
+            x1: ARCADE_LIST_X + ARCADE_LIST_W + 20,
+            y1: ARCADE_LIST_Y + 20,
+        };
+
+        assert!(!arcade_list_needs_forced_redraw(Some(rect), false));
+    }
 
     #[test]
     fn empty_raw_preview_blit_clears_preview_screen() {
