@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 8888|565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 565|8888] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs the real launcher-backed arcade screen:
@@ -18,7 +18,8 @@ with MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
 
 --list-only disables screenshot loading and the real launcher's catalog refresh
 worker so list-renderer changes can be measured without preview/catalog noise.
---fb-format selects the framebuffer format passed to the UI.
+--fb-format selects the framebuffer format passed to the UI. 565 is production;
+8888 is diagnostic-only for framebuffer/color-route A/B runs.
 Previews are raw565-only and rendered by the Rust post-render blitter.
 --transition selects raw-preview screenshot transitions. Default is fade; `cut`
 disables animation; `mega` cycles all effects. --transition-segment-secs controls
@@ -114,6 +115,9 @@ if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ 
 case "$preview_format" in ""|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be raw-rgb565" >&2; exit 2 ;; esac
 if [[ -n "$preview_archive" && ! "$preview_archive" =~ ^[A-Za-z0-9_./:-]+$ ]]; then echo "--preview-archive contains unsupported characters" >&2; exit 2; fi
 case "$fb_format" in 8888|565) ;; *) echo "--fb-format must be 8888 or 565" >&2; exit 2 ;; esac
+if [[ "$fb_format" == "8888" ]]; then
+  echo "warning: --fb-format 8888 is diagnostic-only; production arcade scrolling uses 565" >&2
+fi
 if [[ -n "$transition" && ! "$transition" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--transition must be a comma-separated transition label list or mega" >&2; exit 2; fi
 if [[ -n "$transition_segment_secs" && ! "$transition_segment_secs" =~ ^[0-9]+$ ]]; then echo "--transition-segment-secs must be an integer" >&2; exit 2; fi
 if [[ -n "$transition_ms" && ! "$transition_ms" =~ ^[0-9]+$ ]]; then echo "--transition-ms must be an integer" >&2; exit 2; fi

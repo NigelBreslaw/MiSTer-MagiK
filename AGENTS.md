@@ -306,6 +306,10 @@ Do not reintroduce the old live-framebuffer arcade scroll-present path
 (`MISTER_ARCADE_SCROLL_PRESENT` / `--scroll-present`): a 2026-06-11 MiSTer A/B
 showed it roughly doubled framebuffer present cost versus the normal cached-RAM
 full-list copy. See `history/2026-6-8/arcade-band-copy-trial.md`.
+Use RGB565 for production arcade performance conclusions. `MISTER_FB_FORMAT=8888`
+is retained for diagnostic framebuffer/color-route A/B runs, but a 2026-06-14
+held-scroll check measured RGB565 at p95 17.1 ms with 1 frame >20 ms while 8888
+measured p95 28.7 ms with 150 frames >20 ms over the same 10 s run.
 Screenshot transitions live on the real `ui arcade` surface. Default preview
 changes use `fade`; use `scripts/profile-preview-transition-mega.sh LABEL
 --deploy-fast` to run every raw-preview transition and summarize the trace by

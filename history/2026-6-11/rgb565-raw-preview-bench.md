@@ -50,8 +50,10 @@ Findings:
   Raw mode reduced Slint p95 by an order of magnitude in both scenarios and cut
   >20 ms frames from 3 to 1.
 - After this pass, normal launcher defaults were changed to RGB565 framebuffer
-  plus raw preview blitter. Use `MISTER_FB_FORMAT=8888` and
-  `MISTER_PREVIEW_BLITTER=slint` to force the old path.
+  plus raw previews. Use `MISTER_FB_FORMAT=8888` only for diagnostic
+  framebuffer/color-route A/B runs.
+- Keep 8888 support for smoke tests until the boot/fallback path is fully
+  settled.
 
 Artifacts:
 
@@ -59,6 +61,20 @@ Artifacts:
 - `build/preview-scroll-profiles/RGB565-AFTER-565-20260611-*`
 - `build/preview-scroll-profiles/RGB565-RAW-565-20260611-*`
 - `build/rgb565-smoke-scaled-snapshot/fb0.png`
+
+## 8888 diagnostic policy check - 2026-06-14
+
+Current held-scroll, raw565 previews, same deployed build after the launcher
+catalog projection:
+
+| Format | Frames | Avg wall | P95 wall | Slow >16.7 ms | Slow >20 ms |
+|---|---:|---:|---:|---:|---:|
+| 565 | 590 | 16.642 ms | 17.082 ms | 80 | 1 |
+| 8888 | 530 | 18.552 ms | 28.703 ms | 202 | 150 |
+
+The 8888 override is retained for diagnostics, but production/default arcade
+profiling should use RGB565 unless a later architecture removes the extra
+presentation cost.
 
 ## Native raw RGB565 preview cache follow-up
 

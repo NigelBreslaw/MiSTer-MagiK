@@ -265,6 +265,13 @@ pub fn run_ui(f: &mut Fpga) {
         "ui-fb-mode=temporary {UI_FB_W}x{UI_FB_H} format={} fpga-scale=1920x1080 restore=on-drop",
         fb_format.label()
     );
+    if fb_format.is_diagnostic_override() {
+        println!(
+            "ui-fb-format-diagnostic={} production_default={}",
+            fb_format.label(),
+            FramebufferFormat::production_default().label()
+        );
+    }
     let _fb_mode_guard = match FbModeGuard::set_temporary_format(UI_FB_W, UI_FB_H, fb_format) {
         Ok(guard) => guard,
         Err(e) => {
