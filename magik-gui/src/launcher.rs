@@ -126,6 +126,12 @@ struct ArcadeScrollState {
     turbo_active: bool,
 }
 
+impl Default for ArcadeNav {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArcadeNav {
     pub fn new() -> Self {
         Self {
@@ -326,6 +332,12 @@ pub struct LauncherNav {
     pub arcade: ArcadeNav,
     repeat: RepeatNav,
     prev: PadState,
+}
+
+impl Default for LauncherNav {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LauncherNav {

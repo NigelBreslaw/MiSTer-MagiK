@@ -1,4 +1,5 @@
 //! Host-testable classic arcade screen transition effects.
+#![allow(clippy::too_many_arguments)]
 
 use std::time::Instant;
 
@@ -645,8 +646,7 @@ fn draw_radial_spokes(
         for x in (0..w).step_by(4) {
             let dx = x as i32 + 2 - cx;
             let dy = y as i32 + 2 - cy;
-            let spoke =
-                ((dy.abs() * 7 + dx.abs() * 5 + if dx ^ dy < 0 { 8 } else { 0 }) & 15) as i32;
+            let spoke = (dy.abs() * 7 + dx.abs() * 5 + if dx ^ dy < 0 { 8 } else { 0 }) & 15;
             let reveal = spoke <= threshold;
             let px = block_pick(a, b, w, x, y, reveal);
             fill_block(dst, w, h, x, y, 4, 4, px);
@@ -780,8 +780,8 @@ fn draw_tunnel_zoom(
     let zoom = 40 + (frame as usize % 120) * 2;
     for y in (0..h).step_by(8) {
         for x in (0..w).step_by(8) {
-            let dx = (x as i32 + 2 - cx).abs() as usize;
-            let dy = (y as i32 + 2 - cy).abs() as usize;
+            let dx = (x as i32 + 2 - cx).unsigned_abs() as usize;
+            let dy = (y as i32 + 2 - cy).unsigned_abs() as usize;
             let dist = dx + dy + 1;
             let sx = (x + zoom * 320 / dist) % w.max(1);
             let sy = (y + zoom * 180 / dist) % h.max(1);

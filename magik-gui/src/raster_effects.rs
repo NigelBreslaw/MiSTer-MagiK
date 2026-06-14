@@ -1,4 +1,5 @@
 //! Host-testable classic arcade raster and palette effects.
+#![allow(clippy::too_many_arguments)]
 
 use std::time::Instant;
 
@@ -395,7 +396,7 @@ fn draw_palette_gradient_sky(
         let sky = y as u32 * 255 / h.max(1) as u32;
         let warm = (80i32 - (y as i32 - sun_y).abs()).max(0) as u8;
         let c = color(
-            (20 + warm).min(255),
+            20 + warm,
             (28 + sky / 4 + warm as u32 / 3).min(255) as u8,
             (90 + sky / 2).min(255) as u8,
         );

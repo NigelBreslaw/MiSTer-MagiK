@@ -219,6 +219,8 @@ scripts/deploy-rust.sh --fast
 scripts/dev-rust fmt
 scripts/dev-rust test
 scripts/dev-rust check
+cargo clippy --manifest-path magik-gui/Cargo.toml --lib --no-default-features -- -D warnings
+cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
 
 # One-time: boot into MiSTer_MagiK through stock MiSTer main= handoff
 scripts/install-slint-boot.sh
@@ -849,10 +851,14 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister \
 ```
 
 **Host dev checks:** use `scripts/dev-rust fmt`, `scripts/dev-rust test`, and
-`scripts/dev-rust check` for routine local validation. These run the
-host-testable Rust library with `--no-default-features`, so pure logic tests do
-not compile the Slint UI binary or macOS AppKit code. Use `scripts/dev-rust
-build-ui` or `magik-gui/build-arm.sh --fast` when you need the ARM Slint binary.
+`scripts/dev-rust check` for routine local validation. Before making any commit
+that touches Rust code or CI, also run strict Clippy for both Rust crates:
+`cargo clippy --manifest-path magik-gui/Cargo.toml --lib --no-default-features
+-- -D warnings` and `cargo clippy --manifest-path tools/mister/Cargo.toml
+--all-targets -- -D warnings`. These checks run the host-testable Rust library
+with `--no-default-features`, so pure logic tests do not compile the Slint UI
+binary or macOS AppKit code. Use `scripts/dev-rust build-ui` or
+`magik-gui/build-arm.sh --fast` when you need the ARM Slint binary.
 
 Every `magik-gui/build-arm.sh` run prints the binary size and appends a local,
 gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the

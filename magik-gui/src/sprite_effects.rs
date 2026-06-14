@@ -1,4 +1,5 @@
 //! Host-testable classic arcade sprite/object effects.
+#![allow(clippy::too_many_arguments)]
 
 use std::time::Instant;
 
@@ -1087,7 +1088,7 @@ fn render_multi_sprite_object(
     frame: u64,
     counters: &mut SpriteCounters,
 ) {
-    let tile = ((w.min(h) / 12).max(8)).min(42);
+    let tile = (w.min(h) / 12).clamp(8, 42);
     let cols = 10usize;
     let rows = 6usize;
     let ox = w as isize / 2 - (cols * tile) as isize / 2;
@@ -1096,7 +1097,7 @@ fn render_multi_sprite_object(
         - 7;
     for row in 0..rows {
         for col in 0..cols {
-            if row == 0 && (col < 2 || col > 7) {
+            if row == 0 && !(2..=7).contains(&col) {
                 continue;
             }
             let sprite = &atlas.boss_parts[(row * cols + col) % atlas.boss_parts.len()];
@@ -1128,7 +1129,7 @@ fn render_boss_assembly(
     frame: u64,
     counters: &mut SpriteCounters,
 ) {
-    let tile = ((w.min(h) / 9).max(10)).min(54);
+    let tile = (w.min(h) / 9).clamp(10, 54);
     let phase = (frame % 150) as isize;
     let progress = phase.min(90);
     let layout = [
@@ -1184,7 +1185,7 @@ fn render_priority_foreground(
     let size = (h / 5).max(18);
     let span = w + size * 2;
     let x = ((frame as usize * 4) % span) as isize - size as isize;
-    let y = h as isize / 2 - size as isize / 2 + triangle(frame as usize * 2 & 255) as isize / 16;
+    let y = h as isize / 2 - size as isize / 2 + triangle((frame as usize * 2) & 255) as isize / 16;
     let pixels = draw_sprite_scaled(dst, w, h, &atlas.ship, x, y, size, size, 255, false, false);
     counters.record_sprite(pixels);
     for i in 0..7 {
@@ -1280,7 +1281,7 @@ fn render_drop_shadow_copy(
 ) {
     let size = (h / 4).max(24);
     let x =
-        w as isize / 2 - size as isize / 2 + triangle(frame as usize * 2 & 255) as isize / 5 - 51;
+        w as isize / 2 - size as isize / 2 + triangle((frame as usize * 2) & 255) as isize / 5 - 51;
     let y = h as isize / 2 - size as isize / 2;
     let shadow = draw_sprite_scaled(
         dst,
@@ -1309,7 +1310,7 @@ fn render_blob_contact_shadow(
     counters: &mut SpriteCounters,
 ) {
     let size = (h / 4).max(24);
-    let bob = triangle(frame as usize * 4 & 255) as isize / 5;
+    let bob = triangle((frame as usize * 4) & 255) as isize / 5;
     let x = w as isize / 2 - size as isize / 2;
     let y = h as isize / 2 - size as isize / 2 - bob / 2;
     draw_ellipse(
@@ -1336,7 +1337,7 @@ fn render_invincibility_flicker(
 ) {
     let size = (h / 4).max(24);
     let x =
-        w as isize / 2 - size as isize / 2 + triangle(frame as usize * 2 & 255) as isize / 6 - 42;
+        w as isize / 2 - size as isize / 2 + triangle((frame as usize * 2) & 255) as isize / 6 - 42;
     let y = h as isize / 2 - size as isize / 2;
     if (frame / 5) & 1 == 0 {
         let pixels =
@@ -1399,7 +1400,7 @@ fn render_motion_smear(
 ) {
     let size = (h / 4).max(24);
     let x =
-        w as isize / 2 - size as isize / 2 + triangle(frame as usize * 4 & 255) as isize / 3 - 85;
+        w as isize / 2 - size as isize / 2 + triangle((frame as usize * 4) & 255) as isize / 3 - 85;
     let y = h as isize / 2 - size as isize / 2;
     for i in 0..9 {
         let tint = (80 + i * 18).min(255) as u8;
@@ -1635,8 +1636,9 @@ fn render_flipbook_logo(
     let out_w = (w / 2).max(72);
     let out_h = (h / 5).max(24);
     let x = w as isize / 2 - out_w as isize / 2;
-    let y =
-        h as isize / 2 - out_h as isize / 2 + triangle(frame as usize * 2 & 255) as isize / 24 - 5;
+    let y = h as isize / 2 - out_h as isize / 2
+        + triangle((frame as usize * 2) & 255) as isize / 24
+        - 5;
     let pixels = draw_sprite_scaled(
         dst,
         w,
@@ -1696,7 +1698,7 @@ fn render_mirrored_reflection(
 ) {
     let size = (h / 4).max(24);
     let x =
-        w as isize / 2 - size as isize / 2 + triangle(frame as usize * 2 & 255) as isize / 6 - 42;
+        w as isize / 2 - size as isize / 2 + triangle((frame as usize * 2) & 255) as isize / 6 - 42;
     let y = h as isize / 2 - size as isize;
     let pixels = draw_sprite_scaled(dst, w, h, &atlas.ship, x, y, size, size, 255, false, false);
     counters.record_sprite(pixels);
@@ -1725,7 +1727,7 @@ fn render_object_overload(
     counters: &mut SpriteCounters,
 ) {
     for i in 0..320usize {
-        if ((i + frame as usize / 3) % 5) == 0 {
+        if (i + frame as usize / 3).is_multiple_of(5) {
             counters.flicker_skip_count += 1;
             continue;
         }
