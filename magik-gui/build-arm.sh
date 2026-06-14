@@ -14,7 +14,7 @@
 # spot expensive crates and accidental target/feature creep.
 #
 # Uses the Apple Virtualization Framework container backend on Apple Silicon,
-# and falls back to cross/Docker on Linux and CI (see AGENTS.md §12).
+# and falls back to cross/Docker on Linux and CI (see magik-gui/BUILD.md).
 #
 # One-time host setup:
 #   rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
