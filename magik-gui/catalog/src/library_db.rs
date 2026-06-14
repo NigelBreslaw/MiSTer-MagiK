@@ -41,7 +41,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 20;
+const SCHEMA_VERSION: u32 = 21;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -2244,6 +2244,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             system_id,
             identity_id,
             parent_setname,
+            asset_pack_id,
+            asset_key,
+            asset_link_reason,
             preferred,
             preferred_reason
         )
@@ -2254,8 +2257,8 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                 l.title AS title,
                 lower(l.title) AS sort_title,
                 l.launch_ref AS launch_ref,
-                COALESCE(g.image_path, '') AS image_path,
-                g.has_image AS has_image,
+                COALESCE(g.image_path, '') AS discovery_image_path,
+                g.has_image AS discovery_has_image,
                 l.system_id AS system_id,
                 i.identity_id AS identity_id,
                 CASE
@@ -2270,14 +2273,46 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                      AND i.identity_id = COALESCE(i.family_id, i.identity_id)
                     THEN 1
                     ELSE 0
-                END AS is_parent
+                END AS is_parent,
+                exact.pack_id AS exact_pack_id,
+                exact.asset_key AS exact_asset_key,
+                parent.pack_id AS parent_pack_id,
+                parent.asset_key AS parent_asset_key,
+                sibling.pack_id AS sibling_pack_id,
+                sibling.asset_key AS sibling_asset_key
             FROM launchables l
             JOIN games g ON g.game_id = l.launchable_id
             LEFT JOIN launchable_identities i
               ON i.launchable_id = l.launchable_id
              AND i.namespace = 'mame'
+            LEFT JOIN asset_entries exact
+              ON exact.identity_namespace = 'mame'
+             AND exact.identity_id = i.identity_id
+            LEFT JOIN asset_entries parent
+              ON parent.identity_namespace = 'mame'
+             AND parent.identity_id = i.family_id
+            LEFT JOIN (
+                SELECT family_id, MIN(pack_id) AS pack_id, MIN(asset_key) AS asset_key
+                FROM asset_entries
+                WHERE identity_namespace = 'mame'
+                GROUP BY family_id
+            ) sibling
+              ON sibling.family_id = COALESCE(i.family_id, l.launchable_id)
             WHERE l.system_id IN ('arcade','neogeo')
               AND l.launch_ref != ''
+        ),
+        resolved AS (
+            SELECT
+                *,
+                COALESCE(exact_pack_id, parent_pack_id, sibling_pack_id) AS asset_pack_id,
+                COALESCE(exact_asset_key, parent_asset_key, sibling_asset_key) AS asset_key,
+                CASE
+                    WHEN exact_asset_key IS NOT NULL THEN 'exact'
+                    WHEN parent_asset_key IS NOT NULL THEN 'parent'
+                    WHEN sibling_asset_key IS NOT NULL THEN 'sibling'
+                    ELSE 'none'
+                END AS asset_link_reason
+            FROM candidates
         ),
         ranked AS (
             SELECT
@@ -2285,18 +2320,18 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                 row_number() OVER (
                     PARTITION BY family_id
                     ORDER BY is_parent DESC,
-                             has_image DESC,
+                             CASE WHEN asset_key IS NOT NULL THEN 1 ELSE discovery_has_image END DESC,
                              sort_title ASC,
                              launch_ref ASC
                 ) AS family_rank,
                 row_number() OVER (
                     PARTITION BY family_id
                     ORDER BY is_parent DESC,
-                             has_image DESC,
+                             CASE WHEN asset_key IS NOT NULL THEN 1 ELSE discovery_has_image END DESC,
                              sort_title ASC,
                              launch_ref ASC
                 ) - 1 AS variant_ordinal
-            FROM candidates
+            FROM resolved
         )
         SELECT
             family_id,
@@ -2305,11 +2340,20 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             title,
             sort_title,
             launch_ref,
-            image_path,
-            has_image,
+            CASE
+                WHEN asset_key IS NOT NULL THEN '/media/fat/_Arcade/media/screenshot/' || asset_key || '.png'
+                ELSE discovery_image_path
+            END,
+            CASE
+                WHEN asset_key IS NOT NULL THEN 1
+                ELSE discovery_has_image
+            END,
             system_id,
             identity_id,
             parent_setname,
+            asset_pack_id,
+            asset_key,
+            asset_link_reason,
             CASE WHEN family_rank = 1 THEN 1 ELSE 0 END,
             CASE
                 WHEN family_rank = 1 AND is_parent = 1 THEN 'installed-parent'
@@ -2331,6 +2375,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             identity_id,
             family_id,
             parent_setname,
+            asset_pack_id,
+            asset_key,
+            asset_link_reason,
             preferred_reason
         )
         SELECT
@@ -2345,6 +2392,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             identity_id,
             family_id,
             parent_setname,
+            asset_pack_id,
+            asset_key,
+            asset_link_reason,
             preferred_reason
         FROM ui_arcade_variants
         WHERE preferred = 1
@@ -2354,14 +2404,90 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
     .map_err(|e| format!("materialize arcade ui projections: {e}"))
 }
 
-fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
-    write_sqlite_scan_with_mame(path, scan, &default_mame_sqlite_path())
+fn register_preview_asset_pack(
+    tx: &rusqlite::Transaction<'_>,
+    mame_metadata: &HashMap<String, MameMachineMetadata>,
+    index: Option<&preview_worker::PreviewArchiveIndex>,
+) -> Result<(), String> {
+    let Some(index) = index else {
+        return Ok(());
+    };
+    tx.execute(
+        "INSERT INTO asset_packs(pack_id,platform_id,asset_type,local_path,codec,version)
+         VALUES (?1,?2,?3,?4,?5,?6)",
+        params![
+            "arcade-screenshot-v1",
+            "arcade",
+            "screenshot",
+            index.path.as_str(),
+            index.codec,
+            "v1"
+        ],
+    )
+    .map_err(|e| format!("insert preview asset pack: {e}"))?;
+    let mut stmt = tx
+        .prepare(
+            "INSERT INTO asset_entries(pack_id,asset_key,identity_namespace,identity_id,family_id,width,height)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        )
+        .map_err(|e| format!("prepare preview asset entry insert: {e}"))?;
+    for entry in &index.entries {
+        let identity_id = normalize_id(entry);
+        let family_id = mame_metadata
+            .get(&identity_id)
+            .and_then(|machine| machine.parent_setname.as_deref())
+            .filter(|parent| !parent.trim().is_empty())
+            .unwrap_or(identity_id.as_str())
+            .to_string();
+        stmt.execute(params![
+            "arcade-screenshot-v1",
+            identity_id.as_str(),
+            "mame",
+            identity_id.as_str(),
+            family_id.as_str(),
+            Option::<i64>::None,
+            Option::<i64>::None
+        ])
+        .map_err(|e| format!("insert preview asset entry: {e}"))?;
+    }
+    Ok(())
 }
 
+fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
+    let preview_asset_pack = preview_worker::preview_archive_index_from_env()
+        .map_err(|e| format!("preview archive index: {e}"))?;
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        &default_mame_sqlite_path(),
+        preview_asset_pack.as_ref(),
+    )
+}
+
+#[cfg(test)]
 fn write_sqlite_scan_with_mame(
     path: &Path,
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
+) -> Result<(), String> {
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, None)
+}
+
+#[cfg(test)]
+fn write_sqlite_scan_with_mame_and_preview_pack(
+    path: &Path,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+    preview_asset_pack: &preview_worker::PreviewArchiveIndex,
+) -> Result<(), String> {
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, Some(preview_asset_pack))
+}
+
+fn write_sqlite_scan_with_sources(
+    path: &Path,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+    preview_asset_pack: Option<&preview_worker::PreviewArchiveIndex>,
 ) -> Result<(), String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     conn.execute_batch(
@@ -2489,6 +2615,7 @@ fn write_sqlite_scan_with_mame(
             asset_key TEXT NOT NULL,
             identity_namespace TEXT,
             identity_id TEXT,
+            family_id TEXT,
             width INTEGER,
             height INTEGER,
             PRIMARY KEY(pack_id, asset_key)
@@ -2505,6 +2632,9 @@ fn write_sqlite_scan_with_mame(
             identity_id TEXT,
             family_id TEXT NOT NULL,
             parent_setname TEXT,
+            asset_pack_id TEXT,
+            asset_key TEXT,
+            asset_link_reason TEXT NOT NULL,
             preferred_reason TEXT NOT NULL
         );
         CREATE TABLE ui_arcade_variants (
@@ -2519,6 +2649,9 @@ fn write_sqlite_scan_with_mame(
             system_id TEXT NOT NULL,
             identity_id TEXT,
             parent_setname TEXT,
+            asset_pack_id TEXT,
+            asset_key TEXT,
+            asset_link_reason TEXT NOT NULL,
             preferred INTEGER NOT NULL,
             preferred_reason TEXT NOT NULL,
             PRIMARY KEY(family_id, variant_ordinal)
@@ -2575,6 +2708,7 @@ fn write_sqlite_scan_with_mame(
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
+    register_preview_asset_pack(&tx, &mame_metadata, preview_asset_pack)?;
     {
         let mut stmt = tx
             .prepare(
@@ -4150,6 +4284,124 @@ mod tests {
         assert_eq!(preferred.2, "deterministic-child");
         assert_eq!(preferred.3, 1);
         assert_eq!(variant_count, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn screenshot_pack_resolves_exact_parent_and_sibling_assets() {
+        let root = unique_temp_dir("screenshot-pack-family");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                ("1941", None, "1941", Some("1990"), Some("Capcom")),
+                (
+                    "1941j",
+                    Some("1941"),
+                    "1941: Counter Attack (Japan)",
+                    Some("1990"),
+                    Some("Capcom"),
+                ),
+                (
+                    "1941r1",
+                    Some("1941"),
+                    "1941: Counter Attack (World, earlier)",
+                    Some("1990"),
+                    Some("Capcom"),
+                ),
+                (
+                    "1941u",
+                    Some("1941"),
+                    "1941: Counter Attack (USA)",
+                    Some("1990"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root.join("arcade-screenshots.mmlz4b").display().to_string(),
+            codec: "lz4-block",
+            entries: vec!["1941u".to_string()],
+        };
+        let mut parent = mra_discovery(1, "1941");
+        parent.setname = Some("1941".to_string());
+        let mut japan = mra_discovery(2, "1941: Counter Attack (Japan)");
+        japan.setname = Some("1941j".to_string());
+        let mut world = mra_discovery(3, "1941: Counter Attack (World, earlier)");
+        world.setname = Some("1941r1".to_string());
+        let mut usa = mra_discovery(4, "1941: Counter Attack (USA)");
+        usa.setname = Some("1941u".to_string());
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![parent, japan, world, usa]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let mut stmt = conn
+            .prepare(
+                "SELECT identity_id,asset_key,asset_link_reason,image_path,has_image
+                 FROM ui_arcade_variants
+                 ORDER BY identity_id",
+            )
+            .expect("prepare variant asset query");
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .expect("query variant assets")
+            .map(|row| row.expect("read variant asset row"))
+            .collect::<Vec<_>>();
+        let preferred = conn
+            .query_row(
+                "SELECT identity_id,asset_key,asset_link_reason,image_path,has_image
+                 FROM ui_arcade_preferred",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .expect("query preferred asset");
+
+        assert_eq!(rows.len(), 4);
+        for row in &rows {
+            assert_eq!(row.1.as_deref(), Some("1941u"));
+            assert_eq!(
+                row.3,
+                "/media/fat/_Arcade/media/screenshot/1941u.png"
+            );
+            assert_eq!(row.4, 1);
+        }
+        assert!(rows
+            .iter()
+            .any(|row| row.0.as_deref() == Some("1941u") && row.2 == "exact"));
+        assert!(rows
+            .iter()
+            .any(|row| row.0.as_deref() == Some("1941") && row.2 == "sibling"));
+        assert_eq!(preferred.0.as_deref(), Some("1941"));
+        assert_eq!(preferred.1.as_deref(), Some("1941u"));
+        assert_eq!(preferred.2, "sibling");
+        assert_eq!(
+            preferred.3,
+            "/media/fat/_Arcade/media/screenshot/1941u.png"
+        );
+        assert_eq!(preferred.4, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
