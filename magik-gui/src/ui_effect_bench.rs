@@ -35,7 +35,7 @@ impl EffectBenchMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
-enum EffectFill {
+pub(crate) enum EffectFill {
     Full,
     Half,
     Double,
@@ -73,19 +73,19 @@ impl EffectFill {
 
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
-struct EffectTarget {
-    physical_x: usize,
-    physical_y: usize,
-    physical_w: usize,
-    physical_h: usize,
-    render_w: usize,
-    render_h: usize,
-    scale: usize,
+pub(crate) struct EffectTarget {
+    pub(crate) physical_x: usize,
+    pub(crate) physical_y: usize,
+    pub(crate) physical_w: usize,
+    pub(crate) physical_h: usize,
+    pub(crate) render_w: usize,
+    pub(crate) render_h: usize,
+    pub(crate) scale: usize,
 }
 
 #[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 impl EffectTarget {
-    fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
+    pub(crate) fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
         let (physical_w, physical_h, scale) = match fill {
             EffectFill::Full => (1920, 1080, size.scale_to_1080p()?),
             EffectFill::Half => match size.scale_to_half_1080p() {

@@ -14,15 +14,17 @@ Historical benchmark labels: **A0** ≈ old thin-LTO `release`, **A3** ≈ `rele
 
 ## Daily host checks
 
-Routine host development should use the lightweight library checks instead of
-plain `cargo test`, because the Slint UI binary intentionally cross-builds for
-the MiSTer and can trip macOS AppKit code in Slint before reaching our tests.
+Routine host development should use the lightweight library checks by default.
+The macOS host can also compile the UI feature as a smoke test: Cargo enables
+Slint `std` only for macOS so Slint's AppKit system tray support compiles, while
+ARM/MiSTer targets keep the embedded no-std Slint configuration.
 
 ```bash
 scripts/dev-rust fmt       # cargo fmt --check
 scripts/dev-rust fmt-fix   # cargo fmt
 scripts/dev-rust test      # cargo test --lib --no-default-features
 scripts/dev-rust check     # cargo check --lib --no-default-features
+cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features
 scripts/dev-rust check-arm-lib       # ARM --lib check, no Slint/UI
 scripts/dev-rust check-arm-ui        # ARM launcher/controller UI check
 scripts/dev-rust check-ui            # alias: ARM launcher/controller UI check
@@ -34,7 +36,9 @@ scripts/dev-rust build-ui  # magik-gui/build-arm.sh
 
 The host-testable library contains pure catalog/controller/repeat logic. The
 framebuffer, FPGA, Linux input loop, and Slint renderer stay in the binary target
-behind Cargo feature `ui`.
+behind Cargo feature `ui`; use the explicit `cargo test --features ui
+--no-default-features` smoke when you want host coverage for the UI binary target
+without producing a deployable macOS app.
 
 Catalog and library-scan code lives in the path dependency
 `magik-gui/catalog` (`mister-magik-catalog`). The main crate re-exports its

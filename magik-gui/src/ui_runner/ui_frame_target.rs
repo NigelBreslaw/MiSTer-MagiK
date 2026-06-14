@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DirtyRect {
     pub(crate) x0: usize,
     pub(crate) y0: usize,
