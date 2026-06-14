@@ -27,7 +27,7 @@ case "$SCENE" in
   demo|full_motion|static_ui|local_motion|console_scroll|launcher|controller_test|arcade|blend_velocity|video_playback|solid_fill|dirty_band) ;;
   arcade-effects)
     REMOTE_SCENE="arcade"
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_BLITTER=raw MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_PREVIEW_TRANSITION_PICKER=1 MISTER_PREVIEW_TRANSITION_MS=900"
+    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_PREVIEW_TRANSITION_PICKER=1 MISTER_PREVIEW_TRANSITION_MS=900"
     ;;
   camera-effects)
     EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_CAMERA_EFFECTS_HUD=1"

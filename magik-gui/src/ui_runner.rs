@@ -10,7 +10,7 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, SoftwareRenderer, TargetPixel,
 };
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
 #[cfg(feature = "video")]
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::rc::Rc;
@@ -37,10 +37,10 @@ use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
 use crate::preview_state::{
-    apply_ready_preview, preview_raw_blitter_enabled, preview_visual_pct,
-    request_arcade_preview_window, schedule_arcade_preview_window, PreviewRawFrame,
-    PreviewRawPixels, PreviewRawTransitionFrame, PreviewState, ARCADE_PREVIEW_BOX_H,
-    ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
+    apply_ready_preview, preview_visual_pct, request_arcade_preview_window,
+    schedule_arcade_preview_window, PreviewRawFrame, PreviewRawPixels, PreviewRawTransitionFrame,
+    PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X,
+    ARCADE_PREVIEW_BOX_Y,
 };
 use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};

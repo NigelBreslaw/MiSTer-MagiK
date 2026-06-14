@@ -27,12 +27,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
     sync_launcher_arcade_geometry_bridge(&bridge);
-    bridge.set_arcade_preview_has_image(false);
     bridge.set_arcade_preview_placeholder_visible(true);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
     bridge.set_arcade_preview_run_label(preview_run_label().into());
-    bridge.set_arcade_preview_image(Image::default());
     bridge.set_arcade_preview_source_width(0);
     bridge.set_arcade_preview_source_height(0);
     bridge.set_arcade_preview_display_width(0);

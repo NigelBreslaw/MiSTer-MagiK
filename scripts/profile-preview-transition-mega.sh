@@ -56,7 +56,6 @@ secs=$((segment_secs * effect_count))
   "$secs" held-scroll "$label" \
   "$deploy" \
   --fb-format "$fb_format" \
-  --preview-blitter raw \
   --preview-format "$preview_format" \
   --transition mega \
   --transition-segment-secs "$segment_secs" \

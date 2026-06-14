@@ -1,10 +1,9 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
 
 use mister_magik_ui as slint_ui;
 use slint::platform::software_renderer::Rgb565Pixel;
-use slint::{ComponentHandle, Image};
+use slint::ComponentHandle;
 use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::ArcadeGameEntry;
@@ -41,16 +40,6 @@ fn preview_loading_enabled() -> bool {
     })
 }
 
-pub(crate) fn preview_raw_blitter_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(
-        || match std::env::var("MISTER_PREVIEW_BLITTER").as_deref() {
-            Ok("slint") | Ok("image") | Ok("0") | Ok("off") | Ok("false") | Ok("no") => false,
-            _ => true,
-        },
-    )
-}
-
 pub(crate) fn preview_visual_pct() -> u32 {
     static VALUE: OnceLock<u32> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -63,7 +52,6 @@ pub(crate) fn preview_visual_pct() -> u32 {
 }
 
 struct PreviewImage {
-    image: Image,
     pixels: PreviewImagePixels,
     source_w: u32,
     source_h: u32,
@@ -197,13 +185,6 @@ fn apply_preview_image_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
     preview_image: &PreviewImage,
 ) {
-    if preview_raw_blitter_enabled() {
-        bridge.set_arcade_preview_image(Image::default());
-        bridge.set_arcade_preview_has_image(false);
-    } else {
-        bridge.set_arcade_preview_image(preview_image.image.clone());
-        bridge.set_arcade_preview_has_image(true);
-    }
     bridge.set_arcade_preview_status(PreviewStatus::Ready);
     bridge.set_arcade_preview_source_width(preview_image.source_w as i32);
     bridge.set_arcade_preview_source_height(preview_image.source_h as i32);
@@ -212,8 +193,6 @@ fn apply_preview_image_bridge(
 }
 
 fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
-    bridge.set_arcade_preview_image(Image::default());
-    bridge.set_arcade_preview_has_image(false);
     bridge.set_arcade_preview_source_width(0);
     bridge.set_arcade_preview_source_height(0);
     bridge.set_arcade_preview_display_width(0);
@@ -296,7 +275,6 @@ impl PreviewState {
             self.pending_prefetch_paths.clear();
             self.ready_backlog.clear();
             self.raw_dirty = false;
-            bridge.set_arcade_preview_has_image(false);
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
@@ -382,7 +360,7 @@ impl PreviewState {
     }
 
     pub(crate) fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
-        if !preview_raw_blitter_enabled() || !self.has_visible_preview {
+        if !self.has_visible_preview {
             return None;
         }
         let image = self.cache.peek(&self.visible_path)?;
@@ -390,9 +368,6 @@ impl PreviewState {
     }
 
     pub(crate) fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
-        if !preview_raw_blitter_enabled() {
-            return None;
-        }
         let current = if self.has_visible_preview {
             self.raw_frame()?
         } else if self.previous_image.is_some() || self.raw_dirty {
@@ -699,37 +674,23 @@ pub(crate) fn apply_ready_preview(
                 ARCADE_PREVIEW_BOX_W,
                 ARCADE_PREVIEW_BOX_H,
             );
-            let slint_image_t = Instant::now();
-            let (slint_image, pixels) = match image {
+            let pixels = match image {
                 PreviewPixels::Rgb565 {
                     stride_bytes,
                     words,
                     ..
-                } => {
-                    let pixels = words.into_iter().map(Rgb565Pixel).collect();
-                    (
-                        Image::default(),
-                        PreviewImagePixels::Rgb565 {
-                            pixels,
-                            stride_pixels: stride_bytes as usize / 2,
-                        },
-                    )
-                }
+                } => PreviewImagePixels::Rgb565 {
+                    pixels: words.into_iter().map(Rgb565Pixel).collect(),
+                    stride_pixels: stride_bytes as usize / 2,
+                },
             };
-            let slint_image_us = slint_image_t.elapsed().as_micros() as u64;
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace slint_image generation={} slint_image_us={} raw_blitter={} output={}x{} path={}",
-                    result.generation,
-                    slint_image_us,
-                    if preview_raw_blitter_enabled() { 1 } else { 0 },
-                    source_w,
-                    source_h,
-                    result.image_path
+                    "preview_trace raw_image generation={} output={}x{} path={}",
+                    result.generation, source_w, source_h, result.image_path
                 );
             }
             let image = Arc::new(PreviewImage {
-                image: slint_image,
                 pixels,
                 source_w,
                 source_h,
@@ -855,7 +816,6 @@ mod tests {
     fn preview_cache_hits_share_image_payload() {
         let mut cache = PreviewImageCache::default();
         let image = Arc::new(PreviewImage {
-            image: Image::default(),
             pixels: PreviewImagePixels::Rgb565 {
                 pixels: vec![Rgb565Pixel(0xffff)],
                 stride_pixels: 1,
@@ -878,7 +838,6 @@ mod tests {
     fn empty_preview_transition_keeps_previous_frame_for_fade_out() {
         let mut preview = PreviewState::new();
         let visible_image = Arc::new(PreviewImage {
-            image: Image::default(),
             pixels: PreviewImagePixels::Rgb565 {
                 pixels: vec![Rgb565Pixel(0xf800)],
                 stride_pixels: 1,
