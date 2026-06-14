@@ -31,6 +31,21 @@ Measured medians:
 | `build-ui-device` / `noop-warm` | 4.901s | 4.919s | 1.84s | 1.85s | noise |
 | `build-ui-opts` / `touch-rust-bin` | 20.370s | 14.336s | 17.06s | 10.93s | 29.6% wall-time faster |
 
+Clean all-CPU `release-device` timing:
+
+- Fresh target dir with helper image already current:
+  - Command: `MISTER_APPLE_CONTAINER_TARGET_DIR=/private/tmp/mister-magik-clean-build-20260614T222002Z MISTER_APPLE_CONTAINER_IMAGE_STAMP=/private/tmp/mister-magik-apple-container-target.image.sha256 magik-gui/build-arm.sh --device`.
+  - Wall time: `124.05s`.
+  - Cargo-reported build time: `2m 00s`.
+  - Binary size: `5893828` bytes.
+- A prior fresh-target run with a missing image stamp also rebuilt the helper
+  image and took `191.37s` wall; Cargo reported `2m 03s` for that run.
+- One image-current fresh-target retry failed at `40.80s` with
+  `failed to build archive ... librgb-...rlib: failed to open object file`.
+  The next identical fresh-target retry passed, so this was recorded as a
+  transient Apple-container/target-dir archive failure rather than accepted
+  behavior.
+
 Binary sizes stayed unchanged:
 
 - `release-opts`: `5041980` bytes.
