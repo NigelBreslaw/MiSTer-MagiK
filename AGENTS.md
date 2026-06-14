@@ -236,9 +236,9 @@ scripts/run-rust.sh launcher 0
 # already-deployed binary without rebuilding or copying.
 
 # Build/update the SQLite library cache outside the UI hot path. Production
-# MiSTer_MagiK launcher scripts block for the first missing cache, then run
-# later refreshes in the background before execing the Slint UI; the UI process
-# refreshes in-process only with MISTER_CATALOG_REFRESH=1.
+# MiSTer_MagiK launcher scripts block for the first missing cache, then delay
+# later background refreshes until after the Slint UI has had time to settle; the
+# UI process refreshes in-process only with MISTER_CATALOG_REFRESH=1.
 scripts/mister run "/media/fat/mister-magik/mister-magik-fb library-refresh"
 
 # Inspect the SQLite library cache directly on the MiSTer. The device does not
