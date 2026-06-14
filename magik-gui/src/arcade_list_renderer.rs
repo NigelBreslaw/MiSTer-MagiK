@@ -626,7 +626,7 @@ mod tests {
         ));
         assert!(renderer.draw(&games, 7.0, false).is_none());
 
-        games[3].title = "Changed visible row".to_string();
+        games[3].title = "Changed visible row".into();
 
         assert!(matches!(
             renderer.draw(&games, 7.0, false),
@@ -636,11 +636,11 @@ mod tests {
 
     fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
         ArcadeGameEntry {
-            title: title.to_string(),
-            mra_path: mra_path.to_string(),
-            image_path: String::new(),
+            title: title.into(),
+            mra_path: mra_path.into(),
+            image_path: "".into(),
             has_image: false,
-            system_id: system_id.to_string(),
+            system_id: system_id.into(),
         }
     }
 }

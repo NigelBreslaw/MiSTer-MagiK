@@ -468,7 +468,7 @@ impl LauncherNav {
                 .system_game_at(system_id, self.arcade.selected)
                 .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
-                    path: Some(game.mra_path.clone()),
+                    path: Some(game.mra_path.to_string()),
                 });
         }
 
@@ -1137,7 +1137,7 @@ mod tests {
             vec![ArcadeGameEntry {
                 title: "Agony".into(),
                 mra_path: "magik-plan:amiga-agony".into(),
-                image_path: String::new(),
+                image_path: "".into(),
                 has_image: false,
                 system_id: "amiga".into(),
             }],

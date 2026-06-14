@@ -469,7 +469,7 @@ pub(crate) fn request_arcade_preview_window(
     bridge.set_arcade_preview_placeholder_visible(true);
 
     preview.window_paths = preview_window_paths(games, selected, DEFAULT_PREVIEW_RADIUS, |game| {
-        game.has_image.then_some(game.image_path.as_str())
+        game.has_image.then_some(game.image_path.as_ref())
     })
     .into_iter()
     .map(str::to_string)
@@ -481,12 +481,12 @@ pub(crate) fn request_arcade_preview_window(
     if preview
         .selected_mra_path
         .as_deref()
-        .is_some_and(|path| path == game.mra_path)
+        .is_some_and(|path| path == game.mra_path.as_ref())
     {
         if let Some(path) = preview.selected_image_path.clone() {
             if preview.visible_path != path {
                 if let Some(image) = preview.cache.get(&path) {
-                    bridge.set_arcade_preview_title(game.title.clone().into());
+                    bridge.set_arcade_preview_title(game.title.as_ref().into());
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
                     preview.begin_raw_transition_to(&path);
@@ -507,18 +507,18 @@ pub(crate) fn request_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return false;
     }
-    preview.selected_mra_path = Some(game.mra_path.clone());
+    preview.selected_mra_path = Some(game.mra_path.to_string());
 
-    bridge.set_arcade_preview_title(game.title.clone().into());
+    bridge.set_arcade_preview_title(game.title.as_ref().into());
     if game.has_image {
-        preview.selected_image_path = Some(game.image_path.clone());
-        if preview.cache.contains_failed(&game.image_path) {
+        preview.selected_image_path = Some(game.image_path.to_string());
+        if preview.cache.contains_failed(game.image_path.as_ref()) {
             preview.select_empty_preview();
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             request_preview_prefetches(games, selected, preview);
             return true;
         }
-        if let Some(image) = preview.cache.get(&game.image_path) {
+        if let Some(image) = preview.cache.get(game.image_path.as_ref()) {
             preview.current_generation = 0;
             preview.has_visible_preview = true;
             if preview_trace_enabled() {
@@ -527,8 +527,8 @@ pub(crate) fn request_arcade_preview_window(
                     game.title, game.image_path
                 );
             }
-            preview.begin_raw_transition_to(&game.image_path);
-            preview.visible_path = game.image_path.clone();
+            preview.begin_raw_transition_to(game.image_path.as_ref());
+            preview.visible_path = game.image_path.to_string();
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &image);
             request_preview_prefetches(games, selected, preview);
@@ -536,7 +536,7 @@ pub(crate) fn request_arcade_preview_window(
         }
         preview.current_generation = preview
             .worker
-            .request_selected(game.title.clone(), game.image_path.clone());
+            .request_selected(game.title.to_string(), game.image_path.to_string());
         if preview_trace_enabled() {
             eprintln!(
                 "preview_trace requested generation={} title={} path={}",
@@ -570,19 +570,23 @@ fn request_preview_prefetches(
             continue;
         };
         if !game.has_image
-            || preview.cache.contains(&game.image_path)
-            || preview.cache.contains_failed(&game.image_path)
-            || preview.pending_prefetch_paths.contains(&game.image_path)
+            || preview.cache.contains(game.image_path.as_ref())
+            || preview.cache.contains_failed(game.image_path.as_ref())
+            || preview
+                .pending_prefetch_paths
+                .contains(game.image_path.as_ref())
         {
             continue;
         }
         let distance = idx.abs_diff(selected);
         preview
             .pending_prefetch_paths
-            .insert(game.image_path.clone());
-        preview
-            .worker
-            .request_prefetch(game.title.clone(), game.image_path.clone(), distance);
+            .insert(game.image_path.to_string());
+        preview.worker.request_prefetch(
+            game.title.to_string(),
+            game.image_path.to_string(),
+            distance,
+        );
         if preview_trace_enabled() {
             eprintln!(
                 "preview_trace prefetch distance={} title={} path={}",
@@ -609,7 +613,7 @@ pub(crate) fn schedule_arcade_preview_window(
     if preview
         .selected_mra_path
         .as_deref()
-        .is_some_and(|path| path == game.mra_path)
+        .is_some_and(|path| path == game.mra_path.as_ref())
     {
         request_preview_prefetches(games, selected, preview);
         return false;

@@ -202,11 +202,11 @@ pub(super) fn slint_arcade_games(
     let rows: Vec<slint_ui::launcher::ArcadeGame> = games
         .iter()
         .map(|g| slint_ui::launcher::ArcadeGame {
-            title: g.title.clone().into(),
-            mra_path: g.mra_path.clone().into(),
-            image_path: g.image_path.clone().into(),
+            title: g.title.as_ref().into(),
+            mra_path: g.mra_path.as_ref().into(),
+            image_path: g.image_path.as_ref().into(),
             has_image: g.has_image,
-            system_id: g.system_id.clone().into(),
+            system_id: g.system_id.as_ref().into(),
         })
         .collect();
     ModelRc::new(VecModel::from(rows))

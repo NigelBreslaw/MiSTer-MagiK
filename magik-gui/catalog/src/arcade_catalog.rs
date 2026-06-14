@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
@@ -53,11 +54,11 @@ fn print_phase(name: &str, p: &PhaseTiming) {
 
 #[derive(Clone, Debug)]
 pub struct ArcadeGameEntry {
-    pub title: String,
-    pub mra_path: String,
-    pub image_path: String,
+    pub title: Arc<str>,
+    pub mra_path: Arc<str>,
+    pub image_path: Arc<str>,
     pub has_image: bool,
-    pub system_id: String,
+    pub system_id: Arc<str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,8 +101,8 @@ impl ArcadeCatalog {
     pub fn title_for_path(&self, mra_path: &str) -> &str {
         self.games
             .iter()
-            .find(|g| g.mra_path == mra_path)
-            .map(|g| g.title.as_str())
+            .find(|g| g.mra_path.as_ref() == mra_path)
+            .map(|g| g.title.as_ref())
             .unwrap_or("Game")
     }
 
@@ -148,7 +149,7 @@ fn games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameE
     let mut by_system: HashMap<String, Vec<ArcadeGameEntry>> = HashMap::new();
     for game in games {
         by_system
-            .entry(game.system_id.clone())
+            .entry(game.system_id.to_string())
             .or_default()
             .push(game.clone());
     }
@@ -159,7 +160,7 @@ fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<Arc
     let mut by_system: HashMap<String, Vec<&ArcadeGameEntry>> = HashMap::new();
     for game in games {
         by_system
-            .entry(game.system_id.clone())
+            .entry(game.system_id.to_string())
             .or_default()
             .push(game);
     }
@@ -217,7 +218,7 @@ fn prefer_preview_game(a: &ArcadeGameEntry, b: &ArcadeGameEntry) -> bool {
 
 fn has_preview_image(game: &ArcadeGameEntry) -> bool {
     game.has_image
-        && Path::new(&game.image_path)
+        && Path::new(game.image_path.as_ref())
             .extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| {
@@ -400,7 +401,7 @@ pub fn build_with_options(
 pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for game in games {
-        *counts.entry(game.system_id.clone()).or_default() += 1;
+        *counts.entry(game.system_id.to_string()).or_default() += 1;
     }
     let mut systems: Vec<GameSystemEntry> = counts
         .into_iter()
@@ -580,8 +581,8 @@ fn prefer_game_entry(a: &ArcadeGameEntry, b: &ArcadeGameEntry) -> bool {
     if a.has_image != b.has_image {
         return a.has_image;
     }
-    let a_path = Path::new(&a.mra_path);
-    let b_path = Path::new(&b.mra_path);
+    let a_path = Path::new(a.mra_path.as_ref());
+    let b_path = Path::new(b.mra_path.as_ref());
     let a_org = is_organized_mirror(a_path);
     let b_org = is_organized_mirror(b_path);
     if a_org != b_org {
@@ -780,11 +781,11 @@ fn merge_entries(
         };
 
         games.push(ArcadeGameEntry {
-            title,
-            mra_path: path.display().to_string(),
-            image_path,
+            title: title.into(),
+            mra_path: path.display().to_string().into(),
+            image_path: image_path.into(),
             has_image: false,
-            system_id: "arcade".to_string(),
+            system_id: "arcade".into(),
         });
         on_progress(i + 1, total);
     }
@@ -851,9 +852,9 @@ fn resolve_setname_images(
     let total = games.len();
     for (i, game) in games.iter_mut().enumerate() {
         if game.image_path.is_empty() {
-            if let Some(setname) = read_mra_setname(Path::new(&game.mra_path)) {
+            if let Some(setname) = read_mra_setname(Path::new(game.mra_path.as_ref())) {
                 if let Some(path) = resolve_setname_media(root, &setname) {
-                    game.image_path = path.display().to_string();
+                    game.image_path = path.display().to_string().into();
                     resolved += 1;
                 }
             }
@@ -870,7 +871,7 @@ fn resolve_images(games: &mut [ArcadeGameEntry]) -> (usize, usize) {
         if g.image_path.is_empty() {
             continue;
         }
-        if Path::new(&g.image_path).is_file() {
+        if Path::new(g.image_path.as_ref()).is_file() {
             g.has_image = true;
             found += 1;
         } else {
@@ -1049,14 +1050,14 @@ mod tests {
             ArcadeGameEntry {
                 title: "1943- Kai Midway Kaisen (JP)".into(),
                 mra_path: "/media/fat/_Arcade/_Organized/a/1943- Kai Midway Kaisen (JP).mra".into(),
-                image_path: String::new(),
+                image_path: "".into(),
                 has_image: false,
                 system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "1943- Kai Midway Kaisen (JP)".into(),
                 mra_path: "/media/fat/_Arcade/1943- Kai Midway Kaisen (JP).mra".into(),
-                image_path: String::new(),
+                image_path: "".into(),
                 has_image: true,
                 system_id: "arcade".into(),
             },
@@ -1092,7 +1093,7 @@ mod tests {
             ArcadeGameEntry {
                 title: "1942".into(),
                 mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                image_path: String::new(),
+                image_path: "".into(),
                 has_image: false,
                 system_id: "arcade".into(),
             },
@@ -1116,12 +1117,14 @@ mod tests {
         let games = catalog.system_preview_games("arcade");
         assert_eq!(games.len(), 3);
         assert_eq!(catalog.system_preview_game_count("arcade"), 3);
-        assert_eq!(games[0].title, "1941: Counter Attack (Japan)");
-        assert_eq!(games[1].title, "1943");
-        assert_eq!(games[2].title, "Astra SuperStars");
+        assert_eq!(games[0].title.as_ref(), "1941: Counter Attack (Japan)");
+        assert_eq!(games[1].title.as_ref(), "1943");
+        assert_eq!(games[2].title.as_ref(), "Astra SuperStars");
         assert_eq!(
-            catalog.system_preview_game_at("arcade", 1).map(|game| game.title),
-            Some("1943".into())
+            catalog
+                .system_preview_game_at("arcade", 1)
+                .map(|game| game.title.to_string()),
+            Some("1943".to_string())
         );
     }
 
@@ -1136,7 +1139,7 @@ mod tests {
         let games = vec![ArcadeGameEntry {
             title: "Agony".into(),
             mra_path: "magik-plan:amiga-agony".into(),
-            image_path: String::new(),
+            image_path: "".into(),
             has_image: false,
             system_id: "amiga".into(),
         }];
