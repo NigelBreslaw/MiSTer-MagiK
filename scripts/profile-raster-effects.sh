@@ -11,7 +11,7 @@ EFFECT_COUNT=15
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-raster-effects.sh [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
+Usage: scripts/profile-raster-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
 
 Runs:
   mister-magik-fb ui raster-effects
@@ -34,7 +34,6 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
-    --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --mode) mode="${2:-}"; shift 2 ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
@@ -71,7 +70,6 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then echo "--secs must be a pos
 mkdir -p "$OUT_DIR" "$(dirname "$RESULTS")"
 
 case "$deploy" in
-  fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
   skip) : ;;
 esac

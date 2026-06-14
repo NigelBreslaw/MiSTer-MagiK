@@ -111,19 +111,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: fast
-            args: --fast
-            profile: release
-            features: none
-          - name: device
+          - name: release
             args: --device
             profile: release-device
             features: none
-          - name: fast-video
-            args: --fast --video
-            profile: release
-            features: video
-          - name: device-video-full
+          - name: release-video-full
             args: --device --all-scenes --video
             profile: release-device
             features: video

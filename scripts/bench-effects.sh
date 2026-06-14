@@ -14,8 +14,8 @@ TSV="$BENCH_DIR/results-effects.tsv"
 MISTER="$HERE/scripts/mister"
 
 LABEL="EFFECTS"
-BUILD_PROFILE=release
-BUILD_FLAG=(--all-scenes)
+BUILD_PROFILE=release-device
+BUILD_FLAG=(--device --all-scenes)
 SKIP_BUILD=0
 SKIP_DEVICE=0
 REPLACE_LABEL=0
@@ -46,7 +46,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
-    --device) BUILD_PROFILE=release-device; BUILD_FLAG+=(--device); shift ;;
+    --device) BUILD_PROFILE=release-device; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-device) SKIP_DEVICE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;

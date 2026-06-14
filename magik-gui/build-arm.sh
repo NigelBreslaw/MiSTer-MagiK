@@ -2,14 +2,12 @@
 # Cross-compile the native MiSTer frontend for armv7 (the DE10-Nano's ARM core).
 #
 # Profiles (see magik-gui/BUILD.md):
-#   ./build-arm.sh              → release (thin LTO + Cortex-A9, launcher UI scope)
-#   ./build-arm.sh --fast-dev   → release-fast-dev (no LTO, incremental, launcher UI scope)
+#   ./build-arm.sh              → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --opt2       → release-opt2 (experiment: opt-level=2)
 #   ./build-arm.sh --opts       → release-opts (experiment: opt-level=s)
 #   ./build-arm.sh --incr       → release-incr (experiment: incremental release)
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
-#   ./build-arm.sh --fast       → alias for release
-#   ./build-arm.sh --all-scenes → release with every Slint bench scene
+#   ./build-arm.sh --all-scenes → release-device with every Slint bench scene
 #   ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark
 #
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
@@ -25,11 +23,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PROFILE=release
+PROFILE=release-device
 FEATURES=(ui)
 FEATURE_LIST=""
 BIN_TARGET=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
+CLEAN=0
 add_feature() {
   local feature="$1"
   local existing
@@ -45,7 +44,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
-    --fast-dev|--release-fast-dev) PROFILE=release-fast-dev ;;
     --opt2|--release-opt2) PROFILE=release-opt2 ;;
     --opts|--release-opts) PROFILE=release-opts ;;
     --incr|--release-incr) PROFILE=release-incr ;;
@@ -58,7 +56,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       FEATURES=(preview-archive-bench)
       BIN_TARGET=preview-archive-bench
       ;;
-    --fast|--release) PROFILE=release ;;
+    --clean) CLEAN=1 ;;
     --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
     --ui-scope)
@@ -70,11 +68,16 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       UI_SCOPE="${ARGS[$i]}"
       ;;
     -h|--help)
-      sed -n '4,12p' ./build-arm.sh | sed 's/^# \{0,1\}//'
+      sed -n '4,11p' ./build-arm.sh | sed 's/^# \{0,1\}//'
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
+      echo "  ./build-arm.sh --clean       → cargo clean before building"
       echo "  ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark"
       exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      exit 2
       ;;
   esac
 done
@@ -85,7 +88,7 @@ export RUSTC_WRAPPER=""
 
 if [ -z "$UI_SCOPE" ]; then
   case "$PROFILE" in
-    release|release-fast-dev|release-opt2|release-opts|release-incr)
+    release-opt2|release-opts|release-incr)
       if [[ " ${FEATURES[*]-} " != *" video "* ]]; then
         UI_SCOPE=launcher
       else
@@ -128,20 +131,20 @@ if [ "$PROFILE" = release-device-profile ]; then
   echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 + NEON target)"
 elif [ "$PROFILE" = release-device ]; then
   echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 + NEON target)"
-elif [ "$PROFILE" = release-fast-dev ]; then
-  echo "==> cross build profile=release-fast-dev ui_scope=$UI_SCOPE (no LTO + incremental + Cortex-A9 + NEON target)"
 elif [ "$PROFILE" = release-opt2 ]; then
   echo "==> cross build profile=release-opt2 ui_scope=$UI_SCOPE (opt-level=2 + thin LTO + Cortex-A9 + NEON target)"
 elif [ "$PROFILE" = release-opts ]; then
   echo "==> cross build profile=release-opts ui_scope=$UI_SCOPE (opt-level=s + thin LTO + Cortex-A9 + NEON target)"
 elif [ "$PROFILE" = release-incr ]; then
   echo "==> cross build profile=release-incr ui_scope=$UI_SCOPE (thin LTO + incremental + Cortex-A9 + NEON target)"
-else
-  echo "==> cross build profile=release ui_scope=$UI_SCOPE (thin LTO + Cortex-A9 + NEON target)"
 fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
+if [ "$CLEAN" -eq 1 ]; then
+  echo "==> cargo clean"
+  cargo clean
+fi
 BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
 if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
   BUILD_ARGS+=(--timings)

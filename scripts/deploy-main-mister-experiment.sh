@@ -10,8 +10,8 @@ GUI_DIR="$ROOT/magik-gui"
 MAIN_DIR="$ROOT/main-mister"
 GUI_REMOTE="/media/fat/mister-magik/mister-magik-fb"
 MAIN_REMOTE="/media/fat/MiSTer_MagiK"
-GUI_PROFILE=release
-GUI_BUILD_ARGS=(--fast)
+GUI_PROFILE=release-device
+GUI_BUILD_ARGS=(--device)
 
 for arg in "$@"; do
   case "$arg" in
@@ -19,13 +19,13 @@ for arg in "$@"; do
       GUI_PROFILE=release-device
       GUI_BUILD_ARGS=(--device)
       ;;
-    --fast)
-      GUI_PROFILE=release
-      GUI_BUILD_ARGS=(--fast)
-      ;;
     -h|--help)
       sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      exit 2
       ;;
   esac
 done

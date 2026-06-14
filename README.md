@@ -65,7 +65,7 @@ sections in file order.
 Build and deploy the fork + Slint child:
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-main-mister-experiment.sh --fast
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-main-mister-experiment.sh
 ```
 
 Or install the boot handoff after deploying binaries:

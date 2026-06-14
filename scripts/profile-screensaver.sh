@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screensaver.sh [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--mode mega|MODE] [--segment-secs N] [--secs N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N]
+Usage: scripts/profile-screensaver.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|MODE] [--segment-secs N] [--secs N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N]
 
 Runs:
   mister-magik-fb ui screensaver
@@ -31,7 +31,6 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
-    --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --mode) mode="${2:-}"; shift 2 ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
@@ -67,7 +66,6 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then echo "--secs must be a pos
 mkdir -p "$OUT_DIR"
 
 case "$deploy" in
-  fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
   skip) : ;;
 esac

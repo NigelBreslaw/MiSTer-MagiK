@@ -15,7 +15,7 @@ CONTAINER_CPUS="${MISTER_APPLE_CONTAINER_CPUS:-3}"
 CONTAINER_MEMORY="${MISTER_APPLE_CONTAINER_MEMORY:-5g}"
 TARGET=armv7-unknown-linux-gnueabihf
 
-PROFILE=release
+PROFILE=release-device
 FEATURES=(ui)
 FEATURE_LIST=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
@@ -35,8 +35,7 @@ add_feature() {
 usage() {
   cat <<'EOF'
 Native Apple-container ARMv7 build:
-  ./build-arm64-apple-container.sh              → release (thin LTO, launcher UI scope)
-  ./build-arm64-apple-container.sh --fast-dev   → release-fast-dev
+  ./build-arm64-apple-container.sh              → release-device
   ./build-arm64-apple-container.sh --opt2       → release-opt2
   ./build-arm64-apple-container.sh --opts       → release-opts
   ./build-arm64-apple-container.sh --incr       → release-incr
@@ -57,7 +56,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
-    --fast-dev|--release-fast-dev) PROFILE=release-fast-dev ;;
     --opt2|--release-opt2) PROFILE=release-opt2 ;;
     --opts|--release-opts) PROFILE=release-opts ;;
     --incr|--release-incr) PROFILE=release-incr ;;
@@ -65,7 +63,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       PROFILE=release-device-profile
       add_feature profile
       ;;
-    --fast|--release) PROFILE=release ;;
     --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
     --ui-scope)
@@ -95,7 +92,7 @@ done
 
 if [ -z "$UI_SCOPE" ]; then
   case "$PROFILE" in
-    release|release-fast-dev|release-opt2|release-opts|release-incr) UI_SCOPE=launcher ;;
+    release-opt2|release-opts|release-incr) UI_SCOPE=launcher ;;
     *) UI_SCOPE=all ;;
   esac
 fi

@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-fast|--deploy-device] [--list-only] [--fb-format 565|8888] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--list-only] [--fb-format 565|8888] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | screenshot-stress
 Runs the real launcher-backed arcade screen:
@@ -58,7 +58,6 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
-    --deploy-fast) deploy="fast"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --list-only) list_only="1"; shift ;;
     --fb-format) fb_format="${2:-}"; shift 2 ;;
@@ -164,7 +163,6 @@ fi
 remote_extra_env="$remote_extra_env MISTER_PREVIEW_RUN_LABEL='${run_label}'"
 
 case "$deploy" in
-  fast) "$HERE/scripts/deploy-rust.sh" --fast --ui-scope arcade ;;
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
   skip) : ;;
 esac
