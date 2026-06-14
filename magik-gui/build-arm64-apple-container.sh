@@ -15,6 +15,8 @@ RUST_TOOLCHAIN="${MISTER_ARM64_RUST_TOOLCHAIN:-$HOME/.rustup/toolchains/stable-a
 CONTAINER_CPUS="${MISTER_APPLE_CONTAINER_CPUS:-3}"
 CONTAINER_MEMORY="${MISTER_APPLE_CONTAINER_MEMORY:-5g}"
 TARGET=armv7-unknown-linux-gnueabihf
+DOCKERFILE=Dockerfile.cross-armv7
+IMAGE_STAMP="${MISTER_APPLE_CONTAINER_IMAGE_STAMP:-$TARGET_DIR.image.sha256}"
 
 PROFILE=release-device
 FEATURES=(ui)
@@ -22,6 +24,7 @@ FEATURE_LIST=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
 LOCKED=1
 CLEAN=0
+REBUILD_IMAGE="${MISTER_APPLE_CONTAINER_REBUILD_IMAGE:-0}"
 BIN_TARGET=""
 BIN_NAME="mister-magik-fb"
 
@@ -48,6 +51,7 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
+  ./build-arm64-apple-container.sh --rebuild-image → rebuild the cross image
   ./build-arm64-apple-container.sh --preview-archive-bench → build only the preview archive benchmark
 
 One-time host setup:
@@ -87,6 +91,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       UI_SCOPE="${ARGS[$i]}"
       ;;
     --clean) CLEAN=1 ;;
+    --rebuild-image) REBUILD_IMAGE=1 ;;
     --unlocked) LOCKED=0 ;;
     -h|--help)
       usage
@@ -148,13 +153,49 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 mkdir -p "$TARGET_DIR" "$CARGO_CACHE"
 
+dockerfile_hash() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$DOCKERFILE" | awk '{print $1}'
+  else
+    sha256sum "$DOCKERFILE" | awk '{print $1}'
+  fi
+}
+
+image_stamp() {
+  printf '%s  %s\n' "$IMAGE" "$(dockerfile_hash)"
+}
+
+image_exists() {
+  container run --arch arm64 --rm "$IMAGE" true >/dev/null 2>&1
+}
+
+ensure_image() {
+  local expected_stamp existing_stamp reason
+  expected_stamp="$(image_stamp)"
+  existing_stamp="$(cat "$IMAGE_STAMP" 2>/dev/null || true)"
+
+  if [[ "$REBUILD_IMAGE" =~ ^(1|true|yes)$ ]]; then
+    reason="requested"
+  elif [ "$existing_stamp" != "$expected_stamp" ]; then
+    reason="missing or stale Dockerfile stamp"
+  elif ! image_exists; then
+    reason="image not found"
+  else
+    echo "==> linux/arm64 cross image is current: $IMAGE"
+    return
+  fi
+
+  echo "==> building linux/arm64 cross image: $IMAGE ($reason)"
+  container build --arch arm64 --file "$DOCKERFILE" --tag "$IMAGE" .
+  printf '%s\n' "$expected_stamp" >"$IMAGE_STAMP"
+}
+
 echo "==> host arch: $(uname -m)"
 echo "==> container tool: $(container --version 2>&1 | head -n 1)"
 echo "==> rust toolchain: $RUST_TOOLCHAIN"
 echo "==> target triple: $TARGET"
 echo "==> build backend: apple-container"
-echo "==> building linux/arm64 cross image: $IMAGE"
-container build --arch arm64 --file Dockerfile.cross-armv7 --tag "$IMAGE" .
+ensure_image
 
 FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
 BUILD_ARGS=(build --target "$TARGET" --profile "$PROFILE" --features "$FEATURE_LIST")

@@ -297,6 +297,9 @@ Useful knobs:
   target cache; default is `/private/tmp/mister-magik-apple-container-target`.
 - `MISTER_APPLE_CONTAINER_MIRROR_TARGET_DIR=/path` — mirror artifacts somewhere
   other than `magik-gui/target`.
+- `MISTER_APPLE_CONTAINER_REBUILD_IMAGE=1` or `--rebuild-image` — force a
+  rebuild of the Linux/arm64 cross image. Otherwise the script rebuilds it only
+  when the image is missing or `Dockerfile.cross-armv7` changes.
 
 ## cross-rs
 
