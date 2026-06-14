@@ -106,3 +106,21 @@ specific optimization; otherwise a change can look neutral at 60 Hz while making
 the frame loop less robust. The existing `ArcadeListUpdate::Scroll` remains a
 RAM-surface reuse signal inside `ArcadeListRenderer`, not a request to scroll the
 already-presented framebuffer.
+
+## Catalog startup projection - 2026-06-14
+
+Change: schema 18 adds a materialized `launcher_catalog` table at
+`library-refresh` / import time, after launcher filtering and MRA variant
+collapse. Startup now reads that projection directly and falls back to the old
+join for older databases.
+
+| Run | Catalog load | First frame | Games |
+|---|---:|---:|---:|
+| `CATALOG-BEFORE-20260614` | 849 ms | 888 ms | 9524 |
+| `CATALOG-AFTER-20260614` | 316 ms | 564 ms | 9524 |
+
+The one-time schema rebuild on the MiSTer took `scan_us=75035650` and
+`import_us=30467612`; that cost is paid by `library-refresh`, not by cached UI
+launch. The steady scroll trace was noisier after the rebuild because preview
+cache state changed, so the keep/revert decision is based on the startup timing
+lines rather than the unrelated preview-frame tail.
