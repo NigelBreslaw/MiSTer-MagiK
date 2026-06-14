@@ -7,7 +7,9 @@ WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
 STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-pcm-s16le-cortex-a9-o3"
-IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
+DOCKER_IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
+APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
+BACKEND="${MISTER_FFMPEG_BUILD_BACKEND:-auto}"
 
 REQUIRED_DIST_FILES=(
   "$STAMP"
@@ -32,6 +34,14 @@ dist_is_complete() {
   done
 }
 
+case "$BACKEND" in
+  auto|apple-container|docker) ;;
+  *)
+    echo "ERROR: invalid MISTER_FFMPEG_BUILD_BACKEND=$BACKEND (expected auto, apple-container, or docker)" >&2
+    exit 2
+    ;;
+esac
+
 if dist_is_complete; then
   echo "==> minimal FFmpeg already built: $DIST"
   exit 0
@@ -41,13 +51,6 @@ if [ -e "$DIST" ]; then
   rm -rf "$DIST"
 fi
 
-export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "==> building cross helper image $IMAGE"
-  docker build -t "$IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
-fi
-
 mkdir -p "$WORK"
 if [ ! -d "$SRC/.git" ]; then
   rm -rf "$SRC"
@@ -55,13 +58,49 @@ if [ ! -d "$SRC/.git" ]; then
   git clone --depth=1 -b "n$VERSION" "${FFMPEG_GIT_URL:-https://github.com/FFmpeg/FFmpeg}" "$SRC"
 fi
 
+if [ "$BACKEND" = auto ]; then
+  if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && command -v container >/dev/null 2>&1; then
+    BACKEND=apple-container
+  else
+    BACKEND=docker
+  fi
+fi
+
+if [ "$BACKEND" = apple-container ]; then
+  if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+    echo "ERROR: Apple-container FFmpeg backend requires arm64 macOS; got $(uname -s)/$(uname -m)." >&2
+    exit 1
+  fi
+  if ! command -v container >/dev/null 2>&1; then
+    echo "ERROR: Apple container is not installed or not on PATH." >&2
+    exit 1
+  fi
+  echo "==> building Apple-container FFmpeg helper image $APPLE_IMAGE"
+  container build --arch arm64 --file "$HERE/Dockerfile.cross-armv7" --tag "$APPLE_IMAGE" "$HERE"
+  RUNNER=(
+    container run --arch arm64 --rm
+    --volume "$HERE:/project"
+    --workdir "/project/target/ffmpeg-minimal/armv7/ffmpeg-$VERSION"
+    "$APPLE_IMAGE"
+  )
+else
+  export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
+  if ! docker image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+    echo "==> building cross helper image $DOCKER_IMAGE"
+    docker build -t "$DOCKER_IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
+  fi
+  RUNNER=(
+    docker run --rm
+    --platform linux/amd64
+    --user "$(id -u):$(id -g)"
+    -v "$HERE:/project"
+    -w "/project/target/ffmpeg-minimal/armv7/ffmpeg-$VERSION"
+    "$DOCKER_IMAGE"
+  )
+fi
+
 echo "==> configuring minimal FFmpeg n$VERSION"
-docker run --rm \
-  --platform linux/amd64 \
-  --user "$(id -u):$(id -g)" \
-  -v "$HERE:/project" \
-  -w "/project/target/ffmpeg-minimal/armv7/ffmpeg-$VERSION" \
-  "$IMAGE" \
+"${RUNNER[@]}" \
   bash -lc '
 set -euo pipefail
 rm -rf ../dist

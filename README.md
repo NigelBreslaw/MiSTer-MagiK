@@ -38,7 +38,8 @@ AGENTS.md                     operational guide (read this for MiSTer quirks)
 
 ## Build & deploy
 
-Requires [Docker](https://www.docker.com/) and [Rust](https://rustup.rs/).
+Requires [Rust](https://rustup.rs/). Local Apple-Silicon ARM builds use Apple's
+`container` runtime; Linux/CI builds use Docker/cross-rs.
 
 
 See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.

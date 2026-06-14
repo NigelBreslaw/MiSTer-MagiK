@@ -13,20 +13,51 @@
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
 # spot expensive crates and accidental target/feature creep.
 #
-# Wraps `cross` with the settings the toolchain needs on an Apple-Silicon host
-# (see AGENTS.md §12).
+# Uses the Apple Virtualization Framework container backend on Apple Silicon,
+# and falls back to cross/Docker on Linux and CI (see AGENTS.md §12).
 #
 # One-time host setup:
-#   cargo install cross --locked
-#   rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-non-host
+#   rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
+#   rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
+#   container system start
 #
 set -euo pipefail
 cd "$(dirname "$0")"
+
+BACKEND="${MISTER_ARM_BUILD_BACKEND:-auto}"
+case "$BACKEND" in
+  auto|apple-container|cross) ;;
+  *)
+    echo "ERROR: invalid MISTER_ARM_BUILD_BACKEND=$BACKEND (expected auto, apple-container, or cross)" >&2
+    exit 2
+    ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) BACKEND=cross ;;
+  esac
+done
+if [ "$BACKEND" = auto ] || [ "$BACKEND" = apple-container ]; then
+  if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+    if ! command -v container >/dev/null 2>&1; then
+      if [ "$BACKEND" = apple-container ]; then
+        echo "ERROR: Apple container is not installed or not on PATH." >&2
+        exit 1
+      fi
+    else
+      exec "$PWD/build-arm64-apple-container.sh" "$@"
+    fi
+  elif [ "$BACKEND" = apple-container ]; then
+    echo "ERROR: Apple-container backend requires arm64 macOS; got $(uname -s)/$(uname -m)." >&2
+    exit 1
+  fi
+fi
 
 PROFILE=release-device
 FEATURES=(ui)
 FEATURE_LIST=""
 BIN_TARGET=""
+BIN_NAME="mister-magik-fb"
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
 CLEAN=0
 add_feature() {
@@ -55,6 +86,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --preview-archive-bench)
       FEATURES=(preview-archive-bench)
       BIN_TARGET=preview-archive-bench
+      BIN_NAME=preview-archive-bench
       ;;
     --clean) CLEAN=1 ;;
     --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
@@ -72,7 +104,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
-      echo "  ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark"
       exit 0
       ;;
     *)
@@ -183,5 +214,5 @@ if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
   fi
 fi
 
-BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
+BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/$BIN_NAME"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"
