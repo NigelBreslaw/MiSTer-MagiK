@@ -899,11 +899,16 @@ impl PreviewArchive {
 fn preview_archive_preload_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_PREVIEW_ARCHIVE_PRELOAD").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
+        preview_archive_preload_enabled_from_env(
+            std::env::var("MISTER_PREVIEW_ARCHIVE_PRELOAD")
+                .ok()
+                .as_deref(),
         )
     })
+}
+
+fn preview_archive_preload_enabled_from_env(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("on") | Some("true") | Some("yes"))
 }
 
 fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -1186,6 +1191,16 @@ mod tests {
         assert_eq!(index.codec, "lz4-block");
         assert_eq!(index.entries, vec!["1941u"]);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn archive_preload_is_opt_in() {
+        assert!(!preview_archive_preload_enabled_from_env(None));
+        assert!(!preview_archive_preload_enabled_from_env(Some("0")));
+        assert!(!preview_archive_preload_enabled_from_env(Some("off")));
+        assert!(preview_archive_preload_enabled_from_env(Some("1")));
+        assert!(preview_archive_preload_enabled_from_env(Some("true")));
+        assert!(preview_archive_preload_enabled_from_env(Some("on")));
     }
 
     #[test]
