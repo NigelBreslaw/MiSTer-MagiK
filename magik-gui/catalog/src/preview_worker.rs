@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 5;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
@@ -625,6 +625,21 @@ pub fn preview_archive_entry_stems_from_env() -> Result<Option<HashSet<String>>,
         return Ok(None);
     };
     preview_archive_entry_stems(Path::new(&path)).map(Some)
+}
+
+pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64)>, String> {
+    let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
+        return Ok(None);
+    };
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("metadata preview archive {path}: {e}"))?;
+    let mtime_secs = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(Some((path, meta.len(), mtime_secs)))
 }
 
 fn preview_archive_entry_stems(path: &Path) -> Result<HashSet<String>, String> {

@@ -737,11 +737,10 @@ pub(super) fn run_launcher_loop(
         });
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
+        let full_frame_present = should_present_full_frame(launching, route_action);
         let arcade_list_rect = if !preview_stress && !launching && nav.screen == Screen::Arcade {
-            let force_arcade_redraw = this_rect.is_some_and(|rect| {
-                rect.intersection(ArcadeListRenderer::dirty_rect())
-                    .is_some()
-            });
+            let force_arcade_redraw =
+                arcade_list_needs_forced_redraw(this_rect, full_frame_present);
             arcade_list_renderer.draw(
                 active_arcade_games,
                 nav.arcade.visual_index,
@@ -791,7 +790,7 @@ pub(super) fn run_launcher_loop(
         }
         let mut copied_rows = 0u32;
         let mut cached_present_frame_us = 0u128;
-        if should_present_full_frame(launching, route_action) {
+        if full_frame_present {
             let cached_copy_start = Instant::now();
             copied_rows = target.present_rows(f, disp, ui, 0, ui.render_h());
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();
