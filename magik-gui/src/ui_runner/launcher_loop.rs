@@ -1,5 +1,8 @@
 use super::launcher_frame_accounting::{LauncherFrameAccounting, LauncherPresentedFrame};
 use super::*;
+use mister_magik_fb::framebuffer_ownership::{
+    should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
+};
 
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
@@ -81,6 +84,7 @@ pub(super) fn run_launcher_loop(
     let mut pacer = VsyncPacer::from_env();
     let mut present_probe = PresentProbe::from_env();
     let mut preview = PreviewState::new();
+    let mut route_guard = FramebufferRouteGuard::from_env();
     let mut preview_transition = PreviewTransitionDemo::from_env();
     let mut effect_label_overlay = preview_transition
         .label_overlay_enabled()
@@ -208,6 +212,40 @@ pub(super) fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
+        let mut route_action = FramebufferRouteAction {
+            reassert_route: false,
+            force_full_present: false,
+        };
+        if !launching {
+            route_action = route_guard.tick(frames);
+            if route_action.reassert_route {
+                match f.fb_enable_format(
+                    0,
+                    ui.fb_w() as u16,
+                    ui.fb_h() as u16,
+                    ui_fpga_scaled_mode(),
+                    Some(0),
+                    Some(0),
+                    std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+                    FramebufferFormat::from_env(),
+                ) {
+                    Ok(flag) => {
+                        boot_analytics::event(
+                            "launcher_fb_route_reasserted",
+                            format!("frame={frames} support_flag={flag}"),
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("failed to reassert Slint framebuffer route: {e}");
+                        route_action.force_full_present = false;
+                        boot_analytics::event(
+                            "launcher_fb_route_reassert_failed",
+                            format!("frame={frames} error={e}"),
+                        );
+                    }
+                }
+            }
+        }
         if last_clock_update.elapsed() >= Duration::from_secs(1) {
             let clock_text = launcher_clock_text();
             if dirty_opt {
@@ -753,7 +791,7 @@ pub(super) fn run_launcher_loop(
         }
         let mut copied_rows = 0u32;
         let mut cached_present_frame_us = 0u128;
-        if launching {
+        if should_present_full_frame(launching, route_action) {
             let cached_copy_start = Instant::now();
             copied_rows = target.present_rows(f, disp, ui, 0, ui.render_h());
             cached_present_frame_us = cached_copy_start.elapsed().as_micros();

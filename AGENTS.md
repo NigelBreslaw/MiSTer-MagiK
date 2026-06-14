@@ -644,6 +644,19 @@ Important gotchas:
   starts must be OSD-only; framebuffer ownership begins with the Rust
   `early-black` helper after Main has initialized video. See
   `history/2026-6-12/slint-owned-magik-framebuffer.md`.
+- **Launcher framebuffer ownership is now periodically reasserted by Slint.**
+  A 2026-06-14 live diagnosis found Main could report
+  `launcher_active=true`, `visible_owner="core"`, and `fb_enabled=0` while the
+  Slint child was alive, because Rust routes `/dev/fb0` through SPI outside
+  Main's `video_fb_enable()` bookkeeping. The launcher now sends the RGB565
+  `SET_FBUF` route on frame 0 and every 60 frames by default, and pairs each
+  successful reassert with a full cached-frame present so dirty-row mode cannot
+  leave `/dev/fb0` stale after another helper process touches it. Tune with
+  `MISTER_FB_ROUTE_REASSERT_FRAMES`; set it to `0` only for diagnostics. When
+  investigating this path, trust Slint `launcher_fb_route_reasserted` events and
+  `scripts/mister status` `fb0: slint_like` over Main's stale
+  `visible_owner`. See
+  `history/2026-6-14/launcher-framebuffer-route-reassertion.md`.
 
 ---
 
