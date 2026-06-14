@@ -1,5 +1,8 @@
 use image::{imageops::FilterType, RgbImage};
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 use rayon::prelude::*;
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use ssh2::{ExtendedData, Session};
 use std::env;
@@ -7,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -181,6 +185,9 @@ fn run_cli() -> Result<()> {
         "preview-cache-build" => {
             preview_cache_build(&args)?;
         }
+        "mame-metadata-build" => {
+            mame_metadata_build(&args)?;
+        }
         "recover" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             if !dry_run {
@@ -202,7 +209,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|recover> ..."
+        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|recover> ..."
     );
 }
 
@@ -330,6 +337,262 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
         png_dir.display(),
         raw_dir.display()
     );
+    Ok(())
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct MameMachine {
+    setname: String,
+    parent_setname: Option<String>,
+    title: String,
+    year: Option<String>,
+    manufacturer: Option<String>,
+    sourcefile: Option<String>,
+    rotate: Option<i64>,
+    display_type: Option<String>,
+    display_width: Option<i64>,
+    display_height: Option<i64>,
+    refresh_hz: Option<f64>,
+    players: Option<i64>,
+    coins: Option<i64>,
+    control_type: Option<String>,
+    control_ways: Option<String>,
+    buttons: Option<i64>,
+    driver_status: Option<String>,
+    emulation_status: Option<String>,
+    savestate: Option<String>,
+    source_version: String,
+}
+
+fn mame_metadata_build(args: &[String]) -> Result<()> {
+    let out = option_value(args, "--out")
+        .or_else(|| option_value(args, "-o"))
+        .ok_or("mame-metadata-build needs --out <sqlite>")?;
+    let xml = if let Some(listxml) = option_value(args, "--listxml") {
+        fs::read_to_string(listxml)?
+    } else {
+        let mame = option_value(args, "--mame")
+            .or_else(|| env::var("MAME_BIN").ok())
+            .unwrap_or_else(|| "/Users/nigelb/Downloads/mame0288-arm64/mame".to_string());
+        let output = Command::new(&mame).arg("-listxml").output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "{mame} -listxml failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        String::from_utf8(output.stdout)?
+    };
+    let machines = parse_mame_listxml(&xml)?;
+    write_mame_metadata_db(Path::new(&out), &machines)?;
+    println!(
+        "mame_metadata_build out={} machines={} source_version={}",
+        out,
+        machines.len(),
+        machines
+            .first()
+            .map(|machine| machine.source_version.as_str())
+            .unwrap_or("unknown")
+    );
+    Ok(())
+}
+
+fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut machines = Vec::new();
+    let mut source_version = "unknown".to_string();
+    let mut current: Option<MameMachine> = None;
+    let mut field = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                match tag.as_str() {
+                    "mame" => {
+                        if let Some(build) = attr_value(&e, b"build") {
+                            source_version = build;
+                        }
+                    }
+                    "machine" => {
+                        let setname = attr_value(&e, b"name").unwrap_or_default();
+                        current = Some(MameMachine {
+                            setname,
+                            parent_setname: attr_value(&e, b"cloneof"),
+                            sourcefile: attr_value(&e, b"sourcefile"),
+                            source_version: source_version.clone(),
+                            ..MameMachine::default()
+                        });
+                    }
+                    "description" | "year" | "manufacturer" if current.is_some() => field = tag,
+                    "input" => {
+                        if let Some(machine) = current.as_mut() {
+                            apply_mame_input(machine, &e);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                if let Some(machine) = current.as_mut() {
+                    match tag.as_str() {
+                        "display" if machine.display_type.is_none() => {
+                            apply_mame_display(machine, &e)
+                        }
+                        "input" => apply_mame_input(machine, &e),
+                        "control" => apply_mame_control(machine, &e),
+                        "driver" => apply_mame_driver(machine, &e),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if let Some(machine) = current.as_mut() {
+                    let text = e.xml10_content().unwrap_or_default().into_owned();
+                    match field.as_str() {
+                        "description" => machine.title = text,
+                        "year" => machine.year = Some(text),
+                        "manufacturer" => machine.manufacturer = Some(text),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                if tag == "machine" {
+                    if let Some(mut machine) = current.take() {
+                        if machine.title.is_empty() {
+                            machine.title = machine.setname.clone();
+                        }
+                        machines.push(machine);
+                    }
+                }
+                field.clear();
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(format!("parse MAME listxml: {e}").into()),
+            _ => {}
+        }
+    }
+    Ok(machines)
+}
+
+fn apply_mame_display(machine: &mut MameMachine, e: &BytesStart<'_>) {
+    machine.display_type = attr_value(e, b"type");
+    machine.rotate = attr_value(e, b"rotate").and_then(|value| value.parse().ok());
+    machine.display_width = attr_value(e, b"width").and_then(|value| value.parse().ok());
+    machine.display_height = attr_value(e, b"height").and_then(|value| value.parse().ok());
+    machine.refresh_hz = attr_value(e, b"refresh").and_then(|value| value.parse().ok());
+}
+
+fn apply_mame_input(machine: &mut MameMachine, e: &BytesStart<'_>) {
+    machine.players = attr_value(e, b"players").and_then(|value| value.parse().ok());
+    machine.coins = attr_value(e, b"coins").and_then(|value| value.parse().ok());
+}
+
+fn apply_mame_control(machine: &mut MameMachine, e: &BytesStart<'_>) {
+    if machine.control_type.is_none() {
+        machine.control_type = attr_value(e, b"type");
+    }
+    if machine.control_ways.is_none() {
+        machine.control_ways = attr_value(e, b"ways");
+    }
+    if let Some(buttons) = attr_value(e, b"buttons").and_then(|value| value.parse::<i64>().ok()) {
+        machine.buttons = Some(machine.buttons.unwrap_or(0).max(buttons));
+    }
+}
+
+fn apply_mame_driver(machine: &mut MameMachine, e: &BytesStart<'_>) {
+    machine.driver_status = attr_value(e, b"status");
+    machine.emulation_status = attr_value(e, b"emulation");
+    machine.savestate = attr_value(e, b"savestate");
+}
+
+fn attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
+    e.attributes()
+        .with_checks(false)
+        .flatten()
+        .find(|attr| attr.key.as_ref() == key)
+        .map(|attr| String::from_utf8_lossy(attr.value.as_ref()).into_owned())
+}
+
+fn write_mame_metadata_db(path: &Path, machines: &[MameMachine]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("sqlite3.tmp");
+    match fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let mut conn = Connection::open(&tmp)?;
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode=OFF;
+        PRAGMA synchronous=OFF;
+        CREATE TABLE mame_machines (
+            setname TEXT PRIMARY KEY,
+            parent_setname TEXT,
+            title TEXT NOT NULL,
+            year TEXT,
+            manufacturer TEXT,
+            sourcefile TEXT,
+            rotate INTEGER,
+            display_type TEXT,
+            display_width INTEGER,
+            display_height INTEGER,
+            refresh_hz REAL,
+            players INTEGER,
+            coins INTEGER,
+            control_type TEXT,
+            control_ways TEXT,
+            buttons INTEGER,
+            driver_status TEXT,
+            emulation_status TEXT,
+            savestate TEXT,
+            source_version TEXT NOT NULL
+        ) WITHOUT ROWID;
+        "#,
+    )?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO mame_machines(
+                setname,parent_setname,title,year,manufacturer,sourcefile,rotate,display_type,
+                display_width,display_height,refresh_hz,players,coins,control_type,control_ways,
+                buttons,driver_status,emulation_status,savestate,source_version
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+        )?;
+        for machine in machines {
+            stmt.execute(params![
+                machine.setname,
+                machine.parent_setname,
+                machine.title,
+                machine.year,
+                machine.manufacturer,
+                machine.sourcefile,
+                machine.rotate,
+                machine.display_type,
+                machine.display_width,
+                machine.display_height,
+                machine.refresh_hz,
+                machine.players,
+                machine.coins,
+                machine.control_type,
+                machine.control_ways,
+                machine.buttons,
+                machine.driver_status,
+                machine.emulation_status,
+                machine.savestate,
+                machine.source_version
+            ])?;
+        }
+    }
+    tx.commit()?;
+    fs::rename(tmp, path)?;
     Ok(())
 }
 
@@ -2362,6 +2625,53 @@ H: Handlers=sysrq kbd event7
     }
 
     #[test]
+    fn parses_mame_1942_metadata() {
+        let machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
+        let parent = machines
+            .iter()
+            .find(|machine| machine.setname == "1942")
+            .unwrap();
+        let clone = machines
+            .iter()
+            .find(|machine| machine.setname == "1942a")
+            .unwrap();
+
+        assert_eq!(parent.parent_setname, None);
+        assert_eq!(parent.title, "1942 (Revision B)");
+        assert_eq!(parent.year.as_deref(), Some("1984"));
+        assert_eq!(parent.manufacturer.as_deref(), Some("Capcom"));
+        assert_eq!(parent.rotate, Some(270));
+        assert_eq!(parent.display_width, Some(256));
+        assert_eq!(parent.display_height, Some(224));
+        assert_eq!(parent.players, Some(2));
+        assert_eq!(parent.coins, Some(2));
+        assert_eq!(parent.control_type.as_deref(), Some("joy"));
+        assert_eq!(parent.control_ways.as_deref(), Some("8"));
+        assert_eq!(parent.buttons, Some(2));
+        assert_eq!(parent.driver_status.as_deref(), Some("good"));
+        assert_eq!(parent.source_version, "0.288 (mame0288)");
+        assert_eq!(clone.parent_setname.as_deref(), Some("1942"));
+    }
+
+    #[test]
+    fn writes_mame_metadata_sqlite() {
+        let machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
+        let path = temp_path("mame.sqlite3");
+        write_mame_metadata_db(&path, &machines).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        let row: (String, String, i64, i64) = conn
+            .query_row(
+                "SELECT parent_setname, manufacturer, rotate, buttons FROM mame_machines WHERE setname='1942a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(row, ("1942".to_string(), "Capcom".to_string(), 270, 2));
+    }
+
+    #[test]
     fn raw565_preview_header_and_stride_match_runtime_format() {
         let image = RgbImage::from_raw(
             3,
@@ -2407,4 +2717,41 @@ H: Handlers=sysrq kbd event7
         assert!(text.contains("render_us"));
         assert!(text.contains("copy_us"));
     }
+
+    const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
+<mame build="0.288 (mame0288)" debug="no" mameconfig="10">
+  <machine name="1942" sourcefile="capcom/1942.cpp">
+    <description>1942 (Revision B)</description>
+    <year>1984</year>
+    <manufacturer>Capcom</manufacturer>
+    <display tag="screen" type="raster" rotate="270" width="256" height="224" refresh="59.637405" />
+    <input players="2" coins="2">
+      <control type="joy" player="1" buttons="2" ways="8" />
+      <control type="joy" player="2" buttons="2" ways="8" />
+    </input>
+    <driver status="good" emulation="good" savestate="supported" />
+  </machine>
+  <machine name="1942a" sourcefile="capcom/1942.cpp" cloneof="1942" romof="1942">
+    <description>1942 (Revision A)</description>
+    <year>1984</year>
+    <manufacturer>Capcom</manufacturer>
+    <display tag="screen" type="raster" rotate="270" width="256" height="224" refresh="59.637405" />
+    <input players="2" coins="2">
+      <control type="joy" player="1" buttons="2" ways="8" />
+      <control type="joy" player="2" buttons="2" ways="8" />
+    </input>
+    <driver status="good" emulation="good" savestate="supported" />
+  </machine>
+  <machine name="1942p" sourcefile="capcom/1942.cpp" cloneof="1942" romof="1942">
+    <description>1942 (Tecfri PCB, bootleg?)</description>
+    <year>1984</year>
+    <manufacturer>bootleg</manufacturer>
+    <display tag="screen" type="raster" rotate="270" width="256" height="224" refresh="59.637405" />
+    <input players="1" coins="2">
+      <control type="joy" buttons="2" ways="8" />
+    </input>
+    <driver status="good" emulation="good" savestate="supported" />
+  </machine>
+</mame>
+"#;
 }
