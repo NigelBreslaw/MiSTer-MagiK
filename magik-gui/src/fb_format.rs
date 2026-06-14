@@ -47,6 +47,14 @@ impl FramebufferFormat {
         }
     }
 
+    pub const fn production_default() -> Self {
+        Self::Rgb565
+    }
+
+    pub const fn is_diagnostic_override(self) -> bool {
+        matches!(self, Self::Xrgb8888)
+    }
+
     pub fn from_label(label: &str) -> Option<Self> {
         match label {
             "8888" | "xrgb8888" | "XRGB8888" => Some(Self::Xrgb8888),
@@ -60,7 +68,7 @@ impl FramebufferFormat {
             .ok()
             .as_deref()
             .and_then(Self::from_label)
-            .unwrap_or(Self::Rgb565)
+            .unwrap_or_else(Self::production_default)
     }
 
     pub fn rb_from_env(self) -> bool {
@@ -112,6 +120,16 @@ mod tests {
         assert_eq!(FramebufferFormat::Xrgb8888.stride_bytes(960), 3840);
         assert_eq!(FramebufferFormat::Rgb565.stride_bytes(960), 1920);
         assert_eq!(FramebufferFormat::Rgb565.stride_bytes(961), 1936);
+    }
+
+    #[test]
+    fn production_default_is_rgb565() {
+        assert_eq!(
+            FramebufferFormat::production_default(),
+            FramebufferFormat::Rgb565
+        );
+        assert!(FramebufferFormat::Xrgb8888.is_diagnostic_override());
+        assert!(!FramebufferFormat::Rgb565.is_diagnostic_override());
     }
 
     #[test]
