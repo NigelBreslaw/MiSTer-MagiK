@@ -766,6 +766,13 @@ pub fn refresh_default_sqlite_database(
     refresh_sqlite_database(&cfg, progress)
 }
 
+pub fn default_sqlite_preview_archive_fingerprint_unchanged() -> bool {
+    let cfg = BenchConfig::production();
+    read_sqlite_fingerprint(&cfg.sqlite_path)
+        .as_ref()
+        .is_some_and(preview_archive_fingerprint_unchanged)
+}
+
 fn refresh_sqlite_database(
     cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,

@@ -22,7 +22,12 @@ pub(super) fn start_library_catalog_worker(
                     if loaded.catalog.games.is_empty() {
                         cache_state = CatalogCacheState::Empty;
                     } else {
-                        cache_state = CatalogCacheState::Ready;
+                        cache_state =
+                            if library_db::default_sqlite_preview_archive_fingerprint_unchanged() {
+                                CatalogCacheState::Ready
+                            } else {
+                                CatalogCacheState::ReadyWithStalePreviewArchive
+                            };
                         let _ = tx.send(CatalogWorkerMessage::Ready {
                             catalog: loaded.catalog,
                             summary: None,
@@ -103,6 +108,7 @@ pub(super) fn start_library_catalog_worker(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatalogCacheState {
     Ready,
+    ReadyWithStalePreviewArchive,
     Empty,
     Missing,
 }
@@ -122,9 +128,9 @@ fn catalog_worker_plan(
     }
     match cache_state {
         CatalogCacheState::Ready => CatalogWorkerPlan::UseCacheOnly,
-        CatalogCacheState::Empty | CatalogCacheState::Missing => {
-            CatalogWorkerPlan::RefreshInProcess
-        }
+        CatalogCacheState::ReadyWithStalePreviewArchive
+        | CatalogCacheState::Empty
+        | CatalogCacheState::Missing => CatalogWorkerPlan::RefreshInProcess,
     }
 }
 
@@ -171,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_worker_refreshes_missing_or_empty_cache_without_refresh() {
+    fn catalog_worker_refreshes_missing_empty_or_stale_preview_cache_without_refresh() {
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Missing, false),
             CatalogWorkerPlan::RefreshInProcess
@@ -180,12 +186,17 @@ mod tests {
             catalog_worker_plan(CatalogCacheState::Empty, false),
             CatalogWorkerPlan::RefreshInProcess
         );
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::ReadyWithStalePreviewArchive, false),
+            CatalogWorkerPlan::RefreshInProcess
+        );
     }
 
     #[test]
     fn catalog_worker_refreshes_only_when_requested() {
         for state in [
             CatalogCacheState::Ready,
+            CatalogCacheState::ReadyWithStalePreviewArchive,
             CatalogCacheState::Empty,
             CatalogCacheState::Missing,
         ] {
