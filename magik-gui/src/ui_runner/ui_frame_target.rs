@@ -2028,6 +2028,10 @@ pub(super) fn copy_arcade_list_update(
             rect.rows()
         }
         ArcadeListUpdate::Scroll { .. } => {
+            // `Scroll` means the renderer reused its cached RAM surface. A
+            // prior live-framebuffer scroll-present path was visually correct
+            // but roughly doubled present cost because `/dev/fb0` reads are
+            // expensive on the MiSTer write-combined framebuffer.
             renderer.copy_layer_to_target(target, disp, ui);
             ArcadeListRenderer::dirty_rect().rows()
         }

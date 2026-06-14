@@ -124,7 +124,7 @@ def main() -> int:
             "present_probe_us",
             "wall_us",
         ]
-        print("\t".join(f"{field}={row[field]}" for field in fields))
+        print("\t".join(f"{field}={row[field]}" for field in fields if field in row))
     return 0
 
 
