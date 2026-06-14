@@ -45,7 +45,13 @@ struct ArcadeListDrawKey {
 
 pub(crate) enum ArcadeListUpdate {
     Full(DirtyRect),
-    Scroll { delta_y: isize },
+    /// The cached RAM list surface was advanced by scrolling and patching only
+    /// the newly exposed content band. This is not a framebuffer dirty rect:
+    /// presenting a scroll by reading from live `/dev/fb0` was measured slower
+    /// on MiSTer's write-combined framebuffer than rewriting the list overlay.
+    Scroll {
+        delta_y: isize,
+    },
 }
 
 impl ArcadeListRenderer {

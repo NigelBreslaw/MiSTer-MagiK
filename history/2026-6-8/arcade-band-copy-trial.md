@@ -84,3 +84,25 @@ extra work, but the presentation cost roughly doubled and p95 framebuffer
 present time reached about 5 ms with previews enabled. The slow path and its
 `MISTER_ARCADE_SCROLL_PRESENT` / `--scroll-present` toggles were removed after
 this run so future profiling cannot accidentally compare against it again.
+
+## Fresh review baseline - 2026-06-14
+
+Command:
+
+```bash
+scripts/profile-preview-scroll.sh 20 held-scroll LISTSCROLL-BEFORE-20260614 --skip-build --list-only --fb-format 565 --preview-format raw-rgb565 --visual-captures 0
+```
+
+Result:
+
+| Case | Frames | Avg wall | P95 wall | P99 wall | Slow >16.7 ms | Slow >20 ms | Avg fb-present | P95 fb-present | Rows |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| list-only normal | 1202 | 16361 us | 16480 us | 17136 us | 22 | 1 | 2592 us | 2840 us | 384 |
+
+This run reinforces the earlier conclusion. Wall time is the gating user-visible
+metric, but it sits close to one vblank even when the app burns extra present
+time. Use `fb_present_us` / `overlay_present_us` as the headroom metric for this
+specific optimization; otherwise a change can look neutral at 60 Hz while making
+the frame loop less robust. The existing `ArcadeListUpdate::Scroll` remains a
+RAM-surface reuse signal inside `ArcadeListRenderer`, not a request to scroll the
+already-presented framebuffer.
