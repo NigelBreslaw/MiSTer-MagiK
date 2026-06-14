@@ -142,7 +142,10 @@ fi
 
 BUILD_LOG="$(mktemp)"
 trap 'rm -f "$BUILD_LOG"' EXIT
-BUILD_ARGS=(--locked --timings --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
+  BUILD_ARGS+=(--timings)
+fi
 if [ -n "$BIN_TARGET" ]; then
   BUILD_ARGS+=(--bin "$BIN_TARGET")
 fi
@@ -170,9 +173,11 @@ if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
   exit 1
 fi
 echo "==> cross build OK"
-TIMING_REPORT="$(find "$PWD/target/cargo-timings" -type f -name 'cargo-timing*.html' -print 2>/dev/null | sort | tail -1 || true)"
-if [ -n "$TIMING_REPORT" ]; then
-  echo "==> Cargo timing report: $TIMING_REPORT"
+if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
+  TIMING_REPORT="$(find "$PWD/target/cargo-timings" -type f -name 'cargo-timing*.html' -print 2>/dev/null | sort | tail -1 || true)"
+  if [ -n "$TIMING_REPORT" ]; then
+    echo "==> Cargo timing report: $TIMING_REPORT"
+  fi
 fi
 
 BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
