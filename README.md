@@ -24,7 +24,6 @@ magik-gui/                         native frontend (mister-magik-fb)
   ui/controller_test.slint    pad test scene
   src/launcher.rs             nav + fifo load_core game launch
   src/fpga.rs                 SPI, fb_enable_direct, set_vga_fb
-main-mister/                       Main_MiSTer fork experiments
 scripts/
   deploy-rust.sh              build + deploy Slint child binary
   deploy-main-mister-experiment.sh build + deploy Main-as-parent experiment
@@ -35,6 +34,10 @@ tools/mister/                 Rust host-side MiSTer CLI
 history/                      experiment notes
 AGENTS.md                     operational guide (read this for MiSTer quirks)
 ```
+
+The maintained Main_MiSTer fork lives in a sibling checkout at
+`../mister-main-magik` by default. Set `MISTER_MAIN_DIR` to use a different fork
+path.
 
 ## Build & deploy
 
@@ -66,20 +69,20 @@ sections in file order.
 Build and deploy the fork + Slint child:
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-main-mister-experiment.sh
+scripts/deploy-main-mister-experiment.sh
 ```
 
 Or install the boot handoff after deploying binaries:
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/install-slint-boot.sh
+scripts/install-slint-boot.sh
 ```
 
 Restore stock menu by copying `/media/fat/MiSTer.ini.bak` back to
 `/media/fat/MiSTer.ini` and ensuring `inittab` boots stock MiSTer:
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/restore-stock-boot.sh
+scripts/restore-stock-boot.sh
 ```
 
 ## Dev / manual run
