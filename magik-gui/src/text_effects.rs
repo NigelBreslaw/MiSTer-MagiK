@@ -1,4 +1,5 @@
 //! Host-testable classic arcade/game and Amiga demo text effects.
+#![allow(clippy::too_many_arguments)]
 
 use std::time::Instant;
 
@@ -1361,7 +1362,7 @@ fn draw_dark_scanlines(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64) 
 }
 
 fn draw_warning_backdrop(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64) {
-    let pulse = triangle(frame as usize * 5 & 255) / 16;
+    let pulse = triangle((frame as usize * 5) & 255) / 16;
     clear(dst, color(30 + pulse, 4, 8));
     for y in (0..h).step_by(32) {
         let c = if ((y / 32 + frame as usize / 10) & 1) == 0 {
@@ -1448,7 +1449,7 @@ fn draw_bubble_backdrop(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64)
 
 fn draw_intermission_backdrop(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64) {
     clear(dst, color(4, 6, 18));
-    let curtain = triangle(frame as usize * 2 & 255) as usize * w / 255;
+    let curtain = triangle((frame as usize * 2) & 255) as usize * w / 255;
     fill_rect(dst, w, h, 0, 0, curtain, h, color(65, 10, 30));
     fill_rect(
         dst,
@@ -1603,7 +1604,7 @@ fn draw_keftales(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64) {
 fn draw_rotozoom_cells(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64) {
     let cx = w as isize / 2;
     let cy = h as isize / 2;
-    let zoom = 24 + triangle(frame as usize * 2 & 255) as isize / 4;
+    let zoom = 24 + triangle((frame as usize * 2) & 255) as isize / 4;
     for y in (0..h).step_by(6) {
         for x in (0..w).step_by(6) {
             let rx = x as isize - cx;
@@ -1638,13 +1639,11 @@ fn draw_tunnel(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64, images: 
             let dx = x as isize - cx;
             let dy = y as isize - cy;
             let d = (dx.unsigned_abs() + dy.unsigned_abs()).max(1);
-            let band = ((d / 10 + frame as usize) & 15) as usize;
+            let band = (d / 10 + frame as usize) & 15;
             let mut c = palette(band, frame);
             if let Some(img) = maybe_img {
-                let sx =
-                    ((dx.unsigned_abs() as usize + frame as usize) % img.w.max(1)).min(img.w - 1);
-                let sy = ((dy.unsigned_abs() as usize + frame as usize / 2) % img.h.max(1))
-                    .min(img.h - 1);
+                let sx = ((dx.unsigned_abs() + frame as usize) % img.w.max(1)).min(img.w - 1);
+                let sy = ((dy.unsigned_abs() + frame as usize / 2) % img.h.max(1)).min(img.h - 1);
                 c = blend(c, img.pixels[sy * img.stride + sx], 90);
             }
             fill_rect(dst, w, h, x as isize, y as isize, 4, 4, c);
@@ -1850,7 +1849,7 @@ fn render_zoom_from_horizon(
     counters: &mut TextCounters,
 ) {
     let text = "GO";
-    let t = triangle(frame as usize * 3 & 255) as usize;
+    let t = triangle((frame as usize * 3) & 255) as usize;
     let scale = 2 + t * (w / 90).max(4) / 255;
     let y = h as isize / 2 + (255 - t) as isize * h as isize / 640;
     let x = w as isize / 2 - text_width(text, scale) as isize / 2;
@@ -2644,7 +2643,7 @@ fn render_voice_sync(
     counters: &mut TextCounters,
 ) {
     let scale = (w / 190).max(2);
-    let pulse = triangle(frame as usize * 8 & 255) as usize / 96;
+    let pulse = triangle((frame as usize * 8) & 255) as usize / 96;
     draw_text_shadowed(
         dst,
         w,
@@ -3017,7 +3016,7 @@ fn render_turntable_logo(
 ) {
     let text = "MAGIK";
     let scale = (w / 190).max(2);
-    let phase = triangle(frame as usize * 3 & 255) as usize;
+    let phase = triangle((frame as usize * 3) & 255) as usize;
     let squash = (30 + phase) as isize;
     let x0 = w as isize / 2 - text_width(text, scale) as isize * squash / 255 / 2;
     for (i, ch) in text.chars().enumerate() {

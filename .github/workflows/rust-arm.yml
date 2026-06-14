@@ -101,7 +101,7 @@ jobs:
 
       - name: Clippy magik-gui host logic
         working-directory: magik-gui
-        run: cargo clippy --lib --no-default-features
+        run: cargo clippy --lib --no-default-features -- -D warnings
 
   arm-build:
     name: ${{ matrix.name }}

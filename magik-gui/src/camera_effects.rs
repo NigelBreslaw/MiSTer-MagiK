@@ -1,4 +1,5 @@
 //! Host-testable classic arcade camera/background effects.
+#![allow(clippy::too_many_arguments)]
 
 use std::time::Instant;
 
@@ -596,8 +597,7 @@ fn draw_silhouettes(dst: &mut [CameraPixel], w: usize, h: usize, frame: u64) {
     let base_y = h as isize - 88;
     let c = color(0, 0, 4);
     for i in 0..10 {
-        let x = ((i * 123) as isize - (frame as isize * (2 + (i & 1))) % (w as isize + 140))
-            + w as isize;
+        let x = ((i * 123) - (frame as isize * (2 + (i & 1))) % (w as isize + 140)) + w as isize;
         let height = (72 + (i * 17 % 80)) as usize;
         fill_rect(dst, w, h, x, base_y - height as isize, 36, height, c);
         fill_rect(dst, w, h, x - 14, base_y - height as isize / 2, 64, 14, c);
@@ -1067,7 +1067,7 @@ fn render_isometric_drift(
         for gx in -8..16isize {
             let sx = ox + (gx - gy) * tile_w / 2 - (frame as isize % tile_w);
             let sy = oy + (gx + gy) * tile_h / 2;
-            let idx = (gx + gy * 3).unsigned_abs() as usize + frame as usize / 120;
+            let idx = (gx + gy * 3).unsigned_abs() + frame as usize / 120;
             let c = if images.is_empty() {
                 let v = ((gx + gy + frame as isize / 20) & 7) as u8;
                 color(20 + v * 22, 80 + v * 9, 130 + v * 5)
