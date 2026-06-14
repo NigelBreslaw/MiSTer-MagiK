@@ -3566,6 +3566,7 @@ fn should_ignore_path(path: &Path) -> bool {
             || s.eq_ignore_ascii_case("screenshot")
             || s.eq_ignore_ascii_case("screenshots")
             || s.eq_ignore_ascii_case("screenshot-magik")
+            || s.eq_ignore_ascii_case("_organized")
             || s.eq_ignore_ascii_case("boxart")
     })
 }
@@ -3992,6 +3993,44 @@ mod tests {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name == "screenshot")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_ignores_organized_alias_dirs() {
+        let root = unique_temp_dir("ignore-organized-aliases");
+        let arcade_dir = root.join("_Arcade");
+        let organized_dir = arcade_dir.join("_Organized/_1 A-E");
+        std::fs::create_dir_all(&organized_dir).expect("create organized dir");
+        std::fs::write(
+            arcade_dir.join("Diamond Run.mra"),
+            "<misterromdescription><name>Diamond Run</name><setname>diamond</setname></misterromdescription>",
+        )
+        .expect("write source mra");
+        std::fs::write(
+            organized_dir.join("Diamond Run.mra"),
+            "<misterromdescription><name>Diamond Run Alias</name><setname>diamond-alias</setname></misterromdescription>",
+        )
+        .expect("write organized alias mra");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(scan.discoveries.len(), 1);
+        assert_eq!(scan.discoveries[0].title, "Diamond Run");
+        assert!(scan
+            .file_fingerprints
+            .contains_key(&arcade_dir.join("Diamond Run.mra").display().to_string()));
+        assert!(!scan
+            .file_fingerprints
+            .contains_key(&organized_dir.join("Diamond Run.mra").display().to_string()));
+        assert!(!scan.directory_manifest.keys().any(|path| Path::new(path)
+            .components()
+            .any(|component| component.as_os_str() == "_Organized")));
         let _ = std::fs::remove_dir_all(root);
     }
 
