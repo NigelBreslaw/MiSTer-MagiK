@@ -68,3 +68,38 @@ Compressed sources verified:
   `.neo` entries from `/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack.zip`.
   Existing organizer MGLs cover those payloads, so final launch plans prefer the
   `mgl` launchers instead of generating duplicate virtual plans.
+
+## Changed Refresh Shortcut Follow-Up
+
+Date: 2026-06-14
+
+The cached-database changed-refresh path used to do a full directory manifest
+walk to prove the DB was stale, then immediately start the real library scan and
+walk the same roots again. The refresh path now checks stored directory metadata
+first. If a directory is missing, stops being a directory, or has changed
+size/mtime, refresh skips the proof walk and goes straight to the rebuild. If
+directory metadata is unchanged, it still rebuilds and compares child signatures
+to catch same-second edits.
+
+Host fixture benchmark command shape:
+
+```bash
+MISTER_LIBRARY_ROOTS=/tmp/mister-library-bench-after2 \
+MISTER_LIBRARY_BENCH_SQLITE=/tmp/mister-library-bench-after2.sqlite3 \
+MISTER_LIBRARY_BENCH_LABEL=AFTER \
+MISTER_LIBRARY_BENCH_ITERATIONS=5 \
+MISTER_LIBRARY_BENCH_CHANGED_REFRESH=1 \
+cargo run --manifest-path magik-gui/catalog/Cargo.toml --bin library-scan-bench
+```
+
+Fixture: 1,300 candidate files, existing SQLite DB, then one synthetic `.nes`
+candidate added before each changed-refresh measurement.
+
+| Metric | Before avg | After avg | Change |
+| --- | ---: | ---: | ---: |
+| `changed_refresh scan_us` | 28.8 ms | 18.8 ms | 34.9% faster |
+| `changed_refresh` total | 97.2 ms | 81.9 ms | 15.8% faster |
+
+`MISTER_LIBRARY_BENCH_CHANGED_REFRESH=1` mutates the first configured library
+root and should only be used on disposable benchmark roots, not directly on
+`/media/fat`.

@@ -251,6 +251,7 @@ pub fn run_scan_bench() {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1)
         .max(1);
+    let bench_changed_refresh = env_bool("MISTER_LIBRARY_BENCH_CHANGED_REFRESH");
     println!("library-scan-bench label={label}");
     println!("library-scan-bench roots={}", cfg.roots.join("|"));
     println!(
@@ -300,6 +301,28 @@ pub fn run_scan_bench() {
             .unwrap_or(true);
         let manifest_us = manifest_t.elapsed().as_micros() as u64;
 
+        let changed_refresh = if bench_changed_refresh {
+            let change_dir = Path::new(&cfg.roots[0]).join("games/NES");
+            let change_parent = if change_dir.is_dir() {
+                change_dir
+            } else {
+                PathBuf::from(&cfg.roots[0])
+            };
+            let change_path =
+                change_parent.join(format!("Mister_Magik_Refresh_Bench_{iteration}.nes"));
+            if let Err(e) = std::fs::write(&change_path, b"[mister]\nrbf=menu\n") {
+                eprintln!(
+                    "library-scan-bench changed refresh setup failed at {}: {e}",
+                    change_path.display()
+                );
+            }
+            let changed_refresh_t = Instant::now();
+            let summary = refresh_sqlite_database(&cfg, None);
+            Some((changed_refresh_t.elapsed().as_micros() as u64, summary))
+        } else {
+            None
+        };
+
         println!(
             "library_scan_bench_tsv\t{label}\t{iteration}\tcold_scan\t{cold_us}\tdiscover_us={}\tclassify_us={}\tnormal_files={}\tcontainers={}\tentries={}\tdiscoveries={}\tdirs={}",
             scan.discover_us,
@@ -320,6 +343,20 @@ pub fn run_scan_bench() {
             "library_scan_bench_tsv\t{label}\t{iteration}\tno_change_manifest\t{manifest_us}\tchanged={manifest_changed}\tdirs={}",
             scan.directory_manifest.len()
         );
+        if let Some((changed_refresh_us, changed_summary)) = changed_refresh {
+            match changed_summary {
+                Ok(summary) => println!(
+                    "library_scan_bench_tsv\t{label}\t{iteration}\tchanged_refresh\t{changed_refresh_us}\tscan_us={}\timport_us={}\tskipped={}\tdiscoveries={}",
+                    summary.scan_us,
+                    summary.import_us,
+                    summary.skipped,
+                    summary.discoveries
+                ),
+                Err(e) => println!(
+                    "library_scan_bench_tsv\t{label}\t{iteration}\tchanged_refresh_error\t{changed_refresh_us}\t{e}"
+                ),
+            }
+        }
     }
 }
 
@@ -718,9 +755,16 @@ fn canonical_variant_title(title: &str) -> String {
 }
 
 pub fn refresh_default_sqlite_database(
-    mut progress: ProgressCallback<'_>,
+    progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let cfg = BenchConfig::production();
+    refresh_sqlite_database(&cfg, progress)
+}
+
+fn refresh_sqlite_database(
+    cfg: &BenchConfig,
+    mut progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
     let scan_t = Instant::now();
     if let Some(existing) = read_sqlite_fingerprint(&cfg.sqlite_path) {
         if let Some(report) = progress.as_mut() {
@@ -1089,12 +1133,33 @@ fn validate_or_rebuild_directory_manifest(
             return None;
         }
     }
+    if directory_manifest_metadata_changed(&existing.directory_manifest) {
+        return Some(DirectoryManifest::new());
+    }
+    // Directory metadata can miss same-second child edits on some filesystems,
+    // so only use it as an early changed signal. The unchanged case still
+    // rebuilds and compares child signatures before trusting the cached DB.
     let current = build_directory_manifest(roots, None);
     if current == existing.directory_manifest {
         Some(current)
     } else {
         Some(DirectoryManifest::new())
     }
+}
+
+fn directory_manifest_metadata_changed(existing: &DirectoryManifest) -> bool {
+    for (dir, signature) in existing {
+        let Ok(meta) = std::fs::metadata(dir) else {
+            return true;
+        };
+        if !meta.is_dir() {
+            return true;
+        }
+        if meta.len() != signature.dir_size || mtime_secs(&meta) != signature.dir_mtime_secs {
+            return true;
+        }
+    }
+    false
 }
 
 enum DiscoveryEvent {
@@ -3541,6 +3606,21 @@ mod tests {
         let validated = validate_or_rebuild_directory_manifest(&[root_key], &fingerprint);
 
         assert_eq!(validated, Some(manifest));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn directory_manifest_metadata_check_detects_missing_directory() {
+        let root = unique_temp_dir("manifest-metadata-missing");
+        let rom_dir = root.join("games/NES");
+        std::fs::create_dir_all(&rom_dir).expect("create rom dir");
+        std::fs::write(rom_dir.join("unchanged.nes"), b"rom").expect("write rom");
+        let root_key = root.display().to_string();
+        let manifest = build_directory_manifest(std::slice::from_ref(&root_key), None);
+
+        assert!(!directory_manifest_metadata_changed(&manifest));
+        std::fs::remove_dir_all(&rom_dir).expect("remove rom dir");
+        assert!(directory_manifest_metadata_changed(&manifest));
         let _ = std::fs::remove_dir_all(root);
     }
 
