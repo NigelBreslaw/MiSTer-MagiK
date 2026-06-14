@@ -34,13 +34,14 @@ const DEFAULT_ROOTS: &[&str] = &[
 ];
 
 pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
+pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 18;
+const SCHEMA_VERSION: u32 = 19;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -166,6 +167,14 @@ struct DbFingerprint {
     file_fingerprints: FileFingerprint,
     container_fingerprints: BTreeMap<String, (u64, i64)>,
     directory_manifest: DirectoryManifest,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MameMachineMetadata {
+    parent_setname: Option<String>,
+    title: String,
+    year: Option<String>,
+    manufacturer: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -365,6 +374,12 @@ pub fn default_sqlite_path() -> PathBuf {
     std::env::var("MISTER_LIBRARY_SQLITE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH))
+}
+
+pub fn default_mame_sqlite_path() -> PathBuf {
+    std::env::var("MISTER_MAME_SQLITE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_MAME_SQLITE_PATH))
 }
 
 pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
@@ -1781,6 +1796,11 @@ fn discovery_from_profile_file(
                 .as_deref()
                 .and_then(|payload| profile_for_mgl_payload(profiles, &file.path, payload));
             let profile = payload_profile.unwrap_or(profile);
+            let setname = if profile.system_id == "neogeo" {
+                neogeo_mgl_setname(&file.path, mgl.file_path.as_deref())
+            } else {
+                None
+            };
             return GameDiscovery {
                 source_path: file.path.display().to_string(),
                 launch_ref: file.path.display().to_string(),
@@ -1798,7 +1818,7 @@ fn discovery_from_profile_file(
                 manufacturer: None,
                 genre: None,
                 year: None,
-                setname: None,
+                setname,
                 parent: None,
                 image_path: None,
                 has_image: false,
@@ -1936,6 +1956,12 @@ fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
         rbf: tag_text(&data, "rbf"),
         file_path: attr_text(&data, "path"),
     })
+}
+
+fn neogeo_mgl_setname(mgl_path: &Path, payload_path: Option<&str>) -> Option<String> {
+    payload_path
+        .and_then(parenthesized_setname)
+        .or_else(|| parenthesized_setname(&mgl_path.display().to_string()))
 }
 
 fn tag_text(text: &str, tag: &str) -> Option<String> {
@@ -2095,7 +2121,75 @@ fn sync_parent_dir(path: &Path) {
     }
 }
 
+fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadata> {
+    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return HashMap::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT setname,parent_setname,title,year,manufacturer FROM mame_machines",
+    ) else {
+        return HashMap::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            MameMachineMetadata {
+                parent_setname: row.get(1)?,
+                title: row.get(2)?,
+                year: row.get(3)?,
+                manufacturer: row.get(4)?,
+            },
+        ))
+    }) else {
+        return HashMap::new();
+    };
+    rows.filter_map(|row| row.ok()).collect()
+}
+
+fn mame_identity_for_discovery(discovery: &GameDiscovery) -> Option<String> {
+    if discovery.platform_id != "arcade" && discovery.platform_id != "neogeo" {
+        return None;
+    }
+    discovery
+        .setname
+        .as_deref()
+        .map(str::trim)
+        .filter(|setname| !setname.is_empty())
+        .map(normalize_id)
+}
+
+fn mame_identity_projection<'a>(
+    identity_id: &str,
+    metadata: &'a HashMap<String, MameMachineMetadata>,
+) -> (String, Option<&'a str>, Option<&'a str>, Option<&'a str>, &'static str) {
+    if let Some(machine) = metadata.get(identity_id) {
+        let family_id = machine
+            .parent_setname
+            .as_deref()
+            .filter(|parent| !parent.trim().is_empty())
+            .unwrap_or(identity_id)
+            .to_string();
+        (
+            family_id,
+            Some(machine.title.as_str()),
+            machine.year.as_deref(),
+            machine.manufacturer.as_deref(),
+            "mame",
+        )
+    } else {
+        (identity_id.to_string(), None, None, None, "setname")
+    }
+}
+
 fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
+    write_sqlite_scan_with_mame(path, scan, &default_mame_sqlite_path())
+}
+
+fn write_sqlite_scan_with_mame(
+    path: &Path,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+) -> Result<(), String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     conn.execute_batch(
         r#"
@@ -2186,6 +2280,46 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             priority INTEGER NOT NULL,
             confidence TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE launchables (
+            launchable_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            system_id TEXT NOT NULL,
+            launch_kind TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            launch_ref TEXT NOT NULL,
+            setname TEXT,
+            core_id TEXT NOT NULL,
+            hardware_id TEXT NOT NULL,
+            confidence TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE launchable_identities (
+            launchable_id TEXT NOT NULL,
+            namespace TEXT NOT NULL,
+            identity_id TEXT NOT NULL,
+            family_id TEXT,
+            metadata_title TEXT,
+            year TEXT,
+            manufacturer TEXT,
+            source TEXT NOT NULL,
+            PRIMARY KEY(launchable_id, namespace, identity_id)
+        ) WITHOUT ROWID;
+        CREATE TABLE asset_packs (
+            pack_id TEXT PRIMARY KEY,
+            platform_id TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            local_path TEXT NOT NULL,
+            codec TEXT,
+            version TEXT
+        ) WITHOUT ROWID;
+        CREATE TABLE asset_entries (
+            pack_id TEXT NOT NULL,
+            asset_key TEXT NOT NULL,
+            identity_namespace TEXT,
+            identity_id TEXT,
+            width INTEGER,
+            height INTEGER,
+            PRIMARY KEY(pack_id, asset_key)
+        ) WITHOUT ROWID;
         CREATE TABLE launcher_catalog (
             ordinal INTEGER PRIMARY KEY,
             title TEXT NOT NULL,
@@ -2234,6 +2368,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
 
+    let mame_metadata = load_mame_machine_metadata(mame_sqlite_path);
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
@@ -2384,6 +2519,18 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             )
             .map_err(|e| format!("prepare launch plan insert: {e}"))?;
+        let mut launchable_stmt = tx
+            .prepare(
+                "INSERT INTO launchables(launchable_id,title,system_id,launch_kind,source_path,launch_ref,setname,core_id,hardware_id,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            )
+            .map_err(|e| format!("prepare launchable insert: {e}"))?;
+        let mut identity_stmt = tx
+            .prepare(
+                "INSERT INTO launchable_identities(launchable_id,namespace,identity_id,family_id,metadata_title,year,manufacturer,source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            )
+            .map_err(|e| format!("prepare launchable identity insert: {e}"))?;
         let mut region_stmt = tx
             .prepare(
                 "INSERT INTO region_metadata(game_id,inferred_region,confidence,override_region)
@@ -2467,6 +2614,36 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                     confidence_str(discovery.confidence)
                 ])
                 .map_err(|e| format!("insert launch plan: {e}"))?;
+            launchable_stmt
+                .execute(params![
+                    key.as_str(),
+                    discovery.title.as_str(),
+                    system_id.as_str(),
+                    launch_kind_for_discovery(discovery),
+                    discovery.source_path.as_str(),
+                    plan_launch_ref.as_str(),
+                    discovery.setname.as_deref(),
+                    discovery.core_id.as_str(),
+                    discovery.hardware_id.as_str(),
+                    confidence_str(discovery.confidence)
+                ])
+                .map_err(|e| format!("insert launchable: {e}"))?;
+            if let Some(identity_id) = mame_identity_for_discovery(discovery) {
+                let (family_id, title, year, manufacturer, source) =
+                    mame_identity_projection(&identity_id, &mame_metadata);
+                identity_stmt
+                    .execute(params![
+                        key.as_str(),
+                        "mame",
+                        identity_id.as_str(),
+                        family_id.as_str(),
+                        title,
+                        year,
+                        manufacturer,
+                        source
+                    ])
+                    .map_err(|e| format!("insert launchable identity: {e}"))?;
+            }
             let region = infer_region_metadata(discovery);
             region_stmt
                 .execute(params![
@@ -3217,6 +3394,38 @@ mod tests {
     }
 
     #[test]
+    fn neogeo_mgl_discovery_uses_payload_setname() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-neogeo-mgl-test-{}.mgl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><rbf>NeoGeo</rbf><file delay="2" type="s" path="/media/fat/games/NeoGeo/Neo Geo Mister FGPA Ultra Pack.zip/Neo Geo Mister FGPA Ultra Pack/ World A-Z/Metal Slug 3 (mslug3).neo"/></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+        let meta = std::fs::metadata(&path).expect("stat mgl fixture");
+        let file = FoundFile {
+            path: path.clone(),
+            ext: "mgl".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "mgl")
+            .expect("mgl profile");
+        let payload_rule = profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+
+        assert_eq!(discovery.platform_id, "neogeo");
+        assert_eq!(discovery.setname.as_deref(), Some("mslug3"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn mgl_covered_payload_does_not_get_virtual_duplicate() {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-mgl-dedupe-test-{}.mgl",
@@ -3419,6 +3628,167 @@ mod tests {
             discovery.image_path.as_deref(),
             Some("/media/fat/_Arcade/media/screenshot/mpatrol.png")
         );
+    }
+
+    #[test]
+    fn arcade_mra_identity_uses_mame_parent_family() {
+        let root = unique_temp_dir("arcade-mame-identity");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                (
+                    "1942",
+                    None,
+                    "1942 (Revision B)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+                (
+                    "1942b",
+                    Some("1942"),
+                    "1942 (First Version)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let mut discovery = mra_discovery(1, "1942 (First Version)");
+        discovery.setname = Some("1942b".to_string());
+
+        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
+            .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row = conn
+            .query_row(
+                "SELECT l.system_id,l.launch_kind,i.identity_id,i.family_id,i.metadata_title,i.year,i.manufacturer,i.source
+                 FROM launchables l
+                 JOIN launchable_identities i ON i.launchable_id=l.launchable_id",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .expect("query identity row");
+
+        assert_eq!(row.0, "arcade");
+        assert_eq!(row.1, "mra");
+        assert_eq!(row.2, "1942b");
+        assert_eq!(row.3, "1942");
+        assert_eq!(row.4.as_deref(), Some("1942 (First Version)"));
+        assert_eq!(row.5.as_deref(), Some("1984"));
+        assert_eq!(row.6.as_deref(), Some("Capcom"));
+        assert_eq!(row.7, "mame");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn neogeo_mgl_identity_uses_mame_setname() {
+        let root = unique_temp_dir("neogeo-mame-identity");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[(
+                "mslug3",
+                None,
+                "Metal Slug 3 (NGM-2560)",
+                Some("2000"),
+                Some("SNK"),
+            )],
+        );
+        let path = "/media/fat/_Games/_Neo Geo MVS & AES/Metal Slug 3 (mslug3).mgl";
+        let mut discovery = mgl(path, path);
+        discovery.title = "Metal Slug 3".to_string();
+        discovery.platform_id = "neogeo".to_string();
+        discovery.core_id = "neogeo".to_string();
+        discovery.hardware_id = "neogeo".to_string();
+        discovery.setname = Some("mslug3".to_string());
+
+        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
+            .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row = conn
+            .query_row(
+                "SELECT identity_id,family_id,metadata_title,year,manufacturer,source
+                 FROM launchable_identities",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .expect("query identity row");
+
+        assert_eq!(row.0, "mslug3");
+        assert_eq!(row.1, "mslug3");
+        assert_eq!(row.2.as_deref(), Some("Metal Slug 3 (NGM-2560)"));
+        assert_eq!(row.3.as_deref(), Some("2000"));
+        assert_eq!(row.4.as_deref(), Some("SNK"));
+        assert_eq!(row.5, "mame");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unknown_mame_identity_remains_launchable_without_enrichment() {
+        let root = unique_temp_dir("unknown-mame-identity");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(&mame_db, &[]);
+        let mut discovery = mra_discovery(1, "Mystery Arcade Game");
+        discovery.setname = Some("mystery".to_string());
+
+        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
+            .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let launchable_count: i64 = conn
+            .query_row("SELECT count(*) FROM launchables", [], |row| row.get(0))
+            .expect("query launchable count");
+        let row = conn
+            .query_row(
+                "SELECT identity_id,family_id,metadata_title,year,manufacturer,source
+                 FROM launchable_identities",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .expect("query identity row");
+
+        assert_eq!(launchable_count, 1);
+        assert_eq!(row.0, "mystery");
+        assert_eq!(row.1, "mystery");
+        assert!(row.2.is_none());
+        assert!(row.3.is_none());
+        assert!(row.4.is_none());
+        assert_eq!(row.5, "setname");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -3905,6 +4275,35 @@ mod tests {
         push_u32(&mut out, u32::MAX);
         push_u16(&mut out, 0);
         std::fs::write(path, out).expect("write zip fixture");
+    }
+
+    fn write_mame_fixture_db(
+        path: &Path,
+        rows: &[(&str, Option<&str>, &str, Option<&str>, Option<&str>)],
+    ) {
+        let conn = Connection::open(path).expect("open mame fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE mame_machines (
+                setname TEXT PRIMARY KEY,
+                parent_setname TEXT,
+                title TEXT NOT NULL,
+                year TEXT,
+                manufacturer TEXT
+            ) WITHOUT ROWID;
+            "#,
+        )
+        .expect("create mame fixture");
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer)
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .expect("prepare mame fixture insert");
+        for (setname, parent, title, year, manufacturer) in rows {
+            stmt.execute(params![setname, parent, title, year, manufacturer])
+                .expect("insert mame fixture row");
+        }
     }
 
     fn push_u16(out: &mut Vec<u8>, value: u16) {
