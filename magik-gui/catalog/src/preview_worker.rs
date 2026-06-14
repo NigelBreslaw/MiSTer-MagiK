@@ -180,6 +180,13 @@ impl PreviewPixels {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewArchiveIndex {
+    pub path: String,
+    pub codec: &'static str,
+    pub entries: Vec<String>,
+}
+
 pub struct PreviewWorker {
     tx: mpsc::Sender<PreviewCommand>,
     rx: mpsc::Receiver<PreviewResult>,
@@ -627,6 +634,13 @@ pub fn preview_archive_entry_stems_from_env() -> Result<Option<HashSet<String>>,
     preview_archive_entry_stems(Path::new(&path)).map(Some)
 }
 
+pub fn preview_archive_index_from_env() -> Result<Option<PreviewArchiveIndex>, String> {
+    let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
+        return Ok(None);
+    };
+    preview_archive_index(Path::new(&path)).map(Some)
+}
+
 pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64)>, String> {
     let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
         return Ok(None);
@@ -643,17 +657,22 @@ pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64
 }
 
 fn preview_archive_entry_stems(path: &Path) -> Result<HashSet<String>, String> {
+    Ok(preview_archive_index(path)?.entries.into_iter().collect())
+}
+
+pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String> {
     let mut file =
         File::open(path).map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)
         .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-    match &magic {
-        PreviewArchive::LZ4_BLOCK_MAGIC | PreviewArchive::RAW_MAGIC => {}
+    let codec = match &magic {
+        PreviewArchive::LZ4_BLOCK_MAGIC => "lz4-block",
+        PreviewArchive::RAW_MAGIC => "raw",
         _ => return Err(format!("{}: bad preview archive magic", path.display())),
-    }
+    };
     let count = read_u32(&mut file)? as usize;
-    let mut stems = HashSet::with_capacity(count);
+    let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         let name_len = read_u16(&mut file)? as usize;
         let _raw_len = read_u32(&mut file)?;
@@ -665,10 +684,16 @@ fn preview_archive_entry_stems(path: &Path) -> Result<HashSet<String>, String> {
         let name =
             String::from_utf8(name).map_err(|e| format!("preview archive entry name utf8: {e}"))?;
         if let Some(stem) = Path::new(&name).file_stem().and_then(|s| s.to_str()) {
-            stems.insert(stem.to_ascii_lowercase());
+            entries.push(stem.to_ascii_lowercase());
         }
     }
-    Ok(stems)
+    entries.sort();
+    entries.dedup();
+    Ok(PreviewArchiveIndex {
+        path: path.display().to_string(),
+        codec,
+        entries,
+    })
 }
 
 fn auto_preview_archive_path() -> Option<String> {
@@ -1078,6 +1103,30 @@ mod tests {
         let stems = preview_archive_entry_stems(&path).expect("read rawpack index");
 
         assert!(stems.contains("mpatrol"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn lz4_preview_archive_index_reads_names_without_payload_decode() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-{}.mmlz4b",
+            std::process::id()
+        ));
+        let name = b"1941u.rgb565";
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::LZ4_BLOCK_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&8192u32.to_le_bytes());
+        bytes.extend_from_slice(&17u32.to_le_bytes());
+        bytes.extend_from_slice(&4096u64.to_le_bytes());
+        bytes.extend_from_slice(name);
+        std::fs::write(&path, bytes).expect("write lz4 block fixture");
+
+        let index = preview_archive_index(&path).expect("read lz4 block index");
+
+        assert_eq!(index.codec, "lz4-block");
+        assert_eq!(index.entries, vec!["1941u"]);
         let _ = std::fs::remove_file(path);
     }
 
