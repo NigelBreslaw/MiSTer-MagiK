@@ -336,6 +336,9 @@ impl PreviewState {
     }
 
     fn begin_raw_transition_to_empty(&mut self) {
+        if !self.has_visible_preview && self.visible_path.is_empty() {
+            return;
+        }
         self.previous_image = if self.has_visible_preview {
             self.cache.peek_shared(&self.visible_path).map(Arc::clone)
         } else {
@@ -868,6 +871,55 @@ mod tests {
             preview.raw_transition_id,
             previous_transition_id.wrapping_add(1)
         );
+
+        let frame = preview
+            .raw_transition_frame()
+            .expect("empty preview transition frame");
+        assert!(frame.previous.is_some());
+        assert!(matches!(frame.current.pixels, PreviewRawPixels::Empty));
+    }
+
+    #[test]
+    fn consecutive_empty_previews_keep_existing_fade_out() {
+        let mut preview = PreviewState::new();
+        let visible_image = Arc::new(PreviewImage {
+            pixels: PreviewImagePixels::Rgb565 {
+                pixels: vec![Rgb565Pixel(0xf800)],
+                stride_pixels: 1,
+            },
+            source_w: 1,
+            source_h: 1,
+            display_w: 1,
+            display_h: 1,
+        });
+        preview.cache.insert(
+            "visible.png".into(),
+            Arc::clone(&visible_image),
+            &[],
+            Some("visible.png"),
+        );
+        preview.selected_image_path = Some("visible.png".into());
+        preview.has_visible_preview = true;
+        preview.visible_path = "visible.png".into();
+
+        preview.select_empty_preview();
+        let first_transition_id = preview.raw_transition_id;
+        let first_previous = Arc::clone(
+            preview
+                .previous_image
+                .as_ref()
+                .expect("first empty preview keeps previous image"),
+        );
+
+        preview.select_empty_preview();
+
+        assert_eq!(preview.raw_transition_id, first_transition_id);
+        assert!(preview.raw_dirty);
+        let second_previous = preview
+            .previous_image
+            .as_ref()
+            .expect("second empty preview keeps previous image");
+        assert!(Arc::ptr_eq(&first_previous, second_previous));
 
         let frame = preview
             .raw_transition_frame()
