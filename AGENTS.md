@@ -187,7 +187,7 @@ magik-gui/                   native armv7 frontend — see §12
   src/launcher.rs       nav state machine + launch_mra
   src/fpga.rs           SPI + fb_enable_direct + set_vga_fb
   src/fb.rs             /dev/fb0 mmap, vsync, dirty-row copy, boot retry
-  build-arm.sh          cross build (release-device default); see magik-gui/BUILD.md
+  build-arm.sh          ARM build entrypoint (Apple container locally, cross in CI); see magik-gui/BUILD.md
   BUILD.md              ARM build profiles
 main-mister/            buildable Main_MiSTer fork experiments — see docs/main-mister-fork.md
   build-docker.sh       Dockerized Main build with ARM GCC 10.2
@@ -841,6 +841,9 @@ explicit HDMI capture path if visual correctness needs to be proven beyond the
 
 Cross-compile toolchain is **proven end-to-end**: a binary built on the
 Apple-Silicon host runs on the MiSTer (`arch=arm, os=linux, glibc 2.31`).
+On Apple Silicon, `magik-gui/build-arm.sh` uses the Apple Virtualization
+Framework container backend by default and mirrors the finished binary into the
+normal `magik-gui/target/...` path. CI/Linux still use cross-rs via Docker.
 
 **Build & deploy:**
 
@@ -904,20 +907,24 @@ mapping (A0 ≈ `release`, A3 ≈ `release-device`).
 **One-time host setup (done):**
 
 ```bash
-cargo install cross --version 0.2.5 --locked
-rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-non-host
+rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
+rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
+container system start
+container builder start --cpus 3 --memory 5g
 ```
 
 **Apple-Silicon gotchas (all handled by `build-arm.sh` + config, but know them):**
 
+- **Backend selection:** local Apple-Silicon builds default to
+  `MISTER_ARM_BUILD_BACKEND=apple-container`. Set
+  `MISTER_ARM_BUILD_BACKEND=cross` only when intentionally comparing against the
+  CI/Linux Docker path.
 - **glibc match:** `cross` 0.2.5 images are Ubuntu 20.04 = **glibc 2.31**, which is
   what the MiSTer runs. So the default image Just Works — no musl, no static.
-- **`--force-non-host`:** cross mounts the host's rustup toolchain into the Linux
-  container, so the `*-unknown-linux-gnu` toolchain must be installed on the Mac
-  even though it can't run there. rustup blocks it without `--force-non-host`.
-- **`DOCKER_DEFAULT_PLATFORM=linux/amd64`:** the cross image has no arm64 manifest;
-  on arm64 Docker we must request amd64 (qemu-emulated). Our crate is tiny so the
-  emulation cost is negligible. (`build-arm.sh` sets this.)
+- **`--force-non-host`:** the Apple container mounts a Linux/aarch64 Rust
+  toolchain into the Linux VM, so `stable-aarch64-unknown-linux-gnu` must be
+  installed on the Mac even though it cannot run directly on macOS. rustup blocks
+  it without `--force-non-host`.
 - **sccache wrapper:** this repo must not use `sccache`. The root
   `.cargo/config.toml` and `magik-gui/.cargo/config.toml` set
   `rustc-wrapper=""`, and Rust workflow scripts export `RUSTC_WRAPPER=""` so a

@@ -9,6 +9,7 @@ cd "$(dirname "$0")"
 
 IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 TARGET_DIR="${MISTER_APPLE_CONTAINER_TARGET_DIR:-/private/tmp/mister-magik-apple-container-target}"
+MIRROR_TARGET_DIR="${MISTER_APPLE_CONTAINER_MIRROR_TARGET_DIR:-$PWD/target}"
 CARGO_CACHE="${MISTER_APPLE_CONTAINER_CARGO_HOME:-$HOME/.cargo}"
 RUST_TOOLCHAIN="${MISTER_ARM64_RUST_TOOLCHAIN:-$HOME/.rustup/toolchains/stable-aarch64-unknown-linux-gnu}"
 CONTAINER_CPUS="${MISTER_APPLE_CONTAINER_CPUS:-3}"
@@ -20,6 +21,9 @@ FEATURES=(ui)
 FEATURE_LIST=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
 LOCKED=1
+CLEAN=0
+BIN_TARGET=""
+BIN_NAME="mister-magik-fb"
 
 add_feature() {
   local feature="$1"
@@ -41,7 +45,10 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --incr       → release-incr
   ./build-arm64-apple-container.sh --device     → release-device
   ./build-arm64-apple-container.sh --all-scenes → compile every Slint bench scene
+  ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
+  ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
+  ./build-arm64-apple-container.sh --preview-archive-bench → build only the preview archive benchmark
 
 One-time host setup:
   rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
@@ -63,6 +70,12 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       PROFILE=release-device-profile
       add_feature profile
       ;;
+    --preview-archive-bench)
+      FEATURES=(preview-archive-bench)
+      BIN_TARGET=preview-archive-bench
+      BIN_NAME=preview-archive-bench
+      ;;
+    --video) add_feature video ;;
     --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
     --ui-scope)
@@ -73,10 +86,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       fi
       UI_SCOPE="${ARGS[$i]}"
       ;;
-    --video)
-      echo "ERROR: --video is not supported by build-arm64-apple-container.sh yet; use build-arm.sh --video." >&2
-      exit 2
-      ;;
+    --clean) CLEAN=1 ;;
     --unlocked) LOCKED=0 ;;
     -h|--help)
       usage
@@ -104,6 +114,10 @@ case "$UI_SCOPE" in
     ;;
 esac
 export MISTER_UI_BUILD_SCOPE="$UI_SCOPE"
+if [[ " ${FEATURES[*]-} " == *" video "* ]] && [ "$UI_SCOPE" != all ]; then
+  echo "ERROR: --video requires UI scope 'all' because video_playback.slint is a bench scene" >&2
+  exit 2
+fi
 
 if [ "$(uname -m)" != arm64 ]; then
   echo "ERROR: Apple-container native path requires an arm64 macOS host; got $(uname -m)." >&2
@@ -127,12 +141,18 @@ if [ ! -d "$RUST_TOOLCHAIN/lib/rustlib/$TARGET" ]; then
   exit 1
 fi
 
+if [ "$CLEAN" -eq 1 ]; then
+  echo "==> clearing Apple-container target cache: $TARGET_DIR"
+  rm -rf "$TARGET_DIR"
+  rm -rf "$MIRROR_TARGET_DIR/$TARGET"
+fi
 mkdir -p "$TARGET_DIR" "$CARGO_CACHE"
 
 echo "==> host arch: $(uname -m)"
 echo "==> container tool: $(container --version 2>&1 | head -n 1)"
 echo "==> rust toolchain: $RUST_TOOLCHAIN"
 echo "==> target triple: $TARGET"
+echo "==> build backend: apple-container"
 echo "==> building linux/arm64 cross image: $IMAGE"
 container build --arch arm64 --file Dockerfile.cross-armv7 --tag "$IMAGE" .
 
@@ -140,6 +160,23 @@ FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
 BUILD_ARGS=(build --target "$TARGET" --profile "$PROFILE" --features "$FEATURE_LIST")
 if [ "$LOCKED" -eq 1 ]; then
   BUILD_ARGS+=(--locked)
+fi
+if [ -n "$BIN_TARGET" ]; then
+  BUILD_ARGS+=(--bin "$BIN_TARGET")
+fi
+
+EXTRA_ENVS=()
+if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
+  "$PWD/scripts/build-minimal-ffmpeg.sh"
+  EXTRA_ENVS+=(
+    --env FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist
+    --env PKG_CONFIG_PATH=/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig
+    --env PKG_CONFIG_ALLOW_CROSS=1
+    --env CFLAGS=-I/project/target/ffmpeg-minimal/armv7/dist/include
+    --env HOST_CFLAGS=-I/project/target/ffmpeg-minimal/armv7/dist/include
+    --env CFLAGS_aarch64_unknown_linux_gnu=-I/project/target/ffmpeg-minimal/armv7/dist/include
+  )
+  echo "==> using minimal FFmpeg: /project/target/ffmpeg-minimal/armv7/dist"
 fi
 
 HOST_RUSTFLAGS="${RUSTFLAGS:-}"
@@ -161,6 +198,7 @@ container run --arch arm64 --rm \
   --env RUSTC_WRAPPER= \
   --env RUSTFLAGS="$CONTAINER_RUSTFLAGS" \
   --env SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}" \
+  "${EXTRA_ENVS[@]}" \
   --volume "$CARGO_CACHE:/cargo" \
   --volume "$RUST_TOOLCHAIN:/rust:ro" \
   --volume "$PWD:/project" \
@@ -169,12 +207,18 @@ container run --arch arm64 --rm \
   "$IMAGE" \
   sh -lc 'PATH=/rust/bin:$PATH cargo "$@"' sh "${BUILD_ARGS[@]}"
 
-BIN="$TARGET_DIR/$TARGET/$PROFILE/mister-magik-fb"
+BIN="$TARGET_DIR/$TARGET/$PROFILE/$BIN_NAME"
 if [ ! -f "$BIN" ]; then
   echo "ERROR: expected binary not found: $BIN" >&2
   exit 1
 fi
 
+MIRROR_BIN="$MIRROR_TARGET_DIR/$TARGET/$PROFILE/$BIN_NAME"
+mkdir -p "$(dirname "$MIRROR_BIN")"
+cp "$BIN" "$MIRROR_BIN"
+
 BYTES="$(stat -f%z "$BIN" 2>/dev/null || stat -c%s "$BIN")"
 echo "==> build OK: $BIN"
+echo "==> mirrored binary: $MIRROR_BIN"
 echo "==> binary size: $BYTES bytes"
+"$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$MIRROR_BIN"
