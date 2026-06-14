@@ -44,5 +44,6 @@ for script in \
 done
 
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
+python3 "$ROOT/scripts/import-wikipedia-neogeo-screenshots.py" --self-test
 
 echo "host tool checks ok"
