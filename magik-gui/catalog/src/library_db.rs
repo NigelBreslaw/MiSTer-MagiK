@@ -39,7 +39,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 17;
+const SCHEMA_VERSION: u32 = 18;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -483,6 +483,66 @@ fn load_arcade_catalog_from_sqlite_at(
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let games = match load_materialized_launcher_catalog(&conn) {
+        Ok(Some(games)) => games,
+        Ok(None) => load_joined_launcher_catalog(&conn)?,
+        Err(e) => return Err(e),
+    };
+    let rows = games.len();
+    let systems = arcade_catalog::systems_from_games(&games);
+    Ok(LibraryCatalogLoad {
+        catalog: ArcadeCatalog::new(root, games, systems),
+        us: t.elapsed().as_micros() as u64,
+        rows,
+    })
+}
+
+fn load_materialized_launcher_catalog(
+    conn: &Connection,
+) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
+    if !sqlite_table_exists(conn, "launcher_catalog")? {
+        return Ok(None);
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT title,
+                    launch_ref,
+                    image_path,
+                    has_image,
+                    system_id
+             FROM launcher_catalog
+             ORDER BY ordinal",
+        )
+        .map_err(|e| format!("prepare launcher catalog query: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ArcadeGameEntry {
+                title: row.get::<_, String>(0)?,
+                mra_path: row.get::<_, String>(1)?,
+                image_path: row.get::<_, String>(2)?,
+                has_image: row.get::<_, i64>(3)? != 0,
+                system_id: row.get::<_, String>(4)?,
+            })
+        })
+        .map_err(|e| format!("query launcher catalog: {e}"))?;
+    let mut games = Vec::new();
+    for row in rows {
+        games.push(row.map_err(|e| format!("read launcher catalog row: {e}"))?);
+    }
+    Ok(Some(games))
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(|e| format!("check sqlite table {table}: {e}"))
+}
+
+fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT games.title,
@@ -527,14 +587,7 @@ fn load_arcade_catalog_from_sqlite_at(
         rows_out.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
     rows_out.retain(|row| is_launcher_launch_ref(&row.game.mra_path));
-    let games = collapse_catalog_variants(rows_out);
-    let rows = games.len();
-    let systems = arcade_catalog::systems_from_games(&games);
-    Ok(LibraryCatalogLoad {
-        catalog: ArcadeCatalog::new(root, games, systems),
-        us: t.elapsed().as_micros() as u64,
-        rows,
-    })
+    Ok(collapse_catalog_variants(rows_out))
 }
 
 #[derive(Clone, Debug)]
@@ -2109,6 +2162,15 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             priority INTEGER NOT NULL,
             confidence TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE launcher_catalog (
+            ordinal INTEGER PRIMARY KEY,
+            title TEXT NOT NULL,
+            sort_title TEXT NOT NULL,
+            launch_ref TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            has_image INTEGER NOT NULL,
+            system_id TEXT NOT NULL
+        );
         CREATE TABLE region_metadata (
             game_id TEXT PRIMARY KEY,
             inferred_region TEXT,
@@ -2282,6 +2344,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         }
     }
     {
+        let mut launcher_rows = Vec::<CatalogRow>::new();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
             .map_err(|e| format!("prepare system insert: {e}"))?;
@@ -2354,6 +2417,20 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                 None
             };
             let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
+            if is_launcher_launch_ref(&plan_launch_ref) {
+                launcher_rows.push(CatalogRow {
+                    game: ArcadeGameEntry {
+                        title: discovery.title.clone(),
+                        mra_path: plan_launch_ref.clone(),
+                        image_path: discovery.image_path.clone().unwrap_or_default(),
+                        has_image: discovery.has_image,
+                        system_id: system_id.clone(),
+                    },
+                    source_kind: launch_kind_for_discovery(discovery).to_string(),
+                    setname: discovery.setname.clone().unwrap_or_default(),
+                    parent: discovery.parent.clone().unwrap_or_default(),
+                });
+            }
             plan_stmt
                 .execute(params![
                     format!("plan:{key}"),
@@ -2391,6 +2468,27 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
                     discovery.hardware_id.as_str()
                 ])
                 .map_err(|e| format!("insert game fts: {e}"))?;
+        }
+        launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
+        let launcher_games = collapse_catalog_variants(launcher_rows);
+        let mut launcher_stmt = tx
+            .prepare(
+                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )
+            .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
+        for (idx, game) in launcher_games.iter().enumerate() {
+            launcher_stmt
+                .execute(params![
+                    idx as i64,
+                    game.title.as_str(),
+                    normalize_title(&game.title),
+                    game.mra_path.as_str(),
+                    game.image_path.as_str(),
+                    if game.has_image { 1 } else { 0 },
+                    game.system_id.as_str()
+                ])
+                .map_err(|e| format!("insert launcher catalog: {e}"))?;
         }
     }
     {
@@ -3495,6 +3593,37 @@ mod tests {
             .games
             .iter()
             .any(|game| game.title == "Game 20004"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_materializes_launcher_catalog_variants() {
+        let root = unique_temp_dir("sqlite-launcher-catalog");
+        let db = root.join("library.sqlite3");
+        let mut world = mra_discovery(1, "Moon Patrol (World)");
+        world.launch_ref = "/media/fat/_Arcade/Moon Patrol (World).mra".to_string();
+        world.source_path = world.launch_ref.clone();
+        world.setname = Some("mpatrol".to_string());
+        let mut us = mra_discovery(2, "Moon Patrol (US)");
+        us.launch_ref = "/media/fat/_Arcade/Moon Patrol (US).mra".to_string();
+        us.source_path = us.launch_ref.clone();
+        us.setname = Some("mpatrol".to_string());
+        us.image_path = Some("/media/fat/_Arcade/media/screenshot/mpatrol.png".to_string());
+        us.has_image = true;
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![world, us]))
+            .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let materialized_rows: i64 = conn
+            .query_row("SELECT count(*) FROM launcher_catalog", [], |row| row.get(0))
+            .expect("count launcher catalog");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(materialized_rows, 1);
+        assert_eq!(loaded.rows, 1);
+        assert_eq!(loaded.catalog.games[0].title, "Moon Patrol (US)");
+        assert!(loaded.catalog.games[0].has_image);
         let _ = std::fs::remove_dir_all(root);
     }
 
