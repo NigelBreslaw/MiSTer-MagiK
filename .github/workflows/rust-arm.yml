@@ -105,6 +105,98 @@ jobs:
 
   arm-build:
     name: ${{ matrix.name }}
+    runs-on: macos-26
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: release
+            args: --device
+            profile: release-device
+            features: none
+          - name: release-video-full
+            args: --device --all-scenes --video
+            profile: release-device
+            features: video
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust host toolchain
+        working-directory: magik-gui
+        run: rustup show
+
+      - name: Install Rust Linux ARM64 toolchain
+        run: |
+          rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
+          rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
+
+      - name: Install Apple container
+        run: |
+          curl -L \
+            https://github.com/apple/container/releases/download/1.0.0/container-1.0.0-installer-signed.pkg \
+            -o /tmp/container-installer-signed.pkg
+          sudo installer -pkg /tmp/container-installer-signed.pkg -target /
+          yes | container system start
+          container --version
+          sysctl kern.hv_support || true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Cache minimal FFmpeg
+        if: matrix.features == 'video'
+        uses: actions/cache@v5
+        with:
+          path: magik-gui/target/ffmpeg-minimal/armv7
+          key: ffmpeg-minimal-${{ runner.os }}-8.1.1-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+
+      - name: Cache Apple-container ARM build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            /private/tmp/mister-magik-apple-container-target
+            magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
+          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          restore-keys: |
+            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-${{ runner.os }}-${{ matrix.name }}-
+
+      - name: Build ARM binary
+        env:
+          MISTER_ARM_BUILD_BACKEND: apple-container
+        run: magik-gui/build-arm.sh ${{ matrix.args }}
+
+      - name: Check ARM shared libraries
+        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
+
+      - name: Upload ARM binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: mister-magik-fb-${{ matrix.name }}
+          path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
+          if-no-files-found: error
+
+      - name: Upload size history
+        uses: actions/upload-artifact@v7
+        with:
+          name: binary-size-${{ matrix.name }}
+          path: build/binary-size.tsv
+          if-no-files-found: error
+
+  arm-build-cross:
+    # Disabled while the PR focuses on getting hosted Apple-container builds green.
+    if: false
+    name: cross-${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -134,8 +226,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
+          key: cargo-cross-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
           restore-keys: |
+            cargo-cross-${{ runner.os }}-
             cargo-${{ runner.os }}-
 
       - name: Cache cross binary
@@ -154,7 +247,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: magik-gui/target/ffmpeg-minimal/armv7
-          key: ffmpeg-minimal-${{ runner.os }}-8.1.1-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: ffmpeg-minimal-cross-${{ runner.os }}-8.1.1-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
 
       - name: Cache ARM build outputs
         uses: actions/cache@v5
@@ -162,12 +255,14 @@ jobs:
           path: |
             magik-gui/target/${{ matrix.profile }}
             magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-arm-cross-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
-            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
-            target-arm-${{ runner.os }}-${{ matrix.name }}-
+            target-arm-cross-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-cross-${{ runner.os }}-${{ matrix.name }}-
 
       - name: Build ARM binary
+        env:
+          MISTER_ARM_BUILD_BACKEND: cross
         run: magik-gui/build-arm.sh ${{ matrix.args }}
 
       - name: Check ARM shared libraries
@@ -176,13 +271,13 @@ jobs:
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
-          name: mister-magik-fb-${{ matrix.name }}
+          name: mister-magik-fb-cross-${{ matrix.name }}
           path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
           if-no-files-found: error
 
       - name: Upload size history
         uses: actions/upload-artifact@v7
         with:
-          name: binary-size-${{ matrix.name }}
+          name: binary-size-cross-${{ matrix.name }}
           path: build/binary-size.tsv
           if-no-files-found: error
