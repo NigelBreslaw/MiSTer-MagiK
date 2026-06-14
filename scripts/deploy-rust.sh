@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Cross-build the Rust frontend and deploy the binary to the MiSTer.
 #
+# This is a production-safe file deploy: when Main_MiSTer supervises the
+# launcher, deploy asks it to suspend MagiK, swaps the binary, then resumes.
+#
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 #   MISTER_IP=... scripts/deploy-rust.sh --opt2
 #   MISTER_IP=... scripts/deploy-rust.sh --opts
@@ -85,21 +88,28 @@ LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Deploying $BIN -> $REMOTE"
-cleanup_deploy_lock() {
+remote_run() {
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
   MISTER_PASS="${MISTER_PASS:-1}" \
-    "$HERE/scripts/mister" run "rm -f '$DEPLOY_LOCK'" >/dev/null 2>&1 || true
+    "$HERE/scripts/mister" run "$1"
+}
+
+magik_command() {
+  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+}
+
+cleanup_deploy_lock() {
+  remote_run "rm -f '$DEPLOY_LOCK'" >/dev/null 2>&1 || true
+  magik_command "mister_magik_resume"
 }
 trap cleanup_deploy_lock EXIT
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" run "mkdir -p '$REMOTE_DIR'; : > '$DEPLOY_LOCK'; kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true"
+remote_run "mkdir -p '$REMOTE_DIR'; : > '$DEPLOY_LOCK'"
+magik_command "mister_magik_suspend"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   "$HERE/scripts/mister" put "$BIN" "$REMOTE.upload"
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'; rm -f '$DEPLOY_LOCK'"
+remote_run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'; rm -f '$DEPLOY_LOCK'"
+magik_command "mister_magik_resume"
 trap - EXIT
 if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   if [ ! -f "$VIDEO_SRC" ]; then
@@ -126,6 +136,7 @@ if [ -n "$REMOTE_BYTES" ]; then
 fi
 
 echo "==> Deployed ($PROFILE)."
+echo "    Main-supervised launcher was suspended and resumed when available."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"
 echo "    Dev / bench:     scripts/run-rust.sh arcade 0"

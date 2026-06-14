@@ -229,6 +229,10 @@ scripts/install-slint-boot.sh
 # Re-deploy Slint only after Rust/UI code changes
 scripts/deploy-rust.sh
 
+# deploy-rust.sh is production-safe: when Main_MiSTer supervises the launcher,
+# it sends `mister_magik_suspend`, uploads/replaces the binary, then sends
+# `mister_magik_resume` so deploy/dev stops are expected rather than crashes.
+
 # Re-deploy Slint + external Main fork after ownership/handoff changes
 # Defaults to ../Main_MiSTer; export MISTER_MAIN_DIR to override.
 scripts/deploy-main-mister-experiment.sh
