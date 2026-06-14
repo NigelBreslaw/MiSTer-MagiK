@@ -1,6 +1,7 @@
 //! Native port of MiSTer's HPS↔FPGA "SPI" layer (the GPO/GPI bit-bang in
-//! `fpga_io.cpp` / `spi.cpp`). Proven from Python in the spike (AGENTS.md §9.5);
-//! this is the real implementation at native speed, where multi-word reads work.
+//! `fpga_io.cpp` / `spi.cpp`). Proven from Python in the framebuffer spike
+//! documented in `history/2026-5-2/framebuffer-experiments.md`; this is the real
+//! implementation at native speed, where multi-word reads work.
 //!
 //! The "SPI" is just two memory-mapped registers in the FPGA manager:
 //!   GPO (write, 0xFF706000+0x10) and GPI (read, +0x14).
@@ -206,7 +207,8 @@ impl Fpga {
     /// Like `spi` but also returns the value captured while ACK is high. Some
     /// FPGA responses present read data only during the strobe-high window; this
     /// lets the first on-device run tell us which phase is authoritative at
-    /// native speed (the Python spike was too slow to tell — AGENTS.md §9.5).
+    /// native speed (the Python spike documented in
+    /// `history/2026-5-2/framebuffer-experiments.md` was too slow to tell).
     /// Returns `(ack_high_data, ack_low_data)`.
     pub fn spi_capture(&mut self, word: u16) -> io::Result<(u16, u16)> {
         let gpo = (self.gpo & !(0xFFFF | STROBE)) | word as u32;

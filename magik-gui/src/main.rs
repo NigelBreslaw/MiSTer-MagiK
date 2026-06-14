@@ -28,7 +28,8 @@
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
 //!
-//! See AGENTS.md for display routing, boot handoff, and toolchain details.
+//! See docs/architecture.md for display routing and boot handoff; see
+//! magik-gui/BUILD.md for toolchain details.
 
 use std::ffi::CString;
 
