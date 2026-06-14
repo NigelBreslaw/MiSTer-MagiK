@@ -20,7 +20,7 @@ usage() {
 
 Options:
   --device       Build magik-gui with the release-device profile (default).
-  --clean-main   Run make clean/build-docker clean before building the Main fork.
+  --clean-main   Run make clean inside the Main fork container before building.
   -h, --help     Show this help.
 
 Environment:
@@ -69,21 +69,14 @@ echo "==> Building magik-gui ($GUI_PROFILE)"
 "$GUI_DIR/build-arm.sh" "${GUI_BUILD_ARGS[@]}"
 
 echo "==> Building Main fork: $MAIN_DIR"
-if command -v arm-none-linux-gnueabihf-gcc >/dev/null 2>&1; then
-  if [[ "$CLEAN_MAIN" == 1 ]]; then
-    make -C "$MAIN_DIR" clean
-  fi
-  make -C "$MAIN_DIR"
-else
-  if [[ ! -x "$MAIN_DIR/build-docker.sh" ]]; then
-    echo "ERROR: $MAIN_DIR/build-docker.sh is missing or not executable." >&2
-    exit 1
-  fi
-  if [[ "$CLEAN_MAIN" == 1 ]]; then
-    "$MAIN_DIR/build-docker.sh" clean
-  fi
-  "$MAIN_DIR/build-docker.sh"
+if [[ ! -x "$MAIN_DIR/build-container.sh" ]]; then
+  echo "ERROR: $MAIN_DIR/build-container.sh is missing or not executable." >&2
+  exit 1
 fi
+if [[ "$CLEAN_MAIN" == 1 ]]; then
+  "$MAIN_DIR/build-container.sh" clean
+fi
+"$MAIN_DIR/build-container.sh"
 
 echo "==> Deploying experiment binaries"
 "$ROOT/scripts/mister" run '
