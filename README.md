@@ -1,111 +1,46 @@
 # MiSTer MagiK
 
-A [Slint](https://slint.dev) front end for the **MiSTer FPGA**, built as a native
-**Rust** binary with a custom software renderer, vsync pacing, and direct FPGA
-framebuffer routing.
+MiSTer MagiK is a frontend for the MiSTer FPGA focused on making it easy to
+manage your game collection, get set up, and start playing with ease.
 
-The headline result: **locked 60fps, smooth and tear-free** on HDMI. See
-`history/2026-5-2/framebuffer-experiments.md` for how we got there.
+It is built to feel polished, playful, and commercial-quality, with a whimsical
+interface that makes browsing retro games part of the fun.
 
-## MiSTer device facts
+To make MiSTer usable, MiSTer MagiK is **highly opinionated**.
 
-| Property | Value |
-|---|---|
-| CPU / ABI | ARM Cortex-A9, `armv7l` hard-float (`gnueabihf`) |
-| glibc | **2.31** (matches the cross container) |
-| Display | `/dev/fb0`, 1920×1080, 32bpp (B,G,R,X); **no `/dev/dri`** |
-| Framebuffer routing | FPGA SPI `SET_FBUF` + `set_vga_fb` — see `magik-gui/src/fpga.rs` |
+If playing with `.ini` files, getting lost in display modes, tuning scaler
+settings, and never quite having a working joystick is your idea of fun, you
+probably will not like this frontend.
 
-## Project layout
+But if you love 90s arcade effects, smooth 60fps transitions, fast game
+discovery, and the feeling of stumbling into the next brilliant retro game to
+play, you might just love it.
 
-```
-magik-gui/                         native frontend (mister-magik-fb)
-  ui/launcher.slint           2×2 home grid + game launch
-  ui/controller_test.slint    pad test scene
-  src/launcher.rs             nav + fifo load_core game launch
-  src/fpga.rs                 SPI, fb_enable_direct, set_vga_fb
-scripts/
-  deploy-rust.sh              build + deploy Slint child binary
-  deploy-main-mister-experiment.sh build + deploy Main-as-parent experiment
-  install-slint-boot.sh       one-time: MiSTer.ini main= handoff to MiSTer_MagiK
-  restore-stock-boot.sh       revert to stock MiSTer menu
-  mister                      Rust SSH/status/snapshot wrapper
-tools/mister/                 Rust host-side MiSTer CLI
-history/                      experiment notes
-AGENTS.md                     operational guide (read this for MiSTer quirks)
-```
+MiSTer MagiK wants MiSTer to feel less like a configuration project and more
+like a magic cabinet.
 
-The maintained Main_MiSTer fork lives in a sibling checkout at `../Main_MiSTer`
-by default. Set `MISTER_MAIN_DIR` to use a different fork path.
+## Built With Slint
 
-## Build & deploy
+MiSTer MagiK is built with [Slint](https://slint.dev), a modern declarative UI
+toolkit for Rust, C++, JavaScript, and embedded systems.
 
-Requires [Rust](https://rustup.rs/). Local Apple-Silicon ARM builds use Apple's
-`container` runtime; Linux/CI builds use Docker/cross-rs.
+Slint is a huge part of what makes MiSTer MagiK possible. It gives the project a
+real UI language, a clean Rust integration model, and a path to building rich
+animated interfaces on hardware that was never designed to run a modern desktop
+environment.
 
+MiSTer MagiK uses Slint as the foundation for its launcher experience: smooth
+transitions, responsive controls, structured components, and a UI that can keep
+growing without turning into a pile of one-off framebuffer code.
 
-See [`magik-gui/BUILD.md`](magik-gui/BUILD.md) for release profiles.
-See [`docs/main-mister-fork.md`](docs/main-mister-fork.md) for the Main fork experiment.
+If you are building embedded UI, hardware UI, kiosk software, or anything that
+needs to feel polished without dragging in a full desktop stack, Slint is worth
+a serious look.
 
-## Boot into MiSTer MagiK
+## Licenses
 
-**Do not** set `main=mister-magik-fb` in `MiSTer.ini` — MiSTer execs away before
-`video_init()` and the TV gets no HDMI signal.
+MiSTer MagiK is licensed under the terms in this repository's `LICENSE` file.
 
-Production boot: `/etc/inittab` keeps
-booting stock `/media/fat/MiSTer`, and `[MiSTer] main=MiSTer_MagiK` hands off to
-the Main_MiSTer fork. This preserves `update_all` and makes rollback simple.
-Before editing, the scripts copy `/media/fat/MiSTer.ini` to
-`/media/fat/MiSTer.ini.bak`. `MiSTer.ini` edits go through the Rust
-comment-preserving mutator in `scripts/mister`: it installs
-`[MiSTer] main=MiSTer_MagiK` and launcher-specific `[Menu]` video settings
-without using ad hoc shell edits. Normal arcade direct-video output is configured
-with `[arcade] direct_video=1`; vertical arcade stays scaler-based with
-`[arcade_vertical] direct_video=0` and `video_mode=8` so MiSTer can rotate it.
-The vertical section must appear after `[arcade]`, because MiSTer applies matching
-sections in file order.
-
-Build and deploy the fork + Slint child:
-
-```bash
-scripts/deploy-main-mister-experiment.sh
-```
-
-Or install the boot handoff after deploying binaries:
-
-```bash
-scripts/install-slint-boot.sh
-```
-
-Restore stock menu by copying `/media/fat/MiSTer.ini.bak` back to
-`/media/fat/MiSTer.ini` and ensuring `inittab` boots stock MiSTer:
-
-```bash
-scripts/restore-stock-boot.sh
-```
-
-## Dev / manual run
-
-Kill stock MiSTer so it releases the gamepad, then run the launcher:
-
-```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister run \
-  'killall MiSTer 2>/dev/null; sleep 1; /media/fat/mister-magik/mister-magik-fb ui launcher 60'
-```
-
-## Subcommands
-
-| Command | Purpose |
-|---|---|
-| `ui [scene] [secs]` | Slint UI — default `launcher`; `secs=0` runs forever |
-| `ui controller_test` | pad diagram test |
-| `read` | SPI video mode / fb diagnostics |
-| `fb` | geometry test pattern on HDMI |
-| `input log\|sniff\|calibrate` | gamepad debugging |
-| `audio-tone` | HDMI audio sanity check through `/dev/MrAudio` |
-| `scenes` | list bench scene names |
-
-## References
-
-- [AGENTS.md](AGENTS.md) — MiSTer display model, gotchas, roadmap
-- [Slint](https://slint.dev)
+MiSTer MagiK also includes or builds on open source software, fonts, tools, and
+libraries from the broader Rust, Slint, and MiSTer ecosystems. Their respective
+licenses remain with their authors.
