@@ -11,13 +11,17 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --all-scenes
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope arcade
 #   MISTER_IP=... scripts/deploy-rust.sh --video
+#   MISTER_IP=... scripts/deploy-rust.sh --mame-metadata --asset-packs
 #
 # Default installs the release-device (A3) binary.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR="/media/fat/mister-magik"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
+REMOTE_ASSET_DIR="$REMOTE_DIR/assets"
 DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
+MAME_SQLITE="${MISTER_MAME_SQLITE:-$HERE/build/mame.sqlite3}"
+NEOGEO_SCREENSHOT_PACK="${MISTER_NEOGEO_SCREENSHOT_PACK:-$HERE/build/neogeo-screenshots/neogeo-screenshots.mmlz4b}"
 DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
   DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov"
@@ -34,6 +38,8 @@ VIDEO_REMOTE="/media/fat/mister-magik/mslug3.mov"
 PROFILE=release-device
 BUILD_FLAG=(--device)
 DEPLOY_VIDEO=0
+DEPLOY_MAME_METADATA=0
+DEPLOY_ASSET_PACKS=0
 ARGS=("$@")
 for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
@@ -43,6 +49,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --incr) PROFILE=release-incr; BUILD_FLAG=(--incr) ;;
     --device) PROFILE=release-device; BUILD_FLAG=(--device) ;;
     --video) DEPLOY_VIDEO=1; BUILD_FLAG+=(--video) ;;
+    --mame-metadata) DEPLOY_MAME_METADATA=1 ;;
+    --asset-packs) DEPLOY_ASSET_PACKS=1 ;;
     --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
     --ui-scope=*) BUILD_FLAG+=("$arg") ;;
     --ui-scope)
@@ -121,6 +129,35 @@ if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   MISTER_PASS="${MISTER_PASS:-1}" \
     "$HERE/scripts/mister" put "$VIDEO_SRC" "$VIDEO_REMOTE"
 fi
+if [ "$DEPLOY_MAME_METADATA" -eq 1 ]; then
+  if [ ! -f "$MAME_SQLITE" ]; then
+    echo "==> Building MAME metadata DB at $MAME_SQLITE"
+    mkdir -p "$(dirname "$MAME_SQLITE")"
+    "$HERE/scripts/mister" mame-metadata-build --out "$MAME_SQLITE"
+  fi
+  echo "==> Deploying $MAME_SQLITE -> $REMOTE_DIR/mame.sqlite3"
+  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+  MISTER_PASS="${MISTER_PASS:-1}" \
+    "$HERE/scripts/mister" put "$MAME_SQLITE" "$REMOTE_DIR/mame.sqlite3.upload"
+  remote_run "mv '$REMOTE_DIR/mame.sqlite3.upload' '$REMOTE_DIR/mame.sqlite3'"
+fi
+if [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
+  if [ ! -f "$NEOGEO_SCREENSHOT_PACK" ]; then
+    echo "ERROR: --asset-packs requested but $NEOGEO_SCREENSHOT_PACK does not exist" >&2
+    echo "       Build it with: scripts/build-neogeo-screenshot-pack.sh" >&2
+    exit 1
+  fi
+  echo "==> Deploying $NEOGEO_SCREENSHOT_PACK -> $REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b"
+  remote_run "mkdir -p '$REMOTE_ASSET_DIR'"
+  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+  MISTER_PASS="${MISTER_PASS:-1}" \
+    "$HERE/scripts/mister" put "$NEOGEO_SCREENSHOT_PACK" "$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b.upload"
+  remote_run "mv '$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b.upload' '$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b'"
+fi
+if [ "$DEPLOY_MAME_METADATA" -eq 1 ] || [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
+  echo "==> Refreshing library DB on device"
+  remote_run "$REMOTE library-refresh"
+fi
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   "$HERE/scripts/mister" run "chmod +x $REMOTE"
@@ -140,4 +177,5 @@ echo "    Main-supervised launcher was suspended and resumed when available."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"
 echo "    Dev / bench:     scripts/run-rust.sh arcade 0"
+echo "    Diagnostics:     scripts/mister-asset-diagnostics.sh"
 echo "    Restore stock:   scripts/restore-stock-boot.sh"

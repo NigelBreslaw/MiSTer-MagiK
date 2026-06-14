@@ -38,6 +38,7 @@ for script in \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/install-slint-boot.sh" \
   "$ROOT/scripts/mister" \
+  "$ROOT/scripts/mister-asset-diagnostics.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"
