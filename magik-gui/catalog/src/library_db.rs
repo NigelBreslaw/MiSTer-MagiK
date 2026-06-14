@@ -618,11 +618,11 @@ fn query_game_entries(
     let rows = stmt
         .query_map([], |row| {
             Ok(ArcadeGameEntry {
-                title: row.get::<_, String>(0)?,
-                mra_path: row.get::<_, String>(1)?,
-                image_path: row.get::<_, String>(2)?,
+                title: row.get::<_, String>(0)?.into(),
+                mra_path: row.get::<_, String>(1)?.into(),
+                image_path: row.get::<_, String>(2)?.into(),
                 has_image: row.get::<_, i64>(3)? != 0,
-                system_id: row.get::<_, String>(4)?,
+                system_id: row.get::<_, String>(4)?.into(),
             })
         })
         .map_err(|e| format!("query {label}: {e}"))?;
@@ -671,11 +671,11 @@ fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry
         .query_map([], |row| {
             Ok(CatalogRow {
                 game: ArcadeGameEntry {
-                    title: row.get::<_, String>(0)?,
-                    mra_path: row.get::<_, String>(1)?,
-                    image_path: row.get::<_, String>(2)?,
+                    title: row.get::<_, String>(0)?.into(),
+                    mra_path: row.get::<_, String>(1)?.into(),
+                    image_path: row.get::<_, String>(2)?.into(),
                     has_image: row.get::<_, i64>(3)? != 0,
-                    system_id: row.get::<_, String>(4)?,
+                    system_id: row.get::<_, String>(4)?.into(),
                 },
                 source_kind: row.get::<_, String>(5)?,
                 setname: row.get::<_, String>(6)?,
@@ -2941,11 +2941,11 @@ fn write_sqlite_scan_with_sources(
                 if system_id != "arcade" && system_id != "neogeo" {
                     launcher_rows.push(CatalogRow {
                         game: ArcadeGameEntry {
-                            title: discovery.title.clone(),
-                            mra_path: plan_launch_ref.clone(),
-                            image_path: discovery.image_path.clone().unwrap_or_default(),
+                            title: discovery.title.clone().into(),
+                            mra_path: plan_launch_ref.clone().into(),
+                            image_path: discovery.image_path.clone().unwrap_or_default().into(),
                             has_image: discovery.has_image,
-                            system_id: system_id.clone(),
+                            system_id: system_id.clone().into(),
                         },
                         source_kind: launch_kind_for_discovery(discovery).to_string(),
                         setname: discovery.setname.clone().unwrap_or_default(),
@@ -3054,12 +3054,12 @@ fn write_sqlite_scan_with_sources(
             launcher_stmt
                 .execute(params![
                     ordinal_offset + idx as i64,
-                    game.title.as_str(),
+                    game.title.as_ref(),
                     normalize_title(&game.title),
-                    game.mra_path.as_str(),
-                    game.image_path.as_str(),
+                    game.mra_path.as_ref(),
+                    game.image_path.as_ref(),
                     if game.has_image { 1 } else { 0 },
-                    game.system_id.as_str()
+                    game.system_id.as_ref()
                 ])
                 .map_err(|e| format!("insert launcher catalog: {e}"))?;
         }
@@ -3873,7 +3873,7 @@ mod tests {
         let games = collapse_catalog_variants(rows);
 
         assert_eq!(games.len(), 1);
-        assert_eq!(games[0].title, "Moon Patrol (US)");
+        assert_eq!(games[0].title.as_ref(), "Moon Patrol (US)");
     }
 
     #[test]
@@ -3901,8 +3901,10 @@ mod tests {
         let games = collapse_catalog_variants(rows);
 
         assert_eq!(games.len(), 2);
-        assert!(games.iter().any(|game| game.title == "Agony"));
-        assert!(games.iter().any(|game| game.title == "Alien Breed"));
+        assert!(games.iter().any(|game| game.title.as_ref() == "Agony"));
+        assert!(games
+            .iter()
+            .any(|game| game.title.as_ref() == "Alien Breed"));
     }
 
     #[test]
@@ -3947,7 +3949,7 @@ mod tests {
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
 
         assert_eq!(loaded.rows, 1);
-        assert_eq!(loaded.catalog.games[0].system_id, "neogeo");
+        assert_eq!(loaded.catalog.games[0].system_id.as_ref(), "neogeo");
         assert!(loaded.catalog.games[0].mra_path.starts_with("magik-plan:"));
         assert!(loaded
             .catalog
@@ -4233,7 +4235,7 @@ mod tests {
         assert_eq!(preferred.4, 0);
         assert_eq!(variant_count, 2);
         assert_eq!(loaded.catalog.games.len(), 1);
-        assert_eq!(loaded.catalog.games[0].title, "1942");
+        assert_eq!(loaded.catalog.games[0].title.as_ref(), "1942");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4459,7 +4461,7 @@ mod tests {
             .catalog
             .games
             .iter()
-            .all(|game| game.system_id == "amiga"));
+            .all(|game| game.system_id.as_ref() == "amiga"));
         assert!(loaded
             .catalog
             .systems
@@ -4549,7 +4551,7 @@ mod tests {
 
         assert_eq!(loaded.rows, 5);
         assert!(loaded.catalog.games.iter().all(|game| {
-            game.mra_path == AMIGAVISION_LAUNCHER_REF
+            game.mra_path.as_ref() == AMIGAVISION_LAUNCHER_REF
                 || game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
         }));
         assert!(loaded
@@ -4718,7 +4720,7 @@ mod tests {
             .catalog
             .games
             .iter()
-            .any(|game| game.title == "Game 20004"));
+            .any(|game| game.title.as_ref() == "Game 20004"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4750,7 +4752,7 @@ mod tests {
 
         assert_eq!(materialized_rows, 1);
         assert_eq!(loaded.rows, 1);
-        assert_eq!(loaded.catalog.games[0].title, "Moon Patrol (US)");
+        assert_eq!(loaded.catalog.games[0].title.as_ref(), "Moon Patrol (US)");
         assert!(loaded.catalog.games[0].has_image);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -4800,11 +4802,11 @@ mod tests {
     fn catalog_row(title: &str, path: &str, setname: &str, parent: &str) -> CatalogRow {
         CatalogRow {
             game: ArcadeGameEntry {
-                title: title.to_string(),
-                mra_path: path.to_string(),
-                image_path: String::new(),
+                title: title.into(),
+                mra_path: path.into(),
+                image_path: "".into(),
                 has_image: false,
-                system_id: "arcade".to_string(),
+                system_id: "arcade".into(),
             },
             source_kind: "mra".to_string(),
             setname: setname.to_string(),
@@ -4815,11 +4817,11 @@ mod tests {
     fn catalog_launcher_row(title: &str, path: &str) -> CatalogRow {
         CatalogRow {
             game: ArcadeGameEntry {
-                title: title.to_string(),
-                mra_path: path.to_string(),
-                image_path: String::new(),
+                title: title.into(),
+                mra_path: path.into(),
+                image_path: "".into(),
                 has_image: false,
-                system_id: "unknown".to_string(),
+                system_id: "unknown".into(),
             },
             source_kind: "mgl".to_string(),
             setname: String::new(),
@@ -4830,11 +4832,11 @@ mod tests {
     fn catalog_entry_row(title: &str, path: &str) -> CatalogRow {
         CatalogRow {
             game: ArcadeGameEntry {
-                title: title.to_string(),
-                mra_path: path.to_string(),
-                image_path: String::new(),
+                title: title.into(),
+                mra_path: path.into(),
+                image_path: "".into(),
                 has_image: false,
-                system_id: "amiga".to_string(),
+                system_id: "amiga".into(),
             },
             source_kind: "catalog-entry".to_string(),
             setname: String::new(),
