@@ -12,7 +12,6 @@ TARGET_DIR="${MISTER_APPLE_CONTAINER_TARGET_DIR:-/private/tmp/mister-magik-apple
 MIRROR_TARGET_DIR="${MISTER_APPLE_CONTAINER_MIRROR_TARGET_DIR:-$PWD/target}"
 CARGO_CACHE="${MISTER_APPLE_CONTAINER_CARGO_HOME:-$HOME/.cargo}"
 RUST_TOOLCHAIN="${MISTER_ARM64_RUST_TOOLCHAIN:-$HOME/.rustup/toolchains/stable-aarch64-unknown-linux-gnu}"
-CONTAINER_CPUS="${MISTER_APPLE_CONTAINER_CPUS:-3}"
 CONTAINER_MEMORY="${MISTER_APPLE_CONTAINER_MEMORY:-5g}"
 TARGET=armv7-unknown-linux-gnueabihf
 DOCKERFILE=Dockerfile.cross-armv7
@@ -27,6 +26,25 @@ CLEAN=0
 REBUILD_IMAGE="${MISTER_APPLE_CONTAINER_REBUILD_IMAGE:-0}"
 BIN_TARGET=""
 BIN_NAME="mister-magik-fb"
+
+default_container_cpus() {
+  local cpus
+  cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  case "$cpus" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s\n' "$cpus"; return ;;
+  esac
+
+  cpus="$(sysctl -n hw.logicalcpu 2>/dev/null || true)"
+  case "$cpus" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s\n' "$cpus"; return ;;
+  esac
+
+  printf '3\n'
+}
+
+CONTAINER_CPUS="${MISTER_APPLE_CONTAINER_CPUS:-$(default_container_cpus)}"
 
 add_feature() {
   local feature="$1"
@@ -58,7 +76,10 @@ One-time host setup:
   rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
   rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
   container system start
-  container builder start --cpus 3 --memory 5g
+  container builder start --cpus "$(getconf _NPROCESSORS_ONLN)" --memory 5g
+
+The Apple builder VM must be restarted with the higher CPU count before a run
+can use it. MISTER_APPLE_CONTAINER_CPUS=3 keeps the old 3-CPU build limit.
 EOF
 }
 
@@ -195,6 +216,7 @@ echo "==> container tool: $(container --version 2>&1 | head -n 1)"
 echo "==> rust toolchain: $RUST_TOOLCHAIN"
 echo "==> target triple: $TARGET"
 echo "==> build backend: apple-container"
+echo "==> build CPUs: $CONTAINER_CPUS"
 ensure_image
 
 FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
@@ -235,6 +257,9 @@ container run --arch arm64 --rm \
   --memory "$CONTAINER_MEMORY" \
   --env CARGO_HOME=/cargo \
   --env CARGO_TARGET_DIR=/target \
+  --env CARGO_BUILD_JOBS="$CONTAINER_CPUS" \
+  --env CMAKE_BUILD_PARALLEL_LEVEL="$CONTAINER_CPUS" \
+  --env MAKEFLAGS="-j$CONTAINER_CPUS" \
   --env MISTER_UI_BUILD_SCOPE="$UI_SCOPE" \
   --env RUSTC_WRAPPER= \
   --env RUSTFLAGS="$CONTAINER_RUSTFLAGS" \
