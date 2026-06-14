@@ -212,10 +212,11 @@ scripts/deploy-rust.sh
 # Build only: magik-gui/build-arm.sh  |  magik-gui/build-arm.sh --device
 # Profiles: magik-gui/BUILD.md
 
-# Fast host checks (do not compile Slint/AppKit)
+# Fast host checks (pure library); UI-feature smoke is macOS-safe too
 scripts/dev-rust fmt
 scripts/dev-rust test
 scripts/dev-rust check
+cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features
 cargo clippy --manifest-path magik-gui/Cargo.toml --lib --no-default-features -- -D warnings
 cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
 
@@ -877,14 +878,19 @@ MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/mister \
 ```
 
 **Host dev checks:** use `scripts/dev-rust fmt`, `scripts/dev-rust test`, and
-`scripts/dev-rust check` for routine local validation. Before making any commit
-that touches Rust code or CI, also run strict Clippy for both Rust crates:
+`scripts/dev-rust check` for routine local validation. Use
+`cargo test --manifest-path magik-gui/Cargo.toml --features ui
+--no-default-features` as a macOS host smoke for the UI feature; Cargo enables
+Slint `std` on macOS only so Slint's AppKit system tray support compiles, while
+ARM/MiSTer targets keep the embedded no-std Slint configuration. Before making
+any commit that touches Rust code or CI, also run strict Clippy for both Rust crates:
 `cargo clippy --manifest-path magik-gui/Cargo.toml --lib --no-default-features
 -- -D warnings` and `cargo clippy --manifest-path tools/mister/Cargo.toml
 --all-targets -- -D warnings`. These checks run the host-testable Rust library
-with `--no-default-features`, so pure logic tests do not compile the Slint UI
-binary or macOS AppKit code. Use `scripts/dev-rust build-ui` or
-`magik-gui/build-arm.sh` when you need the ARM Slint binary.
+with `--no-default-features`; the explicit UI-feature smoke also compiles the
+binary test target without producing a deployable macOS app. Use
+`scripts/dev-rust build-ui` or `magik-gui/build-arm.sh` when you need the ARM
+Slint binary.
 
 Every `magik-gui/build-arm.sh` run prints the binary size and appends a local,
 gitignored row to `build/binary-size.tsv` keyed by profile + features. Keep the

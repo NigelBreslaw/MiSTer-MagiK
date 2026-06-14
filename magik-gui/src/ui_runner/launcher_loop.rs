@@ -881,6 +881,7 @@ pub(super) fn run_launcher_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_effect_bench::{EffectFill, EffectTarget};
 
     #[test]
     pub(super) fn effect_half_target_allows_640x448_at_native_scale() {
