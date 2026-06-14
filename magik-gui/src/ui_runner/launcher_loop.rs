@@ -1,3 +1,4 @@
+use super::launcher_frame_accounting::{LauncherFrameAccounting, LauncherPresentedFrame};
 use super::*;
 
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
@@ -41,20 +42,9 @@ pub(super) fn run_launcher_loop(
     let mut launch_spawned_mister = false;
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
-    let mut last_status_write = Instant::now() - Duration::from_secs(2);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let mut launcher_bench_next_step = Instant::now();
     let mut launcher_bench_step_idx = 0usize;
-    let mut launcher_fps_window_start;
-    let mut launcher_fps_frames = 0u64;
-    let mut launcher_prepare_us = 0u128;
-    let mut launcher_render_us = 0u128;
-    let mut launcher_custom_draw_us = 0u128;
-    let mut launcher_vsync_us = 0u128;
-    let mut launcher_copy_us = 0u128;
-    let mut launcher_cached_present_us = 0u128;
-    let mut launcher_overlay_present_us = 0u128;
-    let mut launcher_rows = 0u128;
     let dirty_opt = launcher_dirty_opt_enabled();
     let label = if secs == 0 {
         "forever".to_string()
@@ -90,7 +80,6 @@ pub(super) fn run_launcher_loop(
     }
     let mut pacer = VsyncPacer::from_env();
     let mut present_probe = PresentProbe::from_env();
-    let mut boot_frame_profile = boot_analytics::LauncherFrameWriter::from_env();
     let mut preview = PreviewState::new();
     let mut preview_transition = PreviewTransitionDemo::from_env();
     let mut effect_label_overlay = preview_transition
@@ -103,21 +92,6 @@ pub(super) fn run_launcher_loop(
     let cpu = cpu_profile::start();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
-    let mut preview_scroll_trace = std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
-        .ok()
-        .and_then(|path| {
-            let mut file = std::fs::File::create(&path)
-                .map_err(|e| eprintln!("preview scroll trace: create {path} failed: {e}"))
-                .ok()?;
-            std::io::Write::write_all(
-                &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\twall_us\n",
-            )
-            .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
-            .ok()?;
-            println!("preview_scroll_trace={path}");
-            Some(file)
-        });
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let preview_stress = preview_stress_enabled();
@@ -225,13 +199,9 @@ pub(super) fn run_launcher_loop(
     } else {
         start
     };
-    launcher_fps_window_start = run_start;
-    let mut first_frame_logged = false;
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
-    let mut first_copy_logged = false;
-    let mut first_visible_copy_done = false;
-    let mut stable_frame_logged = false;
+    let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     while secs == 0 || run_start.elapsed().as_secs() < secs {
         let loop_start = Instant::now();
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
@@ -764,7 +734,7 @@ pub(super) fn run_launcher_loop(
                 format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
             );
         }
-        let pace = if first_visible_copy_done {
+        let pace = if frame_accounting.first_visible_copy_done() {
             let pace = pacer.wait();
             let frame_t3 = Instant::now();
             (Some(pace), frame_t3)
@@ -823,162 +793,41 @@ pub(super) fn run_launcher_loop(
             present_probe_frame_us = probe_copy_start.elapsed().as_micros();
         }
         let frame_t4 = Instant::now();
-        if let Some(file) = preview_scroll_trace.as_mut() {
-            let cache_state = preview.trace_cache_state();
-            let _ = std::io::Write::write_fmt(
-                file,
-                format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                    frames,
-                    loop_start.duration_since(run_start).as_micros(),
-                    nav.arcade.selected,
-                    nav.arcade.visual_index,
-                    cache_state,
-                    preview_transition_trace.effect.label(),
-                    preview_transition_trace.progress,
-                    arcade_update_label,
-                    copied_rows,
-                    prepare_us,
-                    (frame_t2 - frame_t1).as_micros(),
-                    (custom_draw_done - custom_draw_start).as_micros(),
-                    (frame_t3 - custom_draw_done).as_micros(),
-                    (frame_t4 - frame_t3).as_micros(),
-                    cached_present_frame_us,
-                    overlay_present_frame_us,
-                    present_probe_frame_us,
-                    (frame_t4 - loop_start).as_micros()
-                ),
-            );
-        }
-        if copied_rows > 0 && !first_copy_logged {
-            first_copy_logged = true;
-            boot_analytics::event(
-                if first_visible_copy_done {
-                    "first_copy"
-                } else {
-                    "first_copy_immediate"
-                },
-                format!(
-                    "frame={frames} rows={copied_rows} dirty_rect={}",
-                    format_dirty_rect(this_rect)
-                ),
-            );
-            disp.record_visual_sample("after_first_copy");
-        }
-        if copied_rows > 0 {
-            first_visible_copy_done = true;
-        }
-        launcher_fps_frames += 1;
-        launcher_prepare_us += prepare_us;
-        launcher_render_us += (frame_t2 - frame_t1).as_micros();
-        launcher_custom_draw_us += (custom_draw_done - custom_draw_start).as_micros();
-        launcher_vsync_us += (frame_t3 - custom_draw_done).as_micros();
-        launcher_copy_us += (frame_t4 - frame_t3).as_micros();
-        launcher_cached_present_us += cached_present_frame_us;
-        launcher_overlay_present_us += overlay_present_frame_us;
-        launcher_rows += copied_rows as u128;
-        if launcher_fps_window_start.elapsed() >= Duration::from_secs(1) {
-            let n = launcher_fps_frames.max(1) as u128;
-            println!(
-                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
-                launcher_fps_frames,
-                launcher_prepare_us / n,
-                launcher_render_us / n,
-                launcher_custom_draw_us / n,
-                launcher_vsync_us / n,
-                launcher_copy_us / n,
-                launcher_cached_present_us / n,
-                launcher_overlay_present_us / n,
-                launcher_rows / n
-            );
-            launcher_fps_window_start = Instant::now();
-            launcher_fps_frames = 0;
-            launcher_prepare_us = 0;
-            launcher_render_us = 0;
-            launcher_custom_draw_us = 0;
-            launcher_vsync_us = 0;
-            launcher_copy_us = 0;
-            launcher_cached_present_us = 0;
-            launcher_overlay_present_us = 0;
-            launcher_rows = 0;
-        }
-        if frames == 30 && !stable_frame_logged {
-            stable_frame_logged = true;
-            boot_analytics::event("stable_frame", "frame=30");
-            disp.record_visual_sample("stable_frame_30");
-        } else if frames == 120 {
-            disp.record_visual_sample("sample_frame_120");
-        } else if frames == 240 {
-            disp.record_visual_sample("sample_frame_240");
-        }
-        let reasserted = false;
-        if boot_frame_profile
-            .as_ref()
-            .is_some_and(|profile| !profile.should_record(frames))
-        {
-            boot_frame_profile = None;
-        }
-        if let Some(profile) = boot_frame_profile.as_mut() {
-            let (edge1_hash, edge1_nonzero) = disp.right_edge_signature(1);
-            let (edge8_hash, edge8_nonzero) = disp.right_edge_signature(8);
-            let (left8_hash, left8_nonzero) = disp.left_edge_signature(8);
-            let (top8_hash, top8_nonzero) = disp.top_edge_signature(8);
-            let (bottom8_hash, bottom8_nonzero) = disp.bottom_edge_signature(8);
-            let (full_sample_hash, full_sample_nonzero) = disp.sampled_signature();
-            profile.record(
+        frame_accounting.finish_frame(
+            LauncherPresentedFrame {
                 frames,
-                (frame_t1 - frame_t0).as_micros() as u64,
-                (frame_t2 - frame_t1).as_micros() as u64,
-                (frame_t3 - frame_t2).as_micros() as u64,
-                (frame_t4 - frame_t3).as_micros() as u64,
+                selected: nav.arcade.selected,
+                visual_index: nav.arcade.visual_index,
+                run_start,
+                loop_start,
+                frame_t0,
+                frame_t1,
+                frame_t2,
+                frame_t3,
+                frame_t4,
+                custom_draw_start,
+                custom_draw_done,
+                prepare_us,
+                dirty_rect: this_rect,
                 copied_rows,
-                reasserted,
-                edge1_hash,
-                edge1_nonzero,
-                edge8_hash,
-                edge8_nonzero,
-                left8_hash,
-                left8_nonzero,
-                top8_hash,
-                top8_nonzero,
-                bottom8_hash,
-                bottom8_nonzero,
-                full_sample_hash,
-                full_sample_nonzero,
-            );
-        }
-        if !first_frame_logged {
-            first_frame_logged = true;
-            boot_analytics::event("first_frame", format!("catalog_ready={catalog_ready}"));
-            print_startup_event(
-                start,
-                "first_frame",
-                format!("catalog_ready={catalog_ready}"),
-            );
-        }
-        if last_status_write.elapsed() >= Duration::from_secs(1) {
-            let fps_estimate = if run_start.elapsed().as_secs_f64() > 0.0 {
-                frames as f64 / run_start.elapsed().as_secs_f64()
-            } else {
-                0.0
-            };
-            runtime_status::write_launcher_status(LauncherStatus {
-                scene: launcher_mode.label(),
-                screen: screen_label(nav.screen),
-                frames,
-                fps_estimate,
-                last_frame_ms_ago: 0,
-                catalog_ready,
-                catalog_games: catalog.len(),
-                catalog_systems: catalog.systems.len(),
-                catalog_refresh_done,
-                launch_state: if launching { "launching" } else { "idle" },
-                loading_title: &loading_title,
-                input_pad_count: pad.len(),
-                active_pad_index: pad.active_idx(),
-            });
-            last_status_write = Instant::now();
-        }
+                cached_present_us: cached_present_frame_us,
+                overlay_present_us: overlay_present_frame_us,
+                present_probe_us: present_probe_frame_us,
+                arcade_update_label,
+                preview_cache_state: preview.trace_cache_state(),
+                preview_transition: preview_transition_trace,
+            },
+            start,
+            disp,
+            &nav,
+            &pad,
+            &catalog,
+            catalog_ready,
+            catalog_refresh_done,
+            launching,
+            &loading_title,
+            launcher_mode,
+        );
         frames += 1;
     }
     let elapsed = run_start.elapsed().as_secs_f64();
