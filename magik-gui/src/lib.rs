@@ -10,6 +10,7 @@ pub mod controller_db;
 pub mod effects;
 pub mod fb_format;
 pub mod framebuffer_copy;
+pub mod framebuffer_ownership;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
