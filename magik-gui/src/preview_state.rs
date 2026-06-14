@@ -1,4 +1,5 @@
 use std::collections::{HashSet, VecDeque};
+use std::mem::ManuallyDrop;
 use std::sync::{Arc, OnceLock};
 
 use mister_magik_ui as slint_ui;
@@ -64,6 +65,20 @@ enum PreviewImagePixels {
         pixels: Vec<Rgb565Pixel>,
         stride_pixels: usize,
     },
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<Rgb565Pixel>() == std::mem::size_of::<u16>());
+    assert!(std::mem::align_of::<Rgb565Pixel>() == std::mem::align_of::<u16>());
+};
+
+fn rgb565_words_into_pixels(words: Vec<u16>) -> Vec<Rgb565Pixel> {
+    let mut words = ManuallyDrop::new(words);
+    let ptr = words.as_mut_ptr();
+    let len = words.len();
+    let cap = words.capacity();
+    // Rgb565Pixel is repr(transparent) over u16 in Slint's software renderer.
+    unsafe { Vec::from_raw_parts(ptr.cast::<Rgb565Pixel>(), len, cap) }
 }
 
 #[derive(Default)]
@@ -683,7 +698,7 @@ pub(crate) fn apply_ready_preview(
                     words,
                     ..
                 } => PreviewImagePixels::Rgb565 {
-                    pixels: words.into_iter().map(Rgb565Pixel).collect(),
+                    pixels: rgb565_words_into_pixels(words),
                     stride_pixels: stride_bytes as usize / 2,
                 },
             };
@@ -767,6 +782,24 @@ mod tests {
     fn preview_size_keeps_common_arcade_screenshot_native_when_resize_is_off() {
         let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
         assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
+    }
+
+    #[test]
+    fn rgb565_words_into_pixels_reuses_allocation() {
+        let words = vec![0x001f, 0x07e0, 0xf800];
+        let ptr = words.as_ptr();
+        let len = words.len();
+        let cap = words.capacity();
+
+        let pixels = rgb565_words_into_pixels(words);
+
+        assert_eq!(pixels.as_ptr().cast::<u16>(), ptr);
+        assert_eq!(pixels.len(), len);
+        assert_eq!(pixels.capacity(), cap);
+        assert_eq!(
+            pixels.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [0x001f, 0x07e0, 0xf800]
+        );
     }
 
     #[test]
