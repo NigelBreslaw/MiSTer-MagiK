@@ -41,7 +41,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 19;
+const SCHEMA_VERSION: u32 = 20;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -536,9 +536,13 @@ fn load_arcade_catalog_from_sqlite_at(
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    let games = match load_materialized_launcher_catalog(&conn) {
+    let games = match load_materialized_ui_catalog(&conn) {
         Ok(Some(games)) => games,
-        Ok(None) => load_joined_launcher_catalog(&conn)?,
+        Ok(None) => match load_materialized_launcher_catalog(&conn) {
+            Ok(Some(games)) => games,
+            Ok(None) => load_joined_launcher_catalog(&conn)?,
+            Err(e) => return Err(e),
+        },
         Err(e) => return Err(e),
     };
     let rows = games.len();
@@ -550,23 +554,67 @@ fn load_arcade_catalog_from_sqlite_at(
     })
 }
 
-fn load_materialized_launcher_catalog(
+fn load_materialized_ui_catalog(
     conn: &Connection,
 ) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
-    if !sqlite_table_exists(conn, "launcher_catalog")? {
+    if !sqlite_table_exists(conn, "ui_arcade_preferred")? {
         return Ok(None);
     }
-    let mut stmt = conn
-        .prepare(
+    let mut games = query_game_entries(
+        conn,
+        "SELECT title,
+                launch_ref,
+                image_path,
+                has_image,
+                system_id
+         FROM ui_arcade_preferred
+         ORDER BY ordinal",
+        "ui arcade preferred",
+    )?;
+    if sqlite_table_exists(conn, "launcher_catalog")? {
+        games.extend(query_game_entries(
+            conn,
             "SELECT title,
                     launch_ref,
                     image_path,
                     has_image,
                     system_id
              FROM launcher_catalog
+             WHERE system_id NOT IN ('arcade','neogeo')
              ORDER BY ordinal",
-        )
-        .map_err(|e| format!("prepare launcher catalog query: {e}"))?;
+            "launcher catalog extras",
+        )?);
+    }
+    Ok(Some(games))
+}
+
+fn load_materialized_launcher_catalog(
+    conn: &Connection,
+) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
+    if !sqlite_table_exists(conn, "launcher_catalog")? {
+        return Ok(None);
+    }
+    Ok(Some(query_game_entries(
+        conn,
+        "SELECT title,
+                launch_ref,
+                image_path,
+                has_image,
+                system_id
+         FROM launcher_catalog
+         ORDER BY ordinal",
+        "launcher catalog",
+    )?))
+}
+
+fn query_game_entries(
+    conn: &Connection,
+    sql: &str,
+    label: &str,
+) -> Result<Vec<ArcadeGameEntry>, String> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("prepare {label} query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
             Ok(ArcadeGameEntry {
@@ -577,12 +625,12 @@ fn load_materialized_launcher_catalog(
                 system_id: row.get::<_, String>(4)?,
             })
         })
-        .map_err(|e| format!("query launcher catalog: {e}"))?;
+        .map_err(|e| format!("query {label}: {e}"))?;
     let mut games = Vec::new();
     for row in rows {
-        games.push(row.map_err(|e| format!("read launcher catalog row: {e}"))?);
+        games.push(row.map_err(|e| format!("read {label} row: {e}"))?);
     }
-    Ok(Some(games))
+    Ok(games)
 }
 
 fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -2181,6 +2229,131 @@ fn mame_identity_projection<'a>(
     }
 }
 
+fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        r#"
+        INSERT INTO ui_arcade_variants(
+            family_id,
+            variant_ordinal,
+            launchable_id,
+            title,
+            sort_title,
+            launch_ref,
+            image_path,
+            has_image,
+            system_id,
+            identity_id,
+            parent_setname,
+            preferred,
+            preferred_reason
+        )
+        WITH candidates AS (
+            SELECT
+                COALESCE(i.family_id, l.launchable_id) AS family_id,
+                l.launchable_id AS launchable_id,
+                l.title AS title,
+                lower(l.title) AS sort_title,
+                l.launch_ref AS launch_ref,
+                COALESCE(g.image_path, '') AS image_path,
+                g.has_image AS has_image,
+                l.system_id AS system_id,
+                i.identity_id AS identity_id,
+                CASE
+                    WHEN i.identity_id IS NOT NULL
+                     AND i.family_id IS NOT NULL
+                     AND i.identity_id != i.family_id
+                    THEN i.family_id
+                    ELSE NULL
+                END AS parent_setname,
+                CASE
+                    WHEN i.identity_id IS NOT NULL
+                     AND i.identity_id = COALESCE(i.family_id, i.identity_id)
+                    THEN 1
+                    ELSE 0
+                END AS is_parent
+            FROM launchables l
+            JOIN games g ON g.game_id = l.launchable_id
+            LEFT JOIN launchable_identities i
+              ON i.launchable_id = l.launchable_id
+             AND i.namespace = 'mame'
+            WHERE l.system_id IN ('arcade','neogeo')
+              AND l.launch_ref != ''
+        ),
+        ranked AS (
+            SELECT
+                *,
+                row_number() OVER (
+                    PARTITION BY family_id
+                    ORDER BY is_parent DESC,
+                             has_image DESC,
+                             sort_title ASC,
+                             launch_ref ASC
+                ) AS family_rank,
+                row_number() OVER (
+                    PARTITION BY family_id
+                    ORDER BY is_parent DESC,
+                             has_image DESC,
+                             sort_title ASC,
+                             launch_ref ASC
+                ) - 1 AS variant_ordinal
+            FROM candidates
+        )
+        SELECT
+            family_id,
+            variant_ordinal,
+            launchable_id,
+            title,
+            sort_title,
+            launch_ref,
+            image_path,
+            has_image,
+            system_id,
+            identity_id,
+            parent_setname,
+            CASE WHEN family_rank = 1 THEN 1 ELSE 0 END,
+            CASE
+                WHEN family_rank = 1 AND is_parent = 1 THEN 'installed-parent'
+                WHEN family_rank = 1 THEN 'deterministic-child'
+                ELSE 'variant'
+            END
+        FROM ranked
+        ORDER BY family_id, variant_ordinal;
+
+        INSERT INTO ui_arcade_preferred(
+            ordinal,
+            launchable_id,
+            title,
+            sort_title,
+            launch_ref,
+            image_path,
+            has_image,
+            system_id,
+            identity_id,
+            family_id,
+            parent_setname,
+            preferred_reason
+        )
+        SELECT
+            row_number() OVER (ORDER BY sort_title ASC, launch_ref ASC) - 1,
+            launchable_id,
+            title,
+            sort_title,
+            launch_ref,
+            image_path,
+            has_image,
+            system_id,
+            identity_id,
+            family_id,
+            parent_setname,
+            preferred_reason
+        FROM ui_arcade_variants
+        WHERE preferred = 1
+        ORDER BY sort_title ASC, launch_ref ASC;
+        "#,
+    )
+    .map_err(|e| format!("materialize arcade ui projections: {e}"))
+}
+
 fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
     write_sqlite_scan_with_mame(path, scan, &default_mame_sqlite_path())
 }
@@ -2319,6 +2492,36 @@ fn write_sqlite_scan_with_mame(
             width INTEGER,
             height INTEGER,
             PRIMARY KEY(pack_id, asset_key)
+        ) WITHOUT ROWID;
+        CREATE TABLE ui_arcade_preferred (
+            ordinal INTEGER PRIMARY KEY,
+            launchable_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            sort_title TEXT NOT NULL,
+            launch_ref TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            has_image INTEGER NOT NULL,
+            system_id TEXT NOT NULL,
+            identity_id TEXT,
+            family_id TEXT NOT NULL,
+            parent_setname TEXT,
+            preferred_reason TEXT NOT NULL
+        );
+        CREATE TABLE ui_arcade_variants (
+            family_id TEXT NOT NULL,
+            variant_ordinal INTEGER NOT NULL,
+            launchable_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            sort_title TEXT NOT NULL,
+            launch_ref TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            has_image INTEGER NOT NULL,
+            system_id TEXT NOT NULL,
+            identity_id TEXT,
+            parent_setname TEXT,
+            preferred INTEGER NOT NULL,
+            preferred_reason TEXT NOT NULL,
+            PRIMARY KEY(family_id, variant_ordinal)
         ) WITHOUT ROWID;
         CREATE TABLE launcher_catalog (
             ordinal INTEGER PRIMARY KEY,
@@ -2583,18 +2786,20 @@ fn write_sqlite_scan_with_mame(
             };
             let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
             if is_launcher_launch_ref(&plan_launch_ref) {
-                launcher_rows.push(CatalogRow {
-                    game: ArcadeGameEntry {
-                        title: discovery.title.clone(),
-                        mra_path: plan_launch_ref.clone(),
-                        image_path: discovery.image_path.clone().unwrap_or_default(),
-                        has_image: discovery.has_image,
-                        system_id: system_id.clone(),
-                    },
-                    source_kind: launch_kind_for_discovery(discovery).to_string(),
-                    setname: discovery.setname.clone().unwrap_or_default(),
-                    parent: discovery.parent.clone().unwrap_or_default(),
-                });
+                if system_id != "arcade" && system_id != "neogeo" {
+                    launcher_rows.push(CatalogRow {
+                        game: ArcadeGameEntry {
+                            title: discovery.title.clone(),
+                            mra_path: plan_launch_ref.clone(),
+                            image_path: discovery.image_path.clone().unwrap_or_default(),
+                            has_image: discovery.has_image,
+                            system_id: system_id.clone(),
+                        },
+                        source_kind: launch_kind_for_discovery(discovery).to_string(),
+                        setname: discovery.setname.clone().unwrap_or_default(),
+                        parent: discovery.parent.clone().unwrap_or_default(),
+                    });
+                }
             }
             plan_stmt
                 .execute(params![
@@ -2664,6 +2869,27 @@ fn write_sqlite_scan_with_mame(
                 ])
                 .map_err(|e| format!("insert game fts: {e}"))?;
         }
+        drop(fts_stmt);
+        drop(region_stmt);
+        drop(identity_stmt);
+        drop(launchable_stmt);
+        drop(plan_stmt);
+        drop(game_stmt);
+        drop(system_stmt);
+        materialize_arcade_ui_projections(&tx)?;
+        tx.execute(
+            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
+             SELECT ordinal,title,sort_title,launch_ref,image_path,has_image,system_id
+             FROM ui_arcade_preferred
+             ORDER BY ordinal",
+            [],
+        )
+        .map_err(|e| format!("insert preferred launcher catalog: {e}"))?;
+        let ordinal_offset = tx
+            .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|e| format!("query launcher catalog offset: {e}"))?;
         launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
         let launcher_games = collapse_catalog_variants(launcher_rows);
         let mut launcher_stmt = tx
@@ -2675,7 +2901,7 @@ fn write_sqlite_scan_with_mame(
         for (idx, game) in launcher_games.iter().enumerate() {
             launcher_stmt
                 .execute(params![
-                    idx as i64,
+                    ordinal_offset + idx as i64,
                     game.title.as_str(),
                     normalize_title(&game.title),
                     game.mra_path.as_str(),
@@ -3788,6 +4014,142 @@ mod tests {
         assert!(row.3.is_none());
         assert!(row.4.is_none());
         assert_eq!(row.5, "setname");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ui_arcade_preferred_collapses_family_and_keeps_variants() {
+        let root = unique_temp_dir("ui-arcade-preferred-parent");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                ("1942", None, "1942", Some("1984"), Some("Capcom")),
+                (
+                    "1942b",
+                    Some("1942"),
+                    "1942 (First Version)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let mut parent = mra_discovery(1, "1942");
+        parent.setname = Some("1942".to_string());
+        let mut clone = mra_discovery(2, "1942 (First Version)");
+        clone.setname = Some("1942b".to_string());
+        clone.has_image = true;
+        clone.image_path = Some("/media/fat/_Arcade/media/screenshot/1942b.png".to_string());
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![clone, parent]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let preferred = conn
+            .query_row(
+                "SELECT identity_id,family_id,preferred_reason,title,has_image
+                 FROM ui_arcade_preferred",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .expect("query preferred row");
+        let variant_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_variants", [], |row| {
+                row.get(0)
+            })
+            .expect("query variant count");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(preferred.0.as_deref(), Some("1942"));
+        assert_eq!(preferred.1, "1942");
+        assert_eq!(preferred.2, "installed-parent");
+        assert_eq!(preferred.3, "1942");
+        assert_eq!(preferred.4, 0);
+        assert_eq!(variant_count, 2);
+        assert_eq!(loaded.catalog.games.len(), 1);
+        assert_eq!(loaded.catalog.games[0].title, "1942");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ui_arcade_preferred_uses_deterministic_child_when_parent_missing() {
+        let root = unique_temp_dir("ui-arcade-preferred-child");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                (
+                    "1942b",
+                    Some("1942"),
+                    "1942 (First Version)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+                (
+                    "1942w",
+                    Some("1942"),
+                    "1942 (World)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let mut first = mra_discovery(1, "1942 (First Version)");
+        first.setname = Some("1942b".to_string());
+        let mut world = mra_discovery(2, "1942 (World)");
+        world.setname = Some("1942w".to_string());
+        world.has_image = true;
+        world.image_path = Some("/media/fat/_Arcade/media/screenshot/1942w.png".to_string());
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![first, world]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let preferred = conn
+            .query_row(
+                "SELECT identity_id,family_id,preferred_reason,has_image
+                 FROM ui_arcade_preferred",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .expect("query preferred row");
+        let variant_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_variants", [], |row| {
+                row.get(0)
+            })
+            .expect("query variant count");
+
+        assert_eq!(preferred.0.as_deref(), Some("1942w"));
+        assert_eq!(preferred.1, "1942");
+        assert_eq!(preferred.2, "deterministic-child");
+        assert_eq!(preferred.3, 1);
+        assert_eq!(variant_count, 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
