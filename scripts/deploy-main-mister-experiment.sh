@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
 # Build and deploy the Main-as-parent experiment:
 #   - magik-gui Slint binary -> /media/fat/mister-magik/mister-magik-fb
-#   - main-mister fork       -> /media/fat/MiSTer_MagiK
+#   - external Main fork     -> /media/fat/MiSTer_MagiK
 #   - boot config            -> stock inittab + MiSTer.ini main=MiSTer_MagiK
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUI_DIR="$ROOT/magik-gui"
-MAIN_DIR="$ROOT/main-mister"
+MAIN_DIR="${MISTER_MAIN_DIR:-$ROOT/../mister-main-magik}"
 GUI_REMOTE="/media/fat/mister-magik/mister-magik-fb"
 MAIN_REMOTE="/media/fat/MiSTer_MagiK"
 GUI_PROFILE=release-device
 GUI_BUILD_ARGS=(--device)
+CLEAN_MAIN=0
+
+usage() {
+  sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+
+Options:
+  --device       Build magik-gui with the release-device profile (default).
+  --clean-main   Run make clean/build-docker clean before building the Main fork.
+  -h, --help     Show this help.
+
+Environment:
+  MISTER_MAIN_DIR  Path to the external mister-main-magik checkout.
+                   Defaults to ../mister-main-magik.
+EOF
+}
 
 for arg in "$@"; do
   case "$arg" in
@@ -19,8 +35,11 @@ for arg in "$@"; do
       GUI_PROFILE=release-device
       GUI_BUILD_ARGS=(--device)
       ;;
+    --clean-main)
+      CLEAN_MAIN=1
+      ;;
     -h|--help)
-      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+      usage
       exit 0
       ;;
     *)
@@ -33,15 +52,36 @@ done
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/$GUI_PROFILE/mister-magik-fb"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
 
+if [[ ! -d "$MAIN_DIR" || ! -f "$MAIN_DIR/Makefile" ]]; then
+  cat >&2 <<EOF
+ERROR: Main_MiSTer fork checkout not found.
+
+Expected: $MAIN_DIR
+
+Create or clone the external fork at ../mister-main-magik, or set:
+
+  MISTER_MAIN_DIR=/path/to/mister-main-magik $0
+EOF
+  exit 1
+fi
+
 echo "==> Building magik-gui ($GUI_PROFILE)"
 "$GUI_DIR/build-arm.sh" "${GUI_BUILD_ARGS[@]}"
 
-echo "==> Building main-mister"
+echo "==> Building Main fork: $MAIN_DIR"
 if command -v arm-none-linux-gnueabihf-gcc >/dev/null 2>&1; then
-  make -C "$MAIN_DIR" clean
+  if [[ "$CLEAN_MAIN" == 1 ]]; then
+    make -C "$MAIN_DIR" clean
+  fi
   make -C "$MAIN_DIR"
 else
-  "$MAIN_DIR/build-docker.sh" clean
+  if [[ ! -x "$MAIN_DIR/build-docker.sh" ]]; then
+    echo "ERROR: $MAIN_DIR/build-docker.sh is missing or not executable." >&2
+    exit 1
+  fi
+  if [[ "$CLEAN_MAIN" == 1 ]]; then
+    "$MAIN_DIR/build-docker.sh" clean
+  fi
   "$MAIN_DIR/build-docker.sh"
 fi
 
