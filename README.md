@@ -35,9 +35,8 @@ history/                      experiment notes
 AGENTS.md                     operational guide (read this for MiSTer quirks)
 ```
 
-The maintained Main_MiSTer fork lives in a sibling checkout at
-`../mister-main-magik` by default. Set `MISTER_MAIN_DIR` to use a different fork
-path.
+The maintained Main_MiSTer fork lives in a sibling checkout at `../Main_MiSTer`
+by default. Set `MISTER_MAIN_DIR` to use a different fork path.
 
 ## Build & deploy
 

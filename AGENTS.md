@@ -192,10 +192,11 @@ magik-gui/                   native armv7 frontend — see §12
 ```
 
 The maintained Main_MiSTer fork now lives outside this repo, normally as a
-sibling checkout at `../mister-main-magik`; override with `MISTER_MAIN_DIR`.
-Its rebuild ledger is `MAGIK_PATCHSET.md`. On the device the Slint binary lives
-at `/media/fat/mister-magik/mister-magik-fb` and the fork binary lives at
-`/media/fat/MiSTer_MagiK`.
+sibling checkout at `../Main_MiSTer`; override with `MISTER_MAIN_DIR`. It is a
+real GitHub fork at `NigelBreslaw/Main_MiSTer`, with long-lived branch
+`mister-magik`. Its rebuild ledger is `MAGIK_PATCHSET.md`. On the device the
+Slint binary lives at `/media/fat/mister-magik/mister-magik-fb` and the fork
+binary lives at `/media/fat/MiSTer_MagiK`.
 
 ---
 
@@ -229,7 +230,7 @@ scripts/install-slint-boot.sh
 scripts/deploy-rust.sh
 
 # Re-deploy Slint + external Main fork after ownership/handoff changes
-# Defaults to ../mister-main-magik; export MISTER_MAIN_DIR to override.
+# Defaults to ../Main_MiSTer; export MISTER_MAIN_DIR to override.
 scripts/deploy-main-mister-experiment.sh
 # Add --clean-main only when stale Main objects are suspected.
 scripts/deploy-main-mister-experiment.sh --clean-main
@@ -483,8 +484,9 @@ MiSTer briefly, sends `load_core` via fifo, shows loading overlay until core run
 ### Main fork experiment — Main as parent of Slint
 
 The maintained Main_MiSTer fork lives in the external sibling repo
-`../mister-main-magik` (or `MISTER_MAIN_DIR`). This app repo deploys it as
-`/media/fat/MiSTer_MagiK` and selects it through `[MiSTer]
+`../Main_MiSTer` (or `MISTER_MAIN_DIR`). It is the real GitHub fork
+`NigelBreslaw/Main_MiSTer`, with long-lived branch `mister-magik`. This app repo
+deploys it as `/media/fat/MiSTer_MagiK` and selects it through `[MiSTer]
 main=MiSTer_MagiK`, while `magik-gui/` stays the separate Slint binary project.
 Use `scripts/deploy-main-mister-experiment.sh` to build/deploy both.
 
@@ -497,7 +499,7 @@ as a child through the `agetty`/tty2 handoff. Explicit commands on
 `mister_magik_launch <absolute .mgl/.mra path>` and
 `mister_magik_exit_to_menu`.
 
-Fork baseline policy: pin `mister-main-magik` to upstream Main_MiSTer release
+Fork baseline policy: pin `Main_MiSTer/mister-magik` to upstream Main_MiSTer release
 commits named `Release YYYYMMDD.` that update `releases/MiSTer_YYYYMMDD`, not
 arbitrary development commits. Current baseline is `Release 20260603`
 (`c73802332ff9c73659410084b6319ccd29f0b3aa`). The fork's
