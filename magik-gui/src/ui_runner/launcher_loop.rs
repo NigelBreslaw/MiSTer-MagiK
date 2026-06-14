@@ -122,14 +122,9 @@ pub(super) fn run_launcher_loop(
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let preview_stress = preview_stress_enabled();
     println!(
-        "preview_stress={} preview_visual_pct={} preview_blitter={}",
+        "preview_stress={} preview_visual_pct={} preview_blitter=raw",
         if preview_stress { "on" } else { "off" },
-        preview_visual_pct(),
-        if preview_raw_blitter_enabled() {
-            "raw"
-        } else {
-            "slint"
-        }
+        preview_visual_pct()
     );
     println!(
         "preview_transition={} segment_secs={} duration_ms={}",

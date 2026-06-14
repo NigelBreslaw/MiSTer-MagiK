@@ -4,8 +4,6 @@ import { MisterBridge } from "mister_bridge.slint";
 export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
     property <int> count: MisterBridge.arcade-games.length;
-    property <length> preview-display-width: MisterBridge.arcade-preview-display-width * 1px * s;
-    property <length> preview-display-height: MisterBridge.arcade-preview-display-height * 1px * s;
     property <length> cabinet-width: 336px * s;
     property <length> cabinet-height: 520px * s;
     property <length> cabinet-screen-x: 8px * s;
@@ -86,14 +84,6 @@ export component ArcadeListScreen inherits Rectangle {
                     width: root.cabinet-screen-width;
                     height: root.cabinet-screen-height;
                     clip: true;
-
-                    if MisterBridge.arcade-preview-has-image : Image {
-                        x: (parent.width - root.preview-display-width) / 2;
-                        y: (parent.height - root.preview-display-height) / 2;
-                        width: root.preview-display-width;
-                        height: root.preview-display-height;
-                        source: MisterBridge.arcade-preview-image;
-                    }
                 }
             }
 
