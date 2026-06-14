@@ -8,6 +8,7 @@ use crate::launch_profiles::{
     self, CollectionListing, CollectionRule, IgnoreReason, LaunchProfile, MountKind,
     PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
 };
+use crate::preview_worker;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -696,19 +697,23 @@ fn catalog_variant_score(row: &CatalogRow) -> i32 {
     )
     .to_ascii_lowercase();
 
+    variant_score_from_haystack(&haystack)
+}
+
+fn variant_score_from_haystack(haystack: &str) -> i32 {
     let mut score = 0;
     if contains_any(
-        &haystack,
+        haystack,
         &[
             "(usa", "(us,", "(us)", "(u)", "/_usa/", " america", "american",
         ],
     ) {
         score += 1000;
-    } else if contains_any(&haystack, &["(japan", "(jp", "(j)", "/_japan/"]) {
+    } else if contains_any(haystack, &["(japan", "(jp", "(j)", "/_japan/"]) {
         score += 900;
-    } else if contains_any(&haystack, &["(world", "(w,", "(w)", "/_world/"]) {
+    } else if contains_any(haystack, &["(world", "(w,", "(w)", "/_world/"]) {
         score += 800;
-    } else if contains_any(&haystack, &["(europe", "(eu", "(e)", "/_europe/"]) {
+    } else if contains_any(haystack, &["(europe", "(eu", "(e)", "/_europe/"]) {
         score += 700;
     }
 
@@ -846,7 +851,6 @@ fn refresh_sqlite_database(
 struct BenchConfig {
     roots: Vec<String>,
     sqlite_path: PathBuf,
-    optional_catalogs: bool,
 }
 
 impl BenchConfig {
@@ -864,18 +868,12 @@ impl BenchConfig {
         let sqlite_path = std::env::var("MISTER_LIBRARY_BENCH_SQLITE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH));
-        let optional_catalogs = env_bool("MISTER_LIBRARY_OPTIONAL_CATALOGS");
-        Self {
-            roots,
-            sqlite_path,
-            optional_catalogs,
-        }
+        Self { roots, sqlite_path }
     }
 
     fn production() -> Self {
         let mut cfg = Self::from_env();
         cfg.sqlite_path = default_sqlite_path();
-        cfg.optional_catalogs = true;
         cfg
     }
 }
@@ -902,6 +900,7 @@ fn scan_library_with_progress(
     let discover_t = Instant::now();
     let rx = discover_files_pipelined(cfg.roots.clone());
     let profiles = launch_profiles::builtin_profiles();
+    let preview_images = PreviewImageIndex::from_env();
     let mut discover_us = 0;
     let mut file_fingerprints = FileFingerprint::new();
     let mut directory_manifest = DirectoryManifest::new();
@@ -1002,12 +1001,10 @@ fn scan_library_with_progress(
                     profile_id: profile.id.to_string(),
                     rule: payload_rule,
                 });
-                discoveries.push(discovery_from_profile_file(
-                    &f,
-                    profile,
-                    &payload_rule,
-                    &profiles,
-                ));
+                let mut discovery =
+                    discovery_from_profile_file(&f, profile, &payload_rule, &profiles);
+                attach_preview_image(&mut discovery, &preview_images);
+                discoveries.push(discovery);
             }
             Some((
                 profile,
@@ -1053,27 +1050,6 @@ fn scan_library_with_progress(
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
     }
-    if cfg.optional_catalogs {
-        if let Some(report) = progress.as_mut() {
-            report(
-                "Importing metadata",
-                "Looking for gamelist.xml screenshots...",
-            );
-        }
-        let imported = match progress.as_mut() {
-            Some(report) => {
-                enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, Some(&mut **report))
-            }
-            None => enrich_discoveries_from_gamelists(&mut discoveries, &cfg.roots, None),
-        };
-        if let Some(report) = progress.as_mut() {
-            report(
-                "Importing metadata",
-                &format!("Matched screenshot metadata for {imported} games"),
-            );
-        }
-    }
-
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: unix_now_secs(),
@@ -1344,7 +1320,11 @@ fn build_directory_manifest(
         .collect()
 }
 
-fn scan_archive_toc(file: &FoundFile, format: ArchiveFormat, profile: &LaunchProfile) -> ArchiveScan {
+fn scan_archive_toc(
+    file: &FoundFile,
+    format: ArchiveFormat,
+    profile: &LaunchProfile,
+) -> ArchiveScan {
     let t = Instant::now();
     let (status, entries) = match format {
         ArchiveFormat::Zip => match scan_zip_central_directory(file, profile) {
@@ -1405,9 +1385,7 @@ fn scan_zip_central_directory(
     let mut cd_entries = le_u16(&tail[eocd + 10..eocd + 12]) as usize;
     let mut cd_size = le_u32(&tail[eocd + 12..eocd + 16]) as u64;
     let mut cd_offset = le_u32(&tail[eocd + 16..eocd + 20]) as u64;
-    if cd_offset == u32::MAX as u64
-        || cd_size == u32::MAX as u64
-        || cd_entries == u16::MAX as usize
+    if cd_offset == u32::MAX as u64 || cd_size == u32::MAX as u64 || cd_entries == u16::MAX as usize
     {
         let zip64 = read_zip64_central_directory_location(&mut f, &tail, eocd)?;
         cd_entries = zip64.entries;
@@ -1628,145 +1606,6 @@ fn collection_discoveries_from_listing_text(
         .collect()
 }
 
-#[derive(Clone, Debug)]
-struct GamelistMetadata {
-    title: Option<String>,
-    image_path: Option<String>,
-    has_image: bool,
-}
-
-fn enrich_discoveries_from_gamelists(
-    discoveries: &mut [GameDiscovery],
-    roots: &[String],
-    mut progress: ProgressCallback<'_>,
-) -> usize {
-    let mut by_path = HashMap::<String, GamelistMetadata>::new();
-    let mut by_stem = HashMap::<String, GamelistMetadata>::new();
-    let mut xml_files = 0usize;
-    let mut xml_games = 0usize;
-    for root in roots {
-        let path = Path::new(root);
-        if !path.is_dir() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(path)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if !entry
-                .file_name()
-                .to_string_lossy()
-                .eq_ignore_ascii_case("gamelist.xml")
-            {
-                continue;
-            }
-            let parent = entry.path().parent().unwrap_or(path);
-            xml_files += 1;
-            if let Some(report) = progress.as_mut() {
-                report(
-                    "Importing metadata",
-                    &format!("Reading {}", entry.path().display()),
-                );
-            }
-            let rows = parse_gamelist_metadata(entry.path(), parent);
-            xml_games += rows.len();
-            for (game_path, meta) in rows {
-                by_stem
-                    .entry(match_stem(&game_path))
-                    .or_insert_with(|| meta.clone());
-                by_path.insert(normalize_match_path(&game_path), meta);
-            }
-        }
-    }
-    if let Some(report) = progress.as_mut() {
-        report(
-            "Importing metadata",
-            &format!("{xml_files} XML files, {xml_games} metadata rows"),
-        );
-    }
-
-    let mut matched = 0usize;
-    let total = discoveries.len();
-    for (idx, discovery) in discoveries.iter_mut().enumerate() {
-        if idx % 500 == 0 {
-            if let Some(report) = progress.as_mut() {
-                report(
-                    "Matching screenshots",
-                    &format!("{idx}/{total} discoveries; {matched} matched"),
-                );
-            }
-        }
-        let meta = by_path
-            .get(&normalize_match_path(&discovery.source_path))
-            .or_else(|| by_path.get(&normalize_match_path(&discovery.launch_ref)))
-            .or_else(|| by_stem.get(&match_stem(&discovery.source_path)))
-            .or_else(|| by_stem.get(&match_stem(&discovery.launch_ref)));
-        let Some(meta) = meta else {
-            continue;
-        };
-        if let Some(title) = meta.title.as_deref().filter(|s| !s.trim().is_empty()) {
-            discovery.title = title.to_string();
-        }
-        if let Some(image_path) = meta.image_path.as_deref().filter(|s| !s.trim().is_empty()) {
-            discovery.image_path = Some(image_path.to_string());
-            discovery.has_image = meta.has_image;
-        }
-        matched += 1;
-    }
-    matched
-}
-
-fn parse_gamelist_metadata(path: &Path, base: &Path) -> Vec<(String, GamelistMetadata)> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    let mut rest = text.as_str();
-    while let Some(start) = rest.find("<game") {
-        rest = &rest[start..];
-        let Some(tag_end) = rest.find('>') else {
-            break;
-        };
-        let after_open = &rest[tag_end + 1..];
-        let Some(end) = after_open.find("</game>") else {
-            break;
-        };
-        let block = &after_open[..end];
-        rest = &after_open[end + "</game>".len()..];
-        let Some(raw_path) = tag_text(block, "path") else {
-            continue;
-        };
-        let game_path = resolve_gamelist_path(base, &raw_path);
-        let image_path = tag_text(block, "image").map(|image| resolve_gamelist_path(base, &image));
-        let has_image = image_path
-            .as_deref()
-            .map(|p| Path::new(p).is_file())
-            .unwrap_or(false);
-        out.push((
-            game_path,
-            GamelistMetadata {
-                title: tag_text(block, "name"),
-                image_path,
-                has_image,
-            },
-        ));
-    }
-    out
-}
-
-fn resolve_gamelist_path(base: &Path, raw: &str) -> String {
-    let clean = raw.trim().trim_start_matches("./");
-    if clean.starts_with('/') {
-        clean.to_string()
-    } else {
-        base.join(clean).display().to_string()
-    }
-}
-
 fn normalize_match_path(path: &str) -> String {
     path.split("::")
         .next()
@@ -1783,15 +1622,6 @@ fn normalize_launch_path(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn match_stem(path: &str) -> String {
-    normalize_id(
-        Path::new(path.split("::").next().unwrap_or(path))
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(path),
-    )
-}
-
 fn parenthesized_setname(path: &str) -> Option<String> {
     let stem = Path::new(path)
         .file_stem()
@@ -1805,6 +1635,52 @@ fn parenthesized_setname(path: &str) -> Option<String> {
     } else {
         Some(normalize_id(value))
     }
+}
+
+#[derive(Default)]
+struct PreviewImageIndex {
+    arcade_stems: Option<HashSet<String>>,
+}
+
+impl PreviewImageIndex {
+    fn from_env() -> Self {
+        Self {
+            arcade_stems: preview_worker::preview_archive_entry_stems_from_env()
+                .ok()
+                .flatten(),
+        }
+    }
+
+    #[cfg(test)]
+    fn arcade(stems: &[&str]) -> Self {
+        Self {
+            arcade_stems: Some(stems.iter().map(|stem| stem.to_ascii_lowercase()).collect()),
+        }
+    }
+
+    fn has_arcade_stem(&self, stem: &str) -> bool {
+        self.arcade_stems
+            .as_ref()
+            .is_some_and(|stems| stems.contains(&stem.to_ascii_lowercase()))
+    }
+}
+
+fn attach_preview_image(discovery: &mut GameDiscovery, preview_images: &PreviewImageIndex) {
+    if discovery.platform_id != "arcade" {
+        return;
+    }
+    let Some(setname) = discovery
+        .setname
+        .as_deref()
+        .filter(|setname| !setname.trim().is_empty())
+    else {
+        return;
+    };
+    if !preview_images.has_arcade_stem(setname) {
+        return;
+    }
+    discovery.image_path = Some(format!("/media/fat/_Arcade/media/screenshot/{setname}.png"));
+    discovery.has_image = true;
 }
 
 fn discovery_from_profile_file(
@@ -1931,9 +1807,7 @@ fn discovery_from_profile_archive_entry(
             RuleSourceKind::MainSource | RuleSourceKind::Mgl | RuleSourceKind::Mra => {
                 DiscoveryConfidence::ArchiveToc
             }
-            RuleSourceKind::ConfStr | RuleSourceKind::MagikProfile => {
-                profile_confidence(rule)
-            }
+            RuleSourceKind::ConfStr | RuleSourceKind::MagikProfile => profile_confidence(rule),
         },
     }
 }
@@ -2072,12 +1946,52 @@ fn normalize_id(value: &str) -> String {
 
 fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
     let covered_payloads = covered_payload_paths(discoveries);
-    discoveries
-        .iter()
-        .filter(|d| is_playable_discovery_with_coverage(d, &covered_payloads))
-        .map(discovery_unique_key)
-        .collect::<HashSet<_>>()
-        .len()
+    preferred_playable_discoveries_by_key(discoveries, &covered_payloads).len()
+}
+
+fn preferred_playable_discoveries_by_key<'a>(
+    discoveries: &'a [GameDiscovery],
+    covered_payloads: &HashSet<String>,
+) -> BTreeMap<String, &'a GameDiscovery> {
+    let mut out = BTreeMap::<String, &'a GameDiscovery>::new();
+    for discovery in discoveries {
+        if !is_playable_discovery_with_coverage(discovery, covered_payloads) {
+            continue;
+        }
+        let key = discovery_unique_key(discovery);
+        match out.get(&key).copied() {
+            Some(existing) if prefer_discovery_variant(discovery, existing) => {
+                out.insert(key, discovery);
+            }
+            None => {
+                out.insert(key, discovery);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn prefer_discovery_variant(a: &GameDiscovery, b: &GameDiscovery) -> bool {
+    let a_score = discovery_variant_score(a);
+    let b_score = discovery_variant_score(b);
+    if a_score != b_score {
+        return a_score > b_score;
+    }
+    normalize_launch_path(&a.launch_ref) < normalize_launch_path(&b.launch_ref)
+}
+
+fn discovery_variant_score(discovery: &GameDiscovery) -> i32 {
+    let haystack = format!(
+        "{} {} {} {}",
+        discovery.title,
+        discovery.launch_ref,
+        discovery.setname.as_deref().unwrap_or(""),
+        discovery.parent.as_deref().unwrap_or("")
+    )
+    .to_ascii_lowercase();
+
+    variant_score_from_haystack(&haystack)
 }
 
 fn confidence_str(confidence: DiscoveryConfidence) -> &'static str {
@@ -2438,15 +2352,9 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
             )
             .map_err(|e| format!("prepare game fts insert: {e}"))?;
         let covered_payloads = covered_payload_paths(&scan.discoveries);
-        let mut seen = HashSet::<String>::new();
-        for discovery in &scan.discoveries {
-            if !is_playable_discovery_with_coverage(discovery, &covered_payloads) {
-                continue;
-            }
-            let key = discovery_unique_key(discovery);
-            if !seen.insert(key.clone()) {
-                continue;
-            }
+        let discoveries =
+            preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
+        for (key, discovery) in discoveries {
             let system_id = catalog_system_id_for_discovery(discovery);
             system_stmt
                 .execute(params![
@@ -3042,11 +2950,6 @@ fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: &str) -> bo
                 | ProfilePathClass::Ignored { .. }
         ))
     ) || is_amigavision_listing_path(path)
-        || path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|s| s.eq_ignore_ascii_case("gamelist.xml"))
-        .unwrap_or(false)
 }
 
 fn should_ignore_path(path: &Path) -> bool {
@@ -3060,6 +2963,10 @@ fn should_ignore_path(path: &Path) -> bool {
             || s == ".____padding_file"
             || s.eq_ignore_ascii_case("images")
             || s.eq_ignore_ascii_case("manuals")
+            || s.eq_ignore_ascii_case("screenshot")
+            || s.eq_ignore_ascii_case("screenshots")
+            || s.eq_ignore_ascii_case("screenshot-magik")
+            || s.eq_ignore_ascii_case("boxart")
     })
 }
 
@@ -3353,7 +3260,10 @@ mod tests {
     fn catalog_entries_with_shared_collection_launch_ref_stay_separate() {
         let rows = vec![
             catalog_entry_row("Agony", "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
-            catalog_entry_row("Alien Breed", "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+            catalog_entry_row(
+                "Alien Breed",
+                "/media/fat/games/Amiga/AmigaVision-MiSTer.7z",
+            ),
         ];
 
         let games = collapse_catalog_variants(rows);
@@ -3383,7 +3293,6 @@ mod tests {
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
             sqlite_path: db.clone(),
-            optional_catalogs: false,
         };
 
         let scan = scan_library(&cfg);
@@ -3417,6 +3326,57 @@ mod tests {
     }
 
     #[test]
+    fn scanner_ignores_gamelists_and_screenshot_media_dirs() {
+        let root = unique_temp_dir("ignore-screenshot-media");
+        let nes_dir = root.join("games/NES");
+        let screenshot_dir = nes_dir.join("screenshot");
+        std::fs::create_dir_all(&screenshot_dir).expect("create screenshot dir");
+        std::fs::write(nes_dir.join("Mario.nes"), "rom").expect("write rom");
+        std::fs::write(
+            nes_dir.join("gamelist.xml"),
+            "<game><path>./Mario.nes</path><image>./screenshot/Mario.png</image></game>",
+        )
+        .expect("write gamelist");
+        std::fs::write(screenshot_dir.join("Not A Game.nes"), "media").expect("write media");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(scan.discoveries.len(), 1);
+        assert!(!scan.discoveries[0].has_image);
+        assert!(scan
+            .file_fingerprints
+            .contains_key(&nes_dir.join("Mario.nes").display().to_string()));
+        assert!(!scan
+            .file_fingerprints
+            .contains_key(&nes_dir.join("gamelist.xml").display().to_string()));
+        assert!(!scan.directory_manifest.keys().any(|path| Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "screenshot")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_images_use_archive_stems_without_screenshot_stat() {
+        let mut discovery = mra_discovery(1, "Moon Patrol (US)");
+        discovery.setname = Some("mpatrol".to_string());
+        let preview_images = PreviewImageIndex::arcade(&["mpatrol"]);
+
+        attach_preview_image(&mut discovery, &preview_images);
+
+        assert!(discovery.has_image);
+        assert_eq!(
+            discovery.image_path.as_deref(),
+            Some("/media/fat/_Arcade/media/screenshot/mpatrol.png")
+        );
+    }
+
+    #[test]
     fn amigavision_listing_entries_generate_visible_collection_games() {
         let root = unique_temp_dir("amigavision-listing");
         let db = root.join("library.sqlite3");
@@ -3440,11 +3400,9 @@ mod tests {
         );
 
         assert_eq!(unique_discovery_count(&discoveries), 2);
-        assert!(discoveries
-            .iter()
-            .all(|discovery| discovery
-                .launch_ref
-                .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
+        assert!(discoveries.iter().all(|discovery| discovery
+            .launch_ref
+            .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries)).expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
@@ -3503,13 +3461,15 @@ mod tests {
             b"Agony (OCS)[en]\nAlien Breed (OCS)[en]\nInvalid \xff Title (OCS)[en]\n",
         )
         .expect("write games listing");
-        std::fs::write(listings_dir.join("demos.txt"), "State of the Art (OCS)[demo]\n")
-            .expect("write demos listing");
+        std::fs::write(
+            listings_dir.join("demos.txt"),
+            "State of the Art (OCS)[demo]\n",
+        )
+        .expect("write demos listing");
         let db = root.join("library.sqlite3");
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
             sqlite_path: db.clone(),
-            optional_catalogs: false,
         };
 
         let scan = scan_library(&cfg);
@@ -3695,7 +3655,9 @@ mod tests {
             .expect("write sqlite");
         let conn = Connection::open(&db).expect("open sqlite");
         let materialized_rows: i64 = conn
-            .query_row("SELECT count(*) FROM launcher_catalog", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
+                row.get(0)
+            })
             .expect("count launcher catalog");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");

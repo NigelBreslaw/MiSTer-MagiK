@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::mpsc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -317,7 +317,10 @@ impl PreviewDecodedCache {
     }
 
     fn get(&mut self, key: &str) -> Option<LoadedPreviewPixels> {
-        let idx = self.entries.iter().position(|(entry_key, _)| entry_key == key)?;
+        let idx = self
+            .entries
+            .iter()
+            .position(|(entry_key, _)| entry_key == key)?;
         let (key, loaded) = self.entries.remove(idx);
         let clone_t = Instant::now();
         let mut out = loaded.clone();
@@ -334,7 +337,11 @@ impl PreviewDecodedCache {
         if self.cap == 0 {
             return;
         }
-        if let Some(idx) = self.entries.iter().position(|(entry_key, _)| *entry_key == key) {
+        if let Some(idx) = self
+            .entries
+            .iter()
+            .position(|(entry_key, _)| *entry_key == key)
+        {
             self.entries.remove(idx);
         }
         self.entries.push((key, loaded.clone()));
@@ -613,6 +620,42 @@ fn preview_archive_path_from_env() -> Option<String> {
     }
 }
 
+pub fn preview_archive_entry_stems_from_env() -> Result<Option<HashSet<String>>, String> {
+    let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
+        return Ok(None);
+    };
+    preview_archive_entry_stems(Path::new(&path)).map(Some)
+}
+
+fn preview_archive_entry_stems(path: &Path) -> Result<HashSet<String>, String> {
+    let mut file =
+        File::open(path).map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)
+        .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
+    match &magic {
+        PreviewArchive::LZ4_BLOCK_MAGIC | PreviewArchive::RAW_MAGIC => {}
+        _ => return Err(format!("{}: bad preview archive magic", path.display())),
+    }
+    let count = read_u32(&mut file)? as usize;
+    let mut stems = HashSet::with_capacity(count);
+    for _ in 0..count {
+        let name_len = read_u16(&mut file)? as usize;
+        let _raw_len = read_u32(&mut file)?;
+        let _compressed_len = read_u32(&mut file)?;
+        let _offset = read_u64(&mut file)?;
+        let mut name = vec![0u8; name_len];
+        file.read_exact(&mut name)
+            .map_err(|e| format!("read preview archive entry name: {e}"))?;
+        let name =
+            String::from_utf8(name).map_err(|e| format!("preview archive entry name utf8: {e}"))?;
+        if let Some(stem) = Path::new(&name).file_stem().and_then(|s| s.to_str()) {
+            stems.insert(stem.to_ascii_lowercase());
+        }
+    }
+    Ok(stems)
+}
+
 fn auto_preview_archive_path() -> Option<String> {
     if matches!(
         std::env::var("MISTER_PREVIEW_ARCHIVE_AUTO").as_deref(),
@@ -663,11 +706,14 @@ impl PreviewArchive {
                 .map_err(|e| format!("read preview archive entry name: {e}"))?;
             let name = String::from_utf8(name)
                 .map_err(|e| format!("preview archive entry name utf8: {e}"))?;
-            entries.insert(name, PreviewArchiveEntry {
-                raw_len,
-                compressed_len,
-                offset,
-            });
+            entries.insert(
+                name,
+                PreviewArchiveEntry {
+                    raw_len,
+                    compressed_len,
+                    offset,
+                },
+            );
         }
         Ok(Self {
             bytes: preview_archive_preload_enabled()
@@ -763,8 +809,8 @@ fn preview_archive_preload_enabled() -> bool {
 }
 
 fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    let mut file = File::open(path)
-        .map_err(|e| format!("preload preview archive {}: {e}", path.display()))?;
+    let mut file =
+        File::open(path).map_err(|e| format!("preload preview archive {}: {e}", path.display()))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|e| format!("read preview archive {}: {e}", path.display()))?;
@@ -914,14 +960,7 @@ mod tests {
 
     #[test]
     fn preview_window_paths_dedupes_missing_and_duplicate_paths() {
-        let items = vec![
-            Some("a"),
-            Some("b"),
-            None,
-            Some("b"),
-            Some("c"),
-            Some("d"),
-        ];
+        let items = vec![Some("a"), Some("b"), None, Some("b"), Some("c"), Some("d")];
         let paths = preview_window_paths(&items, 2, 3, |p| *p);
         assert_eq!(paths, vec!["b", "a", "c", "d"]);
     }
@@ -962,7 +1001,10 @@ mod tests {
 
     #[test]
     fn hybrid_filter_uses_nearest_for_upscale_and_lanczos_for_downscale_labels() {
-        assert_eq!(PreviewResizeFilter::from_label("hybrid"), PreviewResizeFilter::Hybrid);
+        assert_eq!(
+            PreviewResizeFilter::from_label("hybrid"),
+            PreviewResizeFilter::Hybrid
+        );
         assert_eq!(PreviewResizeFilter::Hybrid.label(), "hybrid");
     }
 
@@ -999,6 +1041,29 @@ mod tests {
                 "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320/astrass.rgb565"
             )
         );
+    }
+
+    #[test]
+    fn preview_archive_entry_stems_reads_index_only() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-{}.mmraw",
+            std::process::id()
+        ));
+        let name = b"mpatrol.rgb565";
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::RAW_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&20u32.to_le_bytes());
+        bytes.extend_from_slice(&20u32.to_le_bytes());
+        bytes.extend_from_slice(&128u64.to_le_bytes());
+        bytes.extend_from_slice(name);
+        std::fs::write(&path, bytes).expect("write rawpack fixture");
+
+        let stems = preview_archive_entry_stems(&path).expect("read rawpack index");
+
+        assert!(stems.contains("mpatrol"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

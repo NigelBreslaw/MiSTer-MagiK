@@ -49,3 +49,30 @@ LIB-SCAN-PROFILE-20260612	1	import	29130813	bytes=38494208
 LIB-SCAN-PROFILE-20260612	1	cached_arcade_load	739591	rows=7962
 LIB-SCAN-PROFILE-20260612	1	no_change_manifest	17819550	changed=false
 LIB-SCAN-PROFILE-20260612	post-reboot	post_reboot_rescan	76939464	skipped=true bytes=38494208 scan_us=76939464 import_us=0 discoveries=8527 normal_files=26584 containers=0 entries=0
+LIB-SCAN-BEFORE-20260614	1	cold_scan	50883522	discover_us=32645358
+LIB-SCAN-BEFORE-20260614	1	import	31365899	bytes=42422272
+LIB-SCAN-BEFORE-20260614	1	cached_arcade_load	204610	rows=9524
+LIB-SCAN-BEFORE-20260614	1	no_change_manifest	17658249	changed=false
+LIB-SCAN-BEFORE-20260614	2	cold_scan	40465862	discover_us=25344170
+LIB-SCAN-BEFORE-20260614	2	import	32423264	bytes=42422272
+LIB-SCAN-BEFORE-20260614	2	cached_arcade_load	206688	rows=9524
+LIB-SCAN-BEFORE-20260614	2	no_change_manifest	17764925	changed=false
+LIB-SCAN-BEFORE-20260614	3	cold_scan	40813969	discover_us=25859261
+LIB-SCAN-BEFORE-20260614	3	import	31701034	bytes=42422272
+LIB-SCAN-BEFORE-20260614	3	cached_arcade_load	206573	rows=9524
+LIB-SCAN-BEFORE-20260614	3	no_change_manifest	17803883	changed=false
+LIB-SCAN-BEFORE-20260614	post-reboot	post_reboot_rescan	66791824	skipped=true bytes=42422272 scan_us=66791824 import_us=0 discoveries=10089 normal_files=26584 containers=154 entries=281
+LIB-SCAN-AFTER-20260614	1	cold_scan	26312166	discover_us=26304640
+LIB-SCAN-AFTER-20260614	1	import	33369001	bytes=41508864
+LIB-SCAN-AFTER-20260614	1	cached_arcade_load	176772	rows=9523
+LIB-SCAN-AFTER-20260614	1	no_change_manifest	16530925	changed=false
+LIB-SCAN-AFTER-20260614	2	cold_scan	25325421	discover_us=25241074
+LIB-SCAN-AFTER-20260614	2	import	33203018	bytes=41508864
+LIB-SCAN-AFTER-20260614	2	cached_arcade_load	171158	rows=9523
+LIB-SCAN-AFTER-20260614	2	no_change_manifest	16243319	changed=false
+LIB-SCAN-AFTER-20260614	3	cold_scan	24943459	discover_us=24931307
+LIB-SCAN-AFTER-20260614	3	import	33894017	bytes=41508864
+LIB-SCAN-AFTER-20260614	3	cached_arcade_load	181698	rows=9523
+LIB-SCAN-AFTER-20260614	3	no_change_manifest	16515400	changed=false
+LIB-SCAN-AFTER-20260614	post-reboot	post_reboot_rescan	66928197	skipped=true bytes=41508864 scan_us=66928197 import_us=0 discoveries=10089 normal_files=26584 containers=154 entries=281
+LIB-SCAN-AFTER-20260614	settled-1	settled_rescan	15779327	skipped=true bytes=41508864 scan_us=15779327 import_us=0 discoveries=10089 normal_files=26584 containers=154 entries=281 image_games=828 image_launcher_rows=698

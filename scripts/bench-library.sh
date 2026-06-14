@@ -67,7 +67,7 @@ echo "== deploy =="
 "$HERE/scripts/mister" put "$BIN" "$REMOTE"
 
 echo "== library-scan-bench on device =="
-OUT=$("$HERE/scripts/mister" run "chmod +x $REMOTE; MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ITERATIONS=$ITERATIONS MISTER_LIBRARY_BENCH_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_OPTIONAL_CATALOGS=1 $REMOTE library-scan-bench" 2>&1) || true
+OUT=$("$HERE/scripts/mister" run "chmod +x $REMOTE; MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ITERATIONS=$ITERATIONS MISTER_LIBRARY_BENCH_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-scan-bench" 2>&1) || true
 echo "$OUT"
 
 echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
