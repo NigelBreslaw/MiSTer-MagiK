@@ -104,7 +104,7 @@ echo "==> Building raw565 preview cache"
 "$MISTER" preview-cache-build --input "$ORIGINALS" --output "$CACHE_DIR" --max "$MAX_SIZE"
 
 echo "==> Packing $RAW_DIR"
-node "$ROOT/scripts/build-preview-zstd-archive.mjs" "$RAW_DIR" "$PACK" lz4-block 12
+node "$ROOT/scripts/build-preview-archive.mjs" "$RAW_DIR" "$PACK" lz4-block 12
 
 if [[ "$DEPLOY" == "1" ]]; then
   remote_dir="$(dirname "$REMOTE_PACK")"
