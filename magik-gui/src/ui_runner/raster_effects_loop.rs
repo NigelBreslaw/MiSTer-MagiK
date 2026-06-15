@@ -7,8 +7,9 @@ use mister_magik_fb::raster_effects::{
     pixel_to_rgb888, render_raster_effect_frame, synthetic_raster_images, RasterEffectKind,
     RasterEffectRenderState,
 };
+use mister_magik_fb::raw565;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 pub(super) fn print_raster_effects() {
@@ -334,24 +335,13 @@ fn load_raster_effect_images(root: &str, cap: usize) -> Vec<CameraImage> {
 }
 
 fn read_raw565_image(path: &Path) -> Option<CameraImage> {
-    let mut file = File::open(path).ok()?;
-    let mut header = [0u8; 8];
-    file.read_exact(&mut header).ok()?;
-    let w = u32::from_le_bytes(header[0..4].try_into().ok()?) as usize;
-    let h = u32::from_le_bytes(header[4..8].try_into().ok()?) as usize;
-    if w == 0 || h == 0 || w > 2048 || h > 2048 {
-        return None;
-    }
-    let mut bytes = vec![0u8; w * h * 2];
-    file.read_exact(&mut bytes).ok()?;
-    let mut pixels = Vec::with_capacity(w * h);
-    for chunk in bytes.chunks_exact(2) {
-        pixels.push(CameraPixel(u16::from_le_bytes([chunk[0], chunk[1]])));
-    }
+    let data = std::fs::read(path).ok()?;
+    let image = raw565::decode_raw565(&data).ok()?;
+    let pixels = image.words.into_iter().map(CameraPixel).collect();
     Some(CameraImage {
         pixels,
-        w,
-        h,
-        stride: w,
+        w: image.width,
+        h: image.height,
+        stride: image.stride_words,
     })
 }
