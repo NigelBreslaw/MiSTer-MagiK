@@ -134,7 +134,9 @@ impl ArcadeCatalog {
     }
 
     pub fn system_preview_game_at(&self, system_id: &str, index: usize) -> Option<ArcadeGameEntry> {
-        self.system_preview_game_slice(system_id).get(index).cloned()
+        self.system_preview_game_slice(system_id)
+            .get(index)
+            .cloned()
     }
 
     pub fn system_preview_game_slice(&self, system_id: &str) -> &[ArcadeGameEntry] {
@@ -274,18 +276,13 @@ pub fn build_with_options(
     report("Indexing arcade…", "Scanning .mra files…");
     let mra_paths = {
         let t = Instant::now();
-        let raw = walk_mra(&root);
-        let raw_count = raw.len();
-        let paths = dedupe_mra_paths(raw);
+        let paths = walk_mra(&root);
         timings.walk_mra = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
             count: paths.len() as u64,
-            notes: format!("{raw_count} raw → {} unique", paths.len()),
+            notes: String::new(),
         };
-        report(
-            "Indexing arcade…",
-            &format!("Found {} games ({raw_count} files on disk)", paths.len()),
-        );
+        report("Indexing arcade…", &format!("Found {} games", paths.len()));
         paths
     };
 
@@ -353,18 +350,6 @@ pub fn build_with_options(
                 "png_found={found} png_missing={missing} setname_resolved={setname_resolved}"
             ),
         };
-    }
-
-    report("Indexing arcade…", "Removing duplicates…");
-    {
-        let before = games.len();
-        games = dedupe_by_title(games);
-        if games.len() != before {
-            eprintln!(
-                "catalog: deduped {before} → {} entries by display title",
-                games.len()
-            );
-        }
     }
 
     report("Indexing arcade…", "Sorting…");
@@ -487,6 +472,9 @@ fn walk_mra(root: &Path) -> Vec<PathBuf> {
             continue;
         }
         let path = entry.path();
+        if is_organized_mirror(path) {
+            continue;
+        }
         if path.extension().and_then(|e| e.to_str()) != Some("mra") {
             continue;
         }
@@ -500,100 +488,13 @@ fn walk_mra(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Same `.mra` filename often appears many times under `_Organized/` mirror folders.
-/// Keep one path per basename — prefer root-level copies over organized mirrors.
-fn dedupe_mra_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut best: HashMap<String, PathBuf> = HashMap::new();
-    for path in paths {
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let key = name.to_ascii_lowercase();
-        match best.get(&key) {
-            None => {
-                best.insert(key, path);
-            }
-            Some(existing) => {
-                let pick = prefer_mra_path(existing, &path);
-                best.insert(key, pick);
-            }
-        }
-    }
-    let mut out: Vec<PathBuf> = best.into_values().collect();
-    out.sort();
-    out
-}
-
-fn prefer_mra_path(a: &Path, b: &Path) -> PathBuf {
-    let a_org = is_organized_mirror(a);
-    let b_org = is_organized_mirror(b);
-    if a_org != b_org {
-        return if a_org {
-            b.to_path_buf()
-        } else {
-            a.to_path_buf()
-        };
-    }
-    let a_depth = path_depth(a);
-    let b_depth = path_depth(b);
-    if a_depth != b_depth {
-        return if a_depth < b_depth {
-            a.to_path_buf()
-        } else {
-            b.to_path_buf()
-        };
-    }
-    if a <= b {
-        a.to_path_buf()
-    } else {
-        b.to_path_buf()
-    }
-}
-
 fn is_organized_mirror(path: &Path) -> bool {
-    path.to_string_lossy().split('/').any(|c| c == "_Organized")
-}
-
-fn path_depth(path: &Path) -> usize {
-    path.components().count()
-}
-
-/// Collapse entries that share the same display title (gamelist mirrors / variants).
-fn dedupe_by_title(games: Vec<ArcadeGameEntry>) -> Vec<ArcadeGameEntry> {
-    let mut best_idx: HashMap<String, usize> = HashMap::new();
-    let mut out: Vec<ArcadeGameEntry> = Vec::with_capacity(games.len());
-
-    for game in games {
-        let key = game.title.to_ascii_lowercase();
-        if let Some(&idx) = best_idx.get(&key) {
-            if prefer_game_entry(&game, &out[idx]) {
-                out[idx] = game;
-            }
-        } else {
-            best_idx.insert(key, out.len());
-            out.push(game);
-        }
-    }
-    out
-}
-
-fn prefer_game_entry(a: &ArcadeGameEntry, b: &ArcadeGameEntry) -> bool {
-    if a.has_image != b.has_image {
-        return a.has_image;
-    }
-    let a_path = Path::new(a.mra_path.as_ref());
-    let b_path = Path::new(b.mra_path.as_ref());
-    let a_org = is_organized_mirror(a_path);
-    let b_org = is_organized_mirror(b_path);
-    if a_org != b_org {
-        return !a_org;
-    }
-    let a_depth = path_depth(a_path);
-    let b_depth = path_depth(b_path);
-    if a_depth != b_depth {
-        return a_depth < b_depth;
-    }
-    a.mra_path < b.mra_path
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("_organized")
+    })
 }
 
 fn parse_gamelist(root: &Path) -> GamelistIndex {
@@ -728,6 +629,7 @@ fn lookup_gamelist<'a>(
     index
         .by_basename
         .get(&basename.to_ascii_lowercase())
+        .filter(|indexed| !is_organized_mirror(&indexed.rel) || is_organized_mirror(rel))
         .map(|i| &i.entry)
 }
 
@@ -1027,6 +929,28 @@ fn decode_png_rgb8_bytes(data: &[u8]) -> Result<DecodedImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("mister-magik-arcade-catalog-{name}-{nanos}"))
+    }
+
+    fn write_png(path: &Path) {
+        let mut data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut data, 1, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[0x11, 0x22, 0x33]).unwrap();
+        }
+        fs::write(path, data).expect("write png");
+    }
 
     #[test]
     fn es_relative_strips_dot_slash() {
@@ -1035,36 +959,20 @@ mod tests {
     }
 
     #[test]
-    fn dedupe_prefers_root_over_organized() {
-        let root = PathBuf::from("/media/fat/_Arcade/Donkey Kong (US, Set 1).mra");
-        let organized = PathBuf::from(
-            "/media/fat/_Arcade/_Organized/_2 Region/_USA/Donkey Kong (US, Set 1).mra",
-        );
-        let paths = dedupe_mra_paths(vec![organized.clone(), root.clone()]);
-        assert_eq!(paths, vec![root]);
-    }
+    fn walk_mra_ignores_organized_mirrors() {
+        let root = temp_root("walk");
+        fs::create_dir_all(root.join("_organized/_2 Region/_USA")).expect("create organized dir");
+        fs::write(root.join("Donkey Kong (US, Set 1).mra"), "root").expect("write root mra");
+        fs::write(
+            root.join("_organized/_2 Region/_USA/Donkey Kong (US, Set 1).mra"),
+            "organized",
+        )
+        .expect("write organized mra");
 
-    #[test]
-    fn dedupe_by_title_keeps_one() {
-        let games = vec![
-            ArcadeGameEntry {
-                title: "1943- Kai Midway Kaisen (JP)".into(),
-                mra_path: "/media/fat/_Arcade/_Organized/a/1943- Kai Midway Kaisen (JP).mra".into(),
-                image_path: "".into(),
-                has_image: false,
-                system_id: "arcade".into(),
-            },
-            ArcadeGameEntry {
-                title: "1943- Kai Midway Kaisen (JP)".into(),
-                mra_path: "/media/fat/_Arcade/1943- Kai Midway Kaisen (JP).mra".into(),
-                image_path: "".into(),
-                has_image: true,
-                system_id: "arcade".into(),
-            },
-        ];
-        let out = dedupe_by_title(games);
-        assert_eq!(out.len(), 1);
-        assert!(out[0].has_image);
+        let paths = walk_mra(&root);
+
+        assert_eq!(paths, vec![root.join("Donkey Kong (US, Set 1).mra")]);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1165,5 +1073,78 @@ mod tests {
         assert_eq!(decoded.width, 2);
         assert_eq!(decoded.height, 1);
         assert_eq!(decoded.rgb, vec![0x22, 0x22, 0x22, 0xcc, 0xcc, 0xcc]);
+    }
+
+    #[test]
+    fn build_walks_merges_resolves_and_sorts_real_files() {
+        let root = temp_root("build");
+        fs::create_dir_all(root.join("media/screenshot")).expect("create screenshot dir");
+        fs::create_dir_all(root.join("_Organized/_Region")).expect("create organized dir");
+        fs::write(
+            root.join("1942.mra"),
+            "<misterromdescription><setname>1942</setname>",
+        )
+        .expect("write mra");
+        fs::write(
+            root.join("_Organized/_Region/1942.mra"),
+            "<misterromdescription><setname>1942-clone</setname>",
+        )
+        .expect("write organized mra");
+        fs::write(root.join("Zaxxon.mra"), "<misterromdescription/>").expect("write mra");
+        fs::write(root.join("._AppleDouble.mra"), "ignored").expect("write apple double");
+        write_png(&root.join("media/screenshot/1942.png"));
+        write_png(&root.join("media/screenshot/zaxxon.png"));
+        fs::write(
+            root.join("gamelist.xml"),
+            r#"<gameList>
+  <game>
+    <path>./Zaxxon.mra</path>
+    <name>Zaxxon</name>
+    <image>./media/screenshot/zaxxon.png</image>
+  </game>
+  <game>
+    <path>./_Organized/_Region/1942.mra</path>
+    <name>Organized 1942</name>
+    <image>./media/screenshot/missing.png</image>
+  </game>
+</gameList>"#,
+        )
+        .expect("write gamelist");
+
+        let (catalog, timings) = build_with_options(
+            &root,
+            BuildOptions {
+                sample_image_decodes: 2,
+            },
+            None,
+        );
+
+        assert_eq!(catalog.len(), 2);
+        assert_eq!(catalog.system_game_count("arcade"), 2);
+        assert_eq!(catalog.system_preview_game_count("arcade"), 2);
+        assert_eq!(catalog.games[0].title.as_ref(), "1942");
+        assert!(catalog.games[0].mra_path.ends_with("/1942.mra"));
+        assert!(!catalog.games[0].mra_path.contains("_Organized"));
+        assert!(catalog.games[0]
+            .image_path
+            .ends_with("media/screenshot/1942.png"));
+        assert!(catalog.games[0].has_image);
+        assert_eq!(catalog.games[1].title.as_ref(), "Zaxxon");
+        assert!(catalog.games[1].has_image);
+        assert_eq!(
+            catalog.systems,
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 2,
+            }]
+        );
+        assert_eq!(timings.walk_mra.count, 2);
+        assert_eq!(timings.merge_entries.count, 2);
+        assert_eq!(timings.resolve_setname_images.notes, "setname_resolved=1");
+        assert_eq!(timings.resolve_images.count, 2);
+        assert_eq!(timings.decode_sample_pngs.count, 2);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

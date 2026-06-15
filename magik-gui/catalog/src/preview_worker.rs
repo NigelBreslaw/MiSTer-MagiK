@@ -632,7 +632,11 @@ fn preview_archives() -> Result<Option<&'static Vec<PreviewArchive>>, String> {
 fn preview_archive_paths_from_env() -> Vec<String> {
     let mut paths = Vec::new();
     if let Ok(value) = std::env::var("MISTER_PREVIEW_ARCHIVES") {
-        for path in value.split(':').map(str::trim).filter(|path| !path.is_empty()) {
+        for path in value
+            .split(':')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
             paths.push(path.to_string());
         }
     }
@@ -690,8 +694,8 @@ pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64
     let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
         return Ok(None);
     };
-    let meta = std::fs::metadata(&path)
-        .map_err(|e| format!("metadata preview archive {path}: {e}"))?;
+    let meta =
+        std::fs::metadata(&path).map_err(|e| format!("metadata preview archive {path}: {e}"))?;
     let mtime_secs = meta
         .modified()
         .ok()
@@ -1100,6 +1104,123 @@ mod tests {
         assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 1);
         assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 3);
         assert!(pop_next_preview_request(&mut queue).is_none());
+    }
+
+    #[test]
+    fn enqueue_replaces_lower_priority_duplicate_and_drops_far_prefetch() {
+        let now = Instant::now();
+        let mut queue = Vec::new();
+        enqueue_command(
+            &mut queue,
+            PreviewCommand::Request(PreviewRequest {
+                generation: 1,
+                title: "prefetch".to_string(),
+                image_path: "same.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Prefetch { distance: 3 },
+            }),
+        );
+        enqueue_command(
+            &mut queue,
+            PreviewCommand::Request(PreviewRequest {
+                generation: 2,
+                title: "selected".to_string(),
+                image_path: "same.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Selected,
+            }),
+        );
+        enqueue_command(
+            &mut queue,
+            PreviewCommand::Request(PreviewRequest {
+                generation: 3,
+                title: "too far".to_string(),
+                image_path: "far.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Prefetch {
+                    distance: DEFAULT_PREVIEW_CACHE_CAP + 1,
+                },
+            }),
+        );
+
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].generation, 2);
+        assert_eq!(queue[0].priority, PreviewPriority::Selected);
+    }
+
+    #[test]
+    fn decoded_cache_is_lru_and_resets_timing_on_hits() {
+        let mut cache = PreviewDecodedCache::new(1);
+        let first = LoadedPreviewPixels {
+            timing: ImageLoadTiming {
+                read_us: 11,
+                decode_us: 22,
+                resize_us: 33,
+                total_us: 66,
+                encoded_bytes: 44,
+                decoded_bytes: 2,
+                source_width: 1,
+                source_height: 1,
+            },
+            image: PreviewPixels::Rgb565 {
+                width: 1,
+                height: 1,
+                stride_bytes: 16,
+                words: vec![0xf800],
+            },
+        };
+        let second = LoadedPreviewPixels {
+            timing: ImageLoadTiming {
+                source_width: 2,
+                source_height: 1,
+                ..first.timing.clone()
+            },
+            image: PreviewPixels::Rgb565 {
+                width: 2,
+                height: 1,
+                stride_bytes: 16,
+                words: vec![0x07e0, 0x001f],
+            },
+        };
+
+        cache.insert("a".into(), &first);
+        let hit = cache.get("a").expect("cache hit");
+        assert_eq!(hit.timing.read_us, 0);
+        assert_eq!(hit.timing.decode_us, 0);
+        assert_eq!(hit.timing.resize_us, 0);
+        assert_eq!(hit.timing.encoded_bytes, 0);
+        assert_eq!(hit.timing.source_width, 1);
+
+        cache.insert("b".into(), &second);
+        assert!(cache.get("a").is_none());
+        assert_eq!(cache.get("b").unwrap().timing.source_width, 2);
+    }
+
+    #[test]
+    fn load_preview_failure_preserves_request_metadata() {
+        let req = PreviewRequest {
+            generation: 77,
+            title: "Missing".to_string(),
+            image_path: "/tmp/missing/media/screenshot/missing.png".to_string(),
+            requested_at: Instant::now(),
+            priority: PreviewPriority::Selected,
+        };
+        let mut cache = PreviewDecodedCache::new(2);
+
+        let result = load_preview(req, &mut cache);
+
+        assert_eq!(result.generation, 77);
+        assert_eq!(result.title, "Missing");
+        assert_eq!(
+            result.image_path,
+            "/tmp/missing/media/screenshot/missing.png"
+        );
+        assert!(result.image.is_none());
+        assert_eq!(result.decoded_bytes, 0);
+        assert_eq!(result.source_width, 0);
+        assert_eq!(result.source_height, 0);
+        assert_eq!(result.resize_filter, PreviewResizeFilter::Hybrid);
+        assert_eq!(result.priority, PreviewPriority::Selected);
     }
 
     #[test]
