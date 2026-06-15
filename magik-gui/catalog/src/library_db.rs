@@ -1171,9 +1171,10 @@ fn scan_library_with_progress(
             Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
     }
-    if let Ok(Some((path, size, mtime_secs))) = preview_worker::preview_archive_fingerprint_from_env()
-    {
-        file_fingerprints.insert(path, (size, mtime_secs));
+    if let Ok(fingerprints) = preview_worker::preview_archive_fingerprints_from_env() {
+        for (path, size, mtime_secs) in fingerprints {
+            file_fingerprints.insert(path, (size, mtime_secs));
+        }
     }
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
@@ -1252,7 +1253,7 @@ fn validate_or_rebuild_directory_manifest(
 }
 
 fn preview_archive_fingerprint_unchanged(existing: &DbFingerprint) -> bool {
-    match preview_worker::preview_archive_fingerprint_from_env() {
+    match preview_worker::preview_archive_fingerprints_from_env() {
         Ok(current) => preview_archive_fingerprint_matches(existing, current),
         Err(_) => false,
     }
@@ -1260,18 +1261,22 @@ fn preview_archive_fingerprint_unchanged(existing: &DbFingerprint) -> bool {
 
 fn preview_archive_fingerprint_matches(
     existing: &DbFingerprint,
-    current: Option<(String, u64, i64)>,
+    current: Vec<(String, u64, i64)>,
 ) -> bool {
-    match current {
-        Some((path, size, mtime_secs)) => existing
+    let existing_archive_count = existing
+        .file_fingerprints
+        .keys()
+        .filter(|path| is_preview_archive_fingerprint_path(path))
+        .count();
+    if existing_archive_count != current.len() {
+        return false;
+    }
+    current.into_iter().all(|(path, size, mtime_secs)| {
+        existing
             .file_fingerprints
             .get(&path)
-            .is_some_and(|fingerprint| *fingerprint == (size, mtime_secs)),
-        None => !existing
-            .file_fingerprints
-            .keys()
-            .any(|path| is_preview_archive_fingerprint_path(path)),
-    }
+            .is_some_and(|fingerprint| *fingerprint == (size, mtime_secs))
+    })
 }
 
 fn is_preview_archive_fingerprint_path(path: &str) -> bool {
@@ -1280,7 +1285,7 @@ fn is_preview_archive_fingerprint_path(path: &str) -> bool {
         .and_then(|name| name.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    name.starts_with("raw565-") && (name.ends_with(".mmraw") || name.ends_with(".mmlz4b"))
+    name.ends_with(".mmraw") || name.ends_with(".mmlz4b")
 }
 
 fn directory_manifest_metadata_changed(existing: &DirectoryManifest) -> bool {
@@ -2532,15 +2537,15 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
 fn refresh_sqlite_preview_assets_from_env(path: &Path) -> Result<u64, String> {
     let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
         .map_err(|e| format!("preview archive index: {e}"))?;
-    let preview_fingerprint = preview_worker::preview_archive_fingerprint_from_env()
+    let preview_fingerprints = preview_worker::preview_archive_fingerprints_from_env()
         .map_err(|e| format!("preview archive fingerprint: {e}"))?;
-    refresh_sqlite_preview_assets(path, &preview_asset_packs, preview_fingerprint)
+    refresh_sqlite_preview_assets(path, &preview_asset_packs, preview_fingerprints)
 }
 
 fn refresh_sqlite_preview_assets(
     path: &Path,
     preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
-    preview_fingerprint: Option<(String, u64, i64)>,
+    preview_fingerprints: Vec<(String, u64, i64)>,
 ) -> Result<u64, String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     for table in [
@@ -2656,7 +2661,7 @@ fn refresh_sqlite_preview_assets(
                 .map_err(|e| format!("delete preview fingerprint: {e}"))?;
         }
     }
-    if let Some((path, size, mtime_secs)) = preview_fingerprint {
+    for (path, size, mtime_secs) in preview_fingerprints {
         tx.execute(
             "INSERT OR REPLACE INTO file_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
             params![path, size as i64, mtime_secs],
@@ -4913,7 +4918,7 @@ mod tests {
         let bytes = refresh_sqlite_preview_assets(
             &db,
             &[pack],
-            Some((pack_path.to_string(), 1234, 77)),
+            vec![(pack_path.to_string(), 1234, 77)],
         )
         .expect("refresh preview assets");
 
@@ -4962,12 +4967,12 @@ mod tests {
 
         assert!(!preview_archive_fingerprint_matches(
             &fingerprint,
-            Some((
+            vec![(
                 "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw"
                     .to_string(),
                 1024,
                 42,
-            )),
+            )],
         ));
     }
 
@@ -4978,7 +4983,34 @@ mod tests {
 
         assert!(preview_archive_fingerprint_matches(
             &fingerprint,
-            Some((path.to_string(), 1024, 42)),
+            vec![(path.to_string(), 1024, 42)],
+        ));
+    }
+
+    #[test]
+    fn matching_preview_archive_fingerprints_require_the_full_active_set() {
+        let arcade =
+            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw";
+        let neogeo = "/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b";
+        let fingerprint = fingerprint_with_files(&[(arcade, 1024, 42), (neogeo, 2048, 77)]);
+
+        assert!(preview_archive_fingerprint_matches(
+            &fingerprint,
+            vec![
+                (arcade.to_string(), 1024, 42),
+                (neogeo.to_string(), 2048, 77)
+            ],
+        ));
+        assert!(!preview_archive_fingerprint_matches(
+            &fingerprint,
+            vec![(arcade.to_string(), 1024, 42)],
+        ));
+        assert!(!preview_archive_fingerprint_matches(
+            &fingerprint,
+            vec![
+                (arcade.to_string(), 1024, 42),
+                (neogeo.to_string(), 2048, 78)
+            ],
         ));
     }
 

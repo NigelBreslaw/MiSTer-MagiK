@@ -700,18 +700,24 @@ pub fn preview_archive_indexes_from_env() -> Result<Vec<PreviewArchiveIndex>, St
 }
 
 pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64)>, String> {
-    let Some(path) = preview_archive_path_from_env().or_else(auto_preview_archive_path) else {
-        return Ok(None);
-    };
-    let meta =
-        std::fs::metadata(&path).map_err(|e| format!("metadata preview archive {path}: {e}"))?;
-    let mtime_secs = meta
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
-    Ok(Some((path, meta.len(), mtime_secs)))
+    Ok(preview_archive_fingerprints_from_env()?.into_iter().next())
+}
+
+pub fn preview_archive_fingerprints_from_env() -> Result<Vec<(String, u64, i64)>, String> {
+    preview_archive_paths_from_env()
+        .into_iter()
+        .map(|path| {
+            let meta = std::fs::metadata(&path)
+                .map_err(|e| format!("metadata preview archive {path}: {e}"))?;
+            let mtime_secs = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0);
+            Ok((path, meta.len(), mtime_secs))
+        })
+        .collect()
 }
 
 #[cfg(test)]
