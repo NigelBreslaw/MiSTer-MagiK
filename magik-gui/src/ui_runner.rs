@@ -65,6 +65,7 @@ mod catalog_worker;
 #[cfg(mister_bench_scenes)]
 mod console_scroll_loop;
 mod controller_loop;
+mod effect_loop_support;
 mod launcher_bench;
 mod launcher_bridge;
 mod launcher_frame_accounting;

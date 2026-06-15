@@ -1,15 +1,16 @@
+use super::effect_loop_support::{
+    arcade_root_from_env, cache_cap_from_env, create_trace, env_truthy, load_effect_images,
+    parse_effects_env, process_cpu_us, segment_from_env, selected_effect,
+};
 use super::*;
 use crate::input::PadPool;
 use crate::input_repeat::RepeatNav;
-use crate::preview_worker;
 use mister_magik_fb::camera_effects::{CameraImage, CameraPixel};
-use mister_magik_fb::raw565;
 use mister_magik_fb::sprite_effects::{
     render_sprite_effect_frame, synthetic_sprite_images, SpriteEffectKind, SpriteEffectRenderState,
 };
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 
 pub(super) fn print_sprite_effects() {
     println!("{}", SpriteEffectKind::labels());
@@ -28,35 +29,25 @@ struct SpriteEffectsConfig {
 
 impl SpriteEffectsConfig {
     fn from_env() -> Self {
-        let effects = parse_effects_env();
-        let segment_secs = std::env::var("MISTER_SPRITE_EFFECTS_SEGMENT_SECS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(20)
-            .max(1);
-        let cache_cap = std::env::var("MISTER_SPRITE_EFFECTS_CACHE_CAP")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(64)
-            .clamp(1, 512);
+        let effects = parse_effects_env(
+            "MISTER_SPRITE_EFFECTS",
+            "sprite-effects",
+            SpriteEffectKind::all(),
+            SpriteEffectKind::parse,
+            SpriteEffectKind::SpriteZoomTowardCamera,
+        );
+        let segment = segment_from_env("MISTER_SPRITE_EFFECTS_SEGMENT_SECS", 20);
+        let cache_cap = cache_cap_from_env("MISTER_SPRITE_EFFECTS_CACHE_CAP", 64);
         let auto = env_truthy("MISTER_SPRITE_EFFECTS_AUTO");
         let hud = env_truthy("MISTER_SPRITE_EFFECTS_HUD");
-        let trace = std::env::var("MISTER_SPRITE_EFFECTS_TRACE")
-            .ok()
-            .and_then(|path| {
-                let mut f = File::create(&path)
-                    .map_err(|e| eprintln!("sprite effects trace: create {path} failed: {e}"))
-                    .ok()?;
-                f.write_all(
-                    b"effect\tframe\telapsed_us\twall_us\tcpu_us\tcpu_pct\tdraw_us\tpresent_us\tvsync_us\tclear_us\tbackground_us\tprojection_us\timage_blit_us\tsprite_us\tpost_us\thud_us\tsprite_count\tsprite_pixels\tparticle_count\tflicker_skip_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\n",
-                )
-                .ok()?;
-                println!("sprite_effects_trace={path}");
-                Some(f)
-            });
+        let trace = create_trace(
+            "MISTER_SPRITE_EFFECTS_TRACE",
+            "sprite-effects",
+            b"effect\tframe\telapsed_us\twall_us\tcpu_us\tcpu_pct\tdraw_us\tpresent_us\tvsync_us\tclear_us\tbackground_us\tprojection_us\timage_blit_us\tsprite_us\tpost_us\thud_us\tsprite_count\tsprite_pixels\tparticle_count\tflicker_skip_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\n",
+        );
         Self {
             effects,
-            segment: Duration::from_secs(segment_secs),
+            segment,
             cache_cap,
             auto,
             hud,
@@ -65,19 +56,14 @@ impl SpriteEffectsConfig {
     }
 
     fn effect_at(&self, elapsed: Duration, selected_idx: usize) -> SpriteEffectKind {
-        if self.auto {
-            let idx = ((elapsed.as_micros() / self.segment.as_micros().max(1)) as usize)
-                % self.effects.len().max(1);
-            self.effects
-                .get(idx)
-                .copied()
-                .unwrap_or(SpriteEffectKind::SpriteZoomTowardCamera)
-        } else {
-            self.effects
-                .get(selected_idx % self.effects.len().max(1))
-                .copied()
-                .unwrap_or(SpriteEffectKind::SpriteZoomTowardCamera)
-        }
+        selected_effect(
+            &self.effects,
+            self.auto,
+            self.segment,
+            elapsed,
+            selected_idx,
+            SpriteEffectKind::SpriteZoomTowardCamera,
+        )
     }
 }
 
@@ -88,8 +74,7 @@ pub(super) fn run_sprite_effects_loop(
     _fb_format: FramebufferFormat,
 ) {
     let mut cfg = SpriteEffectsConfig::from_env();
-    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
-        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    let arcade_root = arcade_root_from_env();
     let images = load_sprite_effect_images(&arcade_root, cfg.cache_cap);
     println!(
         "sprite-effects effects={} auto={} hud={} segment_secs={} cache_cap={} images={}",
@@ -237,93 +222,6 @@ pub(super) fn run_sprite_effects_loop(
     }
 }
 
-fn parse_effects_env() -> Vec<SpriteEffectKind> {
-    let spec = std::env::var("MISTER_SPRITE_EFFECTS").unwrap_or_else(|_| "mega".into());
-    if matches!(
-        spec.trim().to_ascii_lowercase().as_str(),
-        "" | "mega" | "all" | "demo"
-    ) {
-        return SpriteEffectKind::all().to_vec();
-    }
-    let mut effects = Vec::new();
-    for part in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(effect) = SpriteEffectKind::parse(part) {
-            effects.push(effect);
-        } else {
-            eprintln!("sprite-effects: unknown effect {part:?}");
-        }
-    }
-    if effects.is_empty() {
-        vec![SpriteEffectKind::SpriteZoomTowardCamera]
-    } else {
-        effects
-    }
-}
-
-fn env_truthy(name: &str) -> bool {
-    matches!(
-        std::env::var(name)
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
-fn process_cpu_us() -> u64 {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    let rc = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts) };
-    if rc == 0 {
-        (ts.tv_sec as u64)
-            .saturating_mul(1_000_000)
-            .saturating_add((ts.tv_nsec as u64) / 1_000)
-    } else {
-        0
-    }
-}
-
 fn load_sprite_effect_images(root: &str, cap: usize) -> Vec<CameraImage> {
-    let resize = preview_worker::PreviewResizeSpec::from_env();
-    let mut paths = Vec::new();
-    if let Ok(loaded) = library_db::load_arcade_catalog_from_sqlite(root) {
-        paths.extend(
-            loaded
-                .catalog
-                .games
-                .iter()
-                .filter(|game| game.has_image && !game.image_path.is_empty())
-                .map(|game| game.image_path.clone())
-                .take(cap * 4),
-        );
-    }
-    let mut images = Vec::new();
-    for path in paths {
-        if images.len() >= cap {
-            break;
-        }
-        let cache = preview_worker::raw565_preview_cache_path(&path, resize);
-        if let Ok(image) = read_raw565_image(&cache) {
-            images.push(image);
-        }
-    }
-    if images.is_empty() {
-        synthetic_sprite_images(cap.min(24).max(8))
-    } else {
-        images
-    }
-}
-
-fn read_raw565_image(path: &Path) -> Result<CameraImage, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{path:?}: {e}"))?;
-    let image = raw565::decode_raw565(&data).map_err(|e| format!("{path:?}: {e}"))?;
-    let pixels = image.words.into_iter().map(CameraPixel).collect();
-    Ok(CameraImage {
-        pixels,
-        w: image.width,
-        h: image.height,
-        stride: image.stride_words,
-    })
+    load_effect_images(root, cap, 8, 24, synthetic_sprite_images)
 }
