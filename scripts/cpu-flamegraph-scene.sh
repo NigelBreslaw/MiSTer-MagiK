@@ -52,8 +52,12 @@ local_smoke_log="$OUT_DIR/${label}-cpu-smoke.log"
 bin="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
 build_args=(--profile)
 case "$scene" in
-  launcher|arcade|controller_test)
-    build_args+=(--ui-scope arcade)
+  arcade)
+    echo "The direct arcade scene was removed. Profile the real Arcade screen through scripts/profile-preview-scroll.sh and launcher traces." >&2
+    exit 2
+    ;;
+  launcher|controller_test)
+    build_args+=(--ui-scope launcher)
     ;;
   *)
     build_args+=(--all-scenes)

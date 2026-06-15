@@ -42,7 +42,6 @@ use crate::preview_state::{
     PreviewState, ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X,
     ARCADE_PREVIEW_BOX_Y,
 };
-use crate::preview_worker::DEFAULT_PREVIEW_CACHE_CAP;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::screenshot_transitions::{
     PreviewTransitionDemo, PreviewTransitionEffect, PreviewTransitionTrace,
@@ -116,37 +115,8 @@ fn screen_label(screen: Screen) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LauncherRunMode {
-    Launcher,
-    Arcade,
-}
-
-impl LauncherRunMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Launcher => "launcher",
-            Self::Arcade => "arcade",
-        }
-    }
-
-    fn initial_screen(self) -> Screen {
-        match self {
-            Self::Launcher => Screen::Home,
-            Self::Arcade => Screen::Arcade,
-        }
-    }
-
-    fn enforce(self, nav: &mut LauncherNav) {
-        if self == Self::Arcade {
-            nav.screen = Screen::Arcade;
-        }
-    }
-}
-
 pub const UI_SCENES: &[&str] = &[
     "launcher",
-    "arcade",
     "screensaver",
     "camera-effects",
     "sprite-effects",
@@ -505,29 +475,6 @@ pub fn run_ui(f: &mut Fpga) {
                 run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
-        "arcade" => {
-            let pad = open_pads();
-            with_scene_app!(launcher::Launcher, &ui, &window, app, {
-                init_launcher_bridge(&app, &pad);
-                boot_analytics::event("app_show_attempt", "scene=arcade");
-                app.show().expect("show");
-                boot_analytics::event("app_show", "scene=arcade ok=1");
-                window.request_redraw();
-                let mut target = UiFrameTarget::open(&ui);
-                run_launcher_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    f,
-                    &window,
-                    &mut target,
-                    pad,
-                    app,
-                    &animation_clock,
-                    LauncherRunMode::Arcade,
-                );
-            });
-        }
         "launcher" => {
             let pad = open_pads();
             with_scene_app!(launcher::Launcher, &ui, &window, app, {
@@ -547,7 +494,6 @@ pub fn run_ui(f: &mut Fpga) {
                     pad,
                     app,
                     &animation_clock,
-                    LauncherRunMode::Launcher,
                 );
             });
         }

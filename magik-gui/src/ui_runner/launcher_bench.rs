@@ -59,6 +59,35 @@ impl LauncherBenchScenario {
             | Self::PreviewStepHold => Duration::ZERO,
         }
     }
+
+    pub(super) fn starts_on_arcade(self) -> bool {
+        matches!(
+            self,
+            Self::QuickTap
+                | Self::RapidTaps
+                | Self::HeldScroll
+                | Self::TurboHold
+                | Self::PreviewStepHold
+        )
+    }
+}
+
+pub(super) fn launcher_start_screen_from_env() -> Option<Screen> {
+    launcher_screen_from_env("MISTER_LAUNCHER_START_SCREEN")
+}
+
+pub(super) fn launcher_lock_screen_from_env() -> Option<Screen> {
+    launcher_screen_from_env("MISTER_LAUNCHER_LOCK_SCREEN")
+}
+
+fn launcher_screen_from_env(name: &str) -> Option<Screen> {
+    match std::env::var(name).ok()?.to_ascii_lowercase().as_str() {
+        "home" => Some(Screen::Home),
+        "arcade" => Some(Screen::Arcade),
+        "controller" | "controller-test" | "controller_test" => Some(Screen::Controller),
+        "settings" => Some(Screen::Settings),
+        _ => None,
+    }
 }
 
 pub(super) fn preview_step_hold_frames() -> usize {

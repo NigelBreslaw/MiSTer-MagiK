@@ -16,6 +16,10 @@ This document defines current benchmark policy. Dated measurement logs live in
   post-deploy runs. Settle, reboot, or rerun before declaring regressions.
 - Do not compare short runs whose first seconds show `fps ~ 30` unless that is
   the behavior under test.
+- Arcade benchmarks must run through `MiSTer_MagiK` supervising
+  `mister-magik-fb ui launcher 0`. The removed direct Arcade scene is invalid
+  for current performance conclusions because it bypasses Main's OSD, VT, and
+  input ownership setup.
 
 ## Arcade And Preview Scenarios
 
@@ -40,6 +44,16 @@ Use these entrypoints:
 scripts/profile-arcade-scroll.sh LABEL
 scripts/profile-preview-scroll.sh LABEL
 scripts/profile-preview-transition-mega.sh LABEL --deploy-device
+```
+
+These scripts write `/media/fat/mister-magik/launcher.env`, send
+`mister_magik_restart_launcher`, and lock the real launcher on Arcade with:
+
+```text
+MISTER_LAUNCHER_START_SCREEN=arcade
+MISTER_LAUNCHER_LOCK_SCREEN=arcade
+MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll|turbo-hold|preview-step-hold|idle
+MISTER_PREVIEW_SCROLL_TRACE_SECS=N
 ```
 
 Preview transition policy:

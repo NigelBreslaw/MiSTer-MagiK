@@ -4,9 +4,8 @@
 # This is intentionally separate from deploy-rust.sh: use it when the binary on
 # /media/fat is already good and you only need to restart a scene.
 #
-#   scripts/run-rust.sh                  # real arcade screen, forever
-#   scripts/run-rust.sh launcher 0       # full launcher, forever
-#   scripts/run-rust.sh arcade-effects 0 # arcade screen with left/right effect picker
+#   scripts/run-rust.sh                  # restart supervised launcher, forever
+#   scripts/run-rust.sh launcher 0       # restart supervised launcher, forever
 #   scripts/run-rust.sh camera-effects 0 # full-screen classic camera effect picker
 #   scripts/run-rust.sh sprite-effects 0 # full-screen classic sprite effect picker
 #   scripts/run-rust.sh text-effects 0   # full-screen classic text effect picker
@@ -17,18 +16,19 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
-SCENE="${1:-arcade}"
+SCENE="${1:-launcher}"
 SECS="${2:-0}"
 LOG="/tmp/mister-magik-${SCENE}.log"
 REMOTE_SCENE="$SCENE"
 EXTRA_ENV=""
 
 case "$SCENE" in
-  demo|full_motion|static_ui|local_motion|console_scroll|launcher|controller_test|arcade|blend_velocity|video_playback|solid_fill|dirty_band) ;;
-  arcade-effects)
-    REMOTE_SCENE="arcade"
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_PREVIEW_TRANSITION_PICKER=1 MISTER_PREVIEW_TRANSITION_MS=900"
+  launcher) ;;
+  arcade|arcade-effects)
+    echo "The direct arcade scene was removed. Use scripts/profile-preview-scroll.sh for supervised real Arcade benchmarks." >&2
+    exit 2
     ;;
+  demo|full_motion|static_ui|local_motion|console_scroll|controller_test|blend_velocity|video_playback|solid_fill|dirty_band) ;;
   camera-effects)
     EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_CAMERA_EFFECTS_HUD=1"
     ;;
@@ -53,6 +53,12 @@ case "$SCENE" in
     exit 2
     ;;
 esac
+
+if [[ "$SCENE" == "launcher" ]]; then
+  echo "==> Restarting Main-supervised launcher"
+  "$HERE/scripts/mister" run "rm -f /media/fat/mister-magik/launcher.env; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  exit 0
+fi
 
 echo "==> Starting deployed $REMOTE ui $REMOTE_SCENE $SECS"
 if [ -n "$EXTRA_ENV" ]; then
