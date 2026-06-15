@@ -261,16 +261,15 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    let fb_format = FramebufferFormat::from_env();
+    let fb_format = FramebufferFormat::production_default();
     println!(
         "ui-fb-mode=temporary {UI_FB_W}x{UI_FB_H} format={} fpga-scale=1920x1080 restore=on-drop",
         fb_format.label()
     );
-    if fb_format.is_diagnostic_override() {
+    if std::env::var_os("MISTER_FB_FORMAT").is_some() {
         println!(
-            "ui-fb-format-diagnostic={} production_default={}",
-            fb_format.label(),
-            FramebufferFormat::production_default().label()
+            "ui-fb-format-override-ignored=1 production_format={}",
+            fb_format.label()
         );
     }
     let _fb_mode_guard = match FbModeGuard::set_temporary_format(UI_FB_W, UI_FB_H, fb_format) {

@@ -36,7 +36,7 @@ launcher.
 
 The launcher path uses a small Linux framebuffer and FPGA scaling:
 
-- Rust sets `/dev/fb0` to the selected launcher format, normally RGB565.
+- Rust sets `/dev/fb0` to RGB565 for the launcher/UI path.
 - Slint renders a 960x540 UI into cached RAM.
 - The Rust frame loop copies dirty regions into the write-combined `/dev/fb0`.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
@@ -50,7 +50,9 @@ Important policy:
   cached-RAM plus dirty-copy path is the current reliable 60fps design.
 - Do not assume `/dev/fb0` contents are visible on HDMI. The FPGA may be scanning
   another buffer.
-- Keep 8888 as a diagnostic path. Use RGB565 for production performance work.
+- RGB888 UI support has been removed. Keep any 8888 work in explicit low-level
+  diagnostics such as framebuffer smoke/recovery tooling, not in app rendering
+  or benchmarks.
 
 Historical evidence:
 

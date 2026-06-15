@@ -829,46 +829,6 @@ fn transition_gate(
     }
 }
 
-fn blit_transition_rgb_cut(
-    cached: &mut [Pixel],
-    ui: &UiDisplay,
-    screen: DirtyRect,
-    frame: &PreviewRawTransitionFrame<'_>,
-) {
-    for y in screen.y0..screen.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
-        for x in screen.x0..screen.x1.min(ui.render_w()) {
-            let rgb = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
-                .unwrap_or((0, 0, 0));
-            cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
-        }
-    }
-}
-
-fn blit_transition_rgb_fade(
-    cached: &mut [Pixel],
-    ui: &UiDisplay,
-    screen: DirtyRect,
-    frame: &PreviewRawTransitionFrame<'_>,
-    progress: f32,
-) {
-    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
-    for y in screen.y0..screen.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
-        for x in screen.x0..screen.x1.min(ui.render_w()) {
-            let prev = frame
-                .previous
-                .as_ref()
-                .and_then(|prev| sample_preview_rgb(prev, screen, x, y, 0, 1024, 1024))
-                .unwrap_or((0, 0, 0));
-            let current = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
-                .unwrap_or((0, 0, 0));
-            let rgb = blend_rgb(prev, current, alpha);
-            cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
-        }
-    }
-}
-
 fn blit_transition_565_cut(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
@@ -1660,31 +1620,26 @@ impl EffectLabelOverlay {
 }
 
 pub(crate) enum UiFrameTarget {
-    Xrgb8888 { cached: Vec<Pixel> },
     Rgb565 { cached: Vec<Rgb565Pixel> },
 }
 
 impl UiFrameTarget {
-    pub(super) fn cached_with_format(ui: &UiDisplay, format: FramebufferFormat) -> Self {
-        match format {
-            FramebufferFormat::Xrgb8888 => Self::Xrgb8888 {
-                cached: vec![Pixel(0); ui.render_w() * ui.render_h()],
-            },
-            FramebufferFormat::Rgb565 => Self::Rgb565 {
-                cached: vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()],
-            },
+    pub(super) fn cached(ui: &UiDisplay) -> Self {
+        Self::Rgb565 {
+            cached: vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()],
         }
     }
 
     pub(super) fn open(ui: &UiDisplay) -> Self {
-        let format = FramebufferFormat::from_env();
-        println!("slint-render-target=cached fb-format={}", format.label());
-        Self::cached_with_format(ui, format)
+        println!(
+            "slint-render-target=cached fb-format={}",
+            FramebufferFormat::production_default().label()
+        );
+        Self::cached(ui)
     }
 
     pub(super) fn render(&mut self, renderer: &SoftwareRenderer, ui: &UiDisplay) -> PhysicalRegion {
         match self {
-            Self::Xrgb8888 { cached } => renderer.render(cached, ui.render_w()),
             Self::Rgb565 { cached } => renderer.render(cached, ui.render_w()),
         }
     }
@@ -1692,7 +1647,6 @@ impl UiFrameTarget {
     #[cfg(mister_bench_scenes)]
     pub(super) fn label(&self) -> &'static str {
         match self {
-            Self::Xrgb8888 { .. } => "cached-8888",
             Self::Rgb565 { .. } => "cached-565",
         }
     }
@@ -1706,7 +1660,6 @@ impl UiFrameTarget {
     ) -> u32 {
         let _ = f;
         match self {
-            Self::Xrgb8888 { cached } => copy_cached_rect(disp, ui, cached, rect),
             Self::Rgb565 { cached } => copy_cached_rect_565(disp, ui, cached, rect),
         }
         rect.rows()
@@ -1730,56 +1683,6 @@ impl UiFrameTarget {
         let src_h = frame.source_h as usize;
 
         match self {
-            Self::Xrgb8888 { cached } => {
-                if clear_screen {
-                    for y in screen.y0..screen.y1.min(ui.render_h()) {
-                        let row = y * ui.render_w();
-                        for x in screen.x0..screen.x1.min(ui.render_w()) {
-                            cached[row + x] = Pixel(0);
-                        }
-                    }
-                }
-                match frame.pixels {
-                    PreviewRawPixels::Empty => {
-                        for y in screen.y0..screen.y1.min(ui.render_h()) {
-                            let row = y * ui.render_w();
-                            for x in screen.x0..screen.x1.min(ui.render_w()) {
-                                cached[row + x] = Pixel(0);
-                            }
-                        }
-                    }
-                    PreviewRawPixels::Rgb8(rgb) => {
-                        for y in rect.y0..rect.y1 {
-                            let src_y =
-                                ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                            let row = y * ui.render_w();
-                            for x in rect.x0..rect.x1 {
-                                let src_x = ((x as isize - image_x).max(0) as usize / scale_x)
-                                    .min(src_w - 1);
-                                let si = (src_y * src_w + src_x) * 3;
-                                cached[row + x] =
-                                    Pixel::from_rgb(rgb[si], rgb[si + 1], rgb[si + 2]);
-                            }
-                        }
-                    }
-                    PreviewRawPixels::Rgb565 {
-                        pixels,
-                        stride_pixels,
-                    } => {
-                        for y in rect.y0..rect.y1 {
-                            let src_y =
-                                ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                            let row = y * ui.render_w();
-                            for x in rect.x0..rect.x1 {
-                                let src_x = ((x as isize - image_x).max(0) as usize / scale_x)
-                                    .min(src_w - 1);
-                                cached[row + x] =
-                                    rgb565_to_pixel(pixels[src_y * stride_pixels + src_x]);
-                            }
-                        }
-                    }
-                }
-            }
             Self::Rgb565 { cached } => {
                 if clear_screen {
                     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
@@ -1860,22 +1763,6 @@ impl UiFrameTarget {
     ) -> DirtyRect {
         let screen = preview_screen_rect(ui);
         match self {
-            Self::Xrgb8888 { cached } => match effect {
-                PreviewTransitionEffect::Cut => blit_transition_rgb_cut(cached, ui, screen, frame),
-                PreviewTransitionEffect::Fade => {
-                    blit_transition_rgb_fade(cached, ui, screen, frame, progress)
-                }
-                #[cfg(mister_bench_scenes)]
-                _ => {
-                    for y in screen.y0..screen.y1.min(ui.render_h()) {
-                        let row = y * ui.render_w();
-                        for x in screen.x0..screen.x1.min(ui.render_w()) {
-                            let rgb = transition_rgb(frame, screen, effect, progress, x, y);
-                            cached[row + x] = Pixel::from_rgb(rgb.0, rgb.1, rgb.2);
-                        }
-                    }
-                }
-            },
             Self::Rgb565 { cached } => match effect {
                 PreviewTransitionEffect::Cut => {
                     if blit_transition_565_cut(cached, ui, screen, frame).is_none() {
@@ -1920,13 +1807,6 @@ impl UiFrameTarget {
         let w = w.min(ui.render_w().saturating_sub(x));
         let h = h.min(ui.render_h().saturating_sub(y));
         match self {
-            Self::Xrgb8888 { cached } => {
-                for yy in 0..h {
-                    let dst = (y + yy) * ui.render_w() + x;
-                    let src_idx = yy * w;
-                    cached[dst..dst + w].copy_from_slice(&src[src_idx..src_idx + w]);
-                }
-            }
             Self::Rgb565 { cached } => {
                 for yy in 0..h {
                     let dst = (y + yy) * ui.render_w() + x;
@@ -1957,7 +1837,6 @@ impl UiFrameTarget {
     ) -> u32 {
         let _ = f;
         match self {
-            Self::Xrgb8888 { cached } => copy_cached_rows(disp, ui, cached, y0, y1),
             Self::Rgb565 { cached } => copy_cached_rows_565(disp, ui, cached, y0, y1),
         }
         y1.saturating_sub(y0) as u32
@@ -2097,7 +1976,7 @@ mod tests {
     #[test]
     fn empty_raw_preview_blit_clears_preview_screen() {
         let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
-        let mut target = UiFrameTarget::cached_with_format(&ui, FramebufferFormat::Xrgb8888);
+        let mut target = UiFrameTarget::cached(&ui);
         let frame = PreviewRawFrame {
             pixels: PreviewRawPixels::Empty,
             source_w: 1,
@@ -2106,9 +1985,8 @@ mod tests {
             display_h: ARCADE_PREVIEW_BOX_H,
         };
 
-        if let UiFrameTarget::Xrgb8888 { cached } = &mut target {
-            cached.fill(Pixel(0x00ff00));
-        }
+        let UiFrameTarget::Rgb565 { cached } = &mut target;
+        cached.fill(<Rgb565Pixel as TargetPixel>::from_rgb(0, 255, 0));
 
         let rect = target
             .blit_raw_preview(&ui, &frame, true)
@@ -2119,10 +1997,8 @@ mod tests {
         assert_eq!(rect.y0, screen.y0);
         assert_eq!(rect.x1, screen.x1);
         assert_eq!(rect.y1, screen.y1);
-        if let UiFrameTarget::Xrgb8888 { cached } = target {
-            let center =
-                ((screen.y0 + screen.y1) / 2) * ui.render_w() + (screen.x0 + screen.x1) / 2;
-            assert_eq!(cached[center].0, 0);
-        }
+        let UiFrameTarget::Rgb565 { cached } = target;
+        let center = ((screen.y0 + screen.y1) / 2) * ui.render_w() + (screen.x0 + screen.x1) / 2;
+        assert_eq!(cached[center].0, 0);
     }
 }
