@@ -1,4 +1,9 @@
-//! Arcade catalog helpers: recursive `.mra` scan + optional `gamelist.xml` metadata.
+//! Arcade catalog helpers.
+//!
+//! The runtime launcher catalog is SQLite-backed. This module keeps the shared
+//! in-memory catalog type plus a direct `.mra` fallback builder for tests and
+//! diagnostics. The fallback derives titles from `.mra` filenames and resolves
+//! screenshots only from MRA `<setname>` values and known preview media dirs.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -25,8 +30,7 @@ pub struct PhaseTiming {
 #[derive(Clone, Debug, Default)]
 pub struct CatalogTimings {
     pub walk_mra: PhaseTiming,
-    pub parse_gamelist: PhaseTiming,
-    pub merge_entries: PhaseTiming,
+    pub build_entries: PhaseTiming,
     pub resolve_setname_images: PhaseTiming,
     pub resolve_images: PhaseTiming,
     pub sort_catalog: PhaseTiming,
@@ -38,8 +42,7 @@ impl CatalogTimings {
     pub fn print_summary(&self) {
         println!("catalog phase          ms    count   notes");
         print_phase("walk_mra", &self.walk_mra);
-        print_phase("parse_gamelist", &self.parse_gamelist);
-        print_phase("merge_entries", &self.merge_entries);
+        print_phase("build_entries", &self.build_entries);
         print_phase("resolve_setname_images", &self.resolve_setname_images);
         print_phase("resolve_images", &self.resolve_images);
         print_phase("sort_catalog", &self.sort_catalog);
@@ -230,23 +233,6 @@ fn has_preview_image(game: &ArcadeGameEntry) -> bool {
             })
 }
 
-#[derive(Clone, Debug, Default)]
-struct GamelistEntry {
-    name: String,
-    image: String,
-}
-
-#[derive(Clone, Debug)]
-struct IndexedGamelistEntry {
-    rel: PathBuf,
-    entry: GamelistEntry,
-}
-
-struct GamelistIndex {
-    by_rel: HashMap<PathBuf, GamelistEntry>,
-    by_basename: HashMap<String, IndexedGamelistEntry>,
-}
-
 #[derive(Default)]
 pub struct BuildOptions {
     pub sample_image_decodes: usize,
@@ -286,35 +272,20 @@ pub fn build_with_options(
         paths
     };
 
-    report("Indexing arcade…", "Reading gamelist.xml…");
-    let gamelist = {
-        let t = Instant::now();
-        let index = parse_gamelist(&root);
-        timings.parse_gamelist = PhaseTiming {
-            ms: t.elapsed().as_millis() as u64,
-            count: index.by_rel.len() as u64,
-            notes: format!("basename_index={}", index.by_basename.len()),
-        };
-        index
-    };
-
     let mut games = {
         let t = Instant::now();
-        let (rows, matched) = merge_entries(&root, &mra_paths, &gamelist, |done, total| {
+        let rows = build_entries(&mra_paths, |done, total| {
             if done == total || done % 400 == 0 {
                 report(
                     "Indexing arcade…",
-                    &format!("Matching metadata {done}/{total}…"),
+                    &format!("Preparing rows {done}/{total}…"),
                 );
             }
         });
-        timings.merge_entries = PhaseTiming {
+        timings.build_entries = PhaseTiming {
             ms: t.elapsed().as_millis() as u64,
             count: rows.len() as u64,
-            notes: format!(
-                "matched={matched} unmatched={}",
-                rows.len().saturating_sub(matched)
-            ),
+            notes: "source=mra_filename".to_string(),
         };
         rows
     };
@@ -497,213 +468,30 @@ fn is_organized_mirror(path: &Path) -> bool {
     })
 }
 
-fn parse_gamelist(root: &Path) -> GamelistIndex {
-    let path = root.join("gamelist.xml");
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return GamelistIndex {
-            by_rel: HashMap::new(),
-            by_basename: HashMap::new(),
-        };
-    };
-
-    let mut by_rel = HashMap::new();
-    let mut by_basename = HashMap::new();
-    let mut in_game = false;
-    let mut cur_path = String::new();
-    let mut cur_name = String::new();
-    let mut cur_image = String::new();
-    let mut field = String::new();
-    let mut text = String::new();
-
-    let mut reader = quick_xml::Reader::from_str(&data);
-    reader.config_mut().trim_text(true);
-
-    loop {
-        match reader.read_event() {
-            Ok(quick_xml::events::Event::Start(e)) => {
-                field.clear();
-                text.clear();
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if tag == "game" {
-                    in_game = true;
-                    cur_path.clear();
-                    cur_name.clear();
-                    cur_image.clear();
-                } else if in_game {
-                    field = tag;
-                }
-            }
-            Ok(quick_xml::events::Event::Text(e)) => {
-                if in_game && !field.is_empty() {
-                    text = e.xml10_content().unwrap_or_default().into_owned();
-                }
-            }
-            Ok(quick_xml::events::Event::End(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if tag == "game" && in_game {
-                    if !cur_path.is_empty() {
-                        let rel = es_relative_path(&cur_path);
-                        let entry = GamelistEntry {
-                            name: cur_name.clone(),
-                            image: cur_image.clone(),
-                        };
-                        by_rel.insert(rel.clone(), entry.clone());
-                        if let Some(base) = rel.file_name().and_then(|n| n.to_str()) {
-                            let key = base.to_ascii_lowercase();
-                            match by_basename.get(&key) {
-                                None => {
-                                    by_basename.insert(
-                                        key,
-                                        IndexedGamelistEntry {
-                                            rel: rel.clone(),
-                                            entry,
-                                        },
-                                    );
-                                }
-                                Some(existing) => {
-                                    if prefer_gamelist_entry(
-                                        &existing.entry,
-                                        &existing.rel,
-                                        &entry,
-                                        &rel,
-                                    ) {
-                                        by_basename
-                                            .insert(key, IndexedGamelistEntry { rel, entry });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    in_game = false;
-                } else if in_game && !field.is_empty() && !text.is_empty() {
-                    match field.as_str() {
-                        "path" => cur_path = text.clone(),
-                        "name" => cur_name = text.clone(),
-                        "image" => cur_image = text.clone(),
-                        _ => {}
-                    }
-                    field.clear();
-                    text.clear();
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => {
-                eprintln!("gamelist.xml parse error: {e}");
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    GamelistIndex {
-        by_rel,
-        by_basename,
-    }
-}
-
-fn prefer_gamelist_entry(
-    existing: &GamelistEntry,
-    existing_rel: &Path,
-    new: &GamelistEntry,
-    new_rel: &Path,
-) -> bool {
-    let existing_org = is_organized_mirror(existing_rel);
-    let new_org = is_organized_mirror(new_rel);
-    if existing_org != new_org {
-        return !new_org;
-    }
-    if existing.image.is_empty() != new.image.is_empty() {
-        return !new.image.is_empty();
-    }
-    false
-}
-
-fn lookup_gamelist<'a>(
-    index: &'a GamelistIndex,
-    rel: &Path,
-    basename: &str,
-) -> Option<&'a GamelistEntry> {
-    if let Some(entry) = index.by_rel.get(rel) {
-        return Some(entry);
-    }
-    index
-        .by_basename
-        .get(&basename.to_ascii_lowercase())
-        .filter(|indexed| !is_organized_mirror(&indexed.rel) || is_organized_mirror(rel))
-        .map(|i| &i.entry)
-}
-
-fn es_relative_path(rel: &str) -> PathBuf {
-    let trimmed = rel.trim();
-    let rel = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    PathBuf::from(rel)
-}
-
-fn mra_relative_key(root: &Path, path: &Path) -> PathBuf {
-    path.strip_prefix(root)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn merge_entries(
-    root: &Path,
+fn build_entries(
     mra_paths: &[PathBuf],
-    gamelist: &GamelistIndex,
     mut on_progress: impl FnMut(usize, usize),
-) -> (Vec<ArcadeGameEntry>, usize) {
-    let mut matched = 0usize;
+) -> Vec<ArcadeGameEntry> {
     let mut games = Vec::with_capacity(mra_paths.len());
     let total = mra_paths.len();
 
     for (i, path) in mra_paths.iter().enumerate() {
-        let rel = mra_relative_key(root, path);
-        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let meta = lookup_gamelist(gamelist, &rel, basename);
-        if meta.is_some() {
-            matched += 1;
-        }
-
         let file_stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Unknown");
 
-        let title = meta
-            .map(|m| m.name.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| file_stem.to_string());
-
-        let image_rel = meta.map(|m| m.image.as_str()).unwrap_or("");
-        let image_path = if image_rel.is_empty() {
-            String::new()
-        } else {
-            resolve_image_path(root, image_rel)
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
-        };
-
         games.push(ArcadeGameEntry {
-            title: title.into(),
+            title: file_stem.to_string().into(),
             mra_path: path.display().to_string().into(),
-            image_path: image_path.into(),
+            image_path: "".into(),
             has_image: false,
             system_id: "arcade".into(),
         });
         on_progress(i + 1, total);
     }
 
-    (games, matched)
-}
-
-fn resolve_image_path(root: &Path, rel: &str) -> Option<PathBuf> {
-    let trimmed = rel.trim();
-    let rel = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    let path = root.join(rel);
-    if path.is_file() {
-        Some(path)
-    } else {
-        None
-    }
+    games
 }
 
 const SETNAME_READ_BYTES: usize = 4096;
@@ -953,12 +741,6 @@ mod tests {
     }
 
     #[test]
-    fn es_relative_strips_dot_slash() {
-        let p = es_relative_path("./foo/bar.mra");
-        assert_eq!(p, PathBuf::from("foo/bar.mra"));
-    }
-
-    #[test]
     fn walk_mra_ignores_organized_mirrors() {
         let root = temp_root("walk");
         fs::create_dir_all(root.join("_organized/_2 Region/_USA")).expect("create organized dir");
@@ -1076,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn build_walks_merges_resolves_and_sorts_real_files() {
+    fn build_walks_merges_resolves_and_sorts_real_files_without_xml_metadata() {
         let root = temp_root("build");
         fs::create_dir_all(root.join("media/screenshot")).expect("create screenshot dir");
         fs::create_dir_all(root.join("_Organized/_Region")).expect("create organized dir");
@@ -1099,7 +881,7 @@ mod tests {
             r#"<gameList>
   <game>
     <path>./Zaxxon.mra</path>
-    <name>Zaxxon</name>
+    <name>XML Zaxxon Title Must Be Ignored</name>
     <image>./media/screenshot/zaxxon.png</image>
   </game>
   <game>
@@ -1121,7 +903,7 @@ mod tests {
 
         assert_eq!(catalog.len(), 2);
         assert_eq!(catalog.system_game_count("arcade"), 2);
-        assert_eq!(catalog.system_preview_game_count("arcade"), 2);
+        assert_eq!(catalog.system_preview_game_count("arcade"), 1);
         assert_eq!(catalog.games[0].title.as_ref(), "1942");
         assert!(catalog.games[0].mra_path.ends_with("/1942.mra"));
         assert!(!catalog.games[0].mra_path.contains("_Organized"));
@@ -1130,7 +912,8 @@ mod tests {
             .ends_with("media/screenshot/1942.png"));
         assert!(catalog.games[0].has_image);
         assert_eq!(catalog.games[1].title.as_ref(), "Zaxxon");
-        assert!(catalog.games[1].has_image);
+        assert!(catalog.games[1].image_path.is_empty());
+        assert!(!catalog.games[1].has_image);
         assert_eq!(
             catalog.systems,
             vec![GameSystemEntry {
@@ -1140,10 +923,10 @@ mod tests {
             }]
         );
         assert_eq!(timings.walk_mra.count, 2);
-        assert_eq!(timings.merge_entries.count, 2);
+        assert_eq!(timings.build_entries.count, 2);
         assert_eq!(timings.resolve_setname_images.notes, "setname_resolved=1");
-        assert_eq!(timings.resolve_images.count, 2);
-        assert_eq!(timings.decode_sample_pngs.count, 2);
+        assert_eq!(timings.resolve_images.count, 1);
+        assert_eq!(timings.decode_sample_pngs.count, 1);
 
         let _ = fs::remove_dir_all(root);
     }
