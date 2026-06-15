@@ -722,19 +722,11 @@ fn mister_running() -> bool {
     })
 }
 
-/// Stop Main so Slint owns SPI, HDMI routing, and evdev (no grab).
+/// Main owns HDMI/OSD/input state; do not kill it from Slint.
 pub fn stop_mister() {
-    let _ = Command::new("sh")
-        .arg("-c")
-        .arg("kill -9 $(pidof MiSTer_MagiK) 2>/dev/null; kill -9 $(pidof MiSTer) 2>/dev/null")
-        .status();
-    for _ in 0..30 {
-        if !mister_running() {
-            thread::sleep(Duration::from_millis(50));
-            return;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
+    eprintln!(
+        "refusing to kill MiSTer/MiSTer_MagiK; reboot or hand off through Main to recover display ownership"
+    );
 }
 
 fn spawn_mister() -> Result<(), String> {

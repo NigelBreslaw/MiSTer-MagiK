@@ -22,8 +22,6 @@ esac
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 REMOTE='$REMOTE'
 test -x \$REMOTE || chmod +x \$REMOTE
 for FILTER in nearest box lanczos hybrid; do

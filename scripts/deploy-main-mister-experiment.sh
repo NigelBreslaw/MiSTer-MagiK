@@ -91,7 +91,6 @@ cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || t
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
 '
 
 "$ROOT/scripts/mister" put "$GUI_BIN" "$GUI_REMOTE.upload"

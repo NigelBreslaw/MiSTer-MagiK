@@ -83,7 +83,7 @@ else
 fi
 
 echo "==> Run CPU profiler scene=$scene secs=$secs"
-if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true; kill -9 \$(pidof MiSTer) 2>/dev/null || true; rm -f $remote_svg $remote_log; sleep 5; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_svg /media/fat/mister-magik/mister-magik-fb ui $scene $secs >$remote_log 2>&1; status=\$?; grep 'cpu_profile:' $remote_log || true; test -s $remote_svg || status=1; exit \$status"; then
+if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_svg $remote_log; sleep 5; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_svg /media/fat/mister-magik/mister-magik-fb ui $scene $secs >$remote_log 2>&1; status=\$?; grep 'cpu_profile:' $remote_log || true; test -s $remote_svg || status=1; exit \$status"; then
   "$MISTER" get "$remote_log" "$local_log" || true
   echo "cpu profiler scene failed; see $local_log" >&2
   exit 1

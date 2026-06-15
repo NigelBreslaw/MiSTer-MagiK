@@ -5,11 +5,13 @@ surface is the framebuffer size and copies 1:1 in every verified mode, including
 1080p, 960x540, 720p, 640x480, and CRT/direct-video smoke modes. The old
 960x540-to-1080p pixel-doubling path has been removed.
 
-**Before a manual run**, stop anything else that owns SPI/HDMI (required for 60 fps):
+**Before a manual run**, stop only the Rust UI process. Leave `MiSTer_MagiK`
+running so the launcher keeps its OSD/input suppression state. If display
+ownership looks confused, reboot through `scripts/mister reboot-wait` instead of
+killing Main.
 
 ```bash
 kill -9 $(pidof mister-magik-fb) 2>/dev/null
-kill -9 $(pidof MiSTer) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui full_motion 20
 ```
 

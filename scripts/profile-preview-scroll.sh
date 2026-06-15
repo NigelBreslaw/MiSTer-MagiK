@@ -165,8 +165,6 @@ run_case() {
   "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
 $remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO='$remote_scenario' MISTER_PREVIEW_TRACE=1 MISTER_PREVIEW_SCROLL_TRACE='$remote_tsv' '$REMOTE' ui '$scene' '$secs' >'$remote_log' 2>&1 &
@@ -220,8 +218,6 @@ capture_visuals() {
     "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 rm -f '$remote_log' '$remote_pid'
 sleep 5
 $remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO=idle MISTER_ARCADE_SELECTED_INDEX='$idx' MISTER_PREVIEW_TRACE=1 '$REMOTE' ui arcade 20 >'$remote_log' 2>&1 &
