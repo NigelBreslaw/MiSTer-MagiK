@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::ConsoleFont;
-use crate::fb::{Display, Pixel};
+use crate::fb::{pixel_to_rgb565, Display, Pixel};
 use crate::ui_display::UiDisplay;
 use crate::ui_runner::ui_frame_target::{DirtyRect, UiFrameTarget};
+use slint::platform::software_renderer::Rgb565Pixel;
 
 pub(crate) const ARCADE_LIST_X: usize = 8;
 pub(crate) const ARCADE_LIST_Y: usize = 56;
@@ -15,24 +16,25 @@ pub(crate) const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 pub(crate) const ARCADE_LIST_FADE_H: usize = 48;
 pub(crate) const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
 pub(crate) const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x001a1424);
+pub(crate) const ARCADE_LIST_FADE_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
 
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
-    surface: Vec<Pixel>,
+    surface: Vec<Rgb565Pixel>,
     band_scratch: Vec<Pixel>,
-    fade_scratch: Vec<Pixel>,
+    fade_scratch: Vec<Rgb565Pixel>,
     fade_constants: Vec<FadeBlendConstants>,
-    selection_horizontal: Vec<Pixel>,
-    selection_vertical: Vec<Pixel>,
+    selection_horizontal: Vec<Rgb565Pixel>,
+    selection_vertical: Vec<Rgb565Pixel>,
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
 }
 
 pub(crate) struct CachedArcadeRow {
     pub(crate) title: String,
-    pub(crate) pixels: Vec<Pixel>,
+    pub(crate) pixels: Vec<Rgb565Pixel>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,10 +62,10 @@ impl ArcadeListRenderer {
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
             row_cache: HashMap::new(),
-            surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
+            surface: vec![ARCADE_LIST_FADE_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
             fade_scratch: Vec::new(),
-            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR),
+            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR_565),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             surface_y: 0,
@@ -253,7 +255,10 @@ impl ArcadeListRenderer {
         for row_y in 0..copy_h {
             let src = (src_y + row_y) * ARCADE_LIST_W;
             let dst = (dst_y + row_y) * ARCADE_LIST_W;
-            band[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+            copy_rgb565_to_pixel_row(
+                &row[src..src + ARCADE_LIST_W],
+                &mut band[dst..dst + ARCADE_LIST_W],
+            );
         }
     }
 
@@ -262,7 +267,10 @@ impl ArcadeListRenderer {
             let src = row * ARCADE_LIST_W;
             let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
             let dst = dst_y * ARCADE_LIST_W;
-            self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&band[src..src + ARCADE_LIST_W]);
+            copy_pixel_to_rgb565_row(
+                &band[src..src + ARCADE_LIST_W],
+                &mut self.surface[dst..dst + ARCADE_LIST_W],
+            );
         }
     }
 
@@ -295,7 +303,7 @@ impl ArcadeListRenderer {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
             let src = src_y * ARCADE_LIST_W;
-            target.copy_rect_from(
+            target.copy_rect_from_565(
                 disp,
                 ui,
                 ARCADE_LIST_X,
@@ -308,7 +316,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn surface_row(&self, viewport_y: usize) -> &[Pixel] {
+    fn surface_row(&self, viewport_y: usize) -> &[Rgb565Pixel] {
         let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         let src = src_y * ARCADE_LIST_W;
         &self.surface[src..src + ARCADE_LIST_W]
@@ -322,7 +330,7 @@ impl ArcadeListRenderer {
     ) {
         let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
         let mut band = std::mem::take(&mut self.fade_scratch);
-        band.resize(ARCADE_LIST_W * fade_h, Pixel(0));
+        band.resize(ARCADE_LIST_W * fade_h, Rgb565Pixel(0));
         for row in 0..fade_h {
             blend_row_towards(
                 self.surface_row(row),
@@ -330,7 +338,7 @@ impl ArcadeListRenderer {
                 self.fade_constants[row],
             );
         }
-        target.copy_rect_from(
+        target.copy_rect_from_565(
             disp,
             ui,
             ARCADE_LIST_X,
@@ -348,7 +356,7 @@ impl ArcadeListRenderer {
                 self.fade_constants[fade_h - 1 - row],
             );
         }
-        target.copy_rect_from(
+        target.copy_rect_from_565(
             disp,
             ui,
             ARCADE_LIST_X,
@@ -367,13 +375,13 @@ impl ArcadeListRenderer {
         ui: &UiDisplay,
     ) {
         let rect = Self::selection_rect();
-        let color = Pixel(0x0006d6a0);
+        let color = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
         let thickness = 3usize;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
             .resize(ARCADE_LIST_W * thickness, color);
         self.selection_horizontal.fill(color);
-        target.copy_rect_from(
+        target.copy_rect_from_565(
             disp,
             ui,
             rect.x0,
@@ -382,7 +390,7 @@ impl ArcadeListRenderer {
             thickness,
             &self.selection_horizontal,
         );
-        target.copy_rect_from(
+        target.copy_rect_from_565(
             disp,
             ui,
             rect.x0,
@@ -393,7 +401,7 @@ impl ArcadeListRenderer {
         );
         self.selection_vertical.resize(thickness * h, color);
         self.selection_vertical.fill(color);
-        target.copy_rect_from(
+        target.copy_rect_from_565(
             disp,
             ui,
             rect.x0,
@@ -402,7 +410,7 @@ impl ArcadeListRenderer {
             h,
             &self.selection_vertical,
         );
-        target.copy_rect_from(
+        target.copy_rect_from_565(
             disp,
             ui,
             rect.x1.saturating_sub(thickness),
@@ -413,7 +421,7 @@ impl ArcadeListRenderer {
         );
     }
 
-    fn render_row(&mut self, title: &str, idx: usize) -> Vec<Pixel> {
+    fn render_row(&mut self, title: &str, idx: usize) -> Vec<Rgb565Pixel> {
         let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, idx);
         let title = clipped_title(title, 30);
@@ -428,7 +436,7 @@ impl ArcadeListRenderer {
             &title,
             Pixel(0x00e8e0f0),
         );
-        row
+        row.into_iter().map(pixel_to_rgb565).collect()
     }
 }
 
@@ -515,6 +523,26 @@ fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
     (ARCADE_LIST_FADE_MAX_ALPHA * inv) / (fade_h - 1) as u32
 }
 
+const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
+    Rgb565Pixel((((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)) as u16)
+}
+
+fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
+    for (src, dst) in src.iter().zip(dst.iter_mut()) {
+        *dst = pixel_to_rgb565(*src);
+    }
+}
+
+fn copy_rgb565_to_pixel_row(src: &[Rgb565Pixel], dst: &mut [Pixel]) {
+    for (src, dst) in src.iter().zip(dst.iter_mut()) {
+        let value = src.0 as u32;
+        let r = ((value >> 11) & 0x1f) << 3;
+        let g = ((value >> 5) & 0x3f) << 2;
+        let b = (value & 0x1f) << 3;
+        *dst = Pixel((r << 16) | (g << 8) | b);
+    }
+}
+
 pub(crate) fn blend_velocity_fade_h_from_env() -> usize {
     std::env::var("MISTER_BLEND_BENCH_FADE_H")
         .ok()
@@ -533,10 +561,11 @@ pub(crate) struct FadeBlendConstants {
 }
 
 impl FadeBlendConstants {
-    fn new(alpha: u32, color: Pixel) -> Self {
-        let cr = (color.0 >> 16) & 0xff;
-        let cg = (color.0 >> 8) & 0xff;
-        let cb = color.0 & 0xff;
+    fn new(alpha: u32, color: Rgb565Pixel) -> Self {
+        let color = color.0 as u32;
+        let cr = (color >> 11) & 0x1f;
+        let cg = (color >> 5) & 0x3f;
+        let cb = color & 0x1f;
         Self {
             inv: 256 - alpha,
             cr_alpha: cr * alpha,
@@ -546,21 +575,26 @@ impl FadeBlendConstants {
     }
 }
 
-pub(crate) fn fade_blend_constants(fade_h: usize, color: Pixel) -> Vec<FadeBlendConstants> {
+pub(crate) fn fade_blend_constants(fade_h: usize, color: Rgb565Pixel) -> Vec<FadeBlendConstants> {
     (0..fade_h)
         .map(|row| FadeBlendConstants::new(fade_alpha(row, fade_h), color))
         .collect()
 }
 
-pub(crate) fn blend_row_towards(src: &[Pixel], dst: &mut [Pixel], constants: FadeBlendConstants) {
+pub(crate) fn blend_row_towards(
+    src: &[Rgb565Pixel],
+    dst: &mut [Rgb565Pixel],
+    constants: FadeBlendConstants,
+) {
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
-        let sr = (src.0 >> 16) & 0xff;
-        let sg = (src.0 >> 8) & 0xff;
-        let sb = src.0 & 0xff;
+        let src = src.0 as u32;
+        let sr = (src >> 11) & 0x1f;
+        let sg = (src >> 5) & 0x3f;
+        let sb = src & 0x1f;
         let r = (sr * constants.inv + constants.cr_alpha) >> 8;
         let g = (sg * constants.inv + constants.cg_alpha) >> 8;
         let b = (sb * constants.inv + constants.cb_alpha) >> 8;
-        *dst = Pixel((r << 16) | (g << 8) | b);
+        *dst = Rgb565Pixel(((r << 11) | (g << 5) | b) as u16);
     }
 }
 

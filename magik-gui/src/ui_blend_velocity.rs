@@ -4,12 +4,13 @@ use crate::arcade_catalog::ARCADE_ROW_HEIGHT;
 use crate::arcade_list_renderer::{
     blend_row_towards, blend_velocity_fade_h_from_env, draw_arcade_row_background,
     fade_blend_constants, ArcadeListRenderer, CachedArcadeRow, FadeBlendConstants,
-    ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FONT_PX, ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X,
-    ARCADE_LIST_Y,
+    ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FADE_COLOR_565, ARCADE_LIST_FONT_PX, ARCADE_LIST_H,
+    ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y,
 };
 use crate::bitmap_text::ConsoleFont;
 use crate::cpu_profile;
-use crate::fb::{Display, Pixel, VsyncPacer};
+use crate::fb::{pixel_to_rgb565, Display, Pixel, VsyncPacer};
+use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -126,12 +127,12 @@ struct BlendVelocityBench {
     variant: BlendVelocityVariant,
     title_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
-    surface: Vec<Pixel>,
-    fade_scratch: Vec<Pixel>,
+    surface: Vec<Rgb565Pixel>,
+    fade_scratch: Vec<Rgb565Pixel>,
     fade_constants: Vec<FadeBlendConstants>,
     fade_h: usize,
-    selection_horizontal: Vec<Pixel>,
-    selection_vertical: Vec<Pixel>,
+    selection_horizontal: Vec<Rgb565Pixel>,
+    selection_vertical: Vec<Rgb565Pixel>,
     surface_y: usize,
     visual_px: i32,
     px_per_frame: i32,
@@ -143,7 +144,7 @@ impl BlendVelocityBench {
             variant,
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             row_cache: HashMap::new(),
-            surface: vec![Pixel(0); ARCADE_LIST_W * ARCADE_LIST_H],
+            surface: vec![ARCADE_LIST_FADE_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             fade_scratch: Vec::new(),
             fade_constants: Vec::new(),
             fade_h: blend_velocity_fade_h_from_env(),
@@ -157,8 +158,8 @@ impl BlendVelocityBench {
                 .filter(|v| *v > 0)
                 .unwrap_or(6),
         };
-        this.fade_scratch = vec![Pixel(0); ARCADE_LIST_W * this.fade_h];
-        this.fade_constants = fade_blend_constants(this.fade_h, ARCADE_LIST_FADE_COLOR);
+        this.fade_scratch = vec![Rgb565Pixel(0); ARCADE_LIST_W * this.fade_h];
+        this.fade_constants = fade_blend_constants(this.fade_h, ARCADE_LIST_FADE_COLOR_565);
         this.draw_full_surface();
         this
     }
@@ -261,11 +262,11 @@ impl BlendVelocityBench {
                 continue;
             }
             let bg = if row_idx % 2 == 0 {
-                Pixel(0x001a1424)
+                pixel_to_rgb565(Pixel(0x001a1424))
             } else {
-                Pixel(0x00150f20)
+                pixel_to_rgb565(Pixel(0x00150f20))
             };
-            let border = Pixel(0x00251c34);
+            let border = pixel_to_rgb565(Pixel(0x00251c34));
             let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
             let line = &mut self.surface[dst_y * ARCADE_LIST_W..(dst_y + 1) * ARCADE_LIST_W];
             line.fill(bg);
@@ -274,7 +275,7 @@ impl BlendVelocityBench {
             }
             for x in 12..ARCADE_LIST_W.min(320) {
                 if (x + row_idx as usize * 17 + src_y) % 37 == 0 {
-                    line[x] = Pixel(0x00e8e0f0);
+                    line[x] = pixel_to_rgb565(Pixel(0x00e8e0f0));
                 }
             }
         }
@@ -303,8 +304,13 @@ impl BlendVelocityBench {
                 &title,
                 Pixel(0x00e8e0f0),
             );
-            self.row_cache
-                .insert(idx, CachedArcadeRow { title, pixels: row });
+            self.row_cache.insert(
+                idx,
+                CachedArcadeRow {
+                    title,
+                    pixels: row.into_iter().map(pixel_to_rgb565).collect(),
+                },
+            );
         }
         let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         let dst = dst_y * ARCADE_LIST_W;
@@ -317,7 +323,7 @@ impl BlendVelocityBench {
         let start = Instant::now();
         let fade_h = self.fade_h;
         self.fade_scratch
-            .resize(ARCADE_LIST_W * fade_h * 2, Pixel(0));
+            .resize(ARCADE_LIST_W * fade_h * 2, Rgb565Pixel(0));
         let surface = &self.surface;
         let surface_y = self.surface_y;
         let fade_scratch = &mut self.fade_scratch;
@@ -349,7 +355,7 @@ impl BlendVelocityBench {
         if self.variant == BlendVelocityVariant::CopyOnly {
             self.copy_viewport_band_to_display(disp, 0, fade_h);
         } else {
-            disp.copy_rect_from(
+            disp.copy_rect_from_565(
                 ARCADE_LIST_X,
                 ARCADE_LIST_Y,
                 ARCADE_LIST_W,
@@ -365,7 +371,7 @@ impl BlendVelocityBench {
             self.copy_viewport_band_to_display(disp, ARCADE_LIST_H - fade_h, fade_h);
         } else {
             let offset = ARCADE_LIST_W * fade_h;
-            disp.copy_rect_from(
+            disp.copy_rect_from_565(
                 ARCADE_LIST_X,
                 ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
                 ARCADE_LIST_W,
@@ -386,7 +392,7 @@ impl BlendVelocityBench {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
             let src = src_y * ARCADE_LIST_W;
-            disp.copy_rect_from(
+            disp.copy_rect_from_565(
                 ARCADE_LIST_X,
                 ARCADE_LIST_Y + viewport_y + copied,
                 ARCADE_LIST_W,
@@ -399,20 +405,20 @@ impl BlendVelocityBench {
 
     fn copy_selection_frame_to_display(&mut self, disp: &mut Display) {
         let rect = ArcadeListRenderer::selection_rect();
-        let color = Pixel(0x0006d6a0);
+        let color = pixel_to_rgb565(Pixel(0x0006d6a0));
         let thickness = 3usize;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
             .resize(ARCADE_LIST_W * thickness, color);
         self.selection_horizontal.fill(color);
-        disp.copy_rect_from(
+        disp.copy_rect_from_565(
             rect.x0,
             rect.y0,
             ARCADE_LIST_W,
             thickness,
             &self.selection_horizontal,
         );
-        disp.copy_rect_from(
+        disp.copy_rect_from_565(
             rect.x0,
             rect.y1.saturating_sub(thickness),
             ARCADE_LIST_W,
@@ -421,8 +427,8 @@ impl BlendVelocityBench {
         );
         self.selection_vertical.resize(thickness * h, color);
         self.selection_vertical.fill(color);
-        disp.copy_rect_from(rect.x0, rect.y0, thickness, h, &self.selection_vertical);
-        disp.copy_rect_from(
+        disp.copy_rect_from_565(rect.x0, rect.y0, thickness, h, &self.selection_vertical);
+        disp.copy_rect_from_565(
             rect.x1.saturating_sub(thickness),
             rect.y0,
             thickness,

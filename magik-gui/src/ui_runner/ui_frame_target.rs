@@ -1665,6 +1665,22 @@ impl UiFrameTarget {
         rect.rows()
     }
 
+    pub(crate) fn copy_rect_from_565(
+        &mut self,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+    ) {
+        let _ = ui;
+        match self {
+            Self::Rgb565 { .. } => disp.copy_rect_from_565(x, y, w, h, src),
+        }
+    }
+
     pub(super) fn blit_raw_preview(
         &mut self,
         ui: &UiDisplay,
@@ -1840,20 +1856,6 @@ impl UiFrameTarget {
             Self::Rgb565 { cached } => copy_cached_rows_565(disp, ui, cached, y0, y1),
         }
         y1.saturating_sub(y0) as u32
-    }
-
-    pub(crate) fn copy_rect_from(
-        &mut self,
-        disp: &mut Display,
-        ui: &UiDisplay,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Pixel],
-    ) {
-        let _ = ui;
-        disp.copy_rect_from(x, y, w, h, src);
     }
 }
 

@@ -1135,6 +1135,36 @@ impl Display {
         }
     }
 
+    /// Copy a dense RGB565 source rectangle into an RGB565 framebuffer at (x,y).
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    pub fn copy_rect_from_565(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+    ) {
+        debug_assert_eq!(self.format, FramebufferFormat::Rgb565);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let dst_w = self.w;
+        let x1 = (x + w).min(self.w);
+        let y1 = (y + h).min(self.h);
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        let copy_w = x1 - x;
+        let copy_h = y1 - y;
+        let dst = self.buffer_565_mut();
+        for row in 0..copy_h {
+            let src_a = row * w;
+            let dst_a = (y + row) * dst_w + x;
+            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+        }
+    }
+
     /// Copy a logical source rectangle into an arbitrary framebuffer location,
     /// nearest-neighbour scaled by `scale`.
     #[allow(dead_code)]
