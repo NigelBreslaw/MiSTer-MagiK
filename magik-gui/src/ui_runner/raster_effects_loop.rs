@@ -4,8 +4,7 @@ use crate::input_repeat::RepeatNav;
 use crate::preview_worker;
 use mister_magik_fb::camera_effects::{CameraImage, CameraPixel};
 use mister_magik_fb::raster_effects::{
-    pixel_to_rgb888, render_raster_effect_frame, synthetic_raster_images, RasterEffectKind,
-    RasterEffectRenderState,
+    render_raster_effect_frame, synthetic_raster_images, RasterEffectKind, RasterEffectRenderState,
 };
 use mister_magik_fb::raw565;
 use std::fs::File;
@@ -86,7 +85,7 @@ pub(super) fn run_raster_effects_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut Display,
-    fb_format: FramebufferFormat,
+    _fb_format: FramebufferFormat,
 ) {
     let mut cfg = RasterEffectsConfig::from_env();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
@@ -121,8 +120,6 @@ pub(super) fn run_raster_effects_loop(
     let mut selected_idx = 0usize;
     let mut backbuffer = vec![CameraPixel(0); ui.render_w() * ui.render_h()];
     let mut render_state = RasterEffectRenderState::new(ui.render_w(), ui.render_h());
-    let mut xrgb_scratch =
-        (fb_format == FramebufferFormat::Xrgb8888).then(|| vec![Pixel(0); backbuffer.len()]);
     let mut pacer = VsyncPacer::from_env();
     let start = Instant::now();
     let mut frame = 0u64;
@@ -196,18 +193,7 @@ pub(super) fn run_raster_effects_loop(
 
         let vsync = pacer.wait();
         let present_start = Instant::now();
-        match fb_format {
-            FramebufferFormat::Rgb565 => {
-                disp.copy_rows_camera_565(&backbuffer, 0, ui.render_h());
-            }
-            FramebufferFormat::Xrgb8888 => {
-                let scratch = xrgb_scratch.as_mut().expect("xrgb scratch");
-                for (dst, src) in scratch.iter_mut().zip(backbuffer.iter().copied()) {
-                    *dst = Pixel(pixel_to_rgb888(src));
-                }
-                disp.copy_rows(scratch, 0, ui.render_h());
-            }
-        }
+        disp.copy_rows_camera_565(&backbuffer, 0, ui.render_h());
         let present_us = present_start.elapsed().as_micros() as u64;
         let wall_us = frame_start.elapsed().as_micros() as u64;
         let cpu_us = process_cpu_us().saturating_sub(cpu_start);

@@ -215,7 +215,7 @@ pub(super) fn run_screensaver_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut Display,
-    fb_format: FramebufferFormat,
+    _fb_format: FramebufferFormat,
 ) {
     let mut cfg = ScreensaverConfig::from_env();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
@@ -235,8 +235,6 @@ pub(super) fn run_screensaver_loop(
 
     let mut backbuffer = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
     let mut render_state = ScreensaverRenderState::new(ui.render_w(), ui.render_h());
-    let mut xrgb_scratch =
-        (fb_format == FramebufferFormat::Xrgb8888).then(|| vec![Pixel(0); backbuffer.len()]);
     let mut pacer = VsyncPacer::from_env();
     let start = Instant::now();
     let mut frame = 0_u64;
@@ -260,16 +258,7 @@ pub(super) fn run_screensaver_loop(
         let draw_us = draw_start.elapsed().as_micros() as u64;
         let vsync = pacer.wait();
         let present_start = Instant::now();
-        match fb_format {
-            FramebufferFormat::Rgb565 => disp.copy_rows_565(&backbuffer, 0, ui.render_h()),
-            FramebufferFormat::Xrgb8888 => {
-                let scratch = xrgb_scratch.as_mut().expect("xrgb scratch");
-                for (dst, src) in scratch.iter_mut().zip(backbuffer.iter().copied()) {
-                    *dst = rgb565_to_pixel(src);
-                }
-                disp.copy_rows(scratch, 0, ui.render_h());
-            }
-        }
+        disp.copy_rows_565(&backbuffer, 0, ui.render_h());
         let present_us = present_start.elapsed().as_micros() as u64;
         let wall_us = frame_start.elapsed().as_micros() as u64;
         if let Some(trace) = cfg.trace.as_mut() {

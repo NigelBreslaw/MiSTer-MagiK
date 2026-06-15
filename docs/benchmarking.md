@@ -6,7 +6,9 @@ This document defines current benchmark policy. Dated measurement logs live in
 ## General Rules
 
 - Use RGB565 for production launcher and arcade conclusions.
-- Use `MISTER_FB_FORMAT=8888` only for framebuffer/color-route diagnostics.
+- The UI/app benchmark path is RGB565-only. `MISTER_FB_FORMAT=8888` is ignored
+  by `mister-magik-fb ui ...`; use explicit low-level diagnostics such as
+  `fb-format-smoke 8888` for framebuffer/color-route experiments.
 - Start visual benchmarks from a clean display-owner state. If stock OSD/menu is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.

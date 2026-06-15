@@ -9,7 +9,7 @@ REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screensaver.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|MODE] [--segment-secs N] [--secs N] [--fb-format 8888|565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N]
+Usage: scripts/profile-screensaver.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|MODE] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N]
 
 Runs:
   mister-magik-fb ui screensaver
@@ -49,7 +49,7 @@ if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$mode" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--mode must be a comma-separated screensaver label list or mega" >&2; exit 2; fi
 if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
-case "$fb_format" in 8888|565) ;; *) echo "--fb-format must be 8888 or 565" >&2; exit 2 ;; esac
+case "$fb_format" in 565) ;; *) echo "--fb-format must be 565; RGB888 UI support was removed" >&2; exit 2 ;; esac
 case "$preview_format" in png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be png, derived-png, raw-rgb, or raw-rgb565" >&2; exit 2 ;; esac
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
