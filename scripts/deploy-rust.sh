@@ -9,7 +9,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --opts
 #   MISTER_IP=... scripts/deploy-rust.sh --incr
 #   MISTER_IP=... scripts/deploy-rust.sh --all-scenes
-#   MISTER_IP=... scripts/deploy-rust.sh --ui-scope arcade
+#   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_IP=... scripts/deploy-rust.sh --video
 #   MISTER_IP=... scripts/deploy-rust.sh --mame-metadata --asset-packs
 #
@@ -176,6 +176,6 @@ echo "==> Deployed ($PROFILE)."
 echo "    Main-supervised launcher was suspended and resumed when available."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"
-echo "    Dev / bench:     scripts/run-rust.sh arcade 0"
+echo "    Arcade bench:    scripts/profile-preview-scroll.sh 30 held-scroll LABEL"
 echo "    Diagnostics:     scripts/mister-asset-diagnostics.sh"
 echo "    Restore stock:   scripts/restore-stock-boot.sh"

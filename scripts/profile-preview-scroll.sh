@@ -1,38 +1,29 @@
 #!/usr/bin/env bash
-# Run a real arcade preview-scroll benchmark on the MiSTer.
+# Run a real launcher Arcade preview-scroll benchmark through MiSTer_MagiK.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/preview-scroll-profiles"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 usage() {
   cat <<'EOF'
 Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--list-only] [--fb-format 565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold
-Runs the real launcher-backed arcade screen:
-  ui arcade
-with MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE.
+Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
+/media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
 
---list-only disables screenshot loading and the real launcher's catalog refresh
-worker so list-renderer changes can be measured without preview/catalog noise.
+--list-only disables screenshot loading and the launcher's catalog refresh so
+list-renderer changes can be measured without preview/catalog noise.
 --fb-format is kept for old command lines, but UI profiling supports only 565.
-Previews are raw565-only and rendered by the Rust post-render blitter.
 --transition selects raw-preview screenshot transitions. Default is fade; `cut`
-disables animation; `mega` cycles all effects. --transition-segment-secs controls
-the benchmark window per effect.
---visual-captures captures fixed arcade indices from the real arcade screen after the
-benchmark, storing before/after PNG evidence under <label>-visuals.
---preview-visual-pct scales screenshot display area. 100 is the current size;
-50 renders screenshots at half the current visual area.
---preview-resize-filter selects the raw565 cache/resize variant.
---preview-resize-max sets the resize target box; default runtime code uses 320x320.
---preview-format selects the raw RGB565 cache.
---preview-archive selects a single preview archive for runtime loading experiments.
+disables animation; `mega` cycles all effects.
+--visual-captures captures fixed Arcade indices from the real launcher screen.
 
-Do not use row-step scenarios such as list-scroll/smooth-scroll for arcade
+Do not use row-step scenarios such as list-scroll/smooth-scroll for Arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
 EOF
 }
@@ -60,10 +51,7 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="device"; shift ;;
     --list-only) list_only="1"; shift ;;
     --fb-format) fb_format="${2:-}"; shift 2 ;;
-    --preview-blitter)
-      echo "--preview-blitter was removed; previews are always raw565 via the Rust blitter" >&2
-      exit 2
-      ;;
+    --preview-blitter) echo "--preview-blitter was removed; previews are always raw565 via the Rust blitter" >&2; exit 2 ;;
     --transition) transition="${2:-}"; shift 2 ;;
     --transition-segment-secs) transition_segment_secs="${2:-}"; shift 2 ;;
     --transition-ms) transition_ms="${2:-}"; shift 2 ;;
@@ -93,11 +81,7 @@ case "$scenario" in
   *) echo "unknown scenario: $scenario" >&2; usage >&2; exit 2 ;;
 esac
 remote_scenario="$scenario"
-if [[ "$remote_scenario" == "velocity-scroll" ]]; then
-  # Keep the human-facing name explicit while sending the concrete scenario name
-  # understood by both old and new deployed binaries.
-  remote_scenario="held-scroll"
-fi
+if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ -n "$preview_visual_pct" && ! "$preview_visual_pct" =~ ^[0-9]+$ ]]; then echo "--preview-visual-pct must be an integer" >&2; exit 2; fi
@@ -112,136 +96,107 @@ if [[ -n "$transition_ms" && ! "$transition_ms" =~ ^[0-9]+$ ]]; then echo "--tra
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
+env_file="$(mktemp)"
 
-remote_extra_env="MISTER_FB_FORMAT=$fb_format MISTER_CATALOG_REFRESH=off"
-if [[ "$list_only" == "1" ]]; then
-  remote_extra_env="MISTER_FB_FORMAT=$fb_format MISTER_PREVIEW_LOADING=off MISTER_CATALOG_REFRESH=off"
-fi
-if [[ -n "$preview_visual_pct" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_VISUAL_PCT=$preview_visual_pct"
-fi
-if [[ -n "$preview_resize_filter" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_RESIZE_FILTER=$preview_resize_filter"
-fi
-if [[ -n "$preview_resize_max" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_RESIZE_MAX=$preview_resize_max"
-fi
-if [[ -n "$preview_format" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_FORMAT=$preview_format"
-fi
-if [[ -n "$preview_archive" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_ARCHIVE=$preview_archive"
-fi
-if [[ -n "$transition" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION=$transition"
-fi
-if [[ -n "$transition_segment_secs" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION_SEGMENT_SECS=$transition_segment_secs"
-fi
-if [[ -n "$transition_ms" ]]; then
-  remote_extra_env="$remote_extra_env MISTER_PREVIEW_TRANSITION_MS=$transition_ms"
-fi
+cleanup() {
+  rm -f "$env_file"
+  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+case "$deploy" in
+  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
+  skip) : ;;
+esac
+
 if [[ -z "$preview_format" && -z "$preview_resize_filter" && -z "$preview_resize_max" ]]; then
   run_label="default derived-png nearest 320x320"
 else
   run_label="${preview_format:-app-default} ${preview_resize_filter:-app-default} resize ${preview_resize_max:-320x320}"
 fi
-remote_extra_env="$remote_extra_env MISTER_PREVIEW_RUN_LABEL='${run_label}'"
 
-case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
-  skip) : ;;
-esac
+write_launcher_env() {
+  local scenario_value="$1"
+  local trace_path="$2"
+  local selected_index="${3:-}"
+  {
+    printf 'export MISTER_FB_FORMAT=%q\n' "$fb_format"
+    printf 'export MISTER_CATALOG_REFRESH=off\n'
+    printf 'export MISTER_MAGIK_LIBRARY_REFRESH_DELAY_SECS=9999\n'
+    printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+    printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
+    printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$scenario_value"
+    printf 'export MISTER_PREVIEW_TRACE=1\n'
+    printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
+    if [[ -n "$trace_path" ]]; then printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$trace_path"; fi
+    if [[ "$list_only" == "1" ]]; then printf 'export MISTER_PREVIEW_LOADING=off\n'; fi
+    if [[ -n "$preview_visual_pct" ]]; then printf 'export MISTER_PREVIEW_VISUAL_PCT=%q\n' "$preview_visual_pct"; fi
+    if [[ -n "$preview_resize_filter" ]]; then printf 'export MISTER_PREVIEW_RESIZE_FILTER=%q\n' "$preview_resize_filter"; fi
+    if [[ -n "$preview_resize_max" ]]; then printf 'export MISTER_PREVIEW_RESIZE_MAX=%q\n' "$preview_resize_max"; fi
+    if [[ -n "$preview_format" ]]; then printf 'export MISTER_PREVIEW_FORMAT=%q\n' "$preview_format"; fi
+    if [[ -n "$preview_archive" ]]; then printf 'export MISTER_PREVIEW_ARCHIVE=%q\n' "$preview_archive"; fi
+    if [[ -n "$transition" ]]; then printf 'export MISTER_PREVIEW_TRANSITION=%q\n' "$transition"; fi
+    if [[ -n "$transition_segment_secs" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_SEGMENT_SECS=%q\n' "$transition_segment_secs"; fi
+    if [[ -n "$transition_ms" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_MS=%q\n' "$transition_ms"; fi
+    if [[ -n "$selected_index" ]]; then printf 'export MISTER_ARCADE_SELECTED_INDEX=%q\n' "$selected_index"; fi
+    printf 'export MISTER_PREVIEW_RUN_LABEL=%q\n' "$run_label"
+  } >"$env_file"
+}
+
+restart_supervised_launcher() {
+  local trace_path="$1"
+  "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
+  "$MISTER" run "rm -f '$REMOTE_LOG' '$trace_path'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+}
 
 run_case() {
   local name="$1"
-  local scene="$2"
   local remote_tsv="/tmp/${label}-${name}.tsv"
-  local remote_log="/tmp/${label}-${name}.log"
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name scene=$scene scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format preview_blitter=raw transition=${transition:-fade} list_only=$list_only preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none}"
-  "$MISTER" run "
-set -e
-kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-rm -f '$remote_tsv' '$remote_log'
-sleep 5
-$remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO='$remote_scenario' MISTER_PREVIEW_TRACE=1 MISTER_PREVIEW_SCROLL_TRACE='$remote_tsv' '$REMOTE' ui '$scene' '$secs' >'$remote_log' 2>&1 &
-UI_PID=\$!
-RSS_MAX=0
-TICKS=0
-MAX_TICKS=$((secs + 15))
-while kill -0 \$UI_PID 2>/dev/null; do
-  RSS=\$(awk '/^VmHWM:/{print \$2}' /proc/\$UI_PID/status 2>/dev/null || echo 0)
-  case \"\$RSS\" in ''|*[!0-9]*) RSS=0 ;; esac
-  [ \"\$RSS\" -gt \"\$RSS_MAX\" ] && RSS_MAX=\$RSS
-  sleep 1
-  TICKS=\$((TICKS + 1))
-  if [ \"\$TICKS\" -ge \"\$MAX_TICKS\" ]; then
-    echo bench_timeout_after_ticks=\$TICKS >>'$remote_log'
-    kill -9 \$UI_PID 2>/dev/null || true
-    break
-  fi
-done
-wait \$UI_PID 2>/dev/null || true
-echo rss_hwm_kb=\$RSS_MAX >>'$remote_log'
-test -s '$remote_tsv'
-" || {
-    "$MISTER" get "$remote_log" "$local_log" || true
+  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=${transition:-fade} list_only=$list_only preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none}"
+  write_launcher_env "$remote_scenario" "$remote_tsv"
+  restart_supervised_launcher "$remote_tsv"
+  sleep $((secs + 7))
+  if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
+    "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
     echo "$name failed; see $local_log" >&2
     exit 1
-  }
-  "$MISTER" get "$remote_tsv" "$local_tsv"
-  "$MISTER" get "$remote_log" "$local_log"
+  fi
+  "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
   echo "wrote $local_tsv"
   echo "wrote $local_log"
 }
 
 capture_visuals() {
   local count="$visual_captures"
-  if [[ "$count" == "0" || "$list_only" == "1" ]]; then
-    return
-  fi
+  if [[ "$count" == "0" || "$list_only" == "1" ]]; then return; fi
   local visual_dir="$OUT_DIR/${label}-visuals"
   mkdir -p "$visual_dir"
   local indices=(0 7 14 21 28 35 42 49)
-  local i idx idx_pad remote_log remote_pid snap_dir png_out
+  local i idx idx_pad snap_dir png_out
   for ((i = 0; i < count && i < ${#indices[@]}; i++)); do
     idx="${indices[$i]}"
     idx_pad="$(printf "%03d" "$idx")"
-    remote_log="/tmp/${label}-visual-${fb_format}-${idx_pad}.log"
-    remote_pid="/tmp/${label}-visual-${fb_format}-${idx_pad}.pid"
     snap_dir="$visual_dir/${fb_format}-idx${idx_pad}.snapshot"
     png_out="$visual_dir/${fb_format}-idx${idx_pad}.png"
-    echo "==> visual fb_format=$fb_format preview_blitter=raw selected_index=$idx"
-    "$MISTER" run "
-set -e
-kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-rm -f '$remote_log' '$remote_pid'
-sleep 5
-$remote_extra_env MISTER_LAUNCHER_BENCH_SCENARIO=idle MISTER_ARCADE_SELECTED_INDEX='$idx' MISTER_PREVIEW_TRACE=1 '$REMOTE' ui arcade 20 >'$remote_log' 2>&1 &
-echo \$! >'$remote_pid'
-" >/dev/null
+    echo "==> visual fb_format=$fb_format selected_index=$idx"
+    write_launcher_env "idle" "" "$idx"
+    restart_supervised_launcher "/tmp/${label}-visual-${idx_pad}.tsv"
     sleep 8
     "$MISTER" snapshot "$snap_dir" >/dev/null
     cp "$snap_dir/fb0.png" "$png_out"
-    "$MISTER" get "$remote_log" "$visual_dir/${fb_format}-idx${idx_pad}.log" >/dev/null || true
-    "$MISTER" run "kill -9 \$(cat '$remote_pid' 2>/dev/null) 2>/dev/null || true; rm -f '$remote_pid'" >/dev/null || true
+    "$MISTER" get "$REMOTE_LOG" "$visual_dir/${fb_format}-idx${idx_pad}.log" >/dev/null || true
     echo "wrote $png_out"
   done
 }
 
 summarize_trace() {
-  local name="$1"
-  local tsv="$2"
-  local log="$3"
+  local name="$1" tsv="$2" log="$3"
   awk -v name="$name" '
     BEGIN { FS="\t" }
-    NR == 1 {
-      for (i = 1; i <= NF; i++) col[$i] = i
-      next
-    }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     NF {
       n++
       wall = $(col["wall_us"]) + 0
@@ -253,30 +208,15 @@ summarize_trace() {
       states[state]++
     }
     END {
-      if (n == 0) {
-        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
-        exit
-      }
-      for (i = 1; i <= n; i++) {
-        for (j = i + 1; j <= n; j++) {
-          if (walls[j] < walls[i]) {
-            tmp = walls[i]; walls[i] = walls[j]; walls[j] = tmp
-          }
-        }
-      }
-      p95_i = int(n * 0.95)
-      if (p95_i < 1) p95_i = 1
-      if (p95_i > n) p95_i = n
-      printf "%s\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
-        name, n, sum / n, walls[p95_i], slow16, slow20,
-        states["exact"] + 0, states["cached"] + 0,
-        states["stale"] + 0, states["placeholder"] + 0
+      if (n == 0) { printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name; exit }
+      for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (walls[j] < walls[i]) { tmp = walls[i]; walls[i] = walls[j]; walls[j] = tmp }
+      p95_i = int(n * 0.95); if (p95_i < 1) p95_i = 1; if (p95_i > n) p95_i = n
+      printf "%s\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", name, n, sum / n, walls[p95_i], slow16, slow20, states["exact"] + 0, states["cached"] + 0, states["stale"] + 0, states["placeholder"] + 0
     }
   ' "$tsv" | while IFS=$'\t' read -r n frames avg p95 slow16 slow20 exact cached stale placeholder; do
     local rss
     rss="$(sed -n 's/^rss_hwm_kb=//p' "$log" | tail -1)"
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$n" "$frames" "$avg" "$p95" "$slow16" "$slow20" "$exact" "$cached" "$stale" "$placeholder" "${rss:-0}"
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$n" "$frames" "$avg" "$p95" "$slow16" "$slow20" "$exact" "$cached" "$stale" "$placeholder" "${rss:-0}"
   done
 }
 
@@ -284,11 +224,7 @@ summarize_trace_by_effect() {
   local tsv="$1"
   awk '
     BEGIN { FS="\t" }
-    NR == 1 {
-      for (i = 1; i <= NF; i++) col[$i] = i
-      has_effect = ("transition_effect" in col)
-      next
-    }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; has_effect = ("transition_effect" in col); next }
     NF && has_effect {
       effect = $(col["transition_effect"])
       idx = ++n[effect]
@@ -297,32 +233,16 @@ summarize_trace_by_effect() {
       sum[effect] += wall
       if (wall > 16667) slow16[effect]++
       if (wall > 20000) slow20[effect]++
-      if (!(effect in seen)) {
-        seen[effect] = 1
-        order[++order_n] = effect
-      }
+      if (!(effect in seen)) { seen[effect] = 1; order[++order_n] = effect }
     }
     END {
       if (!has_effect) exit
       for (oi = 1; oi <= order_n; oi++) {
-        effect = order[oi]
-        count = n[effect]
-        for (i = 1; i <= count; i++) {
-          sorted[i] = walls[effect, i]
-        }
-        for (i = 1; i <= count; i++) {
-          for (j = i + 1; j <= count; j++) {
-            if (sorted[j] < sorted[i]) {
-              tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp
-            }
-          }
-        }
-        p95_i = int(count * 0.95)
-        if (p95_i < 1) p95_i = 1
-        if (p95_i > count) p95_i = count
-        printf "%s\t%d\t%.0f\t%d\t%d\t%d\n",
-          effect, count, sum[effect] / count, sorted[p95_i],
-          slow16[effect] + 0, slow20[effect] + 0
+        effect = order[oi]; count = n[effect]
+        for (i = 1; i <= count; i++) sorted[i] = walls[effect, i]
+        for (i = 1; i <= count; i++) for (j = i + 1; j <= count; j++) if (sorted[j] < sorted[i]) { tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp }
+        p95_i = int(count * 0.95); if (p95_i < 1) p95_i = 1; if (p95_i > count) p95_i = count
+        printf "%s\t%d\t%.0f\t%d\t%d\t%d\n", effect, count, sum[effect] / count, sorted[p95_i], slow16[effect] + 0, slow20[effect] + 0
         delete sorted
       }
     }
@@ -330,36 +250,23 @@ summarize_trace_by_effect() {
 }
 
 check_velocity_motion() {
-  local name="$1"
-  local tsv="$2"
+  local name="$1" tsv="$2"
   awk -v name="$name" '
     BEGIN { FS="\t" }
-    NR == 1 {
-      for (i = 1; i <= NF; i++) col[$i] = i
-      next
-    }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     NF {
       n++
       vi = $(col["visual_index"]) + 0
-      frac = vi - int(vi)
-      if (frac < 0) frac = -frac
+      frac = vi - int(vi); if (frac < 0) frac = -frac
       if (frac > 0.001 && frac < 0.999) fractional++
-      if (seen) {
-        delta = vi - last
-        if (delta < 0) delta = -delta
-        if (delta > 0.001) moving++
-      }
-      last = vi
-      seen = 1
+      if (seen) { delta = vi - last; if (delta < 0) delta = -delta; if (delta > 0.001) moving++ }
+      last = vi; seen = 1
     }
-    END {
-      printf "%s\t%d\t%d\t%d\n", name, n, fractional, moving
-      if (moving > 0 && fractional == 0) exit 3
-    }
+    END { printf "%s\t%d\t%d\t%d\n", name, n, fractional, moving; if (moving > 0 && fractional == 0) exit 3 }
   ' "$tsv"
 }
 
-run_case arcade arcade
+run_case arcade
 capture_visuals
 
 arcade_tsv="$OUT_DIR/${label}-arcade.tsv"

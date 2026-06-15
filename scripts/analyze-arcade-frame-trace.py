@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Summarize real arcade-screen frame traces.
 
-The current trace is produced by `MISTER_PREVIEW_SCROLL_TRACE` from `ui arcade`
-and has one row per frame. Older `MISTER_ARCADE_FRAME_TRACE` files are still
-accepted so historical captures remain readable. By default the first frame is
-ignored because it includes startup rendering.
+The current trace is produced by `MISTER_PREVIEW_SCROLL_TRACE` from the
+Main-supervised launcher Arcade screen and has one row per frame. Older
+`MISTER_ARCADE_FRAME_TRACE` files are still accepted so historical captures
+remain readable. By default the first frame is ignored because it includes
+startup rendering.
 """
 
 from __future__ import annotations

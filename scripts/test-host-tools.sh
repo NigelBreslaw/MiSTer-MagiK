@@ -33,6 +33,7 @@ grep -q '^video_mode=8$' "$TMP/repaired.ini"
 
 for script in \
   "$ROOT/scripts/check-no-main-kill.sh" \
+  "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-neogeo-screenshot-pack.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
@@ -46,6 +47,7 @@ for script in \
 done
 
 "$ROOT/scripts/check-no-main-kill.sh"
+"$ROOT/scripts/check-no-direct-arcade-scene.sh"
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
 python3 "$ROOT/scripts/import-wikipedia-neogeo-screenshots.py" --self-test
 

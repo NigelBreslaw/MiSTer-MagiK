@@ -41,6 +41,7 @@ fn run_cli() -> Result<()> {
                 args.remove(0);
             }
             let command = args.first().ok_or("run needs a command")?;
+            validate_remote_run_command(command)?;
             let sess = connect(10)?;
             if stream {
                 stream_command(&sess, command)?;
@@ -211,6 +212,24 @@ fn usage() {
     println!(
         "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|recover> ..."
     );
+}
+
+fn validate_remote_run_command(command: &str) -> Result<()> {
+    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let direct_arcade = [
+        "mister-magik-fb ui arcade",
+        "mister-magik-fb' ui arcade",
+        "mister-magik-fb\" ui arcade",
+        "mister-magic-fb ui arcade",
+        "mister-magic-fb' ui arcade",
+        "mister-magic-fb\" ui arcade",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+    if direct_arcade {
+        return Err("refusing removed direct arcade scene; benchmark Arcade through the Main-supervised launcher env/restart path".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1708,9 +1727,7 @@ fn print_status_summary(status: &Value) {
         ini_value(status, "arcade_vertical", "video_mode").unwrap_or("?")
     );
     for name in ["MiSTer", "MiSTer_MagiK", "mister-magik-fb"] {
-        let pid = status["processes"][name]
-            .as_array()
-            .and_then(|a| a.first())
+        let pid = primary_process(status, name)
             .and_then(|v| v["pid"].as_u64())
             .map(|p| p.to_string())
             .unwrap_or_else(|| "none".to_string());
@@ -1744,6 +1761,22 @@ fn print_status_summary(status: &Value) {
                 .map(Value::to_string)
                 .unwrap_or_else(|| "?".into())
         );
+    }
+}
+
+fn primary_process<'a>(status: &'a Value, name: &str) -> Option<&'a Value> {
+    let processes = status["processes"][name].as_array()?;
+    if name == "mister-magik-fb" {
+        processes
+            .iter()
+            .find(|process| {
+                process["cmdline"]
+                    .as_str()
+                    .is_some_and(|cmd| cmd.contains(" ui launcher "))
+            })
+            .or_else(|| processes.first())
+    } else {
+        processes.first()
     }
 }
 
@@ -2374,6 +2407,47 @@ video_mode=14
         let edited = edit_mister_ini(ini, IniEdit::StockBoot);
 
         assert!(edited.contains(";main=mister-magik-fb ; MiSTer MagiK stock boot restore"));
+    }
+
+    #[test]
+    fn remote_run_rejects_removed_direct_arcade_scene() {
+        assert!(validate_remote_run_command(
+            "/media/fat/mister-magik/mister-magik-fb ui arcade 20"
+        )
+        .is_err());
+        assert!(validate_remote_run_command(
+            "'/media/fat/mister-magik/mister-magik-fb' ui arcade 20"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn remote_run_allows_launcher_and_restart_paths() {
+        assert!(validate_remote_run_command(
+            "/media/fat/mister-magik/mister-magik-fb ui launcher 0"
+        )
+        .is_ok());
+        assert!(validate_remote_run_command(
+            "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn status_prefers_launcher_process_over_helper_processes() {
+        let status = json!({
+            "processes": {
+                "mister-magik-fb": [
+                    {"pid": 1661, "cmdline": "/media/fat/mister-magik/mister-magik-fb library-refresh"},
+                    {"pid": 1528, "cmdline": "/media/fat/mister-magik/mister-magik-fb ui launcher 0"}
+                ]
+            }
+        });
+
+        assert_eq!(
+            primary_process(&status, "mister-magik-fb").and_then(|process| process["pid"].as_u64()),
+            Some(1528)
+        );
     }
 
     #[test]

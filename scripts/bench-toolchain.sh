@@ -131,9 +131,9 @@ case "$UI_SCOPE" in
   *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;
 esac
 if [[ "$SCENE_FILTER" -eq 0 && -n "$LAUNCHER_SCENARIO" ]]; then
-  BENCH_SCENES=(arcade)
+  BENCH_SCENES=(launcher)
 elif [[ "$SCENE_FILTER" -eq 0 && "$UI_SCOPE" == "arcade" ]]; then
-  BENCH_SCENES=(arcade)
+  BENCH_SCENES=(launcher)
 elif [[ "$SCENE_FILTER" -eq 0 && "$UI_SCOPE" == "launcher" ]]; then
   BENCH_SCENES=(launcher)
 fi

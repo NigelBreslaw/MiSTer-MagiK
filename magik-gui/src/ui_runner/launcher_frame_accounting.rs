@@ -12,6 +12,7 @@ pub(super) struct LauncherFrameAccounting {
     overlay_present_us: u128,
     rows: u128,
     preview_scroll_trace: Option<std::fs::File>,
+    preview_scroll_trace_duration: Option<Duration>,
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     last_status_write: Instant,
     first_copy_logged: bool,
@@ -58,6 +59,7 @@ impl LauncherFrameAccounting {
             overlay_present_us: 0,
             rows: 0,
             preview_scroll_trace: open_preview_scroll_trace(),
+            preview_scroll_trace_duration: preview_scroll_trace_duration_from_env(),
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             first_copy_logged: false,
@@ -84,7 +86,6 @@ impl LauncherFrameAccounting {
         catalog_refresh_done: bool,
         launching: bool,
         loading_title: &str,
-        launcher_mode: LauncherRunMode,
     ) {
         self.write_preview_trace(&frame);
         self.record_first_copy(&frame, disp);
@@ -102,11 +103,17 @@ impl LauncherFrameAccounting {
             catalog_refresh_done,
             launching,
             loading_title,
-            launcher_mode,
         );
     }
 
     fn write_preview_trace(&mut self, frame: &LauncherPresentedFrame) {
+        if self
+            .preview_scroll_trace_duration
+            .is_some_and(|limit| frame.loop_start.duration_since(frame.run_start) > limit)
+        {
+            self.preview_scroll_trace = None;
+            return;
+        }
         if let Some(file) = self.preview_scroll_trace.as_mut() {
             let _ = std::io::Write::write_fmt(
                 file,
@@ -132,6 +139,7 @@ impl LauncherFrameAccounting {
                     (frame.frame_t4 - frame.loop_start).as_micros()
                 ),
             );
+            let _ = std::io::Write::flush(file);
         }
     }
 
@@ -271,7 +279,6 @@ impl LauncherFrameAccounting {
         catalog_refresh_done: bool,
         launching: bool,
         loading_title: &str,
-        launcher_mode: LauncherRunMode,
     ) {
         if self.last_status_write.elapsed() < Duration::from_secs(1) {
             return;
@@ -282,7 +289,7 @@ impl LauncherFrameAccounting {
             0.0
         };
         runtime_status::write_launcher_status(LauncherStatus {
-            scene: launcher_mode.label(),
+            scene: "launcher",
             screen: screen_label(nav.screen),
             frames,
             fps_estimate,
@@ -298,6 +305,14 @@ impl LauncherFrameAccounting {
         });
         self.last_status_write = Instant::now();
     }
+}
+
+fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
+    let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    (secs > 0).then(|| Duration::from_secs(secs))
 }
 
 fn open_preview_scroll_trace() -> Option<std::fs::File> {

@@ -33,19 +33,27 @@ pub(super) fn run_launcher_loop(
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
-    launcher_mode: LauncherRunMode,
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
+    let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let bench_starts_on_arcade =
+        launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
+    let start_screen = launcher_start_screen_from_env()
+        .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
+        .unwrap_or(Screen::Home);
+    let lock_screen = launcher_lock_screen_from_env()
+        .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
+    let preload_arcade_catalog =
+        start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
     let mut nav = LauncherNav::new();
-    nav.screen = launcher_mode.initial_screen();
+    nav.screen = start_screen;
     let mut setup = SetupNav::new();
     let mut loading_title = String::new();
     let mut launch_started = Instant::now();
     let mut launch_spawned_mister = false;
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
-    let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let mut launcher_bench_next_step = Instant::now();
     let mut launcher_bench_step_idx = 0usize;
     let dirty_opt = launcher_dirty_opt_enabled();
@@ -60,12 +68,17 @@ pub(super) fn run_launcher_loop(
     );
     println!(
         "launcher_mode={} fb_format={}",
-        launcher_mode.label(),
+        "launcher",
         FramebufferFormat::from_env().label()
     );
     if let Some(scenario) = launcher_bench_scenario {
         println!("launcher_bench_scenario={}", scenario.label());
     }
+    println!(
+        "launcher_start_screen={} launcher_lock_screen={}",
+        screen_label(start_screen),
+        lock_screen.map(screen_label).unwrap_or("none")
+    );
     println!(
         "launcher_dirty_opt={}",
         if dirty_opt { "on" } else { "off" }
@@ -113,7 +126,7 @@ pub(super) fn run_launcher_loop(
     let catalog_refresh = catalog_refresh_requested();
     let catalog_rx;
     let mut catalog_refresh_done = false;
-    if launcher_mode == LauncherRunMode::Arcade {
+    if preload_arcade_catalog {
         match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
             Ok(loaded) if !loaded.catalog.games.is_empty() => {
                 catalog = loaded.catalog;
@@ -196,7 +209,7 @@ pub(super) fn run_launcher_loop(
         catalog_version,
     );
     window.request_redraw();
-    let run_start = if launcher_mode == LauncherRunMode::Arcade && catalog_ready {
+    let run_start = if preload_arcade_catalog && catalog_ready {
         Instant::now()
     } else {
         start
@@ -267,7 +280,7 @@ pub(super) fn run_launcher_loop(
                 match message {
                     CatalogWorkerMessage::Progress { title, detail } => {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        let visible = if catalog_ready && launcher_mode == LauncherRunMode::Arcade {
+                        let visible = if catalog_ready && preload_arcade_catalog {
                             title == "Library scan failed" || title == "Library load failed"
                         } else {
                             !catalog_ready
@@ -408,7 +421,9 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        launcher_mode.enforce(&mut nav);
+        if let Some(screen) = lock_screen {
+            nav.screen = screen;
+        }
 
         if !launching {
             let pad_changed = pad.poll_with_debug_labels(setup_active);
@@ -653,7 +668,9 @@ pub(super) fn run_launcher_loop(
                 }
             }
 
-            launcher_mode.enforce(&mut nav);
+            if let Some(screen) = lock_screen {
+                nav.screen = screen;
+            }
 
             if full_bridge_dirty {
                 sync_bridge_launcher(
@@ -861,7 +878,6 @@ pub(super) fn run_launcher_loop(
             catalog_refresh_done,
             launching,
             &loading_title,
-            launcher_mode,
         );
         frames += 1;
     }

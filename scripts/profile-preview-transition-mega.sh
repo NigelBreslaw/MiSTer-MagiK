@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the real arcade screen through every raw screenshot transition effect.
+# Run the real launcher Arcade screen through every raw screenshot transition effect.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,7 +8,8 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-device] [--segment-secs N] [--transition-ms N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
 
-Runs the real `ui arcade` surface with `MISTER_PREVIEW_TRANSITION=mega`.
+Runs the Main-supervised launcher Arcade screen with
+`MISTER_PREVIEW_TRANSITION=mega`.
 Each effect gets --segment-secs seconds of held-scroll, then the trace is
 summarized overall and by transition effect.
 EOF

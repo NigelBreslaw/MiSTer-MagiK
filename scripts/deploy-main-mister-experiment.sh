@@ -90,7 +90,10 @@ ps > "$SNAP/ps.txt" 2>/dev/null || true
 cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || true
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
-kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
+if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then
+  printf "mister_magik_suspend\n" > /dev/MiSTer_cmd
+  sleep 1
+fi
 '
 
 "$ROOT/scripts/mister" put "$GUI_BIN" "$GUI_REMOTE.upload"

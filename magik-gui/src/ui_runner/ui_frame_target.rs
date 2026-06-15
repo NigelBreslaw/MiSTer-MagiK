@@ -458,10 +458,7 @@ pub(super) fn sample_raw565(view: &Raw565View<'_>, x: usize, y: usize) -> Option
     }
 }
 
-fn raw565_row_for_screen_y<'a>(
-    view: &'a Raw565View<'a>,
-    y: usize,
-) -> Option<&'a [Rgb565Pixel]> {
+fn raw565_row_for_screen_y<'a>(view: &'a Raw565View<'a>, y: usize) -> Option<&'a [Rgb565Pixel]> {
     let sy = y as isize - view.y;
     if sy < 0 || sy >= view.h as isize {
         None
