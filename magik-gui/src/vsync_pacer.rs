@@ -171,4 +171,24 @@ mod tests {
         assert_eq!(model.hits(), 1);
         assert_eq!(model.max_miss_streak(), 3);
     }
+
+    #[test]
+    fn source_labels_match_runtime_status_values() {
+        assert_eq!(VsyncPaceSource::Vsync.label(), "vsync");
+        assert_eq!(VsyncPaceSource::Fallback.label(), "fallback");
+        assert_eq!(VsyncPaceSource::Timeout.label(), "timeout");
+        assert_eq!(VsyncPaceSource::Error.label(), "error");
+    }
+
+    #[test]
+    fn error_misses_count_as_fallback_frames() {
+        let mut model = VsyncPacerModel::new(FALLBACK_60_US, 2);
+
+        assert!(!model.record_miss(VsyncPaceSource::Error));
+        assert!(model.record_miss(VsyncPaceSource::Fallback));
+
+        assert_eq!(model.fallback_frames(), 2);
+        assert_eq!(model.miss_streak(), 2);
+        assert_eq!(model.max_miss_streak(), 2);
+    }
 }

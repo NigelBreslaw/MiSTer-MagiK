@@ -143,4 +143,28 @@ mod tests {
         assert_eq!(state.last_raw, "type=1 num=2 val=3");
         assert_eq!(state.last_event_label, "A down");
     }
+
+    #[test]
+    fn layout_guess_strips_hex_prefixes_and_identifies_known_dpad_axis_pads() {
+        let retrobit = PadInfo {
+            vendor_id: "0x2563".to_string(),
+            product_id: "0X0575".to_string(),
+            ..PadInfo::default()
+        };
+        let dragonrise = PadInfo {
+            vendor_id: "0079".to_string(),
+            product_id: "0011".to_string(),
+            ..PadInfo::default()
+        };
+        let generic = PadInfo {
+            vendor_id: "045e".to_string(),
+            product_id: "028e".to_string(),
+            ..PadInfo::default()
+        };
+
+        assert_eq!(PadLayout::guess(&retrobit), PadLayout::DpadAxes45);
+        assert_eq!(layout_profile_name(&retrobit), "dpad_axes_4_5");
+        assert_eq!(PadLayout::guess(&dragonrise), PadLayout::DpadAxes45);
+        assert_eq!(layout_profile_name(&generic), "generic");
+    }
 }

@@ -78,7 +78,7 @@ impl PreviewResizeFilter {
     }
 
     pub fn from_label(label: &str) -> Self {
-        match label.to_ascii_lowercase().replace('_', "-").as_str() {
+        match label.trim().to_ascii_lowercase().replace('_', "-").as_str() {
             "nearest" | "nearest-neighbor" => Self::Nearest,
             "box" | "area" | "box-area" => Self::Box,
             "lanczos" | "lanczos3" => Self::Lanczos,
@@ -1383,5 +1383,45 @@ mod tests {
         let err = load_preview_pixels("/tmp/missing/media/screenshot/tiny.png", resize)
             .expect_err("missing raw565 cache must not decode original screenshots");
         assert!(err.contains("raw565-hybrid-320x320/tiny.rgb565"));
+    }
+
+    #[test]
+    fn resize_filters_parse_aliases_and_default_to_off() {
+        assert_eq!(
+            PreviewResizeFilter::from_label(" nearest_neighbor\n"),
+            PreviewResizeFilter::Nearest
+        );
+        assert_eq!(
+            PreviewResizeFilter::from_label("box-area"),
+            PreviewResizeFilter::Box
+        );
+        assert_eq!(
+            PreviewResizeFilter::from_label("LANCZOS3"),
+            PreviewResizeFilter::Lanczos
+        );
+        assert_eq!(
+            PreviewResizeFilter::from_label("hybrid_arcade"),
+            PreviewResizeFilter::Hybrid
+        );
+        assert_eq!(
+            PreviewResizeFilter::from_label("unknown"),
+            PreviewResizeFilter::Off
+        );
+    }
+
+    #[test]
+    fn resize_spec_cache_labels_include_filter_and_bounds() {
+        let off = PreviewResizeSpec::off();
+        assert_eq!(off.cache_label(), "off-0x0");
+
+        let spec = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Lanczos,
+            max_w: 320,
+            max_h: 240,
+        };
+        assert_eq!(spec.cache_label(), "lanczos-320x240");
+        assert_eq!(parse_size("640x480"), Some((640, 480)));
+        assert_eq!(parse_size("640X480"), Some((640, 480)));
+        assert_eq!(parse_size("640,480"), None);
     }
 }
