@@ -16,6 +16,7 @@ pub mod input_repeat;
 pub mod input_state;
 pub mod launcher;
 pub mod raster_effects;
+pub mod raw565;
 pub mod runtime_status;
 pub mod sprite_effects;
 pub mod text_effects;

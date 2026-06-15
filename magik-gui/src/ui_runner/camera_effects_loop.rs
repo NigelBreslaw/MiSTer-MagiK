@@ -6,8 +6,9 @@ use mister_magik_fb::camera_effects::{
     pixel_to_rgb888, render_camera_effect_frame, synthetic_images, CameraEffectKind,
     CameraEffectRenderState, CameraImage, CameraPixel,
 };
+use mister_magik_fb::raw565;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 pub(super) fn print_camera_effects() {
@@ -320,31 +321,13 @@ fn load_camera_effect_images(root: &str, cap: usize) -> Vec<CameraImage> {
 }
 
 fn read_raw565_image(path: &Path) -> Result<CameraImage, String> {
-    let mut data = Vec::new();
-    File::open(path)
-        .and_then(|mut f| f.read_to_end(&mut data))
-        .map_err(|e| format!("{path:?}: {e}"))?;
-    if data.len() < 20 || &data[..8] != b"MM56501\0" {
-        return Err(format!("{path:?}: bad raw565 header"));
-    }
-    let w = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
-    let h = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
-    let stride_bytes = u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
-    if w == 0 || h == 0 || stride_bytes < w * 2 || stride_bytes % 16 != 0 {
-        return Err(format!("{path:?}: bad raw565 geometry"));
-    }
-    let expected = 20 + stride_bytes * h;
-    if data.len() != expected {
-        return Err(format!("{path:?}: raw565 length mismatch"));
-    }
-    let mut pixels = Vec::with_capacity(stride_bytes / 2 * h);
-    for chunk in data[20..].chunks_exact(2) {
-        pixels.push(CameraPixel(u16::from_le_bytes([chunk[0], chunk[1]])));
-    }
+    let data = std::fs::read(path).map_err(|e| format!("{path:?}: {e}"))?;
+    let image = raw565::decode_raw565(&data).map_err(|e| format!("{path:?}: {e}"))?;
+    let pixels = image.words.into_iter().map(CameraPixel).collect();
     Ok(CameraImage {
         pixels,
-        w,
-        h,
-        stride: stride_bytes / 2,
+        w: image.width,
+        h: image.height,
+        stride: image.stride_words,
     })
 }

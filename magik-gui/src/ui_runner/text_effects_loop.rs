@@ -3,12 +3,13 @@ use crate::input::PadPool;
 use crate::input_repeat::RepeatNav;
 use crate::preview_worker;
 use mister_magik_fb::camera_effects::{CameraImage, CameraPixel};
+use mister_magik_fb::raw565;
 use mister_magik_fb::text_effects::{
     pixel_to_rgb888, render_text_effect_frame, synthetic_text_images, TextEffectKind,
     TextEffectRenderState,
 };
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 pub(super) fn print_text_effects() {
@@ -328,24 +329,13 @@ fn load_text_effect_images(root: &str, cap: usize) -> Vec<CameraImage> {
 }
 
 fn read_raw565_image(path: &Path) -> Option<CameraImage> {
-    let mut file = File::open(path).ok()?;
-    let mut header = [0u8; 8];
-    file.read_exact(&mut header).ok()?;
-    let w = u32::from_le_bytes(header[0..4].try_into().ok()?) as usize;
-    let h = u32::from_le_bytes(header[4..8].try_into().ok()?) as usize;
-    if w == 0 || h == 0 || w > 2048 || h > 2048 {
-        return None;
-    }
-    let mut bytes = vec![0u8; w * h * 2];
-    file.read_exact(&mut bytes).ok()?;
-    let pixels = bytes
-        .chunks_exact(2)
-        .map(|pair| CameraPixel(u16::from_le_bytes([pair[0], pair[1]])))
-        .collect();
+    let data = std::fs::read(path).ok()?;
+    let image = raw565::decode_raw565(&data).ok()?;
+    let pixels = image.words.into_iter().map(CameraPixel).collect();
     Some(CameraImage {
         pixels,
-        w,
-        h,
-        stride: w,
+        w: image.width,
+        h: image.height,
+        stride: image.stride_words,
     })
 }
