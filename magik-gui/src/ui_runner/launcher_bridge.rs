@@ -9,6 +9,7 @@ pub(super) fn open_pads() -> PadPool {
 
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
     bridge.set_selected_index(0);
     bridge.set_settings_focused(false);
@@ -104,6 +105,7 @@ pub(super) fn sync_bridge_launcher(
     catalog_version: usize,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    bridge.set_startup_visible(false);
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
         Screen::Home => 0,

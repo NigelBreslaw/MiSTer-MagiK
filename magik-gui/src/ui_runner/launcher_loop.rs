@@ -23,6 +23,33 @@ pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: 
     }
 }
 
+pub(super) fn present_launcher_startup_frame(
+    start: Instant,
+    ui: &UiDisplay,
+    disp: &mut Display,
+    f: &mut Fpga,
+    window: &Rc<MinimalSoftwareWindow>,
+    target: &mut UiFrameTarget,
+) {
+    let draw_t = Instant::now();
+    window.request_redraw();
+    window.draw_if_needed(|renderer| {
+        let _ = target.render(renderer, ui);
+    });
+    let render_us = draw_t.elapsed().as_micros();
+    let copy_t = Instant::now();
+    target.present_rows(f, disp, ui, 0, ui.render_h());
+    print_startup_event(
+        start,
+        "startup_splash_presented",
+        format!(
+            "render_us={} copy_us={}",
+            render_us,
+            copy_t.elapsed().as_micros()
+        ),
+    );
+}
+
 pub(super) fn run_launcher_loop(
     secs: u64,
     ui: &UiDisplay,
