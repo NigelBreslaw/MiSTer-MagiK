@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Instant, UNIX_EPOCH};
@@ -152,7 +153,7 @@ pub enum PreviewPixels {
         width: u32,
         height: u32,
         stride_bytes: u32,
-        words: Vec<u16>,
+        words: Arc<[u16]>,
     },
 }
 
@@ -1021,7 +1022,7 @@ fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
         width,
         height,
         stride_bytes,
-        words,
+        words: Arc::from(words.into_boxed_slice()),
     })
 }
 
@@ -1166,7 +1167,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 stride_bytes: 16,
-                words: vec![0xf800],
+                words: Arc::from([0xf800]),
             },
         };
         let second = LoadedPreviewPixels {
@@ -1179,7 +1180,7 @@ mod tests {
                 width: 2,
                 height: 1,
                 stride_bytes: 16,
-                words: vec![0x07e0, 0x001f],
+                words: Arc::from([0x07e0, 0x001f]),
             },
         };
 
@@ -1190,6 +1191,16 @@ mod tests {
         assert_eq!(hit.timing.resize_us, 0);
         assert_eq!(hit.timing.encoded_bytes, 0);
         assert_eq!(hit.timing.source_width, 1);
+        let (
+            PreviewPixels::Rgb565 {
+                words: first_words,
+                ..
+            },
+            PreviewPixels::Rgb565 {
+                words: hit_words, ..
+            },
+        ) = (&first.image, &hit.image);
+        assert!(Arc::ptr_eq(first_words, hit_words));
 
         cache.insert("b".into(), &second);
         assert!(cache.get("a").is_none());

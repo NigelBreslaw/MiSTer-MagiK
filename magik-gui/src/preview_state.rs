@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-use std::mem::ManuallyDrop;
 use std::sync::{Arc, OnceLock};
 
 use mister_magik_ui as slint_ui;
@@ -62,7 +61,7 @@ struct PreviewImage {
 
 enum PreviewImagePixels {
     Rgb565 {
-        pixels: Vec<Rgb565Pixel>,
+        words: Arc<[u16]>,
         stride_pixels: usize,
     },
 }
@@ -72,13 +71,9 @@ const _: () = {
     assert!(std::mem::align_of::<Rgb565Pixel>() == std::mem::align_of::<u16>());
 };
 
-fn rgb565_words_into_pixels(words: Vec<u16>) -> Vec<Rgb565Pixel> {
-    let mut words = ManuallyDrop::new(words);
-    let ptr = words.as_mut_ptr();
-    let len = words.len();
-    let cap = words.capacity();
+fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
     // Rgb565Pixel is repr(transparent) over u16 in Slint's software renderer.
-    unsafe { Vec::from_raw_parts(ptr.cast::<Rgb565Pixel>(), len, cap) }
+    unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<Rgb565Pixel>(), words.len()) }
 }
 
 #[derive(Default)]
@@ -324,10 +319,10 @@ impl PreviewState {
         PreviewRawFrame {
             pixels: match &image.pixels {
                 PreviewImagePixels::Rgb565 {
-                    pixels,
+                    words,
                     stride_pixels,
                 } => PreviewRawPixels::Rgb565 {
-                    pixels,
+                    pixels: rgb565_words_as_pixels(words),
                     stride_pixels: *stride_pixels,
                 },
             },
@@ -702,7 +697,7 @@ pub(crate) fn apply_ready_preview(
                     words,
                     ..
                 } => PreviewImagePixels::Rgb565 {
-                    pixels: rgb565_words_into_pixels(words),
+                    words,
                     stride_pixels: stride_bytes as usize / 2,
                 },
             };
@@ -789,17 +784,14 @@ mod tests {
     }
 
     #[test]
-    fn rgb565_words_into_pixels_reuses_allocation() {
-        let words = vec![0x001f, 0x07e0, 0xf800];
+    fn rgb565_words_as_pixels_borrows_shared_payload() {
+        let words = Arc::<[u16]>::from([0x001f, 0x07e0, 0xf800]);
         let ptr = words.as_ptr();
-        let len = words.len();
-        let cap = words.capacity();
 
-        let pixels = rgb565_words_into_pixels(words);
+        let pixels = rgb565_words_as_pixels(&words);
 
         assert_eq!(pixels.as_ptr().cast::<u16>(), ptr);
-        assert_eq!(pixels.len(), len);
-        assert_eq!(pixels.capacity(), cap);
+        assert_eq!(pixels.len(), words.len());
         assert_eq!(
             pixels.iter().map(|p| p.0).collect::<Vec<_>>(),
             [0x001f, 0x07e0, 0xf800]
@@ -855,9 +847,10 @@ mod tests {
     #[test]
     fn preview_cache_hits_share_image_payload() {
         let mut cache = PreviewImageCache::default();
+        let words = Arc::<[u16]>::from([0xffff]);
         let image = Arc::new(PreviewImage {
             pixels: PreviewImagePixels::Rgb565 {
-                pixels: vec![Rgb565Pixel(0xffff)],
+                words: Arc::clone(&words),
                 stride_pixels: 1,
             },
             source_w: 1,
@@ -872,6 +865,17 @@ mod tests {
 
         assert!(Arc::ptr_eq(&image, &first_hit));
         assert!(Arc::ptr_eq(&first_hit, &second_hit));
+        let (
+            PreviewImagePixels::Rgb565 {
+                words: first_words, ..
+            },
+            PreviewImagePixels::Rgb565 {
+                words: second_words,
+                ..
+            },
+        ) = (&first_hit.pixels, &second_hit.pixels);
+        assert!(Arc::ptr_eq(first_words, second_words));
+        assert!(Arc::ptr_eq(&words, first_words));
     }
 
     #[test]
@@ -879,7 +883,7 @@ mod tests {
         let mut preview = PreviewState::new();
         let visible_image = Arc::new(PreviewImage {
             pixels: PreviewImagePixels::Rgb565 {
-                pixels: vec![Rgb565Pixel(0xf800)],
+                words: Arc::from([0xf800]),
                 stride_pixels: 1,
             },
             source_w: 1,
@@ -921,7 +925,7 @@ mod tests {
         let mut preview = PreviewState::new();
         let visible_image = Arc::new(PreviewImage {
             pixels: PreviewImagePixels::Rgb565 {
-                pixels: vec![Rgb565Pixel(0xf800)],
+                words: Arc::from([0xf800]),
                 stride_pixels: 1,
             },
             source_w: 1,
