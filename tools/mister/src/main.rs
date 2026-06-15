@@ -2615,6 +2615,28 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
+    fn preview_cache_jobs_filter_media_and_reject_duplicate_stems() {
+        let dir = temp_path("preview-cache-jobs");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("1942.PNG"), b"not decoded here").unwrap();
+        fs::write(dir.join("pacman.jpeg"), b"not decoded here").unwrap();
+        fs::write(dir.join("._pacman.jpeg"), b"resource fork").unwrap();
+        fs::write(dir.join("notes.txt"), b"ignore").unwrap();
+        fs::create_dir(dir.join("nested.png")).unwrap();
+
+        let jobs = preview_cache_jobs(&dir).unwrap();
+        let stems: Vec<_> = jobs.iter().map(|job| job.stem.as_str()).collect();
+        assert_eq!(stems, vec!["1942", "pacman"]);
+
+        fs::write(dir.join("pacman.jpg"), b"duplicate stem").unwrap();
+        let err = preview_cache_jobs(&dir).unwrap_err().to_string();
+        assert!(err.contains("duplicate source stem: pacman"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn png_writer_outputs_valid_signature_and_chunks() {
         let path = temp_path("tiny.png");
         let raw = vec![

@@ -56,9 +56,9 @@ impl FramebufferFormat {
     }
 
     pub fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "8888" | "xrgb8888" | "XRGB8888" => Some(Self::Xrgb8888),
-            "565" | "rgb565" | "RGB565" => Some(Self::Rgb565),
+        match label.trim().to_ascii_lowercase().as_str() {
+            "8888" | "xrgb8888" => Some(Self::Xrgb8888),
+            "565" | "rgb565" => Some(Self::Rgb565),
             _ => None,
         }
     }
@@ -74,11 +74,7 @@ impl FramebufferFormat {
     pub fn rb_from_env(self) -> bool {
         std::env::var("MISTER_FB_RB")
             .ok()
-            .and_then(|s| match s.as_str() {
-                "0" | "false" | "off" => Some(false),
-                "1" | "true" | "on" => Some(true),
-                _ => None,
-            })
+            .and_then(|s| rb_from_label(&s))
             .unwrap_or_else(|| self.default_rb())
     }
 
@@ -109,6 +105,14 @@ pub const FB_FMT_RXB: u16 = 0b10000;
 
 pub const fn align16(bytes: usize) -> usize {
     (bytes + 15) & !15
+}
+
+fn rb_from_label(label: &str) -> Option<bool> {
+    match label.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "off" => Some(false),
+        "1" | "true" | "on" => Some(true),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +170,27 @@ mod tests {
             FramebufferFormat::from_bits_per_pixel(32).mode_line(960, 540, 3840, true),
             "8888 1 960 540 3840"
         );
+    }
+
+    #[test]
+    fn format_labels_are_case_and_whitespace_tolerant() {
+        assert_eq!(
+            FramebufferFormat::from_label(" Xrgb8888\n"),
+            Some(FramebufferFormat::Xrgb8888)
+        );
+        assert_eq!(
+            FramebufferFormat::from_label("RGB565"),
+            Some(FramebufferFormat::Rgb565)
+        );
+        assert_eq!(FramebufferFormat::from_label("888"), None);
+    }
+
+    #[test]
+    fn route_bit_labels_are_case_and_whitespace_tolerant() {
+        assert_eq!(rb_from_label(" FALSE "), Some(false));
+        assert_eq!(rb_from_label("Off"), Some(false));
+        assert_eq!(rb_from_label("YES"), None);
+        assert_eq!(rb_from_label("true"), Some(true));
+        assert_eq!(rb_from_label("1"), Some(true));
     }
 }
