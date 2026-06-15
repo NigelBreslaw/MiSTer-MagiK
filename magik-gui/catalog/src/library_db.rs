@@ -847,36 +847,66 @@ fn refresh_sqlite_database(
         }
         let current_manifest = validate_or_rebuild_directory_manifest(&cfg.roots, &existing);
         let scan_us = scan_t.elapsed().as_micros() as u64;
-        if current_manifest == Some(existing.directory_manifest.clone())
-            && preview_archive_fingerprint_unchanged(&existing)
+        let preview_archive_unchanged = preview_archive_fingerprint_unchanged(&existing);
+        match library_refresh_plan(&existing, current_manifest.as_ref(), preview_archive_unchanged)
         {
-            if let Some(report) = progress.as_mut() {
-                report(
-                    "Library unchanged",
-                    &format!(
-                        "{} directories checked; using cached database",
-                        existing.directory_manifest.len()
-                    ),
-                );
+            LibraryRefreshPlan::UseCachedDatabase => {
+                if let Some(report) = progress.as_mut() {
+                    report(
+                        "Library unchanged",
+                        &format!(
+                            "{} directories checked; using cached database",
+                            existing.directory_manifest.len()
+                        ),
+                    );
+                }
+                let bytes = std::fs::metadata(&cfg.sqlite_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                return Ok(LibraryRefreshSummary {
+                    skipped: true,
+                    scan_us,
+                    import_us: 0,
+                    bytes,
+                    normal_files: existing.normal_files,
+                    containers: existing.containers,
+                    entries: existing.entries,
+                    discoveries: existing.discoveries,
+                });
             }
-            let bytes = std::fs::metadata(&cfg.sqlite_path)
-                .map(|m| m.len())
-                .unwrap_or(0);
-            return Ok(LibraryRefreshSummary {
-                skipped: true,
-                scan_us,
-                import_us: 0,
-                bytes,
-                normal_files: existing.normal_files,
-                containers: existing.containers,
-                entries: existing.entries,
-                discoveries: existing.discoveries,
-            });
+            LibraryRefreshPlan::RefreshPreviewAssets => {
+                if let Some(report) = progress.as_mut() {
+                    report(
+                        "Preview images changed",
+                        "Updating screenshot availability without rescanning games...",
+                    );
+                }
+                let import_t = Instant::now();
+                if let Ok(bytes) = refresh_sqlite_preview_assets_from_env(&cfg.sqlite_path) {
+                    return Ok(LibraryRefreshSummary {
+                        skipped: true,
+                        scan_us,
+                        import_us: import_t.elapsed().as_micros() as u64,
+                        bytes,
+                        normal_files: existing.normal_files,
+                        containers: existing.containers,
+                        entries: existing.entries,
+                        discoveries: existing.discoveries,
+                    });
+                }
+                if let Some(report) = progress.as_mut() {
+                    report(
+                        "Library changed",
+                        "Preview metadata update failed; rebuilding database...",
+                    );
+                }
+            }
+            LibraryRefreshPlan::RebuildDatabase => {}
         }
         if let Some(report) = progress.as_mut() {
             report(
                 "Library changed",
-                "Directory manifest changed; rebuilding database...",
+                "Catalog metadata changed; rebuilding database...",
             );
         }
     } else {
@@ -918,6 +948,28 @@ fn refresh_sqlite_database(
         entries: scan.entries.len(),
         discoveries: unique_discovery_count(&scan.discoveries),
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryRefreshPlan {
+    UseCachedDatabase,
+    RefreshPreviewAssets,
+    RebuildDatabase,
+}
+
+fn library_refresh_plan(
+    existing: &DbFingerprint,
+    current_manifest: Option<&DirectoryManifest>,
+    preview_archive_unchanged: bool,
+) -> LibraryRefreshPlan {
+    if current_manifest != Some(&existing.directory_manifest) {
+        return LibraryRefreshPlan::RebuildDatabase;
+    }
+    if preview_archive_unchanged {
+        LibraryRefreshPlan::UseCachedDatabase
+    } else {
+        LibraryRefreshPlan::RefreshPreviewAssets
+    }
 }
 
 struct BenchConfig {
@@ -2475,6 +2527,145 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         &default_mame_sqlite_path(),
         &preview_asset_packs,
     )
+}
+
+fn refresh_sqlite_preview_assets_from_env(path: &Path) -> Result<u64, String> {
+    let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
+        .map_err(|e| format!("preview archive index: {e}"))?;
+    let preview_fingerprint = preview_worker::preview_archive_fingerprint_from_env()
+        .map_err(|e| format!("preview archive fingerprint: {e}"))?;
+    refresh_sqlite_preview_assets(path, &preview_asset_packs, preview_fingerprint)
+}
+
+fn refresh_sqlite_preview_assets(
+    path: &Path,
+    preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
+    preview_fingerprint: Option<(String, u64, i64)>,
+) -> Result<u64, String> {
+    let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
+    for table in [
+        "asset_packs",
+        "asset_entries",
+        "ui_arcade_preferred",
+        "ui_arcade_variants",
+        "launcher_catalog",
+        "file_fingerprints",
+    ] {
+        if !sqlite_table_exists(&conn, table)? {
+            return Err(format!("sqlite missing {table} table"));
+        }
+    }
+    let mame_metadata = load_mame_machine_metadata(&default_mame_sqlite_path());
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("begin sqlite tx: {e}"))?;
+    let preserved_launcher_rows = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT title,sort_title,launch_ref,image_path,has_image,system_id
+                 FROM launcher_catalog
+                 WHERE system_id NOT IN ('arcade','neogeo')
+                 ORDER BY ordinal",
+            )
+            .map_err(|e| format!("prepare preserved launcher query: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|e| format!("query preserved launcher rows: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read preserved launcher row: {e}"))?;
+        rows
+    };
+
+    tx.execute("DELETE FROM asset_entries", [])
+        .map_err(|e| format!("delete asset entries: {e}"))?;
+    tx.execute("DELETE FROM asset_packs", [])
+        .map_err(|e| format!("delete asset packs: {e}"))?;
+    tx.execute("DELETE FROM ui_arcade_variants", [])
+        .map_err(|e| format!("delete arcade variants: {e}"))?;
+    tx.execute("DELETE FROM ui_arcade_preferred", [])
+        .map_err(|e| format!("delete arcade preferred: {e}"))?;
+
+    register_preview_asset_packs(&tx, &mame_metadata, preview_asset_packs)?;
+    materialize_arcade_ui_projections(&tx)?;
+
+    tx.execute("DELETE FROM launcher_catalog", [])
+        .map_err(|e| format!("delete launcher catalog: {e}"))?;
+    tx.execute(
+        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
+         SELECT ordinal,title,sort_title,launch_ref,image_path,has_image,system_id
+         FROM ui_arcade_preferred
+         ORDER BY ordinal",
+        [],
+    )
+    .map_err(|e| format!("insert refreshed arcade launcher catalog: {e}"))?;
+    let ordinal_offset = tx
+        .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|e| format!("query launcher catalog offset: {e}"))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )
+            .map_err(|e| format!("prepare preserved launcher insert: {e}"))?;
+        for (idx, row) in preserved_launcher_rows.iter().enumerate() {
+            stmt.execute(params![
+                ordinal_offset + idx as i64,
+                row.0.as_str(),
+                row.1.as_str(),
+                row.2.as_str(),
+                row.3.as_str(),
+                row.4,
+                row.5.as_str()
+            ])
+            .map_err(|e| format!("insert preserved launcher row: {e}"))?;
+        }
+    }
+
+    let existing_preview_fingerprints = {
+        let mut stmt = tx
+            .prepare("SELECT file_path FROM file_fingerprints")
+            .map_err(|e| format!("prepare file fingerprint query: {e}"))?;
+        let paths = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query file fingerprints: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read file fingerprint row: {e}"))?
+            .into_iter()
+            .filter(|path| is_preview_archive_fingerprint_path(path))
+            .collect::<Vec<_>>();
+        paths
+    };
+    {
+        let mut stmt = tx
+            .prepare("DELETE FROM file_fingerprints WHERE file_path=?1")
+            .map_err(|e| format!("prepare preview fingerprint delete: {e}"))?;
+        for path in existing_preview_fingerprints {
+            stmt.execute(params![path])
+                .map_err(|e| format!("delete preview fingerprint: {e}"))?;
+        }
+    }
+    if let Some((path, size, mtime_secs)) = preview_fingerprint {
+        tx.execute(
+            "INSERT OR REPLACE INTO file_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
+            params![path, size as i64, mtime_secs],
+        )
+        .map_err(|e| format!("insert preview fingerprint: {e}"))?;
+    }
+    tx.commit()
+        .map_err(|e| format!("commit preview asset refresh: {e}"))?;
+    Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -4658,6 +4849,40 @@ mod tests {
     }
 
     #[test]
+    fn refresh_plan_uses_unchanged_database_without_refresh() {
+        let manifest = single_dir_manifest("/media/fat/_Arcade", 1);
+        let fingerprint = fingerprint_with_manifest(manifest.clone());
+
+        assert_eq!(
+            library_refresh_plan(&fingerprint, Some(&manifest), true),
+            LibraryRefreshPlan::UseCachedDatabase
+        );
+    }
+
+    #[test]
+    fn refresh_plan_updates_preview_assets_without_rebuild() {
+        let manifest = single_dir_manifest("/media/fat/_Arcade", 1);
+        let fingerprint = fingerprint_with_manifest(manifest.clone());
+
+        assert_eq!(
+            library_refresh_plan(&fingerprint, Some(&manifest), false),
+            LibraryRefreshPlan::RefreshPreviewAssets
+        );
+    }
+
+    #[test]
+    fn refresh_plan_rebuilds_when_file_tree_changes() {
+        let old_manifest = single_dir_manifest("/media/fat/_Arcade", 1);
+        let current_manifest = single_dir_manifest("/media/fat/_Arcade", 2);
+        let fingerprint = fingerprint_with_manifest(old_manifest);
+
+        assert_eq!(
+            library_refresh_plan(&fingerprint, Some(&current_manifest), true),
+            LibraryRefreshPlan::RebuildDatabase
+        );
+    }
+
+    #[test]
     fn preview_archive_paths_are_recognized_as_fingerprint_inputs() {
         assert!(is_preview_archive_fingerprint_path(
             "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw"
@@ -4671,7 +4896,68 @@ mod tests {
     }
 
     #[test]
-    fn preview_archive_added_after_old_database_forces_catalog_refresh() {
+    fn preview_archive_added_after_old_database_updates_assets_without_rescan() {
+        let root = unique_temp_dir("preview-archive-asset-refresh");
+        let db = root.join("library.sqlite3");
+        let mut discovery = mra_discovery(1, "1941");
+        discovery.setname = Some("game00001".to_string());
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![discovery])).expect("save sqlite");
+        let pack_path =
+            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw";
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: pack_path.to_string(),
+            codec: "raw",
+            entries: vec!["game00001".to_string()],
+        };
+
+        let bytes = refresh_sqlite_preview_assets(
+            &db,
+            &[pack],
+            Some((pack_path.to_string(), 1234, 77)),
+        )
+        .expect("refresh preview assets");
+
+        assert!(bytes > 0);
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row = conn
+            .query_row(
+                "SELECT image_path,has_image,asset_key,asset_link_reason
+                 FROM ui_arcade_preferred",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .expect("query refreshed preferred row");
+        assert_eq!(
+            row.0,
+            "/media/fat/_Arcade/media/screenshot/game00001.png"
+        );
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2.as_deref(), Some("game00001"));
+        assert_eq!(row.3, "exact");
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM games", [], |row| row.get::<_, i64>(0))
+                .expect("count games"),
+            1
+        );
+        assert_eq!(
+            read_sqlite_fingerprint(&db)
+                .expect("read fingerprint")
+                .file_fingerprints
+                .get(pack_path),
+            Some(&(1234, 77))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_archive_fingerprint_mismatch_marks_preview_assets_stale() {
         let fingerprint = fingerprint_with_files(&[]);
 
         assert!(!preview_archive_fingerprint_matches(
@@ -5108,5 +5394,19 @@ mod tests {
             .map(|(path, size, mtime_secs)| (path.to_string(), (*size, *mtime_secs)))
             .collect();
         fingerprint
+    }
+
+    fn single_dir_manifest(path: &str, hash: u64) -> DirectoryManifest {
+        let mut manifest = DirectoryManifest::new();
+        manifest.insert(
+            path.to_string(),
+            DirectorySignature {
+                dir_size: 1,
+                dir_mtime_secs: 1,
+                child_count: 1,
+                hash,
+            },
+        );
+        manifest
     }
 }

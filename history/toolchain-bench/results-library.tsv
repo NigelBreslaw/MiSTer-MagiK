@@ -76,3 +76,29 @@ LIB-SCAN-AFTER-20260614	3	cached_arcade_load	181698	rows=9523
 LIB-SCAN-AFTER-20260614	3	no_change_manifest	16515400	changed=false
 LIB-SCAN-AFTER-20260614	post-reboot	post_reboot_rescan	66928197	skipped=true bytes=41508864 scan_us=66928197 import_us=0 discoveries=10089 normal_files=26584 containers=154 entries=281
 LIB-SCAN-AFTER-20260614	settled-1	settled_rescan	15779327	skipped=true bytes=41508864 scan_us=15779327 import_us=0 discoveries=10089 normal_files=26584 containers=154 entries=281 image_games=828 image_launcher_rows=698
+LIBREFRESH-BEFORE	1	cold_scan	18699233	discover_us=18371208
+LIBREFRESH-BEFORE	1	import	23964206	bytes=31006720
+LIBREFRESH-BEFORE	1	cached_arcade_load	144110	rows=8389
+LIBREFRESH-BEFORE	1	no_change_manifest	8579643	changed=false
+LIBREFRESH-BEFORE	2	cold_scan	9326985	discover_us=9314281
+LIBREFRESH-BEFORE	2	import	23749488	bytes=31006720
+LIBREFRESH-BEFORE	2	cached_arcade_load	149533	rows=8389
+LIBREFRESH-BEFORE	2	no_change_manifest	8356928	changed=false
+LIBREFRESH-BEFORE	3	cold_scan	9183993	discover_us=9168313
+LIBREFRESH-BEFORE	3	import	23364157	bytes=31006720
+LIBREFRESH-BEFORE	3	cached_arcade_load	139150	rows=8389
+LIBREFRESH-BEFORE	3	no_change_manifest	8981721	changed=false
+LIBREFRESH-BEFORE	post-reboot	post_reboot_rescan	65975861	skipped=true bytes=31006720 scan_us=65975861 import_us=0 discoveries=9959 normal_files=12346 containers=154 entries=281
+LIBREFRESH-AFTER	1	cold_scan	16406859	discover_us=16058544
+LIBREFRESH-AFTER	1	import	23381439	bytes=31006720
+LIBREFRESH-AFTER	1	cached_arcade_load	135116	rows=8389
+LIBREFRESH-AFTER	1	no_change_manifest	8602912	changed=false
+LIBREFRESH-AFTER	2	cold_scan	9072278	discover_us=9027544
+LIBREFRESH-AFTER	2	import	25095015	bytes=31006720
+LIBREFRESH-AFTER	2	cached_arcade_load	135015	rows=8389
+LIBREFRESH-AFTER	2	no_change_manifest	8294262	changed=false
+LIBREFRESH-AFTER	3	cold_scan	9358440	discover_us=9345047
+LIBREFRESH-AFTER	3	import	23642917	bytes=31006720
+LIBREFRESH-AFTER	3	cached_arcade_load	135140	rows=8389
+LIBREFRESH-AFTER	3	no_change_manifest	8610303	changed=false
+LIBREFRESH-AFTER	post-reboot	post_reboot_rescan	68796820	skipped=true bytes=31006720 scan_us=68796820 import_us=0 discoveries=9959 normal_files=12346 containers=154 entries=281
