@@ -4,10 +4,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const ZSTD_ARCHIVE_MAGIC: &[u8; 8] = b"MMZST01\0";
-const LZ4_ARCHIVE_MAGIC: &[u8; 8] = b"MMLZ401\0";
 const LZ4_BLOCK_ARCHIVE_MAGIC: &[u8; 8] = b"MMLZ4B1\0";
-const RAW_MAGIC: &[u8; 8] = b"MM56501\0";
+const RAW_ARCHIVE_MAGIC: &[u8; 8] = b"MMRAWP1\0";
+const RAW565_MAGIC: &[u8; 8] = b"MM56501\0";
 
 #[derive(Clone, Debug)]
 struct ArchiveEntry {
@@ -46,7 +45,7 @@ pub(crate) fn run() {
             .map(String::as_str)
             .unwrap_or("mister-magik-fb");
         eprintln!(
-            "usage: {bin} preview-archive-bench raw-dir <dir> [trials]\n       {bin} preview-archive-bench zstd <archive> [trials]\n       {bin} preview-archive-bench lz4 <archive> [trials]\n       {bin} preview-archive-bench lz4-block <archive> [trials]\n       {bin} preview-archive-bench compare-lz4-block <raw-dir> <archive> <name.rgb565>..."
+            "usage: {bin} preview-archive-bench raw-dir <dir> [trials]\n       {bin} preview-archive-bench raw <archive> [trials]\n       {bin} preview-archive-bench lz4-block <archive> [trials]\n       {bin} preview-archive-bench compare-lz4-block <raw-dir> <archive> <name.rgb565>..."
         );
         std::process::exit(2);
     }
@@ -61,7 +60,7 @@ pub(crate) fn run() {
             .map(String::as_str)
             .unwrap_or("preview-archive-bench");
         eprintln!(
-            "usage: {bin} raw-dir <dir> [trials]\n       {bin} zstd <archive> [trials]\n       {bin} lz4 <archive> [trials]\n       {bin} lz4-block <archive> [trials]\n       {bin} compare-lz4-block <raw-dir> <archive> <name.rgb565>..."
+            "usage: {bin} raw-dir <dir> [trials]\n       {bin} raw <archive> [trials]\n       {bin} lz4-block <archive> [trials]\n       {bin} compare-lz4-block <raw-dir> <archive> <name.rgb565>..."
         );
         std::process::exit(2);
     }
@@ -75,8 +74,7 @@ pub(crate) fn run() {
 
     let result = match mode {
         "raw-dir" => bench_raw_dir(path, trials),
-        "zstd" => bench_archive(path, trials, ArchiveCodec::Zstd),
-        "lz4" => bench_archive(path, trials, ArchiveCodec::Lz4),
+        "raw" => bench_archive(path, trials, ArchiveCodec::Raw),
         "lz4-block" => bench_archive(path, trials, ArchiveCodec::Lz4Block),
         "compare-lz4-block" => compare_lz4_block(&args[offset + 1..]),
         _ => Err(format!("unknown preview archive bench mode: {mode}")),
@@ -197,24 +195,21 @@ fn bench_raw_dir(dir: &Path, trials: usize) -> Result<(), String> {
 
 #[derive(Clone, Copy, Debug)]
 enum ArchiveCodec {
-    Zstd,
-    Lz4,
+    Raw,
     Lz4Block,
 }
 
 impl ArchiveCodec {
     fn label(self) -> &'static str {
         match self {
-            Self::Zstd => "zstd",
-            Self::Lz4 => "lz4",
+            Self::Raw => "raw",
             Self::Lz4Block => "lz4-block",
         }
     }
 
     fn magic(self) -> &'static [u8; 8] {
         match self {
-            Self::Zstd => ZSTD_ARCHIVE_MAGIC,
-            Self::Lz4 => LZ4_ARCHIVE_MAGIC,
+            Self::Raw => RAW_ARCHIVE_MAGIC,
             Self::Lz4Block => LZ4_BLOCK_ARCHIVE_MAGIC,
         }
     }
@@ -300,18 +295,10 @@ fn run_archive_trial(
         file.read_exact(&mut compressed)
             .map_err(|e| format!("read {}: {e}", entry.name))?;
         let read_us = read_t.elapsed().as_micros() as u64;
+        let bytes_read = compressed.len() as u64;
         let decompress_t = Instant::now();
         let data = match codec {
-            ArchiveCodec::Zstd => zstd::stream::decode_all(&compressed[..])
-                .map_err(|e| format!("zstd decode {}: {e}", entry.name))?,
-            ArchiveCodec::Lz4 => {
-                let mut decoder = lz4_flex::frame::FrameDecoder::new(&compressed[..]);
-                let mut out = Vec::with_capacity(entry.raw_len);
-                decoder
-                    .read_to_end(&mut out)
-                    .map_err(|e| format!("lz4 decode {}: {e}", entry.name))?;
-                out
-            }
+            ArchiveCodec::Raw => compressed,
             ArchiveCodec::Lz4Block => decode_lz4_block_entry(&compressed, entry.raw_len)
                 .map_err(|e| format!("lz4 block decode {}: {e}", entry.name))?,
         };
@@ -331,7 +318,7 @@ fn run_archive_trial(
         let total_us = sample_t.elapsed().as_micros() as u64;
         black_box(checksum);
         summary.files += 1;
-        summary.bytes_read += compressed.len() as u64;
+        summary.bytes_read += bytes_read;
         summary.decoded_bytes += decoded_bytes as u64;
         summary.read_us += read_us;
         summary.decompress_us += decompress_us;
@@ -398,7 +385,7 @@ fn read_archive_index(path: &Path, codec: ArchiveCodec) -> Result<Vec<ArchiveEnt
 }
 
 fn validate_raw565(data: &[u8]) -> Result<(usize, u64), String> {
-    if data.len() < 20 || &data[..8] != RAW_MAGIC {
+    if data.len() < 20 || &data[..8] != RAW565_MAGIC {
         return Err("bad raw565 header".into());
     }
     let width = u32::from_le_bytes(data[8..12].try_into().unwrap());

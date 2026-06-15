@@ -26,7 +26,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zune-png = { version = "0.5", default-features = false, features = ["std"] }
 swash = { version = "0.2.7", features = ["scale", "render"] }
-zstd = { version = "0.13.3", optional = true }
 lz4_flex = { version = "0.13.1", optional = true }
 pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 mister-magik-catalog = { path = "catalog" }
@@ -45,7 +44,7 @@ profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:mister-magik-ui"]
 bench-scenes = ["mister-magik-ui?/bench-scenes"]
 video = ["dep:ffmpeg-next", "bench-scenes", "mister-magik-ui?/video"]
-preview-archive-bench = ["dep:zstd", "dep:lz4_flex"]
+preview-archive-bench = ["dep:lz4_flex"]
 
 # Slint from git master (1.17.x); bench vs 1.16 in history/toolchain-bench/slint-master.md.
 [patch.crates-io]
