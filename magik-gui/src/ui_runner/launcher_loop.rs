@@ -44,7 +44,7 @@ pub(super) fn run_launcher_loop(
         .unwrap_or(Screen::Home);
     let lock_screen = launcher_lock_screen_from_env()
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
-    let preload_arcade_catalog =
+    let arcade_catalog_required_at_start =
         start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
     let mut nav = LauncherNav::new();
     nav.screen = start_screen;
@@ -126,62 +126,75 @@ pub(super) fn run_launcher_loop(
     let catalog_refresh = catalog_refresh_requested();
     let catalog_rx;
     let mut catalog_refresh_done = false;
-    if preload_arcade_catalog {
-        match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
-            Ok(loaded) if !loaded.catalog.games.is_empty() => {
-                catalog = loaded.catalog;
-                catalog_ready = true;
-                catalog_version = catalog_version.wrapping_add(1);
-                apply_forced_arcade_selected(&mut nav, &catalog);
-                print_startup_event(
-                    start,
-                    "catalog_cache_load_sync",
-                    format!("games={} load_us={}", catalog.len(), loaded.us),
-                );
-                if catalog_refresh {
-                    print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    catalog_rx = Some(start_library_catalog_worker(
-                        arcade_root.clone(),
-                        catalog_refresh,
-                    ));
-                } else {
-                    catalog_rx = None;
-                    catalog_refresh_done = true;
-                }
-            }
-            Ok(loaded) => {
-                print_startup_event(
-                    start,
-                    "catalog_cache_empty",
-                    format!("games={} load_us={}", loaded.catalog.len(), loaded.us),
-                );
+    match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
+        Ok(loaded) if !loaded.catalog.games.is_empty() => {
+            print_startup_event(
+                start,
+                "catalog_cache_load_sync",
+                catalog_load_timing_detail(&loaded),
+            );
+            catalog = loaded.catalog;
+            catalog_ready = true;
+            catalog_version = catalog_version.wrapping_add(1);
+            apply_forced_arcade_selected(&mut nav, &catalog);
+            if ready_catalog_background_worker_needed(
+                catalog_refresh,
+                !arcade_catalog_required_at_start,
+            ) {
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
                 catalog_rx = Some(start_library_catalog_worker(
                     arcade_root.clone(),
                     catalog_refresh,
                 ));
-            }
-            Err(e) => {
-                eprintln!("arcade catalog cache load failed: {e}");
-                print_startup_event(start, "catalog_cache_load_failed", e);
-                print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(
-                    arcade_root.clone(),
-                    catalog_refresh,
-                ));
+            } else {
+                print_startup_event(
+                    start,
+                    "catalog_refresh_decision",
+                    "cache_state=ready refresh_requested=false background_validation=false plan=use_cache_only",
+                );
+                catalog_rx = None;
+                catalog_refresh_done = true;
             }
         }
-    } else {
-        print_startup_event(start, "catalog_cache_load_deferred", &arcade_root);
-        print_startup_event(start, "catalog_worker_start", &arcade_root);
-        catalog_rx = Some(start_library_catalog_worker(
-            arcade_root.clone(),
-            catalog_refresh,
-        ));
+        Ok(loaded) => {
+            print_startup_event(
+                start,
+                "catalog_cache_empty",
+                catalog_load_timing_detail(&loaded),
+            );
+            print_startup_event(start, "catalog_worker_start", &arcade_root);
+            catalog_rx = Some(start_library_catalog_worker(
+                arcade_root.clone(),
+                catalog_refresh,
+            ));
+        }
+        Err(e) => {
+            eprintln!("arcade catalog cache load failed: {e}");
+            print_startup_event(start, "catalog_cache_load_failed", e);
+            print_startup_event(start, "catalog_worker_start", &arcade_root);
+            catalog_rx = Some(start_library_catalog_worker(
+                arcade_root.clone(),
+                catalog_refresh,
+            ));
+        }
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let bridge_systems_t = Instant::now();
     bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version));
-    bridge.set_catalog_scan_visible(!catalog_ready);
+    print_startup_event(
+        start,
+        "catalog_bridge_systems",
+        format!(
+            "catalog_ready={} systems={} elapsed_us={}",
+            catalog_ready,
+            catalog.systems.len(),
+            bridge_systems_t.elapsed().as_micros()
+        ),
+    );
+    bridge.set_catalog_scan_visible(initial_catalog_scan_visible(
+        catalog_ready,
+        arcade_catalog_required_at_start,
+    ));
     bridge.set_catalog_scan_title(if catalog_ready {
         if catalog_refresh {
             "Validating library".into()
@@ -196,6 +209,7 @@ pub(super) fn run_launcher_loop(
     } else {
         "No cached catalog; scanning library...".into()
     });
+    let bridge_sync_t = Instant::now();
     sync_bridge_launcher(
         &app,
         &pad,
@@ -208,8 +222,18 @@ pub(super) fn run_launcher_loop(
         &mut bridge_models,
         catalog_version,
     );
+    print_startup_event(
+        start,
+        "catalog_bridge_sync",
+        format!(
+            "catalog_ready={} games={} elapsed_us={}",
+            catalog_ready,
+            catalog.len(),
+            bridge_sync_t.elapsed().as_micros()
+        ),
+    );
     window.request_redraw();
-    let run_start = if preload_arcade_catalog && catalog_ready {
+    let run_start = if arcade_catalog_required_at_start && catalog_ready {
         Instant::now()
     } else {
         start
@@ -278,17 +302,13 @@ pub(super) fn run_launcher_loop(
         if !catalog_refresh_done {
             while let Some(message) = catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 match message {
+                    CatalogWorkerMessage::Timing { name, detail } => {
+                        print_startup_event(start, &name, detail);
+                    }
                     CatalogWorkerMessage::Progress { title, detail } => {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        let visible = if catalog_ready && preload_arcade_catalog {
-                            title == "Library scan failed" || title == "Library load failed"
-                        } else {
-                            !catalog_ready
-                                || title == "Indexing library"
-                                || title == "Library changed"
-                                || title == "Library scan failed"
-                                || title == "Library load failed"
-                        };
+                        let visible =
+                            catalog_scan_progress_visible(catalog_ready, nav.screen, &title);
                         bridge.set_catalog_scan_visible(visible);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_detail(detail.into());
@@ -299,17 +319,21 @@ pub(super) fn run_launcher_loop(
                         summary,
                         load_us,
                     } => {
-                        catalog = ready_catalog;
-                        catalog_version = catalog_version.wrapping_add(1);
-                        catalog_ready = true;
-                        apply_forced_arcade_selected(&mut nav, &catalog);
                         let cached_before_refresh = summary.is_none();
+                        let duplicate_cached_catalog =
+                            duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
                         catalog_refresh_done = !cached_before_refresh;
-                        print_startup_event(
-                            start,
-                            "library_ready",
-                            format!("games={} load_us={load_us}", catalog.len()),
-                        );
+                        if !duplicate_cached_catalog {
+                            catalog = ready_catalog;
+                            catalog_version = catalog_version.wrapping_add(1);
+                            catalog_ready = true;
+                            apply_forced_arcade_selected(&mut nav, &catalog);
+                            print_startup_event(
+                                start,
+                                "library_ready",
+                                format!("games={} load_us={load_us}", catalog.len()),
+                            );
+                        }
                         if let Some(summary) = summary {
                             let event = if summary.skipped {
                                 "library_db_unchanged"
@@ -331,6 +355,9 @@ pub(super) fn run_launcher_loop(
                                 ),
                             );
                         }
+                        if duplicate_cached_catalog {
+                            continue;
+                        }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
                         if cached_before_refresh {
@@ -346,6 +373,7 @@ pub(super) fn run_launcher_loop(
                             bridge.set_catalog_scan_title("".into());
                             bridge.set_catalog_scan_detail("".into());
                         }
+                        let bridge_sync_t = Instant::now();
                         sync_bridge_launcher(
                             &app,
                             &pad,
@@ -357,6 +385,15 @@ pub(super) fn run_launcher_loop(
                             &mut preview,
                             &mut bridge_models,
                             catalog_version,
+                        );
+                        print_startup_event(
+                            start,
+                            "catalog_bridge_sync_update",
+                            format!(
+                                "games={} elapsed_us={}",
+                                catalog.len(),
+                                bridge_sync_t.elapsed().as_micros()
+                            ),
                         );
                         full_bridge_dirty = true;
                     }
@@ -891,6 +928,37 @@ pub(super) fn run_launcher_loop(
     }
 }
 
+fn initial_catalog_scan_visible(
+    catalog_ready: bool,
+    arcade_catalog_required_at_start: bool,
+) -> bool {
+    !catalog_ready && arcade_catalog_required_at_start
+}
+
+fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &str) -> bool {
+    if matches!(title, "Library scan failed" | "Library load failed") {
+        return true;
+    }
+    if !catalog_ready {
+        return screen == Screen::Arcade || title == "Indexing library";
+    }
+    matches!(
+        title,
+        "Library changed" | "Indexing library" | "Loading library"
+    )
+}
+
+fn ready_catalog_background_worker_needed(
+    refresh_requested: bool,
+    background_validation: bool,
+) -> bool {
+    refresh_requested || background_validation
+}
+
+fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bool) -> bool {
+    catalog_ready && cached_before_refresh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,5 +1013,78 @@ mod tests {
                 y1: 60
             })
         );
+    }
+
+    #[test]
+    pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
+        assert!(!initial_catalog_scan_visible(false, false));
+        assert!(!initial_catalog_scan_visible(true, false));
+    }
+
+    #[test]
+    pub(super) fn arcade_boot_without_ready_catalog_shows_catalog_popup() {
+        assert!(initial_catalog_scan_visible(false, true));
+        assert!(!initial_catalog_scan_visible(true, true));
+    }
+
+    #[test]
+    pub(super) fn cached_home_validation_progress_stays_hidden() {
+        assert!(!catalog_scan_progress_visible(
+            true,
+            Screen::Home,
+            "Validating library"
+        ));
+        assert!(!catalog_scan_progress_visible(
+            true,
+            Screen::Home,
+            "Preview images changed"
+        ));
+    }
+
+    #[test]
+    pub(super) fn missing_catalog_and_rebuild_progress_are_visible() {
+        assert!(catalog_scan_progress_visible(
+            false,
+            Screen::Home,
+            "Indexing library"
+        ));
+        assert!(catalog_scan_progress_visible(
+            true,
+            Screen::Home,
+            "Library changed"
+        ));
+        assert!(catalog_scan_progress_visible(
+            true,
+            Screen::Home,
+            "Indexing library"
+        ));
+    }
+
+    #[test]
+    pub(super) fn catalog_scan_failures_are_visible_even_with_cache() {
+        assert!(catalog_scan_progress_visible(
+            true,
+            Screen::Home,
+            "Library scan failed"
+        ));
+        assert!(catalog_scan_progress_visible(
+            true,
+            Screen::Arcade,
+            "Library load failed"
+        ));
+    }
+
+    #[test]
+    pub(super) fn ready_catalog_uses_background_worker_for_refresh_or_home_validation() {
+        assert!(!ready_catalog_background_worker_needed(false, false));
+        assert!(ready_catalog_background_worker_needed(true, true));
+        assert!(ready_catalog_background_worker_needed(false, true));
+    }
+
+    #[test]
+    pub(super) fn duplicate_cached_catalog_ready_is_skipped_after_sync_load() {
+        assert!(duplicate_cached_catalog_ready(true, true));
+        assert!(!duplicate_cached_catalog_ready(false, true));
+        assert!(!duplicate_cached_catalog_ready(true, false));
     }
 }

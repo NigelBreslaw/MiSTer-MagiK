@@ -19,6 +19,7 @@ pub(super) fn start_library_catalog_worker(
             let mut cache_state = CatalogCacheState::Missing;
             match library_db::load_arcade_catalog_from_sqlite(&root) {
                 Ok(loaded) => {
+                    send_catalog_load_timing(&tx, "catalog_worker_cache_load", &loaded);
                     if loaded.catalog.games.is_empty() {
                         cache_state = CatalogCacheState::Empty;
                     } else {
@@ -37,15 +38,29 @@ pub(super) fn start_library_catalog_worker(
                 }
                 Err(e) => {
                     eprintln!("library catalog cache load failed: {e}");
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "catalog_worker_cache_load_failed".to_string(),
+                        detail: e,
+                    });
                 }
             }
-            match catalog_worker_plan(cache_state, refresh_requested) {
+            let plan = catalog_worker_plan(cache_state, refresh_requested);
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_refresh_decision".to_string(),
+                detail: format!(
+                    "cache_state={} refresh_requested={} plan={}",
+                    cache_state.label(),
+                    refresh_requested,
+                    plan.label()
+                ),
+            });
+            match plan {
                 CatalogWorkerPlan::UseCacheOnly => {
                     let _ = tx.send(CatalogWorkerMessage::Done);
                     return;
                 }
                 CatalogWorkerPlan::RefreshInProcess => {
-                    let (title, detail) = if cache_state == CatalogCacheState::Ready {
+                    let (title, detail) = if cache_state.has_usable_catalog() {
                         (
                             "Validating library",
                             "Using cached catalog while checking for changed files...",
@@ -86,6 +101,7 @@ pub(super) fn start_library_catalog_worker(
             }
             match library_db::load_arcade_catalog_from_sqlite(&root) {
                 Ok(loaded) => {
+                    send_catalog_load_timing(&tx, "catalog_worker_refreshed_load", &loaded);
                     let _ = tx.send(CatalogWorkerMessage::Ready {
                         catalog: loaded.catalog,
                         summary,
@@ -113,10 +129,34 @@ enum CatalogCacheState {
     Missing,
 }
 
+impl CatalogCacheState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::ReadyWithStalePreviewArchive => "ready_stale_preview_archive",
+            Self::Empty => "empty",
+            Self::Missing => "missing",
+        }
+    }
+
+    fn has_usable_catalog(self) -> bool {
+        matches!(self, Self::Ready | Self::ReadyWithStalePreviewArchive)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatalogWorkerPlan {
     UseCacheOnly,
     RefreshInProcess,
+}
+
+impl CatalogWorkerPlan {
+    fn label(self) -> &'static str {
+        match self {
+            Self::UseCacheOnly => "use_cache_only",
+            Self::RefreshInProcess => "refresh_in_process",
+        }
+    }
 }
 
 fn catalog_worker_plan(
@@ -135,6 +175,10 @@ fn catalog_worker_plan(
 }
 
 pub(super) enum CatalogWorkerMessage {
+    Timing {
+        name: String,
+        detail: String,
+    },
     Progress {
         title: String,
         detail: String,
@@ -148,6 +192,30 @@ pub(super) enum CatalogWorkerMessage {
         summary: library_db::LibraryRefreshSummary,
     },
     Done,
+}
+
+pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad) -> String {
+    format!(
+        "games={} rows={} total_us={} open_us={} query_us={} systems_us={} catalog_us={}",
+        loaded.catalog.len(),
+        loaded.rows,
+        loaded.us,
+        loaded.open_us,
+        loaded.query_us,
+        loaded.systems_us,
+        loaded.catalog_us
+    )
+}
+
+fn send_catalog_load_timing(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    name: &str,
+    loaded: &library_db::LibraryCatalogLoad,
+) {
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: name.to_string(),
+        detail: catalog_load_timing_detail(loaded),
+    });
 }
 
 pub(super) fn lower_background_priority() {

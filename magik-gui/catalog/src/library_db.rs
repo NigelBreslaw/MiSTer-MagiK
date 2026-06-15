@@ -132,6 +132,10 @@ struct LibraryScan {
 pub struct LibraryCatalogLoad {
     pub catalog: ArcadeCatalog,
     pub us: u64,
+    pub open_us: u64,
+    pub query_us: u64,
+    pub systems_us: u64,
+    pub catalog_us: u64,
     pub rows: usize,
 }
 
@@ -533,9 +537,12 @@ fn load_arcade_catalog_from_sqlite_at(
 ) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let t = Instant::now();
+    let open_t = Instant::now();
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let open_us = open_t.elapsed().as_micros() as u64;
+    let query_t = Instant::now();
     let games = match load_materialized_ui_catalog(&conn) {
         Ok(Some(games)) => games,
         Ok(None) => match load_materialized_launcher_catalog(&conn) {
@@ -545,11 +552,21 @@ fn load_arcade_catalog_from_sqlite_at(
         },
         Err(e) => return Err(e),
     };
+    let query_us = query_t.elapsed().as_micros() as u64;
     let rows = games.len();
+    let systems_t = Instant::now();
     let systems = arcade_catalog::systems_from_games(&games);
+    let systems_us = systems_t.elapsed().as_micros() as u64;
+    let catalog_t = Instant::now();
+    let catalog = ArcadeCatalog::new(root, games, systems);
+    let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
-        catalog: ArcadeCatalog::new(root, games, systems),
+        catalog,
         us: t.elapsed().as_micros() as u64,
+        open_us,
+        query_us,
+        systems_us,
+        catalog_us,
         rows,
     })
 }
