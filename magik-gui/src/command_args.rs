@@ -2,7 +2,6 @@ pub const COMMANDS: &[&str] = &[
     "read",
     "route",
     "fb",
-    "fb-current",
     "fb-format-smoke",
     "early-black",
     "ui",
