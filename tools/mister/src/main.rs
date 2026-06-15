@@ -2273,6 +2273,21 @@ video_mode=14
     }
 
     #[test]
+    fn ini_parser_ignores_malformed_sections_and_comments() {
+        let parsed = parse_ini_keys(
+            "[MiSTer]\nmain=MiSTer_MagiK ; boot fork\n[broken\nvideo_mode=4\n# comment\n[Menu] ; inline note\nvideo_mode=8\n"
+                .to_string(),
+        );
+
+        assert_eq!(
+            parsed["MiSTer"]["main"]["value"],
+            "MiSTer_MagiK ; boot fork"
+        );
+        assert_eq!(parsed["MiSTer"]["video_mode"]["value"], "4");
+        assert_eq!(parsed["Menu"]["video_mode"]["value"], "8");
+    }
+
+    #[test]
     fn magik_boot_edit_sets_launcher_safe_video_without_touching_arcade_vertical() {
         let ini = "[MiSTer]\r\n; keep original core output for external scaler\r\ndirect_video=1\r\nmain=mister-magik-fb ; old handoff\r\n\r\n[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1\r\n\r\n[Menu]\r\ndirect_video=0\r\nvideo_mode=4 ; menu probe\r\n";
 
@@ -2430,6 +2445,20 @@ H: Handlers=sysrq kbd event7
     }
 
     #[test]
+    fn parses_input_devices_without_trailing_blank_line() {
+        let devices = parse_input_devices(
+            r#"I: Bus=0003 Vendor=045e Product=028e Version=0114
+N: Name="Xbox 360 Controller"
+H: Handlers=event3 js0"#
+                .to_string(),
+        );
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0]["name"], "Xbox 360 Controller");
+        assert_eq!(devices[0]["handlers"], json!(["event3", "js0"]));
+    }
+
+    #[test]
     fn classifies_black_slint_and_static_like_framebuffers() {
         let geometry = default_fb_geometry();
         let black = vec![0; geometry.bytes().unwrap()];
@@ -2459,6 +2488,24 @@ H: Handlers=sysrq kbd event7
         assert_eq!(parse_virtual_size("960,540"), Some((960, 540)));
         assert_eq!(parse_virtual_size(" 1920,1080\n"), Some((1920, 1080)));
         assert_eq!(parse_virtual_size("bad"), None);
+        assert_eq!(parse_virtual_size("960x540"), None);
+        assert_eq!(parse_virtual_size("960,"), None);
+    }
+
+    #[test]
+    fn framebuffer_geometry_bytes_detects_overflow() {
+        let geometry = FbGeometry {
+            width: 1,
+            height: usize::MAX,
+            stride: 2,
+            bpp: 16,
+        };
+
+        assert!(geometry
+            .bytes()
+            .unwrap_err()
+            .to_string()
+            .contains("overflow"));
     }
 
     #[test]

@@ -466,6 +466,8 @@ fn strip_hex_prefix(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn sample_info(vendor: &str, product: &str, port: &str, serial: &str) -> PadInfo {
         PadInfo {
@@ -481,6 +483,17 @@ mod tests {
             evdev_abs_count: 0,
             capture_available: false,
         }
+    }
+
+    fn temp_path(name: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir()
+            .join(format!("mister-magik-controller-db-{name}-{nanos}.json"))
+            .display()
+            .to_string()
     }
 
     #[test]
@@ -585,5 +598,69 @@ mod tests {
             ..PadInfo::default()
         };
         assert_eq!(ControllerDb::infer_kind(&fight), ControllerKind::FightStick);
+    }
+
+    #[test]
+    fn load_save_round_trips_entries_and_path() {
+        let path = temp_path("round-trip");
+        let info = sample_info("0X2563", " 0x0575 ", "1-1.3", "");
+        let mut db = ControllerDb::load_from(&path);
+
+        assert_eq!(db.path(), path);
+        assert!(db.is_empty());
+        assert_eq!(db.registry_status(&info), PadRegistryStatus::Unknown);
+        assert!(db.needs_setup(&info));
+
+        db.finish_setup(&info, "Arcade Pad".into(), ControllerKind::Arcade);
+        db.save().expect("save controller db");
+
+        let loaded = ControllerDb::load_from(&path);
+        let entry = loaded.get(&info).expect("saved controller");
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded.contains(&info));
+        assert_eq!(loaded.display_label(&info), "Arcade Pad");
+        assert_eq!(entry.kind, ControllerKind::Arcade);
+        assert_eq!(entry.last_usb_port, "1-1.3");
+        assert_eq!(loaded.registry_status(&info), PadRegistryStatus::Known);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_unsupported_or_malformed_file_starts_empty() {
+        let unsupported = temp_path("unsupported");
+        fs::write(&unsupported, r#"{"version":999,"controllers":{}}"#)
+            .expect("write unsupported controller db");
+        assert!(ControllerDb::load_from(&unsupported).is_empty());
+
+        let malformed = temp_path("malformed");
+        fs::write(&malformed, "{not-json").expect("write malformed controller db");
+        assert!(ControllerDb::load_from(&malformed).is_empty());
+
+        let _ = fs::remove_file(unsupported);
+        let _ = fs::remove_file(malformed);
+    }
+
+    #[test]
+    fn note_sighting_updates_pending_but_not_moved_complete_pad() {
+        let mut db = ControllerDb::empty("/tmp/t.json");
+        let first = sample_info("2563", "0575", "1-1.3", "SN");
+        db.upsert(&first, ControllerDb::default_entry(&first));
+
+        let pending_move = sample_info("2563", "0575", "1-1.7", "SN");
+        assert_eq!(
+            db.registry_status(&pending_move),
+            PadRegistryStatus::PendingSetup
+        );
+        assert!(db.note_sighting(&pending_move));
+        assert_eq!(db.get(&pending_move).unwrap().last_usb_port, "1-1.7");
+
+        db.finish_setup(&pending_move, "Done".into(), ControllerKind::Gamepad);
+        let moved_again = sample_info("2563", "0575", "1-1.9", "SN");
+        assert!(!db.note_sighting(&moved_again));
+        assert_eq!(
+            db.registry_status(&moved_again),
+            PadRegistryStatus::MovedPort
+        );
     }
 }
