@@ -17,7 +17,6 @@ MISTER="$ROOT/scripts/mister"
 WORK="$ROOT/build/mister-video-mode-test"
 REMOTE_INI="/media/fat/MiSTer.ini"
 REMOTE_BACKUP="/media/fat/MiSTer.ini.magik-mode-test.bak"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_BENCH_REQUEST="/media/fat/mister-magik/bench-boot"
 REMOTE_CONSOLE_TRACE="/tmp/mister-magik-console-scroll-trace.tsv"
 
@@ -36,8 +35,6 @@ Usage:
   scripts/mister-video-mode-test.sh crt-list
   scripts/mister-video-mode-test.sh crt-smoke LABEL [stock|magik]
   scripts/mister-video-mode-test.sh stock-ui
-  scripts/mister-video-mode-test.sh pattern [SECS] [normal|direct|none]
-  scripts/mister-video-mode-test.sh run [SCENE] [SECS]
   scripts/mister-video-mode-test.sh restore
 
 Examples:
@@ -593,26 +590,6 @@ crt_smoke() {
   echo "==> Results: $dir"
 }
 
-pause_stock_mister() {
-  mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; if pidof MiSTer >/dev/null 2>&1; then kill -STOP \$(pidof MiSTer); fi"
-}
-
-run_pattern() {
-  local secs="${1:-0}"
-  local route="${2:-normal}"
-  echo "==> Running simple framebuffer pattern secs=$secs route=$route"
-  pause_stock_mister
-  mister run "'$REMOTE_BIN' fb-current '$secs' '$route' >/tmp/mister-video-mode-pattern.log 2>&1 & echo pattern_pid=\$!; sleep 2; sed -n '1,100p' /tmp/mister-video-mode-pattern.log"
-}
-
-run_scene() {
-  local scene="${1:-static_ui}"
-  local secs="${2:-0}"
-  echo "==> Running $scene for secs=$secs"
-  pause_stock_mister
-  mister run "'$REMOTE_BIN' ui '$scene' '$secs' >/tmp/mister-video-mode-test-$scene.log 2>&1 & echo ui_pid=\$!; sleep 4; sed -n '1,120p' /tmp/mister-video-mode-test-$scene.log"
-}
-
 case "${1:-}" in
   set)
     [[ $# -eq 2 ]] || { usage; exit 2; }
@@ -656,14 +633,6 @@ case "${1:-}" in
   crt-smoke)
     shift
     crt_smoke "$@"
-    ;;
-  pattern)
-    shift
-    run_pattern "$@"
-    ;;
-  run)
-    shift
-    run_scene "$@"
     ;;
   restore)
     restore_mode
