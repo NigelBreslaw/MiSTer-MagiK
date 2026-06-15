@@ -391,6 +391,9 @@ fn pop_next_preview_request(queue: &mut Vec<PreviewRequest>) -> Option<PreviewRe
 fn enqueue_command(queue: &mut Vec<PreviewRequest>, command: PreviewCommand) {
     match command {
         PreviewCommand::Request(req) => {
+            if matches!(req.priority, PreviewPriority::Selected) {
+                queue.retain(|queued| !matches!(queued.priority, PreviewPriority::Selected));
+            }
             if let Some(existing) = queue
                 .iter_mut()
                 .find(|existing| existing.image_path == req.image_path)
@@ -1159,6 +1162,47 @@ mod tests {
         assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].generation, 2);
         assert_eq!(queue[0].priority, PreviewPriority::Selected);
+    }
+
+    #[test]
+    fn enqueue_selected_supersedes_older_selected_work() {
+        let now = Instant::now();
+        let mut queue = Vec::new();
+        enqueue_command(
+            &mut queue,
+            PreviewCommand::Request(PreviewRequest {
+                generation: 1,
+                title: "old selected".to_string(),
+                image_path: "old.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Selected,
+            }),
+        );
+        enqueue_command(
+            &mut queue,
+            PreviewCommand::Request(PreviewRequest {
+                generation: 2,
+                title: "near".to_string(),
+                image_path: "near.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Prefetch { distance: 1 },
+            }),
+        );
+        enqueue_command(
+            &mut queue,
+            PreviewCommand::Request(PreviewRequest {
+                generation: 3,
+                title: "new selected".to_string(),
+                image_path: "new.png".to_string(),
+                requested_at: now,
+                priority: PreviewPriority::Selected,
+            }),
+        );
+
+        assert_eq!(queue.len(), 2);
+        assert!(queue.iter().all(|req| req.generation != 1));
+        assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 3);
+        assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 2);
     }
 
     #[test]
