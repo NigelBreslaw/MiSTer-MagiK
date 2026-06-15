@@ -95,6 +95,8 @@ Current rules:
   is available. See `history/2026-6-14/library-identity-model.md`.
 - Preview availability comes from the preview archive index plus MRA `<setname>`
   virtual keys, not from walking PNG/JPG screenshot folders.
+- Catalog code must not read `gamelist.xml`; direct `.mra` fallback helpers use
+  filename titles and MRA `<setname>` screenshot lookup only.
 - Runtime preview loading is raw565-oriented. Build cache assets from the Mac
   with `tools/mister preview-cache-build`.
 
