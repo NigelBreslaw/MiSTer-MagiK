@@ -448,6 +448,7 @@ pub(super) fn raw565_view<'a>(
     })
 }
 
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 pub(super) fn sample_raw565(view: &Raw565View<'_>, x: usize, y: usize) -> Option<Rgb565Pixel> {
     let sx = x as isize - view.x;
     let sy = y as isize - view.y;
@@ -485,21 +486,38 @@ fn raw565_row_pixel_or(
     }
 }
 
+fn raw565_view_screen_rect(
+    view: &Raw565View<'_>,
+    ui: &UiDisplay,
+    screen: DirtyRect,
+) -> Option<DirtyRect> {
+    let x0 = screen.x0.max(view.x.max(0) as usize);
+    let y0 = screen.y0.max(view.y.max(0) as usize);
+    let x1 = screen
+        .x1
+        .min((view.x + view.w as isize).max(0) as usize)
+        .min(ui.render_w());
+    let y1 = screen
+        .y1
+        .min((view.y + view.h as isize).max(0) as usize)
+        .min(ui.render_h());
+    (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
+}
+
 pub(super) fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
-    let a = alpha as u32;
-    let ia = 255u32.saturating_sub(a);
     let f = from.0 as u32;
     let t = to.0 as u32;
-    let fr = (f >> 11) & 0x1f;
-    let fg = (f >> 5) & 0x3f;
-    let fb = f & 0x1f;
-    let tr = (t >> 11) & 0x1f;
-    let tg = (t >> 5) & 0x3f;
-    let tb = t & 0x1f;
-    let r = (fr * ia + tr * a) / 255;
-    let g = (fg * ia + tg * a) / 255;
-    let b = (fb * ia + tb * a) / 255;
-    Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
+    let a = ((alpha as u32 + 4) >> 3).min(32);
+    if a == 0 {
+        return from;
+    }
+    if a >= 32 {
+        return to;
+    }
+    let ia = 32 - a;
+    let rb = (((f & 0xf81f) * ia + (t & 0xf81f) * a) >> 5) & 0xf81f;
+    let g = (((f & 0x07e0) * ia + (t & 0x07e0) * a) >> 5) & 0x07e0;
+    Rgb565Pixel((rb | g) as u16)
 }
 
 #[cfg(mister_bench_scenes)]
@@ -852,7 +870,16 @@ fn blit_transition_565_cut(
     screen: DirtyRect,
     frame: &PreviewRawTransitionFrame<'_>,
 ) -> Option<()> {
-    if matches!(frame.current.pixels, PreviewRawPixels::Empty) {
+    blit_preview_frame_565_cut(cached, ui, screen, &frame.current)
+}
+
+fn blit_preview_frame_565_cut(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    frame: &PreviewRawFrame<'_>,
+) -> Option<()> {
+    if matches!(frame.pixels, PreviewRawPixels::Empty) {
         let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
         for y in screen.y0..screen.y1.min(ui.render_h()) {
             let row = y * ui.render_w();
@@ -862,12 +889,28 @@ fn blit_transition_565_cut(
         }
         return Some(());
     }
-    let current = raw565_view(&frame.current, screen, 0)?;
+    let current = raw565_view(frame, screen, 0)?;
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    let image_rect = raw565_view_screen_rect(&current, ui, screen)?;
     for y in screen.y0..screen.y1.min(ui.render_h()) {
         let row = y * ui.render_w();
-        for x in screen.x0..screen.x1.min(ui.render_w()) {
-            cached[row + x] = sample_raw565(&current, x, y).unwrap_or(black);
+        if y < image_rect.y0 || y >= image_rect.y1 {
+            for x in screen.x0..screen.x1.min(ui.render_w()) {
+                cached[row + x] = black;
+            }
+            continue;
+        }
+        for x in screen.x0..image_rect.x0 {
+            cached[row + x] = black;
+        }
+        let src_y = (y as isize - current.y) as usize;
+        let src_x = (image_rect.x0 as isize - current.x) as usize;
+        let src_a = src_y * current.stride_pixels + src_x;
+        let dst_a = row + image_rect.x0;
+        cached[dst_a..dst_a + image_rect.width()]
+            .copy_from_slice(&current.pixels[src_a..src_a + image_rect.width()]);
+        for x in image_rect.x1..screen.x1.min(ui.render_w()) {
+            cached[row + x] = black;
         }
     }
     Some(())
@@ -891,8 +934,31 @@ fn blit_transition_565_fade(
         .as_ref()
         .and_then(|prev| raw565_view(prev, screen, 0));
     let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if alpha == 0 {
+        if let Some(previous) = frame.previous.as_ref() {
+            return blit_preview_frame_565_cut(cached, ui, screen, previous);
+        }
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        for y in screen.y0..screen.y1.min(ui.render_h()) {
+            let row = y * ui.render_w();
+            for x in screen.x0..screen.x1.min(ui.render_w()) {
+                cached[row + x] = black;
+            }
+        }
+        return Some(());
+    }
+    if alpha == 255 {
+        return blit_preview_frame_565_cut(cached, ui, screen, &frame.current);
+    }
+    let mut fade_rect: Option<DirtyRect> = None;
+    for view in [previous.as_ref(), current.as_ref()].into_iter().flatten() {
+        if let Some(rect) = raw565_view_screen_rect(view, ui, screen) {
+            fade_rect = Some(fade_rect.map_or(rect, |existing| existing.union(rect)));
+        }
+    }
+    let fade_rect = fade_rect.unwrap_or(screen);
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
-    for y in screen.y0..screen.y1.min(ui.render_h()) {
+    for y in fade_rect.y0..fade_rect.y1.min(ui.render_h()) {
         let row = y * ui.render_w();
         let previous_row = previous
             .as_ref()
@@ -900,7 +966,7 @@ fn blit_transition_565_fade(
         let current_row = current
             .as_ref()
             .and_then(|view| raw565_row_for_screen_y(view, y));
-        for x in screen.x0..screen.x1.min(ui.render_w()) {
+        for x in fade_rect.x0..fade_rect.x1.min(ui.render_w()) {
             let prev = raw565_row_pixel_or(previous_row, previous.as_ref(), x, black);
             let curr = raw565_row_pixel_or(current_row, current.as_ref(), x, black);
             cached[row + x] = blend_565(prev, curr, alpha);
