@@ -88,6 +88,10 @@ Current rules:
 
 - Build/update the library cache outside the UI hot path with
   `mister-magik-fb library-refresh` or `scripts/mister` helpers.
+- Launcher boot loads the cached SQLite catalog before the first frame when a
+  usable database exists, then performs refresh/preview validation in the
+  background. Use `startup_timing` log lines to separate SQLite load, catalog
+  construction, Slint bridge sync, and refresh costs.
 - Do not count helper payloads as games: BIOS ROMs, raw `.rbf` core binaries,
   menu-level computer/console launchers, and known support files are not normal
   launchables.
