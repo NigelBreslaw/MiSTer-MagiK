@@ -220,6 +220,24 @@ component CatalogScanPopup inherits Rectangle {
     }
 }
 
+component StartupSplash inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    background: #1a1424;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px * s;
+
+        Text {
+            text: "MiSTer MagiK";
+            color: #e8e0f0;
+            font-size: 28px * s;
+            horizontal-alignment: center;
+        }
+    }
+}
+
 component SettingsRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
@@ -396,4 +414,6 @@ export component Launcher inherits MisterWindow {
             }
         }
     }
+
+    if MisterBridge.startup-visible : StartupSplash { }
 }

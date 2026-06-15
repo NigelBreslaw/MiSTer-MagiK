@@ -484,6 +484,14 @@ pub fn run_ui(f: &mut Fpga) {
                 boot_analytics::event("app_show", "scene=launcher ok=1");
                 window.request_redraw();
                 let mut target = UiFrameTarget::open(&ui);
+                present_launcher_startup_frame(
+                    Instant::now(),
+                    &ui,
+                    &mut disp,
+                    f,
+                    &window,
+                    &mut target,
+                );
                 run_launcher_loop(
                     secs,
                     &ui,

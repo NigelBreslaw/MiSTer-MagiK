@@ -92,6 +92,10 @@ Current rules:
   usable database exists, then performs refresh/preview validation in the
   background. Use `startup_timing` log lines to separate SQLite load, catalog
   construction, Slint bridge sync, and refresh costs.
+- The launcher presents a minimal `MiSTer MagiK` Slint splash immediately after
+  `app.show()` and before catalog loading. Keep that path free of catalog,
+  preview, media, or controller work so HDMI never sits on a black screen while
+  the launcher warms up.
 - Do not count helper payloads as games: BIOS ROMs, raw `.rbf` core binaries,
   menu-level computer/console launchers, and known support files are not normal
   launchables.
