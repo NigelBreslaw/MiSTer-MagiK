@@ -1,6 +1,5 @@
 //! Background arcade preview image loader.
 
-use crate::arcade_catalog::ImageLoadTiming;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -179,6 +178,17 @@ impl PreviewPixels {
             } => *stride_bytes as usize * *height as usize,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ImageLoadTiming {
+    read_us: u64,
+    decode_us: u64,
+    resize_us: u64,
+    total_us: u64,
+    encoded_bytes: usize,
+    source_width: u32,
+    source_height: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -564,7 +574,6 @@ fn load_raw565_preview_timed(
     let image = decode_raw565_preview_bytes(&data)?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
     let total_us = total_t.elapsed().as_micros() as u64;
-    let decoded_bytes = image.decoded_bytes();
     Ok(LoadedPreviewPixels {
         timing: ImageLoadTiming {
             read_us,
@@ -572,7 +581,6 @@ fn load_raw565_preview_timed(
             resize_us: 0,
             total_us,
             encoded_bytes: data.len(),
-            decoded_bytes,
             source_width: image.width(),
             source_height: image.height(),
         },
@@ -884,7 +892,6 @@ impl PreviewArchive {
         let image = decode_raw565_preview_bytes(&data)?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let total_us = total_t.elapsed().as_micros() as u64;
-        let decoded_bytes = image.decoded_bytes();
         Ok(Some(LoadedPreviewPixels {
             timing: ImageLoadTiming {
                 read_us,
@@ -892,7 +899,6 @@ impl PreviewArchive {
                 resize_us: 0,
                 total_us,
                 encoded_bytes: entry.compressed_len,
-                decoded_bytes,
                 source_width: image.width(),
                 source_height: image.height(),
             },
@@ -1159,7 +1165,6 @@ mod tests {
                 resize_us: 33,
                 total_us: 66,
                 encoded_bytes: 44,
-                decoded_bytes: 2,
                 source_width: 1,
                 source_height: 1,
             },
