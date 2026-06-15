@@ -9,7 +9,6 @@
 //!     read               print live video mode + fb params
 //!     route              route the current /dev/fb0 buffer 0 to HDMI
 //!     fb                 paint + optionally route current fb size
-//!     fb-current         compatibility alias for `fb`
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
 //!     library-refresh    build/update the SQLite library cache
@@ -148,8 +147,7 @@ fn main() {
     match cmd.as_str() {
         "read" => read_mode(&mut f),
         "route" => route_framebuffer(&mut f),
-        "fb" => fb_current_probe(&mut f),
-        "fb-current" => fb_current_probe(&mut f),
+        "fb" => fb_probe(&mut f),
         "fb-format-smoke" => fb_format_smoke(&mut f),
         "early-black" => early_black_route(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
@@ -432,7 +430,7 @@ fn early_black_route(f: &mut Fpga) {
     );
 }
 
-fn fb_current_probe(f: &mut Fpga) {
+fn fb_probe(f: &mut Fpga) {
     let _vt = vt::VtGraphicsGuard::enter_or_warn();
     let secs = std::env::args()
         .nth(2)
@@ -491,7 +489,7 @@ fn fb_current_probe(f: &mut Fpga) {
             println!("route skipped; expecting another owner to scan /dev/fb0");
         }
         other => {
-            eprintln!("unknown fb-current route '{other}' (use normal|direct|none)");
+            eprintln!("unknown fb route '{other}' (use normal|direct|none)");
             std::process::exit(2);
         }
     }
