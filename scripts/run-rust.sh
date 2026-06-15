@@ -62,8 +62,6 @@ echo "==> Log: $LOG"
 "$HERE/scripts/mister" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 test -x '$REMOTE' || chmod +x '$REMOTE'
 $EXTRA_ENV '$REMOTE' ui '$REMOTE_SCENE' '$SECS' >'$LOG' 2>&1 &
 echo ui_pid=\$!

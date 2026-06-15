@@ -151,8 +151,6 @@ run_one() {
   mister run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep $SETTLE_SECS
 MISTER_EFFECT_BENCH_LABEL=$LABEL $REMOTE effect-bench $effect $SCENE_SECS $mode $size $FILL_FILTER > /tmp/effect-bench-ui.log 2>&1 &
 UI_PID=\$!

@@ -42,7 +42,6 @@ END {
 cp "$tmp" /etc/inittab
 
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 $(pidof MiSTer_MagiK) 2>/dev/null || true
 sync
 
 echo "=== restored inittab ==="

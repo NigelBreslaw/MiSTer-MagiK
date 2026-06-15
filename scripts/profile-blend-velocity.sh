@@ -96,7 +96,7 @@ case "$deploy" in
 esac
 
 echo "==> Capture blend_velocity secs=$secs label=$label variant=$variant deploy=$deploy"
-if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true; kill -9 \$(pidof MiSTer) 2>/dev/null || true; rm -f $remote_tsv $remote_log; sleep 5; ${fade_env}MISTER_BLEND_BENCH_VARIANT=$variant MISTER_BLEND_BENCH_TRACE=$remote_tsv $REMOTE ui blend_velocity $secs >$remote_log 2>&1; status=\$?; grep -E 'blend_velocity|done:' $remote_log || true; test -s $remote_tsv || status=1; exit \$status"; then
+if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_tsv $remote_log; sleep 5; ${fade_env}MISTER_BLEND_BENCH_VARIANT=$variant MISTER_BLEND_BENCH_TRACE=$remote_tsv $REMOTE ui blend_velocity $secs >$remote_log 2>&1; status=\$?; grep -E 'blend_velocity|done:' $remote_log || true; test -s $remote_tsv || status=1; exit \$status"; then
   "$MISTER" get "$remote_log" "$local_log" || true
   echo "blend velocity profile failed; see $local_log" >&2
   exit 1

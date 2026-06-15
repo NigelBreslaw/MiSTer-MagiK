@@ -93,8 +93,6 @@ echo "==> text-effects label=$label mode=$mode secs=$secs segment_secs=$segment_
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
 MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_TEXT_EFFECTS='$mode' MISTER_TEXT_EFFECTS_AUTO=1 MISTER_TEXT_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_TEXT_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui text-effects '$secs' >'$remote_log' 2>&1 &
@@ -153,8 +151,6 @@ if [[ "$visual_captures" != "0" ]]; then
     "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
-kill -9 \$(pidof MiSTer_MagiK) 2>/dev/null || true
-kill -9 \$(pidof MiSTer) 2>/dev/null || true
 sleep 5
 MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_TEXT_EFFECTS='$mode' MISTER_TEXT_EFFECTS_AUTO=1 MISTER_TEXT_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_TEXT_EFFECTS_HUD=1 '$REMOTE' ui text-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
 echo \$! >/tmp/${label}-visual-${i}.pid
