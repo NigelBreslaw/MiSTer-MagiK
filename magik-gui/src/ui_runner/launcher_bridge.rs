@@ -48,7 +48,7 @@ pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::
     bridge.set_arcade_list_y(ARCADE_LIST_Y as i32);
     bridge.set_arcade_list_width(ARCADE_LIST_W as i32);
     bridge.set_arcade_list_height(ARCADE_LIST_H as i32);
-    bridge.set_arcade_list_visible(!preview_stress_enabled());
+    bridge.set_arcade_list_visible(true);
     bridge.set_arcade_preview_box_x(ARCADE_PREVIEW_BOX_X as i32);
     bridge.set_arcade_preview_box_y(ARCADE_PREVIEW_BOX_Y as i32);
     bridge.set_arcade_preview_box_width(ARCADE_PREVIEW_BOX_W as i32);

@@ -73,16 +73,6 @@ pub(super) fn launcher_dirty_opt_enabled() -> bool {
     })
 }
 
-pub(super) fn preview_stress_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_PREVIEW_STRESS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    })
-}
-
 pub(super) fn preview_run_label() -> String {
     std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
 }

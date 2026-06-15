@@ -28,9 +28,8 @@ REMOTE='$REMOTE'
 test -x \$REMOTE || chmod +x \$REMOTE
 for FILTER in nearest box lanczos hybrid; do
   echo preview_resize_demo filter=\$FILTER max='$MAX_SIZE'
-  MISTER_PREVIEW_STRESS=1 \
   MISTER_CATALOG_REFRESH=off \
-  MISTER_LAUNCHER_BENCH_SCENARIO=stress-scroll \
+  MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold \
   MISTER_PREVIEW_RESIZE_FILTER=\$FILTER \
   MISTER_PREVIEW_RESIZE_MAX='$MAX_SIZE' \
   MISTER_PREVIEW_FORMAT='$FORMAT' \

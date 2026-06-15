@@ -98,10 +98,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog_version = 0usize;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    let preview_stress = preview_stress_enabled();
     println!(
-        "preview_stress={} preview_visual_pct={} preview_blitter=raw",
-        if preview_stress { "on" } else { "off" },
+        "preview_visual_pct={} preview_blitter=raw",
         preview_visual_pct()
     );
     println!(
@@ -738,7 +736,7 @@ pub(super) fn run_launcher_loop(
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
         let full_frame_present = should_present_full_frame(launching, route_action);
-        let arcade_list_rect = if !preview_stress && !launching && nav.screen == Screen::Arcade {
+        let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
             let force_arcade_redraw =
                 arcade_list_needs_forced_redraw(this_rect, full_frame_present);
             arcade_list_renderer.draw(

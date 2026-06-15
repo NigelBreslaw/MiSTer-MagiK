@@ -4,17 +4,12 @@ use super::*;
 pub(super) enum LauncherBenchScenario {
     Idle,
     HomeNav,
-    ListScroll,
-    SelectedFirst,
-    StressScroll,
-    CacheWarm,
     QuickTap,
     RapidTaps,
     HeldScroll,
     TurboHold,
     PreviewStepHold,
     ModelSync,
-    PreviewChanges,
 }
 
 impl LauncherBenchScenario {
@@ -26,13 +21,7 @@ impl LauncherBenchScenario {
         {
             "idle" => Some(Self::Idle),
             "home-nav" | "home_nav" => Some(Self::HomeNav),
-            "list-scroll" | "list_scroll" => Some(Self::ListScroll),
-            "selected-first" | "selected_first" => Some(Self::SelectedFirst),
-            "velocity-scroll" | "velocity_scroll" | "smooth-scroll" | "smooth_scroll" => {
-                Some(Self::HeldScroll)
-            }
-            "stress-scroll" | "stress_scroll" => Some(Self::StressScroll),
-            "cache-warm" | "cache_warm" => Some(Self::CacheWarm),
+            "velocity-scroll" | "velocity_scroll" => Some(Self::HeldScroll),
             "quick-tap" | "quick_tap" => Some(Self::QuickTap),
             "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
             "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
@@ -41,7 +30,6 @@ impl LauncherBenchScenario {
                 Some(Self::PreviewStepHold)
             }
             "model-sync" | "model_sync" => Some(Self::ModelSync),
-            "preview" | "preview-changes" | "preview_changes" => Some(Self::PreviewChanges),
             _ => None,
         }
     }
@@ -50,17 +38,12 @@ impl LauncherBenchScenario {
         match self {
             Self::Idle => "idle",
             Self::HomeNav => "home-nav",
-            Self::ListScroll => "list-scroll",
-            Self::SelectedFirst => "selected-first",
-            Self::StressScroll => "stress-scroll",
-            Self::CacheWarm => "cache-warm",
             Self::QuickTap => "quick-tap",
             Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
             Self::TurboHold => "turbo-hold",
             Self::PreviewStepHold => "preview-step-hold",
             Self::ModelSync => "model-sync",
-            Self::PreviewChanges => "preview-changes",
         }
     }
 
@@ -68,17 +51,12 @@ impl LauncherBenchScenario {
         match self {
             Self::Idle => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
-            Self::ListScroll => Duration::from_millis(120),
-            Self::SelectedFirst => Duration::from_millis(700),
-            Self::StressScroll => Duration::from_millis(60),
-            Self::CacheWarm => Duration::from_millis(120),
             Self::ModelSync => Duration::from_millis(300),
             Self::QuickTap
             | Self::RapidTaps
             | Self::HeldScroll
             | Self::TurboHold
             | Self::PreviewStepHold => Duration::ZERO,
-            Self::PreviewChanges => Duration::from_millis(500),
         }
     }
 }
@@ -145,41 +123,6 @@ pub(super) fn launcher_bench_step(
                     game_count,
                 );
             }
-            true
-        }
-        LauncherBenchScenario::ListScroll
-        | LauncherBenchScenario::PreviewChanges
-        | LauncherBenchScenario::SelectedFirst
-        | LauncherBenchScenario::StressScroll
-        | LauncherBenchScenario::CacheWarm => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            let selected = match scenario {
-                LauncherBenchScenario::SelectedFirst => (step.saturating_mul(7)) % count,
-                LauncherBenchScenario::CacheWarm => {
-                    let span = count.min(DEFAULT_PREVIEW_CACHE_CAP * 3).max(1);
-                    let cycle = span.saturating_mul(2).saturating_sub(2).max(1);
-                    let pos = step % cycle;
-                    if pos < span {
-                        pos
-                    } else {
-                        cycle - pos
-                    }
-                }
-                _ => step % count,
-            };
-            if selected < nav.arcade.selected {
-                nav.arcade.scroll_y = 0;
-            }
-            nav.arcade.selected = selected;
-            nav.arcade.snap_to_selected();
-            keep_bench_arcade_visible(&mut nav.arcade.scroll_y, nav.arcade.selected, count);
             true
         }
         LauncherBenchScenario::HeldScroll => {
