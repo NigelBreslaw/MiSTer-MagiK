@@ -853,7 +853,12 @@ fn catalog_variant_score(row: &CatalogRow) -> i32 {
     )
     .to_ascii_lowercase();
 
-    variant_score_from_haystack(&haystack)
+    let mut score = variant_score_from_haystack(&haystack);
+    if row.source_kind == "mra" && !row.setname.trim().is_empty() && row.parent.trim().is_empty()
+    {
+        score += 1000;
+    }
+    score
 }
 
 fn variant_score_from_haystack(haystack: &str) -> i32 {
@@ -1224,6 +1229,16 @@ fn save_scan_artifact_to_sqlite(
 }
 
 fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
+    let arcade_metadata =
+        load_arcade_machine_metadata(&default_mame_sqlite_path(), &default_hbmame_sqlite_path());
+    build_arcade_catalog_from_scan_with_metadata(root, scan, &arcade_metadata)
+}
+
+fn build_arcade_catalog_from_scan_with_metadata(
+    root: impl AsRef<Path>,
+    scan: &LibraryScan,
+    arcade_metadata: &ArcadeMachineMetadata,
+) -> ArcadeCatalog {
     let covered_payloads = covered_payload_paths(&scan.discoveries);
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
     let mut rows = Vec::<CatalogRow>::new();
@@ -1233,6 +1248,8 @@ fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) ->
         if !is_launcher_launch_ref(&plan_launch_ref) {
             continue;
         }
+        let (setname, parent) =
+            catalog_family_fields_for_discovery(discovery, arcade_metadata);
         rows.push(CatalogRow {
             game: ArcadeGameEntry {
                 title: discovery.title.clone().into(),
@@ -1242,14 +1259,33 @@ fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) ->
                 system_id: system_id.into(),
             },
             source_kind: launch_kind_for_discovery(discovery).to_string(),
-            setname: discovery.setname.clone().unwrap_or_default(),
-            parent: discovery.parent.clone().unwrap_or_default(),
+            setname,
+            parent,
         });
     }
     rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     let games = collapse_catalog_variants(rows);
     let systems = arcade_catalog::systems_from_games(&games);
     ArcadeCatalog::new(root.as_ref().to_path_buf(), games, systems)
+}
+
+fn catalog_family_fields_for_discovery(
+    discovery: &GameDiscovery,
+    arcade_metadata: &ArcadeMachineMetadata,
+) -> (String, String) {
+    if let Some(identity_id) = mame_identity_for_discovery(discovery) {
+        let (family_id, _, _, _, _) = mame_identity_projection(&identity_id, arcade_metadata);
+        let parent = if family_id == identity_id {
+            String::new()
+        } else {
+            family_id
+        };
+        return (identity_id, parent);
+    }
+    (
+        discovery.setname.clone().unwrap_or_default(),
+        discovery.parent.clone().unwrap_or_default(),
+    )
 }
 
 fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, u64) {
@@ -4596,6 +4632,51 @@ mod tests {
                 .iter()
                 .map(|game| game.mra_path.as_ref())
                 .collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ram_catalog_uses_mame_metadata_families_like_sqlite_catalog() {
+        let root = unique_temp_dir("ram-catalog-mame-families");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                ("1942", None, "1942", Some("1984"), Some("Capcom")),
+                (
+                    "1942b",
+                    Some("1942"),
+                    "1942 (First Version)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let mut parent = mra_discovery(1, "1942");
+        parent.setname = Some("1942".to_string());
+        let mut clone = mra_discovery(2, "1942 (First Version)");
+        clone.setname = Some("1942b".to_string());
+        clone.parent = None;
+        let scan = sqlite_scan_with_discoveries(vec![parent, clone]);
+        let metadata = load_arcade_machine_metadata(&mame_db, &PathBuf::new());
+        let ram_catalog =
+            build_arcade_catalog_from_scan_with_metadata("/media/fat/_Arcade", &scan, &metadata);
+
+        write_sqlite_scan_with_mame(&db, &scan, &mame_db).expect("save sqlite");
+        let sqlite_catalog =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
+
+        assert_eq!(ram_catalog.system_game_count("arcade"), 1);
+        assert_eq!(
+            ram_catalog.system_game_count("arcade"),
+            sqlite_catalog.catalog.system_game_count("arcade")
+        );
+        assert_eq!(
+            ram_catalog.games[0].title.as_ref(),
+            sqlite_catalog.catalog.games[0].title.as_ref()
         );
         let _ = std::fs::remove_dir_all(root);
     }
