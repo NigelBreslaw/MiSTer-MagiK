@@ -166,8 +166,15 @@ impl LibraryScanArtifact {
     }
 
     pub fn save_default_sqlite(self) -> Result<LibraryRefreshSummary, String> {
+        self.save_default_sqlite_with_progress(None)
+    }
+
+    pub fn save_default_sqlite_with_progress(
+        self,
+        progress: ProgressCallback<'_>,
+    ) -> Result<LibraryRefreshSummary, String> {
         let cfg = BenchConfig::production();
-        save_scan_artifact_to_sqlite(&cfg, self)
+        save_scan_artifact_to_sqlite(&cfg, self, progress)
     }
 }
 
@@ -1097,7 +1104,7 @@ fn refresh_sqlite_database(
             ),
         );
     }
-    let mut summary = save_scan_artifact_to_sqlite(&cfg, artifact)?;
+    let mut summary = save_scan_artifact_to_sqlite(&cfg, artifact, progress)?;
     summary.scan_us = scan_us;
     Ok(summary)
 }
@@ -1197,9 +1204,10 @@ fn scan_library_artifact(
 fn save_scan_artifact_to_sqlite(
     cfg: &BenchConfig,
     artifact: LibraryScanArtifact,
+    progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let import_t = Instant::now();
-    let bytes = save_sqlite_scan(&cfg.sqlite_path, &artifact.scan)?;
+    let bytes = save_sqlite_scan_with_progress(&cfg.sqlite_path, &artifact.scan, progress)?;
     let import_us = import_t.elapsed().as_micros() as u64;
     Ok(LibraryRefreshSummary {
         skipped: false,
@@ -2431,6 +2439,14 @@ fn confidence_str(confidence: DiscoveryConfidence) -> &'static str {
 }
 
 fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
+    save_sqlite_scan_with_progress(path, scan, None)
+}
+
+fn save_sqlite_scan_with_progress(
+    path: &Path,
+    scan: &LibraryScan,
+    progress: ProgressCallback<'_>,
+) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
@@ -2445,7 +2461,7 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
         }
     }
 
-    if let Err(e) = write_sqlite_scan(&build_tmp_path, scan) {
+    if let Err(e) = write_sqlite_scan(&build_tmp_path, scan, progress) {
         let _ = std::fs::remove_file(&build_tmp_path);
         return Err(e);
     }
@@ -2890,7 +2906,11 @@ fn register_preview_asset_packs(
     Ok(())
 }
 
-fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
+fn write_sqlite_scan(
+    path: &Path,
+    scan: &LibraryScan,
+    progress: ProgressCallback<'_>,
+) -> Result<(), String> {
     let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
         .map_err(|e| format!("preview archive index: {e}"))?;
     write_sqlite_scan_with_sources(
@@ -2899,6 +2919,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         &default_mame_sqlite_path(),
         &default_hbmame_sqlite_path(),
         &preview_asset_packs,
+        progress,
     )
 }
 
@@ -3047,7 +3068,7 @@ fn write_sqlite_scan_with_mame(
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, &PathBuf::new(), &[])
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, &PathBuf::new(), &[], None)
 }
 
 #[cfg(test)]
@@ -3057,7 +3078,14 @@ fn write_sqlite_scan_with_mame_and_hbmame(
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, hbmame_sqlite_path, &[])
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        mame_sqlite_path,
+        hbmame_sqlite_path,
+        &[],
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -3073,6 +3101,7 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
         mame_sqlite_path,
         &PathBuf::new(),
         std::slice::from_ref(preview_asset_pack),
+        None,
     )
 }
 
@@ -3082,6 +3111,7 @@ fn write_sqlite_scan_with_sources(
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
     preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
+    mut progress: ProgressCallback<'_>,
 ) -> Result<(), String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     conn.execute_batch(
@@ -3480,7 +3510,12 @@ fn write_sqlite_scan_with_sources(
         let covered_payloads = covered_payload_paths(&scan.discoveries);
         let discoveries =
             preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
-        for (key, discovery) in discoveries {
+        let discovery_total = discoveries.len();
+        report_sqlite_import_progress(&mut progress, 0, discovery_total);
+        for (idx, (key, discovery)) in discoveries.into_iter().enumerate() {
+            if idx > 0 && idx % 250 == 0 {
+                report_sqlite_import_progress(&mut progress, idx, discovery_total);
+            }
             let system_id = catalog_system_id_for_discovery(discovery);
             system_stmt
                 .execute(params![
@@ -3600,6 +3635,7 @@ fn write_sqlite_scan_with_sources(
                 ])
                 .map_err(|e| format!("insert game fts: {e}"))?;
         }
+        report_sqlite_import_progress(&mut progress, discovery_total, discovery_total);
         drop(fts_stmt);
         drop(region_stmt);
         drop(identity_stmt);
@@ -3607,6 +3643,7 @@ fn write_sqlite_scan_with_sources(
         drop(plan_stmt);
         drop(game_stmt);
         drop(system_stmt);
+        report_sqlite_import_finalizing(&mut progress);
         materialize_arcade_ui_projections(&tx)?;
         tx.execute(
             "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
@@ -3741,6 +3778,28 @@ fn write_sqlite_scan_with_sources(
         }
     }
     tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))
+}
+
+fn report_sqlite_import_progress(
+    progress: &mut ProgressCallback<'_>,
+    written: usize,
+    total: usize,
+) {
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Saving library",
+            &format!("Writing {written} of {total} games into SQLite..."),
+        );
+    }
+}
+
+fn report_sqlite_import_finalizing(progress: &mut ProgressCallback<'_>) {
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Saving library",
+            "Finalizing catalog views and search indexes...",
+        );
+    }
 }
 
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {

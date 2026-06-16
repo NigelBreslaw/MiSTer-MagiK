@@ -103,7 +103,7 @@ pub(super) fn start_library_catalog_worker(
                     detail: "Writing catalog database in the background...".to_string(),
                     percent: 90,
                 });
-                match artifact.save_default_sqlite() {
+                match artifact.save_default_sqlite_with_progress(Some(&mut progress)) {
                     Ok(summary) => {
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
@@ -278,13 +278,34 @@ fn catalog_scan_percent(title: &str, detail: &str) -> i32 {
     if title == "Loading library" {
         return 100;
     }
+    if title == "Saving library" {
+        if let Some(percent) = sqlite_import_percent(detail) {
+            return percent;
+        }
+        if detail.starts_with("Finalizing ") {
+            return 99;
+        }
+        return 90;
+    }
     if matches!(title, "Saving library" | "Indexing library") && detail.starts_with("Writing ") {
         return 90;
     }
-    if title == "Saving library" {
-        return 90;
-    }
     -1
+}
+
+fn sqlite_import_percent(detail: &str) -> Option<i32> {
+    let rest = detail.strip_prefix("Writing ")?;
+    let mut parts = rest.split_whitespace();
+    let written = parts.next()?.parse::<usize>().ok()?;
+    if parts.next()? != "of" {
+        return None;
+    }
+    let total = parts.next()?.parse::<usize>().ok()?;
+    if total == 0 {
+        return Some(90);
+    }
+    let percent = 90 + (written.min(total) * 9 / total) as i32;
+    Some(percent.clamp(90, 99))
 }
 
 #[derive(Default)]
@@ -423,5 +444,28 @@ mod tests {
         assert!(coalescer.should_send("Classifying library", "0 candidate files"));
         assert!(coalescer.should_send("Indexing library", "Writing 10 games, 2 archives..."));
         assert!(coalescer.should_send("Loading library", "Opening SQLite catalog..."));
+    }
+
+    #[test]
+    fn catalog_scan_percent_tracks_sqlite_import_progress() {
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Writing 0 of 100 games into SQLite..."),
+            90
+        );
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Writing 50 of 100 games into SQLite..."),
+            94
+        );
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Writing 100 of 100 games into SQLite..."),
+            99
+        );
+        assert_eq!(
+            catalog_scan_percent(
+                "Saving library",
+                "Finalizing catalog views and search indexes..."
+            ),
+            99
+        );
     }
 }
