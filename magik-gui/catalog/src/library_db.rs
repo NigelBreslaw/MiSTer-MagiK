@@ -1888,35 +1888,42 @@ fn scan_zip_central_directory(
     if cd_offset + cd_size > len {
         return Err("zip central directory outside file".to_string());
     }
-    let cd_size_usize = usize::try_from(cd_size)
-        .map_err(|_| "zip central directory too large to index".to_string())?;
-
     f.seek(SeekFrom::Start(cd_offset))
         .map_err(|e| format!("seek zip central directory: {e}"))?;
-    let mut cd = vec![0u8; cd_size_usize];
-    f.read_exact(&mut cd)
-        .map_err(|e| format!("read zip central directory: {e}"))?;
 
     let mut entries = Vec::new();
-    let mut pos = 0usize;
+    let mut remaining = cd_size;
     let mut scanned = 0usize;
-    while pos + 46 <= cd.len() && scanned < cd_entries {
-        if le_u32(&cd[pos..pos + 4]) != 0x0201_4b50 {
-            return Err(format!("bad central directory signature at {pos}"));
+    while remaining >= 46 && scanned < cd_entries {
+        let entry_offset = cd_size - remaining;
+        let mut header = [0u8; 46];
+        f.read_exact(&mut header)
+            .map_err(|e| format!("read zip central directory header: {e}"))?;
+        remaining -= 46;
+        if le_u32(&header[0..4]) != 0x0201_4b50 {
+            return Err(format!("bad central directory signature at {entry_offset}"));
         }
         scanned += 1;
-        let crc32 = le_u32(&cd[pos + 16..pos + 20]);
-        let compressed = le_u32(&cd[pos + 20..pos + 24]) as u64;
-        let uncompressed = le_u32(&cd[pos + 24..pos + 28]) as u64;
-        let name_len = le_u16(&cd[pos + 28..pos + 30]) as usize;
-        let extra_len = le_u16(&cd[pos + 30..pos + 32]) as usize;
-        let comment_len = le_u16(&cd[pos + 32..pos + 34]) as usize;
-        let name_start = pos + 46;
-        let name_end = name_start + name_len;
-        if name_end > cd.len() {
+        let crc32 = le_u32(&header[16..20]);
+        let compressed = le_u32(&header[20..24]) as u64;
+        let uncompressed = le_u32(&header[24..28]) as u64;
+        let name_len = le_u16(&header[28..30]) as u64;
+        let extra_len = le_u16(&header[30..32]) as u64;
+        let comment_len = le_u16(&header[32..34]) as u64;
+        let trailing_len = extra_len + comment_len;
+        if name_len + trailing_len > remaining {
             return Err("zip entry name outside central directory".to_string());
         }
-        let name = String::from_utf8_lossy(&cd[name_start..name_end]).into_owned();
+        let mut name_buf = vec![0u8; name_len as usize];
+        f.read_exact(&mut name_buf)
+            .map_err(|e| format!("read zip entry name: {e}"))?;
+        remaining -= name_len;
+        if trailing_len > 0 {
+            f.seek(SeekFrom::Current(trailing_len as i64))
+                .map_err(|e| format!("skip zip entry metadata: {e}"))?;
+            remaining -= trailing_len;
+        }
+        let name = String::from_utf8_lossy(&name_buf).into_owned();
         if !name.ends_with('/') && !name.starts_with("__MACOSX/") {
             if let Some(rule) = profile.classify_archive_entry(Path::new(&name)) {
                 entries.push(LibraryContainerEntry {
@@ -1933,7 +1940,6 @@ fn scan_zip_central_directory(
                 });
             }
         }
-        pos = name_end + extra_len + comment_len;
     }
     Ok(entries)
 }
@@ -4769,6 +4775,40 @@ mod tests {
     }
 
     #[test]
+    fn zip_central_directory_scans_entries_with_extra_and_comment_padding() {
+        let root = unique_temp_dir("zip-central-padding");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let zip_path = root.join("games.zip");
+        write_stored_zip_with_central_metadata(
+            &zip_path,
+            &[("World A-Z/Neo Bomberman (neobombe).neo", b"neo".as_slice())],
+            b"extra",
+            b"comment",
+        );
+        let meta = std::fs::metadata(&zip_path).expect("stat zip");
+        let file = FoundFile {
+            path: zip_path.clone(),
+            ext: "zip".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "neogeo")
+            .expect("neogeo profile");
+
+        let entries = scan_zip_central_directory(&file, profile).expect("scan zip");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].entry_path,
+            "World A-Z/Neo Bomberman (neobombe).neo"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn scanner_ignores_gamelists_and_screenshot_media_dirs() {
         let root = unique_temp_dir("ignore-screenshot-media");
         let nes_dir = root.join("games/NES");
@@ -5942,6 +5982,15 @@ mod tests {
     }
 
     fn write_stored_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        write_stored_zip_with_central_metadata(path, entries, &[], &[]);
+    }
+
+    fn write_stored_zip_with_central_metadata(
+        path: &Path,
+        entries: &[(&str, &[u8])],
+        central_extra: &[u8],
+        central_comment: &[u8],
+    ) {
         let mut out = Vec::new();
         let mut central = Vec::new();
         for (name, data) in entries {
@@ -5971,13 +6020,15 @@ mod tests {
             push_u32(&mut central, data.len() as u32);
             push_u32(&mut central, data.len() as u32);
             push_u16(&mut central, name.len() as u16);
-            push_u16(&mut central, 0);
-            push_u16(&mut central, 0);
+            push_u16(&mut central, central_extra.len() as u16);
+            push_u16(&mut central, central_comment.len() as u16);
             push_u16(&mut central, 0);
             push_u16(&mut central, 0);
             push_u32(&mut central, 0);
             push_u32(&mut central, local_offset);
             central.extend_from_slice(name.as_bytes());
+            central.extend_from_slice(central_extra);
+            central.extend_from_slice(central_comment);
         }
         let central_offset = out.len() as u32;
         let central_size = central.len() as u32;
