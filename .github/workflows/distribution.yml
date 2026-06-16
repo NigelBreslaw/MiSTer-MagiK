@@ -108,7 +108,7 @@ jobs:
         env:
           MINGW64: "/mingw64"
           PTR64: "1"
-        run: make -j2 PTR64=1 TARGET=hbmame DEPRECATED=0 SYMBOLS=0 NO_SYMBOLS=1
+        run: make -j2 PTR64=1 TARGET=hbmame DEPRECATED=0 SYMBOLS=0 NO_SYMBOLS=1 NOWERROR=1
 
       - name: Generate HBMAME listxml
         if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
