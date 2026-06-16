@@ -98,9 +98,14 @@ scripts/build-console-screenshot-pack.sh \
   --deploy
 ```
 
-Input image stems may already be canonical, or they may be the software short
-name for the chosen system. For example, `sonic.png` under `--system megadrive`
-becomes `mame-software__megadriv__sonic`.
+Input image stems must already be canonical, or they must be the MAME software
+short name for the chosen system. For example, `sonic.png` under
+`--system megadrive` becomes `mame-software__megadriv__sonic`.
+
+The builder deliberately rejects scraper/title stems such as
+`Sonic The Hedgehog (USA).png`. If `build/mame.sqlite3` exists, it also verifies
+each software name against `mame_software_items`. Convert scraper output into a
+staging directory with canonical names before building the pack.
 
 ## Runtime Projection
 

@@ -23,10 +23,16 @@ Source image stems must be canonical MagiK identities:
 or the software short name for the selected system:
   sonic.png
 
+Non-canonical scraper/title stems are rejected. Rename them, or produce an
+explicit staging directory from a manifest before running this builder.
+
 Options:
   --deploy         Copy the built pack to /media/fat/mister-magik/assets.
   --work-dir DIR   Local work dir (default build/<system>-screenshots).
   --max-size N     Preview box size (default 320).
+
+Environment:
+  MISTER_MAME_SQLITE  Optional validation DB (default build/mame.sqlite3).
 USAGE
 }
 
@@ -98,11 +104,36 @@ CACHE_DIR="$WORK_DIR/cache"
 RAW_DIR="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}"
 PACK="$WORK_DIR/${SYSTEM}-screenshots.mmlz4b"
 REMOTE_PACK="/media/fat/mister-magik/assets/${SYSTEM}-screenshots.mmlz4b"
+MAME_SQLITE="${MISTER_MAME_SQLITE:-$ROOT/build/mame.sqlite3}"
 
 rm -rf "$CANONICAL" "$CACHE_DIR"
 mkdir -p "$CANONICAL" "$CACHE_DIR"
 
+validate_software_name() {
+  local source="$1"
+  local list="$2"
+  local software="$3"
+
+  if [[ "$list" != "$LIST_NAME" ]]; then
+    echo "invalid screenshot stem '$source': list '$list' does not match --system $SYSTEM ($LIST_NAME)" >&2
+    return 1
+  fi
+  if [[ ! "$software" =~ ^[a-z0-9_]+$ ]]; then
+    echo "invalid screenshot stem '$source': software name must be a MAME short name like 'sonic' or 'sf2ce'" >&2
+    return 1
+  fi
+  if [[ -f "$MAME_SQLITE" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    local count
+    count="$(sqlite3 "$MAME_SQLITE" "SELECT count(*) FROM mame_software_items WHERE list_name='$list' AND software_name='$software';")"
+    if [[ "$count" != "1" ]]; then
+      echo "invalid screenshot stem '$source': '$list:$software' is not in $MAME_SQLITE" >&2
+      return 1
+    fi
+  fi
+}
+
 found=0
+errors=0
 while IFS= read -r -d '' file; do
   name="$(basename "$file")"
   ext="${name##*.}"
@@ -113,14 +144,32 @@ while IFS= read -r -d '' file; do
     *) continue ;;
   esac
   if [[ "$stem" == mame-software__* ]]; then
+    if [[ "$stem" =~ ^mame-software__([^_]+)__([a-z0-9_]+)$ ]]; then
+      list="${BASH_REMATCH[1]}"
+      software="${BASH_REMATCH[2]}"
+    else
+      echo "invalid screenshot stem '$stem': expected mame-software__${LIST_NAME}__<software_name>" >&2
+      errors=$((errors + 1))
+      continue
+    fi
     canonical="$stem"
   else
+    list="$LIST_NAME"
+    software="$stem"
     canonical="mame-software__${LIST_NAME}__${stem}"
+  fi
+  if ! validate_software_name "$stem" "$list" "$software"; then
+    errors=$((errors + 1))
+    continue
   fi
   cp "$file" "$CANONICAL/${canonical}.${ext_lower}"
   found=$((found + 1))
 done < <(find "$INPUT_DIR" -maxdepth 1 -type f -print0)
 
+if [[ "$errors" != "0" ]]; then
+  echo "refusing to build $SYSTEM screenshot pack: $errors invalid source screenshot(s)" >&2
+  exit 1
+fi
 if [[ "$found" == "0" ]]; then
   echo "no source screenshots found in $INPUT_DIR" >&2
   exit 1
