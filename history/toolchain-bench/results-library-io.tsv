@@ -1,0 +1,92 @@
+label	type	elapsed_s	field_a	field_b	field_c	field_d	field_e	field_f	field_g	field_h	field_i	field_j	notes
+LIBIO-BASE-20260616	sample	0	0	4	0	0	30422	109705	109463	3383	28098	19335	disk_io_ms=19985 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	1	59	59	0	0	30504	109845	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	2	127	114	0	0	30592	109986	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	3	148	200	0	0	30636	110172	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	4	164	297	0	0	30675	110363	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	5	181	391	0	0	30715	110554	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	6	202	482	0	0	30759	110741	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	8	226	571	0	0	30806	110924	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	9	257	652	0	0	30859	111100	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	10	283	738	0	0	30908	111279	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	11	309	824	0	0	30955	111462	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	12	349	895	0	0	31019	111628	109464	3384	28098	19341	disk_io_ms=19998 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	13	426	920	0	270336	31120	111743	109465	3395	28098	19404	disk_io_ms=20149 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	15	480	926	0	1400832	31196	111848	109465	3439	28098	19687	disk_io_ms=20897 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	16	499	934	0	3260416	31240	111955	109465	3508	28098	20131	disk_io_ms=22012 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	17	522	942	0	5091328	31284	112065	109465	3573	28098	20556	disk_io_ms=23107 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	18	544	952	0	6778880	31326	112183	109465	3636	28098	20948	disk_io_ms=24107 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	19	591	980	0	7606272	31398	112306	109465	3665	28098	21164	disk_io_ms=24662 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	20	623	987	0	9101312	31455	112415	109465	3720	28098	21545	disk_io_ms=25683 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	21	663	994	0	10485760	31517	112527	109465	3769	28098	21879	disk_io_ms=26613 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	22	706	1000	0	11882496	31581	112638	109465	3818	28098	22214	disk_io_ms=27549 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	24	738	1006	0	13438976	31635	112746	109465	3872	28098	22589	disk_io_ms=28558 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	25	765	1014	0	15056896	31684	112857	109465	3932	28098	22987	disk_io_ms=29608 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	26	795	1020	0	16621568	31734	112969	109465	3987	28098	23383	disk_io_ms=30639 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	27	825	1027	0	18276352	31786	113081	109465	4044	28098	23773	disk_io_ms=31684 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	28	851	1032	0	20004864	31835	113189	109465	4106	28098	24192	disk_io_ms=32731 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	29	884	1038	0	21483520	31889	113299	109465	4164	28098	24557	disk_io_ms=33768 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	30	937	1044	0	22654976	31968	113405	109465	4206	28098	24824	disk_io_ms=34461 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	31	967	1051	0	24387584	32016	113509	109465	4272	28098	25245	disk_io_ms=35434 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	33	996	1058	0	25874432	32065	113609	109465	4341	28098	25631	disk_io_ms=36389 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	34	1015	1067	0	27791360	32105	113713	109465	4413	28098	26030	disk_io_ms=37464 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	35	1066	1093	0	28291072	32178	113839	109465	4439	28098	26218	disk_io_ms=37969 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	36	1095	1099	0	29982720	32227	113950	109465	4501	28098	26643	disk_io_ms=39088 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	37	1102	1106	0	31784960	32255	114062	109465	4575	28098	27083	disk_io_ms=40168 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	38	1161	1138	0	32133120	32335	114195	109465	4587	28098	27156	disk_io_ms=40331 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	39	1174	1235	0	32133120	32373	114389	109465	4587	28098	27156	disk_io_ms=40331 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	40	1182	1340	0	32133120	32402	114593	109465	4587	28098	27156	disk_io_ms=40331 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	42	1190	1444	0	32133120	32434	114796	109465	4587	28098	27160	disk_io_ms=40339 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	43	1196	1542	0	32133120	32467	114995	109465	4587	28098	27160	disk_io_ms=40339 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	44	1206	1644	0	32133120	32501	115192	109465	4587	28098	27160	disk_io_ms=40339 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	45	1227	1738	0	32133120	32546	115381	109465	4587	28098	27160	disk_io_ms=40339 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	46	1245	1830	0	32133120	32589	115571	109465	4587	28098	27160	disk_io_ms=40339 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	sample	47	1281	1908	0	32133120	32648	115742	109465	4587	28098	27160	disk_io_ms=40339 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-BASE-20260616	cold_scan	1	12945309										discover_us=12938301
+LIBIO-BASE-20260616	import	1	24785987										bytes=31006720
+LIBIO-BASE-20260616	cached_arcade_load	1	158220										rows=8389
+LIBIO-BASE-20260616	no_change_manifest	1	9949808										changed=false
+LIBIO-BASE-20260616	done	49											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+LIBIO-TMPFS-20260616	sample	0	0	4	0	0	33156	116992	110696	4588	28098	27165	disk_io_ms=40354 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	1	56	62	0	0	33233	117137	110697	4588	28098	27165	disk_io_ms=40354 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	3	125	113	0	0	33323	117276	110697	4588	28098	27165	disk_io_ms=40354 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	4	151	201	0	0	33369	117461	110697	4588	28098	27165	disk_io_ms=40354 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	5	165	293	0	0	33408	117651	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	6	183	387	0	0	33446	117843	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	7	202	482	0	0	33487	118033	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	8	225	571	0	0	33534	118215	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	9	253	653	0	0	33585	118392	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	11	279	740	0	0	33633	118574	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	12	303	829	0	0	33680	118757	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	13	345	899	0	0	33746	118921	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	14	434	924	0	0	33860	119036	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	15	542	928	0	0	33991	119135	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	16	630	951	0	0	34105	119251	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	18	738	955	0	0	34233	119353	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	19	844	960	0	0	34363	119452	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	20	948	965	0	0	34491	119555	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	21	1035	990	0	0	34599	119675	110698	4588	28098	27171	disk_io_ms=40367 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	22	1103	994	0	1351680	34683	119778	110698	4618	28098	27345	disk_io_ms=40832 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	23	1106	998	0	4734976	34705	119886	110698	4694	28098	27756	disk_io_ms=41908 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	24	1109	1003	0	8257536	34725	119997	110698	4769	28098	28185	disk_io_ms=42992 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	25	1111	1008	0	11522048	34749	120104	110698	4848	28098	28584	disk_io_ms=44071 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	26	1113	1013	0	14733312	34771	120209	110698	4928	28098	28981	disk_io_ms=45142 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	28	1115	1018	0	18034688	34795	120315	110698	5006	28098	29388	disk_io_ms=46231 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	29	1117	1023	0	21278720	34817	120422	110698	5089	28098	29782	disk_io_ms=47314 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	30	1119	1027	0	24227840	34840	120524	110698	5173	28098	30137	disk_io_ms=48392 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	31	1121	1032	0	27373568	34865	120621	110698	5252	28098	30527	disk_io_ms=49468 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	32	1123	1037	0	30527488	34886	120722	110698	5333	28098	30914	disk_io_ms=50544 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	33	1166	1083	0	31080448	34954	120867	110698	5345	28098	30972	disk_io_ms=50704 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	34	1182	1177	0	31080448	34993	121056	110698	5345	28098	30972	disk_io_ms=50704 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	35	1190	1279	0	31080448	35025	121255	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	36	1195	1381	0	31080448	35056	121458	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	38	1207	1483	0	31080448	35091	121655	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	39	1217	1577	0	31080448	35132	121845	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	40	1236	1667	0	31080448	35172	122036	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	41	1256	1759	0	31080448	35217	122221	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	sample	42	1294	1834	0	31080448	35280	122389	110699	5345	28098	30977	disk_io_ms=50716 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
+LIBIO-TMPFS-20260616	cold_scan	1	12988830										discover_us=12968063
+LIBIO-TMPFS-20260616	import	1	18724419										bytes=31006720
+LIBIO-TMPFS-20260616	cached_arcade_load	1	157303										rows=8389
+LIBIO-TMPFS-20260616	no_change_manifest	1	9852032										changed=false
+LIBIO-TMPFS-20260616	done	43											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=/tmp
