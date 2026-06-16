@@ -95,12 +95,23 @@ pub(super) fn start_library_catalog_worker(
                         return;
                     }
                 };
-                let catalog = artifact.arcade_catalog(&root);
                 let stats = artifact.stats().clone();
-                let _ = tx.send(CatalogWorkerMessage::ScannedCatalogReady { catalog, stats });
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "library_scan_complete".to_string(),
+                    detail: format!(
+                        "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={}",
+                        stats.scan_us,
+                        stats.discover_us,
+                        stats.classify_us,
+                        stats.discoveries,
+                        stats.normal_files,
+                        stats.containers,
+                        stats.entries
+                    ),
+                });
                 let _ = tx.send(CatalogWorkerMessage::Progress {
                     title: "Saving library".to_string(),
-                    detail: "Writing catalog database in the background...".to_string(),
+                    detail: "Writing catalog database before opening launcher...".to_string(),
                     percent: 90,
                 });
                 match artifact.save_default_sqlite_with_progress(Some(&mut progress)) {
@@ -257,10 +268,6 @@ pub(super) enum CatalogWorkerMessage {
         catalog: ArcadeCatalog,
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
-    },
-    ScannedCatalogReady {
-        catalog: ArcadeCatalog,
-        stats: library_db::LibraryScanStats,
     },
     Persisted {
         summary: library_db::LibraryRefreshSummary,
@@ -420,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn staged_ram_catalog_is_used_only_without_usable_cache() {
+    fn missing_catalog_scans_before_persisting_without_using_stale_cache() {
         assert!(staged_ram_catalog_enabled(CatalogCacheState::Missing));
         assert!(staged_ram_catalog_enabled(CatalogCacheState::Empty));
         assert!(!staged_ram_catalog_enabled(CatalogCacheState::Ready));

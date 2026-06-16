@@ -194,6 +194,7 @@ if [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
     "$HERE/scripts/mister" put "$NEOGEO_SCREENSHOT_PACK" "$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b.upload"
   remote_run "mv '$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b.upload' '$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b'"
 fi
+REFRESHED_LIBRARY=0
 if [ "$DEPLOY_HBMAME_FROM_LIBRARY" -eq 1 ]; then
   echo "==> Building supplemental HBMame metadata from device library"
   if ! remote_run "$REMOTE hbmame-metadata-from-library"; then
@@ -203,13 +204,19 @@ if [ "$DEPLOY_HBMAME_FROM_LIBRARY" -eq 1 ]; then
   fi
   echo "==> Refreshing library DB on device with supplemental HBMame metadata"
   remote_run "$REMOTE library-refresh"
+  REFRESHED_LIBRARY=1
 elif [ "$DEPLOY_MAME_METADATA" -eq 1 ] || [ "$DEPLOY_HBMAME_METADATA" -eq 1 ] || [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
   echo "==> Refreshing library DB on device"
   remote_run "$REMOTE library-refresh"
+  REFRESHED_LIBRARY=1
 fi
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   "$HERE/scripts/mister" run "chmod +x $REMOTE"
+if [ "$REFRESHED_LIBRARY" -eq 1 ]; then
+  echo "==> Restarting launcher to reload refreshed catalog"
+  magik_command "mister_magik_restart_launcher"
+fi
 
 REMOTE_BYTES="$(
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
