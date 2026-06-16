@@ -92,6 +92,9 @@ Current rules:
   usable database exists, then performs refresh/preview validation in the
   background. Use `startup_timing` log lines to separate SQLite load, catalog
   construction, Slint bridge sync, and refresh costs.
+- Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
+  `library-refresh` only for the missing/empty DB first-boot deferral path and
+  must not schedule delayed background refreshes when a database already exists.
 - When the SQLite catalog is missing or empty, boot must start the Slint
   launcher immediately and let the launcher worker perform the first scan behind
   a visible full-screen scan state. Do not run foreground `library-refresh`

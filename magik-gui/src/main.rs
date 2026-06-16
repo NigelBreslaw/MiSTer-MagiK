@@ -33,6 +33,9 @@
 //! magik-gui/BUILD.md for toolchain details.
 
 use std::ffi::CString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 mod arcade_list_renderer;
 mod bitmap_text;
@@ -183,17 +186,30 @@ fn print_preview_transitions() {
 
 fn run_library_refresh() {
     let parent_boot = std::env::var_os("MISTER_MAGIK_PARENT").is_some();
-    let database_exists = library_db::default_sqlite_path().is_file();
+    let database_exists = usable_library_database_exists(&library_db::default_sqlite_path());
     let force_foreground = std::env::var_os("MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH").is_some();
     if should_defer_parent_boot_library_refresh(parent_boot, database_exists, force_foreground) {
         println!("library_refresh\tdeferred\tmissing_database_parent_boot");
         return;
     }
+    let lock_path = library_refresh_lock_path();
+    let lock = match LibraryRefreshLock::acquire(&lock_path) {
+        Ok(RefreshLockState::Acquired(lock)) => lock,
+        Ok(RefreshLockState::Active { pid }) => {
+            println!("library_refresh\tskipped\tactive_pid={pid}");
+            return;
+        }
+        Err(e) => {
+            eprintln!("library_refresh\tfailed\tlock {e}");
+            std::process::exit(1);
+        }
+    };
     let mut progress = |title: &str, detail: &str| {
         println!("library_refresh\tprogress\t{title}\t{detail}");
     };
     match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
+            drop(lock);
             println!(
                 "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                 summary.skipped,
@@ -209,10 +225,135 @@ fn run_library_refresh() {
             );
         }
         Err(e) => {
+            drop(lock);
             eprintln!("library_refresh\tfailed\t{e}");
             std::process::exit(1);
         }
     }
+}
+
+const DEFAULT_LIBRARY_REFRESH_LOCK_PATH: &str = "/tmp/mister-magik/library-refresh.lock";
+
+fn usable_library_database_exists(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
+}
+
+fn library_refresh_lock_path() -> PathBuf {
+    std::env::var("MISTER_LIBRARY_REFRESH_LOCK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_LIBRARY_REFRESH_LOCK_PATH))
+}
+
+enum RefreshLockState {
+    Acquired(LibraryRefreshLock),
+    Active { pid: u32 },
+}
+
+struct LibraryRefreshLock {
+    path: PathBuf,
+    pid: u32,
+}
+
+impl LibraryRefreshLock {
+    fn acquire(path: &Path) -> Result<RefreshLockState, String> {
+        let pid = std::process::id();
+        acquire_library_refresh_lock(path, pid, process_is_library_refresh).map(|state| match state
+        {
+            RefreshLockDecision::Acquired => RefreshLockState::Acquired(Self {
+                path: path.to_path_buf(),
+                pid,
+            }),
+            RefreshLockDecision::Active { pid } => RefreshLockState::Active { pid },
+        })
+    }
+}
+
+impl Drop for LibraryRefreshLock {
+    fn drop(&mut self) {
+        let should_remove = read_lock_pid(&self.path)
+            .map(|pid| pid == self.pid)
+            .unwrap_or(false);
+        if should_remove {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshLockDecision {
+    Acquired,
+    Active { pid: u32 },
+}
+
+fn acquire_library_refresh_lock<F>(
+    path: &Path,
+    pid: u32,
+    is_active_refresh: F,
+) -> Result<RefreshLockDecision, String>
+where
+    F: Fn(u32) -> bool,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    match create_lock_file(path, pid) {
+        Ok(()) => return Ok(RefreshLockDecision::Acquired),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("create {}: {e}", path.display())),
+    }
+    if let Some(active_pid) =
+        read_lock_pid(path).filter(|locked_pid| is_active_refresh(*locked_pid))
+    {
+        return Ok(RefreshLockDecision::Active { pid: active_pid });
+    }
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove stale {}: {e}", path.display())),
+    }
+    match create_lock_file(path, pid) {
+        Ok(()) => Ok(RefreshLockDecision::Acquired),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            if let Some(active_pid) =
+                read_lock_pid(path).filter(|locked_pid| is_active_refresh(*locked_pid))
+            {
+                Ok(RefreshLockDecision::Active { pid: active_pid })
+            } else {
+                Err(format!(
+                    "lock appeared but owner is not active: {}",
+                    path.display()
+                ))
+            }
+        }
+        Err(e) => Err(format!("create {}: {e}", path.display())),
+    }
+}
+
+fn create_lock_file(path: &Path, pid: u32) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    writeln!(file, "{pid}")?;
+    Ok(())
+}
+
+fn read_lock_pid(path: &Path) -> Option<u32> {
+    let mut text = String::new();
+    File::open(path).ok()?.read_to_string(&mut text).ok()?;
+    text.trim().parse::<u32>().ok()
+}
+
+fn process_is_library_refresh(pid: u32) -> bool {
+    let path = PathBuf::from(format!("/proc/{pid}/cmdline"));
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let parts = bytes
+        .split(|byte| *byte == 0)
+        .filter_map(|part| std::str::from_utf8(part).ok())
+        .collect::<Vec<_>>();
+    parts.iter().any(|part| part.ends_with("mister-magik-fb"))
+        && parts.iter().any(|part| *part == "library-refresh")
 }
 
 fn should_defer_parent_boot_library_refresh(
@@ -836,6 +977,18 @@ fn parse_input_log_args(args: &[String]) -> (Option<&str>, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "mister-magik-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn parent_boot_missing_database_defers_library_refresh_to_launcher_ui() {
@@ -845,5 +998,80 @@ mod tests {
             false, false, false
         ));
         assert!(!should_defer_parent_boot_library_refresh(true, false, true));
+    }
+
+    #[test]
+    fn zero_byte_library_database_is_not_usable_for_parent_boot_deferral() {
+        let root = unique_temp_path("zero-byte-library-db");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let db = root.join("library.sqlite3");
+        fs::write(&db, b"").expect("write empty db");
+
+        assert!(!usable_library_database_exists(&db));
+        fs::write(&db, b"not empty").expect("write nonempty db");
+        assert!(usable_library_database_exists(&db));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn library_refresh_lock_acquires_and_cleans_up() {
+        let lock_path = unique_temp_path("refresh-lock-acquire").join("library-refresh.lock");
+        let decision =
+            acquire_library_refresh_lock(&lock_path, 1234, |_| false).expect("acquire lock");
+        assert_eq!(decision, RefreshLockDecision::Acquired);
+        assert_eq!(read_lock_pid(&lock_path), Some(1234));
+
+        let guard = LibraryRefreshLock {
+            path: lock_path.clone(),
+            pid: 1234,
+        };
+        drop(guard);
+
+        assert!(!lock_path.exists());
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
+    }
+
+    #[test]
+    fn library_refresh_lock_skips_when_active_owner_exists() {
+        let lock_path = unique_temp_path("refresh-lock-active").join("library-refresh.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
+        create_lock_file(&lock_path, 7777).expect("seed lock");
+
+        let decision =
+            acquire_library_refresh_lock(&lock_path, 8888, |pid| pid == 7777).expect("check lock");
+
+        assert_eq!(decision, RefreshLockDecision::Active { pid: 7777 });
+        assert_eq!(read_lock_pid(&lock_path), Some(7777));
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
+    }
+
+    #[test]
+    fn library_refresh_lock_recovers_stale_lock() {
+        let lock_path = unique_temp_path("refresh-lock-stale").join("library-refresh.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
+        create_lock_file(&lock_path, 7777).expect("seed stale lock");
+
+        let decision =
+            acquire_library_refresh_lock(&lock_path, 8888, |_| false).expect("replace stale lock");
+
+        assert_eq!(decision, RefreshLockDecision::Acquired);
+        assert_eq!(read_lock_pid(&lock_path), Some(8888));
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
+    }
+
+    #[test]
+    fn library_refresh_lock_drop_keeps_another_owners_lock() {
+        let lock_path = unique_temp_path("refresh-lock-drop-owner").join("library-refresh.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
+        create_lock_file(&lock_path, 7777).expect("seed other lock");
+
+        let guard = LibraryRefreshLock {
+            path: lock_path.clone(),
+            pid: 8888,
+        };
+        drop(guard);
+
+        assert_eq!(read_lock_pid(&lock_path), Some(7777));
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
     }
 }

@@ -520,6 +520,15 @@ pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
         return Err("library-sql only allows read-only SELECT/WITH queries".into());
     }
 
+    let metadata =
+        std::fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    if metadata.len() == 0 {
+        return Err(format!("{} is empty", path.display()));
+    }
+
     let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
@@ -1145,7 +1154,6 @@ fn refresh_sqlite_database(
             );
         }
     } else {
-        let _ = std::fs::remove_file(&cfg.sqlite_path);
         if let Some(report) = progress.as_mut() {
             report(
                 "Indexing library",
@@ -6912,6 +6920,44 @@ mod tests {
             !sqlite_temp_path(&db).exists(),
             "failed temp database should be cleaned up"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_inspect_does_not_create_missing_database() {
+        let root = unique_temp_dir("sqlite-inspect-missing");
+        let db = root.join("library.sqlite3");
+
+        let err = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "SELECT 1".to_string(),
+        ])
+        .expect_err("missing database should fail before sqlite open");
+
+        assert!(err.starts_with("stat "), "unexpected error: {err}");
+        assert!(!db.exists(), "read-only inspect must not create database");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_inspect_rejects_empty_database() {
+        let root = unique_temp_dir("sqlite-inspect-empty");
+        let db = root.join("library.sqlite3");
+        std::fs::write(&db, b"").expect("write empty database");
+
+        let err = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "SELECT 1".to_string(),
+        ])
+        .expect_err("empty database should fail before sqlite open");
+
+        assert!(
+            err.ends_with(" is empty"),
+            "unexpected empty database error: {err}"
+        );
+        assert_eq!(std::fs::metadata(&db).expect("metadata").len(), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -87,6 +87,7 @@ scripts/run-rust.sh arcade 0
 scripts/mister status
 scripts/mister db
 scripts/mister db "SELECT count(*) FROM games"
+scripts/device-catalog-acceptance.sh
 ```
 
 Boot and recovery:
