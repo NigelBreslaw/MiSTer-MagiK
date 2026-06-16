@@ -91,8 +91,10 @@ loading is raw565-oriented; build and deploy caches from the Mac with:
 tools/mister preview-cache-build
 ```
 
-The real app auto-detects a sibling raw565 raw pack first, then falls back to
-the compressed LZ4 block archive or individual `.rgb565` files.
+`preview-cache-build` writes resized PNGs, `.rgb565` files, and the sibling
+compressed LZ4 block archive. The real app auto-detects a sibling raw565 raw
+pack first, then falls back to the compressed archive or individual `.rgb565`
+files.
 
 The library scanner must not walk screenshot/cache media directories, read
 `gamelist.xml`, or probe normal PNG/JPG screenshots for metadata.

@@ -26,7 +26,7 @@ MAME_SQLITE="${MISTER_MAME_SQLITE:-$HERE/build/mame.sqlite3}"
 HBMAME_SQLITE="${MISTER_HBMAME_SQLITE:-$HERE/build/hbmame.sqlite3}"
 HBMAME_BIN="${MISTER_HBMAME_BIN:-}"
 MAME_SOFTWARE_DIR="${MISTER_MAME_SOFTWARE_DIR:-${MISTER_MAME_HASH_DIR:-}}"
-NEOGEO_SCREENSHOT_PACK="${MISTER_NEOGEO_SCREENSHOT_PACK:-$HERE/build/neogeo-screenshots/neogeo-screenshots.mmlz4b}"
+NEOGEO_SCREENSHOT_PACK="${MISTER_NEOGEO_SCREENSHOT_PACK:-$HERE/build/neogeo-screenshots/cache/raw565-hybrid-320x320-lz4block-12.mmlz4b}"
 DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
   DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le.mov"

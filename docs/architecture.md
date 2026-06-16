@@ -113,8 +113,8 @@ Current rules:
   virtual keys, not from walking PNG/JPG screenshot folders.
 - Catalog code must not read `gamelist.xml`; runtime catalog loading goes
   through the SQLite library cache and materialized projections.
-- Runtime preview loading is raw565-oriented. Build cache assets from the Mac
-  with `tools/mister preview-cache-build`.
+- Runtime preview loading is raw565-oriented. Build cache assets and the
+  compressed preview archive from the Mac with `tools/mister preview-cache-build`.
 
 Relevant docs:
 

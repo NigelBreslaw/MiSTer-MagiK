@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+lz4_flex = "0.13.1"
 quick-xml = "0.40"
 rayon = "1"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
