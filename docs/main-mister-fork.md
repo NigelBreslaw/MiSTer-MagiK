@@ -52,6 +52,13 @@ The fork then:
 5. Polls only launcher lifecycle and explicit handoff commands while Slint owns
    the launcher UI.
 
+The generated launcher script may invoke `mister-magik-fb library-refresh`
+before `ui launcher 0`. The Rust command intentionally defers that foreground
+refresh when `MISTER_MAGIK_PARENT` is set and the SQLite catalog is missing, so
+first boot and Reset Database reach Slint immediately and show the scan screen.
+Cached background validation can still run at lower priority after the launcher
+is visible.
+
 The explicit command surface is:
 
 ```text

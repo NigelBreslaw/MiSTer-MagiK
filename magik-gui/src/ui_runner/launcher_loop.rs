@@ -236,6 +236,7 @@ pub(super) fn run_launcher_loop(
     } else {
         "No cached catalog; scanning library...".into()
     });
+    bridge.set_catalog_scan_percent(-1);
     let bridge_sync_t = Instant::now();
     sync_bridge_launcher(
         &app,
@@ -332,13 +333,18 @@ pub(super) fn run_launcher_loop(
                     CatalogWorkerMessage::Timing { name, detail } => {
                         print_startup_event(start, &name, detail);
                     }
-                    CatalogWorkerMessage::Progress { title, detail } => {
+                    CatalogWorkerMessage::Progress {
+                        title,
+                        detail,
+                        percent,
+                    } => {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         let visible =
                             catalog_scan_progress_visible(catalog_ready, nav.screen, &title);
                         bridge.set_catalog_scan_visible(visible);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_detail(detail.into());
+                        bridge.set_catalog_scan_percent(percent);
                         full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Ready {
@@ -387,6 +393,7 @@ pub(super) fn run_launcher_loop(
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_scan_percent(-1);
                         if cached_before_refresh {
                             bridge.set_catalog_scan_title("Validating library".into());
                             bridge.set_catalog_scan_detail(
@@ -444,6 +451,7 @@ pub(super) fn run_launcher_loop(
                         bridge.set_catalog_scan_visible(false);
                         bridge.set_catalog_scan_title("".into());
                         bridge.set_catalog_scan_detail("".into());
+                        bridge.set_catalog_scan_percent(-1);
                         full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Done => {
@@ -453,6 +461,7 @@ pub(super) fn run_launcher_loop(
                             bridge.set_catalog_scan_visible(false);
                             bridge.set_catalog_scan_title("".into());
                             bridge.set_catalog_scan_detail("".into());
+                            bridge.set_catalog_scan_percent(-1);
                             full_bridge_dirty = true;
                         }
                     }
@@ -782,7 +791,10 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        if launching {
+        let catalog_scan_visible = app
+            .global::<slint_ui::launcher::MisterBridge>()
+            .get_catalog_scan_visible();
+        if launching || catalog_scan_visible {
             window.request_redraw();
         }
         let active_arcade_games = if !launching && nav.screen == Screen::Arcade {
@@ -957,9 +969,9 @@ pub(super) fn run_launcher_loop(
 
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
-    arcade_catalog_required_at_start: bool,
+    _arcade_catalog_required_at_start: bool,
 ) -> bool {
-    !catalog_ready && arcade_catalog_required_at_start
+    !catalog_ready
 }
 
 fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &str) -> bool {
@@ -967,7 +979,7 @@ fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &st
         return true;
     }
     if !catalog_ready {
-        return screen == Screen::Arcade || title == "Indexing library";
+        return screen == Screen::Home || screen == Screen::Arcade || title == "Indexing library";
     }
     matches!(
         title,
@@ -1044,12 +1056,12 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(false, false));
         assert!(!initial_catalog_scan_visible(true, false));
     }
 
     #[test]
-    pub(super) fn arcade_boot_without_ready_catalog_shows_catalog_popup() {
+    pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
+        assert!(initial_catalog_scan_visible(false, false));
         assert!(initial_catalog_scan_visible(false, true));
         assert!(!initial_catalog_scan_visible(true, true));
     }
