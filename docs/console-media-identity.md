@@ -107,6 +107,20 @@ The builder deliberately rejects scraper/title stems such as
 each software name against `mame_software_items`. Convert scraper output into a
 staging directory with canonical names before building the pack.
 
+Stage scraper/title screenshots offline with the Rust host tool:
+
+```bash
+scripts/mister console-screenshot-stage \
+  --system saturn \
+  --input build/source-screenshots/saturn-scraper \
+  --output build/source-screenshots/saturn-canonical \
+  --report build/source-screenshots/saturn-stage-report.tsv
+```
+
+The report records `mapped`, `unmatched`, `ambiguous`, and `collision` rows.
+Resolve ambiguous rows with an overrides TSV of `source_stem<TAB>software_name`;
+the runtime still only sees canonical pack entries.
+
 ## Runtime Projection
 
 The launcher catalog marks `has_image=1` when it can resolve a current asset

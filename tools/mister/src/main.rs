@@ -192,6 +192,9 @@ fn run_cli() -> Result<()> {
         "mame-metadata-build" => {
             mame_metadata_build(&args)?;
         }
+        "console-screenshot-stage" => {
+            console_screenshot_stage(&args)?;
+        }
         "recover" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             if !dry_run {
@@ -213,7 +216,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
 }
 
@@ -641,6 +644,358 @@ fn load_mame_software_lists(
         hashes.append(&mut list_hashes);
     }
     Ok((items, hashes))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConsoleScreenshotCandidate {
+    software_name: String,
+    description: String,
+    normalized_title: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConsoleScreenshotMatch {
+    status: &'static str,
+    software_name: Option<String>,
+    description: Option<String>,
+    detail: String,
+}
+
+fn console_screenshot_stage(args: &[String]) -> Result<()> {
+    let system = option_value(args, "--system").ok_or("console-screenshot-stage needs --system")?;
+    let list_name = console_software_list_name(&system)?;
+    let input = option_value(args, "--input")
+        .map(PathBuf::from)
+        .ok_or("console-screenshot-stage needs --input <dir>")?;
+    let output = option_value(args, "--output")
+        .map(PathBuf::from)
+        .ok_or("console-screenshot-stage needs --output <dir>")?;
+    let report_path = option_value(args, "--report").map(PathBuf::from);
+    let overrides_path = option_value(args, "--overrides").map(PathBuf::from);
+    let mame_sqlite = option_value(args, "--mame-sqlite")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("build/mame.sqlite3"));
+
+    if !input.is_dir() {
+        return Err(format!("--input is not a directory: {}", input.display()).into());
+    }
+    let candidates = load_console_screenshot_candidates(&mame_sqlite, list_name)?;
+    let overrides = load_console_screenshot_overrides(overrides_path.as_deref())?;
+    let report = stage_console_screenshots(&input, &output, list_name, &candidates, &overrides)?;
+    print!("{report}");
+    if let Some(report_path) = report_path {
+        if let Some(parent) = report_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(report_path, report)?;
+    }
+    Ok(())
+}
+
+fn console_software_list_name(system: &str) -> Result<&'static str> {
+    match system {
+        "nes" => Ok("nes"),
+        "snes" => Ok("snes"),
+        "n64" => Ok("n64"),
+        "sms" => Ok("sms"),
+        "megadrive" | "md" | "genesis" => Ok("megadriv"),
+        "saturn" => Ok("saturn"),
+        _ => Err(format!(
+            "--system must be one of: nes, snes, n64, sms, megadrive, saturn; got {system}"
+        )
+        .into()),
+    }
+}
+
+fn load_console_screenshot_candidates(
+    db_path: &Path,
+    list_name: &str,
+) -> Result<Vec<ConsoleScreenshotCandidate>> {
+    let conn = Connection::open(db_path)?;
+    let mut stmt = conn.prepare(
+        "SELECT software_name, description
+         FROM mame_software_items
+         WHERE list_name = ?
+         ORDER BY software_name",
+    )?;
+    let rows = stmt.query_map(params![list_name], |row| {
+        let software_name: String = row.get(0)?;
+        let description: String = row.get(1)?;
+        Ok(ConsoleScreenshotCandidate {
+            software_name,
+            normalized_title: normalize_screenshot_title(&description),
+            description,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    if out.is_empty() {
+        return Err(format!(
+            "no software-list rows found for {list_name} in {}",
+            db_path.display()
+        )
+        .into());
+    }
+    Ok(out)
+}
+
+fn load_console_screenshot_overrides(
+    path: Option<&Path>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some(path) = path else {
+        return Ok(out);
+    };
+    let text = fs::read_to_string(path)?;
+    for (idx, line) in text.lines().enumerate() {
+        let line = line.trim_end();
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split('\t');
+        let source = parts
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("bad override line {}: missing source stem", idx + 1))?;
+        let software = parts
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("bad override line {}: missing software name", idx + 1))?;
+        if parts.next().is_some() {
+            return Err(format!("bad override line {}: expected two TSV columns", idx + 1).into());
+        }
+        out.insert(source.trim().to_string(), software.trim().to_string());
+    }
+    Ok(out)
+}
+
+fn stage_console_screenshots(
+    input: &Path,
+    output: &Path,
+    list_name: &str,
+    candidates: &[ConsoleScreenshotCandidate],
+    overrides: &std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    let by_software = candidates
+        .iter()
+        .map(|candidate| (candidate.software_name.as_str(), candidate))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut by_title: std::collections::BTreeMap<&str, Vec<&ConsoleScreenshotCandidate>> =
+        std::collections::BTreeMap::new();
+    for candidate in candidates {
+        by_title
+            .entry(candidate.normalized_title.as_str())
+            .or_default()
+            .push(candidate);
+    }
+
+    fs::remove_dir_all(output).or_else(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })?;
+    fs::create_dir_all(output)?;
+
+    let mut inputs = Vec::new();
+    for entry in fs::read_dir(input)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+        else {
+            continue;
+        };
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| format!("non-utf8 screenshot filename: {}", path.display()))?
+            .to_string();
+        inputs.push((stem, ext, path));
+    }
+    inputs.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut used = std::collections::BTreeMap::<String, String>::new();
+    let mut report = String::from("status\tsource\tsoftware\tdescription\tdetail\n");
+    for (stem, ext, path) in inputs {
+        let matched = match_console_screenshot_stem(&stem, &by_title, &by_software, overrides);
+        let (software, description) = match (
+            matched.software_name.as_deref(),
+            matched.description.as_deref(),
+        ) {
+            (Some(software), Some(description)) if matched.status == "mapped" => {
+                (software, description)
+            }
+            _ => {
+                report.push_str(&format!(
+                    "{}\t{}\t{}\t{}\t{}\n",
+                    matched.status,
+                    tsv_escape(&stem),
+                    matched.software_name.as_deref().unwrap_or(""),
+                    matched
+                        .description
+                        .as_deref()
+                        .map(tsv_escape)
+                        .unwrap_or_default(),
+                    tsv_escape(&matched.detail)
+                ));
+                continue;
+            }
+        };
+        let canonical_stem = format!("mame-software__{list_name}__{software}");
+        if let Some(previous) = used.get(&canonical_stem) {
+            report.push_str(&format!(
+                "collision\t{}\t{}\t{}\tprevious:{}\n",
+                tsv_escape(&stem),
+                software,
+                tsv_escape(description),
+                tsv_escape(previous)
+            ));
+            continue;
+        }
+        used.insert(canonical_stem.clone(), stem.clone());
+        fs::copy(&path, output.join(format!("{canonical_stem}.{ext}")))?;
+        report.push_str(&format!(
+            "mapped\t{}\t{}\t{}\t{}\n",
+            tsv_escape(&stem),
+            software,
+            tsv_escape(description),
+            tsv_escape(&matched.detail)
+        ));
+    }
+    Ok(report)
+}
+
+fn match_console_screenshot_stem(
+    stem: &str,
+    by_title: &std::collections::BTreeMap<&str, Vec<&ConsoleScreenshotCandidate>>,
+    by_software: &std::collections::BTreeMap<&str, &ConsoleScreenshotCandidate>,
+    overrides: &std::collections::BTreeMap<String, String>,
+) -> ConsoleScreenshotMatch {
+    if let Some(software) = overrides.get(stem) {
+        if let Some(candidate) = by_software.get(software.as_str()) {
+            return ConsoleScreenshotMatch {
+                status: "mapped",
+                software_name: Some(candidate.software_name.clone()),
+                description: Some(candidate.description.clone()),
+                detail: "override".to_string(),
+            };
+        }
+        return ConsoleScreenshotMatch {
+            status: "unmatched",
+            software_name: Some(software.clone()),
+            description: None,
+            detail: "override_not_found".to_string(),
+        };
+    }
+
+    let key = normalize_screenshot_title(stem);
+    let matches = by_title.get(key.as_str()).cloned().unwrap_or_default();
+    match matches.as_slice() {
+        [] => ConsoleScreenshotMatch {
+            status: "unmatched",
+            software_name: None,
+            description: None,
+            detail: key,
+        },
+        [candidate] => ConsoleScreenshotMatch {
+            status: "mapped",
+            software_name: Some(candidate.software_name.clone()),
+            description: Some(candidate.description.clone()),
+            detail: "title".to_string(),
+        },
+        many => ConsoleScreenshotMatch {
+            status: "ambiguous",
+            software_name: None,
+            description: None,
+            detail: many
+                .iter()
+                .map(|candidate| candidate.software_name.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        },
+    }
+}
+
+fn normalize_screenshot_title(value: &str) -> String {
+    let mut text = value.to_ascii_lowercase();
+    if let Some(pos) = text.rfind('.') {
+        text.truncate(pos);
+    }
+    for (from, to) in [
+        (", the", " the"),
+        (", a", " a"),
+        (", an", " an"),
+        ("&", " and "),
+    ] {
+        text = text.replace(from, to);
+    }
+    let mut out = String::new();
+    let mut skip_depth = 0usize;
+    for ch in text.chars() {
+        match ch {
+            '(' | '[' | '{' => {
+                skip_depth += 1;
+                out.push(' ');
+            }
+            ')' | ']' | '}' => {
+                skip_depth = skip_depth.saturating_sub(1);
+                out.push(' ');
+            }
+            _ if skip_depth > 0 => {}
+            _ if ch.is_ascii_alphanumeric() => out.push(ch),
+            _ => out.push(' '),
+        }
+    }
+    let stop_words = [
+        "usa",
+        "us",
+        "u",
+        "europe",
+        "eur",
+        "eu",
+        "japan",
+        "jp",
+        "jpn",
+        "world",
+        "korea",
+        "kr",
+        "pal",
+        "ntsc",
+        "rev",
+        "revision",
+        "version",
+        "proto",
+        "prototype",
+        "beta",
+        "demo",
+        "sample",
+        "disc",
+        "disk",
+        "cd",
+    ];
+    out.split_whitespace()
+        .filter(|word| !stop_words.contains(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn tsv_escape(value: &str) -> String {
+    value
+        .replace('\t', " ")
+        .replace('\r', " ")
+        .replace('\n', " ")
 }
 
 fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
@@ -3259,6 +3614,61 @@ H: Handlers=event3 js0"#
         let err = preview_cache_jobs(&dir).unwrap_err().to_string();
         assert!(err.contains("duplicate source stem: pacman"));
 
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn console_screenshot_title_normalization_removes_scraper_noise() {
+        assert_eq!(
+            normalize_screenshot_title("Sonic The Hedgehog (USA, Europe).png"),
+            "sonic the hedgehog"
+        );
+        assert_eq!(
+            normalize_screenshot_title("Legend of Zelda, The [!].jpg"),
+            "legend of zelda the"
+        );
+        assert_eq!(
+            normalize_screenshot_title("Virtua Fighter 2 (Japan) (Rev A)"),
+            "virtua fighter 2"
+        );
+    }
+
+    #[test]
+    fn console_screenshot_stage_maps_reports_and_copies_canonical_names() {
+        let dir = temp_path("console-screenshot-stage");
+        let _ = fs::remove_dir_all(&dir);
+        let input = dir.join("input");
+        let output = dir.join("output");
+        fs::create_dir_all(&input).unwrap();
+        fs::write(input.join("Sonic The Hedgehog (USA).png"), b"sonic").unwrap();
+        fs::write(input.join("Mystery Game.png"), b"mystery").unwrap();
+        fs::write(input.join("Virtua Fighter 2 (Japan).jpg"), b"vf2a").unwrap();
+        fs::write(input.join("Virtua Fighter 2 (USA).jpeg"), b"vf2b").unwrap();
+
+        let candidates = vec![
+            ConsoleScreenshotCandidate {
+                software_name: "sonic".to_string(),
+                description: "Sonic The Hedgehog".to_string(),
+                normalized_title: normalize_screenshot_title("Sonic The Hedgehog"),
+            },
+            ConsoleScreenshotCandidate {
+                software_name: "vf2".to_string(),
+                description: "Virtua Fighter 2".to_string(),
+                normalized_title: normalize_screenshot_title("Virtua Fighter 2"),
+            },
+        ];
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("Virtua Fighter 2 (Japan)".to_string(), "vf2".to_string());
+        overrides.insert("Virtua Fighter 2 (USA)".to_string(), "vf2".to_string());
+
+        let report =
+            stage_console_screenshots(&input, &output, "saturn", &candidates, &overrides).unwrap();
+
+        assert!(output.join("mame-software__saturn__sonic.png").exists());
+        assert!(output.join("mame-software__saturn__vf2.jpg").exists());
+        assert!(report.contains("mapped\tSonic The Hedgehog (USA)\tsonic"));
+        assert!(report.contains("unmatched\tMystery Game"));
+        assert!(report.contains("collision\tVirtua Fighter 2 (USA)\tvf2"));
         let _ = fs::remove_dir_all(dir);
     }
 
