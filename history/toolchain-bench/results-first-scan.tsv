@@ -123,3 +123,37 @@ SLOWCAT-AFTER-TITLE-20260617	df2e4886	library_db_saved	150869	bytes=31629312 sca
 SLOWCAT-AFTER-TITLE-20260617	df2e4886	library_ready	151153	games=8204 load_us=275354
 SLOWCAT-AFTER-TITLE-20260617	df2e4886	catalog_bridge_sync_update	151157	games=8204 elapsed_us=3771
 SLOWCAT-AFTER-TITLE-20260617	df2e4886	db_count	0	9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	first_frame	1659	catalog_ready=false
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	library_scan_complete	75667	scan_us=72757645 discover_us=72493858 classify_us=72595190 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_schema	140	tables=22
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_metadata_load	4130	mame=50097 hbmame=608 software_lists=14979 preview_packs=3
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_begin_tx_asset_packs	58	
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_profiles	0	rows=15
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_files	690	rows=12365
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_payloads	3914	normal_files=12347 entries=281
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_ignored_files	44	rows=398
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	975	from=0 to=1000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	902	from=1000 to=2000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	1098	from=2000 to=3000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	900	from=3000 to=4000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	1214	from=4000 to=5000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	1395	from=5000 to=6000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	1439	from=6000 to=7000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	1429	from=7000 to=8000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	2012	from=8000 to=9000 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_chunk	1677	from=9000 to=9960 total=9960
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_games_total	14210	rows=9960 launcher_rows=7122
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_materialize_arcade_ui	1746	
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_launcher_arcade	128	
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_launcher_console	905	rows=7122
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_launchers	1891	
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_meta	1187	rows=10
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_file_fingerprints	952	rows=12365
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_container_fingerprints	12	rows=154
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_insert_directory_manifest	540	rows=7978
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_commit	1061	
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	import_stage_total	31712	path=/media/fat/mister-magik/.library.sqlite3.tmp.607
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	library_db_saved	108784	bytes=31604736 scan_us=72757645 discover_us=72493858 classify_us=72595190 import_us=32915336 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	library_ready	109084	games=8204 load_us=294862
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	catalog_bridge_sync_update	109099	games=8204 elapsed_us=14126
+SLOWCAT-AFTER-HASH-GATE-20260617	48b10be6	db_count	0	9960
