@@ -153,6 +153,7 @@ pub(super) fn run_launcher_loop(
     let catalog_refresh = catalog_refresh_requested();
     let catalog_rx;
     let mut catalog_refresh_done = false;
+    let mut catalog_from_ram_scan = false;
     let mut catalog_persisted_summary_seen = false;
     match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
         Ok(loaded) if !loaded.catalog.games.is_empty() => {
@@ -361,11 +362,18 @@ pub(super) fn run_launcher_loop(
                         let cached_before_refresh = summary.is_none();
                         let duplicate_cached_catalog =
                             duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
+                        let preserve_ram_catalog = should_preserve_ram_catalog_for_session(
+                            catalog_from_ram_scan,
+                            summary.is_some(),
+                            &catalog,
+                            &ready_catalog,
+                        );
                         catalog_refresh_done = !cached_before_refresh;
-                        if !duplicate_cached_catalog {
+                        if !duplicate_cached_catalog && !preserve_ram_catalog {
                             catalog = ready_catalog;
                             catalog_version = catalog_version.wrapping_add(1);
                             catalog_ready = true;
+                            catalog_from_ram_scan = false;
                             apply_forced_arcade_selected(&mut nav, &catalog);
                             print_startup_event(
                                 start,
@@ -387,7 +395,14 @@ pub(super) fn run_launcher_loop(
                                 );
                             }
                         }
-                        if duplicate_cached_catalog {
+                        if preserve_ram_catalog {
+                            print_startup_event(
+                                start,
+                                "library_ready_deferred",
+                                "keeping in-memory catalog until next launcher start",
+                            );
+                        }
+                        if duplicate_cached_catalog || preserve_ram_catalog {
                             continue;
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -438,6 +453,7 @@ pub(super) fn run_launcher_loop(
                         catalog = ready_catalog;
                         catalog_version = catalog_version.wrapping_add(1);
                         catalog_ready = true;
+                        catalog_from_ram_scan = true;
                         apply_forced_arcade_selected(&mut nav, &catalog);
                         print_startup_event(
                             start,
@@ -1207,10 +1223,47 @@ fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bo
     catalog_ready && cached_before_refresh
 }
 
+fn should_preserve_ram_catalog_for_session(
+    current_from_ram_scan: bool,
+    ready_is_persisted_refresh: bool,
+    current: &ArcadeCatalog,
+    ready: &ArcadeCatalog,
+) -> bool {
+    current_from_ram_scan
+        && ready_is_persisted_refresh
+        && !catalog_launch_order_matches(current, ready)
+}
+
+fn catalog_launch_order_matches(current: &ArcadeCatalog, ready: &ArcadeCatalog) -> bool {
+    current.games.len() == ready.games.len()
+        && current
+            .games
+            .iter()
+            .zip(ready.games.iter())
+            .all(|(left, right)| {
+                left.mra_path == right.mra_path && left.system_id == right.system_id
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
+
+    fn test_catalog(entries: &[(&str, &str)]) -> ArcadeCatalog {
+        let games = entries
+            .iter()
+            .map(|(launch_ref, system_id)| ArcadeGameEntry {
+                title: (*launch_ref).into(),
+                mra_path: (*launch_ref).into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: (*system_id).into(),
+            })
+            .collect::<Vec<_>>();
+        let systems = arcade_catalog::systems_from_games(&games);
+        ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems)
+    }
 
     #[test]
     pub(super) fn effect_half_target_allows_640x448_at_native_scale() {
@@ -1295,6 +1348,29 @@ mod tests {
         };
         assert!(!redraw.should_request(true, 90, now));
         assert!(!redraw.should_request(false, -1, now));
+    }
+
+    #[test]
+    pub(super) fn persisted_catalog_with_same_launch_order_can_replace_ram_catalog() {
+        let ram = test_catalog(&[("/media/fat/_Arcade/a.mra", "arcade")]);
+        let persisted = test_catalog(&[("/media/fat/_Arcade/a.mra", "arcade")]);
+
+        assert!(!should_preserve_ram_catalog_for_session(
+            true, true, &ram, &persisted
+        ));
+    }
+
+    #[test]
+    pub(super) fn persisted_catalog_with_different_launch_order_waits_until_next_session() {
+        let ram = test_catalog(&[
+            ("/media/fat/_Arcade/a.mra", "arcade"),
+            ("/media/fat/_Arcade/b.mra", "arcade"),
+        ]);
+        let persisted = test_catalog(&[("/media/fat/_Arcade/a.mra", "arcade")]);
+
+        assert!(should_preserve_ram_catalog_for_session(
+            true, true, &ram, &persisted
+        ));
     }
 
     #[test]
