@@ -11,6 +11,14 @@ on:
         description: "Distribution artifact basename"
         required: true
         default: "mister-magik"
+      hbmame_download_url:
+        description: "Optional HBMAME Windows cmd-line archive URL; falls back to repo variable HBMAME_DOWNLOAD_URL"
+        required: false
+        default: ""
+      hbmame_cache_key:
+        description: "HBMAME metadata cache version; bump when the HBMAME archive changes"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -24,9 +32,83 @@ env:
   MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
 
 jobs:
+  hbmame-listxml:
+    name: Build HBMAME listxml
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      cache-key: ${{ steps.hbmame-inputs.outputs.cache_key }}
+
+    steps:
+      - name: Checkout app repo
+        uses: actions/checkout@v6
+
+      - name: Resolve HBMAME inputs
+        id: hbmame-inputs
+        shell: pwsh
+        run: |
+          $url = "${{ github.event.inputs.hbmame_download_url }}"
+          if ([string]::IsNullOrWhiteSpace($url)) {
+            $url = "${{ vars.HBMAME_DOWNLOAD_URL }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($url)) {
+            Write-Error "Set workflow input hbmame_download_url or repository variable HBMAME_DOWNLOAD_URL to the official HBMAME command-line archive URL."
+          }
+          $cacheKey = "${{ github.event.inputs.hbmame_cache_key }}"
+          if ([string]::IsNullOrWhiteSpace($cacheKey)) {
+            $cacheKey = "${{ vars.HBMAME_CACHE_KEY }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($cacheKey)) {
+            $cacheKey = "hbmame-current"
+          }
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          Set-Content -Path build/hbmame-url.txt -Value $url
+          Set-Content -Path build/hbmame-cache-key.txt -Value $cacheKey
+          "url=$url" >> $env:GITHUB_OUTPUT
+          "cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
+
+      - name: Cache HBMAME listxml
+        id: hbmame-listxml-cache
+        uses: actions/cache@v5
+        with:
+          path: build/hbmame-listxml.xml
+          key: hbmame-listxml-${{ runner.os }}-${{ steps.hbmame-inputs.outputs.cache_key }}-${{ hashFiles('.github/workflows/distribution.yml') }}
+
+      - name: Download HBMAME command-line archive
+        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build,hbmame-download | Out-Null
+          Invoke-WebRequest -Uri "${{ steps.hbmame-inputs.outputs.url }}" -OutFile hbmame-download/hbmame.7z
+
+      - name: Extract HBMAME
+        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          7z x hbmame-download/hbmame.7z -ohbmame-download/extracted -y
+          $exe = Get-ChildItem -Path hbmame-download/extracted -Recurse -Filter hbmame.exe | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "hbmame.exe not found in archive"
+          }
+          "HBMAME_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Generate HBMAME listxml
+        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & "$env:HBMAME_EXE" -listxml | Out-File -FilePath build/hbmame-listxml.xml -Encoding utf8
+
+      - name: Upload HBMAME listxml
+        uses: actions/upload-artifact@v7
+        with:
+          name: hbmame-listxml
+          path: build/hbmame-listxml.xml
+          if-no-files-found: error
+
   distribution:
     name: Build distribution ZIP
     runs-on: ubuntu-24.04
+    needs: hbmame-listxml
     timeout-minutes: 120
 
     steps:
@@ -123,6 +205,13 @@ jobs:
           path: build/mame.sqlite3
           key: mame-sqlite-${{ runner.os }}-v1
 
+      - name: Cache HBMAME metadata database
+        id: hbmame-db-cache
+        uses: actions/cache@v5
+        with:
+          path: build/hbmame.sqlite3
+          key: hbmame-sqlite-${{ runner.os }}-${{ needs.hbmame-listxml.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml', 'tools/mister/src/main.rs') }}
+
       - name: Install package tools
         run: |
           sudo apt-get update
@@ -136,10 +225,22 @@ jobs:
         if: steps.mame-db-cache.outputs.cache-hit != 'true'
         run: scripts/mister mame-metadata-build --mame mame --out build/mame.sqlite3
 
+      - name: Download HBMAME listxml
+        if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: hbmame-listxml
+          path: build
+
+      - name: Build HBMAME metadata database
+        if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
+        run: scripts/mister mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
+
       - name: Package distribution zip
         run: |
           scripts/package-distribution.sh \
             --main-bin Main_MiSTer/bin/MiSTer \
+            --hbmame-sqlite-default \
             --name "${{ github.event.inputs.artifact_name }}"
 
       - name: Upload distribution zip

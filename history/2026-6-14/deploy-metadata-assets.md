@@ -4,8 +4,9 @@
 
 ```bash
 scripts/deploy-rust.sh --mame-metadata
+scripts/deploy-rust.sh --hbmame-metadata
 scripts/deploy-rust.sh --asset-packs
-scripts/deploy-rust.sh --mame-metadata --asset-packs
+scripts/deploy-rust.sh --mame-metadata --hbmame-metadata --asset-packs
 ```
 
 `--mame-metadata` deploys:
@@ -20,6 +21,25 @@ If `build/mame.sqlite3` is missing, deploy builds it with:
 scripts/mister mame-metadata-build --out build/mame.sqlite3
 ```
 
+`--hbmame-metadata` deploys:
+
+```text
+build/hbmame.sqlite3 -> /media/fat/mister-magik/hbmame.sqlite3
+```
+
+If `build/hbmame.sqlite3` is missing and `MISTER_HBMAME_BIN` is set, deploy
+builds it from HBMAME `-listxml` with:
+
+```bash
+scripts/mister mame-metadata-build --out build/hbmame.sqlite3 --mame "$MISTER_HBMAME_BIN"
+```
+
+If neither a local DB nor `MISTER_HBMAME_BIN` is available, deploy asks the
+device to create a supplemental `hbmame.sqlite3` from parsed MRA parent rows in
+the current library database. When the device library database is missing, deploy
+refreshes once, creates the supplemental DB, then refreshes again so the new
+metadata participates in clone-family projection.
+
 `--asset-packs` deploys:
 
 ```text
@@ -33,8 +53,10 @@ Build that pack first with:
 scripts/build-neogeo-screenshot-pack.sh
 ```
 
-When either flag is used, deploy refreshes the device library database after the
-files are installed.
+When metadata or asset flags are used, deploy refreshes the device library
+database after the files are installed. The library DB fingerprints
+`mame.sqlite3` and `hbmame.sqlite3`, so metadata changes force a catalog rebuild
+instead of using a stale cached projection.
 
 Runtime preview loading now supports multiple v1 screenshot packs. It checks:
 

@@ -13,6 +13,8 @@
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
 //!     library-refresh    build/update the SQLite library cache
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
+//!     hbmame-metadata-from-library
+//!                        build supplemental HBMAME metadata from parsed MRA parents
 //!   Benchmarks:
 //!     scenes             list Slint scene names
 //!     effects            list framebuffer effect benchmark names
@@ -103,6 +105,11 @@ fn main() {
 
     if cmd == "library-sql" {
         run_library_sql();
+        return;
+    }
+
+    if cmd == "hbmame-metadata-from-library" {
+        run_hbmame_metadata_from_library();
         return;
     }
 
@@ -227,6 +234,22 @@ fn run_library_sql() {
         }
         Err(e) => {
             eprintln!("library_sql\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_hbmame_metadata_from_library() {
+    match library_db::write_default_hbmame_metadata_from_library() {
+        Ok(summary) => {
+            println!(
+                "hbmame_metadata_from_library\tdone\tpath={}\trows={}",
+                summary.path.display(),
+                summary.rows
+            );
+        }
+        Err(e) => {
+            eprintln!("hbmame_metadata_from_library\tfailed\t{e}");
             std::process::exit(1);
         }
     }

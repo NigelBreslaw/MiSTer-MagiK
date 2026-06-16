@@ -5,11 +5,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
+DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
 DEFAULT_ASSET_PACK="$ROOT/build/neogeo-screenshots/neogeo-screenshots.mmlz4b"
 DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
 
 BIN="$DEFAULT_BIN"
 MAME_SQLITE="$DEFAULT_MAME"
+HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
 ASSET_PACK=""
 MAIN_BIN=""
@@ -28,11 +30,15 @@ Options:
                        Default: $DEFAULT_BIN
   --mame-sqlite PATH   MAME metadata SQLite database.
                        Default: $DEFAULT_MAME
+  --hbmame-sqlite PATH Optional HBMame metadata SQLite database.
+                       Default if --hbmame-sqlite-default: $DEFAULT_HBMAME
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
   --asset-pack PATH    Optional preview asset pack.
                        Default if --asset-pack-default: $DEFAULT_ASSET_PACK
   --asset-pack-default Include the default Neo Geo screenshot asset pack if present.
+  --hbmame-sqlite-default
+                       Include the default HBMame metadata DB if present.
   --main-bin PATH      Optional MiSTer_MagiK Main fork binary.
   --name NAME          Output basename. Default: mister-magik
   --out-dir PATH       Output directory. Default: dist
@@ -42,6 +48,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   Scripts/mister-magik.sh
   mister-magik/mister-magik-fb
   mister-magik/mame.sqlite3
+  mister-magik/hbmame.sqlite3   when --hbmame-sqlite is provided
   mister-magik/assets/...     when --asset-pack is provided
   MiSTer_MagiK                when --main-bin is provided
 EOF
@@ -57,6 +64,10 @@ while [[ $# -gt 0 ]]; do
       MAME_SQLITE="${2:?--mame-sqlite requires a path}"
       shift 2
       ;;
+    --hbmame-sqlite)
+      HBMAME_SQLITE="${2:?--hbmame-sqlite requires a path}"
+      shift 2
+      ;;
     --installer)
       INSTALLER="${2:?--installer requires a path}"
       shift 2
@@ -67,6 +78,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --asset-pack-default)
       ASSET_PACK="$DEFAULT_ASSET_PACK"
+      shift
+      ;;
+    --hbmame-sqlite-default)
+      HBMAME_SQLITE="$DEFAULT_HBMAME"
       shift
       ;;
     --main-bin)
@@ -113,6 +128,11 @@ if [[ -n "$ASSET_PACK" && ! -f "$ASSET_PACK" ]]; then
   echo "ERROR: asset pack not found: $ASSET_PACK" >&2
   exit 1
 fi
+if [[ -n "$HBMAME_SQLITE" && ! -f "$HBMAME_SQLITE" ]]; then
+  echo "ERROR: HBMame metadata DB not found: $HBMAME_SQLITE" >&2
+  echo "       Build it with: scripts/mister mame-metadata-build --out '$HBMAME_SQLITE' --mame /path/to/hbmame" >&2
+  exit 1
+fi
 if [[ -n "$MAIN_BIN" && ! -f "$MAIN_BIN" ]]; then
   echo "ERROR: Main fork binary not found: $MAIN_BIN" >&2
   exit 1
@@ -128,6 +148,9 @@ chmod 755 "$STAGE/Scripts/mister-magik.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
 cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
+if [[ -n "$HBMAME_SQLITE" ]]; then
+  cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"
+fi
 
 if [[ -n "$ASSET_PACK" ]]; then
   mkdir -p "$STAGE/mister-magik/assets"

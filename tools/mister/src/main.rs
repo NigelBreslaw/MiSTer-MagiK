@@ -392,7 +392,8 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
     } else {
         let mame = option_value(args, "--mame")
             .or_else(|| env::var("MAME_BIN").ok())
-            .unwrap_or_else(|| "/Users/nigelb/Downloads/mame0288-arm64/mame".to_string());
+            .or_else(|| find_program_on_path("mame"))
+            .ok_or("mame-metadata-build needs --listxml <xml>, --mame <binary>, MAME_BIN, or mame on PATH")?;
         let output = Command::new(&mame).arg("-listxml").output()?;
         if !output.status.success() {
             return Err(format!(
@@ -496,6 +497,37 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
         }
     }
     Ok(machines)
+}
+
+fn find_program_on_path(name: &str) -> Option<String> {
+    let paths = env::var_os("PATH")?;
+    let extensions: Vec<String> = if cfg!(windows) {
+        env::var_os("PATHEXT")
+            .map(|value| {
+                value
+                    .to_string_lossy()
+                    .split(';')
+                    .filter(|ext| !ext.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![".exe".into(), ".bat".into(), ".cmd".into()])
+    } else {
+        vec![String::new()]
+    };
+    for dir in env::split_paths(&paths) {
+        for extension in &extensions {
+            let candidate = if extension.is_empty() || name.ends_with(extension) {
+                dir.join(name)
+            } else {
+                dir.join(format!("{name}{extension}"))
+            };
+            if candidate.is_file() {
+                return Some(candidate.display().to_string());
+            }
+        }
+    }
+    None
 }
 
 fn apply_mame_display(machine: &mut MameMachine, e: &BytesStart<'_>) {
