@@ -17,6 +17,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
+const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
+const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else nohup /sbin/reboot >/dev/null 2>&1 & echo raw; fi";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -79,12 +81,13 @@ fn run_cli() -> Result<()> {
             std::process::exit(wait_up(secs)?);
         }
         "reboot" | "reboot-wait" => {
+            let raw = take_raw_reboot_flag(&mut args);
             let host = host();
             {
                 let sess = connect(10)?;
-                let _ = exec(&sess, "nohup /sbin/reboot >/dev/null 2>&1 &", false);
+                let issued = issue_reboot(&sess, raw)?;
+                println!("reboot issued to {host} ({issued})");
             }
-            println!("reboot issued to {host}");
             if action == "reboot-wait" {
                 wait_down(40.0);
                 let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
@@ -210,8 +213,35 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|recover> ..."
+        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
+}
+
+fn take_raw_reboot_flag(args: &mut Vec<String>) -> bool {
+    if let Some(pos) = args.iter().position(|arg| arg == "--raw") {
+        args.remove(pos);
+        true
+    } else {
+        false
+    }
+}
+
+fn reboot_remote_command(raw: bool) -> &'static str {
+    if raw {
+        RAW_REBOOT_REMOTE_CMD
+    } else {
+        SUPERVISED_REBOOT_REMOTE_CMD
+    }
+}
+
+fn issue_reboot(sess: &Session, raw: bool) -> Result<String> {
+    let out = exec(sess, reboot_remote_command(raw), true)?;
+    let mode = out.stdout.trim();
+    if mode.is_empty() {
+        Ok(if raw { "raw" } else { "unknown" }.to_string())
+    } else {
+        Ok(mode.to_string())
+    }
 }
 
 fn validate_remote_run_command(command: &str) -> Result<()> {
@@ -1947,9 +1977,9 @@ fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()
     {
         let sess = connect(10)?;
         let _ = exec(&sess, "mkdir -p /media/fat/mister-magik; : > /media/fat/mister-magik/boot-analytics.enabled; sync", true)?;
-        let _ = exec(&sess, "nohup /sbin/reboot >/dev/null 2>&1 &", false);
+        let issued = issue_reboot(&sess, false)?;
+        println!("reboot issued to {} ({issued})", host());
     }
-    println!("reboot issued to {}", host());
     wait_down(40.0);
     if wait_up(120.0)? != 0 {
         return Err("device did not return after reboot".into());
@@ -2463,6 +2493,33 @@ video_mode=14
             "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn reboot_remote_command_prefers_supervised_magik_command() {
+        let cmd = reboot_remote_command(false);
+
+        assert!(cmd.contains("mister_magik_reboot"));
+        assert!(cmd.contains("/dev/MiSTer_cmd"));
+        assert!(cmd.contains("MiSTer_MagiK"));
+        assert!(cmd.contains("/sbin/reboot"));
+    }
+
+    #[test]
+    fn reboot_remote_command_raw_skips_supervised_command() {
+        let cmd = reboot_remote_command(true);
+
+        assert!(cmd.contains("/sbin/reboot"));
+        assert!(!cmd.contains("mister_magik_reboot"));
+    }
+
+    #[test]
+    fn raw_reboot_flag_is_removed_before_timeout_parse() {
+        let mut args = vec!["--raw".to_string(), "180".to_string()];
+
+        assert!(take_raw_reboot_flag(&mut args));
+        assert_eq!(args, vec!["180"]);
+        assert!(!take_raw_reboot_flag(&mut args));
     }
 
     #[test]

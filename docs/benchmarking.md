@@ -162,9 +162,10 @@ scripts/mister db
 scripts/mister db "SELECT count(*) FROM games"
 ```
 
-`profile-first-scan.sh` deletes the production catalog database, reboots through
-the supervised MagiK boot path, and records first-frame/catalog-ready timings in
-`history/toolchain-bench/results-first-scan.tsv`.
+`profile-first-scan.sh` deletes the production catalog database and reboots with
+`scripts/mister reboot-wait`, which uses the supervised `mister_magik_reboot`
+path when the Main fork is available. It records first-frame/catalog-ready
+timings in `history/toolchain-bench/results-first-scan.tsv`.
 
 `bench-library.sh` suspends the supervised launcher through `/dev/MiSTer_cmd`
 while running scanner/import CLI benchmarks. Do not benchmark by directly
