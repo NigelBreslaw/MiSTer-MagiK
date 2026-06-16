@@ -2768,6 +2768,27 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
+    fn preview_resize_image_chooses_filter_by_scale_direction() {
+        let small = RgbImage::from_pixel(2, 1, image::Rgb([255, 0, 0]));
+        let (upscaled, up_filter) = resize_preview_image(small, 4);
+        assert_eq!((upscaled.width(), upscaled.height()), (4, 2));
+        assert_eq!(up_filter, PreviewResizeChoice::Nearest);
+        assert_eq!(up_filter.label(), "nearest");
+
+        let large = RgbImage::from_pixel(8, 4, image::Rgb([0, 255, 0]));
+        let (downscaled, down_filter) = resize_preview_image(large, 4);
+        assert_eq!((downscaled.width(), downscaled.height()), (4, 2));
+        assert_eq!(down_filter, PreviewResizeChoice::Lanczos);
+        assert_eq!(down_filter.label(), "lanczos");
+
+        let exact = RgbImage::from_pixel(4, 2, image::Rgb([0, 0, 255]));
+        let (unchanged, unchanged_filter) = resize_preview_image(exact, 4);
+        assert_eq!((unchanged.width(), unchanged.height()), (4, 2));
+        assert_eq!(unchanged_filter, PreviewResizeChoice::Unchanged);
+        assert_eq!(unchanged_filter.label(), "unchanged");
+    }
+
+    #[test]
     fn parses_mame_1942_metadata() {
         let machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
         let parent = machines
