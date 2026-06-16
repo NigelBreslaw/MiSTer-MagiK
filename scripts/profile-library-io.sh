@@ -177,6 +177,9 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
   $1 == "library_scan_bench_tsv" {
     print label, $4, $3, $5, "", "", "", "", "", "", "", "", "", $6
   }
+  $1 == "library_import_timing" {
+    print label, "import_stage_" $2, int(($3 + 500) / 1000), "", "", "", "", "", "", "", "", "", "", $4
+  }
   $1 == "library_io_done_tsv" {
     print label, "done", $3, "", "", "", "", "", "", "", "", "", "", $4
   }

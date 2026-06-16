@@ -3738,7 +3738,9 @@ fn write_sqlite_scan_with_sources(
     preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
     mut progress: ProgressCallback<'_>,
 ) -> Result<(), String> {
+    let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
+    let schema_t = Instant::now();
     conn.execute_batch(
         r#"
         PRAGMA journal_mode=OFF;
@@ -3952,18 +3954,34 @@ fn write_sqlite_scan_with_sources(
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
+    report_library_import_timing("schema", schema_t, "tables=22");
 
+    let metadata_t = Instant::now();
     let mame_signature = file_signature(mame_sqlite_path);
     let hbmame_signature = file_signature(hbmame_sqlite_path);
     let mame_metadata = load_mame_machine_metadata(mame_sqlite_path);
     let software_metadata = load_mame_software_metadata(mame_sqlite_path);
     let console_assets = console_preview_assets(preview_asset_packs);
     let arcade_metadata = load_arcade_machine_metadata(mame_sqlite_path, hbmame_sqlite_path);
+    report_library_import_timing(
+        "metadata_load",
+        metadata_t,
+        format!(
+            "mame={} hbmame={} software_lists={} preview_packs={}",
+            arcade_metadata.mame.len(),
+            arcade_metadata.hbmame.len(),
+            software_metadata.items.len(),
+            preview_asset_packs.len()
+        ),
+    );
+    let tx_t = Instant::now();
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
     register_preview_asset_packs(&tx, &mame_metadata, &software_metadata, preview_asset_packs)?;
+    report_library_import_timing("begin_tx_asset_packs", tx_t, "");
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
                 "INSERT INTO profiles(profile_id,system_id,category,title,core_name,core_path,source_kind,source_detail)
@@ -3983,8 +4001,14 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert profile: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_profiles",
+            stage_t,
+            format!("rows={}", launch_profiles::builtin_profiles().len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let normal_paths = scan
             .normal_files
             .iter()
@@ -4019,8 +4043,14 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert file fact: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_files",
+            stage_t,
+            format!("rows={}", scan.file_fingerprints.len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
                 "INSERT INTO payloads(payload_id,file_path,entry_path,launch_ref,profile_id,title,mount_kind,mount_index,mount_delay_secs,disposition,size,mtime_secs,source_kind,source_detail)
@@ -4074,8 +4104,14 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert payload entry: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_payloads",
+            stage_t,
+            format!("normal_files={} entries={}", scan.normal_files.len(), scan.entries.len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
                 "INSERT INTO ignored_files(file_path,profile_id,reason,source_kind,source_detail)
@@ -4092,8 +4128,14 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert ignored file: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_ignored_files",
+            stage_t,
+            format!("rows={}", scan.ignored_files.len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let mut launcher_rows = Vec::<CatalogRow>::new();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
@@ -4139,6 +4181,8 @@ fn write_sqlite_scan_with_sources(
             preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
         let discovery_total = discoveries.len();
         report_sqlite_import_progress(&mut progress, 0, discovery_total);
+        let mut chunk_t = Instant::now();
+        let mut chunk_start = 0usize;
         for (idx, (key, discovery)) in discoveries.into_iter().enumerate() {
             if idx > 0 && idx % 250 == 0 {
                 report_sqlite_import_progress(&mut progress, idx, discovery_total);
@@ -4297,6 +4341,16 @@ fn write_sqlite_scan_with_sources(
                     discovery.hardware_id.as_str()
                 ])
                 .map_err(|e| format!("insert game fts: {e}"))?;
+            let written = idx + 1;
+            if written % 1000 == 0 || written == discovery_total {
+                report_library_import_timing(
+                    "insert_games_chunk",
+                    chunk_t,
+                    format!("from={} to={} total={discovery_total}", chunk_start, written),
+                );
+                chunk_t = Instant::now();
+                chunk_start = written;
+            }
         }
         report_sqlite_import_progress(&mut progress, discovery_total, discovery_total);
         drop(fts_stmt);
@@ -4306,8 +4360,19 @@ fn write_sqlite_scan_with_sources(
         drop(plan_stmt);
         drop(game_stmt);
         drop(system_stmt);
+        report_library_import_timing(
+            "insert_games_total",
+            stage_t,
+            format!(
+                "rows={discovery_total} launcher_rows={}",
+                launcher_rows.len()
+            ),
+        );
         report_sqlite_import_finalizing(&mut progress);
+        let projection_t = Instant::now();
         materialize_arcade_ui_projections(&tx)?;
+        report_library_import_timing("materialize_arcade_ui", projection_t, "");
+        let launcher_arcade_t = Instant::now();
         tx.execute(
             "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
              SELECT ordinal,title,sort_title,launch_ref,image_path,has_image,system_id
@@ -4316,11 +4381,13 @@ fn write_sqlite_scan_with_sources(
             [],
         )
         .map_err(|e| format!("insert preferred launcher catalog: {e}"))?;
+        report_library_import_timing("insert_launcher_arcade", launcher_arcade_t, "");
         let ordinal_offset = tx
             .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
                 row.get::<_, i64>(0)
             })
             .map_err(|e| format!("query launcher catalog offset: {e}"))?;
+        let launcher_console_t = Instant::now();
         launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
         let launcher_games = collapse_catalog_variants(launcher_rows);
         let mut launcher_stmt = tx
@@ -4342,8 +4409,14 @@ fn write_sqlite_scan_with_sources(
                 ])
                 .map_err(|e| format!("insert launcher catalog: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_launcher_console",
+            launcher_console_t,
+            format!("rows={}", launcher_games.len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
                 "INSERT INTO launchers(launcher_id,file_path,launcher_kind,profile_id,title,source_kind,source_detail)
@@ -4372,8 +4445,10 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert launcher: {e}"))?;
         }
+        report_library_import_timing("insert_launchers", stage_t, "");
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare("INSERT INTO meta(key,value) VALUES (?1,?2)")
             .map_err(|e| format!("prepare meta insert: {e}"))?;
@@ -4406,8 +4481,10 @@ fn write_sqlite_scan_with_sources(
             hbmame_signature.mtime_secs
         ])
         .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
+        report_library_import_timing("insert_meta", stage_t, "rows=10");
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare("INSERT INTO file_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)")
             .map_err(|e| format!("prepare file fingerprint insert: {e}"))?;
@@ -4415,8 +4492,14 @@ fn write_sqlite_scan_with_sources(
             stmt.execute(params![path.as_str(), *size as i64, *mtime_secs])
                 .map_err(|e| format!("insert file fingerprint: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_file_fingerprints",
+            stage_t,
+            format!("rows={}", scan.file_fingerprints.len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
                 "INSERT INTO container_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
@@ -4430,8 +4513,14 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert fingerprint: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_container_fingerprints",
+            stage_t,
+            format!("rows={}", scan.containers.len()),
+        );
     }
     {
+        let stage_t = Instant::now();
         let mut stmt = tx
             .prepare("INSERT INTO directory_manifest(dir_path,dir_size,dir_mtime_secs,child_count,hash) VALUES (?1,?2,?3,?4,?5)")
             .map_err(|e| format!("prepare directory manifest insert: {e}"))?;
@@ -4445,8 +4534,28 @@ fn write_sqlite_scan_with_sources(
             ])
             .map_err(|e| format!("insert directory manifest: {e}"))?;
         }
+        report_library_import_timing(
+            "insert_directory_manifest",
+            stage_t,
+            format!("rows={}", scan.directory_manifest.len()),
+        );
     }
-    tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))
+    let commit_t = Instant::now();
+    tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))?;
+    report_library_import_timing("commit", commit_t, "");
+    report_library_import_timing("total", total_t, format!("path={}", path.display()));
+    Ok(())
+}
+
+fn report_library_import_timing(
+    stage: &str,
+    started: Instant,
+    detail: impl std::fmt::Display,
+) {
+    println!(
+        "library_import_timing\t{stage}\t{}\t{detail}",
+        started.elapsed().as_micros()
+    );
 }
 
 fn report_sqlite_import_progress(
