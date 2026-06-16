@@ -14,3 +14,10 @@ FIRSTSCAN-TMPFS-20260616	f751185	library_ready	100698	games=8389 load_us=305794
 FIRSTSCAN-TMPFS-20260616	f751185	library_db_saved	100698	bytes=31006720 scan_us=70317792 discover_us=70048572 classify_us=70237537 import_us=25819970 discoveries=9959 normal_files=12346 containers=154 entries=281
 FIRSTSCAN-TMPFS-20260616	f751185	catalog_bridge_sync_update	100702	games=8389 elapsed_us=3677
 FIRSTSCAN-TMPFS-20260616	f751185	db_count	0	9959
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	first_frame	1596	catalog_ready=false
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	library_scan_catalog_ready	74510	games=9393 scan_us=69933989 discover_us=69735401 classify_us=69776281 discoveries=9959 normal_files=12346 containers=154 entries=281
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	catalog_bridge_sync_update	74518	games=9393 source=memory elapsed_us=7572
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	library_db_saved	102444	bytes=31006720 scan_us=69933989 discover_us=69735401 classify_us=69776281 import_us=27790009 discoveries=9959 normal_files=12346 containers=154 entries=281
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	library_ready	102876	games=8389 load_us=365771
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	catalog_bridge_sync_update	102903	games=8389 elapsed_us=26415
+FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	db_count	0	9959
