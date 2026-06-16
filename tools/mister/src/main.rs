@@ -413,39 +413,108 @@ struct MameMachine {
     source_version: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MameSoftwareItem {
+    list_name: String,
+    software_name: String,
+    parent_name: Option<String>,
+    description: String,
+    year: Option<String>,
+    publisher: Option<String>,
+    region: Option<String>,
+    source_version: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MameSoftwareHash {
+    list_name: String,
+    software_name: String,
+    part_name: Option<String>,
+    rom_name: Option<String>,
+    size: Option<i64>,
+    crc32: Option<String>,
+    sha1: Option<String>,
+    data_area: Option<String>,
+    disk_sha1: Option<String>,
+}
+
 fn mame_metadata_build(args: &[String]) -> Result<()> {
     let out = option_value(args, "--out")
         .or_else(|| option_value(args, "-o"))
         .ok_or("mame-metadata-build needs --out <sqlite>")?;
-    let xml = if let Some(listxml) = option_value(args, "--listxml") {
-        fs::read_to_string(listxml)?
+    let machines = if let Some(machine_sqlite) = option_value(args, "--machine-sqlite") {
+        load_mame_machines_from_db(Path::new(&machine_sqlite))?
     } else {
-        let mame = option_value(args, "--mame")
+        let xml = if let Some(listxml) = option_value(args, "--listxml") {
+            fs::read_to_string(listxml)?
+        } else {
+            let mame = option_value(args, "--mame")
             .or_else(|| env::var("MAME_BIN").ok())
             .or_else(|| find_program_on_path("mame"))
             .ok_or("mame-metadata-build needs --listxml <xml>, --mame <binary>, MAME_BIN, or mame on PATH")?;
-        let output = Command::new(&mame).arg("-listxml").output()?;
-        if !output.status.success() {
-            return Err(format!(
-                "{mame} -listxml failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-        String::from_utf8(output.stdout)?
+            let output = Command::new(&mame).arg("-listxml").output()?;
+            if !output.status.success() {
+                return Err(format!(
+                    "{mame} -listxml failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .into());
+            }
+            String::from_utf8(output.stdout)?
+        };
+        parse_mame_listxml(&xml)?
     };
-    let machines = parse_mame_listxml(&xml)?;
-    write_mame_metadata_db(Path::new(&out), &machines)?;
+    let (software_items, software_hashes) = load_mame_software_lists(args)?;
+    write_mame_metadata_db(
+        Path::new(&out),
+        &machines,
+        &software_items,
+        &software_hashes,
+    )?;
     println!(
-        "mame_metadata_build out={} machines={} source_version={}",
+        "mame_metadata_build out={} machines={} software_items={} software_hashes={} source_version={}",
         out,
         machines.len(),
+        software_items.len(),
+        software_hashes.len(),
         machines
             .first()
             .map(|machine| machine.source_version.as_str())
             .unwrap_or("unknown")
     );
     Ok(())
+}
+
+fn load_mame_software_lists(
+    args: &[String],
+) -> Result<(Vec<MameSoftwareItem>, Vec<MameSoftwareHash>)> {
+    const TARGET_LISTS: &[&str] = &["nes", "snes", "n64", "sms", "megadriv", "saturn"];
+
+    let mut paths = option_values(args, "--software-list")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if let Some(dir) = option_value(args, "--software-dir") {
+        let dir = PathBuf::from(dir);
+        for list in TARGET_LISTS {
+            let path = dir.join(format!("{list}.xml"));
+            if path.is_file() {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+
+    let mut items = Vec::new();
+    let mut hashes = Vec::new();
+    for path in paths {
+        let xml = fs::read_to_string(&path)?;
+        let (mut list_items, mut list_hashes) = parse_mame_software_list_xml(&xml)?;
+        items.append(&mut list_items);
+        hashes.append(&mut list_hashes);
+    }
+    Ok((items, hashes))
 }
 
 fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
@@ -529,6 +598,196 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
     Ok(machines)
 }
 
+fn parse_mame_software_list_xml(
+    xml: &str,
+) -> Result<(Vec<MameSoftwareItem>, Vec<MameSoftwareHash>)> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut items = Vec::new();
+    let mut hashes = Vec::new();
+    let mut list_name = String::new();
+    let mut source_version = "software-list".to_string();
+    let mut current: Option<MameSoftwareItem> = None;
+    let mut current_part: Option<String> = None;
+    let mut current_data_area: Option<String> = None;
+    let mut field = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                match tag.as_str() {
+                    "softwarelist" => {
+                        list_name = attr_value(&e, b"name").unwrap_or_default();
+                        if let Some(build) = attr_value(&e, b"build") {
+                            source_version = build;
+                        }
+                    }
+                    "software" => {
+                        let software_name = attr_value(&e, b"name").unwrap_or_default();
+                        current = Some(MameSoftwareItem {
+                            list_name: list_name.clone(),
+                            software_name,
+                            parent_name: attr_value(&e, b"cloneof"),
+                            source_version: source_version.clone(),
+                            ..MameSoftwareItem::default()
+                        });
+                    }
+                    "description" | "year" | "publisher" if current.is_some() => field = tag,
+                    "part" if current.is_some() => current_part = attr_value(&e, b"name"),
+                    "dataarea" | "diskarea" if current.is_some() => {
+                        current_data_area = attr_value(&e, b"name")
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                if let Some(item) = current.as_ref() {
+                    match tag.as_str() {
+                        "rom" => hashes.push(MameSoftwareHash {
+                            list_name: item.list_name.clone(),
+                            software_name: item.software_name.clone(),
+                            part_name: current_part.clone(),
+                            rom_name: attr_value(&e, b"name"),
+                            size: attr_value(&e, b"size").and_then(|value| value.parse().ok()),
+                            crc32: attr_value(&e, b"crc").map(|value| value.to_ascii_lowercase()),
+                            sha1: attr_value(&e, b"sha1").map(|value| value.to_ascii_lowercase()),
+                            data_area: current_data_area.clone(),
+                            disk_sha1: None,
+                        }),
+                        "disk" => hashes.push(MameSoftwareHash {
+                            list_name: item.list_name.clone(),
+                            software_name: item.software_name.clone(),
+                            part_name: current_part.clone(),
+                            rom_name: attr_value(&e, b"name"),
+                            size: None,
+                            crc32: None,
+                            sha1: None,
+                            data_area: current_data_area.clone(),
+                            disk_sha1: attr_value(&e, b"sha1")
+                                .map(|value| value.to_ascii_lowercase()),
+                        }),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if let Some(item) = current.as_mut() {
+                    let text = e.xml10_content().unwrap_or_default().into_owned();
+                    match field.as_str() {
+                        "description" => {
+                            item.description = text;
+                            item.region = region_from_text(&item.description).map(str::to_string);
+                        }
+                        "year" => item.year = Some(text),
+                        "publisher" => item.publisher = Some(text),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                match tag.as_str() {
+                    "software" => {
+                        if let Some(mut item) = current.take() {
+                            if item.description.is_empty() {
+                                item.description = item.software_name.clone();
+                            }
+                            if item.region.is_none() {
+                                item.region =
+                                    region_from_text(&item.description).map(str::to_string);
+                            }
+                            items.push(item);
+                        }
+                        current_part = None;
+                        current_data_area = None;
+                    }
+                    "part" => current_part = None,
+                    "dataarea" | "diskarea" => current_data_area = None,
+                    "description" | "year" | "publisher" => field.clear(),
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(format!("parse software list XML: {e}").into()),
+            _ => {}
+        }
+    }
+
+    Ok((items, hashes))
+}
+
+fn load_mame_machines_from_db(path: &Path) -> Result<Vec<MameMachine>> {
+    let conn = Connection::open(path)?;
+    let mut stmt = conn.prepare(
+        "SELECT setname,parent_setname,title,year,manufacturer,sourcefile,rotate,display_type,
+                display_width,display_height,refresh_hz,players,coins,control_type,control_ways,
+                buttons,driver_status,emulation_status,savestate,source_version
+         FROM mame_machines
+         ORDER BY setname",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MameMachine {
+            setname: row.get(0)?,
+            parent_setname: row.get(1)?,
+            title: row.get(2)?,
+            year: row.get(3)?,
+            manufacturer: row.get(4)?,
+            sourcefile: row.get(5)?,
+            rotate: row.get(6)?,
+            display_type: row.get(7)?,
+            display_width: row.get(8)?,
+            display_height: row.get(9)?,
+            refresh_hz: row.get(10)?,
+            players: row.get(11)?,
+            coins: row.get(12)?,
+            control_type: row.get(13)?,
+            control_ways: row.get(14)?,
+            buttons: row.get(15)?,
+            driver_status: row.get(16)?,
+            emulation_status: row.get(17)?,
+            savestate: row.get(18)?,
+            source_version: row.get(19)?,
+        })
+    })?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn region_from_text(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &["(usa", "(us)", "(u)", "[usa", "[us]", " usa", " ntsc-u"],
+    ) {
+        Some("usa")
+    } else if contains_any(
+        &lower,
+        &[
+            "(europe", "(eu", "(e)", "[europe", "[eu]", " europe", " pal",
+        ],
+    ) {
+        Some("europe")
+    } else if contains_any(
+        &lower,
+        &[
+            "(japan", "(jp", "(j)", "[japan", "[jp]", " japan", " ntsc-j",
+        ],
+    ) {
+        Some("japan")
+    } else if contains_any(&lower, &["(korea", "[korea", " korea"]) {
+        Some("korea")
+    } else if contains_any(&lower, &["(world", "(w)", "[world", " world"]) {
+        Some("world")
+    } else {
+        None
+    }
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
 fn find_program_on_path(name: &str) -> Option<String> {
     let paths = env::var_os("PATH")?;
     let extensions: Vec<String> = if cfg!(windows) {
@@ -599,7 +858,12 @@ fn attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
         .map(|attr| String::from_utf8_lossy(attr.value.as_ref()).into_owned())
 }
 
-fn write_mame_metadata_db(path: &Path, machines: &[MameMachine]) -> Result<()> {
+fn write_mame_metadata_db(
+    path: &Path,
+    machines: &[MameMachine],
+    software_items: &[MameSoftwareItem],
+    software_hashes: &[MameSoftwareHash],
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -636,6 +900,32 @@ fn write_mame_metadata_db(path: &Path, machines: &[MameMachine]) -> Result<()> {
             savestate TEXT,
             source_version TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE mame_software_items (
+            list_name TEXT NOT NULL,
+            software_name TEXT NOT NULL,
+            parent_name TEXT,
+            description TEXT NOT NULL,
+            year TEXT,
+            publisher TEXT,
+            region TEXT,
+            source_version TEXT NOT NULL,
+            PRIMARY KEY(list_name, software_name)
+        ) WITHOUT ROWID;
+        CREATE TABLE mame_software_hashes (
+            list_name TEXT NOT NULL,
+            software_name TEXT NOT NULL,
+            part_name TEXT,
+            rom_name TEXT,
+            size INTEGER,
+            crc32 TEXT,
+            sha1 TEXT,
+            data_area TEXT,
+            disk_sha1 TEXT
+        );
+        CREATE INDEX mame_software_hashes_crc_idx
+            ON mame_software_hashes(list_name, size, crc32);
+        CREATE INDEX mame_software_hashes_disk_idx
+            ON mame_software_hashes(list_name, disk_sha1);
         "#,
     )?;
     let tx = conn.transaction()?;
@@ -669,6 +959,45 @@ fn write_mame_metadata_db(path: &Path, machines: &[MameMachine]) -> Result<()> {
                 machine.emulation_status,
                 machine.savestate,
                 machine.source_version
+            ])?;
+        }
+    }
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO mame_software_items(
+                list_name,software_name,parent_name,description,year,publisher,region,source_version
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        )?;
+        for item in software_items {
+            stmt.execute(params![
+                item.list_name,
+                item.software_name,
+                item.parent_name,
+                item.description,
+                item.year,
+                item.publisher,
+                item.region,
+                item.source_version
+            ])?;
+        }
+    }
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO mame_software_hashes(
+                list_name,software_name,part_name,rom_name,size,crc32,sha1,data_area,disk_sha1
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        )?;
+        for hash in software_hashes {
+            stmt.execute(params![
+                hash.list_name,
+                hash.software_name,
+                hash.part_name,
+                hash.rom_name,
+                hash.size,
+                hash.crc32,
+                hash.sha1,
+                hash.data_area,
+                hash.disk_sha1
             ])?;
         }
     }
@@ -2246,6 +2575,13 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+fn option_values(args: &[String], name: &str) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == name)
+        .map(|pair| pair[1].clone())
+        .collect()
+}
+
 fn timestamp() -> String {
     unix_secs().to_string()
 }
@@ -2911,7 +3247,7 @@ H: Handlers=event3 js0"#
     fn writes_mame_metadata_sqlite() {
         let machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
         let path = temp_path("mame.sqlite3");
-        write_mame_metadata_db(&path, &machines).unwrap();
+        write_mame_metadata_db(&path, &machines, &[], &[]).unwrap();
         let conn = Connection::open(&path).unwrap();
         let row: (String, String, i64, i64) = conn
             .query_row(
@@ -2923,6 +3259,68 @@ H: Handlers=event3 js0"#
         let _ = fs::remove_file(&path);
 
         assert_eq!(row, ("1942".to_string(), "Capcom".to_string(), 270, 2));
+    }
+
+    #[test]
+    fn loads_mame_machines_from_existing_sqlite() {
+        let machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
+        let path = temp_path("mame-machine-source.sqlite3");
+        write_mame_metadata_db(&path, &machines, &[], &[]).unwrap();
+        let loaded = load_mame_machines_from_db(&path).unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert!(loaded.iter().any(|machine| {
+            machine.setname == "1942a"
+                && machine.parent_setname.as_deref() == Some("1942")
+                && machine.buttons == Some(2)
+        }));
+    }
+
+    #[test]
+    fn parses_mame_software_list_items_and_hashes() {
+        let (items, hashes) = parse_mame_software_list_xml(
+            r#"
+            <softwarelist name="saturn" description="Saturn">
+              <software name="nights" cloneof="nightsu">
+                <description>Nights into Dreams (Europe)</description>
+                <year>1996</year>
+                <publisher>Sega</publisher>
+                <part name="cdrom" interface="saturn_cdrom">
+                  <diskarea name="cdrom">
+                    <disk name="nights" sha1="ABCDEF0123456789ABCDEF0123456789ABCDEF01"/>
+                  </diskarea>
+                </part>
+              </software>
+              <software name="sonic">
+                <description>Sonic the Hedgehog (USA)</description>
+                <year>1991</year>
+                <publisher>Sega</publisher>
+                <part name="cart" interface="megadriv_cart">
+                  <dataarea name="rom" size="524288">
+                    <rom name="sonic.bin" size="524288" crc="F9394E97" sha1="0123456789ABCDEF0123456789ABCDEF01234567"/>
+                  </dataarea>
+                </part>
+              </software>
+            </softwarelist>
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].list_name, "saturn");
+        assert_eq!(items[0].software_name, "nights");
+        assert_eq!(items[0].parent_name.as_deref(), Some("nightsu"));
+        assert_eq!(items[0].region.as_deref(), Some("europe"));
+        assert_eq!(hashes.len(), 2);
+        assert_eq!(
+            hashes[0].disk_sha1.as_deref(),
+            Some("abcdef0123456789abcdef0123456789abcdef01")
+        );
+        assert_eq!(hashes[1].crc32.as_deref(), Some("f9394e97"));
+        assert_eq!(
+            hashes[1].sha1.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 23;
+const SCHEMA_VERSION: u32 = 24;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -239,6 +239,36 @@ struct MameMachineMetadata {
 struct ArcadeMachineMetadata {
     mame: HashMap<String, MameMachineMetadata>,
     hbmame: HashMap<String, MameMachineMetadata>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MameSoftwareItemMetadata {
+    parent_name: Option<String>,
+    description: String,
+    year: Option<String>,
+    publisher: Option<String>,
+    region: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MameSoftwareMetadata {
+    items: HashMap<(String, String), MameSoftwareItemMetadata>,
+    hash_index: HashMap<(String, u64, u32), Vec<String>>,
+    disk_index: HashMap<(String, String), Vec<String>>,
+    title_index: HashMap<(String, String), Vec<String>>,
+    family_members: HashMap<(String, String), Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SoftwareIdentity {
+    list_name: String,
+    software_name: String,
+    family_id: String,
+    metadata_title: Option<String>,
+    year: Option<String>,
+    manufacturer: Option<String>,
+    region: Option<String>,
+    source: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -647,9 +677,7 @@ fn load_arcade_catalog_from_sqlite_at(
     })
 }
 
-fn load_materialized_ui_catalog(
-    conn: &Connection,
-) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
+fn load_materialized_ui_catalog(conn: &Connection) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
     if !sqlite_table_exists(conn, "ui_arcade_preferred")? {
         return Ok(None);
     }
@@ -854,8 +882,7 @@ fn catalog_variant_score(row: &CatalogRow) -> i32 {
     .to_ascii_lowercase();
 
     let mut score = variant_score_from_haystack(&haystack);
-    if row.source_kind == "mra" && !row.setname.trim().is_empty() && row.parent.trim().is_empty()
-    {
+    if row.source_kind == "mra" && !row.setname.trim().is_empty() && row.parent.trim().is_empty() {
         score += 1000;
     }
     score
@@ -1288,8 +1315,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
         if !is_launcher_launch_ref(&plan_launch_ref) {
             continue;
         }
-        let (setname, parent) =
-            catalog_family_fields_for_discovery(discovery, arcade_metadata);
+        let (setname, parent) = catalog_family_fields_for_discovery(discovery, arcade_metadata);
         rows.push(CatalogRow {
             game: ArcadeGameEntry {
                 title: discovery.title.clone().into(),
@@ -2145,11 +2171,20 @@ struct PreviewImageIndex {
 
 impl PreviewImageIndex {
     fn from_env() -> Self {
-        Self {
-            arcade_stems: preview_worker::preview_archive_entry_stems_from_env()
-                .ok()
-                .flatten(),
+        let mut index = Self::default();
+        if let Ok(archives) = preview_worker::preview_archive_indexes_from_env() {
+            for archive in archives {
+                if preview_asset_pack_platform(&archive.path) == "arcade" {
+                    index.arcade_stems.get_or_insert_with(HashSet::new).extend(
+                        archive
+                            .entries
+                            .into_iter()
+                            .map(|stem| stem.to_ascii_lowercase()),
+                    );
+                }
+            }
         }
+        index
     }
 
     #[cfg(test)]
@@ -2167,21 +2202,20 @@ impl PreviewImageIndex {
 }
 
 fn attach_preview_image(discovery: &mut GameDiscovery, preview_images: &PreviewImageIndex) {
-    if discovery.platform_id != "arcade" {
-        return;
+    if discovery.platform_id == "arcade" {
+        let Some(setname) = discovery
+            .setname
+            .as_deref()
+            .filter(|setname| !setname.trim().is_empty())
+        else {
+            return;
+        };
+        if !preview_images.has_arcade_stem(setname) {
+            return;
+        }
+        discovery.image_path = Some(format!("/media/fat/_Arcade/media/screenshot/{setname}.png"));
+        discovery.has_image = true;
     }
-    let Some(setname) = discovery
-        .setname
-        .as_deref()
-        .filter(|setname| !setname.trim().is_empty())
-    else {
-        return;
-    };
-    if !preview_images.has_arcade_stem(setname) {
-        return;
-    }
-    discovery.image_path = Some(format!("/media/fat/_Arcade/media/screenshot/{setname}.png"));
-    discovery.has_image = true;
 }
 
 fn discovery_from_profile_file(
@@ -2544,17 +2578,13 @@ fn save_sqlite_scan_with_progress(
         let _ = std::fs::remove_file(&build_tmp_path);
         return Err(e);
     }
-    File::open(&build_tmp_path)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| format!("sync sqlite build temp: {e}"))?;
+    sync_file_best_effort(&build_tmp_path, "sqlite build temp")?;
     if build_tmp_path != final_tmp_path {
         std::fs::copy(&build_tmp_path, &final_tmp_path)
             .map_err(|e| format!("copy sqlite temp into final dir: {e}"))?;
         let _ = std::fs::remove_file(&build_tmp_path);
     }
-    File::open(&final_tmp_path)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| format!("sync sqlite temp: {e}"))?;
+    sync_file_best_effort(&final_tmp_path, "sqlite temp")?;
     std::fs::rename(&final_tmp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&final_tmp_path);
         let _ = std::fs::remove_file(&build_tmp_path);
@@ -2595,6 +2625,21 @@ fn sync_parent_dir(path: &Path) {
     }
 }
 
+fn sync_file_best_effort(path: &Path, label: &str) -> Result<(), String> {
+    match File::open(path).and_then(|f| f.sync_all()) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(format!("sync {label}: {e}")),
+    }
+}
+
 fn file_signature(path: &Path) -> FileSignature {
     std::fs::metadata(path)
         .map(|metadata| FileSignature {
@@ -2608,9 +2653,9 @@ fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadat
     let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return HashMap::new();
     };
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT setname,parent_setname,title,year,manufacturer FROM mame_machines",
-    ) else {
+    let Ok(mut stmt) =
+        conn.prepare("SELECT setname,parent_setname,title,year,manufacturer FROM mame_machines")
+    else {
         return HashMap::new();
     };
     let Ok(rows) = stmt.query_map([], |row| {
@@ -2629,10 +2674,112 @@ fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadat
     rows.filter_map(|row| row.ok()).collect()
 }
 
-fn load_arcade_machine_metadata(
-    mame_path: &Path,
-    hbmame_path: &Path,
-) -> ArcadeMachineMetadata {
+fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
+    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return MameSoftwareMetadata::default();
+    };
+    if !sqlite_table_exists(&conn, "mame_software_items").unwrap_or(false) {
+        return MameSoftwareMetadata::default();
+    }
+    let mut metadata = MameSoftwareMetadata::default();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT list_name,software_name,parent_name,description,year,publisher,region,source_version
+         FROM mame_software_items",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let _source_version = row.get::<_, String>(7)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                MameSoftwareItemMetadata {
+                    parent_name: row.get(2)?,
+                    description: row.get(3)?,
+                    year: row.get(4)?,
+                    publisher: row.get(5)?,
+                    region: row.get(6)?,
+                },
+            ))
+        }) {
+            for row in rows.flatten() {
+                let (list, name, item) = row;
+                let title_key = canonical_variant_title(&item.description);
+                metadata
+                    .title_index
+                    .entry((list.clone(), title_key))
+                    .or_default()
+                    .push(name.clone());
+                let family = item
+                    .parent_name
+                    .as_deref()
+                    .filter(|parent| !parent.trim().is_empty())
+                    .unwrap_or(&name)
+                    .to_string();
+                metadata
+                    .family_members
+                    .entry((list.clone(), family))
+                    .or_default()
+                    .push(name.clone());
+                metadata.items.insert((list, name), item);
+            }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT list_name,software_name,size,crc32
+         FROM mame_software_hashes
+         WHERE size IS NOT NULL AND crc32 IS NOT NULL",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        }) {
+            for (list, name, size, crc_hex) in rows.flatten() {
+                let Ok(size) = u64::try_from(size) else {
+                    continue;
+                };
+                let Some(crc) = parse_hex_u32(&crc_hex) else {
+                    continue;
+                };
+                metadata
+                    .hash_index
+                    .entry((list, size, crc))
+                    .or_default()
+                    .push(name);
+            }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT list_name,software_name,disk_sha1
+         FROM mame_software_hashes
+         WHERE disk_sha1 IS NOT NULL",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            for (list, name, sha1) in rows.flatten() {
+                metadata
+                    .disk_index
+                    .entry((list, sha1.to_ascii_lowercase()))
+                    .or_default()
+                    .push(name);
+            }
+        }
+    }
+    for members in metadata.family_members.values_mut() {
+        members.sort();
+        members.dedup();
+    }
+    metadata
+}
+
+fn load_arcade_machine_metadata(mame_path: &Path, hbmame_path: &Path) -> ArcadeMachineMetadata {
     ArcadeMachineMetadata {
         mame: load_mame_machine_metadata(mame_path),
         hbmame: load_mame_machine_metadata(hbmame_path),
@@ -2653,8 +2800,8 @@ fn write_simple_mame_metadata_db(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("remove stale metadata temp {}: {e}", tmp.display())),
     }
-    let mut conn = Connection::open(&tmp)
-        .map_err(|e| format!("open metadata temp {}: {e}", tmp.display()))?;
+    let mut conn =
+        Connection::open(&tmp).map_err(|e| format!("open metadata temp {}: {e}", tmp.display()))?;
     conn.execute_batch(
         r#"
         PRAGMA journal_mode=OFF;
@@ -2711,10 +2858,217 @@ fn mame_identity_for_discovery(discovery: &GameDiscovery) -> Option<String> {
         .map(normalize_id)
 }
 
+fn software_list_for_platform(platform_id: &str) -> Option<&'static str> {
+    match platform_id {
+        "nes" => Some("nes"),
+        "snes" => Some("snes"),
+        "n64" => Some("n64"),
+        "sms" => Some("sms"),
+        "megadrive" => Some("megadriv"),
+        "saturn" => Some("saturn"),
+        _ => None,
+    }
+}
+
+fn mame_software_identity_for_discovery(
+    discovery: &GameDiscovery,
+    metadata: &MameSoftwareMetadata,
+) -> Option<SoftwareIdentity> {
+    let list_name = software_list_for_platform(&discovery.platform_id)?;
+    if let Some(software_name) = match_software_by_file_hash(discovery, list_name, metadata) {
+        return software_identity_from_metadata(
+            list_name,
+            &software_name,
+            metadata,
+            "mame-software",
+        );
+    }
+    let title_key = canonical_variant_title(&discovery.title);
+    if let Some(names) = metadata
+        .title_index
+        .get(&(list_name.to_string(), title_key))
+        .filter(|names| !names.is_empty())
+    {
+        return software_identity_from_metadata(list_name, &names[0], metadata, "filename");
+    }
+    None
+}
+
+fn software_identity_from_metadata(
+    list_name: &str,
+    software_name: &str,
+    metadata: &MameSoftwareMetadata,
+    source: &'static str,
+) -> Option<SoftwareIdentity> {
+    let item = metadata
+        .items
+        .get(&(list_name.to_string(), software_name.to_string()))?;
+    let family = item
+        .parent_name
+        .as_deref()
+        .filter(|parent| !parent.trim().is_empty())
+        .unwrap_or(software_name)
+        .to_string();
+    Some(SoftwareIdentity {
+        list_name: list_name.to_string(),
+        software_name: software_name.to_string(),
+        family_id: format!("{list_name}:{family}"),
+        metadata_title: Some(item.description.clone()),
+        year: item.year.clone(),
+        manufacturer: item.publisher.clone(),
+        region: item.region.clone(),
+        source,
+    })
+}
+
+fn match_software_by_file_hash(
+    discovery: &GameDiscovery,
+    list_name: &str,
+    metadata: &MameSoftwareMetadata,
+) -> Option<String> {
+    if !matches!(
+        discovery.source_kind,
+        DiscoverySourceKind::PayloadFile | DiscoverySourceKind::ArchiveEntry
+    ) {
+        return None;
+    }
+    let source_path = discovery
+        .source_path
+        .split("::")
+        .next()
+        .unwrap_or(&discovery.source_path);
+    if list_name == "saturn" && path_ext(source_path).as_deref() == Some("chd") {
+        if let Some(disk_sha1) = chd_raw_sha1(source_path) {
+            let key = (list_name.to_string(), disk_sha1);
+            if let Some(names) = metadata
+                .disk_index
+                .get(&key)
+                .filter(|names| !names.is_empty())
+            {
+                return Some(names[0].clone());
+            }
+        }
+        return None;
+    }
+    if list_name == "saturn" {
+        return None;
+    }
+    let bytes = std::fs::read(source_path).ok()?;
+    for candidate in rom_hash_candidates(list_name, &bytes) {
+        let crc = crc32(&candidate);
+        let key = (list_name.to_string(), candidate.len() as u64, crc);
+        if let Some(names) = metadata
+            .hash_index
+            .get(&key)
+            .filter(|names| !names.is_empty())
+        {
+            return Some(names[0].clone());
+        }
+    }
+    None
+}
+
+fn chd_raw_sha1(path: &str) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut header = [0u8; 124];
+    file.read_exact(&mut header).ok()?;
+    chd_raw_sha1_from_header(&header)
+}
+
+fn chd_raw_sha1_from_header(header: &[u8]) -> Option<String> {
+    if header.len() < 124 || &header[..8] != b"MComprHD" {
+        return None;
+    }
+    let length = be_u32(&header[8..12]) as usize;
+    let version = be_u32(&header[12..16]);
+    let range = match version {
+        3 if length == 120 => 80..100,
+        4 if length == 108 => 88..108,
+        5 if length == 124 => 64..84,
+        _ => return None,
+    };
+    Some(hex_lower(&header[range]))
+}
+
+fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    match list_name {
+        "nes" => {
+            if bytes.len() > 16 && &bytes[..4] == b"NES\x1a" {
+                out.push(bytes[16..].to_vec());
+            }
+            out.push(bytes.to_vec());
+        }
+        "snes" => {
+            if bytes.len() > 512 {
+                out.push(bytes[512..].to_vec());
+            }
+            out.push(bytes.to_vec());
+        }
+        "n64" => {
+            out.push(bytes.to_vec());
+            out.push(swap_pairs(bytes));
+            out.push(swap_words(bytes));
+            out.push(reverse_words(bytes));
+        }
+        "sms" | "megadriv" => out.push(bytes.to_vec()),
+        _ => out.push(bytes.to_vec()),
+    }
+    out.dedup();
+    out
+}
+
+fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for chunk in out.chunks_exact_mut(2) {
+        chunk.swap(0, 1);
+    }
+    out
+}
+
+fn swap_words(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for chunk in out.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+        chunk.swap(1, 3);
+    }
+    out
+}
+
+fn reverse_words(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for chunk in out.chunks_exact_mut(4) {
+        chunk.reverse();
+    }
+    out
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn parse_hex_u32(value: &str) -> Option<u32> {
+    u32::from_str_radix(value.trim(), 16).ok()
+}
+
 fn mame_identity_projection<'a>(
     identity_id: &str,
     metadata: &'a ArcadeMachineMetadata,
-) -> (String, Option<&'a str>, Option<&'a str>, Option<&'a str>, &'static str) {
+) -> (
+    String,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    &'static str,
+) {
     if let Some(machine) = metadata.mame.get(identity_id) {
         let family_id = machine
             .parent_setname
@@ -2926,6 +3280,7 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
 fn register_preview_asset_packs(
     tx: &rusqlite::Transaction<'_>,
     mame_metadata: &HashMap<String, MameMachineMetadata>,
+    software_metadata: &MameSoftwareMetadata,
     indexes: &[preview_worker::PreviewArchiveIndex],
 ) -> Result<(), String> {
     let mut pack_stmt = tx
@@ -2941,11 +3296,7 @@ fn register_preview_asset_packs(
         )
         .map_err(|e| format!("prepare preview asset entry insert: {e}"))?;
     for (idx, index) in indexes.iter().enumerate() {
-        let platform = if index.path.to_ascii_lowercase().contains("neogeo") {
-            "neogeo"
-        } else {
-            "arcade"
-        };
+        let platform = preview_asset_pack_platform(&index.path);
         let pack_id = if idx == 0 {
             format!("{platform}-screenshot-v1")
         } else {
@@ -2962,18 +3313,32 @@ fn register_preview_asset_packs(
             ])
             .map_err(|e| format!("insert preview asset pack: {e}"))?;
         for entry in &index.entries {
-            let identity_id = normalize_id(entry);
-            let family_id = mame_metadata
-                .get(&identity_id)
-                .and_then(|machine| machine.parent_setname.as_deref())
-                .filter(|parent| !parent.trim().is_empty())
-                .unwrap_or(identity_id.as_str())
-                .to_string();
+            let (asset_key, namespace, identity_id, family_id) =
+                if let Some((list_name, software_name)) = parse_software_asset_key(entry) {
+                    let identity_id = format!("{list_name}:{software_name}");
+                    let family_id = software_metadata
+                        .items
+                        .get(&(list_name.clone(), software_name.clone()))
+                        .and_then(|item| item.parent_name.as_deref())
+                        .filter(|parent| !parent.trim().is_empty())
+                        .map(|parent| format!("{list_name}:{parent}"))
+                        .unwrap_or_else(|| identity_id.clone());
+                    (entry.to_string(), "mame-software", identity_id, family_id)
+                } else {
+                    let identity_id = normalize_id(entry);
+                    let family_id = mame_metadata
+                        .get(&identity_id)
+                        .and_then(|machine| machine.parent_setname.as_deref())
+                        .filter(|parent| !parent.trim().is_empty())
+                        .unwrap_or(identity_id.as_str())
+                        .to_string();
+                    (identity_id.clone(), "mame", identity_id, family_id)
+                };
             entry_stmt
                 .execute(params![
                     pack_id.as_str(),
-                    identity_id.as_str(),
-                    "mame",
+                    asset_key.as_str(),
+                    namespace,
                     identity_id.as_str(),
                     family_id.as_str(),
                     Option::<i64>::None,
@@ -2983,6 +3348,83 @@ fn register_preview_asset_packs(
         }
     }
     Ok(())
+}
+
+fn preview_asset_pack_platform(path: &str) -> &'static str {
+    let path = path.to_ascii_lowercase();
+    if path.contains("neogeo") {
+        "neogeo"
+    } else if path.contains("nes-screenshots") {
+        "nes"
+    } else if path.contains("snes-screenshots") {
+        "snes"
+    } else if path.contains("n64-screenshots") {
+        "n64"
+    } else if path.contains("sms-screenshots") {
+        "sms"
+    } else if path.contains("megadrive-screenshots") {
+        "megadrive"
+    } else if path.contains("saturn") {
+        "saturn"
+    } else {
+        "arcade"
+    }
+}
+
+fn software_asset_key(list_name: &str, software_name: &str) -> String {
+    format!("mame-software__{list_name}__{software_name}")
+}
+
+fn parse_software_asset_key(key: &str) -> Option<(String, String)> {
+    let mut parts = key.split("__");
+    if parts.next()? != "mame-software" {
+        return None;
+    }
+    let list_name = parts.next()?.trim();
+    let software_name = parts.next()?.trim();
+    if list_name.is_empty() || software_name.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some((list_name.to_string(), software_name.to_string()))
+}
+
+fn console_preview_asset_keys(indexes: &[preview_worker::PreviewArchiveIndex]) -> HashSet<String> {
+    indexes
+        .iter()
+        .filter(|index| preview_asset_pack_platform(&index.path) != "arcade")
+        .flat_map(|index| index.entries.iter())
+        .filter(|entry| parse_software_asset_key(entry).is_some())
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect()
+}
+
+fn console_preview_image_path(
+    identity: &SoftwareIdentity,
+    software_metadata: &MameSoftwareMetadata,
+    asset_keys: &HashSet<String>,
+) -> Option<String> {
+    let exact = software_asset_key(&identity.list_name, &identity.software_name);
+    if asset_keys.contains(&exact.to_ascii_lowercase()) {
+        return Some(format!("/media/fat/mister-magik/assets/media/{exact}.png"));
+    }
+    let family_name = identity.family_id.split_once(':')?.1;
+    let parent = software_asset_key(&identity.list_name, family_name);
+    if asset_keys.contains(&parent.to_ascii_lowercase()) {
+        return Some(format!("/media/fat/mister-magik/assets/media/{parent}.png"));
+    }
+    let family_key = (identity.list_name.clone(), family_name.to_string());
+    for sibling in software_metadata
+        .family_members
+        .get(&family_key)
+        .into_iter()
+        .flatten()
+    {
+        let key = software_asset_key(&identity.list_name, sibling);
+        if asset_keys.contains(&key.to_ascii_lowercase()) {
+            return Some(format!("/media/fat/mister-magik/assets/media/{key}.png"));
+        }
+    }
+    None
 }
 
 fn write_sqlite_scan(
@@ -3029,6 +3471,7 @@ fn refresh_sqlite_preview_assets(
         }
     }
     let mame_metadata = load_mame_machine_metadata(&default_mame_sqlite_path());
+    let software_metadata = load_mame_software_metadata(&default_mame_sqlite_path());
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
@@ -3043,17 +3486,17 @@ fn refresh_sqlite_preview_assets(
             .map_err(|e| format!("prepare preserved launcher query: {e}"))?;
         let rows = stmt
             .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, String>(5)?,
-            ))
-        })
-        .map_err(|e| format!("query preserved launcher rows: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(|e| format!("query preserved launcher rows: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("read preserved launcher row: {e}"))?;
         rows
     };
@@ -3067,7 +3510,7 @@ fn refresh_sqlite_preview_assets(
     tx.execute("DELETE FROM ui_arcade_preferred", [])
         .map_err(|e| format!("delete arcade preferred: {e}"))?;
 
-    register_preview_asset_packs(&tx, &mame_metadata, preview_asset_packs)?;
+    register_preview_asset_packs(&tx, &mame_metadata, &software_metadata, preview_asset_packs)?;
     materialize_arcade_ui_projections(&tx)?;
 
     tx.execute("DELETE FROM launcher_catalog", [])
@@ -3105,6 +3548,7 @@ fn refresh_sqlite_preview_assets(
             .map_err(|e| format!("insert preserved launcher row: {e}"))?;
         }
     }
+    refresh_console_launcher_images(&tx)?;
 
     let existing_preview_fingerprints = {
         let mut stmt = tx
@@ -3141,6 +3585,68 @@ fn refresh_sqlite_preview_assets(
     Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
 }
 
+fn refresh_console_launcher_images(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        r#"
+        UPDATE launcher_catalog
+        SET
+            image_path = COALESCE((
+                SELECT '/media/fat/mister-magik/assets/media/' || resolved.asset_key || '.png'
+                FROM (
+                    SELECT exact.asset_key AS asset_key, 0 AS rank
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries exact
+                      ON exact.identity_namespace = 'mame-software'
+                     AND exact.identity_id = i.identity_id
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                    UNION ALL
+                    SELECT parent.asset_key AS asset_key, 1 AS rank
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries parent
+                      ON parent.identity_namespace = 'mame-software'
+                     AND parent.identity_id = i.family_id
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                    UNION ALL
+                    SELECT sibling.asset_key AS asset_key, 2 AS rank
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries sibling
+                      ON sibling.identity_namespace = 'mame-software'
+                     AND sibling.family_id = i.family_id
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                    ORDER BY rank, asset_key
+                    LIMIT 1
+                ) resolved
+            ), ''),
+            has_image = CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries a
+                      ON a.identity_namespace = 'mame-software'
+                     AND (a.identity_id = i.identity_id OR a.identity_id = i.family_id OR a.family_id = i.family_id)
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                )
+                THEN 1
+                ELSE 0
+            END
+        WHERE system_id IN ('nes','snes','n64','sms','megadrive','saturn');
+        "#,
+    )
+    .map_err(|e| format!("refresh console launcher images: {e}"))
+}
+
 #[cfg(test)]
 fn write_sqlite_scan_with_mame(
     path: &Path,
@@ -3157,14 +3663,7 @@ fn write_sqlite_scan_with_mame_and_hbmame(
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(
-        path,
-        scan,
-        mame_sqlite_path,
-        hbmame_sqlite_path,
-        &[],
-        None,
-    )
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, hbmame_sqlite_path, &[], None)
 }
 
 #[cfg(test)]
@@ -3410,11 +3909,13 @@ fn write_sqlite_scan_with_sources(
     let mame_signature = file_signature(mame_sqlite_path);
     let hbmame_signature = file_signature(hbmame_sqlite_path);
     let mame_metadata = load_mame_machine_metadata(mame_sqlite_path);
+    let software_metadata = load_mame_software_metadata(mame_sqlite_path);
+    let console_asset_keys = console_preview_asset_keys(preview_asset_packs);
     let arcade_metadata = load_arcade_machine_metadata(mame_sqlite_path, hbmame_sqlite_path);
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
-    register_preview_asset_packs(&tx, &mame_metadata, preview_asset_packs)?;
+    register_preview_asset_packs(&tx, &mame_metadata, &software_metadata, preview_asset_packs)?;
     {
         let mut stmt = tx
             .prepare(
@@ -3596,6 +4097,15 @@ fn write_sqlite_scan_with_sources(
                 report_sqlite_import_progress(&mut progress, idx, discovery_total);
             }
             let system_id = catalog_system_id_for_discovery(discovery);
+            let software_identity =
+                mame_software_identity_for_discovery(discovery, &software_metadata);
+            let software_image_path = software_identity.as_ref().and_then(|identity| {
+                console_preview_image_path(identity, &software_metadata, &console_asset_keys)
+            });
+            let game_image_path = software_image_path
+                .as_deref()
+                .or(discovery.image_path.as_deref());
+            let game_has_image = software_image_path.is_some() || discovery.has_image;
             system_stmt
                 .execute(params![
                     system_id.as_str(),
@@ -3612,8 +4122,8 @@ fn write_sqlite_scan_with_sources(
                     discovery.manufacturer.as_deref(),
                     discovery.genre.as_deref(),
                     discovery.year.map(|n| n as i64),
-                    discovery.image_path.as_deref(),
-                    if discovery.has_image { 1 } else { 0 }
+                    game_image_path,
+                    if game_has_image { 1 } else { 0 }
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             let launcher_path = match discovery.source_kind {
@@ -3636,8 +4146,8 @@ fn write_sqlite_scan_with_sources(
                         game: ArcadeGameEntry {
                             title: discovery.title.clone().into(),
                             mra_path: plan_launch_ref.clone().into(),
-                            image_path: discovery.image_path.clone().unwrap_or_default().into(),
-                            has_image: discovery.has_image,
+                            image_path: game_image_path.unwrap_or_default().into(),
+                            has_image: game_has_image,
                             system_id: system_id.clone().into(),
                         },
                         source_kind: launch_kind_for_discovery(discovery).to_string(),
@@ -3694,7 +4204,34 @@ fn write_sqlite_scan_with_sources(
                     ])
                     .map_err(|e| format!("insert launchable identity: {e}"))?;
             }
+            if let Some(identity) = software_identity.as_ref() {
+                let identity_id = format!("{}:{}", identity.list_name, identity.software_name);
+                identity_stmt
+                    .execute(params![
+                        key.as_str(),
+                        "mame-software",
+                        identity_id.as_str(),
+                        identity.family_id.as_str(),
+                        identity.metadata_title.as_deref(),
+                        identity.year.as_deref(),
+                        identity.manufacturer.as_deref(),
+                        identity.source
+                    ])
+                    .map_err(|e| format!("insert software launchable identity: {e}"))?;
+            }
             let region = infer_region_metadata(discovery);
+            let region = if let Some(identity) = software_identity.as_ref() {
+                if let Some(region) = identity.region.as_deref().and_then(canonical_region_static) {
+                    RegionInference {
+                        region: Some(region),
+                        confidence: identity.source,
+                    }
+                } else {
+                    region
+                }
+            } else {
+                region
+            };
             region_stmt
                 .execute(params![
                     key.as_str(),
@@ -3812,10 +4349,16 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("insert mame metadata size: {e}"))?;
         stmt.execute(params!["mame_metadata_mtime", mame_signature.mtime_secs])
             .map_err(|e| format!("insert mame metadata mtime: {e}"))?;
-        stmt.execute(params!["hbmame_metadata_size", hbmame_signature.size as i64])
-            .map_err(|e| format!("insert hbmame metadata size: {e}"))?;
-        stmt.execute(params!["hbmame_metadata_mtime", hbmame_signature.mtime_secs])
-            .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
+        stmt.execute(params![
+            "hbmame_metadata_size",
+            hbmame_signature.size as i64
+        ])
+        .map_err(|e| format!("insert hbmame metadata size: {e}"))?;
+        stmt.execute(params![
+            "hbmame_metadata_mtime",
+            hbmame_signature.mtime_secs
+        ])
+        .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
     }
     {
         let mut stmt = tx
@@ -4181,6 +4724,12 @@ fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInference {
         };
     }
 
+    if let Some(region) = region_from_saturn_boot_header_file(&discovery.source_path) {
+        return RegionInference {
+            region: Some(region),
+            confidence: "disc-header",
+        };
+    }
     if let Some(region) = region_from_filename(&discovery.source_path) {
         return RegionInference {
             region: Some(region),
@@ -4204,6 +4753,14 @@ fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInference {
         region: None,
         confidence: "unknown",
     }
+}
+
+fn region_from_saturn_boot_header_file(path: &str) -> Option<&'static str> {
+    let path = path.split("::").next().unwrap_or(path);
+    let mut file = File::open(path).ok()?;
+    let mut header = [0u8; 256];
+    file.read_exact(&mut header).ok()?;
+    parse_saturn_boot_header(&header)?.region
 }
 
 fn region_from_filename(path: &str) -> Option<&'static str> {
@@ -4262,6 +4819,51 @@ fn region_from_text(text: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn canonical_region_static(region: &str) -> Option<&'static str> {
+    match region.trim().to_ascii_lowercase().as_str() {
+        "usa" | "us" => Some("usa"),
+        "europe" | "eu" => Some("europe"),
+        "japan" | "jp" => Some("japan"),
+        "korea" | "kr" => Some("korea"),
+        "world" => Some("world"),
+        "unknown" => Some("unknown"),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SaturnBootHeader {
+    product_id: Option<String>,
+    region: Option<&'static str>,
+}
+
+fn parse_saturn_boot_header(bytes: &[u8]) -> Option<SaturnBootHeader> {
+    if bytes.len() < 0x50 || !bytes.starts_with(b"SEGA SEGASATURN") {
+        return None;
+    }
+    let product_id = ascii_trim(&bytes[0x20..0x2a]);
+    let area = String::from_utf8_lossy(&bytes[0x40..0x50]).to_ascii_uppercase();
+    let region = if area.contains('U') {
+        Some("usa")
+    } else if area.contains('E') {
+        Some("europe")
+    } else if area.contains('J') {
+        Some("japan")
+    } else if area.contains('K') {
+        Some("korea")
+    } else {
+        None
+    };
+    Some(SaturnBootHeader { product_id, region })
+}
+
+fn ascii_trim(bytes: &[u8]) -> Option<String> {
+    let value = String::from_utf8_lossy(bytes)
+        .trim_matches(|ch: char| ch.is_ascii_whitespace() || ch == '\0')
+        .to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
@@ -4352,10 +4954,24 @@ fn le_u32(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
+fn be_u32(bytes: &[u8]) -> u32 {
+    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
 fn le_u64(bytes: &[u8]) -> u64 {
     u64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
@@ -4440,6 +5056,19 @@ mod tests {
                 confidence: "unknown"
             }
         );
+    }
+
+    #[test]
+    fn saturn_boot_header_extracts_product_and_area() {
+        let mut header = [b' '; 256];
+        header[0..15].copy_from_slice(b"SEGA SEGASATURN");
+        header[0x20..0x2a].copy_from_slice(b"T-12345G  ");
+        header[0x40..0x50].copy_from_slice(b"JTUE            ");
+
+        let parsed = parse_saturn_boot_header(&header).expect("saturn header");
+
+        assert_eq!(parsed.product_id.as_deref(), Some("T-12345G"));
+        assert_eq!(parsed.region, Some("usa"));
     }
 
     #[test]
@@ -4912,6 +5541,228 @@ mod tests {
     }
 
     #[test]
+    fn nes_software_identity_matches_header_stripped_rom_and_preview_pack() {
+        let root = unique_temp_dir("nes-software-identity");
+        let rom_path = root.join("Super Mario Bros.nes");
+        let mut rom = b"NES\x1a".to_vec();
+        rom.extend_from_slice(&[0; 12]);
+        rom.extend_from_slice(b"fixture-rom");
+        std::fs::write(&rom_path, &rom).expect("write rom");
+        let stripped = &rom[16..];
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "nes",
+                "smb",
+                None,
+                "Super Mario Bros. (USA)",
+                Some("1985"),
+                Some("Nintendo"),
+                Some("usa"),
+            )],
+            &[("nes", "smb", stripped.len() as i64, crc32(stripped))],
+        );
+        let db = root.join("library.sqlite3");
+        let mut discovery = payload(&rom_path.display().to_string());
+        discovery.platform_id = "nes".to_string();
+        discovery.category = "Console".to_string();
+        discovery.core_id = "NES".to_string();
+        discovery.hardware_id = "nes".to_string();
+        discovery.title = "Super Mario Bros. (USA)".to_string();
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b".to_string(),
+            codec: "mmlz4b",
+            entries: vec![software_asset_key("nes", "smb")],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row: (String, String, String, i64, String) = conn
+            .query_row(
+                "SELECT i.namespace,i.identity_id,i.family_id,l.has_image,r.confidence
+                 FROM launchable_identities i
+                 JOIN launchables lb ON lb.launchable_id=i.launchable_id
+                 JOIN launcher_catalog l ON l.launch_ref=lb.launch_ref
+                 JOIN region_metadata r ON r.game_id=i.launchable_id
+                 WHERE i.namespace='mame-software'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("software identity row");
+
+        assert_eq!(
+            row,
+            (
+                "mame-software".to_string(),
+                "nes:smb".to_string(),
+                "nes:smb".to_string(),
+                1,
+                "mame-software".to_string()
+            )
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn console_preview_uses_parent_family_fallback() {
+        let root = unique_temp_dir("software-family-preview");
+        let rom_path = root.join("Variant.sfc");
+        std::fs::write(&rom_path, b"variant-rom").expect("write rom");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[
+                (
+                    "snes",
+                    "parent",
+                    None,
+                    "Example Game (USA)",
+                    Some("1992"),
+                    Some("Example"),
+                    Some("usa"),
+                ),
+                (
+                    "snes",
+                    "child",
+                    Some("parent"),
+                    "Example Game (Rev 1) (USA)",
+                    Some("1992"),
+                    Some("Example"),
+                    Some("usa"),
+                ),
+            ],
+            &[("snes", "child", 11, crc32(b"variant-rom"))],
+        );
+        let db = root.join("library.sqlite3");
+        let mut discovery = payload(&rom_path.display().to_string());
+        discovery.platform_id = "snes".to_string();
+        discovery.category = "Console".to_string();
+        discovery.core_id = "SNES".to_string();
+        discovery.hardware_id = "snes".to_string();
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: "/media/fat/mister-magik/assets/snes-screenshots.mmlz4b".to_string(),
+            codec: "mmlz4b",
+            entries: vec![software_asset_key("snes", "parent")],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row: (String, i64, String) = conn
+            .query_row(
+                "SELECT image_path,has_image,system_id FROM launcher_catalog",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("launcher row");
+
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2, "snes");
+        assert!(row.0.ends_with("mame-software__snes__parent.png"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saturn_software_identity_matches_chd_raw_sha1() {
+        let root = unique_temp_dir("saturn-chd-identity");
+        let chd_path = root.join("Disc.chd");
+        let sha1 = [0x42u8; 20];
+        let mut header = [0u8; 124];
+        header[..8].copy_from_slice(b"MComprHD");
+        header[8..12].copy_from_slice(&124u32.to_be_bytes());
+        header[12..16].copy_from_slice(&5u32.to_be_bytes());
+        header[56..60].copy_from_slice(&4096u32.to_be_bytes());
+        header[60..64].copy_from_slice(&2448u32.to_be_bytes());
+        header[64..84].copy_from_slice(&sha1);
+        std::fs::write(&chd_path, header).expect("write chd header");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "saturn",
+                "nights",
+                None,
+                "Nights into Dreams (USA)",
+                Some("1996"),
+                Some("Sega"),
+                Some("usa"),
+            )],
+            &[],
+        );
+        let conn = Connection::open(&mame_db).expect("open mame fixture");
+        conn.execute(
+            "INSERT INTO mame_software_hashes(list_name,software_name,disk_sha1)
+             VALUES ('saturn','nights',?1)",
+            [hex_lower(&sha1)],
+        )
+        .expect("insert disk hash");
+        drop(conn);
+        let db = root.join("library.sqlite3");
+        let mut discovery = saturn_payload(&chd_path.display().to_string());
+        discovery.title = "Untrusted Scraper Name".to_string();
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let identity: String = conn
+            .query_row(
+                "SELECT identity_id FROM launchable_identities WHERE namespace='mame-software'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("software identity");
+        assert_eq!(identity, "saturn:nights");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rom_normalization_covers_snes_and_n64_byte_orders() {
+        let snes = [0xaa; 512]
+            .into_iter()
+            .chain(b"plain-snes".iter().copied())
+            .collect::<Vec<_>>();
+        assert!(rom_hash_candidates("snes", &snes)
+            .iter()
+            .any(|candidate| candidate == b"plain-snes"));
+
+        let z64 = [0x12, 0x34, 0x56, 0x78];
+        let candidates = rom_hash_candidates("n64", &z64);
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate == &[0x34, 0x12, 0x78, 0x56]));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate == &[0x56, 0x78, 0x12, 0x34]));
+    }
+
+    #[test]
     fn arcade_mra_identity_uses_mame_parent_family() {
         let root = unique_temp_dir("arcade-mame-identity");
         let db = root.join("library.sqlite3");
@@ -4938,8 +5789,12 @@ mod tests {
         let mut discovery = mra_discovery(1, "1942 (First Version)");
         discovery.setname = Some("1942b".to_string());
 
-        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
-            .expect("save sqlite");
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+        )
+        .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
         let row = conn
@@ -4997,8 +5852,12 @@ mod tests {
         discovery.hardware_id = "neogeo".to_string();
         discovery.setname = Some("mslug3".to_string());
 
-        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
-            .expect("save sqlite");
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+        )
+        .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
         let row = conn
@@ -5037,8 +5896,12 @@ mod tests {
         let mut discovery = mra_discovery(1, "Mystery Arcade Game");
         discovery.setname = Some("mystery".to_string());
 
-        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
-            .expect("save sqlite");
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+        )
+        .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
         let launchable_count: i64 = conn
@@ -5163,8 +6026,11 @@ mod tests {
         hbmame_clone.setname = Some("bombjckb".to_string());
         hbmame_clone.parent = Some("bombjack".to_string());
 
-        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![parent, hbmame_clone]))
-            .expect("save sqlite");
+        save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_discoveries(vec![parent, hbmame_clone]),
+        )
+        .expect("save sqlite");
         let summary =
             write_hbmame_metadata_from_library(&db, &hbmame_db).expect("write hbmame metadata");
         assert_eq!(summary.rows, 1);
@@ -5413,10 +6279,7 @@ mod tests {
         assert_eq!(rows.len(), 4);
         for row in &rows {
             assert_eq!(row.1.as_deref(), Some("1941u"));
-            assert_eq!(
-                row.3,
-                "/media/fat/_Arcade/media/screenshot/1941u.png"
-            );
+            assert_eq!(row.3, "/media/fat/_Arcade/media/screenshot/1941u.png");
             assert_eq!(row.4, 1);
         }
         assert!(rows
@@ -5428,10 +6291,7 @@ mod tests {
         assert_eq!(preferred.0.as_deref(), Some("1941"));
         assert_eq!(preferred.1.as_deref(), Some("1941u"));
         assert_eq!(preferred.2, "sibling");
-        assert_eq!(
-            preferred.3,
-            "/media/fat/_Arcade/media/screenshot/1941u.png"
-        );
+        assert_eq!(preferred.3, "/media/fat/_Arcade/media/screenshot/1941u.png");
         assert_eq!(preferred.4, 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -5709,12 +6569,9 @@ mod tests {
             entries: vec!["game00001".to_string()],
         };
 
-        let bytes = refresh_sqlite_preview_assets(
-            &db,
-            &[pack],
-            vec![(pack_path.to_string(), 1234, 77)],
-        )
-        .expect("refresh preview assets");
+        let bytes =
+            refresh_sqlite_preview_assets(&db, &[pack], vec![(pack_path.to_string(), 1234, 77)])
+                .expect("refresh preview assets");
 
         assert!(bytes > 0);
         let conn = Connection::open(&db).expect("open library sqlite");
@@ -5733,10 +6590,7 @@ mod tests {
                 },
             )
             .expect("query refreshed preferred row");
-        assert_eq!(
-            row.0,
-            "/media/fat/_Arcade/media/screenshot/game00001.png"
-        );
+        assert_eq!(row.0, "/media/fat/_Arcade/media/screenshot/game00001.png");
         assert_eq!(row.1, 1);
         assert_eq!(row.2.as_deref(), Some("game00001"));
         assert_eq!(row.3, "exact");
@@ -5752,6 +6606,60 @@ mod tests {
                 .get(pack_path),
             Some(&(1234, 77))
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn console_preview_asset_refresh_clears_removed_pack_images() {
+        let root = unique_temp_dir("console-preview-clear");
+        let rom_path = root.join("Game.nes");
+        let rom = b"fixture-rom";
+        std::fs::write(&rom_path, rom).expect("write rom");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "nes",
+                "fixture",
+                None,
+                "Fixture Game (USA)",
+                Some("1985"),
+                Some("Example"),
+                Some("usa"),
+            )],
+            &[("nes", "fixture", rom.len() as i64, crc32(rom))],
+        );
+        let db = root.join("library.sqlite3");
+        let mut discovery = payload(&rom_path.display().to_string());
+        discovery.platform_id = "nes".to_string();
+        discovery.category = "Console".to_string();
+        discovery.core_id = "NES".to_string();
+        discovery.hardware_id = "nes".to_string();
+        let pack_path = "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b";
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: pack_path.to_string(),
+            codec: "mmlz4b",
+            entries: vec![software_asset_key("nes", "fixture")],
+        };
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        refresh_sqlite_preview_assets(&db, &[], Vec::new()).expect("refresh without pack");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row: (String, i64) = conn
+            .query_row(
+                "SELECT image_path,has_image FROM launcher_catalog WHERE system_id='nes'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("launcher row");
+        assert_eq!(row, (String::new(), 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6099,6 +7007,89 @@ mod tests {
         for (setname, parent, title, year, manufacturer) in rows {
             stmt.execute(params![setname, parent, title, year, manufacturer])
                 .expect("insert mame fixture row");
+        }
+    }
+
+    type SoftwareItemFixture<'a> = (
+        &'a str,
+        &'a str,
+        Option<&'a str>,
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+
+    fn write_mame_software_fixture_db(
+        path: &Path,
+        items: &[SoftwareItemFixture<'_>],
+        hashes: &[(&str, &str, i64, u32)],
+    ) {
+        let conn = Connection::open(path).expect("open software fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE mame_machines (
+                setname TEXT PRIMARY KEY,
+                parent_setname TEXT,
+                title TEXT NOT NULL,
+                year TEXT,
+                manufacturer TEXT
+            ) WITHOUT ROWID;
+            CREATE TABLE mame_software_items (
+                list_name TEXT NOT NULL,
+                software_name TEXT NOT NULL,
+                parent_name TEXT,
+                description TEXT NOT NULL,
+                year TEXT,
+                publisher TEXT,
+                region TEXT,
+                source_version TEXT NOT NULL,
+                PRIMARY KEY(list_name, software_name)
+            ) WITHOUT ROWID;
+            CREATE TABLE mame_software_hashes (
+                list_name TEXT NOT NULL,
+                software_name TEXT NOT NULL,
+                part_name TEXT,
+                rom_name TEXT,
+                size INTEGER,
+                crc32 TEXT,
+                sha1 TEXT,
+                data_area TEXT,
+                disk_sha1 TEXT
+            );
+            "#,
+        )
+        .expect("create software fixture");
+        let mut item_stmt = conn
+            .prepare(
+                "INSERT INTO mame_software_items(
+                    list_name,software_name,parent_name,description,year,publisher,region,source_version
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,'fixture')",
+            )
+            .expect("prepare software fixture item insert");
+        for (list, name, parent, description, year, publisher, region) in items {
+            item_stmt
+                .execute(params![
+                    list,
+                    name,
+                    parent,
+                    description,
+                    year,
+                    publisher,
+                    region
+                ])
+                .expect("insert software fixture item");
+        }
+        let mut hash_stmt = conn
+            .prepare(
+                "INSERT INTO mame_software_hashes(list_name,software_name,size,crc32)
+                 VALUES (?1,?2,?3,?4)",
+            )
+            .expect("prepare software fixture hash insert");
+        for (list, name, size, crc) in hashes {
+            hash_stmt
+                .execute(params![list, name, size, format!("{crc:08x}")])
+                .expect("insert software fixture hash");
         }
     }
 

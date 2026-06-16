@@ -661,6 +661,11 @@ fn preview_archive_paths_from_env() -> Vec<String> {
     if let Some(path) = neogeo_preview_archive_path_from_env().or_else(auto_neogeo_archive_path) {
         paths.push(path);
     }
+    paths.extend(console_preview_archive_paths_from_env());
+    paths.extend(auto_console_archive_paths());
+    if let Some(path) = saturn_preview_archive_path_from_env() {
+        paths.push(path);
+    }
     let mut seen = HashSet::new();
     paths
         .into_iter()
@@ -797,6 +802,46 @@ fn neogeo_preview_archive_path_from_env() -> Option<String> {
 fn auto_neogeo_archive_path() -> Option<String> {
     let path = PathBuf::from("/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b");
     path.exists().then(|| path.display().to_string())
+}
+
+fn saturn_preview_archive_path_from_env() -> Option<String> {
+    match std::env::var("MISTER_SATURN_PREVIEW_ARCHIVE") {
+        Ok(path) if !path.is_empty() => Some(path),
+        _ => None,
+    }
+}
+
+fn console_preview_archive_paths_from_env() -> Vec<String> {
+    [
+        "MISTER_NES_PREVIEW_ARCHIVE",
+        "MISTER_SNES_PREVIEW_ARCHIVE",
+        "MISTER_N64_PREVIEW_ARCHIVE",
+        "MISTER_SMS_PREVIEW_ARCHIVE",
+        "MISTER_MEGADRIVE_PREVIEW_ARCHIVE",
+    ]
+    .into_iter()
+    .filter_map(|name| match std::env::var(name) {
+        Ok(path) if !path.is_empty() => Some(path),
+        _ => None,
+    })
+    .collect()
+}
+
+fn auto_console_archive_paths() -> Vec<String> {
+    [
+        "nes-screenshots.mmlz4b",
+        "snes-screenshots.mmlz4b",
+        "n64-screenshots.mmlz4b",
+        "sms-screenshots.mmlz4b",
+        "megadrive-screenshots.mmlz4b",
+        "saturn-screenshots.mmlz4b",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let path = PathBuf::from("/media/fat/mister-magik/assets").join(name);
+        path.exists().then(|| path.display().to_string())
+    })
+    .collect()
 }
 
 impl PreviewArchive {
@@ -1248,8 +1293,7 @@ mod tests {
         assert_eq!(hit.timing.source_width, 1);
         let (
             PreviewPixels::Rgb565 {
-                words: first_words,
-                ..
+                words: first_words, ..
             },
             PreviewPixels::Rgb565 {
                 words: hit_words, ..

@@ -12,6 +12,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_IP=... scripts/deploy-rust.sh --video
 #   MISTER_IP=... scripts/deploy-rust.sh --mame-metadata --asset-packs
+#   MISTER_MAME_SOFTWARE_DIR=/path/to/mame/hash scripts/deploy-rust.sh --mame-metadata
 #   MISTER_HBMAME_BIN=/path/to/hbmame scripts/deploy-rust.sh --hbmame-metadata
 #
 # Default installs the release-device (A3) binary.
@@ -24,6 +25,7 @@ DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
 MAME_SQLITE="${MISTER_MAME_SQLITE:-$HERE/build/mame.sqlite3}"
 HBMAME_SQLITE="${MISTER_HBMAME_SQLITE:-$HERE/build/hbmame.sqlite3}"
 HBMAME_BIN="${MISTER_HBMAME_BIN:-}"
+MAME_SOFTWARE_DIR="${MISTER_MAME_SOFTWARE_DIR:-${MISTER_MAME_HASH_DIR:-}}"
 NEOGEO_SCREENSHOT_PACK="${MISTER_NEOGEO_SCREENSHOT_PACK:-$HERE/build/neogeo-screenshots/neogeo-screenshots.mmlz4b}"
 DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
@@ -136,10 +138,23 @@ if [ "$DEPLOY_VIDEO" -eq 1 ]; then
     "$HERE/scripts/mister" put "$VIDEO_SRC" "$VIDEO_REMOTE"
 fi
 if [ "$DEPLOY_MAME_METADATA" -eq 1 ]; then
+  BUILD_MAME_METADATA=0
   if [ ! -f "$MAME_SQLITE" ]; then
+    BUILD_MAME_METADATA=1
+  elif [ -n "$MAME_SOFTWARE_DIR" ]; then
+    BUILD_MAME_METADATA=1
+  fi
+  if [ "$BUILD_MAME_METADATA" -eq 1 ]; then
     echo "==> Building MAME metadata DB at $MAME_SQLITE"
     mkdir -p "$(dirname "$MAME_SQLITE")"
-    "$HERE/scripts/mister" mame-metadata-build --out "$MAME_SQLITE"
+    mame_metadata_args=(mame-metadata-build --out "$MAME_SQLITE")
+    if [ -n "$MAME_SOFTWARE_DIR" ] && [ -f "$MAME_SQLITE" ]; then
+      mame_metadata_args+=(--machine-sqlite "$MAME_SQLITE")
+    fi
+    if [ -n "$MAME_SOFTWARE_DIR" ]; then
+      mame_metadata_args+=(--software-dir "$MAME_SOFTWARE_DIR")
+    fi
+    "$HERE/scripts/mister" "${mame_metadata_args[@]}"
   fi
   echo "==> Deploying $MAME_SQLITE -> $REMOTE_DIR/mame.sqlite3"
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
