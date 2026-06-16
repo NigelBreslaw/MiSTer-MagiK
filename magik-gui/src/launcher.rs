@@ -1012,18 +1012,19 @@ pub fn reset_database_and_reboot() -> Result<(), String> {
     reboot_mister()
 }
 
+fn reboot_mister_with(io: &mut impl LaunchIo) -> Result<(), String> {
+    if !io.magik_running() {
+        return Err("MiSTer_MagiK is not running; refusing raw reboot from Slint".into());
+    }
+    if !io.wait_for_command_fifo() {
+        return Err(format!("timed out waiting for {CMD_FIFO}"));
+    }
+    io.write_mister_command("mister_magik_reboot\n")
+}
+
 pub fn reboot_mister() -> Result<(), String> {
-    Command::new("reboot")
-        .spawn()
-        .map(|_| ())
-        .or_else(|_| {
-            Command::new("sh")
-                .arg("-c")
-                .arg("reboot -f")
-                .spawn()
-                .map(|_| ())
-        })
-        .map_err(|e| format!("failed to reboot MiSTer: {e}"))
+    let mut io = SystemLaunchIo;
+    reboot_mister_with(&mut io)
 }
 
 #[cfg(test)]
@@ -1529,6 +1530,37 @@ mod tests {
         assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
         assert!(launch_in_progress());
         reset_launch();
+    }
+
+    #[test]
+    fn reboot_mister_requests_supervised_main_reboot() {
+        let mut io = launch_io();
+
+        reboot_mister_with(&mut io).unwrap();
+
+        assert_eq!(io.commands, vec!["mister_magik_reboot\n"]);
+    }
+
+    #[test]
+    fn reboot_mister_refuses_raw_reboot_without_magik_main() {
+        let mut io = launch_io();
+        io.magik_running = false;
+
+        let err = reboot_mister_with(&mut io).unwrap_err();
+
+        assert!(err.contains("refusing raw reboot"));
+        assert!(io.commands.is_empty());
+    }
+
+    #[test]
+    fn reboot_mister_requires_command_fifo() {
+        let mut io = launch_io();
+        io.fifo_ready = false;
+
+        let err = reboot_mister_with(&mut io).unwrap_err();
+
+        assert!(err.contains(CMD_FIFO));
+        assert!(io.commands.is_empty());
     }
 
     #[test]

@@ -67,8 +67,14 @@ scripts/restore-stock-boot.sh
 scripts/install-slint-boot.sh
 ```
 
-`scripts/mister reboot-wait` waits for the down-to-up transition and confirms
-the device can run commands. Prefer it over blind sleeps.
+`scripts/mister reboot` and `scripts/mister reboot-wait` use
+`mister_magik_reboot` through the Main fork when `MiSTer_MagiK` and
+`/dev/MiSTer_cmd` are available, keeping MiSTer MagiK in display ownership until
+reset. `reboot-wait` then waits for the down-to-up transition and confirms the
+device can run commands. Prefer it over blind sleeps.
+
+Use `scripts/mister reboot --raw` or `scripts/mister reboot-wait --raw` only for
+recovery/debugging when the Main fork or command FIFO is broken.
 
 `scripts/restore-stock-boot.sh` restores stock menu boot by repairing inittab,
 restoring `MiSTer.ini` from `/media/fat/MiSTer.ini.bak` when appropriate, and

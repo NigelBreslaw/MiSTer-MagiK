@@ -7,8 +7,8 @@ surface is the framebuffer size and copies 1:1 in every verified mode, including
 
 **Before a manual run**, stop only the Rust UI process. Leave `MiSTer_MagiK`
 running so the launcher keeps its OSD/input suppression state. If display
-ownership looks confused, reboot through `scripts/mister reboot-wait` instead of
-killing Main.
+ownership looks confused, reboot through the supervised
+`scripts/mister reboot-wait` path instead of killing Main.
 
 ```bash
 kill -9 $(pidof mister-magik-fb) 2>/dev/null
