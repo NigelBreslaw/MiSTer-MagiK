@@ -55,3 +55,71 @@ SLOWCAT-PROFILE-20260617	a554fa03	library_db_saved	352879	bytes=31633408 scan_us
 SLOWCAT-PROFILE-20260617	a554fa03	library_ready	353163	games=8204 load_us=281377
 SLOWCAT-PROFILE-20260617	a554fa03	catalog_bridge_sync_update	353167	games=8204 elapsed_us=4144
 SLOWCAT-PROFILE-20260617	a554fa03	db_count	0	9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	first_frame	1701	catalog_ready=false
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	library_scan_complete	74679	scan_us=71716117 discover_us=71601011 classify_us=71637419 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_schema	147	tables=22
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_metadata_load	4171	mame=50097 hbmame=608 software_lists=14979 preview_packs=3
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_begin_tx_asset_packs	62	
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_profiles	4	rows=15
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_files	687	rows=12365
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_payloads	3608	normal_files=12347 entries=281
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_ignored_files	46	rows=398
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	922	from=0 to=1000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	857	from=1000 to=2000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	862	from=2000 to=3000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	912	from=3000 to=4000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	1027	from=4000 to=5000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	1302	from=5000 to=6000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	2279	from=6000 to=7000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	1421	from=7000 to=8000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	2009	from=8000 to=9000 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_chunk	245300	from=9000 to=9960 total=9960
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_games_total	258037	rows=9960 launcher_rows=7122
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_materialize_arcade_ui	2185	
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_launcher_arcade	114	
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_launcher_console	943	rows=7122
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_launchers	1773	
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_meta	1170	rows=10
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_file_fingerprints	947	rows=12365
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_container_fingerprints	13	rows=154
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_insert_directory_manifest	530	rows=7978
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_commit	1016	
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	import_stage_total	275552	path=/media/fat/mister-magik/.library.sqlite3.tmp.607
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	library_db_saved	351665	bytes=31633408 scan_us=71716117 discover_us=71601011 classify_us=71637419 import_us=276784317 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	library_ready	351949	games=8204 load_us=288505
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	catalog_bridge_sync_update	351953	games=8204 elapsed_us=4304
+SLOWCAT-BEFORE-TITLE-20260617	a8143a19	db_count	0	9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	first_frame	1647	catalog_ready=false
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	library_scan_complete	74969	scan_us=72052723 discover_us=71872484 classify_us=71901929 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_schema	145	tables=22
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_metadata_load	4126	mame=50097 hbmame=608 software_lists=14979 preview_packs=3
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_begin_tx_asset_packs	61	
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_profiles	4	rows=15
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_files	685	rows=12365
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_payloads	4030	normal_files=12347 entries=281
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_ignored_files	47	rows=398
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	1029	from=0 to=1000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	929	from=1000 to=2000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	952	from=2000 to=3000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	896	from=3000 to=4000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	1112	from=4000 to=5000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	1382	from=5000 to=6000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	1392	from=6000 to=7000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	1381	from=7000 to=8000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	1957	from=8000 to=9000 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_chunk	44756	from=9000 to=9960 total=9960
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_games_total	56932	rows=9960 launcher_rows=7122
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_materialize_arcade_ui	1762	
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_launcher_arcade	122	
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_launcher_console	889	rows=7122
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_launchers	1758	
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_meta	1181	rows=10
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_file_fingerprints	930	rows=12365
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_container_fingerprints	12	rows=154
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_insert_directory_manifest	532	rows=7978
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_commit	1154	
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	import_stage_total	74488	path=/media/fat/mister-magik/.library.sqlite3.tmp.606
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	library_db_saved	150869	bytes=31629312 scan_us=72052723 discover_us=71872484 classify_us=71901929 import_us=75703940 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	library_ready	151153	games=8204 load_us=275354
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	catalog_bridge_sync_update	151157	games=8204 elapsed_us=3771
+SLOWCAT-AFTER-TITLE-20260617	df2e4886	db_count	0	9960
