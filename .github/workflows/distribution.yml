@@ -259,7 +259,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: build/mame.sqlite3
-          key: mame-sqlite-${{ runner.os }}-v1
+          key: mame-sqlite-${{ runner.os }}-v2-${{ hashFiles('tools/mister/src/main.rs', '.github/workflows/distribution.yml') }}
 
       - name: Cache HBMAME metadata database
         id: hbmame-db-cache
@@ -273,15 +273,47 @@ jobs:
       - name: Install package tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y zip
+          sudo apt-get install -y sqlite3 zip
 
       - name: Install MAME for metadata
         if: steps.mame-db-cache.outputs.cache-hit != 'true'
         run: sudo apt-get install -y mame
 
+      - name: Resolve MAME software lists
+        if: steps.mame-db-cache.outputs.cache-hit != 'true'
+        id: mame-hash
+        shell: bash
+        run: |
+          hash_dir="$(dirname "$(find /usr/share /usr/local/share -path '*/hash/nes.xml' -print -quit)")"
+          if [[ -z "$hash_dir" || ! -f "$hash_dir/saturn.xml" ]]; then
+            echo "MAME hash directory with target software lists was not found" >&2
+            exit 1
+          fi
+          echo "dir=$hash_dir" >> "$GITHUB_OUTPUT"
+
       - name: Build MAME metadata database
         if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        run: scripts/mister mame-metadata-build --mame mame --out build/mame.sqlite3
+        run: scripts/mister mame-metadata-build --mame mame --software-dir "${{ steps.mame-hash.outputs.dir }}" --out build/mame.sqlite3
+
+      - name: Verify MAME software metadata
+        run: |
+          sqlite3 build/mame.sqlite3 "
+            WITH expected(list_name) AS (
+              VALUES ('megadriv'),('n64'),('nes'),('saturn'),('sms'),('snes')
+            )
+            SELECT expected.list_name, COALESCE(counts.rows, 0) AS rows
+            FROM expected
+            LEFT JOIN (
+              SELECT list_name, count(*) AS rows
+              FROM mame_software_items
+              GROUP BY list_name
+            ) counts USING (list_name)
+            ORDER BY expected.list_name;
+          " | tee build/mame-software-counts.txt
+          if grep -E '\|0$' build/mame-software-counts.txt; then
+            echo "One or more required MAME software lists are missing from build/mame.sqlite3" >&2
+            exit 1
+          fi
 
       - name: Download HBMAME listxml
         if: steps.hbmame-db-cache.outputs.cache-matched-key == ''

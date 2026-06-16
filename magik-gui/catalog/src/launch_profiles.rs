@@ -301,6 +301,16 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
             &["gg"],
         ),
         cartridge_profile(
+            "sms",
+            "sms",
+            "Console",
+            "Sega Master System",
+            "SMS",
+            "_Console/SMS",
+            &["SMS"],
+            &["sms", "sg"],
+        ),
+        cartridge_profile(
             "megadrive",
             "megadrive",
             "Console",
