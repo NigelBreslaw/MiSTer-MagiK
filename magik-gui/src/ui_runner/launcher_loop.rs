@@ -269,6 +269,7 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
+    let mut catalog_scan_redraw = CatalogScanRedraw::new();
     while secs == 0 || run_start.elapsed().as_secs() < secs {
         let loop_start = Instant::now();
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
@@ -377,9 +378,11 @@ pub(super) fn run_launcher_loop(
                                 start,
                                 event,
                                 format!(
-                                    "bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                                    "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                                     summary.bytes,
                                     summary.scan_us,
+                                    summary.discover_us,
+                                    summary.classify_us,
                                     summary.import_us,
                                     summary.discoveries,
                                     summary.normal_files,
@@ -437,9 +440,11 @@ pub(super) fn run_launcher_loop(
                             start,
                             "library_db_unchanged",
                             format!(
-                                "bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                                "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                                 summary.bytes,
                                 summary.scan_us,
+                                summary.discover_us,
+                                summary.classify_us,
                                 summary.import_us,
                                 summary.discoveries,
                                 summary.normal_files,
@@ -791,10 +796,16 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        let catalog_scan_visible = app
-            .global::<slint_ui::launcher::MisterBridge>()
-            .get_catalog_scan_visible();
-        if launching || catalog_scan_visible {
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let catalog_scan_visible = bridge.get_catalog_scan_visible();
+        let catalog_scan_percent = bridge.get_catalog_scan_percent();
+        if launching
+            || catalog_scan_redraw.should_request(
+                catalog_scan_visible,
+                catalog_scan_percent,
+                loop_start,
+            )
+        {
             window.request_redraw();
         }
         let active_arcade_games = if !launching && nav.screen == Screen::Arcade {
@@ -967,6 +978,44 @@ pub(super) fn run_launcher_loop(
     }
 }
 
+#[derive(Debug)]
+struct CatalogScanRedraw {
+    last_request: Instant,
+    period: Duration,
+}
+
+impl CatalogScanRedraw {
+    fn new() -> Self {
+        Self {
+            last_request: Instant::now() - catalog_scan_redraw_period(),
+            period: catalog_scan_redraw_period(),
+        }
+    }
+
+    fn should_request(&mut self, visible: bool, percent: i32, now: Instant) -> bool {
+        if !visible {
+            return false;
+        }
+        if percent >= 0 {
+            return false;
+        }
+        if now.duration_since(self.last_request) < self.period {
+            return false;
+        }
+        self.last_request = now;
+        true
+    }
+}
+
+fn catalog_scan_redraw_period() -> Duration {
+    let fps = std::env::var("MISTER_CATALOG_SCAN_FPS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(15)
+        .clamp(1, 60);
+    Duration::from_millis((1000 / fps).max(1))
+}
+
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
     _arcade_catalog_required_at_start: bool,
@@ -1064,6 +1113,28 @@ mod tests {
         assert!(initial_catalog_scan_visible(false, false));
         assert!(initial_catalog_scan_visible(false, true));
         assert!(!initial_catalog_scan_visible(true, true));
+    }
+
+    #[test]
+    pub(super) fn catalog_scan_redraw_throttles_indeterminate_animation() {
+        let now = Instant::now();
+        let mut redraw = CatalogScanRedraw {
+            last_request: now,
+            period: Duration::from_millis(66),
+        };
+        assert!(!redraw.should_request(true, -1, now + Duration::from_millis(20)));
+        assert!(redraw.should_request(true, -1, now + Duration::from_millis(70)));
+    }
+
+    #[test]
+    pub(super) fn catalog_scan_redraw_skips_determinate_periodic_frames() {
+        let now = Instant::now();
+        let mut redraw = CatalogScanRedraw {
+            last_request: now - Duration::from_secs(1),
+            period: Duration::from_millis(66),
+        };
+        assert!(!redraw.should_request(true, 90, now));
+        assert!(!redraw.should_request(false, -1, now));
     }
 
     #[test]

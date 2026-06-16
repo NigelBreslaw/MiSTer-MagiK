@@ -188,10 +188,12 @@ fn run_library_refresh() {
     match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
             println!(
-                "library_refresh\tdone\tskipped={} bytes={} scan_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                 summary.skipped,
                 summary.bytes,
                 summary.scan_us,
+                summary.discover_us,
+                summary.classify_us,
                 summary.import_us,
                 summary.discoveries,
                 summary.normal_files,
