@@ -11,6 +11,8 @@ RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release-device
 BUILD_FLAG=(--device)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_DIR="/media/fat/mister-magik"
+DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
 BENCH_SQLITE="/media/fat/mister-magik/library-scan-bench.sqlite3"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-library.tsv"
@@ -49,6 +51,27 @@ done
 BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
 mkdir -p "$BENCH_DIR"
 
+remote_run() {
+  "$HERE/scripts/mister" run "$1"
+}
+
+magik_command() {
+  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+}
+
+cleanup_deploy_lock() {
+  remote_run "rm -f '$DEPLOY_LOCK'" >/dev/null 2>&1 || true
+  magik_command "mister_magik_resume"
+}
+
+run_with_launcher_suspended() {
+  trap 'magik_command "mister_magik_resume"' RETURN
+  magik_command "mister_magik_suspend"
+  remote_run "$1"
+  magik_command "mister_magik_resume"
+  trap - RETURN
+}
+
 if [[ ! -f "$TSV" ]]; then
   echo "label	iteration	scenario	us	notes" > "$TSV"
 elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
@@ -67,8 +90,13 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
 fi
 
 echo "== deploy =="
-"$HERE/scripts/mister" run 'kill -9 $(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik'
-"$HERE/scripts/mister" put "$BIN" "$REMOTE"
+trap cleanup_deploy_lock EXIT
+remote_run "mkdir -p '$REMOTE_DIR'; : > '$DEPLOY_LOCK'"
+magik_command "mister_magik_suspend"
+"$HERE/scripts/mister" put "$BIN" "$REMOTE.upload"
+remote_run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'; rm -f '$DEPLOY_LOCK'"
+magik_command "mister_magik_resume"
+trap - EXIT
 
 echo "== library-scan-bench on device =="
 remote_env="MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ITERATIONS=$ITERATIONS MISTER_LIBRARY_BENCH_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_SQLITE=$BENCH_SQLITE"
@@ -78,14 +106,14 @@ fi
 if [[ -n "$SQLITE_BUILD_DIR" ]]; then
   remote_env="$remote_env MISTER_LIBRARY_SQLITE_BUILD_DIR=$SQLITE_BUILD_DIR"
 fi
-OUT=$("$HERE/scripts/mister" run "chmod +x $REMOTE; $remote_env $REMOTE library-scan-bench" 2>&1) || true
+OUT=$(run_with_launcher_suspended "chmod +x $REMOTE; $remote_env $REMOTE library-scan-bench" 2>&1) || true
 echo "$OUT"
 
 echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
 if [[ "$POST_REBOOT" -eq 1 ]]; then
   echo "== post-reboot no-change refresh =="
   "$HERE/scripts/mister" reboot-wait
-  OUT=$("$HERE/scripts/mister" run "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-refresh" 2>&1) || true
+  OUT=$(run_with_launcher_suspended "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-refresh" 2>&1) || true
   echo "$OUT"
   echo "$OUT" | awk -v label="$LABEL" -F '\t' '
     $1 == "library_refresh" && $2 == "done" {
