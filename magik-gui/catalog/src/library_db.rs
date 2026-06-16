@@ -140,6 +140,37 @@ pub struct LibraryCatalogLoad {
 }
 
 #[derive(Clone, Debug)]
+pub struct LibraryScanStats {
+    pub scan_us: u64,
+    pub discover_us: u64,
+    pub classify_us: u64,
+    pub normal_files: usize,
+    pub containers: usize,
+    pub entries: usize,
+    pub discoveries: usize,
+}
+
+pub struct LibraryScanArtifact {
+    scan: LibraryScan,
+    stats: LibraryScanStats,
+}
+
+impl LibraryScanArtifact {
+    pub fn stats(&self) -> &LibraryScanStats {
+        &self.stats
+    }
+
+    pub fn arcade_catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
+        build_arcade_catalog_from_scan(root, &self.scan)
+    }
+
+    pub fn save_default_sqlite(self) -> Result<LibraryRefreshSummary, String> {
+        let cfg = BenchConfig::production();
+        save_scan_artifact_to_sqlite(&cfg, self)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct LibraryRefreshSummary {
     pub skipped: bool,
     pub scan_us: u64,
@@ -858,6 +889,11 @@ pub fn refresh_default_sqlite_database(
     refresh_sqlite_database(&cfg, progress)
 }
 
+pub fn scan_default_library(progress: ProgressCallback<'_>) -> Result<LibraryScanArtifact, String> {
+    let cfg = BenchConfig::production();
+    Ok(scan_library_artifact(&cfg, progress))
+}
+
 pub fn default_sqlite_preview_archive_fingerprint_unchanged() -> bool {
     let cfg = BenchConfig::production();
     read_sqlite_fingerprint(&cfg.sqlite_path)
@@ -952,9 +988,9 @@ fn refresh_sqlite_database(
         }
     }
 
-    let scan = match progress.as_mut() {
-        Some(report) => scan_library_with_progress(&cfg, Some(&mut **report)),
-        None => scan_library(&cfg),
+    let artifact = match progress.as_mut() {
+        Some(report) => scan_library_artifact(&cfg, Some(&mut **report)),
+        None => scan_library_artifact(&cfg, None),
     };
     let scan_us = scan_t.elapsed().as_micros() as u64;
 
@@ -963,26 +999,13 @@ fn refresh_sqlite_database(
             "Indexing library",
             &format!(
                 "Writing {} games, {} archives...",
-                unique_discovery_count(&scan.discoveries),
-                scan.containers.len()
+                artifact.stats.discoveries, artifact.stats.containers
             ),
         );
     }
-    let import_t = Instant::now();
-    let bytes = save_sqlite_scan(&cfg.sqlite_path, &scan)?;
-    let import_us = import_t.elapsed().as_micros() as u64;
-    Ok(LibraryRefreshSummary {
-        skipped: false,
-        scan_us,
-        discover_us: scan.discover_us,
-        classify_us: scan.classify_us,
-        import_us,
-        bytes,
-        normal_files: scan.normal_files.len(),
-        containers: scan.containers.len(),
-        entries: scan.entries.len(),
-        discoveries: unique_discovery_count(&scan.discoveries),
-    })
+    let mut summary = save_scan_artifact_to_sqlite(&cfg, artifact)?;
+    summary.scan_us = scan_us;
+    Ok(summary)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1050,6 +1073,77 @@ fn env_bool(name: &str) -> bool {
 
 fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     scan_library_with_progress(cfg, None)
+}
+
+fn scan_library_artifact(
+    cfg: &BenchConfig,
+    mut progress: ProgressCallback<'_>,
+) -> LibraryScanArtifact {
+    let scan_t = Instant::now();
+    let scan = match progress.as_mut() {
+        Some(report) => scan_library_with_progress(cfg, Some(&mut **report)),
+        None => scan_library(cfg),
+    };
+    let stats = LibraryScanStats {
+        scan_us: scan_t.elapsed().as_micros() as u64,
+        discover_us: scan.discover_us,
+        classify_us: scan.classify_us,
+        normal_files: scan.normal_files.len(),
+        containers: scan.containers.len(),
+        entries: scan.entries.len(),
+        discoveries: unique_discovery_count(&scan.discoveries),
+    };
+    LibraryScanArtifact { scan, stats }
+}
+
+fn save_scan_artifact_to_sqlite(
+    cfg: &BenchConfig,
+    artifact: LibraryScanArtifact,
+) -> Result<LibraryRefreshSummary, String> {
+    let import_t = Instant::now();
+    let bytes = save_sqlite_scan(&cfg.sqlite_path, &artifact.scan)?;
+    let import_us = import_t.elapsed().as_micros() as u64;
+    Ok(LibraryRefreshSummary {
+        skipped: false,
+        scan_us: artifact.stats.scan_us,
+        discover_us: artifact.stats.discover_us,
+        classify_us: artifact.stats.classify_us,
+        import_us,
+        bytes,
+        normal_files: artifact.stats.normal_files,
+        containers: artifact.stats.containers,
+        entries: artifact.stats.entries,
+        discoveries: artifact.stats.discoveries,
+    })
+}
+
+fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
+    let covered_payloads = covered_payload_paths(&scan.discoveries);
+    let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
+    let mut rows = Vec::<CatalogRow>::new();
+    for (key, discovery) in discoveries {
+        let system_id = catalog_system_id_for_discovery(discovery);
+        let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
+        if !is_launcher_launch_ref(&plan_launch_ref) {
+            continue;
+        }
+        rows.push(CatalogRow {
+            game: ArcadeGameEntry {
+                title: discovery.title.clone().into(),
+                mra_path: plan_launch_ref.into(),
+                image_path: discovery.image_path.clone().unwrap_or_default().into(),
+                has_image: discovery.has_image,
+                system_id: system_id.into(),
+            },
+            source_kind: launch_kind_for_discovery(discovery).to_string(),
+            setname: discovery.setname.clone().unwrap_or_default(),
+            parent: discovery.parent.clone().unwrap_or_default(),
+        });
+    }
+    rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
+    let games = collapse_catalog_variants(rows);
+    let systems = arcade_catalog::systems_from_games(&games);
+    ArcadeCatalog::new(root.as_ref().to_path_buf(), games, systems)
 }
 
 fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, u64) {
@@ -4179,6 +4273,37 @@ mod tests {
         assert!(games
             .iter()
             .any(|game| game.title.as_ref() == "Alien Breed"));
+    }
+
+    #[test]
+    fn ram_catalog_from_scan_matches_sqlite_catalog_for_simple_mra_fixture() {
+        let scan = sqlite_scan_with_discoveries(vec![
+            mra_discovery(1, "Alpha Mission"),
+            mra_discovery(2, "Beta Fighter"),
+        ]);
+        let ram_catalog = build_arcade_catalog_from_scan("/media/fat/_Arcade", &scan);
+        let root = unique_temp_dir("ram-catalog-projection");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let sqlite_catalog =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
+
+        assert_eq!(ram_catalog.len(), sqlite_catalog.catalog.len());
+        assert_eq!(
+            ram_catalog
+                .games
+                .iter()
+                .map(|game| game.mra_path.as_ref())
+                .collect::<Vec<_>>(),
+            sqlite_catalog
+                .catalog
+                .games
+                .iter()
+                .map(|game| game.mra_path.as_ref())
+                .collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
