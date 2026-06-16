@@ -90,6 +90,43 @@ fn unix_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_name(prefix: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{prefix}-{nanos}")
+    }
+
+    struct FileRestore {
+        path: &'static str,
+        original: Option<Vec<u8>>,
+    }
+
+    impl FileRestore {
+        fn capture(path: &'static str) -> Self {
+            Self {
+                path,
+                original: fs::read(path).ok(),
+            }
+        }
+    }
+
+    impl Drop for FileRestore {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(bytes) => {
+                    let _ = fs::write(self.path, bytes);
+                }
+                None => {
+                    let _ = fs::remove_file(self.path);
+                }
+            }
+        }
+    }
 
     #[test]
     fn event_value_uses_agent_readable_schema() {
@@ -139,5 +176,55 @@ mod tests {
         assert_eq!(value["launch_state"], "idle");
         assert_eq!(value["input_pad_count"], 3);
         assert_eq!(value["active_pad_index"], 2);
+    }
+
+    #[test]
+    fn event_appends_jsonl_row_to_runtime_event_file() {
+        let _restore = FileRestore::capture(EVENTS_PATH);
+        let _ = fs::remove_file(EVENTS_PATH);
+        let name = unique_name("coverage_event");
+        event(&name, "detail=ok");
+
+        let text = fs::read_to_string(EVENTS_PATH).expect("events jsonl should be written");
+        let row: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        assert_eq!(row["source"], "slint");
+        assert_eq!(row["event"], name);
+        assert_eq!(row["detail"], "detail=ok");
+        assert!(row["ts_unix_ms"].as_u64().is_some());
+        assert!(row["pid"].as_i64().is_some());
+    }
+
+    #[test]
+    fn write_launcher_status_replaces_status_file_atomically() {
+        let _restore = FileRestore::capture(STATUS_PATH);
+        let _ = fs::remove_file(STATUS_PATH);
+        let _ = fs::remove_file(format!("{STATUS_PATH}.tmp"));
+
+        write_launcher_status(LauncherStatus {
+            scene: "launcher",
+            screen: "arcade",
+            frames: 7,
+            fps_estimate: 60.04,
+            last_frame_ms_ago: 1,
+            catalog_ready: false,
+            catalog_games: 12,
+            catalog_systems: 2,
+            catalog_refresh_done: true,
+            launch_state: "loading",
+            loading_title: "1942",
+            input_pad_count: 1,
+            active_pad_index: 0,
+        });
+
+        let text = fs::read_to_string(STATUS_PATH).expect("status json should be written");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["schema"], "mister-magik-slint-status-v1");
+        assert_eq!(value["screen"], "arcade");
+        assert_eq!(value["frames"], 7);
+        assert_eq!(value["fps_estimate"], 60.0);
+        assert_eq!(value["catalog_ready"], false);
+        assert_eq!(value["catalog_refresh_done"], true);
+        assert_eq!(value["loading_title"], "1942");
+        assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
     }
 }

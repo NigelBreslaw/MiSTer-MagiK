@@ -591,6 +591,92 @@ mod tests {
     }
 
     #[test]
+    fn kind_labels_and_indexes_are_stable_for_setup_ui() {
+        for (idx, kind) in ControllerKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind.index(), idx);
+            assert_eq!(ControllerKind::from_index(idx), kind);
+            assert!(!kind.as_str().is_empty());
+            assert!(!kind.label().is_empty());
+        }
+        assert_eq!(
+            ControllerKind::from_index(usize::MAX),
+            ControllerKind::Unknown
+        );
+        assert_eq!(ControllerKind::FightStick.as_str(), "fight_stick");
+        assert_eq!(ControllerKind::FightStick.label(), "Fight stick");
+    }
+
+    #[test]
+    fn registry_status_labels_are_agent_readable() {
+        assert_eq!(
+            PadRegistryStatus::Unknown.as_str(),
+            "unknown (not in database)"
+        );
+        assert_eq!(PadRegistryStatus::PendingSetup.as_str(), "pending setup");
+        assert_eq!(PadRegistryStatus::Known.as_str(), "known");
+        assert_eq!(PadRegistryStatus::MovedPort.as_str(), "moved USB port");
+    }
+
+    #[test]
+    fn display_label_falls_back_to_kernel_name_then_vid_pid() {
+        let db = ControllerDb::empty("/tmp/t.json");
+        let named = sample_info("0x2563", "0x0575", "1-1.3", "");
+        assert_eq!(db.display_label(&named), "Test Pad");
+
+        let unnamed = PadInfo {
+            name: String::new(),
+            vendor_id: " 0X2563 ".into(),
+            product_id: "0x0575".into(),
+            usb_port: "1-1.3".into(),
+            ..PadInfo::default()
+        };
+        assert_eq!(db.display_label(&unnamed), "Controller 2563:0575");
+        assert_eq!(
+            ControllerDb::default_entry(&unnamed).label,
+            "Controller 2563:0575"
+        );
+    }
+
+    #[test]
+    fn claim_existing_reports_missing_id_and_fills_empty_kernel_name() {
+        let mut db = ControllerDb::empty("/tmp/t.json");
+        let old = sample_info("0x2563", "0x0575", "1-1.3", "SN-A");
+        let new_port = sample_info("0x2563", "0x0575", "1-1.7", "SN-A");
+
+        let missing = db.claim_existing(&new_port, "2563:0575:SN-A").unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+
+        db.upsert(
+            &old,
+            ControllerEntry {
+                label: "My Pad".into(),
+                kernel_name: String::new(),
+                kind: ControllerKind::Gamepad,
+                setup_complete: true,
+                last_usb_port: "1-1.3".into(),
+            },
+        );
+        db.claim_existing(&new_port, "2563:0575:SN-A").unwrap();
+        let entry = db.get(&new_port).unwrap();
+        assert_eq!(entry.last_usb_port, "1-1.7");
+        assert_eq!(entry.kernel_name, "Test Pad");
+    }
+
+    #[test]
+    fn remove_by_info_and_id_delete_entries() {
+        let mut db = ControllerDb::empty("/tmp/t.json");
+        let first = sample_info("2563", "0575", "1-1.3", "A");
+        let second = sample_info("2563", "0575", "1-1.4", "B");
+        db.upsert(&first, ControllerDb::default_entry(&first));
+        db.upsert(&second, ControllerDb::default_entry(&second));
+
+        assert!(db.remove(&first).is_some());
+        assert!(!db.contains(&first));
+        assert!(db.remove_id("2563:0575:B").is_some());
+        assert!(db.is_empty());
+    }
+
+    #[test]
     fn infer_kind_heuristics() {
         let fight = PadInfo {
             js_buttons: 10,
