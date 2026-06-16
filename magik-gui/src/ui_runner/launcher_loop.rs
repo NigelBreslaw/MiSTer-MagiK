@@ -271,6 +271,7 @@ pub(super) fn run_launcher_loop(
     let mut first_vsync_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
+    let mut games_found_counter = GamesFoundCounter::default();
     while secs == 0 || run_start.elapsed().as_secs() < secs {
         let loop_start = Instant::now();
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
@@ -343,6 +344,9 @@ pub(super) fn run_launcher_loop(
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         let visible =
                             catalog_scan_progress_visible(catalog_ready, nav.screen, &title);
+                        let detail = games_found_counter
+                            .progress_detail(&title, &detail, loop_start)
+                            .unwrap_or(detail);
                         bridge.set_catalog_scan_visible(visible);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_detail(detail.into());
@@ -389,6 +393,7 @@ pub(super) fn run_launcher_loop(
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
                         bridge.set_catalog_scan_percent(-1);
+                        games_found_counter.reset();
                         if cached_before_refresh {
                             bridge.set_catalog_scan_title("Validating library".into());
                             bridge.set_catalog_scan_detail(
@@ -454,6 +459,7 @@ pub(super) fn run_launcher_loop(
                         bridge.set_catalog_scan_title("".into());
                         bridge.set_catalog_scan_detail("".into());
                         bridge.set_catalog_scan_percent(-1);
+                        games_found_counter.reset();
                         let bridge_sync_t = Instant::now();
                         sync_bridge_launcher(
                             &app,
@@ -513,6 +519,7 @@ pub(super) fn run_launcher_loop(
                         bridge.set_catalog_scan_title("".into());
                         bridge.set_catalog_scan_detail("".into());
                         bridge.set_catalog_scan_percent(-1);
+                        games_found_counter.reset();
                         full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Done => {
@@ -523,6 +530,7 @@ pub(super) fn run_launcher_loop(
                             bridge.set_catalog_scan_title("".into());
                             bridge.set_catalog_scan_detail("".into());
                             bridge.set_catalog_scan_percent(-1);
+                            games_found_counter.reset();
                             full_bridge_dirty = true;
                         }
                     }
@@ -855,7 +863,16 @@ pub(super) fn run_launcher_loop(
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
+        let games_found_detail_changed = if catalog_scan_visible && catalog_scan_percent < 0 {
+            games_found_counter.tick(loop_start).is_some_and(|detail| {
+                bridge.set_catalog_scan_detail(detail.into());
+                true
+            })
+        } else {
+            false
+        };
         if launching
+            || games_found_detail_changed
             || catalog_scan_redraw.should_request(
                 catalog_scan_visible,
                 catalog_scan_percent,
@@ -1063,6 +1080,78 @@ impl CatalogScanRedraw {
     }
 }
 
+#[derive(Debug, Default)]
+struct GamesFoundCounter {
+    displayed: usize,
+    target: usize,
+    active: bool,
+    last_tick: Option<Instant>,
+}
+
+impl GamesFoundCounter {
+    fn progress_detail(&mut self, title: &str, detail: &str, now: Instant) -> Option<String> {
+        let target = if title == "Classifying library" {
+            parse_games_found_detail(detail)
+        } else {
+            None
+        };
+        let Some(target) = target else {
+            self.reset();
+            return None;
+        };
+        if !self.active || target < self.displayed {
+            self.displayed = self.displayed.min(target);
+            self.last_tick = Some(now);
+        }
+        self.target = target;
+        self.active = true;
+        Some(format_games_found(self.displayed))
+    }
+
+    fn tick(&mut self, now: Instant) -> Option<String> {
+        if !self.active || self.displayed >= self.target {
+            self.last_tick = Some(now);
+            return None;
+        }
+        let elapsed = self
+            .last_tick
+            .map(|last| now.duration_since(last))
+            .unwrap_or(Duration::from_millis(66));
+        let step = games_found_count_step(self.displayed, self.target, elapsed);
+        if step == 0 {
+            return None;
+        }
+        self.displayed = self.displayed.saturating_add(step).min(self.target);
+        self.last_tick = Some(now);
+        Some(format_games_found(self.displayed))
+    }
+
+    fn reset(&mut self) {
+        self.displayed = 0;
+        self.target = 0;
+        self.active = false;
+        self.last_tick = None;
+    }
+}
+
+fn parse_games_found_detail(detail: &str) -> Option<usize> {
+    detail.strip_prefix("Games found: ")?.trim().parse().ok()
+}
+
+fn format_games_found(count: usize) -> String {
+    format!("Games found: {count}")
+}
+
+fn games_found_count_step(displayed: usize, target: usize, elapsed: Duration) -> usize {
+    if target <= displayed {
+        return 0;
+    }
+    let lag = target - displayed;
+    let elapsed_ms = elapsed.as_millis().max(1) as usize;
+    let catchup_ms = 450usize;
+    ((lag * elapsed_ms).div_ceil(catchup_ms)).clamp(1, lag)
+}
+
 fn catalog_scan_redraw_period() -> Duration {
     let fps = std::env::var("MISTER_CATALOG_SCAN_FPS")
         .ok()
@@ -1206,6 +1295,59 @@ mod tests {
         };
         assert!(!redraw.should_request(true, 90, now));
         assert!(!redraw.should_request(false, -1, now));
+    }
+
+    #[test]
+    pub(super) fn games_found_counter_eases_toward_real_scan_count() {
+        let now = Instant::now();
+        let mut counter = GamesFoundCounter::default();
+
+        assert_eq!(
+            counter.progress_detail("Classifying library", "Games found: 250", now),
+            Some("Games found: 0".to_string())
+        );
+        assert_eq!(
+            counter.tick(now + Duration::from_millis(66)),
+            Some("Games found: 37".to_string())
+        );
+
+        let next = counter
+            .tick(now + Duration::from_millis(132))
+            .expect("counter should keep moving");
+        let count = parse_games_found_detail(&next).expect("parse counter detail");
+        assert!(count > 37);
+        assert!(count < 250);
+    }
+
+    #[test]
+    pub(super) fn games_found_counter_catches_large_lag_without_overshoot() {
+        let now = Instant::now();
+        let mut counter = GamesFoundCounter::default();
+
+        counter.progress_detail("Classifying library", "Games found: 1000", now);
+        for frame in 1..20 {
+            counter.tick(now + Duration::from_millis(frame * 66));
+        }
+
+        assert!(counter.displayed > 900);
+        assert!(counter.displayed <= 1000);
+    }
+
+    #[test]
+    pub(super) fn games_found_counter_ignores_other_scan_phases() {
+        let now = Instant::now();
+        let mut counter = GamesFoundCounter::default();
+
+        counter.progress_detail("Classifying library", "Games found: 100", now);
+        assert_eq!(
+            counter.progress_detail(
+                "Saving library",
+                "Writing 0 of 100 games into SQLite...",
+                now
+            ),
+            None
+        );
+        assert!(!counter.active);
     }
 
     #[test]

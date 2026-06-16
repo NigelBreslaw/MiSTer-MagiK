@@ -432,16 +432,16 @@ mod tests {
     #[test]
     fn catalog_progress_coalescer_throttles_repeated_scan_counts() {
         let mut coalescer = CatalogProgressCoalescer::default();
-        assert!(coalescer.should_send("Classifying library", "0 candidate files"));
-        assert!(!coalescer.should_send("Classifying library", "250 candidate files"));
+        assert!(coalescer.should_send("Classifying library", "Games found: 0"));
+        assert!(!coalescer.should_send("Classifying library", "Games found: 250"));
         coalescer.last_sent = Some(Instant::now() - Duration::from_millis(300));
-        assert!(coalescer.should_send("Classifying library", "500 candidate files"));
+        assert!(coalescer.should_send("Classifying library", "Games found: 500"));
     }
 
     #[test]
     fn catalog_progress_coalescer_sends_phase_and_percent_changes() {
         let mut coalescer = CatalogProgressCoalescer::default();
-        assert!(coalescer.should_send("Classifying library", "0 candidate files"));
+        assert!(coalescer.should_send("Classifying library", "Games found: 0"));
         assert!(coalescer.should_send("Indexing library", "Writing 10 games, 2 archives..."));
         assert!(coalescer.should_send("Loading library", "Opening SQLite catalog..."));
     }
