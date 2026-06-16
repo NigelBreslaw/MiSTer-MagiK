@@ -78,7 +78,7 @@ fi
 ORIGINALS="$WORK_DIR/originals"
 CACHE_DIR="$WORK_DIR/cache"
 RAW_DIR="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}"
-PACK="$WORK_DIR/neogeo-screenshots.mmlz4b"
+PACK="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}-lz4block-12.mmlz4b"
 
 mkdir -p "$ORIGINALS" "$CACHE_DIR"
 
@@ -102,9 +102,6 @@ fi
 
 echo "==> Building raw565 preview cache"
 "$MISTER" preview-cache-build --input "$ORIGINALS" --output "$CACHE_DIR" --max "$MAX_SIZE"
-
-echo "==> Packing $RAW_DIR"
-node "$ROOT/scripts/build-preview-archive.mjs" "$RAW_DIR" "$PACK" lz4-block 12
 
 if [[ "$DEPLOY" == "1" ]]; then
   remote_dir="$(dirname "$REMOTE_PACK")"

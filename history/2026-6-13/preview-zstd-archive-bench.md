@@ -35,18 +35,14 @@ Follow-up experiments used LZ4:
   LZ4 frame decoder overhead while keeping the same independent random lookup
   model.
 
-Mac-side packer:
+Historical Mac-side packer inputs:
 
 ```bash
-node scripts/build-preview-zstd-archive.mjs \
-  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320 \
-  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320-zstd9.mmzst \
-  zstd 9
-
-node scripts/build-preview-zstd-archive.mjs \
-  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320 \
-  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320-lz4block-12.mmlz4b \
-  lz4-block 12
+raw565 dir:
+  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320
+outputs:
+  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320-zstd9.mmzst
+  build/arcade-screenshot-cache/hybrid-20260613/raw565-hybrid-320x320-lz4block-12.mmlz4b
 ```
 
 MiSTer-side benchmark binary:

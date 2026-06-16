@@ -296,6 +296,23 @@ struct PreviewCacheResult {
     raw_bytes: u64,
 }
 
+#[derive(Clone, Debug)]
+struct PreviewArchiveSummary {
+    path: PathBuf,
+    entries: usize,
+    raw_bytes: u64,
+    payload_bytes: u64,
+    archive_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewArchiveEntry {
+    name_bytes: Vec<u8>,
+    raw_len: u32,
+    payload_len: u32,
+    offset: u64,
+}
+
 fn preview_cache_build(args: &[String]) -> Result<()> {
     let input = option_value(args, "--input")
         .or_else(|| option_value(args, "-i"))
@@ -315,6 +332,9 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
     let output = PathBuf::from(output);
     let png_dir = output.join(format!("png-hybrid-{max_size}x{max_size}"));
     let raw_dir = output.join(format!("raw565-hybrid-{max_size}x{max_size}"));
+    let archive_path = output.join(format!(
+        "raw565-hybrid-{max_size}x{max_size}-lz4block-12.mmlz4b"
+    ));
     fs::create_dir_all(&png_dir)?;
     fs::create_dir_all(&raw_dir)?;
 
@@ -354,6 +374,7 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
         .filter(|r| r.resize == PreviewResizeChoice::Unchanged)
         .count();
     let raw_bytes: u64 = ok.iter().map(|r| r.raw_bytes).sum();
+    let archive = build_preview_archive(&raw_dir, &archive_path)?;
 
     println!(
         "preview_cache_build input={} output={} max={} threads={}",
@@ -376,7 +397,7 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
         );
     }
     println!(
-        "preview_cache_summary ok={} failed=0 elapsed_ms={} nearest={} lanczos={} unchanged={} raw_bytes={} png_dir={} raw565_dir={}",
+        "preview_cache_summary ok={} failed=0 elapsed_ms={} nearest={} lanczos={} unchanged={} raw_bytes={} png_dir={} raw565_dir={} archive={}",
         ok.len(),
         total_t.elapsed().as_millis(),
         nearest,
@@ -384,9 +405,114 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
         unchanged,
         raw_bytes,
         png_dir.display(),
-        raw_dir.display()
+        raw_dir.display(),
+        archive.path.display()
+    );
+    println!(
+        "preview_archive codec=lz4-block entries={} raw_bytes={} compressed_payload_bytes={} archive_bytes={} preset=rust-block output={}",
+        archive.entries,
+        archive.raw_bytes,
+        archive.payload_bytes,
+        archive.archive_bytes,
+        archive.path.display()
     );
     Ok(())
+}
+
+fn build_preview_archive(raw_dir: &Path, out_path: &Path) -> Result<PreviewArchiveSummary> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(raw_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("rgb565") {
+            continue;
+        }
+        files.push(path);
+    }
+    files.sort();
+    if files.is_empty() {
+        return Err(format!("no .rgb565 files in {}", raw_dir.display()).into());
+    }
+
+    let mut entries = Vec::with_capacity(files.len());
+    let mut payloads = Vec::with_capacity(files.len());
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("non-utf8 raw565 filename: {}", path.display()))?
+            .to_string();
+        let name_bytes = name.as_bytes().to_vec();
+        if name_bytes.len() > u16::MAX as usize {
+            return Err(format!("preview archive name too long: {name}").into());
+        }
+        let raw = fs::read(&path)?;
+        if raw.len() > u32::MAX as usize {
+            return Err(format!("preview archive file too large: {}", path.display()).into());
+        }
+        let compressed = lz4_flex::block::compress(&raw);
+        let payload = if compressed.len() < raw.len() {
+            let mut payload = Vec::with_capacity(1 + compressed.len());
+            payload.push(0);
+            payload.extend_from_slice(&compressed);
+            payload
+        } else {
+            let mut payload = Vec::with_capacity(1 + raw.len());
+            payload.push(1);
+            payload.extend_from_slice(&raw);
+            payload
+        };
+        if payload.len() > u32::MAX as usize {
+            return Err(format!("preview archive payload too large: {}", path.display()).into());
+        }
+        entries.push(PreviewArchiveEntry {
+            name_bytes,
+            raw_len: raw.len() as u32,
+            payload_len: payload.len() as u32,
+            offset: 0,
+        });
+        payloads.push(payload);
+    }
+
+    let mut index_len = 8usize + 4;
+    for entry in &entries {
+        index_len = index_len
+            .checked_add(2 + 4 + 4 + 8 + entry.name_bytes.len())
+            .ok_or("preview archive index length overflow")?;
+    }
+    let mut offset = index_len as u64;
+    for entry in &mut entries {
+        entry.offset = offset;
+        offset = offset
+            .checked_add(entry.payload_len as u64)
+            .ok_or("preview archive payload offset overflow")?;
+    }
+
+    let mut bytes = Vec::with_capacity(offset as usize);
+    bytes.extend_from_slice(b"MMLZ4B1\0");
+    bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for entry in &entries {
+        bytes.extend_from_slice(&(entry.name_bytes.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&entry.raw_len.to_le_bytes());
+        bytes.extend_from_slice(&entry.payload_len.to_le_bytes());
+        bytes.extend_from_slice(&entry.offset.to_le_bytes());
+        bytes.extend_from_slice(&entry.name_bytes);
+    }
+    for payload in &payloads {
+        bytes.extend_from_slice(payload);
+    }
+    fs::write(out_path, &bytes)?;
+
+    Ok(PreviewArchiveSummary {
+        path: out_path.to_path_buf(),
+        entries: entries.len(),
+        raw_bytes: entries.iter().map(|entry| entry.raw_len as u64).sum(),
+        payload_bytes: entries.iter().map(|entry| entry.payload_len as u64).sum(),
+        archive_bytes: bytes.len() as u64,
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -3132,6 +3258,125 @@ H: Handlers=event3 js0"#
         fs::write(dir.join("pacman.jpg"), b"duplicate stem").unwrap();
         let err = preview_cache_jobs(&dir).unwrap_err().to_string();
         assert!(err.contains("duplicate source stem: pacman"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[derive(Debug)]
+    struct TestArchiveEntry {
+        name: String,
+        raw_len: u32,
+        payload_len: u32,
+        offset: u64,
+    }
+
+    fn read_test_archive(path: &Path) -> (Vec<TestArchiveEntry>, Vec<u8>) {
+        let bytes = fs::read(path).unwrap();
+        assert_eq!(&bytes[..8], b"MMLZ4B1\0");
+        let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let mut pos = 12;
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let name_len = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+            pos += 2;
+            let raw_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let payload_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let offset = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+            pos += 8;
+            let name = String::from_utf8(bytes[pos..pos + name_len].to_vec()).unwrap();
+            pos += name_len;
+            entries.push(TestArchiveEntry {
+                name,
+                raw_len,
+                payload_len,
+                offset,
+            });
+        }
+        (entries, bytes)
+    }
+
+    #[test]
+    fn preview_archive_writer_sorts_entries_and_writes_runtime_format() {
+        let dir = temp_path("preview-archive-writer");
+        let _ = fs::remove_dir_all(&dir);
+        let raw_dir = dir.join("raw565-hybrid-320x320");
+        fs::create_dir_all(&raw_dir).unwrap();
+        fs::write(raw_dir.join("z-last.rgb565"), b"x").unwrap();
+        fs::write(raw_dir.join("a-first.rgb565"), vec![0u8; 256]).unwrap();
+
+        let archive_path = dir.join("raw565-hybrid-320x320-lz4block-12.mmlz4b");
+        let summary = build_preview_archive(&raw_dir, &archive_path).unwrap();
+        assert_eq!(summary.entries, 2);
+        assert_eq!(summary.raw_bytes, 257);
+        assert!(summary.archive_bytes > 0);
+
+        let (entries, bytes) = read_test_archive(&archive_path);
+        assert_eq!(entries[0].name, "a-first.rgb565");
+        assert_eq!(entries[1].name, "z-last.rgb565");
+        assert_eq!(entries[0].raw_len, 256);
+        assert_eq!(entries[1].raw_len, 1);
+
+        let index_len = 12
+            + entries
+                .iter()
+                .map(|entry| 2 + 4 + 4 + 8 + entry.name.len())
+                .sum::<usize>();
+        assert_eq!(entries[0].offset, index_len as u64);
+        assert_eq!(
+            entries[1].offset,
+            entries[0].offset + entries[0].payload_len as u64
+        );
+        assert_eq!(bytes[entries[0].offset as usize], 0);
+        assert_eq!(bytes[entries[1].offset as usize], 1);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn preview_cache_build_writes_raw565_and_archive_in_one_job() {
+        let dir = temp_path("preview-cache-build-archive");
+        let _ = fs::remove_dir_all(&dir);
+        let input = dir.join("input");
+        let output = dir.join("cache");
+        fs::create_dir_all(&input).unwrap();
+
+        RgbImage::from_pixel(2, 2, image::Rgb([255, 0, 0]))
+            .save(input.join("b-title.png"))
+            .unwrap();
+        RgbImage::from_pixel(4, 1, image::Rgb([0, 255, 0]))
+            .save(input.join("a-title.png"))
+            .unwrap();
+
+        preview_cache_build(&[
+            "--input".into(),
+            input.display().to_string(),
+            "--output".into(),
+            output.display().to_string(),
+            "--max".into(),
+            "3".into(),
+        ])
+        .unwrap();
+
+        assert!(output
+            .join("raw565-hybrid-3x3")
+            .join("a-title.rgb565")
+            .exists());
+        assert!(output
+            .join("raw565-hybrid-3x3")
+            .join("b-title.rgb565")
+            .exists());
+        let archive_path = output.join("raw565-hybrid-3x3-lz4block-12.mmlz4b");
+        assert!(archive_path.exists());
+        let (entries, _) = read_test_archive(&archive_path);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-title.rgb565", "b-title.rgb565"]
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

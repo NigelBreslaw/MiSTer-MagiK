@@ -16,7 +16,7 @@ build/neogeo-screenshots/
   originals/
   cache/png-hybrid-320x320/
   cache/raw565-hybrid-320x320/
-  neogeo-screenshots.mmlz4b
+  cache/raw565-hybrid-320x320-lz4block-12.mmlz4b
 ```
 
 Build locally from the MiSTer source images:
@@ -46,8 +46,8 @@ Default deploy path:
 The script uses the existing host conversion path:
 
 1. `scripts/mister get` copies source PNG/JPG files to `originals/`.
-2. `scripts/mister preview-cache-build` writes `.rgb565` previews.
-3. `scripts/build-preview-zstd-archive.mjs ... lz4-block 12` packs them.
+2. `scripts/mister preview-cache-build` writes resized PNGs, `.rgb565`
+   previews, and the compressed LZ4 block archive.
 
 The filenames should already be MAME setname stems for the MiSTer Neo Geo pack,
 for example `mslug3.png`, `kof98.png`, and `aof2.png`. Those stems line up with

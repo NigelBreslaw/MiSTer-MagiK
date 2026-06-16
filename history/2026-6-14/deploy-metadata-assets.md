@@ -43,7 +43,7 @@ metadata participates in clone-family projection.
 `--asset-packs` deploys:
 
 ```text
-build/neogeo-screenshots/neogeo-screenshots.mmlz4b
+build/neogeo-screenshots/cache/raw565-hybrid-320x320-lz4block-12.mmlz4b
   -> /media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b
 ```
 

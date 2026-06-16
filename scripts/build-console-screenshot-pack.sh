@@ -102,7 +102,7 @@ WORK_DIR="${WORK_DIR:-$ROOT/build/${SYSTEM}-screenshots}"
 CANONICAL="$WORK_DIR/canonical"
 CACHE_DIR="$WORK_DIR/cache"
 RAW_DIR="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}"
-PACK="$WORK_DIR/${SYSTEM}-screenshots.mmlz4b"
+PACK="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}-lz4block-12.mmlz4b"
 REMOTE_PACK="/media/fat/mister-magik/assets/${SYSTEM}-screenshots.mmlz4b"
 MAME_SQLITE="${MISTER_MAME_SQLITE:-$ROOT/build/mame.sqlite3}"
 
@@ -177,9 +177,6 @@ fi
 
 echo "==> Building raw565 preview cache for $SYSTEM"
 "$MISTER" preview-cache-build --input "$CANONICAL" --output "$CACHE_DIR" --max "$MAX_SIZE"
-
-echo "==> Packing $RAW_DIR"
-node "$ROOT/scripts/build-preview-archive.mjs" "$RAW_DIR" "$PACK" lz4-block 12
 
 if [[ "$DEPLOY" == "1" ]]; then
   echo "==> Deploying $PACK to $REMOTE_PACK"
