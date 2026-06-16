@@ -2882,15 +2882,19 @@ fn mame_software_identity_for_discovery(
     discovery: &GameDiscovery,
     metadata: &MameSoftwareMetadata,
 ) -> Option<SoftwareIdentity> {
+    mame_software_identity_for_discovery_with_hash_matcher(discovery, metadata, |discovery,
+                                                                                 list_name,
+                                                                                 metadata| {
+        match_software_by_file_hash(discovery, list_name, metadata)
+    })
+}
+
+fn mame_software_identity_for_discovery_with_hash_matcher(
+    discovery: &GameDiscovery,
+    metadata: &MameSoftwareMetadata,
+    hash_matcher: impl FnOnce(&GameDiscovery, &str, &MameSoftwareMetadata) -> Option<String>,
+) -> Option<SoftwareIdentity> {
     let list_name = software_list_for_platform(&discovery.platform_id)?;
-    if let Some(software_name) = match_software_by_file_hash(discovery, list_name, metadata) {
-        return software_identity_from_metadata(
-            list_name,
-            &software_name,
-            metadata,
-            "mame-software",
-        );
-    }
     let title_key = canonical_variant_title(&discovery.title);
     if let Some(names) = metadata
         .title_index
@@ -2898,6 +2902,14 @@ fn mame_software_identity_for_discovery(
         .filter(|names| !names.is_empty())
     {
         return software_identity_from_metadata(list_name, &names[0], metadata, "filename");
+    }
+    if let Some(software_name) = hash_matcher(discovery, list_name, metadata) {
+        return software_identity_from_metadata(
+            list_name,
+            &software_name,
+            metadata,
+            "mame-software",
+        );
     }
     None
 }
@@ -5725,7 +5737,7 @@ mod tests {
         discovery.category = "Console".to_string();
         discovery.core_id = "NES".to_string();
         discovery.hardware_id = "nes".to_string();
-        discovery.title = "Super Mario Bros. (USA)".to_string();
+        discovery.title = "Untrusted ROM Name".to_string();
         let pack = preview_worker::PreviewArchiveIndex {
             path: "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b".to_string(),
             codec: "mmlz4b",
@@ -5773,6 +5785,38 @@ mod tests {
             )
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn software_identity_title_match_skips_content_hash() {
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata.items.insert(
+            ("snes".to_string(), "example".to_string()),
+            MameSoftwareItemMetadata {
+                description: "Example Game (USA)".to_string(),
+                year: Some("1992".to_string()),
+                publisher: Some("Example".to_string()),
+                region: Some("usa".to_string()),
+                parent_name: None,
+            },
+        );
+        metadata
+            .title_index
+            .insert(("snes".to_string(), "example-game".to_string()), vec!["example".to_string()]);
+        let mut discovery = payload("/media/fat/games/SNES/Example Game (USA).sfc");
+        discovery.platform_id = "snes".to_string();
+        discovery.title = "Example Game (USA)".to_string();
+
+        let identity = mame_software_identity_for_discovery_with_hash_matcher(
+            &discovery,
+            &metadata,
+            |_, _, _| panic!("title match should not read or hash payload content"),
+        )
+        .expect("title identity");
+
+        assert_eq!(identity.list_name, "snes");
+        assert_eq!(identity.software_name, "example");
+        assert_eq!(identity.source, "filename");
     }
 
     #[test]
