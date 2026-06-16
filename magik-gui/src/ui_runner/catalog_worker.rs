@@ -9,7 +9,11 @@ pub(super) fn start_library_catalog_worker(
         .name("library-catalog".to_string())
         .spawn(move || {
             let progress_tx = tx.clone();
+            let mut progress_coalescer = CatalogProgressCoalescer::default();
             let mut progress = move |title: &str, detail: &str| {
+                if !progress_coalescer.should_send(title, detail) {
+                    return;
+                }
                 let _ = progress_tx.send(CatalogWorkerMessage::Progress {
                     title: title.to_string(),
                     detail: detail.to_string(),
@@ -212,6 +216,36 @@ fn catalog_scan_percent(title: &str, detail: &str) -> i32 {
     -1
 }
 
+#[derive(Default)]
+struct CatalogProgressCoalescer {
+    last_sent: Option<Instant>,
+    last_title: String,
+    last_percent: i32,
+}
+
+impl CatalogProgressCoalescer {
+    fn should_send(&mut self, title: &str, detail: &str) -> bool {
+        let now = Instant::now();
+        let percent = catalog_scan_percent(title, detail);
+        let phase_changed = self.last_sent.is_none()
+            || self.last_title != title
+            || self.last_percent != percent
+            || percent >= 0;
+        let elapsed = self
+            .last_sent
+            .map(|last| now.duration_since(last))
+            .unwrap_or(Duration::MAX);
+        if !phase_changed && elapsed < Duration::from_millis(250) {
+            return false;
+        }
+        self.last_sent = Some(now);
+        self.last_title.clear();
+        self.last_title.push_str(title);
+        self.last_percent = percent;
+        true
+    }
+}
+
 pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad) -> String {
     format!(
         "games={} rows={} total_us={} open_us={} query_us={} systems_us={} catalog_us={}",
@@ -291,5 +325,22 @@ mod tests {
                 CatalogWorkerPlan::RefreshInProcess
             );
         }
+    }
+
+    #[test]
+    fn catalog_progress_coalescer_throttles_repeated_scan_counts() {
+        let mut coalescer = CatalogProgressCoalescer::default();
+        assert!(coalescer.should_send("Classifying library", "0 candidate files"));
+        assert!(!coalescer.should_send("Classifying library", "250 candidate files"));
+        coalescer.last_sent = Some(Instant::now() - Duration::from_millis(300));
+        assert!(coalescer.should_send("Classifying library", "500 candidate files"));
+    }
+
+    #[test]
+    fn catalog_progress_coalescer_sends_phase_and_percent_changes() {
+        let mut coalescer = CatalogProgressCoalescer::default();
+        assert!(coalescer.should_send("Classifying library", "0 candidate files"));
+        assert!(coalescer.should_send("Indexing library", "Writing 10 games, 2 archives..."));
+        assert!(coalescer.should_send("Loading library", "Opening SQLite catalog..."));
     }
 }

@@ -143,6 +143,8 @@ pub struct LibraryCatalogLoad {
 pub struct LibraryRefreshSummary {
     pub skipped: bool,
     pub scan_us: u64,
+    pub discover_us: u64,
+    pub classify_us: u64,
     pub import_us: u64,
     pub bytes: u64,
     pub normal_files: usize,
@@ -266,6 +268,7 @@ pub fn run_scan_bench() {
         .unwrap_or(1)
         .max(1);
     let bench_changed_refresh = env_bool("MISTER_LIBRARY_BENCH_CHANGED_REFRESH");
+    let bench_precount = env_bool("MISTER_LIBRARY_BENCH_PRECOUNT");
     println!("library-scan-bench label={label}");
     println!("library-scan-bench roots={}", cfg.roots.join("|"));
     println!(
@@ -277,6 +280,13 @@ pub fn run_scan_bench() {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => eprintln!("library-scan-bench remove old sqlite: {e}"),
+        }
+
+        if bench_precount {
+            let (candidates, dirs, precount_us) = precount_discovery_candidates(&cfg.roots);
+            println!(
+                "library_scan_bench_tsv\t{label}\t{iteration}\tprecount_discovery\t{precount_us}\tcandidates={candidates}\tdirs={dirs}"
+            );
         }
 
         let cold_t = Instant::now();
@@ -360,8 +370,10 @@ pub fn run_scan_bench() {
         if let Some((changed_refresh_us, changed_summary)) = changed_refresh {
             match changed_summary {
                 Ok(summary) => println!(
-                    "library_scan_bench_tsv\t{label}\t{iteration}\tchanged_refresh\t{changed_refresh_us}\tscan_us={}\timport_us={}\tskipped={}\tdiscoveries={}",
+                    "library_scan_bench_tsv\t{label}\t{iteration}\tchanged_refresh\t{changed_refresh_us}\tscan_us={}\tdiscover_us={}\tclassify_us={}\timport_us={}\tskipped={}\tdiscoveries={}",
                     summary.scan_us,
+                    summary.discover_us,
+                    summary.classify_us,
                     summary.import_us,
                     summary.skipped,
                     summary.discoveries
@@ -883,6 +895,8 @@ fn refresh_sqlite_database(
                 return Ok(LibraryRefreshSummary {
                     skipped: true,
                     scan_us,
+                    discover_us: 0,
+                    classify_us: 0,
                     import_us: 0,
                     bytes,
                     normal_files: existing.normal_files,
@@ -903,6 +917,8 @@ fn refresh_sqlite_database(
                     return Ok(LibraryRefreshSummary {
                         skipped: true,
                         scan_us,
+                        discover_us: 0,
+                        classify_us: 0,
                         import_us: import_t.elapsed().as_micros() as u64,
                         bytes,
                         normal_files: existing.normal_files,
@@ -958,6 +974,8 @@ fn refresh_sqlite_database(
     Ok(LibraryRefreshSummary {
         skipped: false,
         scan_us,
+        discover_us: scan.discover_us,
+        classify_us: scan.classify_us,
         import_us,
         bytes,
         normal_files: scan.normal_files.len(),
@@ -1032,6 +1050,23 @@ fn env_bool(name: &str) -> bool {
 
 fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     scan_library_with_progress(cfg, None)
+}
+
+fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, u64) {
+    let started = Instant::now();
+    let rx = discover_files_pipelined(roots.to_vec());
+    let mut candidates = 0usize;
+    let mut dirs = 0usize;
+    while let Ok(event) = rx.recv() {
+        match event {
+            DiscoveryEvent::File(_) => candidates += 1,
+            DiscoveryEvent::Done { manifest, .. } => {
+                dirs = manifest.len();
+                break;
+            }
+        }
+    }
+    (candidates, dirs, started.elapsed().as_micros() as u64)
 }
 
 fn scan_library_with_progress(
@@ -2203,28 +2238,53 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
 
-    let tmp_path = sqlite_temp_path(path);
-    match std::fs::remove_file(&tmp_path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("remove stale sqlite temp: {e}")),
+    let build_tmp_path = sqlite_build_temp_path(path);
+    let final_tmp_path = sqlite_temp_path(path);
+    for tmp_path in [&build_tmp_path, &final_tmp_path] {
+        match std::fs::remove_file(tmp_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("remove stale sqlite temp: {e}")),
+        }
     }
 
-    if let Err(e) = write_sqlite_scan(&tmp_path, scan) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(e) = write_sqlite_scan(&build_tmp_path, scan) {
+        let _ = std::fs::remove_file(&build_tmp_path);
         return Err(e);
     }
-    File::open(&tmp_path)
+    File::open(&build_tmp_path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| format!("sync sqlite build temp: {e}"))?;
+    if build_tmp_path != final_tmp_path {
+        std::fs::copy(&build_tmp_path, &final_tmp_path)
+            .map_err(|e| format!("copy sqlite temp into final dir: {e}"))?;
+        let _ = std::fs::remove_file(&build_tmp_path);
+    }
+    File::open(&final_tmp_path)
         .and_then(|f| f.sync_all())
         .map_err(|e| format!("sync sqlite temp: {e}"))?;
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
+    std::fs::rename(&final_tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&final_tmp_path);
+        let _ = std::fs::remove_file(&build_tmp_path);
         format!("replace sqlite: {e}")
     })?;
     sync_parent_dir(path);
     std::fs::metadata(path)
         .map(|m| m.len())
         .map_err(|e| format!("stat sqlite: {e}"))
+}
+
+fn sqlite_build_temp_path(path: &Path) -> PathBuf {
+    let Some(build_dir) = std::env::var_os("MISTER_LIBRARY_SQLITE_BUILD_DIR").map(PathBuf::from)
+    else {
+        return sqlite_temp_path(path);
+    };
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("library.sqlite3");
+    let _ = std::fs::create_dir_all(&build_dir);
+    build_dir.join(format!(".{name}.build.{}", std::process::id()))
 }
 
 fn sqlite_temp_path(path: &Path) -> PathBuf {

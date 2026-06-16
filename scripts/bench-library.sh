@@ -20,11 +20,13 @@ DO_CLEAN=0
 SKIP_BUILD=0
 REPLACE_LABEL=0
 POST_REBOOT=0
+PRECOUNT=0
+SQLITE_BUILD_DIR=""
 
 usage() {
   sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
-  echo "Options: --clean  --skip-build  --replace-label  --device  --iterations N  --post-reboot  -h"
+  echo "Options: --clean  --skip-build  --replace-label  --device  --iterations N  --post-reboot  --precount  --sqlite-build-dir DIR  -h"
   exit "${1:-0}"
 }
 
@@ -37,6 +39,8 @@ while [[ $# -gt 0 ]]; do
     --device) BUILD_PROFILE=release-device; shift ;;
     --iterations) ITERATIONS="${2:?}"; shift 2 ;;
     --post-reboot) POST_REBOOT=1; shift ;;
+    --precount) PRECOUNT=1; shift ;;
+    --sqlite-build-dir) SQLITE_BUILD_DIR="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
   esac
@@ -67,7 +71,14 @@ echo "== deploy =="
 "$HERE/scripts/mister" put "$BIN" "$REMOTE"
 
 echo "== library-scan-bench on device =="
-OUT=$("$HERE/scripts/mister" run "chmod +x $REMOTE; MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ITERATIONS=$ITERATIONS MISTER_LIBRARY_BENCH_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-scan-bench" 2>&1) || true
+remote_env="MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ITERATIONS=$ITERATIONS MISTER_LIBRARY_BENCH_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_SQLITE=$BENCH_SQLITE"
+if [[ "$PRECOUNT" -eq 1 ]]; then
+  remote_env="$remote_env MISTER_LIBRARY_BENCH_PRECOUNT=1"
+fi
+if [[ -n "$SQLITE_BUILD_DIR" ]]; then
+  remote_env="$remote_env MISTER_LIBRARY_SQLITE_BUILD_DIR=$SQLITE_BUILD_DIR"
+fi
+OUT=$("$HERE/scripts/mister" run "chmod +x $REMOTE; $remote_env $REMOTE library-scan-bench" 2>&1) || true
 echo "$OUT"
 
 echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
