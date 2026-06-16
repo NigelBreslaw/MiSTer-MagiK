@@ -44,7 +44,8 @@ component CogIcon inherits Image {
     in property <bool> focused;
 
     source: @image-url("icons/settings.svg");
-    colorize: focused ? #06d6a0 : #9080a8;
+    colorize: white;
+    opacity: focused ? 1.0 : 0.5;
 }
 
 component SettingsButton inherits Rectangle {
@@ -54,7 +55,7 @@ component SettingsButton inherits Rectangle {
     height: 56px;
     background: focused ? #2a2236 : #1e1828;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
+    border-color: focused ? white : #5c4a72;
 
     CogIcon {
         width: 24px;
