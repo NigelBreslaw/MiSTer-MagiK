@@ -24,7 +24,13 @@ or the software short name for the selected system:
   sonic.png
 
 Non-canonical scraper/title stems are rejected. Rename them, or produce an
-explicit staging directory from a manifest before running this builder.
+explicit staging directory before running this builder:
+
+  scripts/mister console-screenshot-stage \
+    --system saturn \
+    --input build/source-screenshots/saturn-scraper \
+    --output build/source-screenshots/saturn-canonical \
+    --report build/source-screenshots/saturn-stage-report.tsv
 
 Options:
   --deploy         Copy the built pack to /media/fat/mister-magik/assets.
