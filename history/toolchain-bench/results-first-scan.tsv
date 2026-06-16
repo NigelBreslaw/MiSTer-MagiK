@@ -1,0 +1,16 @@
+label	commit	event	ms	notes
+FIRSTSCAN-BASE-20260616	bbea05a	first_frame	1622	catalog_ready=false
+FIRSTSCAN-BASE-20260616	bbea05a	library_ready	103112	games=8389 load_us=301260
+FIRSTSCAN-BASE-20260616	bbea05a	library_db_saved	103113	bytes=31006720 scan_us=70108959 import_us=28397505 discoveries=9959 normal_files=12346 containers=154 entries=281
+FIRSTSCAN-BASE-20260616	bbea05a	catalog_bridge_sync_update	103117	games=8389 elapsed_us=3616
+FIRSTSCAN-BASE-20260616	bbea05a	db_count	0	9959
+FIRSTSCAN-UIFPS-20260616	80775c4	first_frame	1604	catalog_ready=false
+FIRSTSCAN-UIFPS-20260616	80775c4	library_ready	102790	games=8389 load_us=306952
+FIRSTSCAN-UIFPS-20260616	80775c4	library_db_saved	102790	bytes=31006720 scan_us=70615122 discover_us=70413367 classify_us=70526742 import_us=27654030 discoveries=9959 normal_files=12346 containers=154 entries=281
+FIRSTSCAN-UIFPS-20260616	80775c4	catalog_bridge_sync_update	102795	games=8389 elapsed_us=4312
+FIRSTSCAN-UIFPS-20260616	80775c4	db_count	0	9959
+FIRSTSCAN-TMPFS-20260616	f751185	first_frame	1616	catalog_ready=false
+FIRSTSCAN-TMPFS-20260616	f751185	library_ready	100698	games=8389 load_us=305794
+FIRSTSCAN-TMPFS-20260616	f751185	library_db_saved	100698	bytes=31006720 scan_us=70317792 discover_us=70048572 classify_us=70237537 import_us=25819970 discoveries=9959 normal_files=12346 containers=154 entries=281
+FIRSTSCAN-TMPFS-20260616	f751185	catalog_bridge_sync_update	100702	games=8389 elapsed_us=3677
+FIRSTSCAN-TMPFS-20260616	f751185	db_count	0	9959
