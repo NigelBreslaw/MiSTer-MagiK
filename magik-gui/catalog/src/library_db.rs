@@ -1526,27 +1526,29 @@ fn classify_profile_path<'a>(
 }
 
 fn profile_for_path<'a>(profiles: &'a [LaunchProfile], path: &Path) -> Option<&'a LaunchProfile> {
-    let components = path
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
-
-    for window in components.windows(2) {
-        if window[0].eq_ignore_ascii_case("games") {
-            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, window[1]) {
+    let mut previous_was_games = false;
+    for component in path_components_str(path) {
+        if previous_was_games {
+            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, component) {
                 return Some(profile);
             }
         }
+        previous_was_games = component.eq_ignore_ascii_case("games");
     }
 
     profiles.iter().find(|profile| {
-        components.iter().any(|component| {
+        path_components_str(path).any(|component| {
             profile
                 .game_dirs
                 .iter()
                 .any(|dir| component.eq_ignore_ascii_case(dir))
         })
     })
+}
+
+fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
 }
 
 fn validate_or_rebuild_directory_manifest(
@@ -4454,6 +4456,18 @@ mod tests {
             Path::new("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf")
         )
         .is_none());
+    }
+
+    #[test]
+    fn profile_for_path_prefers_directory_after_games_component() {
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profile_for_path(
+            &profiles,
+            Path::new("/media/fat/collections/NES/games/NeoGeo/mslug3.neo"),
+        )
+        .expect("profile");
+
+        assert_eq!(profile.id, "neogeo");
     }
 
     #[test]
