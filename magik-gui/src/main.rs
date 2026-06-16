@@ -175,6 +175,13 @@ fn print_preview_transitions() {
 }
 
 fn run_library_refresh() {
+    let parent_boot = std::env::var_os("MISTER_MAGIK_PARENT").is_some();
+    let database_exists = library_db::default_sqlite_path().is_file();
+    let force_foreground = std::env::var_os("MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH").is_some();
+    if should_defer_parent_boot_library_refresh(parent_boot, database_exists, force_foreground) {
+        println!("library_refresh\tdeferred\tmissing_database_parent_boot");
+        return;
+    }
     let mut progress = |title: &str, detail: &str| {
         println!("library_refresh\tprogress\t{title}\t{detail}");
     };
@@ -197,6 +204,14 @@ fn run_library_refresh() {
             std::process::exit(1);
         }
     }
+}
+
+fn should_defer_parent_boot_library_refresh(
+    parent_boot: bool,
+    database_exists: bool,
+    force_foreground: bool,
+) -> bool {
+    parent_boot && !database_exists && !force_foreground
 }
 
 fn run_library_sql() {
@@ -790,5 +805,20 @@ fn parse_input_log_args(args: &[String]) -> (Option<&str>, u64) {
                 (None, args[0].parse().unwrap_or(30))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parent_boot_missing_database_defers_library_refresh_to_launcher_ui() {
+        assert!(should_defer_parent_boot_library_refresh(true, false, false));
+        assert!(!should_defer_parent_boot_library_refresh(true, true, false));
+        assert!(!should_defer_parent_boot_library_refresh(
+            false, false, false
+        ));
+        assert!(!should_defer_parent_boot_library_refresh(true, false, true));
     }
 }

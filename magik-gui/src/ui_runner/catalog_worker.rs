@@ -8,12 +8,12 @@ pub(super) fn start_library_catalog_worker(
     std::thread::Builder::new()
         .name("library-catalog".to_string())
         .spawn(move || {
-            lower_background_priority();
             let progress_tx = tx.clone();
             let mut progress = move |title: &str, detail: &str| {
                 let _ = progress_tx.send(CatalogWorkerMessage::Progress {
                     title: title.to_string(),
                     detail: detail.to_string(),
+                    percent: catalog_scan_percent(title, detail),
                 });
             };
             let mut cache_state = CatalogCacheState::Missing;
@@ -45,6 +45,9 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             let plan = catalog_worker_plan(cache_state, refresh_requested);
+            if cache_state.has_usable_catalog() {
+                lower_background_priority();
+            }
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
                 detail: format!(
@@ -71,6 +74,7 @@ pub(super) fn start_library_catalog_worker(
                     let _ = tx.send(CatalogWorkerMessage::Progress {
                         title: title.to_string(),
                         detail: detail.to_string(),
+                        percent: catalog_scan_percent(title, detail),
                     });
                 }
             }
@@ -81,6 +85,7 @@ pub(super) fn start_library_catalog_worker(
                     let _ = tx.send(CatalogWorkerMessage::Progress {
                         title: "Library scan failed".to_string(),
                         detail: e,
+                        percent: -1,
                     });
                     None
                 }
@@ -97,6 +102,7 @@ pub(super) fn start_library_catalog_worker(
                 let _ = tx.send(CatalogWorkerMessage::Progress {
                     title: "Loading library".to_string(),
                     detail: "Opening SQLite catalog...".to_string(),
+                    percent: 100,
                 });
             }
             match library_db::load_arcade_catalog_from_sqlite(&root) {
@@ -113,6 +119,7 @@ pub(super) fn start_library_catalog_worker(
                     let _ = tx.send(CatalogWorkerMessage::Progress {
                         title: "Library load failed".to_string(),
                         detail: e,
+                        percent: -1,
                     });
                 }
             }
@@ -182,6 +189,7 @@ pub(super) enum CatalogWorkerMessage {
     Progress {
         title: String,
         detail: String,
+        percent: i32,
     },
     Ready {
         catalog: ArcadeCatalog,
@@ -192,6 +200,16 @@ pub(super) enum CatalogWorkerMessage {
         summary: library_db::LibraryRefreshSummary,
     },
     Done,
+}
+
+fn catalog_scan_percent(title: &str, detail: &str) -> i32 {
+    if title == "Loading library" {
+        return 100;
+    }
+    if title == "Indexing library" && detail.starts_with("Writing ") {
+        return 90;
+    }
+    -1
 }
 
 pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad) -> String {

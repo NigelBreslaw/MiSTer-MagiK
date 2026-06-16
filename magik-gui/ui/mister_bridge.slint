@@ -89,6 +89,8 @@ export global MisterBridge {
     in-out property <bool> catalog-scan-visible;
     in-out property <string> catalog-scan-title;
     in-out property <string> catalog-scan-detail;
+    // -1 means indeterminate.
+    in-out property <int> catalog-scan-percent: -1;
     // Non-empty while launching a game — full-screen loading overlay.
     in-out property <string> loading-message;
     in-out property <string> loading-detail;

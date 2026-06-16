@@ -172,26 +172,43 @@ component CatalogScanPopup inherits Rectangle {
     in property <int> s;
     property <duration> tick: animation-tick();
     property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
+    property <bool> determinate: MisterBridge.catalog-scan-percent >= 0;
+    property <int> scan-progress: Math.max(0, Math.min(100, MisterBridge.catalog-scan-percent));
 
-    background: #00000080;
+    background: #0b0d14;
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 520px * s;
-        height: 150px * s;
-        background: #1e1828;
-        border-width: 2px;
-        border-color: #06d6a0;
+    HorizontalLayout {
+        OsdSideLabel { }
 
         VerticalLayout {
-            padding: 18px * s;
-            spacing: 10px * s;
+            padding-left: 70px * s;
+            padding-right: 70px * s;
+            padding-top: 82px * s;
+            padding-bottom: 76px * s;
+            spacing: 18px * s;
+            alignment: center;
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+
+            Text {
+                text: "MiSTer MagiK";
+                color: #06d6a0;
+                font-size: 20px * s;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Scanning for games. This only happens the first time you start MiSTer MagiK";
+                color: #e8e0f0;
+                font-size: 16px * s;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
 
             Text {
                 text: MisterBridge.catalog-scan-title;
-                color: #e8e0f0;
-                font-size: 16px * s;
+                color: #d7eef8;
+                font-size: 10px * s;
                 horizontal-alignment: center;
             }
 
@@ -200,22 +217,42 @@ component CatalogScanPopup inherits Rectangle {
                 color: #9080a8;
                 font-size: 8px * s;
                 horizontal-alignment: center;
+                wrap: word-wrap;
             }
 
             Rectangle {
+                width: 560px * s;
                 height: 16px * s;
                 background: #0e0c14;
                 border-width: 1px;
                 border-color: #5c4a72;
                 clip: true;
 
-                Rectangle {
+                if root.determinate : Rectangle {
+                    x: 2px * s;
+                    y: 2px * s;
+                    width: (parent.width - 4px * s) * root.scan-progress / 100;
+                    height: parent.height - 4px * s;
+                    background: #06d6a0;
+                }
+
+                if !root.determinate : Rectangle {
                     width: 96px * s;
-                    height: 100%;
+                    height: parent.height - 4px * s;
+                    y: 2px * s;
                     x: (parent.width - self.width) * root.phase;
                     background: #06d6a0;
                 }
             }
+
+            if root.determinate : Text {
+                text: root.scan-progress + "%";
+                color: #d7eef8;
+                font-size: 8px * s;
+                horizontal-alignment: center;
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
         }
     }
 }

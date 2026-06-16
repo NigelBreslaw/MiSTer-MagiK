@@ -92,6 +92,11 @@ Current rules:
   usable database exists, then performs refresh/preview validation in the
   background. Use `startup_timing` log lines to separate SQLite load, catalog
   construction, Slint bridge sync, and refresh costs.
+- When the SQLite catalog is missing or empty, boot must start the Slint
+  launcher immediately and let the launcher worker perform the first scan behind
+  a visible full-screen scan state. Do not run foreground `library-refresh`
+  before UI on first boot or after Reset Database; that regresses to a black
+  HDMI screen while the index is built.
 - The launcher presents a minimal `MiSTer MagiK` Slint splash immediately after
   `app.show()` and before catalog loading. Keep that path free of catalog,
   preview, media, or controller work so HDMI never sits on a black screen while
