@@ -663,9 +663,6 @@ fn preview_archive_paths_from_env() -> Vec<String> {
     }
     paths.extend(console_preview_archive_paths_from_env());
     paths.extend(auto_console_archive_paths());
-    if let Some(path) = saturn_preview_archive_path_from_env() {
-        paths.push(path);
-    }
     let mut seen = HashSet::new();
     paths
         .into_iter()
@@ -804,13 +801,6 @@ fn auto_neogeo_archive_path() -> Option<String> {
     path.exists().then(|| path.display().to_string())
 }
 
-fn saturn_preview_archive_path_from_env() -> Option<String> {
-    match std::env::var("MISTER_SATURN_PREVIEW_ARCHIVE") {
-        Ok(path) if !path.is_empty() => Some(path),
-        _ => None,
-    }
-}
-
 fn console_preview_archive_paths_from_env() -> Vec<String> {
     [
         "MISTER_NES_PREVIEW_ARCHIVE",
@@ -818,6 +808,7 @@ fn console_preview_archive_paths_from_env() -> Vec<String> {
         "MISTER_N64_PREVIEW_ARCHIVE",
         "MISTER_SMS_PREVIEW_ARCHIVE",
         "MISTER_MEGADRIVE_PREVIEW_ARCHIVE",
+        "MISTER_SATURN_PREVIEW_ARCHIVE",
     ]
     .into_iter()
     .filter_map(|name| match std::env::var(name) {

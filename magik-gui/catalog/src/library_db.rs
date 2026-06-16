@@ -3313,27 +3313,11 @@ fn register_preview_asset_packs(
             ])
             .map_err(|e| format!("insert preview asset pack: {e}"))?;
         for entry in &index.entries {
-            let (asset_key, namespace, identity_id, family_id) =
-                if let Some((list_name, software_name)) = parse_software_asset_key(entry) {
-                    let identity_id = format!("{list_name}:{software_name}");
-                    let family_id = software_metadata
-                        .items
-                        .get(&(list_name.clone(), software_name.clone()))
-                        .and_then(|item| item.parent_name.as_deref())
-                        .filter(|parent| !parent.trim().is_empty())
-                        .map(|parent| format!("{list_name}:{parent}"))
-                        .unwrap_or_else(|| identity_id.clone());
-                    (entry.to_string(), "mame-software", identity_id, family_id)
-                } else {
-                    let identity_id = normalize_id(entry);
-                    let family_id = mame_metadata
-                        .get(&identity_id)
-                        .and_then(|machine| machine.parent_setname.as_deref())
-                        .filter(|parent| !parent.trim().is_empty())
-                        .unwrap_or(identity_id.as_str())
-                        .to_string();
-                    (identity_id.clone(), "mame", identity_id, family_id)
-                };
+            let Some((asset_key, namespace, identity_id, family_id)) =
+                preview_asset_entry_identity(platform, entry, mame_metadata, software_metadata)
+            else {
+                continue;
+            };
             entry_stmt
                 .execute(params![
                     pack_id.as_str(),
@@ -3350,14 +3334,47 @@ fn register_preview_asset_packs(
     Ok(())
 }
 
+fn preview_asset_entry_identity(
+    platform: &str,
+    entry: &str,
+    mame_metadata: &HashMap<String, MameMachineMetadata>,
+    software_metadata: &MameSoftwareMetadata,
+) -> Option<(String, &'static str, String, String)> {
+    if let Some((list_name, software_name)) = parse_software_asset_key(entry) {
+        if software_list_for_platform(platform).is_some_and(|expected| expected != list_name) {
+            return None;
+        }
+        let identity_id = format!("{list_name}:{software_name}");
+        let family_id = software_metadata
+            .items
+            .get(&(list_name.clone(), software_name.clone()))
+            .and_then(|item| item.parent_name.as_deref())
+            .filter(|parent| !parent.trim().is_empty())
+            .map(|parent| format!("{list_name}:{parent}"))
+            .unwrap_or_else(|| identity_id.clone());
+        return Some((entry.to_string(), "mame-software", identity_id, family_id));
+    }
+    if software_list_for_platform(platform).is_some() {
+        return None;
+    }
+    let identity_id = normalize_id(entry);
+    let family_id = mame_metadata
+        .get(&identity_id)
+        .and_then(|machine| machine.parent_setname.as_deref())
+        .filter(|parent| !parent.trim().is_empty())
+        .unwrap_or(identity_id.as_str())
+        .to_string();
+    Some((identity_id.clone(), "mame", identity_id, family_id))
+}
+
 fn preview_asset_pack_platform(path: &str) -> &'static str {
     let path = path.to_ascii_lowercase();
     if path.contains("neogeo") {
         "neogeo"
-    } else if path.contains("nes-screenshots") {
-        "nes"
     } else if path.contains("snes-screenshots") {
         "snes"
+    } else if path.contains("nes-screenshots") {
+        "nes"
     } else if path.contains("n64-screenshots") {
         "n64"
     } else if path.contains("sms-screenshots") {
@@ -3371,6 +3388,7 @@ fn preview_asset_pack_platform(path: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn software_asset_key(list_name: &str, software_name: &str) -> String {
     format!("mame-software__{list_name}__{software_name}")
 }
@@ -3388,29 +3406,48 @@ fn parse_software_asset_key(key: &str) -> Option<(String, String)> {
     Some((list_name.to_string(), software_name.to_string()))
 }
 
-fn console_preview_asset_keys(indexes: &[preview_worker::PreviewArchiveIndex]) -> HashSet<String> {
-    indexes
+fn console_preview_assets(
+    indexes: &[preview_worker::PreviewArchiveIndex],
+) -> HashMap<String, String> {
+    let mut assets = HashMap::new();
+    for index in indexes
         .iter()
         .filter(|index| preview_asset_pack_platform(&index.path) != "arcade")
-        .flat_map(|index| index.entries.iter())
-        .filter(|entry| parse_software_asset_key(entry).is_some())
-        .map(|entry| entry.to_ascii_lowercase())
-        .collect()
+    {
+        let platform = preview_asset_pack_platform(&index.path);
+        for entry in &index.entries {
+            if let Some((list_name, software_name)) = parse_software_asset_key(entry) {
+                if software_list_for_platform(platform)
+                    .is_some_and(|expected| expected != list_name)
+                {
+                    continue;
+                }
+                assets
+                    .entry(format!("{list_name}:{software_name}"))
+                    .or_insert_with(|| entry.to_string());
+            }
+        }
+    }
+    assets
 }
 
 fn console_preview_image_path(
     identity: &SoftwareIdentity,
     software_metadata: &MameSoftwareMetadata,
-    asset_keys: &HashSet<String>,
+    assets: &HashMap<String, String>,
 ) -> Option<String> {
-    let exact = software_asset_key(&identity.list_name, &identity.software_name);
-    if asset_keys.contains(&exact.to_ascii_lowercase()) {
-        return Some(format!("/media/fat/mister-magik/assets/media/{exact}.png"));
+    let exact = format!("{}:{}", identity.list_name, identity.software_name);
+    if let Some(asset_key) = assets.get(&exact) {
+        return Some(format!(
+            "/media/fat/mister-magik/assets/media/{asset_key}.png"
+        ));
     }
     let family_name = identity.family_id.split_once(':')?.1;
-    let parent = software_asset_key(&identity.list_name, family_name);
-    if asset_keys.contains(&parent.to_ascii_lowercase()) {
-        return Some(format!("/media/fat/mister-magik/assets/media/{parent}.png"));
+    let parent = format!("{}:{family_name}", identity.list_name);
+    if let Some(asset_key) = assets.get(&parent) {
+        return Some(format!(
+            "/media/fat/mister-magik/assets/media/{asset_key}.png"
+        ));
     }
     let family_key = (identity.list_name.clone(), family_name.to_string());
     for sibling in software_metadata
@@ -3419,9 +3456,11 @@ fn console_preview_image_path(
         .into_iter()
         .flatten()
     {
-        let key = software_asset_key(&identity.list_name, sibling);
-        if asset_keys.contains(&key.to_ascii_lowercase()) {
-            return Some(format!("/media/fat/mister-magik/assets/media/{key}.png"));
+        let key = format!("{}:{sibling}", identity.list_name);
+        if let Some(asset_key) = assets.get(&key) {
+            return Some(format!(
+                "/media/fat/mister-magik/assets/media/{asset_key}.png"
+            ));
         }
     }
     None
@@ -3910,7 +3949,7 @@ fn write_sqlite_scan_with_sources(
     let hbmame_signature = file_signature(hbmame_sqlite_path);
     let mame_metadata = load_mame_machine_metadata(mame_sqlite_path);
     let software_metadata = load_mame_software_metadata(mame_sqlite_path);
-    let console_asset_keys = console_preview_asset_keys(preview_asset_packs);
+    let console_assets = console_preview_assets(preview_asset_packs);
     let arcade_metadata = load_arcade_machine_metadata(mame_sqlite_path, hbmame_sqlite_path);
     let tx = conn
         .transaction()
@@ -4100,7 +4139,7 @@ fn write_sqlite_scan_with_sources(
             let software_identity =
                 mame_software_identity_for_discovery(discovery, &software_metadata);
             let software_image_path = software_identity.as_ref().and_then(|identity| {
-                console_preview_image_path(identity, &software_metadata, &console_asset_keys)
+                console_preview_image_path(identity, &software_metadata, &console_assets)
             });
             let game_image_path = software_image_path
                 .as_deref()
@@ -5681,6 +5720,123 @@ mod tests {
         assert_eq!(row.1, 1);
         assert_eq!(row.2, "snes");
         assert!(row.0.ends_with("mame-software__snes__parent.png"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn console_preview_pack_platform_distinguishes_nes_and_snes() {
+        assert_eq!(
+            preview_asset_pack_platform("/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"),
+            "nes"
+        );
+        assert_eq!(
+            preview_asset_pack_platform("/media/fat/mister-magik/assets/snes-screenshots.mmlz4b"),
+            "snes"
+        );
+    }
+
+    #[test]
+    fn console_preview_ignores_noncanonical_console_pack_entries() {
+        let root = unique_temp_dir("noncanonical-console-preview");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "saturn",
+                "albert",
+                None,
+                "Albert Odyssey: Legend of Eldean (USA)",
+                Some("1997"),
+                Some("Working Designs"),
+                Some("usa"),
+            )],
+            &[],
+        );
+        let mut discovery = saturn_payload("/media/fat/games/Saturn/Albert Odyssey.chd");
+        discovery.title = "Albert Odyssey: Legend of Eldean (USA)".to_string();
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b".to_string(),
+            codec: "mmlz4b",
+            entries: vec!["albert-odyssey-legend-of-eldean-us".to_string()],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row: (String, i64, i64) = conn
+            .query_row(
+                "SELECT l.image_path,l.has_image,(
+                    SELECT count(*)
+                    FROM asset_entries
+                    WHERE asset_key='albert-odyssey-legend-of-eldean-us'
+                 )
+                 FROM launcher_catalog l
+                 WHERE l.system_id='saturn'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("launcher and asset row");
+
+        assert_eq!(row, (String::new(), 0, 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn console_preview_ignores_wrong_system_canonical_entries() {
+        let root = unique_temp_dir("wrong-system-console-preview");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        let rom_path = root.join("Fixture.nes");
+        std::fs::write(&rom_path, b"fixture-rom").expect("write rom");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "nes",
+                "fixture",
+                None,
+                "Fixture Game (USA)",
+                Some("1985"),
+                Some("Example"),
+                Some("usa"),
+            )],
+            &[("nes", "fixture", 11, crc32(b"fixture-rom"))],
+        );
+        let mut discovery = payload(&rom_path.display().to_string());
+        discovery.platform_id = "nes".to_string();
+        discovery.category = "Console".to_string();
+        discovery.core_id = "NES".to_string();
+        discovery.hardware_id = "nes".to_string();
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b".to_string(),
+            codec: "mmlz4b",
+            entries: vec![software_asset_key("nes", "fixture")],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let row: (i64, i64) = conn
+            .query_row(
+                "SELECT has_image,(SELECT count(*) FROM asset_entries) FROM launcher_catalog",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("launcher row");
+
+        assert_eq!(row, (0, 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
