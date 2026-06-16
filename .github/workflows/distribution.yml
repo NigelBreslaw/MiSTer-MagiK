@@ -1,0 +1,150 @@
+name: Distribution ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      main_ref:
+        description: "Main_MiSTer ref to bundle"
+        required: true
+        default: "mister-magik"
+      artifact_name:
+        description: "Distribution artifact basename"
+        required: true
+        default: "mister-magik"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CROSS_VERSION: 0.2.5
+  DOCKER_DEFAULT_PLATFORM: linux/amd64
+  MISTER_CARGO_TIMINGS: "0"
+  MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
+  MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
+
+jobs:
+  distribution:
+    name: Build distribution ZIP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout app repo
+        uses: actions/checkout@v6
+
+      - name: Checkout Main_MiSTer fork
+        uses: actions/checkout@v6
+        with:
+          repository: NigelBreslaw/Main_MiSTer
+          ref: ${{ github.event.inputs.main_ref }}
+          path: Main_MiSTer
+
+      - name: Resolve Main_MiSTer revision
+        id: main-rev
+        run: echo "sha=$(git -C Main_MiSTer rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        working-directory: magik-gui
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-dist-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          restore-keys: |
+            cargo-dist-${{ runner.os }}-
+            cargo-${{ runner.os }}-
+
+      - name: Cache cross binary
+        uses: actions/cache@v5
+        id: cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-${{ runner.os }}-${{ env.CROSS_VERSION }}
+
+      - name: Install cross
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Cache ARM frontend build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            magik-gui/target/release-device
+            magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
+          key: target-arm-dist-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          restore-keys: |
+            target-arm-dist-${{ runner.os }}-
+            target-arm-${{ runner.os }}-release-release-device-none-
+
+      - name: Build ARM frontend
+        run: magik-gui/build-arm.sh --device
+
+      - name: Check ARM shared libraries
+        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+
+      - name: Cache Main_MiSTer build outputs
+        id: main-build-cache
+        uses: actions/cache@v5
+        with:
+          path: Main_MiSTer/bin
+          key: main-mister-bin-${{ runner.os }}-${{ steps.main-rev.outputs.sha }}
+
+      - name: Cache Main_MiSTer toolchain
+        if: steps.main-build-cache.outputs.cache-hit != 'true'
+        id: main-toolchain-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/mister-magik/${{ env.MAIN_TOOLCHAIN_VERSION }}
+          key: main-toolchain-${{ runner.os }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
+
+      - name: Install Main_MiSTer toolchain
+        if: steps.main-build-cache.outputs.cache-hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/mister-magik
+          wget -qO- "https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/${MAIN_TOOLCHAIN_VERSION}.tar.xz" \
+            | tar -xJ -C ~/.cache/mister-magik
+
+      - name: Build Main_MiSTer fork
+        if: steps.main-build-cache.outputs.cache-hit != 'true'
+        working-directory: Main_MiSTer
+        run: |
+          export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"
+          make
+
+      - name: Cache MAME metadata database
+        id: mame-db-cache
+        uses: actions/cache@v5
+        with:
+          path: build/mame.sqlite3
+          key: mame-sqlite-${{ runner.os }}-v1
+
+      - name: Install package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Install MAME for metadata
+        if: steps.mame-db-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y mame
+
+      - name: Build MAME metadata database
+        if: steps.mame-db-cache.outputs.cache-hit != 'true'
+        run: scripts/mister mame-metadata-build --mame mame --out build/mame.sqlite3
+
+      - name: Package distribution zip
+        run: |
+          scripts/package-distribution.sh \
+            --main-bin Main_MiSTer/bin/MiSTer \
+            --name "${{ github.event.inputs.artifact_name }}"
+
+      - name: Upload distribution zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.event.inputs.artifact_name }}-distribution
+          path: dist/${{ github.event.inputs.artifact_name }}.zip
+          if-no-files-found: error
