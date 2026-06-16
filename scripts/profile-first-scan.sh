@@ -95,14 +95,14 @@ fi
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
-  if grep -q $'^startup_timing\tcatalog_bridge_sync_update\t' "$local_log"; then
+  if grep -q $'^startup_timing\tlibrary_db_saved\t' "$local_log" || grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
     break
   fi
   sleep 2
 done
 
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
-if ! grep -q $'^startup_timing\tcatalog_bridge_sync_update\t' "$local_log"; then
+if ! grep -q $'^startup_timing\tlibrary_db_saved\t' "$local_log"; then
   echo "first scan did not complete within ${TIMEOUT_SECS}s; latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
@@ -110,7 +110,7 @@ fi
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   BEGIN { OFS = "\t" }
-  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update") {
+  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "library_scan_catalog_ready" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update") {
     ms = $3
     sub(/ms$/, "", ms)
     print label, commit, $2, ms, $4

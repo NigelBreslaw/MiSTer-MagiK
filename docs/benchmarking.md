@@ -156,6 +156,7 @@ database back to the host:
 
 ```bash
 scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
+scripts/profile-library-io.sh LABEL --replace-label
 scripts/bench-library.sh
 scripts/mister db
 scripts/mister db "SELECT count(*) FROM games"
@@ -169,6 +170,11 @@ the supervised MagiK boot path, and records first-frame/catalog-ready timings in
 while running scanner/import CLI benchmarks. Do not benchmark by directly
 killing `mister-magik-fb`; that can leave the Main fork and display/OSD state
 out of sync.
+
+`profile-library-io.sh` runs one scanner/import benchmark while sampling
+process CPU ticks, process I/O bytes, system CPU/iowait, and SD-card diskstats
+once per second. Use it before claiming that a scanner/import change is CPU- or
+I/O-bound.
 
 Set `MISTER_LIBRARY_BENCH_CHANGED_REFRESH=1` only on disposable roots when
 measuring changed-refresh behavior; it creates a synthetic candidate file.

@@ -153,6 +153,7 @@ pub(super) fn run_launcher_loop(
     let catalog_refresh = catalog_refresh_requested();
     let catalog_rx;
     let mut catalog_refresh_done = false;
+    let mut catalog_persisted_summary_seen = false;
     match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
         Ok(loaded) if !loaded.catalog.games.is_empty() => {
             print_startup_event(
@@ -374,22 +375,13 @@ pub(super) fn run_launcher_loop(
                             } else {
                                 "library_db_saved"
                             };
-                            print_startup_event(
-                                start,
-                                event,
-                                format!(
-                                    "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
-                                    summary.bytes,
-                                    summary.scan_us,
-                                    summary.discover_us,
-                                    summary.classify_us,
-                                    summary.import_us,
-                                    summary.discoveries,
-                                    summary.normal_files,
-                                    summary.containers,
-                                    summary.entries
-                                ),
-                            );
+                            if !catalog_persisted_summary_seen {
+                                print_startup_event(
+                                    start,
+                                    event,
+                                    format_library_refresh_summary(&summary),
+                                );
+                            }
                         }
                         if duplicate_cached_catalog {
                             continue;
@@ -433,6 +425,70 @@ pub(super) fn run_launcher_loop(
                             ),
                         );
                         full_bridge_dirty = true;
+                    }
+                    CatalogWorkerMessage::ScannedCatalogReady {
+                        catalog: ready_catalog,
+                        stats,
+                    } => {
+                        catalog = ready_catalog;
+                        catalog_version = catalog_version.wrapping_add(1);
+                        catalog_ready = true;
+                        apply_forced_arcade_selected(&mut nav, &catalog);
+                        print_startup_event(
+                            start,
+                            "library_scan_catalog_ready",
+                            format!(
+                                "games={} scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={}",
+                                catalog.len(),
+                                stats.scan_us,
+                                stats.discover_us,
+                                stats.classify_us,
+                                stats.discoveries,
+                                stats.normal_files,
+                                stats.containers,
+                                stats.entries
+                            ),
+                        );
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_scan_title("".into());
+                        bridge.set_catalog_scan_detail("".into());
+                        bridge.set_catalog_scan_percent(-1);
+                        let bridge_sync_t = Instant::now();
+                        sync_bridge_launcher(
+                            &app,
+                            &pad,
+                            &nav,
+                            &setup,
+                            &loading_title,
+                            "",
+                            Some(&catalog),
+                            &mut preview,
+                            &mut bridge_models,
+                            catalog_version,
+                        );
+                        print_startup_event(
+                            start,
+                            "catalog_bridge_sync_update",
+                            format!(
+                                "games={} source=memory elapsed_us={}",
+                                catalog.len(),
+                                bridge_sync_t.elapsed().as_micros()
+                            ),
+                        );
+                        full_bridge_dirty = true;
+                    }
+                    CatalogWorkerMessage::Persisted { summary } => {
+                        catalog_persisted_summary_seen = true;
+                        print_startup_event(
+                            start,
+                            "library_db_saved",
+                            format_library_refresh_summary(&summary),
+                        );
+                    }
+                    CatalogWorkerMessage::PersistenceFailed { error } => {
+                        catalog_refresh_done = true;
+                        print_startup_event(start, "library_db_save_failed", error);
                     }
                     CatalogWorkerMessage::Unchanged { summary } => {
                         catalog_refresh_done = true;
@@ -1021,6 +1077,21 @@ fn initial_catalog_scan_visible(
     _arcade_catalog_required_at_start: bool,
 ) -> bool {
     !catalog_ready
+}
+
+fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -> String {
+    format!(
+        "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+        summary.bytes,
+        summary.scan_us,
+        summary.discover_us,
+        summary.classify_us,
+        summary.import_us,
+        summary.discoveries,
+        summary.normal_files,
+        summary.containers,
+        summary.entries
+    )
 }
 
 fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &str) -> bool {

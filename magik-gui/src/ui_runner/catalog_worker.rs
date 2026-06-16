@@ -82,6 +82,60 @@ pub(super) fn start_library_catalog_worker(
                     });
                 }
             }
+            if staged_ram_catalog_enabled(cache_state) {
+                let artifact = match library_db::scan_default_library(Some(&mut progress)) {
+                    Ok(artifact) => artifact,
+                    Err(e) => {
+                        eprintln!("library scan failed: {e}");
+                        let _ = tx.send(CatalogWorkerMessage::Progress {
+                            title: "Library scan failed".to_string(),
+                            detail: e,
+                            percent: -1,
+                        });
+                        return;
+                    }
+                };
+                let catalog = artifact.arcade_catalog(&root);
+                let stats = artifact.stats().clone();
+                let _ = tx.send(CatalogWorkerMessage::ScannedCatalogReady { catalog, stats });
+                let _ = tx.send(CatalogWorkerMessage::Progress {
+                    title: "Saving library".to_string(),
+                    detail: "Writing catalog database in the background...".to_string(),
+                    percent: 90,
+                });
+                match artifact.save_default_sqlite() {
+                    Ok(summary) => {
+                        let _ = tx.send(CatalogWorkerMessage::Persisted {
+                            summary: summary.clone(),
+                        });
+                        match library_db::load_arcade_catalog_from_sqlite(&root) {
+                            Ok(loaded) => {
+                                send_catalog_load_timing(
+                                    &tx,
+                                    "catalog_worker_persisted_load",
+                                    &loaded,
+                                );
+                                let _ = tx.send(CatalogWorkerMessage::Ready {
+                                    catalog: loaded.catalog,
+                                    summary: Some(summary),
+                                    load_us: loaded.us,
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("library catalog load failed after persistence: {e}");
+                                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                                    error: format!("load persisted catalog: {e}"),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("library persistence failed after RAM catalog ready: {e}");
+                        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error: e });
+                    }
+                }
+                return;
+            }
             let summary = match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
                 Ok(summary) => Some(summary),
                 Err(e) => {
@@ -185,6 +239,10 @@ fn catalog_worker_plan(
     }
 }
 
+fn staged_ram_catalog_enabled(cache_state: CatalogCacheState) -> bool {
+    !cache_state.has_usable_catalog()
+}
+
 pub(super) enum CatalogWorkerMessage {
     Timing {
         name: String,
@@ -200,6 +258,16 @@ pub(super) enum CatalogWorkerMessage {
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
     },
+    ScannedCatalogReady {
+        catalog: ArcadeCatalog,
+        stats: library_db::LibraryScanStats,
+    },
+    Persisted {
+        summary: library_db::LibraryRefreshSummary,
+    },
+    PersistenceFailed {
+        error: String,
+    },
     Unchanged {
         summary: library_db::LibraryRefreshSummary,
     },
@@ -210,7 +278,10 @@ fn catalog_scan_percent(title: &str, detail: &str) -> i32 {
     if title == "Loading library" {
         return 100;
     }
-    if title == "Indexing library" && detail.starts_with("Writing ") {
+    if matches!(title, "Saving library" | "Indexing library") && detail.starts_with("Writing ") {
+        return 90;
+    }
+    if title == "Saving library" {
         return 90;
     }
     -1
@@ -325,6 +396,16 @@ mod tests {
                 CatalogWorkerPlan::RefreshInProcess
             );
         }
+    }
+
+    #[test]
+    fn staged_ram_catalog_is_used_only_without_usable_cache() {
+        assert!(staged_ram_catalog_enabled(CatalogCacheState::Missing));
+        assert!(staged_ram_catalog_enabled(CatalogCacheState::Empty));
+        assert!(!staged_ram_catalog_enabled(CatalogCacheState::Ready));
+        assert!(!staged_ram_catalog_enabled(
+            CatalogCacheState::ReadyWithStalePreviewArchive
+        ));
     }
 
     #[test]
