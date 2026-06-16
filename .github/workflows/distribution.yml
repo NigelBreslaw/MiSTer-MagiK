@@ -11,12 +11,8 @@ on:
         description: "Distribution artifact basename"
         required: true
         default: "mister-magik"
-      hbmame_download_url:
-        description: "Optional HBMAME Windows cmd-line archive URL; falls back to repo variable HBMAME_DOWNLOAD_URL"
-        required: false
-        default: ""
-      hbmame_cache_key:
-        description: "HBMAME metadata cache version; bump when the HBMAME archive changes"
+      hbmame_ref:
+        description: "Optional Robbbert/hbmame tag/ref; blank uses latest tagNNNNN tag"
         required: false
         default: ""
 
@@ -32,71 +28,95 @@ env:
   MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
 
 jobs:
+  resolve-hbmame:
+    name: Resolve HBMAME ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      ref: ${{ steps.hbmame-ref.outputs.ref }}
+      sha: ${{ steps.hbmame-ref.outputs.sha }}
+      cache-key: ${{ steps.hbmame-ref.outputs.cache_key }}
+
+    steps:
+      - name: Resolve HBMAME tag/ref
+        id: hbmame-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HBMAME_REF_INPUT: ${{ github.event.inputs.hbmame_ref }}
+        run: |
+          set -euo pipefail
+          ref="$HBMAME_REF_INPUT"
+          if [ -z "$ref" ]; then
+            ref="$(gh api repos/Robbbert/hbmame/tags --jq 'map(select(.name | test("^tag[0-9]+$")))[0].name')"
+          fi
+          if [ -z "$ref" ] || [ "$ref" = "null" ]; then
+            echo "Unable to resolve latest Robbbert/hbmame tagNNNNN tag" >&2
+            exit 1
+          fi
+          sha="$(gh api "repos/Robbbert/hbmame/commits/$ref" --jq .sha)"
+          if [ -z "$sha" ] || [ "$sha" = "null" ]; then
+            echo "Unable to resolve Robbbert/hbmame commit for ref: $ref" >&2
+            exit 1
+          fi
+          cache_key="${ref}-${sha}"
+          echo "Using Robbbert/hbmame ref $ref at $sha"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
+
   hbmame-listxml:
     name: Build HBMAME listxml
     runs-on: windows-latest
+    needs: resolve-hbmame
     timeout-minutes: 60
     outputs:
-      cache-key: ${{ steps.hbmame-inputs.outputs.cache_key }}
+      cache-key: ${{ steps.hbmame-outputs.outputs.cache_key }}
 
     steps:
       - name: Checkout app repo
         uses: actions/checkout@v6
 
-      - name: Resolve HBMAME inputs
-        id: hbmame-inputs
-        shell: pwsh
-        run: |
-          $url = "${{ github.event.inputs.hbmame_download_url }}"
-          if ([string]::IsNullOrWhiteSpace($url)) {
-            $url = "${{ vars.HBMAME_DOWNLOAD_URL }}"
-          }
-          if ([string]::IsNullOrWhiteSpace($url)) {
-            Write-Error "Set workflow input hbmame_download_url or repository variable HBMAME_DOWNLOAD_URL to the official HBMAME command-line archive URL."
-          }
-          $cacheKey = "${{ github.event.inputs.hbmame_cache_key }}"
-          if ([string]::IsNullOrWhiteSpace($cacheKey)) {
-            $cacheKey = "${{ vars.HBMAME_CACHE_KEY }}"
-          }
-          if ([string]::IsNullOrWhiteSpace($cacheKey)) {
-            $cacheKey = "hbmame-current"
-          }
-          New-Item -ItemType Directory -Force -Path build | Out-Null
-          Set-Content -Path build/hbmame-url.txt -Value $url
-          Set-Content -Path build/hbmame-cache-key.txt -Value $cacheKey
-          "url=$url" >> $env:GITHUB_OUTPUT
-          "cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
+      - name: Expose HBMAME cache key
+        id: hbmame-outputs
+        run: echo "cache_key=${{ needs.resolve-hbmame.outputs.cache-key }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache HBMAME listxml
         id: hbmame-listxml-cache
         uses: actions/cache@v5
         with:
           path: build/hbmame-listxml.xml
-          key: hbmame-listxml-${{ runner.os }}-${{ steps.hbmame-inputs.outputs.cache_key }}-${{ hashFiles('.github/workflows/distribution.yml') }}
+          key: hbmame-listxml-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml') }}
 
-      - name: Download HBMAME command-line archive
+      - name: Checkout HBMAME
         if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path build,hbmame-download | Out-Null
-          Invoke-WebRequest -Uri "${{ steps.hbmame-inputs.outputs.url }}" -OutFile hbmame-download/hbmame.7z
+        uses: actions/checkout@v6
+        with:
+          repository: Robbbert/hbmame
+          ref: ${{ needs.resolve-hbmame.outputs.ref }}
+          path: hbmame
 
-      - name: Extract HBMAME
+      - name: Install HBMAME build tools
         if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          7z x hbmame-download/hbmame.7z -ohbmame-download/extracted -y
-          $exe = Get-ChildItem -Path hbmame-download/extracted -Recurse -Filter hbmame.exe | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "hbmame.exe not found in archive"
-          }
-          "HBMAME_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+        uses: msys2/setup-msys2@v2
+        with:
+          install: git make mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld mingw-w64-x86_64-libc++
+
+      - name: Build HBMAME
+        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        working-directory: hbmame
+        env:
+          MINGW64: "/mingw64"
+          PTR64: "1"
+        run: make -j2 PTR64=1 TARGET=hbmame DEPRECATED=0 SYMBOLS=0 NO_SYMBOLS=1
 
       - name: Generate HBMAME listxml
         if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        shell: pwsh
+        shell: msys2 {0}
+        working-directory: hbmame
         run: |
-          & "$env:HBMAME_EXE" -listxml | Out-File -FilePath build/hbmame-listxml.xml -Encoding utf8
+          mkdir -p ../build
+          ./hbmame -listxml > ../build/hbmame-listxml.xml
 
       - name: Upload HBMAME listxml
         uses: actions/upload-artifact@v7
@@ -108,7 +128,9 @@ jobs:
   distribution:
     name: Build distribution ZIP
     runs-on: ubuntu-24.04
-    needs: hbmame-listxml
+    needs:
+      - resolve-hbmame
+      - hbmame-listxml
     timeout-minutes: 120
 
     steps:
@@ -210,7 +232,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: build/hbmame.sqlite3
-          key: hbmame-sqlite-${{ runner.os }}-${{ needs.hbmame-listxml.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml', 'tools/mister/src/main.rs') }}
+          key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml', 'tools/mister/src/main.rs') }}
 
       - name: Install package tools
         run: |
