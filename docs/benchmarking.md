@@ -155,10 +155,24 @@ Use library benchmark scripts and SQL inspection rather than pulling the SQLite
 database back to the host:
 
 ```bash
+scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
 scripts/bench-library.sh
 scripts/mister db
 scripts/mister db "SELECT count(*) FROM games"
 ```
 
+`profile-first-scan.sh` deletes the production catalog database, reboots through
+the supervised MagiK boot path, and records first-frame/catalog-ready timings in
+`history/toolchain-bench/results-first-scan.tsv`.
+
+`bench-library.sh` suspends the supervised launcher through `/dev/MiSTer_cmd`
+while running scanner/import CLI benchmarks. Do not benchmark by directly
+killing `mister-magik-fb`; that can leave the Main fork and display/OSD state
+out of sync.
+
 Set `MISTER_LIBRARY_BENCH_CHANGED_REFRESH=1` only on disposable roots when
 measuring changed-refresh behavior; it creates a synthetic candidate file.
+
+Use `scripts/bench-library.sh LABEL --precount` only to measure the cost of a
+pre-scan candidate count for determinate discovery progress. Use
+`--sqlite-build-dir /tmp` only to benchmark the opt-in tmpfs SQLite build path.
