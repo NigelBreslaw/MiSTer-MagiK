@@ -1008,13 +1008,46 @@ fn refresh_sqlite_database(
 ) -> Result<LibraryRefreshSummary, String> {
     let scan_t = Instant::now();
     if let Some(existing) = read_sqlite_fingerprint(&cfg.sqlite_path) {
+        let preview_archive_unchanged = preview_archive_fingerprint_unchanged(&existing);
+        let metadata_unchanged = metadata_fingerprints_unchanged(&existing);
+        if should_refresh_preview_assets_before_manifest(
+            preview_archive_unchanged,
+            metadata_unchanged,
+        ) {
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Preview images changed",
+                    "Updating screenshot availability without rescanning games...",
+                );
+            }
+            let scan_us = scan_t.elapsed().as_micros() as u64;
+            let import_t = Instant::now();
+            if let Ok(bytes) = refresh_sqlite_preview_assets_from_env(&cfg.sqlite_path) {
+                return Ok(LibraryRefreshSummary {
+                    skipped: true,
+                    scan_us,
+                    discover_us: 0,
+                    classify_us: 0,
+                    import_us: import_t.elapsed().as_micros() as u64,
+                    bytes,
+                    normal_files: existing.normal_files,
+                    containers: existing.containers,
+                    entries: existing.entries,
+                    discoveries: existing.discoveries,
+                });
+            }
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Library changed",
+                    "Preview metadata update failed; checking library before rebuild...",
+                );
+            }
+        }
         if let Some(report) = progress.as_mut() {
             report("Checking library", "Looking for changed files...");
         }
         let current_manifest = validate_or_rebuild_directory_manifest(&cfg.roots, &existing);
         let scan_us = scan_t.elapsed().as_micros() as u64;
-        let preview_archive_unchanged = preview_archive_fingerprint_unchanged(&existing);
-        let metadata_unchanged = metadata_fingerprints_unchanged(&existing);
         match library_refresh_plan(
             &existing,
             current_manifest.as_ref(),
@@ -1112,6 +1145,13 @@ fn refresh_sqlite_database(
     let mut summary = save_scan_artifact_to_sqlite(&cfg, artifact, progress)?;
     summary.scan_us = scan_us;
     Ok(summary)
+}
+
+fn should_refresh_preview_assets_before_manifest(
+    preview_archive_unchanged: bool,
+    metadata_unchanged: bool,
+) -> bool {
+    !preview_archive_unchanged && metadata_unchanged
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5555,6 +5595,13 @@ mod tests {
             library_refresh_plan(&fingerprint, Some(&manifest), false, true),
             LibraryRefreshPlan::RefreshPreviewAssets
         );
+    }
+
+    #[test]
+    fn stale_preview_assets_refresh_before_manifest_validation_when_metadata_is_current() {
+        assert!(should_refresh_preview_assets_before_manifest(false, true));
+        assert!(!should_refresh_preview_assets_before_manifest(true, true));
+        assert!(!should_refresh_preview_assets_before_manifest(false, false));
     }
 
     #[test]
