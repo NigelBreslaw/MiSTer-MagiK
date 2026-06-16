@@ -64,10 +64,35 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
 
+  hbmame-db-cache:
+    name: Check HBMAME metadata cache
+    runs-on: ubuntu-24.04
+    needs: resolve-hbmame
+    timeout-minutes: 10
+    outputs:
+      cache-restored: ${{ steps.hbmame-db-cache.outputs.cache-matched-key != '' }}
+
+    steps:
+      - name: Checkout app repo
+        uses: actions/checkout@v6
+
+      - name: Check HBMAME metadata database cache
+        id: hbmame-db-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: build/hbmame.sqlite3
+          key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('tools/mister/src/main.rs') }}
+          restore-keys: |
+            hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-
+          lookup-only: true
+
   hbmame-listxml:
     name: Build HBMAME listxml
     runs-on: windows-latest
-    needs: resolve-hbmame
+    needs:
+      - resolve-hbmame
+      - hbmame-db-cache
+    if: needs.hbmame-db-cache.outputs.cache-restored != 'true'
     timeout-minutes: 60
     outputs:
       cache-key: ${{ steps.hbmame-outputs.outputs.cache_key }}
@@ -130,7 +155,16 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - resolve-hbmame
+      - hbmame-db-cache
       - hbmame-listxml
+    if: |
+      always() &&
+      needs.resolve-hbmame.result == 'success' &&
+      needs.hbmame-db-cache.result == 'success' &&
+      (
+        needs.hbmame-db-cache.outputs.cache-restored == 'true' ||
+        needs.hbmame-listxml.result == 'success'
+      )
     timeout-minutes: 120
 
     steps:
@@ -229,10 +263,12 @@ jobs:
 
       - name: Cache HBMAME metadata database
         id: hbmame-db-cache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: build/hbmame.sqlite3
-          key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml', 'tools/mister/src/main.rs') }}
+          key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('tools/mister/src/main.rs') }}
+          restore-keys: |
+            hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-
 
       - name: Install package tools
         run: |
@@ -248,15 +284,22 @@ jobs:
         run: scripts/mister mame-metadata-build --mame mame --out build/mame.sqlite3
 
       - name: Download HBMAME listxml
-        if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
+        if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
         uses: actions/download-artifact@v7
         with:
           name: hbmame-listxml
           path: build
 
       - name: Build HBMAME metadata database
-        if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
+        if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
         run: scripts/mister mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
+
+      - name: Save HBMAME metadata database cache
+        if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: build/hbmame.sqlite3
+          key: ${{ steps.hbmame-db-cache.outputs.cache-primary-key }}
 
       - name: Package distribution zip
         run: |
