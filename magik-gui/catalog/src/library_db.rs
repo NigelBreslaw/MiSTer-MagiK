@@ -2946,6 +2946,20 @@ fn match_software_by_file_hash(
     list_name: &str,
     metadata: &MameSoftwareMetadata,
 ) -> Option<String> {
+    match_software_by_file_hash_with_full_rom(
+        discovery,
+        list_name,
+        metadata,
+        env_bool("MISTER_LIBRARY_SOFTWARE_HASH"),
+    )
+}
+
+fn match_software_by_file_hash_with_full_rom(
+    discovery: &GameDiscovery,
+    list_name: &str,
+    metadata: &MameSoftwareMetadata,
+    full_rom_hashing_enabled: bool,
+) -> Option<String> {
     if !matches!(
         discovery.source_kind,
         DiscoverySourceKind::PayloadFile | DiscoverySourceKind::ArchiveEntry
@@ -2971,6 +2985,9 @@ fn match_software_by_file_hash(
         return None;
     }
     if list_name == "saturn" {
+        return None;
+    }
+    if !full_rom_hashing_enabled {
         return None;
     }
     let bytes = std::fs::read(source_path).ok()?;
@@ -5709,7 +5726,7 @@ mod tests {
     }
 
     #[test]
-    fn nes_software_identity_matches_header_stripped_rom_and_preview_pack() {
+    fn nes_software_identity_matches_title_and_preview_pack() {
         let root = unique_temp_dir("nes-software-identity");
         let rom_path = root.join("Super Mario Bros.nes");
         let mut rom = b"NES\x1a".to_vec();
@@ -5737,7 +5754,7 @@ mod tests {
         discovery.category = "Console".to_string();
         discovery.core_id = "NES".to_string();
         discovery.hardware_id = "nes".to_string();
-        discovery.title = "Untrusted ROM Name".to_string();
+        discovery.title = "Super Mario Bros. (USA)".to_string();
         let pack = preview_worker::PreviewArchiveIndex {
             path: "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b".to_string(),
             codec: "mmlz4b",
@@ -5781,7 +5798,7 @@ mod tests {
                 "nes:smb".to_string(),
                 "nes:smb".to_string(),
                 1,
-                "mame-software".to_string()
+                "filename".to_string()
             )
         );
         let _ = std::fs::remove_dir_all(root);
@@ -5820,6 +5837,42 @@ mod tests {
     }
 
     #[test]
+    fn software_identity_hash_match_is_disabled_by_default() {
+        let root = unique_temp_dir("software-hash-disabled");
+        let rom_path = root.join("Fixture.sfc");
+        std::fs::write(&rom_path, b"fixture-rom").expect("write rom");
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata
+            .hash_index
+            .insert(("snes".to_string(), 11, crc32(b"fixture-rom")), vec!["fixture".to_string()]);
+        let discovery = payload(&rom_path.display().to_string());
+
+        let matched =
+            match_software_by_file_hash_with_full_rom(&discovery, "snes", &metadata, false);
+
+        assert_eq!(matched, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn software_identity_hash_match_can_be_enabled() {
+        let root = unique_temp_dir("software-hash-enabled");
+        let rom_path = root.join("Fixture.sfc");
+        std::fs::write(&rom_path, b"fixture-rom").expect("write rom");
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata
+            .hash_index
+            .insert(("snes".to_string(), 11, crc32(b"fixture-rom")), vec!["fixture".to_string()]);
+        let discovery = payload(&rom_path.display().to_string());
+
+        let matched =
+            match_software_by_file_hash_with_full_rom(&discovery, "snes", &metadata, true);
+
+        assert_eq!(matched, Some("fixture".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn console_preview_uses_parent_family_fallback() {
         let root = unique_temp_dir("software-family-preview");
         let rom_path = root.join("Variant.sfc");
@@ -5855,6 +5908,7 @@ mod tests {
         discovery.category = "Console".to_string();
         discovery.core_id = "SNES".to_string();
         discovery.hardware_id = "snes".to_string();
+        discovery.title = "Example Game (Rev 1) (USA)".to_string();
         let pack = preview_worker::PreviewArchiveIndex {
             path: "/media/fat/mister-magik/assets/snes-screenshots.mmlz4b".to_string(),
             codec: "mmlz4b",
