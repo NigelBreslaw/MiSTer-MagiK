@@ -67,9 +67,10 @@ scripts/restore-stock-boot.sh
 scripts/install-slint-boot.sh
 ```
 
-`scripts/mister reboot` and `scripts/mister reboot-wait` use
-`mister_magik_reboot` through the Main fork when `MiSTer_MagiK` and
-`/dev/MiSTer_cmd` are available, keeping MiSTer MagiK in display ownership until
+`scripts/mister reboot` and `scripts/mister reboot-wait` require
+`mister_magik_reboot` through the Main fork. If `MiSTer_MagiK` or
+`/dev/MiSTer_cmd` is unavailable, the command fails instead of falling back to a
+raw reboot. When available, this keeps MiSTer MagiK in display ownership until
 reset. `reboot-wait` then waits for the down-to-up transition and confirms the
 device can run commands. Prefer it over blind sleeps.
 

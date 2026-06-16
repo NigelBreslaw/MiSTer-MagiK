@@ -18,7 +18,7 @@ const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
-const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else nohup /sbin/reboot >/dev/null 2>&1 & echo raw; fi";
+const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing; use --raw only for recovery' >&2; exit 12; fi";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -2502,7 +2502,8 @@ video_mode=14
         assert!(cmd.contains("mister_magik_reboot"));
         assert!(cmd.contains("/dev/MiSTer_cmd"));
         assert!(cmd.contains("MiSTer_MagiK"));
-        assert!(cmd.contains("/sbin/reboot"));
+        assert!(!cmd.contains("/sbin/reboot"));
+        assert!(cmd.contains("use --raw only for recovery"));
     }
 
     #[test]
