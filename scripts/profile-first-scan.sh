@@ -115,6 +115,9 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
     sub(/ms$/, "", ms)
     print label, commit, $2, ms, $4
   }
+  $1 == "library_import_timing" {
+    print label, commit, "import_stage_" $2, int(($3 + 500) / 1000), $4
+  }
 ' "$local_log" >>"$TSV"
 
 db_count="$("$MISTER" db "SELECT count(*) FROM games" 2>/dev/null | tail -1 | tr -d '\r' || true)"

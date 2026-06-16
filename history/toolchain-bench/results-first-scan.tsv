@@ -21,3 +21,37 @@ FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	library_db_saved	102444	bytes=31006720 scan_u
 FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	library_ready	102876	games=8389 load_us=365771
 FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	catalog_bridge_sync_update	102903	games=8389 elapsed_us=26415
 FIRSTSCAN-RAMCAT-20260616	c7b6b8c9	db_count	0	9959
+SLOWCAT-PROFILE-20260617	a554fa03	first_frame	1606	catalog_ready=false
+SLOWCAT-PROFILE-20260617	a554fa03	library_scan_complete	76043	scan_us=73203872 discover_us=72936113 classify_us=73050277 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_schema	168	tables=22
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_metadata_load	4158	mame=50097 hbmame=608 software_lists=14979 preview_packs=3
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_begin_tx_asset_packs	58	
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_profiles	0	rows=15
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_files	705	rows=12365
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_payloads	4061	normal_files=12347 entries=281
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_ignored_files	48	rows=398
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	990	from=0 to=1000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	959	from=1000 to=2000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	887	from=2000 to=3000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	916	from=3000 to=4000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	1117	from=4000 to=5000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	1397	from=5000 to=6000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	1398	from=6000 to=7000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	1417	from=7000 to=8000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	1940	from=8000 to=9000 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_chunk	245248	from=9000 to=9960 total=9960
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_games_total	257435	rows=9960 launcher_rows=7122
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_materialize_arcade_ui	2282	
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_launcher_arcade	120	
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_launcher_console	866	rows=7122
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_launchers	1709	
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_meta	1158	rows=10
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_file_fingerprints	935	rows=12365
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_container_fingerprints	11	rows=154
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_insert_directory_manifest	579	rows=7978
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_commit	978	
+SLOWCAT-PROFILE-20260617	a554fa03	import_stage_total	275391	path=/media/fat/mister-magik/.library.sqlite3.tmp.607
+SLOWCAT-PROFILE-20260617	a554fa03	library_db_saved	352879	bytes=31633408 scan_us=73203872 discover_us=72936113 classify_us=73050277 import_us=276630960 discoveries=9960 normal_files=12347 containers=154 entries=281
+SLOWCAT-PROFILE-20260617	a554fa03	library_ready	353163	games=8204 load_us=281377
+SLOWCAT-PROFILE-20260617	a554fa03	catalog_bridge_sync_update	353167	games=8204 elapsed_us=4144
+SLOWCAT-PROFILE-20260617	a554fa03	db_count	0	9960
