@@ -12,6 +12,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_IP=... scripts/deploy-rust.sh --video
 #   MISTER_IP=... scripts/deploy-rust.sh --mame-metadata --asset-packs
+#   MISTER_HBMAME_BIN=/path/to/hbmame scripts/deploy-rust.sh --hbmame-metadata
 #
 # Default installs the release-device (A3) binary.
 set -euo pipefail
@@ -21,6 +22,8 @@ REMOTE="$REMOTE_DIR/mister-magik-fb"
 REMOTE_ASSET_DIR="$REMOTE_DIR/assets"
 DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
 MAME_SQLITE="${MISTER_MAME_SQLITE:-$HERE/build/mame.sqlite3}"
+HBMAME_SQLITE="${MISTER_HBMAME_SQLITE:-$HERE/build/hbmame.sqlite3}"
+HBMAME_BIN="${MISTER_HBMAME_BIN:-}"
 NEOGEO_SCREENSHOT_PACK="${MISTER_NEOGEO_SCREENSHOT_PACK:-$HERE/build/neogeo-screenshots/neogeo-screenshots.mmlz4b}"
 DEFAULT_VIDEO_SRC="$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov"
 if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
@@ -39,6 +42,8 @@ PROFILE=release-device
 BUILD_FLAG=(--device)
 DEPLOY_VIDEO=0
 DEPLOY_MAME_METADATA=0
+DEPLOY_HBMAME_METADATA=0
+DEPLOY_HBMAME_FROM_LIBRARY=0
 DEPLOY_ASSET_PACKS=0
 ARGS=("$@")
 for ((i = 0; i < ${#ARGS[@]}; i++)); do
@@ -50,6 +55,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --device) PROFILE=release-device; BUILD_FLAG=(--device) ;;
     --video) DEPLOY_VIDEO=1; BUILD_FLAG+=(--video) ;;
     --mame-metadata) DEPLOY_MAME_METADATA=1 ;;
+    --hbmame-metadata) DEPLOY_HBMAME_METADATA=1 ;;
     --asset-packs) DEPLOY_ASSET_PACKS=1 ;;
     --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
     --ui-scope=*) BUILD_FLAG+=("$arg") ;;
@@ -141,6 +147,25 @@ if [ "$DEPLOY_MAME_METADATA" -eq 1 ]; then
     "$HERE/scripts/mister" put "$MAME_SQLITE" "$REMOTE_DIR/mame.sqlite3.upload"
   remote_run "mv '$REMOTE_DIR/mame.sqlite3.upload' '$REMOTE_DIR/mame.sqlite3'"
 fi
+if [ "$DEPLOY_HBMAME_METADATA" -eq 1 ]; then
+  if [ ! -f "$HBMAME_SQLITE" ]; then
+    if [ -z "$HBMAME_BIN" ]; then
+      DEPLOY_HBMAME_FROM_LIBRARY=1
+      echo "==> No local HBMame metadata DB; will build supplemental metadata from device library"
+    else
+      echo "==> Building HBMame metadata DB at $HBMAME_SQLITE"
+      mkdir -p "$(dirname "$HBMAME_SQLITE")"
+      "$HERE/scripts/mister" mame-metadata-build --out "$HBMAME_SQLITE" --mame "$HBMAME_BIN"
+    fi
+  fi
+  if [ "$DEPLOY_HBMAME_FROM_LIBRARY" -eq 0 ]; then
+    echo "==> Deploying $HBMAME_SQLITE -> $REMOTE_DIR/hbmame.sqlite3"
+    MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+    MISTER_PASS="${MISTER_PASS:-1}" \
+      "$HERE/scripts/mister" put "$HBMAME_SQLITE" "$REMOTE_DIR/hbmame.sqlite3.upload"
+    remote_run "mv '$REMOTE_DIR/hbmame.sqlite3.upload' '$REMOTE_DIR/hbmame.sqlite3'"
+  fi
+fi
 if [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
   if [ ! -f "$NEOGEO_SCREENSHOT_PACK" ]; then
     echo "ERROR: --asset-packs requested but $NEOGEO_SCREENSHOT_PACK does not exist" >&2
@@ -154,7 +179,16 @@ if [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
     "$HERE/scripts/mister" put "$NEOGEO_SCREENSHOT_PACK" "$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b.upload"
   remote_run "mv '$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b.upload' '$REMOTE_ASSET_DIR/neogeo-screenshots.mmlz4b'"
 fi
-if [ "$DEPLOY_MAME_METADATA" -eq 1 ] || [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
+if [ "$DEPLOY_HBMAME_FROM_LIBRARY" -eq 1 ]; then
+  echo "==> Building supplemental HBMame metadata from device library"
+  if ! remote_run "$REMOTE hbmame-metadata-from-library"; then
+    echo "==> Device library unavailable; refreshing once before supplemental metadata"
+    remote_run "$REMOTE library-refresh"
+    remote_run "$REMOTE hbmame-metadata-from-library"
+  fi
+  echo "==> Refreshing library DB on device with supplemental HBMame metadata"
+  remote_run "$REMOTE library-refresh"
+elif [ "$DEPLOY_MAME_METADATA" -eq 1 ] || [ "$DEPLOY_HBMAME_METADATA" -eq 1 ] || [ "$DEPLOY_ASSET_PACKS" -eq 1 ]; then
   echo "==> Refreshing library DB on device"
   remote_run "$REMOTE library-refresh"
 fi

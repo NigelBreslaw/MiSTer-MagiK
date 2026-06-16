@@ -19,6 +19,7 @@ pub const COMMANDS: &[&str] = &[
     "input",
     "library-refresh",
     "library-sql",
+    "hbmame-metadata-from-library",
     "library-scan-bench",
     "audio-tone",
 ];

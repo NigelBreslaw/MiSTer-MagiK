@@ -35,13 +35,14 @@ const DEFAULT_ROOTS: &[&str] = &[
 
 pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
 pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
+pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 21;
+const SCHEMA_VERSION: u32 = 23;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -184,6 +185,11 @@ pub struct LibraryRefreshSummary {
     pub discoveries: usize,
 }
 
+pub struct HbmameMetadataSummary {
+    pub path: PathBuf,
+    pub rows: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VirtualLaunchPlan {
     pub launch_ref: String,
@@ -201,9 +207,17 @@ struct DbFingerprint {
     containers: usize,
     entries: usize,
     discoveries: usize,
+    mame_metadata: FileSignature,
+    hbmame_metadata: FileSignature,
     file_fingerprints: FileFingerprint,
     container_fingerprints: BTreeMap<String, (u64, i64)>,
     directory_manifest: DirectoryManifest,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct FileSignature {
+    size: u64,
+    mtime_secs: i64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -212,6 +226,12 @@ struct MameMachineMetadata {
     title: String,
     year: Option<String>,
     manufacturer: Option<String>,
+}
+
+#[derive(Default)]
+struct ArcadeMachineMetadata {
+    mame: HashMap<String, MameMachineMetadata>,
+    hbmame: HashMap<String, MameMachineMetadata>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -427,6 +447,12 @@ pub fn default_mame_sqlite_path() -> PathBuf {
     std::env::var("MISTER_MAME_SQLITE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_MAME_SQLITE_PATH))
+}
+
+pub fn default_hbmame_sqlite_path() -> PathBuf {
+    std::env::var("MISTER_HBMAME_SQLITE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_HBMAME_SQLITE_PATH))
 }
 
 pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
@@ -894,6 +920,69 @@ pub fn scan_default_library(progress: ProgressCallback<'_>) -> Result<LibrarySca
     Ok(scan_library_artifact(&cfg, progress))
 }
 
+pub fn write_default_hbmame_metadata_from_library() -> Result<HbmameMetadataSummary, String> {
+    write_hbmame_metadata_from_library(&default_sqlite_path(), &default_hbmame_sqlite_path())
+}
+
+fn write_hbmame_metadata_from_library(
+    library_path: &Path,
+    hbmame_path: &Path,
+) -> Result<HbmameMetadataSummary, String> {
+    let conn = Connection::open_with_flags(library_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open library db {}: {e}", library_path.display()))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+                COALESCE(p.setname, ''),
+                COALESCE(p.parent, ''),
+                g.title,
+                g.year,
+                g.manufacturer
+             FROM launch_plans p
+             JOIN games g ON g.game_id = p.game_id
+             WHERE p.launch_kind = 'mra'
+               AND COALESCE(p.setname, '') != ''
+               AND COALESCE(p.parent, '') != ''",
+        )
+        .map_err(|e| format!("prepare hbmame metadata query: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|e| format!("query hbmame metadata rows: {e}"))?;
+    let mut machines: BTreeMap<String, (String, String, Option<String>, Option<String>)> =
+        BTreeMap::new();
+    for row in rows {
+        let (setname, parent, title, year, manufacturer) =
+            row.map_err(|e| format!("read hbmame metadata row: {e}"))?;
+        let identity_id = normalize_id(&setname);
+        let family_id = normalize_id(&parent);
+        if identity_id.is_empty() || family_id.is_empty() || identity_id == family_id {
+            continue;
+        }
+        machines.entry(identity_id).or_insert_with(|| {
+            (
+                family_id,
+                title,
+                year.map(|value| value.to_string()),
+                manufacturer,
+            )
+        });
+    }
+    write_simple_mame_metadata_db(hbmame_path, &machines)?;
+    Ok(HbmameMetadataSummary {
+        path: hbmame_path.to_path_buf(),
+        rows: machines.len(),
+    })
+}
+
 pub fn default_sqlite_preview_archive_fingerprint_unchanged() -> bool {
     let cfg = BenchConfig::production();
     read_sqlite_fingerprint(&cfg.sqlite_path)
@@ -913,8 +1002,13 @@ fn refresh_sqlite_database(
         let current_manifest = validate_or_rebuild_directory_manifest(&cfg.roots, &existing);
         let scan_us = scan_t.elapsed().as_micros() as u64;
         let preview_archive_unchanged = preview_archive_fingerprint_unchanged(&existing);
-        match library_refresh_plan(&existing, current_manifest.as_ref(), preview_archive_unchanged)
-        {
+        let metadata_unchanged = metadata_fingerprints_unchanged(&existing);
+        match library_refresh_plan(
+            &existing,
+            current_manifest.as_ref(),
+            preview_archive_unchanged,
+            metadata_unchanged,
+        ) {
             LibraryRefreshPlan::UseCachedDatabase => {
                 if let Some(report) = progress.as_mut() {
                     report(
@@ -1019,8 +1113,12 @@ fn library_refresh_plan(
     existing: &DbFingerprint,
     current_manifest: Option<&DirectoryManifest>,
     preview_archive_unchanged: bool,
+    metadata_unchanged: bool,
 ) -> LibraryRefreshPlan {
     if current_manifest != Some(&existing.directory_manifest) {
+        return LibraryRefreshPlan::RebuildDatabase;
+    }
+    if !metadata_unchanged {
         return LibraryRefreshPlan::RebuildDatabase;
     }
     if preview_archive_unchanged {
@@ -1403,6 +1501,11 @@ fn preview_archive_fingerprint_unchanged(existing: &DbFingerprint) -> bool {
         Ok(current) => preview_archive_fingerprint_matches(existing, current),
         Err(_) => false,
     }
+}
+
+fn metadata_fingerprints_unchanged(existing: &DbFingerprint) -> bool {
+    existing.mame_metadata == file_signature(&default_mame_sqlite_path())
+        && existing.hbmame_metadata == file_signature(&default_hbmame_sqlite_path())
 }
 
 fn preview_archive_fingerprint_matches(
@@ -2397,6 +2500,15 @@ fn sync_parent_dir(path: &Path) {
     }
 }
 
+fn file_signature(path: &Path) -> FileSignature {
+    std::fs::metadata(path)
+        .map(|metadata| FileSignature {
+            size: metadata.len(),
+            mtime_secs: mtime_secs(&metadata),
+        })
+        .unwrap_or_default()
+}
+
 fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadata> {
     let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return HashMap::new();
@@ -2422,6 +2534,76 @@ fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadat
     rows.filter_map(|row| row.ok()).collect()
 }
 
+fn load_arcade_machine_metadata(
+    mame_path: &Path,
+    hbmame_path: &Path,
+) -> ArcadeMachineMetadata {
+    ArcadeMachineMetadata {
+        mame: load_mame_machine_metadata(mame_path),
+        hbmame: load_mame_machine_metadata(hbmame_path),
+    }
+}
+
+fn write_simple_mame_metadata_db(
+    path: &Path,
+    rows: &BTreeMap<String, (String, String, Option<String>, Option<String>)>,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create metadata dir {}: {e}", parent.display()))?;
+    }
+    let tmp = sqlite_temp_path(path);
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove stale metadata temp {}: {e}", tmp.display())),
+    }
+    let mut conn = Connection::open(&tmp)
+        .map_err(|e| format!("open metadata temp {}: {e}", tmp.display()))?;
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode=OFF;
+        PRAGMA synchronous=OFF;
+        CREATE TABLE mame_machines (
+            setname TEXT PRIMARY KEY,
+            parent_setname TEXT,
+            title TEXT NOT NULL,
+            year TEXT,
+            manufacturer TEXT
+        ) WITHOUT ROWID;
+        "#,
+    )
+    .map_err(|e| format!("create metadata schema: {e}"))?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("begin metadata tx: {e}"))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer)
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .map_err(|e| format!("prepare metadata insert: {e}"))?;
+        for (setname, (parent, title, year, manufacturer)) in rows {
+            stmt.execute(params![
+                setname.as_str(),
+                parent.as_str(),
+                title.as_str(),
+                year.as_deref(),
+                manufacturer.as_deref()
+            ])
+            .map_err(|e| format!("insert metadata row {setname}: {e}"))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("commit metadata tx: {e}"))?;
+    sync_parent_dir(&tmp);
+    std::fs::rename(&tmp, path)
+        .map_err(|e| format!("replace metadata db {}: {e}", path.display()))?;
+    sync_parent_dir(path);
+    Ok(())
+}
+
 fn mame_identity_for_discovery(discovery: &GameDiscovery) -> Option<String> {
     if discovery.platform_id != "arcade" && discovery.platform_id != "neogeo" {
         return None;
@@ -2436,9 +2618,9 @@ fn mame_identity_for_discovery(discovery: &GameDiscovery) -> Option<String> {
 
 fn mame_identity_projection<'a>(
     identity_id: &str,
-    metadata: &'a HashMap<String, MameMachineMetadata>,
+    metadata: &'a ArcadeMachineMetadata,
 ) -> (String, Option<&'a str>, Option<&'a str>, Option<&'a str>, &'static str) {
-    if let Some(machine) = metadata.get(identity_id) {
+    if let Some(machine) = metadata.mame.get(identity_id) {
         let family_id = machine
             .parent_setname
             .as_deref()
@@ -2451,6 +2633,20 @@ fn mame_identity_projection<'a>(
             machine.year.as_deref(),
             machine.manufacturer.as_deref(),
             "mame",
+        )
+    } else if let Some(machine) = metadata.hbmame.get(identity_id) {
+        let family_id = machine
+            .parent_setname
+            .as_deref()
+            .filter(|parent| !parent.trim().is_empty())
+            .unwrap_or(identity_id)
+            .to_string();
+        (
+            family_id,
+            Some(machine.title.as_str()),
+            machine.year.as_deref(),
+            machine.manufacturer.as_deref(),
+            "hbmame",
         )
     } else {
         (identity_id.to_string(), None, None, None, "setname")
@@ -2701,6 +2897,7 @@ fn write_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<(), String> {
         path,
         scan,
         &default_mame_sqlite_path(),
+        &default_hbmame_sqlite_path(),
         &preview_asset_packs,
     )
 }
@@ -2850,7 +3047,17 @@ fn write_sqlite_scan_with_mame(
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, &[])
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, &PathBuf::new(), &[])
+}
+
+#[cfg(test)]
+fn write_sqlite_scan_with_mame_and_hbmame(
+    path: &Path,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+    hbmame_sqlite_path: &Path,
+) -> Result<(), String> {
+    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, hbmame_sqlite_path, &[])
 }
 
 #[cfg(test)]
@@ -2864,6 +3071,7 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
         path,
         scan,
         mame_sqlite_path,
+        &PathBuf::new(),
         std::slice::from_ref(preview_asset_pack),
     )
 }
@@ -2872,6 +3080,7 @@ fn write_sqlite_scan_with_sources(
     path: &Path,
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
+    hbmame_sqlite_path: &Path,
     preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
 ) -> Result<(), String> {
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
@@ -3089,7 +3298,10 @@ fn write_sqlite_scan_with_sources(
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
 
+    let mame_signature = file_signature(mame_sqlite_path);
+    let hbmame_signature = file_signature(hbmame_sqlite_path);
     let mame_metadata = load_mame_machine_metadata(mame_sqlite_path);
+    let arcade_metadata = load_arcade_machine_metadata(mame_sqlite_path, hbmame_sqlite_path);
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
@@ -3354,7 +3566,7 @@ fn write_sqlite_scan_with_sources(
                 .map_err(|e| format!("insert launchable: {e}"))?;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
                 let (family_id, title, year, manufacturer, source) =
-                    mame_identity_projection(&identity_id, &mame_metadata);
+                    mame_identity_projection(&identity_id, &arcade_metadata);
                 identity_stmt
                     .execute(params![
                         key.as_str(),
@@ -3480,6 +3692,14 @@ fn write_sqlite_scan_with_sources(
             unique_discovery_count(&scan.discoveries) as i64
         ])
         .map_err(|e| format!("insert discovery count: {e}"))?;
+        stmt.execute(params!["mame_metadata_size", mame_signature.size as i64])
+            .map_err(|e| format!("insert mame metadata size: {e}"))?;
+        stmt.execute(params!["mame_metadata_mtime", mame_signature.mtime_secs])
+            .map_err(|e| format!("insert mame metadata mtime: {e}"))?;
+        stmt.execute(params!["hbmame_metadata_size", hbmame_signature.size as i64])
+            .map_err(|e| format!("insert hbmame metadata size: {e}"))?;
+        stmt.execute(params!["hbmame_metadata_mtime", hbmame_signature.mtime_secs])
+            .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
     }
     {
         let mut stmt = tx
@@ -3595,10 +3815,25 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
         containers: sqlite_meta_usize(&conn, "containers")?,
         entries: sqlite_meta_usize(&conn, "entries")?,
         discoveries: sqlite_meta_usize(&conn, "discoveries")?,
+        mame_metadata: FileSignature {
+            size: sqlite_meta_i64(&conn, "mame_metadata_size")?.max(0) as u64,
+            mtime_secs: sqlite_meta_i64(&conn, "mame_metadata_mtime")?,
+        },
+        hbmame_metadata: FileSignature {
+            size: sqlite_meta_i64(&conn, "hbmame_metadata_size")?.max(0) as u64,
+            mtime_secs: sqlite_meta_i64(&conn, "hbmame_metadata_mtime")?,
+        },
         file_fingerprints,
         container_fingerprints,
         directory_manifest,
     })
+}
+
+fn sqlite_meta_i64(conn: &Connection, key: &str) -> Option<i64> {
+    conn.query_row("SELECT value FROM meta WHERE key=?1", [key], |r| {
+        r.get::<_, i64>(0)
+    })
+    .ok()
 }
 
 fn sqlite_meta_usize(conn: &Connection, key: &str) -> Option<usize> {
@@ -4609,6 +4844,116 @@ mod tests {
     }
 
     #[test]
+    fn arcade_identity_uses_hbmame_metadata_after_mame_miss() {
+        let root = unique_temp_dir("hbmame-identity");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        let hbmame_db = root.join("hbmame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[("bombjack", None, "Bomb Jack", Some("1984"), Some("Tehkan"))],
+        );
+        write_mame_fixture_db(
+            &hbmame_db,
+            &[(
+                "bombjckb",
+                Some("bombjack"),
+                "Bomb Jack (Bootleg)",
+                Some("1984"),
+                Some("Tehkan"),
+            )],
+        );
+        let mut parent = mra_discovery(1, "Bomb Jack");
+        parent.setname = Some("bombjack".to_string());
+        let mut hbmame_clone = mra_discovery(2, "Bomb Jack");
+        hbmame_clone.setname = Some("bombjckb".to_string());
+        hbmame_clone.parent = Some("bombjack".to_string());
+        hbmame_clone.source_path =
+            "/media/fat/_Arcade/_alternatives/_Bomb Jack/Bomb Jack (Bootleg) - HBMame.mra"
+                .to_string();
+        hbmame_clone.launch_ref = hbmame_clone.source_path.clone();
+
+        write_sqlite_scan_with_mame_and_hbmame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![parent, hbmame_clone]),
+            &mame_db,
+            &hbmame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let identity = conn
+            .query_row(
+                "SELECT identity_id,family_id,metadata_title,manufacturer,source
+                 FROM launchable_identities
+                 WHERE identity_id='bombjckb'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .expect("query hbmame identity");
+        assert_eq!(identity.0, "bombjckb");
+        assert_eq!(identity.1, "bombjack");
+        assert_eq!(identity.2.as_deref(), Some("Bomb Jack (Bootleg)"));
+        assert_eq!(identity.3.as_deref(), Some("Tehkan"));
+        assert_eq!(identity.4, "hbmame");
+
+        let preferred_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
+                row.get(0)
+            })
+            .expect("query preferred count");
+        let variant_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants WHERE family_id='bombjack'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query variant count");
+        assert_eq!(preferred_count, 1);
+        assert_eq!(variant_count, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hbmame_metadata_from_library_uses_mra_parent_rows() {
+        let root = unique_temp_dir("hbmame-from-library");
+        let db = root.join("library.sqlite3");
+        let hbmame_db = root.join("hbmame.sqlite3");
+        let mut parent = mra_discovery(1, "Bomb Jack");
+        parent.setname = Some("bombjack".to_string());
+        parent.parent = Some("bombjack".to_string());
+        let mut hbmame_clone = mra_discovery(2, "Bomb Jack");
+        hbmame_clone.setname = Some("bombjckb".to_string());
+        hbmame_clone.parent = Some("bombjack".to_string());
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![parent, hbmame_clone]))
+            .expect("save sqlite");
+        let summary =
+            write_hbmame_metadata_from_library(&db, &hbmame_db).expect("write hbmame metadata");
+        assert_eq!(summary.rows, 1);
+
+        let conn = Connection::open(&hbmame_db).expect("open hbmame db");
+        let row = conn
+            .query_row(
+                "SELECT parent_setname,title FROM mame_machines WHERE setname='bombjckb'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("query hbmame row");
+        assert_eq!(row.0, "bombjack");
+        assert_eq!(row.1, "Bomb Jack");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn ui_arcade_preferred_collapses_family_and_keeps_variants() {
         let root = unique_temp_dir("ui-arcade-preferred-parent");
         let db = root.join("library.sqlite3");
@@ -5061,7 +5406,7 @@ mod tests {
         let fingerprint = fingerprint_with_manifest(manifest.clone());
 
         assert_eq!(
-            library_refresh_plan(&fingerprint, Some(&manifest), true),
+            library_refresh_plan(&fingerprint, Some(&manifest), true, true),
             LibraryRefreshPlan::UseCachedDatabase
         );
     }
@@ -5072,8 +5417,19 @@ mod tests {
         let fingerprint = fingerprint_with_manifest(manifest.clone());
 
         assert_eq!(
-            library_refresh_plan(&fingerprint, Some(&manifest), false),
+            library_refresh_plan(&fingerprint, Some(&manifest), false, true),
             LibraryRefreshPlan::RefreshPreviewAssets
+        );
+    }
+
+    #[test]
+    fn refresh_plan_rebuilds_when_metadata_changes() {
+        let manifest = single_dir_manifest("/media/fat/_Arcade", 1);
+        let fingerprint = fingerprint_with_manifest(manifest.clone());
+
+        assert_eq!(
+            library_refresh_plan(&fingerprint, Some(&manifest), true, false),
+            LibraryRefreshPlan::RebuildDatabase
         );
     }
 
@@ -5084,7 +5440,7 @@ mod tests {
         let fingerprint = fingerprint_with_manifest(old_manifest);
 
         assert_eq!(
-            library_refresh_plan(&fingerprint, Some(&current_manifest), true),
+            library_refresh_plan(&fingerprint, Some(&current_manifest), true, true),
             LibraryRefreshPlan::RebuildDatabase
         );
     }
@@ -5615,6 +5971,8 @@ mod tests {
             containers: 0,
             entries: 0,
             discoveries: 0,
+            mame_metadata: FileSignature::default(),
+            hbmame_metadata: FileSignature::default(),
             file_fingerprints: FileFingerprint::default(),
             container_fingerprints: BTreeMap::new(),
             directory_manifest,
