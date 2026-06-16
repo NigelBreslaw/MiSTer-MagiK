@@ -1347,12 +1347,7 @@ fn scan_library_with_progress(
             if let Some(report) = progress.as_mut() {
                 report(
                     "Classifying library",
-                    &format!(
-                        "{idx} candidate files; {} games, {} archives, {} archive entries",
-                        discoveries.len(),
-                        containers.len(),
-                        entries.len()
-                    ),
+                    &format!("Games found: {}", discoveries.len()),
                 );
             }
         }
