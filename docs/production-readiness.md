@@ -46,9 +46,29 @@ Run the full release rehearsal:
 scripts/device-release-acceptance.sh --deploy
 ```
 
+Run a quick non-destructive smoke while iterating on the deployed build:
+
+```bash
+scripts/device-release-acceptance.sh --skip-deploy --fast
+```
+
+Run the long soak only when explicitly requested:
+
+```bash
+scripts/device-release-acceptance.sh --skip-deploy --soak
+```
+
 The script uses only `scripts/mister` for device access and writes artifacts to
 `build/device-release/<timestamp>/`, including status JSON, doctor output,
 snapshots, logs, optional frame/profile files, and `report.md`.
+
+The device gate is telemetry-first: it waits on `scripts/mister status --json`,
+launcher status fields, Main status fields, `/tmp/mister-magik/events.jsonl`,
+and trace TSV row growth before falling back to timeout failure. The default
+gate includes the expanded route, preview, velocity-scroll, controller, audio,
+catalog mutation, first-boot scan, launch matrix, exit-menu, crash-loop,
+display-mode, and install/restore checks. The 30-60 minute soak is deliberately
+default-off behind `--soak`.
 
 The default launch smoke target is:
 
@@ -102,10 +122,11 @@ Block a public beta release if any of these fail:
 ## Current Evidence
 
 As of 2026-06-17, the host gate passes, and the hardware gate passes every
-checked path except restart after crash-policy smoke. The final run is recorded
-under `build/device-release/20260617T084655Z/`; that build is not public-beta
-ready until crash restart returns the launcher to `LauncherActive` without raw
-reboot recovery.
+checked path except restart after crash-policy smoke. The telemetry-expanded
+fast run is recorded under `build/device-release/20260617T153044Z/`; that build
+is not public-beta ready until crash restart returns the launcher to
+`LauncherActive` without raw reboot recovery. Tracked notes from that run live in
+`history/2026-6-17-telemetry-device-gate.md`.
 
 ## Public Beta Limits
 

@@ -19,6 +19,13 @@ pub(super) struct LauncherFrameAccounting {
     first_frame_logged: bool,
     first_visible_copy_done: bool,
     stable_frame_logged: bool,
+    last_rolling_fps: f64,
+    last_rolling_prepare_us: u64,
+    last_rolling_render_us: u64,
+    last_rolling_custom_draw_us: u64,
+    last_rolling_vsync_us: u64,
+    last_rolling_present_us: u64,
+    last_rolling_rows: u64,
 }
 
 pub(super) struct LauncherPresentedFrame {
@@ -66,6 +73,13 @@ impl LauncherFrameAccounting {
             first_frame_logged: false,
             first_visible_copy_done: false,
             stable_frame_logged: false,
+            last_rolling_fps: 0.0,
+            last_rolling_prepare_us: 0,
+            last_rolling_render_us: 0,
+            last_rolling_custom_draw_us: 0,
+            last_rolling_vsync_us: 0,
+            last_rolling_present_us: 0,
+            last_rolling_rows: 0,
         }
     }
 
@@ -86,6 +100,17 @@ impl LauncherFrameAccounting {
         catalog_refresh_done: bool,
         launching: bool,
         loading_title: &str,
+        catalog_scan_visible: bool,
+        catalog_scan_title: &str,
+        catalog_scan_detail: &str,
+        catalog_scan_percent: i32,
+        launcher_bench_scenario: Option<LauncherBenchScenario>,
+        start_screen: Screen,
+        lock_screen: Option<Screen>,
+        route_reassert_count: u64,
+        last_route_reassert_frame: u64,
+        last_route_reassert_ok: bool,
+        last_route_reassert_error: &str,
     ) {
         self.write_preview_trace(&frame);
         self.record_first_copy(&frame, disp);
@@ -103,6 +128,22 @@ impl LauncherFrameAccounting {
             catalog_refresh_done,
             launching,
             loading_title,
+            catalog_scan_visible,
+            catalog_scan_title,
+            catalog_scan_detail,
+            catalog_scan_percent,
+            frame.selected,
+            frame.visual_index,
+            frame.preview_cache_state,
+            frame.preview_transition.effect.label(),
+            frame.preview_transition.progress,
+            launcher_bench_scenario,
+            start_screen,
+            lock_screen,
+            route_reassert_count,
+            last_route_reassert_frame,
+            last_route_reassert_ok,
+            last_route_reassert_error,
         );
     }
 
@@ -178,6 +219,18 @@ impl LauncherFrameAccounting {
         self.rows += frame.copied_rows as u128;
         if self.fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = self.fps_frames.max(1) as u128;
+            let elapsed = self.fps_window_start.elapsed().as_secs_f64();
+            self.last_rolling_fps = if elapsed > 0.0 {
+                self.fps_frames as f64 / elapsed
+            } else {
+                0.0
+            };
+            self.last_rolling_prepare_us = (self.prepare_us / n) as u64;
+            self.last_rolling_render_us = (self.render_us / n) as u64;
+            self.last_rolling_custom_draw_us = (self.custom_draw_us / n) as u64;
+            self.last_rolling_vsync_us = (self.vsync_us / n) as u64;
+            self.last_rolling_present_us = (self.copy_us / n) as u64;
+            self.last_rolling_rows = (self.rows / n) as u64;
             println!(
                 "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
                 self.fps_frames,
@@ -279,6 +332,22 @@ impl LauncherFrameAccounting {
         catalog_refresh_done: bool,
         launching: bool,
         loading_title: &str,
+        catalog_scan_visible: bool,
+        catalog_scan_title: &str,
+        catalog_scan_detail: &str,
+        catalog_scan_percent: i32,
+        arcade_selected: usize,
+        arcade_visual_index: f32,
+        preview_cache_state: &str,
+        preview_transition_effect: &str,
+        preview_transition_progress: f32,
+        launcher_bench_scenario: Option<LauncherBenchScenario>,
+        start_screen: Screen,
+        lock_screen: Option<Screen>,
+        route_reassert_count: u64,
+        last_route_reassert_frame: u64,
+        last_route_reassert_ok: bool,
+        last_route_reassert_error: &str,
     ) {
         if self.last_status_write.elapsed() < Duration::from_secs(1) {
             return;
@@ -293,15 +362,48 @@ impl LauncherFrameAccounting {
             screen: screen_label(nav.screen),
             frames,
             fps_estimate,
+            rolling_fps: self.last_rolling_fps,
+            rolling_prepare_us: self.last_rolling_prepare_us,
+            rolling_render_us: self.last_rolling_render_us,
+            rolling_custom_draw_us: self.last_rolling_custom_draw_us,
+            rolling_vsync_us: self.last_rolling_vsync_us,
+            rolling_present_us: self.last_rolling_present_us,
+            rolling_rows: self.last_rolling_rows,
             last_frame_ms_ago: 0,
             catalog_ready,
             catalog_games: catalog.len(),
             catalog_systems: catalog.systems.len(),
             catalog_refresh_done,
+            catalog_scan_visible,
+            catalog_scan_title,
+            catalog_scan_detail,
+            catalog_scan_percent,
+            arcade_selected,
+            arcade_visual_index,
+            preview_cache_state,
+            preview_transition_effect,
+            preview_transition_progress,
+            bench_scenario: launcher_bench_scenario
+                .map(LauncherBenchScenario::label)
+                .unwrap_or("none"),
+            start_screen: screen_label(start_screen),
+            lock_screen: lock_screen.map(screen_label).unwrap_or("none"),
+            route_reassert_count,
+            last_route_reassert_frame,
+            last_route_reassert_ok,
+            last_route_reassert_error,
             launch_state: if launching { "launching" } else { "idle" },
             loading_title,
             input_pad_count: pad.len(),
             active_pad_index: pad.active_idx(),
+            active_pad_name: &pad.info().name,
+            active_pad_path: pad.path(),
+            last_raw_event: &pad.state().last_raw,
+            last_input_ms_ago: if pad.state().last_raw_event.is_some() {
+                0
+            } else {
+                u64::MAX
+            },
         });
         self.last_status_write = Instant::now();
     }

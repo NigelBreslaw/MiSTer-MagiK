@@ -12,7 +12,6 @@ pub struct FramebufferRouteAction {
 pub struct FramebufferRouteGuard {
     interval_frames: u64,
     next_frame: u64,
-    forced_initial_present: bool,
 }
 
 impl FramebufferRouteGuard {
@@ -20,7 +19,6 @@ impl FramebufferRouteGuard {
         Self {
             interval_frames,
             next_frame: 0,
-            forced_initial_present: false,
         }
     }
 
@@ -32,7 +30,6 @@ impl FramebufferRouteGuard {
         Self {
             interval_frames: 0,
             next_frame: u64::MAX,
-            forced_initial_present: true,
         }
     }
 
@@ -45,11 +42,9 @@ impl FramebufferRouteGuard {
         }
 
         self.next_frame = frame.saturating_add(self.interval_frames.max(1));
-        let force_full_present = !self.forced_initial_present;
-        self.forced_initial_present = true;
         FramebufferRouteAction {
             reassert_route: true,
-            force_full_present,
+            force_full_present: true,
         }
     }
 }
@@ -102,13 +97,13 @@ mod tests {
             guard.tick(3),
             FramebufferRouteAction {
                 reassert_route: true,
-                force_full_present: false
+                force_full_present: true
             }
         );
     }
 
     #[test]
-    fn periodic_route_reassertions_do_not_force_full_presents() {
+    fn periodic_route_reassertions_force_full_presents() {
         let mut guard = FramebufferRouteGuard::new(2);
 
         assert_eq!(
@@ -122,14 +117,14 @@ mod tests {
             guard.tick(2),
             FramebufferRouteAction {
                 reassert_route: true,
-                force_full_present: false
+                force_full_present: true
             }
         );
         assert_eq!(
             guard.tick(4),
             FramebufferRouteAction {
                 reassert_route: true,
-                force_full_present: false
+                force_full_present: true
             }
         );
     }
