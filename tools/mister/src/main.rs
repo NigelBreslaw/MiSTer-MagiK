@@ -2107,6 +2107,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "diagnostics" => {
             agent_diagnostics(&args[1..])?;
         }
+        "reboot-wait" => {
+            agent_reboot_wait(&args[1..])?;
+        }
         "boot-profile" => {
             agent_boot_profile(&args[1..])?;
         }
@@ -2118,8 +2121,94 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       reboot-wait [--timeout SECS] [--supervised]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
     );
+}
+
+fn agent_reboot_wait(args: &[String]) -> Result<()> {
+    let raw = reboot_raw_from_args(args)?;
+    let timeout_secs = option_value(args, "--timeout")
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| {
+            args.iter()
+                .find(|arg| !arg.starts_with('-'))
+                .and_then(|arg| arg.parse::<f64>().ok())
+        })
+        .unwrap_or(40.0);
+    let mode = if raw { "raw" } else { "supervised" };
+    let issue_t = Instant::now();
+    let reply = agent_request("reboot", json!({"mode": mode}), Duration::from_secs(2))?;
+    let issue_ms = issue_t.elapsed().as_millis();
+    println!(
+        "agent reboot issued to {} after {issue_ms}ms: {}",
+        host(),
+        serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
+    );
+
+    let start = Instant::now();
+    let mut down_ms = None;
+    while start.elapsed().as_secs_f64() < 40.0 {
+        let ssh_label = tcp_probe_label(Duration::from_millis(100));
+        let agent_label = tcp_probe_label_port(AGENT_PORT, Duration::from_millis(100));
+        if ssh_label != "ok" && agent_label != "ok" {
+            down_ms = Some(start.elapsed().as_millis());
+            println!("  device went down after {}ms", opt_ms(down_ms));
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let mut agent_ready_ms = None;
+    let mut ssh_ready_ms = None;
+    let mut last_note = String::new();
+    while start.elapsed().as_secs_f64() < timeout_secs {
+        if agent_ready_ms.is_none() {
+            match agent_request("ping", json!({}), Duration::from_millis(300)) {
+                Ok(_) => {
+                    agent_ready_ms = Some(start.elapsed().as_millis());
+                    println!("  agent ready after {}ms", opt_ms(agent_ready_ms));
+                }
+                Err(err) => last_note = err.to_string(),
+            }
+        }
+        if ssh_ready_ms.is_none() {
+            match connect_timed(2) {
+                Ok(timed) => {
+                    let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                    if out.rc == 0 {
+                        ssh_ready_ms = Some(start.elapsed().as_millis());
+                        let ssh_uptime = out.stdout.split_whitespace().next().unwrap_or("");
+                        println!(
+                            "  ssh ready after {}ms; uptime={ssh_uptime}",
+                            opt_ms(ssh_ready_ms)
+                        );
+                    } else {
+                        last_note = format!("ssh exec rc {}", out.rc);
+                    }
+                }
+                Err(err) => last_note = err.to_string(),
+            }
+        }
+        if agent_ready_ms.is_some() && ssh_ready_ms.is_some() {
+            println!(
+                "agent reboot-wait ok mode={mode} down_ms={} agent_ready_ms={} ssh_ready_ms={}",
+                opt_ms(down_ms),
+                opt_ms(agent_ready_ms),
+                opt_ms(ssh_ready_ms)
+            );
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+
+    Err(format!(
+        "agent reboot-wait timeout mode={mode} down_ms={} agent_ready_ms={} ssh_ready_ms={} last={}",
+        opt_ms(down_ms),
+        opt_ms(agent_ready_ms),
+        opt_ms(ssh_ready_ms),
+        last_note
+    )
+    .into())
 }
 
 fn agent_diagnostics(args: &[String]) -> Result<()> {

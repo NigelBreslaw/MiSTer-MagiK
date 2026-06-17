@@ -826,3 +826,60 @@ After deployment:
 Result: keeper. The diagnostics bundle gives a single command for the evidence
 needed after normal boots and provides an SSH fallback when the agent TCP path is
 not usable.
+
+## Experiment 21 - Agent Reboot-Wait
+
+Hypothesis: reboot orchestration should move onto the agent TCP backplane so the
+host can request reboot without SSH and wait for the agent port before waiting
+for SSH.
+
+Change: the agent now accepts a `reboot` command. The host wrapper adds:
+
+```bash
+scripts/mister agent reboot-wait --timeout 40
+```
+
+The command defaults to Linux `/sbin/reboot` for Ethernet reliability. The
+supervised MagiK reset path remains available with `--supervised` for explicit
+HDMI/visual-lockdown validation.
+
+Before/control samples using the host raw reboot path:
+
+- `scripts/mister reboot-wait 40`: device down after 2.0s, SSH ready after
+  14.6s.
+- After the final agent binary install, `scripts/mister reboot-wait 40`: device
+  down after 2.0s, SSH ready after 14.0s.
+
+Failed intermediate result: the first agent implementation used a direct Rust
+`Command::new("/sbin/reboot").spawn()`. It acknowledged the command in 6ms and
+the host saw the device go down after 3.492s, but neither the agent port nor SSH
+returned within 40s. After manual recovery, persistent boot logs showed the
+failed boot as boot 14: agent and sshd started, carrier was up, routes were
+present, and TX packets increased, but RX stayed at `0` from 8.79s through at
+least 50.88s. This reproduced the Ethernet RX-dead failure class rather than an
+agent startup failure.
+
+Correction: agent raw reboot now uses the same detached shell primitive as the
+proven host path:
+
+```sh
+nohup /sbin/reboot >/dev/null 2>&1 &
+```
+
+The agent also writes a synchronous `reboot_scheduled` breadcrumb to
+`/media/fat/mister-magik/bootlogs/agent.log` before rebooting. Final deployed
+validation:
+
+- `scripts/mister agent reboot-wait --timeout 40`: command acknowledged in
+  49ms, device down after 8.642s, agent ready after 22.390s, SSH ready after
+  22.996s.
+- Timeline for the final boot: agent listener at 3.950s uptime, IP at 4.030s,
+  carrier up at 8.170s, first RX/TX at 8.310s, first agent command at 10.020s.
+- Persistent breadcrumb verified:
+  `15.20 agent reboot_scheduled mode=raw`.
+
+Result: keeper for agent control and agent-first watching, not a speed win over
+host raw reboot. The extra wall-clock time is mostly before the board drops:
+the host raw path loses SSH after about 2.0s, while this agent-command sample
+did not see both TCP ports drop until 8.642s. Once the reboot was underway, the
+boot timeline was healthy and RX woke normally.
