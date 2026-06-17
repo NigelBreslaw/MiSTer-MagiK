@@ -37,6 +37,13 @@ need_component_hint() {
 }
 
 cross_env() {
+  if [ "${MISTER_ARM_BUILD_BACKEND:-auto}" != cross ] &&
+    [ "$(uname -s)" = Darwin ] &&
+    [ "$(uname -m)" = arm64 ]; then
+    echo "ERROR: local Apple-Silicon ARM builds use Apple's container runtime, not cross/Docker." >&2
+    echo "       Use magik-gui/build-arm.sh for device builds, or set MISTER_ARM_BUILD_BACKEND=cross explicitly for a comparison." >&2
+    exit 1
+  fi
   export DOCKER_DEFAULT_PLATFORM=linux/amd64
   export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32,48}"
 }

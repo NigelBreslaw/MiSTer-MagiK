@@ -5,6 +5,7 @@ updates:
       - "/magik-gui"
       - "/magik-gui/catalog"
       - "/magik-gui/ui-generated"
+      - "/tools/magik-agent"
       - "/tools/mister"
     schedule:
       interval: "weekly"

@@ -35,7 +35,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-host-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
+          key: cargo-host-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
           restore-keys: |
             cargo-host-${{ runner.os }}-
 
@@ -44,8 +44,9 @@ jobs:
         with:
           path: |
             magik-gui/target/debug
+            tools/magik-agent/target/debug
             tools/mister/target/debug
-          key: target-host-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          key: target-host-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
           restore-keys: |
             target-host-${{ runner.os }}-
 
@@ -67,8 +68,14 @@ jobs:
       - name: Check host tools
         run: scripts/dev-rust host-tools
 
+      - name: Check MagiK agent
+        run: cargo check --manifest-path tools/magik-agent/Cargo.toml
+
       - name: Clippy host tools
         run: cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
+
+      - name: Clippy MagiK agent
+        run: cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings
 
   ci-clippy:
     name: ci-clippy
@@ -137,7 +144,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
 
@@ -151,6 +158,15 @@ jobs:
       - name: Install cross
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Cache ARM agent build outputs
+        if: matrix.name == 'release'
+        uses: actions/cache@v5
+        with:
+          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
+          key: target-agent-arm-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/main.rs', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          restore-keys: |
+            target-agent-arm-${{ runner.os }}-
 
       - name: Cache minimal FFmpeg
         if: matrix.features == 'video'
@@ -175,6 +191,18 @@ jobs:
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
+
+      - name: Build ARM agent
+        if: matrix.name == 'release'
+        run: MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
+
+      - name: Upload ARM agent
+        if: matrix.name == 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mister-magik-agent
+          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
+          if-no-files-found: error
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
