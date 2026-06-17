@@ -97,6 +97,9 @@ fn run_cli() -> Result<()> {
         "boot-net-profile" => {
             boot_net_profile(&args)?;
         }
+        "boot-tcp-profile" => {
+            boot_tcp_profile(&args)?;
+        }
         "watch-reboot" => {
             watch_external_reboot(&args)?;
         }
@@ -236,7 +239,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
 }
 
@@ -2140,6 +2143,205 @@ fn boot_net_profile(args: &[String]) -> Result<()> {
         thread::sleep(Duration::from_secs(2));
     }
     eprintln!("boot-net-profile: appended {samples} row(s) to {out_path}");
+    Ok(())
+}
+
+#[derive(Default)]
+struct TcpProbeStats {
+    ok_count: u64,
+    hostdown_count: u64,
+    noroute_count: u64,
+    timeout_count: u64,
+    refused_count: u64,
+    other_count: u64,
+    first_ok_ms: Option<u128>,
+    first_hostdown_ms: Option<u128>,
+    first_noroute_ms: Option<u128>,
+    first_timeout_ms: Option<u128>,
+    first_refused_ms: Option<u128>,
+    first_other_ms: Option<u128>,
+    last_label: String,
+    transitions: Vec<String>,
+}
+
+impl TcpProbeStats {
+    fn observe(&mut self, label: &str, elapsed_ms: u128) {
+        match label {
+            "ok" => {
+                self.ok_count += 1;
+                self.first_ok_ms.get_or_insert(elapsed_ms);
+            }
+            "hostdown" => {
+                self.hostdown_count += 1;
+                self.first_hostdown_ms.get_or_insert(elapsed_ms);
+            }
+            "noroute" => {
+                self.noroute_count += 1;
+                self.first_noroute_ms.get_or_insert(elapsed_ms);
+            }
+            "timeout" => {
+                self.timeout_count += 1;
+                self.first_timeout_ms.get_or_insert(elapsed_ms);
+            }
+            "refused" => {
+                self.refused_count += 1;
+                self.first_refused_ms.get_or_insert(elapsed_ms);
+            }
+            _ => {
+                self.other_count += 1;
+                self.first_other_ms.get_or_insert(elapsed_ms);
+            }
+        }
+
+        if self.last_label != label {
+            self.transitions.push(format!("{elapsed_ms}:{label}"));
+            self.last_label = label.to_string();
+        }
+    }
+}
+
+fn tcp_probe_label(timeout: Duration) -> String {
+    let addr = match format!("{}:22", host()).to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(addr) => addr,
+            None => return "resolve_none".to_string(),
+        },
+        Err(err) => return format!("resolve_{}", err.kind() as u8),
+    };
+
+    match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(_) => "ok".to_string(),
+        Err(err) => match err.raw_os_error() {
+            Some(64) => "hostdown".to_string(),
+            Some(65) => "noroute".to_string(),
+            Some(60) => "timeout".to_string(),
+            Some(61) => "refused".to_string(),
+            Some(code) => format!("os{code}"),
+            None if err.kind() == io::ErrorKind::TimedOut => "timeout".to_string(),
+            None if err.kind() == io::ErrorKind::ConnectionRefused => "refused".to_string(),
+            None => format!("{:?}", err.kind()).to_lowercase(),
+        },
+    }
+}
+
+fn boot_tcp_profile(args: &[String]) -> Result<()> {
+    let samples = parse_profile_count(args, 1);
+    let raw = args.iter().any(|arg| arg == "--raw");
+    let timeout_secs = option_value(args, "--timeout")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(40.0);
+    let probe_timeout_ms = option_value(args, "--probe-timeout-ms")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(100);
+    let sleep_ms = option_value(args, "--sleep-ms")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(50);
+    let mode = if raw { "raw" } else { "supervised" };
+    let out_path = "history/toolchain-bench/results-boot-tcp.tsv";
+    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tfirst_ok_ms\tssh_exec_ready_ms\tfirst_hostdown_ms\tfirst_noroute_ms\tfirst_timeout_ms\tfirst_refused_ms\tfirst_other_ms\tok_count\thostdown_count\tnoroute_count\ttimeout_count\trefused_count\tother_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tuptime\ttransitions\tnote";
+    println!("{header}");
+
+    for sample in 1..=samples {
+        let ts = unix_ms_now();
+        let issue_t = Instant::now();
+        let reboot_note = {
+            let sess = connect(10)?;
+            issue_reboot(&sess, raw)?
+        };
+        let reboot_issue_ms = issue_t.elapsed().as_millis();
+        let start = Instant::now();
+        let mut down_ms = None;
+        while start.elapsed().as_secs_f64() < 40.0 {
+            if !port_open(Duration::from_millis(200)) {
+                down_ms = Some(start.elapsed().as_millis());
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let mut stats = TcpProbeStats::default();
+        let mut ssh_ready_ms = None;
+        let mut resolve_ms = None;
+        let mut tcp_ms = None;
+        let mut handshake_ms = None;
+        let mut auth_ms = None;
+        let mut exec_ms = None;
+        let mut uptime = String::new();
+        let mut note = reboot_note;
+
+        while start.elapsed().as_secs_f64() < timeout_secs {
+            let elapsed_ms = start.elapsed().as_millis();
+            let label = tcp_probe_label(Duration::from_millis(probe_timeout_ms));
+            stats.observe(&label, elapsed_ms);
+            if label == "ok" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(sleep_ms));
+        }
+
+        let ssh_deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < ssh_deadline {
+            match connect_timed(2) {
+                Ok(timed) => {
+                    let exec_t = Instant::now();
+                    let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                    let this_exec_ms = exec_t.elapsed().as_millis();
+                    if out.rc == 0 {
+                        ssh_ready_ms = Some(start.elapsed().as_millis());
+                        resolve_ms = Some(timed.resolve_ms);
+                        tcp_ms = Some(timed.tcp_ms);
+                        handshake_ms = Some(timed.handshake_ms);
+                        auth_ms = Some(timed.auth_ms);
+                        exec_ms = Some(this_exec_ms);
+                        uptime = out
+                            .stdout
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+                        break;
+                    }
+                    note = format!("exec rc {}", out.rc);
+                }
+                Err(err) => {
+                    note = err.to_string();
+                }
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
+
+        let transitions = stats.transitions.join(",");
+        let row = format!(
+            "boot-tcp\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{uptime}\t{}\t{}",
+            host(),
+            opt_ms(down_ms),
+            opt_ms(stats.first_ok_ms),
+            opt_ms(ssh_ready_ms),
+            opt_ms(stats.first_hostdown_ms),
+            opt_ms(stats.first_noroute_ms),
+            opt_ms(stats.first_timeout_ms),
+            opt_ms(stats.first_refused_ms),
+            opt_ms(stats.first_other_ms),
+            stats.ok_count,
+            stats.hostdown_count,
+            stats.noroute_count,
+            stats.timeout_count,
+            stats.refused_count,
+            stats.other_count,
+            opt_ms(resolve_ms),
+            opt_ms(tcp_ms),
+            opt_ms(handshake_ms),
+            opt_ms(auth_ms),
+            opt_ms(exec_ms),
+            transitions.replace('\t', " "),
+            note.replace('\t', " ")
+        );
+        println!("{row}");
+        append_profile_row(out_path, header, &row)?;
+        thread::sleep(Duration::from_secs(2));
+    }
+
+    eprintln!("boot-tcp-profile: appended {samples} row(s) to {out_path}");
     Ok(())
 }
 
