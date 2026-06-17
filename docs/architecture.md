@@ -113,6 +113,9 @@ Current rules:
   virtual keys, not from walking PNG/JPG screenshot folders.
 - Catalog code must not read `gamelist.xml`; runtime catalog loading goes
   through the SQLite library cache and materialized projections.
+- MAME XML and MAME software-list XML are host-side metadata inputs only. Convert
+  them to `mame.sqlite3` with `scripts/mister mame-metadata-build`; the runtime
+  scanner consumes the SQLite rows, not those XML files.
 - Runtime preview loading is raw565-oriented. Build cache assets and the
   compressed preview archive from the Mac with `tools/mister preview-cache-build`.
 

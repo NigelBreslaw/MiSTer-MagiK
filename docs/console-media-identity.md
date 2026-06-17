@@ -4,6 +4,10 @@ MiSTer MagiK uses MAME software lists as the canonical identity source for
 console media where practical. Runtime must not depend on scraper screenshot
 filenames, `gamelist.xml`, or scanning screenshot folders.
 
+The XML boundary is intentionally narrow: MAME `-listxml` and MAME `hash/*.xml`
+software lists are offline inputs to `scripts/mister mame-metadata-build`. The
+scanner and launcher read the generated SQLite metadata, not those XML files.
+
 ## Target Systems
 
 The first console identity pass covers:
@@ -24,7 +28,10 @@ Library identities use:
 ## Metadata Build
 
 `scripts/mister mame-metadata-build` writes arcade machine metadata and console
-software-list metadata into the same `mame.sqlite3`.
+software-list metadata into the same `mame.sqlite3`. The command can read MAME
+machine XML from `mame -listxml` or `--listxml`; it reads console software-list
+XML only from explicit `--software-list` paths or the target files inside a
+`--software-dir` MAME hash directory.
 
 Important tables:
 
