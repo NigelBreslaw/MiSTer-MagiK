@@ -4,8 +4,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-REMOTE_SCRIPT="/etc/init.d/S03fastnet"
-MARKER="/media/fat/mister-magik/S03fastnet.experiment"
+REMOTE_SCRIPT="/etc/init.d/S00fastnet"
+LEGACY_SCRIPT="/etc/init.d/S03fastnet"
+MARKER="/media/fat/mister-magik/S00fastnet.experiment"
+LEGACY_MARKER="/media/fat/mister-magik/S03fastnet.experiment"
 
 usage() {
   cat <<EOF
@@ -15,7 +17,7 @@ Installs an early background FastNet agent. It starts before normal rcS network
 services, waits for eth0 to exist, repeatedly applies the known static IPv4
 configuration, emits timestamped logs, and leaves normal dhcpcd/sshd in place.
 
-SD-card recovery if SSH is lost: delete /etc/init.d/S03fastnet from the MiSTer
+SD-card recovery if SSH is lost: delete /etc/init.d/S00fastnet from the MiSTer
 Linux root image.
 EOF
 }
@@ -145,6 +147,7 @@ mkdir -p /media/fat/mister-magik
 mount -o remount,rw /
 cp /tmp/S03fastnet '$REMOTE_SCRIPT'
 chmod 755 '$REMOTE_SCRIPT'
+rm -f '$LEGACY_SCRIPT' '$LEGACY_MARKER'
 echo installed >'$MARKER'
 sync
 mount -o remount,ro / || true
@@ -163,7 +166,11 @@ if [ -f '$REMOTE_SCRIPT' ]; then
 else
   echo fastnet_agent=not-installed
 fi
-rm -f '$MARKER'
+if [ -f '$LEGACY_SCRIPT' ]; then
+  rm -f '$LEGACY_SCRIPT'
+  echo fastnet_agent_legacy=removed
+fi
+rm -f '$MARKER' '$LEGACY_MARKER'
 sync
 mount -o remount,ro / || true
 "
@@ -176,6 +183,10 @@ if [ -f '$REMOTE_SCRIPT' ]; then
   ls -l '$REMOTE_SCRIPT'
 else
   echo fastnet_agent=not-installed
+fi
+if [ -f '$LEGACY_SCRIPT' ]; then
+  echo fastnet_agent_legacy=installed
+  ls -l '$LEGACY_SCRIPT'
 fi
 if [ -f '$MARKER' ]; then
   cat '$MARKER'

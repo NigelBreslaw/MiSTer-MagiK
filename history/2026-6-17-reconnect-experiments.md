@@ -316,3 +316,33 @@ advertisement, so the tweak was also not a durable link-mode policy.
 Result: rejected. The boot-time 100/full advertisement was removed and the
 known-good FastNet service was reinstalled. The remaining delay is not explained
 by gigabit mode selection alone.
+
+## Experiment 9 - Move FastNet Earlier To S00
+
+Hypothesis: FastNet was starting after syslog/klogd as `/etc/init.d/S03fastnet`.
+Moving the same background worker to `/etc/init.d/S00fastnet` might let it wait
+for eth0 and start link/IP setup earlier without changing its network behavior.
+
+Fresh before sample after restoring normal FastNet:
+
+- 13.549s SSH command-ready
+- TCP/22 visible at 13.023s
+- FastNet worker start 4.49s, carrier-ready 10.26s
+
+After samples with `S00fastnet`:
+
+- 13.290s SSH command-ready
+- 13.541s SSH command-ready
+- 13.261s SSH command-ready
+- Average: 13.364s
+
+Device-side after timing:
+
+- Worker start: 4.08s, 3.79s, 4.06s
+- Carrier-ready: 9.00s, 9.25s, 9.16s
+
+Result: small keeper. This is not the large breakthrough, but it starts FastNet
+slightly earlier and consistently moves carrier-ready earlier than the immediate
+pre-change boot. The host-visible command-ready improvement is only around
+0.1-0.2s, so the next limiter appears to be host visibility or post-carrier
+network/SSH readiness rather than only FastNet launch order.
