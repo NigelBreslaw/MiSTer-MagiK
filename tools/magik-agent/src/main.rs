@@ -33,10 +33,13 @@ mod linux {
     const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
     const ETH_P_ARP: u16 = 0x0806;
     const LOG_RING_CAPACITY: usize = 512;
+    const TIMELINE_CAPACITY: usize = 128;
 
     type SharedLogRing = Arc<Mutex<LogRing>>;
+    type SharedTimeline = Arc<Mutex<Timeline>>;
 
     static LOG_RING: OnceLock<SharedLogRing> = OnceLock::new();
+    static TIMELINE: OnceLock<SharedTimeline> = OnceLock::new();
 
     pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         match args.first().map(String::as_str).unwrap_or("net-boot") {
@@ -57,8 +60,14 @@ mod linux {
     fn net_boot() -> Result<(), Box<dyn std::error::Error>> {
         let ring = fresh_log_ring();
         let _ = LOG_RING.set(Arc::clone(&ring));
+        let timeline = fresh_timeline();
+        let _ = TIMELINE.set(timeline);
         let mut log = Logger::create(LOG, ring)?;
         let boot_id = next_boot_id();
+        timeline_record_once(
+            "agent_start",
+            format!("boot={boot_id} pid={}", std::process::id()),
+        );
         log.line(format!(
             "worker_start boot={boot_id} pid={}",
             std::process::id()
@@ -75,6 +84,7 @@ mod linux {
                 "configured carrier={carrier} operstate={operstate}"
             ));
             if carrier == "1" {
+                timeline_record_once("carrier_up", format!("operstate={operstate}"));
                 log.line(format!("carrier_ready boot={boot_id}"));
                 configure_network(IFACE, IP, NETMASK, GATEWAY, &mut log);
                 for _ in 0..3 {
@@ -188,6 +198,80 @@ mod linux {
         }
     }
 
+    struct Timeline {
+        events: Vec<TimelineEvent>,
+        dropped: u64,
+    }
+
+    struct TimelineEvent {
+        name: String,
+        uptime_ms: u64,
+        detail: String,
+    }
+
+    impl Timeline {
+        fn new() -> Self {
+            Self {
+                events: Vec::with_capacity(TIMELINE_CAPACITY),
+                dropped: 0,
+            }
+        }
+
+        fn record_once(&mut self, name: &str, detail: String) {
+            if self.events.iter().any(|event| event.name == name) {
+                return;
+            }
+            if self.events.len() == TIMELINE_CAPACITY {
+                self.events.remove(0);
+                self.dropped += 1;
+            }
+            self.events.push(TimelineEvent {
+                name: name.to_string(),
+                uptime_ms: uptime_ms_now(),
+                detail,
+            });
+        }
+    }
+
+    fn fresh_timeline() -> SharedTimeline {
+        Arc::new(Mutex::new(Timeline::new()))
+    }
+
+    fn timeline_record_once(name: &str, detail: String) {
+        if let Some(timeline) = TIMELINE.get() {
+            if let Ok(mut timeline) = timeline.lock() {
+                timeline.record_once(name, detail);
+            }
+        }
+    }
+
+    fn timeline_json(boot_id: u64, started: Instant) -> Value {
+        match TIMELINE.get().and_then(|timeline| timeline.lock().ok()) {
+            Some(timeline) => json!({
+                "boot_id": boot_id,
+                "agent_uptime_ms": started.elapsed().as_millis() as u64,
+                "capacity": TIMELINE_CAPACITY,
+                "dropped": timeline.dropped,
+                "count": timeline.events.len(),
+                "events": timeline.events.iter().map(|event| {
+                    json!({
+                        "event": event.name,
+                        "uptime_ms": event.uptime_ms,
+                        "detail": event.detail,
+                    })
+                }).collect::<Vec<_>>(),
+            }),
+            None => json!({
+                "boot_id": boot_id,
+                "agent_uptime_ms": started.elapsed().as_millis() as u64,
+                "capacity": TIMELINE_CAPACITY,
+                "dropped": 0,
+                "count": 0,
+                "events": [],
+            }),
+        }
+    }
+
     fn start_control_server(boot_id: u64) {
         let token = match fs::read_to_string(TOKEN_PATH) {
             Ok(token) => token.trim().to_string(),
@@ -212,6 +296,7 @@ mod linux {
                 }
             };
             append_log_line(format!("control_listen port={AGENT_PORT} boot={boot_id}"));
+            timeline_record_once("control_listen", format!("port={AGENT_PORT}"));
 
             for stream in listener.incoming() {
                 match stream {
@@ -239,6 +324,7 @@ mod linux {
             .peer_addr()
             .map(|addr| addr.to_string())
             .unwrap_or_else(|_| "?".to_string());
+        timeline_record_once("first_client_connect", format!("peer={peer}"));
         append_log_line(format!("control_client peer={peer}"));
 
         let mut line = String::new();
@@ -268,11 +354,13 @@ mod linux {
             Some(cmd) => cmd,
             None => return response(id, false, None, Some("missing cmd")),
         };
+        timeline_record_once("first_command", format!("cmd={cmd}"));
 
         match cmd {
             "ping" => response(id, true, Some(json!({"pong": true})), None),
             "status" => response(id, true, Some(status_json(boot_id, started)), None),
             "logs" => response(id, true, Some(log_ring_json()), None),
+            "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             _ => response(id, false, None, Some("unknown cmd")),
         }
     }
@@ -400,7 +488,10 @@ mod linux {
         log: &mut Logger,
     ) {
         match configure_interface(iface, ip, netmask) {
-            Ok(()) => log.line(format!("ifconfig_direct ok iface={iface} ip={ip}")),
+            Ok(()) => {
+                timeline_record_once("ip_configured", format!("iface={iface} ip={ip}"));
+                log.line(format!("ifconfig_direct ok iface={iface} ip={ip}"));
+            }
             Err(err) => log.line(format!("ifconfig_direct err={err}")),
         }
         match add_default_route(iface, gateway) {
@@ -518,6 +609,7 @@ mod linux {
             close(fd);
         }
         if result.is_ok() {
+            timeline_record_once("raw_arp_sent", format!("iface={iface} ip={ip} sent={sent}"));
             log.line(format!("gratuitous_arp sent={sent}"));
         }
         result
@@ -546,7 +638,30 @@ mod linux {
         let carrier = read_trimmed("/sys/class/net/eth0/carrier").unwrap_or_else(|| "?".into());
         let operstate = read_trimmed("/sys/class/net/eth0/operstate").unwrap_or_else(|| "?".into());
         let sshd_pid = read_pidof("sshd").unwrap_or_else(|| "none".into());
+        if sshd_pid != "none" {
+            timeline_record_once("sshd_seen", format!("pid={sshd_pid}"));
+        }
+        if let Some(pid) = read_pidof("MiSTer_MagiK") {
+            timeline_record_once("magik_main_seen", format!("pid={pid}"));
+        }
+        if let Some(pid) = read_pidof("mister-magik-fb") {
+            timeline_record_once("magik_launcher_seen", format!("pid={pid}"));
+        }
         let stats = read_netdev_stats(IFACE).unwrap_or_default();
+        if let Some(fields) = read_netdev_stats_fields(IFACE) {
+            if fields[1] > 0 {
+                timeline_record_once(
+                    "first_rx",
+                    format!("rx_bytes={} rx_packets={}", fields[0], fields[1]),
+                );
+            }
+            if fields[9] > 0 {
+                timeline_record_once(
+                    "first_tx",
+                    format!("tx_bytes={} tx_packets={}", fields[8], fields[9]),
+                );
+            }
+        }
         log.line(format!(
             "snapshot boot={boot_id} carrier={carrier} operstate={operstate} sshd_pid={sshd_pid} {stats}"
         ));
@@ -685,6 +800,14 @@ mod linux {
             .ok()
             .and_then(|s| s.split_whitespace().next().map(str::to_string))
             .unwrap_or_else(|| "?".into())
+    }
+
+    fn uptime_ms_now() -> u64 {
+        fs::read_to_string("/proc/uptime")
+            .ok()
+            .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+            .map(|secs| (secs * 1000.0) as u64)
+            .unwrap_or(0)
     }
 }
 
