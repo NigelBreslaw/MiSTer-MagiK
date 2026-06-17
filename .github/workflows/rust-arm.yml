@@ -144,7 +144,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
 
@@ -158,15 +158,6 @@ jobs:
       - name: Install cross
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
-
-      - name: Cache ARM agent build outputs
-        if: matrix.name == 'release'
-        uses: actions/cache@v5
-        with:
-          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
-          key: target-agent-arm-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/main.rs', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
-          restore-keys: |
-            target-agent-arm-${{ runner.os }}-
 
       - name: Cache minimal FFmpeg
         if: matrix.features == 'video'
@@ -192,18 +183,6 @@ jobs:
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
 
-      - name: Build ARM agent
-        if: matrix.name == 'release'
-        run: MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
-
-      - name: Upload ARM agent
-        if: matrix.name == 'release'
-        uses: actions/upload-artifact@v7
-        with:
-          name: mister-magik-agent
-          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
-          if-no-files-found: error
-
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
@@ -216,4 +195,56 @@ jobs:
         with:
           name: binary-size-${{ matrix.name }}
           path: build/binary-size.tsv
+          if-no-files-found: error
+
+  agent-arm-build:
+    name: agent-arm-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        working-directory: magik-gui
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-agent-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock') }}
+          restore-keys: |
+            cargo-agent-${{ runner.os }}-
+            cargo-${{ runner.os }}-
+
+      - name: Cache cross binary
+        uses: actions/cache@v5
+        id: cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-${{ runner.os }}-${{ env.CROSS_VERSION }}
+
+      - name: Install cross
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Cache ARM agent build outputs
+        uses: actions/cache@v5
+        with:
+          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
+          key: target-agent-arm-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/main.rs', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          restore-keys: |
+            target-agent-arm-${{ runner.os }}-
+
+      - name: Build ARM agent
+        run: MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
+
+      - name: Upload ARM agent
+        uses: actions/upload-artifact@v7
+        with:
+          name: mister-magik-agent
+          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
           if-no-files-found: error

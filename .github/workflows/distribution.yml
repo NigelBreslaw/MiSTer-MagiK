@@ -192,7 +192,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-dist-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          key: cargo-dist-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/mister/Cargo.lock') }}
           restore-keys: |
             cargo-dist-${{ runner.os }}-
             cargo-${{ runner.os }}-
@@ -207,15 +207,6 @@ jobs:
       - name: Install cross
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
-
-      - name: Cache ARM agent build outputs
-        uses: actions/cache@v5
-        with:
-          path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
-          key: target-agent-arm-dist-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/main.rs', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
-          restore-keys: |
-            target-agent-arm-dist-${{ runner.os }}-
-            target-agent-arm-${{ runner.os }}-
 
       - name: Cache ARM frontend build outputs
         uses: actions/cache@v5
@@ -233,9 +224,6 @@ jobs:
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
-
-      - name: Build ARM agent
-        run: MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
 
       - name: Cache Main_MiSTer build outputs
         id: main-build-cache
