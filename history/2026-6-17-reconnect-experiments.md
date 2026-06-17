@@ -500,3 +500,52 @@ Result: keeper diagnostic. The host is actively probing and mostly seeing TCP
 timeouts, not `hostdown`/`noroute`, before success. The next optimization should
 focus on making carrier/link readiness earlier and less variable, or adding a
 non-SSH early readiness path that can answer immediately after carrier.
+
+## Experiment 14 - Refresh FastNet After Carrier
+
+Hypothesis: FastNet was applying the static IP while carrier was still down, and
+the kernel was not answering the Mac's ARP probes until a later network event,
+usually `dhcpcd`, refreshed the interface. If FastNet repeats the final
+`ifconfig`/route setup once carrier is truly up, then the MiSTer should start
+transmitting ARP replies closer to carrier-ready and avoid the intermittent
+Mac-side `hostdown` failure.
+
+Fresh before samples with the raw TCP profiler:
+
+- Good sample: TCP/22 visible at 12.334s, SSH command-ready at 12.949s.
+- Failed sample: transitioned from `timeout` to `noroute` at 16.931s and
+  `hostdown` at 16.987s; no SSH command-ready by 36.818s.
+
+The recovery boot after that failed sample showed sshd running at 5.34s and
+carrier-ready at 8.44s, but FastNet snapshots showed received packets with zero
+transmit packets until about 12.08s. The first 42-byte transmit packet at that
+point matched the moment the Mac finally learned the MiSTer MAC address, so the
+failure was ARP/path readiness after carrier rather than sshd startup.
+
+Change: after FastNet observes carrier up, it now performs one post-carrier
+refresh:
+
+```sh
+/sbin/ifconfig eth0 192.168.1.117 netmask 255.255.255.0 up
+/sbin/route add default gw 192.168.1.1 eth0 || true
+arping -A -c 1 -I eth0 192.168.1.117 || true
+```
+
+After samples:
+
+- TCP/22 visible at 11.822s, SSH command-ready at 12.424s.
+- TCP/22 visible at 12.308s, SSH command-ready at 12.776s.
+- TCP/22 visible at 11.919s, SSH command-ready at 12.508s.
+- Average: TCP/22 visible at 12.016s, SSH command-ready at 12.569s.
+
+The inspected after boot had carrier-ready at 8.07s, ran the post-carrier
+refresh from 8.09s to 9.28s, and showed the first transmit packet by the 9.43s
+snapshot instead of around 12.08s. This did not reach the desired 5s target, but
+it moved ARP replies earlier and removed the immediate `hostdown` collapse
+across the three after samples.
+
+Result: keeper. The remaining floor is now mostly the time between carrier
+ready, the one-second BusyBox `arping`, and successful TCP/SSH handshake. If
+revisited, the next version should replace slow `arping` with a tiny
+nonblocking gratuitous-ARP sender or make the host-side waiter actively repair
+the Mac neighbor entry during reboot.

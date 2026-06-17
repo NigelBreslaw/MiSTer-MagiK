@@ -1,3 +1,8 @@
 kind	ts_unix_ms	sample	mode	host	reboot_issue_ms	down_ms	first_ok_ms	ssh_exec_ready_ms	first_hostdown_ms	first_noroute_ms	first_timeout_ms	first_refused_ms	first_other_ms	ok_count	hostdown_count	noroute_count	timeout_count	refused_count	other_count	resolve_ms	tcp_ms	handshake_ms	auth_ms	exec_ms	uptime	transitions	note
 boot-tcp	1781720982463	1	supervised	192.168.1.117	252	728	15005	15744			728			1	0	0	92	0	0	0	0	278	271	186	13.36	728:timeout,15005:ok	supervised
 boot-tcp	1781721023832	1	supervised	192.168.1.117	246	720	11828	12342			720		7262	1	0	0	71	0	1	0	1	295	137	76	9.91	720:timeout,7262:os49,7315:timeout,11828:ok	supervised
+boot-tcp	1781722241632	1	supervised	192.168.1.117	245	735	12334	12949			735			1	0	0	74	0	0	0	1	252	273	82	10.59	735:timeout,12334:ok	supervised
+boot-tcp	1781722256832	2	supervised	192.168.1.117	346	729			16987	16931	729			0	363	1	125	0	0							729:timeout,16931:noroute,16987:hostdown,36818:timeout	Host is down (os error 64)
+boot-tcp	1781723799470	1	supervised	192.168.1.117	247	728	11822	12424			728			1	0	0	71	0	0	0	1	229	271	96	10.05	728:timeout,11822:ok	supervised
+boot-tcp	1781723814149	2	supervised	192.168.1.117	526	724	12308	12776			724			1	0	0	74	0	0	0	1	238	137	85	10.29	724:timeout,12308:ok	supervised
+boot-tcp	1781723829457	3	supervised	192.168.1.117	334	833	11919	12508			833			1	0	0	71	0	0	0	0	221	271	92	10.11	833:timeout,11919:ok	supervised
