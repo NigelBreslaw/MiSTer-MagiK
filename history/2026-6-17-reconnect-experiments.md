@@ -123,3 +123,36 @@ After, `scripts/mister deploy-magik-bin`:
 Result: keeper. The reviewed deploy swap path drops from about 4.374s to about
 1.914s helper-internal average for this binary, and `scripts/deploy-rust.sh`
 now uses the single-session helper for the main executable.
+
+## Experiment 5 - Direct Static `eth0` Setup After Udev
+
+Hypothesis: `dhcpcd` startup order was not enough because its interface
+discovery path was slow. A tiny `S11staticeth0` service using direct `ifconfig`
+and `route` might force the Ethernet device to initialize earlier.
+
+Change: `scripts/mister-static-eth0-boot.sh install` adds
+`/etc/init.d/S11staticeth0`:
+
+```sh
+/sbin/ifconfig eth0 192.168.1.117 netmask 255.255.255.0 up || exit 0
+/sbin/route add default gw 192.168.1.1 eth0 2>/dev/null || true
+```
+
+Fresh before samples:
+
+- 20.536s SSH command-ready
+- 20.557s SSH command-ready
+- Average: 20.547s
+
+After samples:
+
+- 16.135s SSH command-ready
+- 18.200s SSH command-ready
+- 15.844s SSH command-ready
+- Average: 16.726s
+
+Result: keeper candidate. The Ethernet driver moved from roughly 9.5s after
+kernel start to roughly 5.46s. Link-up still happened around 13.7s in the
+inspected run, so physical link negotiation now looks like the cap, but this
+still cuts about 3.8s from command-ready average in this sample set. The service
+is currently installed on the device for follow-on testing.
