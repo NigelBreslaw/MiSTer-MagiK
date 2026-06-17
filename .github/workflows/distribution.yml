@@ -329,7 +329,7 @@ jobs:
 
       - name: Download HBMAME listxml
         if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: hbmame-listxml
           path: build
