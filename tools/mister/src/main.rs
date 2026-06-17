@@ -2081,6 +2081,29 @@ fn agent_cli(args: &[String]) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(result)?);
             }
         }
+        "timeline" => {
+            let json_out = args.iter().any(|arg| arg == "--json");
+            let reply = agent_request("timeline", json!({}), Duration::from_secs(2))?;
+            let result = reply.response.get("result").unwrap_or(&Value::Null);
+            if json_out {
+                println!("{}", serde_json::to_string_pretty(result)?);
+            } else if let Some(events) = result.get("events").and_then(Value::as_array) {
+                for event in events {
+                    let uptime_ms = event.get("uptime_ms").and_then(Value::as_u64).unwrap_or(0);
+                    let name = event.get("event").and_then(Value::as_str).unwrap_or("");
+                    let detail = event.get("detail").and_then(Value::as_str).unwrap_or("");
+                    println!("{uptime_ms}\t{name}\t{detail}");
+                }
+                eprintln!(
+                    "agent timeline: {} event(s), {} dropped, {}ms",
+                    result.get("count").and_then(Value::as_u64).unwrap_or(0),
+                    result.get("dropped").and_then(Value::as_u64).unwrap_or(0),
+                    reply.elapsed_ms
+                );
+            } else {
+                println!("{}", serde_json::to_string_pretty(result)?);
+            }
+        }
         "boot-profile" => {
             agent_boot_profile(&args[1..])?;
         }
@@ -2092,7 +2115,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|boot-profile>\n       logs [--json]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|boot-profile>\n       logs [--json]\n       timeline [--json]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
     );
 }
 

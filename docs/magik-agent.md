@@ -54,6 +54,7 @@ Use the normal wrapper:
 scripts/mister agent ping
 scripts/mister agent status
 scripts/mister agent logs
+scripts/mister agent timeline
 scripts/mister agent boot-profile 3 --timeout 40
 scripts/mister agent boot-profile 1 --supervised --timeout 40
 ```
@@ -67,6 +68,24 @@ scripts/mister agent boot-profile 1 --supervised --timeout 40
 
 `logs` returns the in-memory ring buffer over the TCP agent protocol. The ring
 keeps the newest 512 lines and reports how many older lines were dropped.
+
+`timeline` returns structured boot events. The expected event names are:
+
+- `agent_start`
+- `control_listen`
+- `ip_configured`
+- `raw_arp_sent`
+- `carrier_up`
+- `first_tx`
+- `first_rx`
+- `sshd_seen`
+- `magik_main_seen`
+- `magik_launcher_seen`
+- `first_client_connect`
+- `first_command`
+
+Each event has `uptime_ms`, `event`, and `detail`. Use the timeline to explain
+boot samples without SSH and without scraping text logs.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to Linux

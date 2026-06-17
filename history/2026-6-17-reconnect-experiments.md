@@ -748,3 +748,43 @@ Post-change verification:
   `--raw` flag.
 - The device returned without manual intervention: agent response at 17.198s,
   SSH command-ready at 17.891s.
+
+## Experiment 19 - Boot Timeline Export
+
+Hypothesis: the agent should expose a structured boot timeline so reboot samples
+can be explained without SSH and without scraping log text.
+
+Change: the agent now records one-shot timeline events in RAM and exposes them
+with:
+
+```bash
+scripts/mister agent timeline
+scripts/mister agent timeline --json
+```
+
+Events include agent start, control listener, IP config, raw ARP, carrier up,
+first RX/TX packets, first client/command, sshd seen, and MagiK process pids.
+
+After deployment:
+
+- `scripts/mister agent boot-profile 1 --timeout 40` returned without manual
+  intervention using `mode=raw`.
+- Final deployed-binary sample: agent response at 17.942s after host-observed
+  reboot down; SSH command-ready at 18.566s.
+- `scripts/mister agent timeline` returned 12 events in 3ms, 0 dropped.
+
+Timeline for boot id 11:
+
+- `agent_start` and `control_listen` at 4.230s uptime.
+- `ip_configured` at 4.310s.
+- `raw_arp_sent` at 4.320s.
+- `carrier_up` at 8.440s.
+- `sshd_seen` at 8.480s.
+- `magik_main_seen` at 8.510s.
+- `magik_launcher_seen` and `first_tx` at 8.530s.
+- `first_rx` at 9.650s.
+- `first_client_connect` and `first_command` at 11.040s.
+
+Result: keeper. The timeline explains the reboot sample without SSH status
+files or log scraping: on this raw reboot, the agent, network config, carrier,
+RX/TX, sshd, Main, and Slint launcher all came up normally.
