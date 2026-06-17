@@ -64,6 +64,17 @@ fn run_cli() -> Result<()> {
             put(&sess, Path::new(&args[0]), &args[1])?;
             println!("put {} -> {}", args[0], args[1]);
         }
+        "deploy-magik-bin" => {
+            if args.is_empty() {
+                return Err("deploy-magik-bin needs <local> [remote]".into());
+            }
+            let remote = args
+                .get(1)
+                .map(String::as_str)
+                .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+            let sess = connect(10)?;
+            deploy_magik_bin(&sess, Path::new(&args[0]), remote)?;
+        }
         "get" => {
             if args.len() < 2 {
                 return Err("get needs <remote> <local>".into());
@@ -222,7 +233,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|db|library-db|wait|connection-profile|boot-net-profile|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
 }
 
@@ -1709,9 +1720,9 @@ fn stream_command(sess: &Session, command: &str) -> Result<()> {
 
 fn put(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let sftp = sess.sftp()?;
-    let mut src = File::open(local)?;
+    let bytes = fs::read(local)?;
     let mut dst = sftp.create(Path::new(remote))?;
-    io::copy(&mut src, &mut dst)?;
+    dst.write_all(&bytes)?;
     Ok(())
 }
 
@@ -1724,6 +1735,110 @@ fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
     let mut dst = File::create(local)?;
     io::copy(&mut src, &mut dst)?;
     Ok(())
+}
+
+fn deploy_magik_bin(sess: &Session, local: &Path, remote: &str) -> Result<()> {
+    let total_t = Instant::now();
+    let local_bytes = fs::metadata(local)?.len();
+    let remote_dir = remote
+        .rsplit_once('/')
+        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
+        .ok_or("remote path must be absolute and include a directory")?;
+    let upload = format!("{remote}.upload");
+    let lock = format!("{remote_dir}/deploy.lock");
+
+    let prepare_t = Instant::now();
+    exec(
+        sess,
+        &format!("mkdir -p {}; : > {}", sh(remote_dir), sh(&lock)),
+        true,
+    )?;
+    let prepare_ms = prepare_t.elapsed().as_millis();
+
+    let mut finished = false;
+    let result = (|| -> Result<(u128, u128, u128, u128, u64)> {
+        let suspend_t = Instant::now();
+        magik_fifo_command(sess, "mister_magik_suspend")?;
+        let suspend_ms = suspend_t.elapsed().as_millis();
+
+        let put_t = Instant::now();
+        put(sess, local, &upload)?;
+        let put_ms = put_t.elapsed().as_millis();
+
+        let finish_t = Instant::now();
+        exec(
+            sess,
+            &format!(
+                "mv {} {}; chmod +x {}; rm -f {}",
+                sh(&upload),
+                sh(remote),
+                sh(remote),
+                sh(&lock)
+            ),
+            true,
+        )?;
+        let finish_ms = finish_t.elapsed().as_millis();
+
+        let resume_t = Instant::now();
+        magik_fifo_command(sess, "mister_magik_resume")?;
+        let resume_ms = resume_t.elapsed().as_millis();
+        finished = true;
+
+        let size_t = Instant::now();
+        let out = exec(sess, &format!("wc -c {}", sh(remote)), true)?;
+        let size_ms = size_t.elapsed().as_millis();
+        let remote_bytes = out
+            .stdout
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        Ok((
+            suspend_ms,
+            put_ms,
+            finish_ms,
+            resume_ms + size_ms,
+            remote_bytes,
+        ))
+    })();
+
+    if !finished {
+        let _ = exec(sess, &format!("rm -f {} {}", sh(&upload), sh(&lock)), true);
+        let _ = magik_fifo_command(sess, "mister_magik_resume");
+    }
+
+    let (suspend_ms, put_ms, finish_ms, resume_and_size_ms, remote_bytes) = result?;
+    let total_ms = total_t.elapsed().as_millis();
+    println!(
+        "deploy_magik_bin local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={}",
+        local.display(),
+        remote,
+        local_bytes,
+        remote_bytes,
+        total_ms,
+        prepare_ms,
+        suspend_ms,
+        put_ms,
+        finish_ms,
+        resume_and_size_ms
+    );
+    Ok(())
+}
+
+fn magik_fifo_command(sess: &Session, command: &str) -> Result<()> {
+    let out = exec(
+        sess,
+        &format!(
+            "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '{}\\n' > /dev/MiSTer_cmd; fi",
+            command
+        ),
+        true,
+    )?;
+    if out.rc == 0 {
+        Ok(())
+    } else {
+        Err(format!("MiSTer command failed: {command}").into())
+    }
 }
 
 struct TimedSession {
