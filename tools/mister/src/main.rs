@@ -580,7 +580,7 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
             let mame = option_value(args, "--mame")
             .or_else(|| env::var("MAME_BIN").ok())
             .or_else(|| find_program_on_path("mame"))
-            .ok_or("mame-metadata-build needs --listxml <xml>, --mame <binary>, MAME_BIN, or mame on PATH")?;
+            .ok_or("mame-metadata-build needs --listxml <mame-listxml>, --mame <binary>, MAME_BIN, or mame on PATH")?;
             let output = Command::new(&mame).arg("-listxml").output()?;
             if !output.status.success() {
                 return Err(format!(
@@ -593,7 +593,7 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
         };
         parse_mame_listxml(&xml)?
     };
-    let (software_items, software_hashes) = load_mame_software_lists(args)?;
+    let (software_items, software_hashes) = load_mame_software_list_xmls(args)?;
     write_mame_metadata_db(
         Path::new(&out),
         &machines,
@@ -614,7 +614,7 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn load_mame_software_lists(
+fn load_mame_software_list_xmls(
     args: &[String],
 ) -> Result<(Vec<MameSoftwareItem>, Vec<MameSoftwareHash>)> {
     const TARGET_LISTS: &[&str] = &["nes", "snes", "n64", "sms", "megadriv", "saturn"];
@@ -3590,16 +3590,16 @@ H: Handlers=event3 js0"#
             "--settle".to_string(),
             "12".to_string(),
             "--keep-enabled".to_string(),
-            "--software-list".to_string(),
-            "nes.xml".to_string(),
-            "--software-list".to_string(),
-            "snes.xml".to_string(),
+            "--item".to_string(),
+            "first".to_string(),
+            "--item".to_string(),
+            "second".to_string(),
         ];
         assert_eq!(option_value(&args, "--settle"), Some("12".to_string()));
         assert_eq!(option_value(&args, "--missing"), None);
         assert_eq!(
-            option_values(&args, "--software-list"),
-            vec!["nes.xml".to_string(), "snes.xml".to_string()]
+            option_values(&args, "--item"),
+            vec!["first".to_string(), "second".to_string()]
         );
     }
 
