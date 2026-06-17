@@ -57,6 +57,9 @@ jobs:
         working-directory: magik-gui
         run: cargo test --lib --no-default-features
 
+      - name: Test catalog crate
+        run: cargo test --manifest-path magik-gui/catalog/Cargo.toml
+
       - name: Check host logic
         working-directory: magik-gui
         run: cargo check --lib --no-default-features
