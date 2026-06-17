@@ -372,3 +372,42 @@ host TCP/22 visibility earlier. The clean `S00fastnet` service was reinstalled.
 Result: rejected. Neighbor announcement is not the current answer in this form;
 if revisited, it needs a nonblocking raw packet sender rather than repeated
 `arping` processes.
+
+## Experiment 11 - Defer Persistent Boot Logs Off The Hot Path
+
+Hypothesis: FastNet and FastSSHD persistent diagnostics were writing many small
+lines to `/media/fat` during the reconnect window. Since `/media/fat` is slow
+exFAT/FUSE, those writes could add jitter and delay. Keep detailed `/tmp` logs
+during boot, but defer the SD-card copy until about 20s uptime.
+
+Fresh before sample with clean `S00fastnet`:
+
+- 15.819s SSH command-ready
+- TCP/22 visible at 15.173s
+
+After samples with deferred persistent logging:
+
+- 13.217s SSH command-ready
+- 13.417s SSH command-ready
+- 13.574s SSH command-ready
+- Average: 13.403s
+
+Device-side inspected boot after the change:
+
+- FastNet worker start: 3.47s
+- FastSSHD start: 3.62s
+- FastSSHD sshd started: 4.52s
+- FastNet carrier-ready: 7.88s
+- FastSSHD saw carrier up: 8.33s
+
+Deferred persistence was verified:
+
+- FastNet copied logs to SD at about 23.51s uptime.
+- FastSSHD copied logs to SD at about 23.66s uptime.
+
+Result: keeper. This removes slow SD-card writes from the reconnect hot path and
+keeps delayed persistent evidence. It does not break the host-visible 13s floor,
+but it lowers device-side carrier timing and avoids the observed 15.8s logging
+drag. The remaining gap is now clearly after carrier/sshd readiness: the device
+has sshd alive around 4.5s and carrier around 8s, while the Mac still sees
+TCP/22 around 12.7s.
