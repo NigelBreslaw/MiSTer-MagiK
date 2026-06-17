@@ -12,10 +12,11 @@ mod linux {
     use std::collections::VecDeque;
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
-    use std::io::{self, BufRead, BufReader, Write};
+    use std::io::{self, BufRead, BufReader, Read, Write};
     use std::mem;
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::os::fd::RawFd;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
@@ -34,6 +35,7 @@ mod linux {
     const ETH_P_ARP: u16 = 0x0806;
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
+    const MAX_DEPLOY_BYTES: u64 = 64 * 1024 * 1024;
 
     type SharedLogRing = Arc<Mutex<LogRing>>;
     type SharedTimeline = Arc<Mutex<Timeline>>;
@@ -318,8 +320,8 @@ mod linux {
         boot_id: u64,
         started: Instant,
     ) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
         let peer = stream
             .peer_addr()
             .map(|addr| addr.to_string())
@@ -327,20 +329,31 @@ mod linux {
         timeline_record_once("first_client_connect", format!("peer={peer}"));
         append_log_line(format!("control_client peer={peer}"));
 
-        let mut line = String::new();
-        let read_result = match stream.try_clone() {
-            Ok(cloned) => BufReader::new(cloned).read_line(&mut line),
-            Err(err) => Err(err),
+        let mut reader = match stream.try_clone() {
+            Ok(cloned) => BufReader::new(cloned),
+            Err(err) => {
+                let response = response(None, false, None, Some(&format!("clone error: {err}")));
+                let _ = writeln!(stream, "{response}");
+                return;
+            }
         };
+        let mut line = String::new();
+        let read_result = reader.read_line(&mut line);
         let response = match read_result {
             Ok(0) => response(None, false, None, Some("empty request")),
-            Ok(_) => handle_control_line(&line, &token, boot_id, started),
+            Ok(_) => handle_control_line(&line, &token, boot_id, started, &mut reader),
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
         };
         let _ = writeln!(stream, "{response}");
     }
 
-    fn handle_control_line(line: &str, token: &str, boot_id: u64, started: Instant) -> String {
+    fn handle_control_line<R: Read>(
+        line: &str,
+        token: &str,
+        boot_id: u64,
+        started: Instant,
+        reader: &mut R,
+    ) -> String {
         let parsed: Value = match serde_json::from_str(line.trim()) {
             Ok(value) => value,
             Err(err) => return response(None, false, None, Some(&format!("invalid json: {err}"))),
@@ -363,6 +376,14 @@ mod linux {
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
+            "deploy_magik_bin" => match deploy_magik_bin(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
+            "deploy_magik_bin_stream" => match deploy_magik_bin_stream(args, reader) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             "magik" => match magik_control(args) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
@@ -464,6 +485,160 @@ mod linux {
         }
     }
 
+    fn deploy_magik_bin(args: Value) -> Result<Value, String> {
+        let remote = args
+            .get("remote")
+            .and_then(Value::as_str)
+            .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+        validate_deploy_remote(remote)?;
+        let (expected_size, expected_checksum) = deploy_expectations(&args)?;
+        let hex = args
+            .get("data_hex")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "missing deploy data".to_string())?;
+
+        let decode_t = Instant::now();
+        let bytes = decode_hex(hex)?;
+        deploy_magik_bin_bytes(
+            remote,
+            expected_size,
+            &expected_checksum,
+            bytes,
+            "hex",
+            decode_t.elapsed().as_millis() as u64,
+        )
+    }
+
+    fn deploy_magik_bin_stream(args: Value, reader: &mut dyn Read) -> Result<Value, String> {
+        let remote = args
+            .get("remote")
+            .and_then(Value::as_str)
+            .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+        validate_deploy_remote(remote)?;
+        let (expected_size, expected_checksum) = deploy_expectations(&args)?;
+        let receive_t = Instant::now();
+        let mut bytes = vec![0u8; expected_size as usize];
+        reader
+            .read_exact(&mut bytes)
+            .map_err(|err| err.to_string())?;
+        deploy_magik_bin_bytes(
+            remote,
+            expected_size,
+            &expected_checksum,
+            bytes,
+            "stream",
+            receive_t.elapsed().as_millis() as u64,
+        )
+    }
+
+    fn deploy_expectations(args: &Value) -> Result<(u64, String), String> {
+        let expected_size = args
+            .get("size")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "missing deploy size".to_string())?;
+        if expected_size > MAX_DEPLOY_BYTES {
+            return Err(format!(
+                "deploy size {expected_size} exceeds max {MAX_DEPLOY_BYTES}"
+            ));
+        }
+        let expected_checksum = args
+            .get("checksum")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "missing deploy checksum".to_string())?;
+        Ok((expected_size, expected_checksum.to_string()))
+    }
+
+    fn deploy_magik_bin_bytes(
+        remote: &str,
+        expected_size: u64,
+        expected_checksum: &str,
+        bytes: Vec<u8>,
+        transport: &str,
+        receive_ms: u64,
+    ) -> Result<Value, String> {
+        let total_t = Instant::now();
+        if bytes.len() as u64 != expected_size {
+            return Err(format!(
+                "deploy size mismatch expected={expected_size} actual={}",
+                bytes.len()
+            ));
+        }
+        let checksum = fnv64_hex(&bytes);
+        if checksum != expected_checksum {
+            return Err(format!(
+                "deploy checksum mismatch expected={expected_checksum} actual={checksum}"
+            ));
+        }
+
+        append_log_line(format!(
+            "deploy_magik_bin_start remote={remote} bytes={expected_size} checksum={expected_checksum}"
+        ));
+        let suspend_t = Instant::now();
+        magik_fifo_action("suspend")?;
+        let suspend_ms = suspend_t.elapsed().as_millis() as u64;
+
+        let swap_t = Instant::now();
+        let swap_result = deploy_bytes_to_remote(&bytes, remote);
+        let swap_ms = swap_t.elapsed().as_millis() as u64;
+        if let Err(err) = swap_result {
+            let _ = magik_fifo_action("resume");
+            append_log_line(format!("deploy_magik_bin_error remote={remote} err={err}"));
+            return Err(err);
+        }
+
+        let resume_t = Instant::now();
+        let resume = magik_fifo_action("resume")?;
+        let resume_ms = resume_t.elapsed().as_millis() as u64;
+        let remote_bytes = fs::metadata(remote).map(|meta| meta.len()).unwrap_or(0);
+        append_log_line(format!(
+            "deploy_magik_bin_done remote={remote} bytes={remote_bytes} checksum={expected_checksum}"
+        ));
+        Ok(json!({
+            "transport": transport,
+            "remote": remote,
+            "bytes": expected_size,
+            "remote_bytes": remote_bytes,
+            "checksum": expected_checksum,
+            "receive_ms": receive_ms,
+            "suspend_ms": suspend_ms,
+            "swap_ms": swap_ms,
+            "resume_ms": resume_ms,
+            "total_ms": total_t.elapsed().as_millis() as u64,
+            "resume": resume,
+        }))
+    }
+
+    fn validate_deploy_remote(remote: &str) -> Result<(), String> {
+        if !remote.starts_with("/media/fat/mister-magik/") {
+            return Err("deploy remote must be under /media/fat/mister-magik".to_string());
+        }
+        if remote.ends_with('/') || remote.contains('\0') || remote.contains("/../") {
+            return Err(format!("unsupported deploy remote: {remote}"));
+        }
+        Ok(())
+    }
+
+    fn deploy_bytes_to_remote(bytes: &[u8], remote: &str) -> Result<(), String> {
+        let remote_path = Path::new(remote);
+        let parent = remote_path
+            .parent()
+            .ok_or_else(|| "deploy remote has no parent".to_string())?;
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        let upload = parent.join(format!(
+            ".{}.upload",
+            remote_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("mister-magik-fb")
+        ));
+        let _ = fs::remove_file(&upload);
+        fs::write(&upload, bytes).map_err(|err| err.to_string())?;
+        fs::set_permissions(&upload, fs::Permissions::from_mode(0o755))
+            .map_err(|err| err.to_string())?;
+        fs::rename(&upload, remote).map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
     fn magik_fifo_action(action: &str) -> Result<Value, String> {
         let command = match action {
             "suspend" => "mister_magik_suspend",
@@ -554,6 +729,40 @@ mod linux {
         };
         pids.as_array()
             .is_some_and(|pids| pids.iter().any(|pid| pid.as_u64() == Some(status_pid)))
+    }
+
+    fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
+        if hex.len() % 2 != 0 {
+            return Err("hex payload has odd length".to_string());
+        }
+        let mut bytes = Vec::with_capacity(hex.len() / 2);
+        let raw = hex.as_bytes();
+        let mut i = 0;
+        while i < raw.len() {
+            let hi = hex_value(raw[i])?;
+            let lo = hex_value(raw[i + 1])?;
+            bytes.push((hi << 4) | lo);
+            i += 2;
+        }
+        Ok(bytes)
+    }
+
+    fn hex_value(byte: u8) -> Result<u8, String> {
+        match byte {
+            b'0'..=b'9' => Ok(byte - b'0'),
+            b'a'..=b'f' => Ok(byte - b'a' + 10),
+            b'A'..=b'F' => Ok(byte - b'A' + 10),
+            _ => Err(format!("invalid hex byte: {byte}")),
+        }
+    }
+
+    fn fnv64_hex(bytes: &[u8]) -> String {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
     }
 
     fn tail_text_value(path: &str, n: usize) -> Value {

@@ -946,3 +946,55 @@ dispatch because they intentionally wait for Main/Slint state to settle and
 return structured status, but they are now useful as a TCP control-plane
 primitive for future deploy flows. Agent logs record command, before/after pids,
 pid changes, and errors.
+
+## Experiment 23 - Agent Fast Binary Deploy
+
+Hypothesis: once the agent can supervise the launcher, binary deploy can avoid
+SSH/SFTP setup and move through the TCP backplane while preserving the same
+safe suspend/swap/resume workflow.
+
+Change: the host wrapper adds:
+
+```bash
+scripts/mister agent deploy-magik-bin LOCAL [REMOTE]
+```
+
+The host sends a token-authenticated JSON header followed by raw payload bytes.
+The header includes destination path, byte count, and FNV64 checksum. The agent
+verifies the payload in RAM, asks Main to suspend the launcher, writes a
+same-directory `.upload` file under `/media/fat/mister-magik/`, renames it over
+the final binary, marks it executable, then resumes the launcher. The SSH/SFTP
+`scripts/mister deploy-magik-bin` path remains available as fallback.
+
+Failed intermediate result: the first attempt encoded the payload as hex inside
+a single JSON request. It worked, but was not fast:
+
+- `agent deploy-magik-bin`: 5737ms host total for 6,098,636 bytes.
+- Agent result: `decode_ms=279`, `write_tmp_ms=23`, `swap_ms=2095`,
+  `suspend_ms=500`, `resume_ms=1606`, `total_ms=4721`.
+
+Correction: use raw TCP payload bytes after the JSON header, and stage in RAM
+instead of writing an intermediate `/tmp` file.
+
+Before/control benchmark:
+
+- `scripts/mister deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`
+  used SSH/SFTP and reported `total_ms=3133` for 6,098,636 bytes.
+- Breakdown: `prepare_ms=50`, `suspend_ms=80`, `put_ms=2815`,
+  `finish_ms=88`, `resume_size_ms=97`.
+
+Final agent benchmark:
+
+- `scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`
+  reported host `total_ms=2756`, `request_ms=2721`, `read_ms=3`.
+- Agent result: `transport=stream`, `receive_ms=154`, `suspend_ms=500`,
+  `swap_ms=341`, `resume_ms=1606`, `total_ms=2555`, checksum
+  `b5e2bcccea985c12`, remote bytes 6,098,636.
+- Final `scripts/mister status` showed `MiSTer_MagiK pid=612`,
+  `mister-magik-fb pid=2442`, active VT `tty2`, and Slint launcher/home active.
+
+Result: keeper. The stream deploy path is about 13% faster than SSH/SFTP for
+this 5.8 MiB binary while returning structured deploy details. The main
+remaining cost is deliberate supervisor settle time plus FAT write time, not
+network transfer. This sets up compressed deploy as the next meaningful speed
+step.
