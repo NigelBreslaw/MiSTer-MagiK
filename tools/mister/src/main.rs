@@ -97,6 +97,9 @@ fn run_cli() -> Result<()> {
         "boot-net-profile" => {
             boot_net_profile(&args)?;
         }
+        "watch-reboot" => {
+            watch_external_reboot(&args)?;
+        }
         "reboot" | "reboot-wait" => {
             let raw = take_raw_reboot_flag(&mut args);
             let host = host();
@@ -233,7 +236,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
 }
 
@@ -2138,6 +2141,140 @@ fn boot_net_profile(args: &[String]) -> Result<()> {
     }
     eprintln!("boot-net-profile: appended {samples} row(s) to {out_path}");
     Ok(())
+}
+
+fn watch_external_reboot(args: &[String]) -> Result<()> {
+    let timeout_secs = option_value(args, "--timeout")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(120.0);
+    let wait_down_secs = option_value(args, "--wait-down")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(180.0);
+    let out_path = "history/toolchain-bench/results-boot-net.tsv";
+    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\ttcp22_ms\tssh_exec_ready_ms\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tmain_status_ms\tslint_status_ms\tuptime\tlauncher_state\tslint_frames\tnote";
+    println!("{header}");
+    eprintln!(
+        "watch-reboot: waiting up to {wait_down_secs:.0}s for {}:22 to go down...",
+        host()
+    );
+    let ts = unix_ms_now();
+    let wait_start = Instant::now();
+    while wait_start.elapsed().as_secs_f64() < wait_down_secs {
+        if !port_open(Duration::from_millis(200)) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if wait_start.elapsed().as_secs_f64() >= wait_down_secs {
+        return Err(format!("device did not go down within {wait_down_secs:.0}s").into());
+    }
+    let start = Instant::now();
+    eprintln!("watch-reboot: device went down; timing reconnect...");
+
+    let mut tcp22_ms = None;
+    let mut ssh_ready_ms = None;
+    let mut resolve_ms = None;
+    let mut tcp_ms = None;
+    let mut handshake_ms = None;
+    let mut auth_ms = None;
+    let mut exec_ms = None;
+    let mut uptime = String::new();
+    let mut launcher_state = String::new();
+    let mut slint_frames = String::new();
+    let mut main_status_ms = None;
+    let mut slint_status_ms = None;
+    let mut note = String::from("external");
+
+    while start.elapsed().as_secs_f64() < timeout_secs {
+        if tcp22_ms.is_none() && port_open(Duration::from_millis(150)) {
+            tcp22_ms = Some(start.elapsed().as_millis());
+        }
+        match connect_timed(2) {
+            Ok(timed) => {
+                let exec_t = Instant::now();
+                let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                let this_exec_ms = exec_t.elapsed().as_millis();
+                if out.rc == 0 {
+                    ssh_ready_ms = Some(start.elapsed().as_millis());
+                    resolve_ms = Some(timed.resolve_ms);
+                    tcp_ms = Some(timed.tcp_ms);
+                    handshake_ms = Some(timed.handshake_ms);
+                    auth_ms = Some(timed.auth_ms);
+                    exec_ms = Some(this_exec_ms);
+                    uptime = out
+                        .stdout
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+
+                    let status_deadline = Instant::now() + Duration::from_secs(20);
+                    while Instant::now() < status_deadline {
+                        if main_status_ms.is_none() {
+                            if let Some(text) =
+                                remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
+                            {
+                                if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                                    main_status_ms = Some(start.elapsed().as_millis());
+                                    launcher_state = value
+                                        .get("launcher_state")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_string();
+                                }
+                            }
+                        }
+                        if slint_status_ms.is_none() {
+                            if let Some(text) =
+                                remote_read(&timed.sess, "/tmp/mister-magik/status.json")
+                            {
+                                if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                                    slint_status_ms = Some(start.elapsed().as_millis());
+                                    slint_frames = value
+                                        .get("frames")
+                                        .and_then(Value::as_u64)
+                                        .map(|n| n.to_string())
+                                        .unwrap_or_default();
+                                }
+                            }
+                        }
+                        if main_status_ms.is_some() && slint_status_ms.is_some() {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(250));
+                    }
+                    break;
+                }
+                note = format!("exec rc {}", out.rc);
+            }
+            Err(err) => {
+                note = err.to_string();
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+
+    let row = format!(
+        "boot-net\t{ts}\t1\texternal\t{}\t\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{uptime}\t{launcher_state}\t{slint_frames}\t{}",
+        host(),
+        opt_ms(tcp22_ms),
+        opt_ms(ssh_ready_ms),
+        opt_ms(resolve_ms),
+        opt_ms(tcp_ms),
+        opt_ms(handshake_ms),
+        opt_ms(auth_ms),
+        opt_ms(exec_ms),
+        opt_ms(main_status_ms),
+        opt_ms(slint_status_ms),
+        note.replace('\t', " ")
+    );
+    println!("{row}");
+    append_profile_row(out_path, header, &row)?;
+    if ssh_ready_ms.is_some() {
+        Ok(())
+    } else {
+        Err(format!("device not ready after {timeout_secs:.0}s").into())
+    }
 }
 
 fn opt_ms(value: Option<u128>) -> String {

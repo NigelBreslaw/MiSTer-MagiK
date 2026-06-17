@@ -206,3 +206,45 @@ roughly 3.79s, link-up to roughly 7.91s, sshd listening to roughly 11s, and
 first SSH authentication to roughly 12s device uptime. This cuts about 6.1s from
 the fresh command-ready average while surviving three measured reboots. The
 agent remains installed for follow-on testing.
+
+## Experiment 7 - Early FastSSHD And Manual Reboot Watch
+
+Hypothesis: with FastNet active, stock sshd startup was the next visible delay.
+Starting sshd from an early `/etc/init.d/S04fastsshd` service might allow the
+Mac to connect closer to link-up.
+
+Fresh before samples with FastNet active:
+
+- 16.141s SSH command-ready
+- 14.548s SSH command-ready
+- Average: 15.345s
+
+After samples:
+
+- 18.120s SSH command-ready
+- second sample never reached SSH readiness
+
+At this point the result looked bad, but a manual reboot changed the picture.
+The manual reboot boot log showed:
+
+- FastSSHD started at 4.07s.
+- FastSSHD started sshd at 5.16s.
+- Ethernet link came up at 8.42s.
+- First auth landed around 10s device uptime.
+
+`scripts/mister watch-reboot --wait-down 180 --timeout 120` was added to time
+external/manual reboots without issuing a reboot command itself. Manual reboot
+with FastNet + FastSSHD:
+
+- 12.503s SSH command-ready from observed down transition
+
+Follow-up supervised samples with FastSSHD still installed:
+
+- 13.332s SSH command-ready
+- 13.438s SSH command-ready
+
+Result: cautious keeper. The first supervised attempt had one bad timeout, but
+manual reboot and two follow-up supervised reboots were materially faster than
+FastNet alone. FastSSHD remains installed for continued testing. SD-card
+recovery if it strands the device again: delete `/etc/init.d/S04fastsshd` from
+the MiSTer Linux root image.
