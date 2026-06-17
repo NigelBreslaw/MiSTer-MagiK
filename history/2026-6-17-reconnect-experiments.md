@@ -40,3 +40,32 @@ starts around 4s, but reports `no valid interfaces found`; the Ethernet driver
 still appears around 9.5s and link-up around 13.7s. This suggests the remaining
 delay is not just late `dhcpcd` startup. The device was restored with
 `scripts/mister-fastnet-boot.sh remove` after the experiment.
+
+## Experiment 2 - Start `dhcpcd` Right After `S10udev`
+
+Hypothesis: experiment 1 was too early; starting `dhcpcd` as `S11dhcpcd` after
+udev would let the wired interface exist sooner than the normal `S41dhcpcd`.
+
+Change: `scripts/mister-early-dhcpcd-service.sh install` adds:
+
+```text
+/etc/init.d/S11dhcpcd -> S41dhcpcd
+```
+
+Fresh before samples:
+
+- 20.687s SSH command-ready
+- 20.528s SSH command-ready
+- Average: 20.608s
+
+After samples:
+
+- 20.946s SSH command-ready
+- 18.175s SSH command-ready
+- Average: 19.561s
+
+Result: not a convincing win. `dhcpcd` starts around 5s, but the Ethernet
+driver still appears around 9.35s and link-up around 13.47s. Starting dhcpcd
+earlier in init order does not pull the actual eth0 device initialization much
+earlier. The device was restored with
+`scripts/mister-early-dhcpcd-service.sh remove` after the experiment.
