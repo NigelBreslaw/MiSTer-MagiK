@@ -9,6 +9,7 @@ mod linux {
         SOCK_DGRAM, SOCK_RAW,
     };
     use serde_json::{json, Value};
+    use std::collections::VecDeque;
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, BufRead, BufReader, Write};
@@ -16,7 +17,7 @@ mod linux {
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::os::fd::RawFd;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -31,12 +32,17 @@ mod linux {
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
     const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
     const ETH_P_ARP: u16 = 0x0806;
+    const LOG_RING_CAPACITY: usize = 512;
+
+    type SharedLogRing = Arc<Mutex<LogRing>>;
+
+    static LOG_RING: OnceLock<SharedLogRing> = OnceLock::new();
 
     pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         match args.first().map(String::as_str).unwrap_or("net-boot") {
             "net-boot" => net_boot(),
             "arp" => {
-                let mut log = Logger::append(LOG)?;
+                let mut log = Logger::append(LOG, fresh_log_ring())?;
                 send_gratuitous_arp(IFACE, IP, &mut log)?;
                 Ok(())
             }
@@ -49,7 +55,9 @@ mod linux {
     }
 
     fn net_boot() -> Result<(), Box<dyn std::error::Error>> {
-        let mut log = Logger::create(LOG)?;
+        let ring = fresh_log_ring();
+        let _ = LOG_RING.set(Arc::clone(&ring));
+        let mut log = Logger::create(LOG, ring)?;
         let boot_id = next_boot_id();
         log.line(format!(
             "worker_start boot={boot_id} pid={}",
@@ -95,24 +103,88 @@ mod linux {
 
     struct Logger {
         file: File,
+        ring: SharedLogRing,
     }
 
     impl Logger {
-        fn create(path: &str) -> io::Result<Self> {
+        fn create(path: &str, ring: SharedLogRing) -> io::Result<Self> {
             Ok(Self {
                 file: File::create(path)?,
+                ring,
             })
         }
 
-        fn append(path: &str) -> io::Result<Self> {
+        fn append(path: &str, ring: SharedLogRing) -> io::Result<Self> {
             Ok(Self {
                 file: OpenOptions::new().create(true).append(true).open(path)?,
+                ring,
             })
         }
 
         fn line(&mut self, msg: String) {
-            let _ = writeln!(self.file, "{} agent {msg}", stamp());
+            let line = format!("{} agent {msg}", stamp());
+            record_log_line(&self.ring, &line);
+            let _ = writeln!(self.file, "{line}");
             let _ = self.file.flush();
+        }
+
+        fn ring_text(&self) -> String {
+            ring_lines(&self.ring).join("\n")
+        }
+    }
+
+    struct LogRing {
+        lines: VecDeque<String>,
+        dropped: u64,
+    }
+
+    impl LogRing {
+        fn new() -> Self {
+            Self {
+                lines: VecDeque::with_capacity(LOG_RING_CAPACITY),
+                dropped: 0,
+            }
+        }
+
+        fn push(&mut self, line: String) {
+            if self.lines.len() == LOG_RING_CAPACITY {
+                self.lines.pop_front();
+                self.dropped += 1;
+            }
+            self.lines.push_back(line);
+        }
+    }
+
+    fn fresh_log_ring() -> SharedLogRing {
+        Arc::new(Mutex::new(LogRing::new()))
+    }
+
+    fn record_log_line(ring: &SharedLogRing, line: &str) {
+        if let Ok(mut ring) = ring.lock() {
+            ring.push(line.to_string());
+        }
+    }
+
+    fn ring_lines(ring: &SharedLogRing) -> Vec<String> {
+        ring.lock()
+            .map(|ring| ring.lines.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn log_ring_json() -> Value {
+        match LOG_RING.get().and_then(|ring| ring.lock().ok()) {
+            Some(ring) => json!({
+                "capacity": LOG_RING_CAPACITY,
+                "dropped": ring.dropped,
+                "count": ring.lines.len(),
+                "lines": ring.lines.iter().cloned().collect::<Vec<_>>(),
+            }),
+            None => json!({
+                "capacity": LOG_RING_CAPACITY,
+                "dropped": 0,
+                "count": 0,
+                "lines": [],
+            }),
         }
     }
 
@@ -200,6 +272,7 @@ mod linux {
         match cmd {
             "ping" => response(id, true, Some(json!({"pong": true})), None),
             "status" => response(id, true, Some(status_json(boot_id, started)), None),
+            "logs" => response(id, true, Some(log_ring_json()), None),
             _ => response(id, false, None, Some("unknown cmd")),
         }
     }
@@ -309,8 +382,13 @@ mod linux {
     }
 
     fn append_log_line(msg: String) {
-        if let Ok(mut logger) = Logger::append(LOG) {
-            logger.line(msg);
+        let line = format!("{} agent {msg}", stamp());
+        if let Some(ring) = LOG_RING.get() {
+            record_log_line(ring, &line);
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG) {
+            let _ = writeln!(file, "{line}");
+            let _ = file.flush();
         }
     }
 
@@ -509,14 +587,14 @@ mod linux {
     fn persist_log(boot_id: u64, log: &mut Logger) {
         thread::sleep(Duration::from_secs(20));
         let _ = fs::create_dir_all(BOOTLOG_DIR);
-        let text = fs::read_to_string(LOG).unwrap_or_default();
+        let text = log.ring_text();
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(PLOG) {
             let _ = writeln!(
                 file,
                 "--- agent deferred boot={boot_id} uptime={} ---",
                 stamp()
             );
-            let _ = write!(file, "{text}");
+            let _ = writeln!(file, "{text}");
         }
         log.line(format!("persisted boot={boot_id}"));
     }

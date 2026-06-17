@@ -53,6 +53,7 @@ Use the normal wrapper:
 ```bash
 scripts/mister agent ping
 scripts/mister agent status
+scripts/mister agent logs
 scripts/mister agent boot-profile 3 --timeout 40
 ```
 
@@ -62,6 +63,9 @@ scripts/mister agent boot-profile 3 --timeout 40
 - `eth0` carrier, operstate, IP, MAC, routes, ARP entries, RX/TX counters
 - `sshd`, `MiSTer_MagiK`, and `mister-magik-fb` process ids
 - system uptime
+
+`logs` returns the in-memory ring buffer over the TCP agent protocol. The ring
+keeps the newest 512 lines and reports how many older lines were dropped.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. Rows are appended to:
@@ -85,6 +89,10 @@ Inspect:
 scripts/mister-magik-agent.sh status
 scripts/mister-magik-agent.sh log
 ```
+
+The agent mirrors RAM log lines to `/tmp/mister-magik-agent.log` for compatibility
+with older scripts. It delays SD-card persistence to
+`/media/fat/mister-magik/bootlogs/agent.log` until after the boot hot path.
 
 Remove:
 

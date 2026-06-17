@@ -660,3 +660,53 @@ agent port consistently answers before SSH command execution by about
 0.6-0.8s in these samples, but both are still gated by Ethernet carrier and the
 LAN neighbor path. This is the right foundation for RAM logs, boot timeline,
 diagnostics bundle, and faster deploy/control paths.
+
+## Experiment 17 - RAM Log Ring Buffer
+
+Hypothesis: agent logs should be available through the TCP backplane without
+depending on SSH or immediate SD-card reads. The boot hot path should keep log
+state in RAM, mirror to `/tmp` for compatibility, and defer persistent
+`/media/fat` writes.
+
+Change: `mister-magik-agent` now stores log lines in a 512-line in-memory ring.
+The ring backs `scripts/mister agent logs`, and the delayed persistent flush now
+writes the ring contents to `/media/fat/mister-magik/bootlogs/agent.log`.
+Compatibility files remain:
+
+- `/tmp/mister-magik-agent.log`
+- `/media/fat/mister-magik/bootlogs/agent.log`
+
+Before:
+
+- `scripts/mister agent logs` against the item-1 agent returned `unknown cmd`.
+- `scripts/mister-magik-agent.sh log` could read `/tmp/mister-magik-agent.log`
+  through SSH, but that path depends on SSH being reachable.
+
+After deployment:
+
+- The first supervised reboot after deployment did not come back through SSH or
+  the agent port within 40s. Mac-side diagnostics showed `hostdown` and an
+  incomplete ARP entry.
+- After a manual reboot, `scripts/mister agent logs --json` returned the RAM
+  ring over TCP: 238 lines, 0 dropped.
+- `scripts/mister agent logs` returned the text form in 5ms: 240 lines,
+  0 dropped.
+- `/tmp/mister-magik-agent.log` existed and the delayed SD log existed:
+  `/media/fat/mister-magik/bootlogs/agent.log`.
+
+Root-cause evidence from the failed reboot:
+
+- Persistent boot id 4 started normally, reached carrier-ready at 8.33s, and had
+  `sshd_pid=624`.
+- Routes were present and the agent kept transmitting: TX rose from 336 bytes /
+  8 packets to 6509 bytes / 79 packets by 48.40s.
+- RX stayed exactly zero for the whole captured window:
+  `rx_bytes=0 rx_packets=0` from 8.38s through 48.40s.
+- The successful manual reboot, boot id 5, had the same carrier timing but did
+  receive packets: RX was nonzero at the first post-carrier snapshot.
+
+Result: keeper. The RAM ring made this failure diagnosable without relying on
+the current boot's `/tmp` state. The failure itself is not an agent process
+crash or missing sshd; it is a warm-reboot Ethernet receive-path stall. The next
+commit should add agent-side recovery for `carrier=1`, routes present, TX
+increasing, and RX stuck at zero so a manual reboot is not required.
