@@ -1787,7 +1787,7 @@ fn build_directory_manifest(
                 manifest_builders.entry(root_key).or_default();
             }
             for entry in walkdir::WalkDir::new(path)
-                .follow_links(true)
+                .follow_links(false)
                 .into_iter()
                 .filter_entry(|e| !should_ignore_path(e.path()))
                 .filter_map(Result::ok)
@@ -5821,6 +5821,33 @@ mod tests {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name == "screenshot")));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scanner_does_not_follow_symlinked_game_dirs() {
+        let root = unique_temp_dir("ignore-symlinked-game-dir");
+        let outside = unique_temp_dir("symlink-target-games");
+        let games_dir = root.join("games");
+        let linked_nes = games_dir.join("NES");
+        std::fs::create_dir_all(&games_dir).expect("create games dir");
+        std::fs::create_dir_all(&outside).expect("create symlink target");
+        std::fs::write(outside.join("Mario.nes"), "rom").expect("write outside rom");
+        std::os::unix::fs::symlink(&outside, &linked_nes).expect("create linked game dir");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        assert!(!scan
+            .file_fingerprints
+            .contains_key(&outside.join("Mario.nes").display().to_string()));
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     #[test]
