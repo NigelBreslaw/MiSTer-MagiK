@@ -491,18 +491,18 @@ mod linux {
             .and_then(Value::as_str)
             .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
         validate_deploy_remote(remote)?;
-        let (expected_size, expected_checksum) = deploy_expectations(&args)?;
+        let expectations = deploy_expectations(&args)?;
         let hex = args
             .get("data_hex")
             .and_then(Value::as_str)
             .ok_or_else(|| "missing deploy data".to_string())?;
 
         let decode_t = Instant::now();
-        let bytes = decode_hex(hex)?;
+        let payload = decode_hex(hex)?;
+        let bytes = decode_deploy_payload(&expectations, payload)?;
         deploy_magik_bin_bytes(
             remote,
-            expected_size,
-            &expected_checksum,
+            &expectations,
             bytes,
             "hex",
             decode_t.elapsed().as_millis() as u64,
@@ -515,63 +515,129 @@ mod linux {
             .and_then(Value::as_str)
             .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
         validate_deploy_remote(remote)?;
-        let (expected_size, expected_checksum) = deploy_expectations(&args)?;
+        let expectations = deploy_expectations(&args)?;
         let receive_t = Instant::now();
-        let mut bytes = vec![0u8; expected_size as usize];
+        let mut payload = vec![0u8; expectations.payload_size as usize];
         reader
-            .read_exact(&mut bytes)
+            .read_exact(&mut payload)
             .map_err(|err| err.to_string())?;
-        deploy_magik_bin_bytes(
-            remote,
-            expected_size,
-            &expected_checksum,
-            bytes,
-            "stream",
-            receive_t.elapsed().as_millis() as u64,
+        let receive_ms = receive_t.elapsed().as_millis() as u64;
+        let decode_t = Instant::now();
+        let bytes = decode_deploy_payload(&expectations, payload)?;
+        let decode_ms = decode_t.elapsed().as_millis() as u64;
+        deploy_magik_bin_bytes(remote, &expectations, bytes, "stream", receive_ms).map(
+            |mut result| {
+                if let Some(object) = result.as_object_mut() {
+                    object.insert("decode_ms".to_string(), json!(decode_ms));
+                }
+                result
+            },
         )
     }
 
-    fn deploy_expectations(args: &Value) -> Result<(u64, String), String> {
-        let expected_size = args
+    struct DeployExpectations {
+        raw_size: u64,
+        payload_size: u64,
+        checksum: String,
+        encoding: String,
+    }
+
+    fn deploy_expectations(args: &Value) -> Result<DeployExpectations, String> {
+        let raw_size = args
             .get("size")
             .and_then(Value::as_u64)
             .ok_or_else(|| "missing deploy size".to_string())?;
-        if expected_size > MAX_DEPLOY_BYTES {
+        if raw_size > MAX_DEPLOY_BYTES {
             return Err(format!(
-                "deploy size {expected_size} exceeds max {MAX_DEPLOY_BYTES}"
+                "deploy size {raw_size} exceeds max {MAX_DEPLOY_BYTES}"
             ));
         }
-        let expected_checksum = args
+        let encoding = args
+            .get("encoding")
+            .and_then(Value::as_str)
+            .unwrap_or("raw")
+            .to_string();
+        match encoding.as_str() {
+            "raw" | "lz4-block" => {}
+            _ => return Err(format!("unsupported deploy encoding: {encoding}")),
+        }
+        let payload_size = args
+            .get("payload_size")
+            .and_then(Value::as_u64)
+            .unwrap_or(raw_size);
+        if payload_size > MAX_DEPLOY_BYTES {
+            return Err(format!(
+                "deploy payload size {payload_size} exceeds max {MAX_DEPLOY_BYTES}"
+            ));
+        }
+        if encoding == "raw" && payload_size != raw_size {
+            return Err(format!(
+                "raw payload size mismatch expected={raw_size} payload={payload_size}"
+            ));
+        }
+        let checksum = args
             .get("checksum")
             .and_then(Value::as_str)
             .ok_or_else(|| "missing deploy checksum".to_string())?;
-        Ok((expected_size, expected_checksum.to_string()))
+        Ok(DeployExpectations {
+            raw_size,
+            payload_size,
+            checksum: checksum.to_string(),
+            encoding,
+        })
+    }
+
+    fn decode_deploy_payload(
+        expectations: &DeployExpectations,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        if payload.len() as u64 != expectations.payload_size {
+            return Err(format!(
+                "deploy payload size mismatch expected={} actual={}",
+                expectations.payload_size,
+                payload.len()
+            ));
+        }
+        match expectations.encoding.as_str() {
+            "raw" => Ok(payload),
+            "lz4-block" => lz4_flex::block::decompress(&payload, expectations.raw_size as usize)
+                .map_err(|err| err.to_string()),
+            _ => Err(format!(
+                "unsupported deploy encoding: {}",
+                expectations.encoding
+            )),
+        }
     }
 
     fn deploy_magik_bin_bytes(
         remote: &str,
-        expected_size: u64,
-        expected_checksum: &str,
+        expectations: &DeployExpectations,
         bytes: Vec<u8>,
         transport: &str,
         receive_ms: u64,
     ) -> Result<Value, String> {
         let total_t = Instant::now();
-        if bytes.len() as u64 != expected_size {
+        if bytes.len() as u64 != expectations.raw_size {
             return Err(format!(
-                "deploy size mismatch expected={expected_size} actual={}",
+                "deploy size mismatch expected={} actual={}",
+                expectations.raw_size,
                 bytes.len()
             ));
         }
         let checksum = fnv64_hex(&bytes);
-        if checksum != expected_checksum {
+        if checksum != expectations.checksum {
             return Err(format!(
-                "deploy checksum mismatch expected={expected_checksum} actual={checksum}"
+                "deploy checksum mismatch expected={} actual={checksum}",
+                expectations.checksum
             ));
         }
 
         append_log_line(format!(
-            "deploy_magik_bin_start remote={remote} bytes={expected_size} checksum={expected_checksum}"
+            "deploy_magik_bin_start remote={remote} bytes={} payload_bytes={} encoding={} checksum={}",
+            expectations.raw_size,
+            expectations.payload_size,
+            expectations.encoding,
+            expectations.checksum
         ));
         let suspend_t = Instant::now();
         magik_fifo_action("suspend")?;
@@ -591,14 +657,17 @@ mod linux {
         let resume_ms = resume_t.elapsed().as_millis() as u64;
         let remote_bytes = fs::metadata(remote).map(|meta| meta.len()).unwrap_or(0);
         append_log_line(format!(
-            "deploy_magik_bin_done remote={remote} bytes={remote_bytes} checksum={expected_checksum}"
+            "deploy_magik_bin_done remote={remote} bytes={remote_bytes} checksum={}",
+            expectations.checksum
         ));
         Ok(json!({
             "transport": transport,
+            "encoding": expectations.encoding,
             "remote": remote,
-            "bytes": expected_size,
+            "bytes": expectations.raw_size,
+            "payload_bytes": expectations.payload_size,
             "remote_bytes": remote_bytes,
-            "checksum": expected_checksum,
+            "checksum": expectations.checksum,
             "receive_ms": receive_ms,
             "suspend_ms": suspend_ms,
             "swap_ms": swap_ms,

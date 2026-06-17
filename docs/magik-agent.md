@@ -134,8 +134,13 @@ Responses return parsed Main and Slint status files plus current pids. The
 launcher process, which is expected immediately after `suspend`.
 
 `deploy-magik-bin` uploads a local `mister-magik-fb` binary over the agent TCP
-port using a JSON header followed by raw payload bytes. The host includes byte
-count and FNV64 checksum. The agent verifies the payload in RAM, asks Main to
+port using a JSON header followed by payload bytes. The agent accepts raw bytes
+or LZ4 block payloads. The host defaults to raw for small binaries and only
+tries LZ4 automatically above `MISTER_AGENT_DEPLOY_COMPRESS_MIN_BYTES`
+(default 8 MiB); set `MISTER_AGENT_DEPLOY_ENCODING=lz4-block` to force a
+compressed test. The header includes original byte count, transmitted byte
+count, encoding, and original FNV64 checksum. The agent receives the payload
+into RAM, decompresses if needed, verifies the original bytes, asks Main to
 suspend the launcher, writes a same-directory `.upload` file under
 `/media/fat/mister-magik/`, renames it over the final binary, marks it
 executable, then resumes the launcher. Existing `scripts/mister deploy-magik-bin`

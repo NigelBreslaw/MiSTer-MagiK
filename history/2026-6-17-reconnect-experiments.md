@@ -998,3 +998,62 @@ this 5.8 MiB binary while returning structured deploy details. The main
 remaining cost is deliberate supervisor settle time plus FAT write time, not
 network transfer. This sets up compressed deploy as the next meaningful speed
 step.
+
+## Experiment 24 - Agent Compressed Binary Deploy
+
+Hypothesis: the agent deploy path can reduce Ethernet transfer time by
+compressing the payload before sending it over the token-authenticated TCP
+backplane, while keeping the same RAM verification and FAT atomic swap.
+
+Change: the agent now accepts raw or LZ4-block deploy payloads. The agent
+receives the transmitted payload into RAM, decompresses in RAM when needed,
+verifies the original FNV64 checksum and size, then performs the same
+Main-supervised suspend, FAT `.upload` write, rename, chmod, and resume. The
+host initially chose `encoding=lz4-block` whenever the compressed payload was
+smaller, then was adjusted after measurement to keep raw as the default for
+small binaries and only try automatic compression above 8 MiB. Set
+`MISTER_AGENT_DEPLOY_ENCODING=lz4-block` to force the compressed path.
+
+Before/control benchmark from Experiment 23:
+
+- `scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`
+  used raw stream mode and reported host `total_ms=2756`, `request_ms=2721`,
+  `read_ms=3` for 6,098,636 bytes.
+- Agent result: `transport=stream`, `receive_ms=154`, `suspend_ms=500`,
+  `swap_ms=341`, `resume_ms=1606`, `total_ms=2555`, remote bytes 6,098,636.
+
+Failed intermediate result: the first compressed run used the normal
+`scripts/mister` debug host binary without optimizing `lz4_flex`. It chose
+`encoding=lz4-block` and reduced the payload to 3,634,064 bytes, but host
+compression cost 276ms. Host total regressed to 3003ms even though agent
+receive time dropped to 77ms.
+
+Correction: optimize `lz4_flex` in the host tool dev profile, because
+`scripts/mister` intentionally runs the debug host binary during development.
+
+Forced compressed benchmark:
+
+- `MISTER_AGENT_DEPLOY_ENCODING=lz4-block scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`
+  chose `encoding=lz4-block`, sent 3,634,064 payload bytes for a 6,098,636 byte
+  binary, and reported host `total_ms=2742`, `request_ms=2696`, `read_ms=1`,
+  `compress_ms=9`.
+- Agent result: `transport=stream`, `encoding=lz4-block`, `receive_ms=79`,
+  `decode_ms=63`, `suspend_ms=499`, `swap_ms=346`, `resume_ms=1606`,
+  `total_ms=2545`, remote bytes 6,098,636.
+
+Final default benchmark:
+
+- `scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb`
+  skipped compression with `compression_decision=below-min-size:8388608`.
+  This keeps the current 5.8 MiB app binary on raw stream mode by default and
+  reported host `total_ms=2738`, `request_ms=2697`, `read_ms=2`,
+  `compress_ms=0`.
+- Agent result: `transport=stream`, `encoding=raw`, `receive_ms=130`,
+  `decode_ms=0`, `suspend_ms=500`, `swap_ms=342`, `resume_ms=1625`,
+  `total_ms=2560`, remote bytes 6,098,636.
+
+Result: keeper as a capability, but not as a default for the current binary.
+Compression halves the wire payload and cuts agent receive time by about 51ms,
+but MiSTer-side decode erases that gain for a 5.8 MiB binary. The default
+threshold keeps the daily app deploy path raw and slightly faster while leaving
+the compressed transport available for larger future payloads.
