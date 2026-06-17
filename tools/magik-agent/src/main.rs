@@ -24,7 +24,8 @@ mod linux {
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
-    const SEQ: &str = "/tmp/mister-magik-agent.seq";
+    const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
+    const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
     const ETH_P_ARP: u16 = 0x0806;
 
     pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -288,7 +289,7 @@ mod linux {
 
     fn persist_log(boot_id: u64, log: &mut Logger) {
         thread::sleep(Duration::from_secs(20));
-        let _ = fs::create_dir_all("/media/fat/mister-magik/bootlogs");
+        let _ = fs::create_dir_all(BOOTLOG_DIR);
         let text = fs::read_to_string(LOG).unwrap_or_default();
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(PLOG) {
             let _ = writeln!(
@@ -302,6 +303,7 @@ mod linux {
     }
 
     fn next_boot_id() -> u64 {
+        let _ = fs::create_dir_all(BOOTLOG_DIR);
         let n = fs::read_to_string(SEQ)
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())

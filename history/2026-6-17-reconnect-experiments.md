@@ -595,3 +595,23 @@ userspace: carrier/link readiness plus the time until TCP succeeds after link.
 Recovery if it strands SSH: delete `/etc/init.d/S00magik-agent`. If needed,
 rename `/etc/init.d/disabled-S00fastnet.magik-agent` back to
 `/etc/init.d/S00fastnet`.
+
+Follow-on from the 10-minute acceptance soak attempt: the soak did not start
+because the fast gate first reproduced the known crash-restart blocker, recovered
+with raw reboot, then failed the supervised reboot wait. The device-side agent
+log for the failed reconnect showed `carrier=1`, `operstate=up`, valid routes,
+and `sshd_pid=616`, but `rx_bytes=0 rx_packets=0` through the captured window.
+After a manual reboot, the next boot received packets around 9.6s and SSH
+returned. This points at a host/LAN neighbor-path visibility failure after the
+device believes networking is up, not at Slint soak behavior.
+
+Instrumentation changes from that finding:
+
+- `mister-magik-agent` now stores `agent.seq` under
+  `/media/fat/mister-magik/bootlogs/` so persistent `agent.log` entries can be
+  correlated across failed/manual/current boots.
+- `scripts/device-release-acceptance.sh` collects MagiK agent and legacy FastNet
+  boot logs into every device-release artifact bundle, and tries to collect them
+  immediately when a reboot capture fails.
+- `scripts/mister wait` / `reboot-wait` timeout output now includes final TCP
+  probe state, ARP table evidence, and one ping summary from the Mac side.
