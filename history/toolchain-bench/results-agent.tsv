@@ -1,0 +1,4 @@
+kind	ts_unix_ms	sample	mode	host	reboot_issue_ms	down_ms	agent_ready_ms	ssh_exec_ready_ms	agent_first_hostdown_ms	agent_first_noroute_ms	agent_first_timeout_ms	agent_first_refused_ms	agent_first_other_ms	agent_ok_count	agent_hostdown_count	agent_noroute_count	agent_timeout_count	agent_refused_count	agent_other_count	resolve_ms	tcp_ms	handshake_ms	auth_ms	exec_ms	agent_uptime_ms	ssh_uptime	agent_transitions	note
+agent-boot	1781729647881	1	supervised	192.168.1.117	244	753	13696	14397			753			1	0	0	6	0	0	0	1	274	272	80	7121	12.01	753:timeout,13696:ok	connection timed out
+agent-boot	1781729664528	2	supervised	192.168.1.117	349	738	11526	12131			738			1	0	0	5	0	0	0	0	231	138	84	5337	9.77	738:timeout,11526:ok	connection timed out
+agent-boot	1781729679015	3	supervised	192.168.1.117	432	758	13703	14456			758			1	0	0	6	0	0	0	0	168	271	161	7501	12.05	758:timeout,13703:ok	connection timed out
