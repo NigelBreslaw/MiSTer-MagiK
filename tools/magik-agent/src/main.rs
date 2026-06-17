@@ -354,6 +354,7 @@ mod linux {
             Some(cmd) => cmd,
             None => return response(id, false, None, Some("missing cmd")),
         };
+        let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
         timeline_record_once("first_command", format!("cmd={cmd}"));
 
         match cmd {
@@ -362,6 +363,15 @@ mod linux {
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
+            "reboot" => match schedule_reboot(args) {
+                Ok(mode) => response(
+                    id,
+                    true,
+                    Some(json!({"scheduled": true, "mode": mode})),
+                    None,
+                ),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             _ => response(id, false, None, Some("unknown cmd")),
         }
     }
@@ -468,6 +478,39 @@ mod linux {
         }
     }
 
+    fn schedule_reboot(args: Value) -> Result<String, String> {
+        let mode = args
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("raw")
+            .to_string();
+        match mode.as_str() {
+            "raw" | "supervised" => {}
+            _ => return Err(format!("unsupported reboot mode: {mode}")),
+        }
+        let thread_mode = mode.clone();
+        append_persistent_log_line(format!("reboot_scheduled mode={mode}"));
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            let result = if thread_mode == "supervised" {
+                fs::write("/dev/MiSTer_cmd", "mister_magik_reboot\n").map_err(|err| err.to_string())
+            } else {
+                std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg("nohup /sbin/reboot >/dev/null 2>&1 &")
+                    .spawn()
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            };
+            if let Err(err) = result {
+                append_log_line(format!(
+                    "reboot_schedule_error mode={thread_mode} err={err}"
+                ));
+            }
+        });
+        Ok(mode)
+    }
+
     fn read_routes() -> Value {
         let routes: Vec<Value> = fs::read_to_string("/proc/net/route")
             .ok()
@@ -542,6 +585,16 @@ mod linux {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG) {
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
+        }
+    }
+
+    fn append_persistent_log_line(msg: String) {
+        append_log_line(msg.clone());
+        let _ = fs::create_dir_all(BOOTLOG_DIR);
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(PLOG) {
+            let _ = writeln!(file, "{} agent {msg}", stamp());
+            let _ = file.flush();
+            let _ = file.sync_all();
         }
     }
 

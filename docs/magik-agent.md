@@ -56,6 +56,7 @@ scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
 scripts/mister agent diagnostics --out build/agent-diagnostics/sample
+scripts/mister agent reboot-wait --timeout 40
 scripts/mister agent boot-profile 3 --timeout 40
 scripts/mister agent boot-profile 1 --supervised --timeout 40
 ```
@@ -98,6 +99,19 @@ falls back to SSH when the agent port is unavailable. The bundle includes:
 - `net.json`
 - `processes.json` and `ps.txt`
 - MagiK status files and recent Main/Slint/agent log tails
+
+`reboot-wait` asks the agent to schedule a reboot, then waits for the agent port
+first and SSH second. It defaults to the same detached Linux reboot primitive as
+the host wrapper:
+
+```sh
+nohup /sbin/reboot >/dev/null 2>&1 &
+```
+
+The agent writes a synchronous `reboot_scheduled` breadcrumb to
+`/media/fat/mister-magik/bootlogs/agent.log` before rebooting so a failed reboot
+can still be root-caused after manual recovery. Pass `--supervised` only for
+explicit MagiK visual-lockdown reset validation.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to Linux
