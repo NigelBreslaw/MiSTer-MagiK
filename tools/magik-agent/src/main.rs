@@ -363,6 +363,10 @@ mod linux {
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
+            "magik" => match magik_control(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             "reboot" => match schedule_reboot(args) {
                 Ok(mode) => response(
                     id,
@@ -448,10 +452,108 @@ mod linux {
         })
     }
 
+    fn magik_control(args: Value) -> Result<Value, String> {
+        let action = args
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("status");
+        match action {
+            "status" => Ok(magik_status_json(action, None, None)),
+            "suspend" | "resume" | "restart-launcher" => magik_fifo_action(action),
+            _ => Err(format!("unsupported magik action: {action}")),
+        }
+    }
+
+    fn magik_fifo_action(action: &str) -> Result<Value, String> {
+        let command = match action {
+            "suspend" => "mister_magik_suspend",
+            "resume" => "mister_magik_resume",
+            "restart-launcher" => "mister_magik_restart_launcher",
+            _ => return Err(format!("unsupported magik action: {action}")),
+        };
+
+        let before_main = pid_string("MiSTer_MagiK");
+        let before_launcher = pid_string("mister-magik-fb");
+        append_log_line(format!(
+            "magik_command action={action} command={command} main_pids={before_main} launcher_pids={before_launcher}"
+        ));
+
+        if !Path::new("/dev/MiSTer_cmd").exists() {
+            let err = "missing /dev/MiSTer_cmd".to_string();
+            append_log_line(format!("magik_command_error action={action} err={err}"));
+            return Err(err);
+        }
+        if before_main.is_empty() {
+            let err = "MiSTer_MagiK is not running".to_string();
+            append_log_line(format!("magik_command_error action={action} err={err}"));
+            return Err(err);
+        }
+
+        fs::write("/dev/MiSTer_cmd", format!("{command}\n")).map_err(|err| {
+            append_log_line(format!("magik_command_error action={action} err={err}"));
+            err.to_string()
+        })?;
+
+        let settle_ms = if action == "suspend" { 400 } else { 1500 };
+        thread::sleep(Duration::from_millis(settle_ms));
+        let after_main = pid_string("MiSTer_MagiK");
+        let after_launcher = pid_string("mister-magik-fb");
+        if before_main != after_main || before_launcher != after_launcher {
+            append_log_line(format!(
+                "magik_pid_change action={action} main_before={before_main} main_after={after_main} launcher_before={before_launcher} launcher_after={after_launcher}"
+            ));
+        }
+        append_log_line(format!(
+            "magik_command_done action={action} command={command} main_pids={after_main} launcher_pids={after_launcher}"
+        ));
+        Ok(magik_status_json(
+            action,
+            Some(command.to_string()),
+            Some(settle_ms),
+        ))
+    }
+
+    fn magik_status_json(action: &str, command: Option<String>, settle_ms: Option<u64>) -> Value {
+        let main_pids = read_pid_list("MiSTer_MagiK");
+        let launcher_pids = read_pid_list("mister-magik-fb");
+        let main_status = read_json_value("/tmp/mister-magik/main-status.json");
+        let slint_status = read_json_value("/tmp/mister-magik/status.json");
+        let slint_status_current = status_pid_matches(&slint_status, &launcher_pids);
+        json!({
+            "action": action,
+            "command": command,
+            "settle_ms": settle_ms,
+            "processes": {
+                "MiSTer_MagiK": main_pids,
+                "mister-magik-fb": launcher_pids,
+            },
+            "files": {
+                "main_status": main_status,
+                "slint_status": slint_status,
+                "slint_status_current": slint_status_current,
+            }
+        })
+    }
+
     fn read_text_value(path: &str) -> Value {
         fs::read_to_string(path)
             .map(Value::String)
             .unwrap_or(Value::Null)
+    }
+
+    fn read_json_value(path: &str) -> Value {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(Value::Null)
+    }
+
+    fn status_pid_matches(status: &Value, pids: &Value) -> bool {
+        let Some(status_pid) = status.get("pid").and_then(Value::as_u64) else {
+            return false;
+        };
+        pids.as_array()
+            .is_some_and(|pids| pids.iter().any(|pid| pid.as_u64() == Some(status_pid)))
     }
 
     fn tail_text_value(path: &str, n: usize) -> Value {
@@ -575,6 +677,10 @@ mod linux {
             .map(Value::from)
             .collect();
         Value::Array(pids)
+    }
+
+    fn pid_string(name: &str) -> String {
+        read_pidof(name).unwrap_or_default().replace(' ', ",")
     }
 
     fn append_log_line(msg: String) {

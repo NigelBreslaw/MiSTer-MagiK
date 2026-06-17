@@ -2107,6 +2107,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "diagnostics" => {
             agent_diagnostics(&args[1..])?;
         }
+        "magik" => {
+            agent_magik(&args[1..])?;
+        }
         "reboot-wait" => {
             agent_reboot_wait(&args[1..])?;
         }
@@ -2121,8 +2124,32 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       reboot-wait [--timeout SECS] [--supervised]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--supervised]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
     );
+}
+
+fn agent_magik(args: &[String]) -> Result<()> {
+    let action = args.first().map(String::as_str).unwrap_or("status");
+    match action {
+        "status" | "suspend" | "resume" | "restart-launcher" => {}
+        "-h" | "--help" => {
+            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher>");
+            return Ok(());
+        }
+        other => return Err(format!("unknown agent magik action: {other}").into()),
+    }
+    let reply = agent_request("magik", json!({"action": action}), Duration::from_secs(5))?;
+    let result = reply.response.get("result").unwrap_or(&Value::Null);
+    if action == "status" {
+        println!("{}", serde_json::to_string_pretty(result)?);
+    } else {
+        println!(
+            "agent magik {action} ok after {}ms: {}",
+            reply.elapsed_ms,
+            serde_json::to_string(result)?
+        );
+    }
+    Ok(())
 }
 
 fn agent_reboot_wait(args: &[String]) -> Result<()> {
