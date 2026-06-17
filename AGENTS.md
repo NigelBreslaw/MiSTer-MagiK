@@ -52,6 +52,9 @@ default. Override with `MISTER_MAIN_DIR`.
 - Prefer direct commands such as `scripts/mister ...`, `scripts/deploy-rust.sh`,
   and `scripts/bench-toolchain.sh ...`. Avoid `/bin/zsh -lc` wrappers for normal
   device work because sandbox approvals key off the outer command.
+- Local ARM builds on Apple Silicon use Apple's `container` runtime by default.
+  Do not route local builds through Docker/OrbStack unless
+  `MISTER_ARM_BUILD_BACKEND=cross` is explicitly requested for a comparison.
 - Edit `MiSTer.ini` only through `scripts/mister` mutators or the provided
   install/restore scripts. Do not use ad hoc sed/awk/manual rewrites.
 - Treat `reference/` as read-only. Do not commit changes there.
