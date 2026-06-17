@@ -26,16 +26,30 @@ make_payload() {
 #!/bin/sh
 
 LOG=/tmp/mister-magik-fastnet.log
+PLOG=/media/fat/mister-magik/bootlogs/fastnet.log
+SEQ=/media/fat/mister-magik/bootlogs/fastnet.seq
 IP=192.168.1.117
 NETMASK=255.255.255.0
 GW=192.168.1.1
+BOOT_ID=unknown
 
 stamp() {
   awk '{print $1}' /proc/uptime 2>/dev/null || echo "?"
 }
 
 log() {
-  echo "$(stamp) fastnet $*" >>"$LOG"
+  line="$(stamp) fastnet $*"
+  echo "$line" >>"$LOG"
+  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
+  echo "$line" >>"$PLOG" 2>/dev/null || true
+}
+
+runlog() {
+  "$@" >>"$LOG" 2>&1
+  rc=$?
+  echo "$(stamp) fastnet command rc=$rc: $*" >>"$LOG"
+  echo "$(stamp) fastnet command rc=$rc: $*" >>"$PLOG" 2>/dev/null || true
+  return "$rc"
 }
 
 configure_once() {
@@ -43,13 +57,13 @@ configure_once() {
     log "eth0_missing"
     return 1
   fi
-  /sbin/ifconfig eth0 "$IP" netmask "$NETMASK" up >>"$LOG" 2>&1 || {
+  runlog /sbin/ifconfig eth0 "$IP" netmask "$NETMASK" up || {
     log "ifconfig_failed"
     return 1
   }
-  /sbin/route add default gw "$GW" eth0 >>"$LOG" 2>&1 || true
+  runlog /sbin/route add default gw "$GW" eth0 || true
   if command -v arping >/dev/null 2>&1; then
-    arping -A -c 1 -I eth0 "$IP" >>"$LOG" 2>&1 || true
+    runlog arping -A -c 1 -I eth0 "$IP" || true
   fi
   carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo "?")"
   operstate="$(cat /sys/class/net/eth0/operstate 2>/dev/null || echo "?")"
@@ -57,15 +71,44 @@ configure_once() {
   return 0
 }
 
+snapshot() {
+  carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo "?")"
+  operstate="$(cat /sys/class/net/eth0/operstate 2>/dev/null || echo "?")"
+  sshd_pid="$(pidof sshd 2>/dev/null || echo none)"
+  log "snapshot boot=$BOOT_ID carrier=$carrier operstate=$operstate sshd_pid=$sshd_pid"
+  /sbin/ifconfig eth0 >>"$LOG" 2>&1 || true
+  /sbin/route -n >>"$LOG" 2>&1 || true
+  {
+    echo "$(stamp) fastnet ifconfig_route boot=$BOOT_ID"
+    /sbin/ifconfig eth0 2>&1 || true
+    /sbin/route -n 2>&1 || true
+  } >>"$PLOG" 2>/dev/null || true
+}
+
+next_boot_id() {
+  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
+  n="$(cat "$SEQ" 2>/dev/null || echo 0)"
+  n=$((n + 1))
+  echo "$n" >"$SEQ" 2>/dev/null || true
+  echo "$n"
+}
+
 worker() {
   : >"$LOG"
-  log "worker_start pid=$$"
+  BOOT_ID="$(next_boot_id)"
+  log "worker_start boot=$BOOT_ID pid=$$"
   i=0
   while [ "$i" -lt 80 ]; do
     configure_once || true
     carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo 0)"
     if [ "$carrier" = "1" ]; then
-      log "carrier_ready"
+      log "carrier_ready boot=$BOOT_ID"
+      j=0
+      while [ "$j" -lt 40 ]; do
+        snapshot
+        j=$((j + 1))
+        sleep 1
+      done
       exit 0
     fi
     i=$((i + 1))

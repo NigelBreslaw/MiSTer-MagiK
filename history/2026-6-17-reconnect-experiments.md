@@ -248,3 +248,22 @@ manual reboot and two follow-up supervised reboots were materially faster than
 FastNet alone. FastSSHD remains installed for continued testing. SD-card
 recovery if it strands the device again: delete `/etc/init.d/S04fastsshd` from
 the MiSTer Linux root image.
+
+Follow-up root-cause pass: a later supervised pair produced one good sample
+(`13.223s`) and one host-down timeout. The preserved basic boot logs showed
+FastSSHD had started sshd and FastNet had reached carrier in the failed window,
+so the failure is likely after early sshd/fastnet startup rather than an sshd
+launch failure. To catch the next failure, FastNet/FastSSHD were updated to
+append persistent logs under `/media/fat/mister-magik/bootlogs/` with boot IDs
+and 40s post-carrier/sshd snapshots.
+
+After adding persistent snapshots:
+
+- 16.140s SSH command-ready
+- 13.306s SSH command-ready
+- 13.254s SSH command-ready
+
+The inspected successful run had early sshd listening around 5.6s, carrier up
+around 9.7s, route/IP stable after carrier, and the sshd listener alive through
+the post-carrier snapshots. The extra logging adds some drag but gives SD-card
+recoverable evidence if the intermittent host-down failure recurs.

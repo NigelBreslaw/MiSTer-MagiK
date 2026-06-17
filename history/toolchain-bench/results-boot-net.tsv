@@ -30,3 +30,11 @@ boot-net	1781717676296	2	supervised	192.168.1.117	385	733													Host is do
 boot-net	1781718237136	1	external	192.168.1.117		0	12042	12503	0	0	247	138	70	12604	12657	10.64	LauncherActive	120	connection timed out
 boot-net	1781718301665	1	supervised	192.168.1.117	250	732	12767	13332	0	1	227	271	64	13428	13483	10.92	LauncherActive	118	connection timed out
 boot-net	1781718323607	1	supervised	192.168.1.117	253	739	12772	13438	0	0	207	273	184	13547	13580	11.02	LauncherActive	180	connection timed out
+boot-net	1781718392700	1	supervised	192.168.1.117	254	730	12771	13223	0	1	226	138	85	13317	13375	10.78	LauncherActive	121	connection timed out
+boot-net	1781718408339	2	supervised	192.168.1.117	295	730													Host is down (os error 64)
+boot-net	1781718765219	1	supervised	192.168.1.117	249	739	12782	13249	0	0	252	137	75	13343	13398	10.88	LauncherActive	179	connection timed out
+boot-net	1781718803176	1	supervised	192.168.1.117	246	729	12761	13498	0	1	307	280	146	13590	13626	11.06	LauncherActive	182	connection timed out
+boot-net	1781718819057	2	supervised	192.168.1.117	339	737													Host is down (os error 64)
+boot-net	1781719110193	1	supervised	192.168.1.117	269	733	15182	16140	0	0	251	540	165	16216	16315	13.73	LauncherActive	364	connection timed out
+boot-net	1781719148103	1	supervised	192.168.1.117	317	731	12766	13306	0	1	304	137	97	13423	13489	10.72	LauncherActive	181	connection timed out
+boot-net	1781719163918	2	supervised	192.168.1.117	292	729	12776	13254	0	0	254	137	84	13357	13416	10.89	LauncherActive	181	connection timed out

@@ -26,26 +26,55 @@ make_payload() {
 #!/bin/sh
 
 LOG=/tmp/mister-magik-fastsshd.log
+PLOG=/media/fat/mister-magik/bootlogs/fastsshd.log
+SEQ=/media/fat/mister-magik/bootlogs/fastsshd.seq
+BOOT_ID=unknown
 
 stamp() {
   awk '{print $1}' /proc/uptime 2>/dev/null || echo "?"
 }
 
 log() {
-  echo "$(stamp) fastsshd $*" >>"$LOG"
+  line="$(stamp) fastsshd $*"
+  echo "$line" >>"$LOG"
+  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
+  echo "$line" >>"$PLOG" 2>/dev/null || true
+}
+
+next_boot_id() {
+  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
+  n="$(cat "$SEQ" 2>/dev/null || echo 0)"
+  n=$((n + 1))
+  echo "$n" >"$SEQ" 2>/dev/null || true
+  echo "$n"
+}
+
+monitor_sshd() {
+  i=0
+  while [ "$i" -lt 40 ]; do
+    pid="$(pidof sshd 2>/dev/null || echo none)"
+    carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo "?")"
+    operstate="$(cat /sys/class/net/eth0/operstate 2>/dev/null || echo "?")"
+    log "monitor boot=$BOOT_ID pid=$pid carrier=$carrier operstate=$operstate"
+    i=$((i + 1))
+    sleep 1
+  done
 }
 
 case "$1" in
   start)
     : >"$LOG"
-    log "start"
+    BOOT_ID="$(next_boot_id)"
+    log "start boot=$BOOT_ID"
     mkdir -p /var/run /run /var/empty /var/lock
     if ! pidof sshd >/dev/null 2>&1; then
       /usr/bin/ssh-keygen -A >>"$LOG" 2>&1 || log "ssh_keygen_failed"
       /usr/sbin/sshd >>"$LOG" 2>&1 && log "sshd_started" || log "sshd_failed"
+      pidof sshd >/dev/null 2>&1 && log "sshd_pid=$(pidof sshd 2>/dev/null)" || log "sshd_pid_missing"
     else
-      log "sshd_already_running"
+      log "sshd_already_running pid=$(pidof sshd 2>/dev/null)"
     fi
+    monitor_sshd &
     ;;
   stop)
     ;;
