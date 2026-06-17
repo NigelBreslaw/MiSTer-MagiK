@@ -1,0 +1,4 @@
+kind	ts_unix_ms	sample	host	bytes	resolve_ms	tcp_ms	handshake_ms	auth_ms	exec_ms	sftp_init_ms	put_tmp_ms	put_tmp_mib_s	put_fat_ms	put_fat_mib_s	uptime	note
+connection	1781714911703	1	192.168.1.117	4194304	0	1	119	69	32	70	418	9.57	793	5.04	4286.41	ok
+connection	1781714913697	2	192.168.1.117	4194304	0	0	129	68	34	70	415	9.64	780	5.13	4288.41	ok
+connection	1781714915681	3	192.168.1.117	4194304	0	1	128	69	33	72	413	9.69	768	5.21	4290.39	ok

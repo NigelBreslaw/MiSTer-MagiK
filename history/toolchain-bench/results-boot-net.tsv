@@ -1,0 +1,6 @@
+kind	ts_unix_ms	sample	mode	host	reboot_issue_ms	down_ms	tcp22_ms	ssh_exec_ready_ms	resolve_ms	tcp_ms	handshake_ms	auth_ms	exec_ms	main_status_ms	slint_status_ms	uptime	launcher_state	slint_frames	note
+boot-net	1781714922273	1	supervised	192.168.1.117	245	718	19983	20556	0	0	219	271	81	20594	20676	18.18	LauncherActive	546	connection timed out
+boot-net	1781714945200	2	supervised	192.168.1.117	255	733	17586	18299	0	0	323	272	116	18359	18461	15.92	LauncherActive	487	connection timed out
+boot-net	1781714965921	3	supervised	192.168.1.117	255	721	17583	18228	0	2	301	271	67	18327	18382	15.85	LauncherActive	486	connection timed out
+boot-net	1781714993429	1	raw	192.168.1.117	229	2652	23320	23800	0	1	283	139	56	23906	23971	16.80	LauncherActive	486	connection timed out
+boot-net	1781715019634	2	raw	192.168.1.117	232	2628	23296	23910	0	0	242	272	97	24016	24094	17.06	LauncherActive	547	connection timed out
