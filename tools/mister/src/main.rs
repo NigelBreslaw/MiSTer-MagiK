@@ -2078,9 +2078,9 @@ fn port_open(timeout: Duration) -> bool {
     TcpStream::connect_timeout(&addr, timeout).is_ok()
 }
 
-fn userspace_ready() -> Option<String> {
-    let sess = connect(4).ok()?;
-    let out = exec(&sess, "pidof MiSTer || echo BOOTING", true).ok()?;
+fn userspace_ready_fast() -> Option<String> {
+    let timed = connect_timed(2).ok()?;
+    let out = exec(&timed.sess, "pidof MiSTer || echo BOOTING", true).ok()?;
     Some(out.stdout.trim().to_string())
 }
 
@@ -2103,11 +2103,12 @@ fn wait_down(max_seconds: f64) -> bool {
 fn wait_up(max_seconds: f64) -> Result<i32> {
     let start = Instant::now();
     let mut attempt = 0;
+    let mut last_print = Duration::MAX;
     while start.elapsed().as_secs_f64() < max_seconds {
         attempt += 1;
         let elapsed = start.elapsed().as_secs_f64();
-        if port_open(Duration::from_millis(1500)) {
-            if let Some(status) = userspace_ready() {
+        if port_open(Duration::from_millis(150)) {
+            if let Some(status) = userspace_ready_fast() {
                 let mister = if status == "BOOTING" {
                     "booting".to_string()
                 } else {
@@ -2120,8 +2121,12 @@ fn wait_up(max_seconds: f64) -> Result<i32> {
                 return Ok(0);
             }
         }
-        println!("  [{elapsed:5.1}s] waiting for ssh...");
-        thread::sleep(Duration::from_secs(1));
+        if last_print == Duration::MAX || start.elapsed().saturating_sub(last_print).as_secs() >= 1
+        {
+            println!("  [{elapsed:5.1}s] waiting for ssh...");
+            last_print = start.elapsed();
+        }
+        thread::sleep(Duration::from_millis(250));
     }
     println!("TIMEOUT: device not ready after {max_seconds:.0}s");
     Ok(1)

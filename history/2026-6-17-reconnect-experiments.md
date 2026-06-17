@@ -69,3 +69,25 @@ driver still appears around 9.35s and link-up around 13.47s. Starting dhcpcd
 earlier in init order does not pull the actual eth0 device initialization much
 earlier. The device was restored with
 `scripts/mister-early-dhcpcd-service.sh remove` after the experiment.
+
+## Experiment 3 - Tighten Host `reboot-wait` Polling
+
+Hypothesis: the host wait loop was losing time because each failed wait attempt
+used a long TCP probe plus a 1s sleep. Tightening the probe to 150ms and polling
+roughly four times per second should reduce the wrapper's own overhead.
+
+Fresh before samples from `scripts/mister reboot-wait`:
+
+- 18.2s wait-up time
+- 15.7s wait-up time
+- Average: 16.95s
+
+After samples:
+
+- 16.5s wait-up time
+- 16.1s wait-up time
+- Average: 16.30s
+
+Result: small keeper. This does not change MiSTer boot/network readiness, but it
+removes coarse host-side polling and trims about 0.65s from the two-sample
+average while reducing worst-case miss time.
