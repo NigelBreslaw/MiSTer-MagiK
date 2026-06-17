@@ -27,7 +27,7 @@ make_payload() {
 
 LOG=/tmp/mister-magik-fastsshd.log
 PLOG=/media/fat/mister-magik/bootlogs/fastsshd.log
-SEQ=/media/fat/mister-magik/bootlogs/fastsshd.seq
+SEQ=/tmp/mister-magik-fastsshd.seq
 BOOT_ID=unknown
 
 stamp() {
@@ -37,16 +37,22 @@ stamp() {
 log() {
   line="$(stamp) fastsshd $*"
   echo "$line" >>"$LOG"
-  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
-  echo "$line" >>"$PLOG" 2>/dev/null || true
 }
 
 next_boot_id() {
-  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
   n="$(cat "$SEQ" 2>/dev/null || echo 0)"
   n=$((n + 1))
   echo "$n" >"$SEQ" 2>/dev/null || true
   echo "$n"
+}
+
+persist_later() {
+  sleep 20
+  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
+  {
+    echo "--- fastsshd deferred boot=$BOOT_ID uptime=$(stamp) ---"
+    cat "$LOG" 2>/dev/null || true
+  } >>"$PLOG" 2>/dev/null || true
 }
 
 monitor_sshd() {
@@ -66,6 +72,7 @@ case "$1" in
     : >"$LOG"
     BOOT_ID="$(next_boot_id)"
     log "start boot=$BOOT_ID"
+    persist_later &
     mkdir -p /var/run /run /var/empty /var/lock
     if ! pidof sshd >/dev/null 2>&1; then
       /usr/bin/ssh-keygen -A >>"$LOG" 2>&1 || log "ssh_keygen_failed"
