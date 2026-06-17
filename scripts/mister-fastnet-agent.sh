@@ -70,6 +70,18 @@ configure_once() {
   return 0
 }
 
+refresh_after_carrier() {
+  log "post_carrier_refresh_start boot=$BOOT_ID"
+  runlog /sbin/ifconfig eth0 "$IP" netmask "$NETMASK" up || true
+  runlog /sbin/route add default gw "$GW" eth0 || true
+  if command -v arping >/dev/null 2>&1; then
+    runlog arping -A -c 1 -I eth0 "$IP" || true
+  fi
+  carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo "?")"
+  operstate="$(cat /sys/class/net/eth0/operstate 2>/dev/null || echo "?")"
+  log "post_carrier_refresh_done boot=$BOOT_ID carrier=$carrier operstate=$operstate"
+}
+
 snapshot() {
   carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo "?")"
   operstate="$(cat /sys/class/net/eth0/operstate 2>/dev/null || echo "?")"
@@ -106,6 +118,7 @@ worker() {
     carrier="$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo 0)"
     if [ "$carrier" = "1" ]; then
       log "carrier_ready boot=$BOOT_ID"
+      refresh_after_carrier
       j=0
       while [ "$j" -lt 40 ]; do
         snapshot
