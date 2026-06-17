@@ -267,3 +267,19 @@ The inspected successful run had early sshd listening around 5.6s, carrier up
 around 9.7s, route/IP stable after carrier, and the sshd listener alive through
 the post-carrier snapshots. The extra logging adds some drag but gives SD-card
 recoverable evidence if the intermittent host-down failure recurs.
+
+Manual reboot follow-up after the intermittent timeout:
+
+- User power/manual reboot came back cleanly when checked after the fact.
+- Current boot log: FastSSHD started at 3.70s, sshd started at 4.93s, carrier
+  was observed up at 7.98s.
+- Fresh supervised sample with 40s timeout: TCP/22 at 12.789s, SSH command-ready
+  at 13.385s, MiSTer-reported uptime 10.99s at command execution.
+- Matching boot log: FastSSHD started at 4.40s, sshd started at 5.63s, carrier
+  was observed up at 9.83s.
+
+Conclusion: FastSSHD is not the current limiter on successful boots. The sshd
+daemon is alive several seconds before the host can connect. The dominant
+remaining delay is Ethernet carrier/link readiness and host visibility after
+carrier, so the next serious experiment should target PHY/link negotiation or
+Mac-side neighbor discovery, one variable at a time.
