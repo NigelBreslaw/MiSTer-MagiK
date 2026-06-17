@@ -96,6 +96,11 @@ run_capture() {
     record_ok "$label"
   else
     record_fail "$label"
+    case "$label" in
+      *reboot*|*Reboot*)
+        collect_boot_network_logs || true
+        ;;
+    esac
   fi
 }
 
@@ -584,6 +589,16 @@ assert_artifacts_complete() {
   fi
 }
 
+collect_boot_network_logs() {
+  remote_get_optional "/tmp/mister-magik-agent.log" "mister-magik-agent-current.log"
+  remote_get_optional "/tmp/mister-magik-agent.boot.out" "mister-magik-agent-boot.out"
+  remote_get_optional "/media/fat/mister-magik/bootlogs/agent.log" "mister-magik-agent-persistent.log"
+  remote_get_optional "/media/fat/mister-magik/bootlogs/agent.seq" "mister-magik-agent.seq"
+  remote_get_optional "/media/fat/mister-magik/bootlogs/fastnet.log" "mister-magik-fastnet-persistent.log"
+  remote_get_optional "/media/fat/mister-magik/bootlogs/fastready.log" "mister-magik-fastready.log"
+  remote_get_optional "/media/fat/mister-magik/bootlogs/fastsshd.log" "mister-magik-fastsshd.log"
+}
+
 collect_artifacts() {
   status_json "final" || true
   doctor_json "final" || true
@@ -595,6 +610,7 @@ collect_artifacts() {
   remote_get_optional "/tmp/mister-magik-main.log" "main.log"
   remote_get_optional "/tmp/mister-magik-launcher-frame-profile.tsv" "launcher-frame-profile.tsv"
   remote_get_optional "/tmp/mister-magik-visual-samples.tsv" "visual-samples.tsv"
+  collect_boot_network_logs
 }
 
 finish() {

@@ -2224,6 +2224,40 @@ fn tcp_probe_label(timeout: Duration) -> String {
     }
 }
 
+fn host_wait_diagnostics() -> String {
+    let host = host();
+    let tcp = tcp_probe_label(Duration::from_millis(500));
+    let arp = command_summary("arp", &["-an"], Some(&host));
+    let ping = if cfg!(target_os = "macos") {
+        command_summary("ping", &["-c", "1", "-W", "1000", &host], None)
+    } else {
+        command_summary("ping", &["-c", "1", "-W", "1", &host], None)
+    };
+    format!("tcp={tcp}; arp={arp}; ping={ping}")
+}
+
+fn command_summary(program: &str, args: &[&str], contains: Option<&str>) -> String {
+    match Command::new(program).args(args).output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let mut lines = stdout
+                .lines()
+                .chain(stderr.lines())
+                .filter(|line| contains.map(|needle| line.contains(needle)).unwrap_or(true))
+                .map(str::trim)
+                .filter(|line| !line.is_empty());
+            let text = lines.next().unwrap_or("no matching output");
+            format!(
+                "rc={} {}",
+                output.status.code().unwrap_or(-1),
+                text.replace('\t', " ")
+            )
+        }
+        Err(err) => format!("error={}", err),
+    }
+}
+
 fn boot_tcp_profile(args: &[String]) -> Result<()> {
     let samples = parse_profile_count(args, 1);
     let raw = args.iter().any(|arg| arg == "--raw");
@@ -2583,6 +2617,7 @@ fn wait_up(max_seconds: f64) -> Result<i32> {
         thread::sleep(Duration::from_millis(250));
     }
     println!("TIMEOUT: device not ready after {max_seconds:.0}s");
+    println!("diagnostics: {}", host_wait_diagnostics());
     Ok(1)
 }
 
