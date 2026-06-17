@@ -411,3 +411,30 @@ but it lowers device-side carrier timing and avoids the observed 15.8s logging
 drag. The remaining gap is now clearly after carrier/sshd readiness: the device
 has sshd alive around 4.5s and carrier around 8s, while the Mac still sees
 TCP/22 around 12.7s.
+
+## Experiment 12 - Remove FastNet Pre-Carrier Arping
+
+Hypothesis: `arping -c 1` takes about one second on the MiSTer. FastNet was
+running `arping -A` inside every configure pass before checking carrier, so the
+nominal 0.25s retry loop was really much slower. Removing that `arping` might
+make carrier detection and IP setup happen earlier.
+
+Fresh before sample with deferred logging and normal FastNet arping:
+
+- 13.306s SSH command-ready
+- TCP/22 visible at 12.780s
+
+After samples with pre-carrier `arping` removed:
+
+- 13.385s SSH command-ready
+- 15.912s SSH command-ready
+- 13.351s SSH command-ready
+- Average: 14.216s
+
+The loop did run much faster internally, but the connection behavior did not
+improve and one slow `15.9s` sample returned. The inspected boot still had sshd
+started around 4.55s and carrier around 8.1-8.2s, so removing ARP did not unlock
+earlier host visibility. Normal FastNet arping was restored and reinstalled.
+
+Result: rejected. Although `arping` is slow, its gratuitous ARP appears to be
+helping enough that removing it worsens reliability/timing.
