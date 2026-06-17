@@ -863,7 +863,7 @@ impl PreviewArchive {
             let name = String::from_utf8(name)
                 .map_err(|e| format!("preview archive entry name utf8: {e}"))?;
             entries.insert(
-                name,
+                name.to_ascii_lowercase(),
                 PreviewArchiveEntry {
                     raw_len,
                     compressed_len,
@@ -883,7 +883,8 @@ impl PreviewArchive {
     }
 
     fn load_timed(&self, name: &str) -> Result<Option<LoadedPreviewPixels>, String> {
-        let Some(entry) = self.entries.get(name).copied() else {
+        let key = name.to_ascii_lowercase();
+        let Some(entry) = self.entries.get(&key).copied() else {
             return Ok(None);
         };
         let total_t = Instant::now();
@@ -1416,6 +1417,27 @@ mod tests {
     }
 
     #[test]
+    fn archive_lookup_matches_mixed_case_cache_names() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-case-{}.mmraw",
+            std::process::id()
+        ));
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_raw_archive(&path, "sonic.rgb565", &payload);
+
+        let archive = PreviewArchive::open(&path).expect("open raw archive");
+        let loaded = archive
+            .load_timed("Sonic.rgb565")
+            .expect("load mixed-case cache name")
+            .expect("archive entry");
+
+        assert_eq!(loaded.image.width(), 2);
+        assert_eq!(loaded.image.height(), 1);
+        assert_eq!(loaded.image.decoded_bytes(), 16);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn archive_preload_is_opt_in() {
         assert!(!preview_archive_preload_enabled_from_env(None));
         assert!(!preview_archive_preload_enabled_from_env(Some("0")));
@@ -1487,6 +1509,46 @@ mod tests {
     }
 
     #[test]
+    fn load_preview_reads_raw565_cache_and_reports_dimensions() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-preview-load-{}", std::process::id()));
+        let image_path = root.join("media/screenshot/Tiny.png");
+        std::fs::create_dir_all(image_path.parent().unwrap()).expect("create screenshot dir");
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Hybrid,
+            max_w: 320,
+            max_h: 320,
+        };
+        let cache_path = raw565_preview_cache_path(image_path.to_str().unwrap(), resize);
+        std::fs::create_dir_all(cache_path.parent().unwrap()).expect("create cache dir");
+        std::fs::write(&cache_path, raw565_fixture(3, 1, &[0xf800, 0x07e0, 0x001f]))
+            .expect("write raw565 cache");
+
+        let req = PreviewRequest {
+            generation: 88,
+            title: "Tiny".to_string(),
+            image_path: image_path.display().to_string(),
+            requested_at: Instant::now(),
+            priority: PreviewPriority::Selected,
+        };
+        let mut cache = PreviewDecodedCache::new(2);
+        let result = load_preview(req, &mut cache);
+
+        assert_eq!(result.generation, 88);
+        assert_eq!(result.title, "Tiny");
+        assert_eq!(result.source_width, 3);
+        assert_eq!(result.source_height, 1);
+        assert_eq!(result.decoded_bytes, 16);
+        assert_eq!(result.storage_format.label(), "raw-rgb565");
+        assert_eq!(result.resize_filter, PreviewResizeFilter::Hybrid);
+        let image = result.image.expect("decoded image");
+        assert_eq!(image.width(), 3);
+        assert_eq!(image.height(), 1);
+        assert_eq!(image.decoded_bytes(), 16);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn resize_filters_parse_aliases_and_default_to_off() {
         assert_eq!(
             PreviewResizeFilter::from_label(" nearest_neighbor\n"),
@@ -1524,5 +1586,37 @@ mod tests {
         assert_eq!(parse_size("640x480"), Some((640, 480)));
         assert_eq!(parse_size("640X480"), Some((640, 480)));
         assert_eq!(parse_size("640,480"), None);
+    }
+
+    fn raw565_fixture(width: u32, height: u32, pixels: &[u16]) -> Vec<u8> {
+        let stride_bytes = ((width * 2) as usize).next_multiple_of(16) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MM56501\0");
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&stride_bytes.to_le_bytes());
+        for row in 0..height as usize {
+            let row_start = row * width as usize;
+            let row_end = row_start + width as usize;
+            for pixel in &pixels[row_start..row_end] {
+                bytes.extend_from_slice(&pixel.to_le_bytes());
+            }
+            bytes.resize(20 + (row + 1) * stride_bytes as usize, 0);
+        }
+        bytes
+    }
+
+    fn write_raw_archive(path: &Path, name: &str, payload: &[u8]) {
+        let index_len = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::RAW_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(payload);
+        std::fs::write(path, bytes).expect("write raw archive fixture");
     }
 }

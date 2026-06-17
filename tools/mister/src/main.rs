@@ -3590,9 +3590,17 @@ H: Handlers=event3 js0"#
             "--settle".to_string(),
             "12".to_string(),
             "--keep-enabled".to_string(),
+            "--software-list".to_string(),
+            "nes.xml".to_string(),
+            "--software-list".to_string(),
+            "snes.xml".to_string(),
         ];
         assert_eq!(option_value(&args, "--settle"), Some("12".to_string()));
         assert_eq!(option_value(&args, "--missing"), None);
+        assert_eq!(
+            option_values(&args, "--software-list"),
+            vec!["nes.xml".to_string(), "snes.xml".to_string()]
+        );
     }
 
     #[test]
@@ -3631,6 +3639,47 @@ H: Handlers=event3 js0"#
             normalize_screenshot_title("Virtua Fighter 2 (Japan) (Rev A)"),
             "virtua fighter 2"
         );
+    }
+
+    #[test]
+    fn console_software_list_names_accept_common_aliases() {
+        assert_eq!(console_software_list_name("nes").unwrap(), "nes");
+        assert_eq!(console_software_list_name("md").unwrap(), "megadriv");
+        assert_eq!(console_software_list_name("genesis").unwrap(), "megadriv");
+        assert!(console_software_list_name("pcengine").is_err());
+    }
+
+    #[test]
+    fn console_screenshot_overrides_parse_tsv_and_report_bad_rows() {
+        let path = temp_path("console-overrides.tsv");
+        fs::write(
+            &path,
+            "# comment\nVirtua Fighter 2 (Japan)\tvf2\n\nSonic\tsonic\n",
+        )
+        .unwrap();
+
+        let overrides = load_console_screenshot_overrides(Some(&path)).unwrap();
+        assert_eq!(
+            overrides
+                .get("Virtua Fighter 2 (Japan)")
+                .map(String::as_str),
+            Some("vf2")
+        );
+        assert_eq!(overrides.get("Sonic").map(String::as_str), Some("sonic"));
+
+        fs::write(&path, "missing software only\n").unwrap();
+        let err = load_console_screenshot_overrides(Some(&path))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing software name"));
+
+        fs::write(&path, "source\tsoftware\textra\n").unwrap();
+        let err = load_console_screenshot_overrides(Some(&path))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expected two TSV columns"));
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]

@@ -533,8 +533,7 @@ pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
         return Err("library-sql only allows read-only SELECT/WITH queries".into());
     }
 
-    let metadata =
-        std::fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
     if !metadata.is_file() {
         return Err(format!("{} is not a file", path.display()));
     }
@@ -2897,11 +2896,13 @@ fn mame_software_identity_for_discovery(
     metadata: &MameSoftwareMetadata,
     software_hash_cache: &mut SoftwareHashCache,
 ) -> Option<SoftwareIdentity> {
-    mame_software_identity_for_discovery_with_hash_matcher(discovery, metadata, |discovery,
-                                                                                 list_name,
-                                                                                 metadata| {
-        match_software_by_file_hash(discovery, list_name, metadata, software_hash_cache)
-    })
+    mame_software_identity_for_discovery_with_hash_matcher(
+        discovery,
+        metadata,
+        |discovery, list_name, metadata| {
+            match_software_by_file_hash(discovery, list_name, metadata, software_hash_cache)
+        },
+    )
 }
 
 fn mame_software_identity_for_discovery_with_hash_matcher(
@@ -4256,7 +4257,11 @@ fn write_sqlite_scan_with_sources(
         report_library_import_timing(
             "insert_payloads",
             stage_t,
-            format!("normal_files={} entries={}", scan.normal_files.len(), scan.entries.len()),
+            format!(
+                "normal_files={} entries={}",
+                scan.normal_files.len(),
+                scan.entries.len()
+            ),
         );
     }
     {
@@ -4337,12 +4342,11 @@ fn write_sqlite_scan_with_sources(
                 report_sqlite_import_progress(&mut progress, idx, discovery_total);
             }
             let system_id = catalog_system_id_for_discovery(discovery);
-            let software_identity =
-                mame_software_identity_for_discovery(
-                    discovery,
-                    &software_metadata,
-                    &mut software_hash_cache,
-                );
+            let software_identity = mame_software_identity_for_discovery(
+                discovery,
+                &software_metadata,
+                &mut software_hash_cache,
+            );
             let software_image_path = software_identity.as_ref().and_then(|identity| {
                 console_preview_image_path(identity, &software_metadata, &console_assets)
             });
@@ -4499,7 +4503,10 @@ fn write_sqlite_scan_with_sources(
                 report_library_import_timing(
                     "insert_games_chunk",
                     chunk_t,
-                    format!("from={} to={} total={discovery_total}", chunk_start, written),
+                    format!(
+                        "from={} to={} total={discovery_total}",
+                        chunk_start, written
+                    ),
                 );
                 chunk_t = Instant::now();
                 chunk_start = written;
@@ -4724,11 +4731,7 @@ fn write_sqlite_scan_with_sources(
     Ok(())
 }
 
-fn report_library_import_timing(
-    stage: &str,
-    started: Instant,
-    detail: impl std::fmt::Display,
-) {
+fn report_library_import_timing(stage: &str, started: Instant, detail: impl std::fmt::Display) {
     println!(
         "library_import_timing\t{stage}\t{}\t{detail}",
         started.elapsed().as_micros()
@@ -5965,9 +5968,10 @@ mod tests {
                 parent_name: None,
             },
         );
-        metadata
-            .title_index
-            .insert(("snes".to_string(), "example-game".to_string()), vec!["example".to_string()]);
+        metadata.title_index.insert(
+            ("snes".to_string(), "example-game".to_string()),
+            vec!["example".to_string()],
+        );
         let mut discovery = payload("/media/fat/games/SNES/Example Game (USA).sfc");
         discovery.platform_id = "snes".to_string();
         discovery.title = "Example Game (USA)".to_string();
@@ -5990,14 +5994,16 @@ mod tests {
         let rom_path = root.join("Fixture.sfc");
         std::fs::write(&rom_path, b"fixture-rom").expect("write rom");
         let mut metadata = MameSoftwareMetadata::default();
-        metadata
-            .hash_index
-            .insert(("snes".to_string(), 11, crc32(b"fixture-rom")), vec!["fixture".to_string()]);
+        metadata.hash_index.insert(
+            ("snes".to_string(), 11, crc32(b"fixture-rom")),
+            vec!["fixture".to_string()],
+        );
         let discovery = payload(&rom_path.display().to_string());
 
         let mut cache = SoftwareHashCache::default();
-        let matched =
-            match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, false, &mut cache);
+        let matched = match_software_by_file_hash_with_cache(
+            &discovery, "snes", &metadata, false, &mut cache,
+        );
 
         assert_eq!(matched, None);
         let _ = std::fs::remove_dir_all(root);
@@ -6009,9 +6015,10 @@ mod tests {
         let rom_path = root.join("Fixture.sfc");
         std::fs::write(&rom_path, b"fixture-rom").expect("write rom");
         let mut metadata = MameSoftwareMetadata::default();
-        metadata
-            .hash_index
-            .insert(("snes".to_string(), 11, crc32(b"fixture-rom")), vec!["fixture".to_string()]);
+        metadata.hash_index.insert(
+            ("snes".to_string(), 11, crc32(b"fixture-rom")),
+            vec!["fixture".to_string()],
+        );
         let discovery = payload(&rom_path.display().to_string());
 
         let mut cache = SoftwareHashCache::default();
