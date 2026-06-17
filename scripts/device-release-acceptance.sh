@@ -259,7 +259,7 @@ EOF
 
 if [ "$DEPLOY" -eq 1 ]; then
   run_required_capture "deploy-main-mister-experiment" "$ROOT/scripts/deploy-main-mister-experiment.sh"
-  run_required_capture "reboot-after-deploy" "$MISTER" reboot-wait
+  run_required_capture "raw-reboot-after-deploy" "$MISTER" reboot-wait --raw
 fi
 
 run_required_capture "wait-device" "$MISTER" wait 120
