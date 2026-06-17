@@ -55,6 +55,7 @@ scripts/mister agent ping
 scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent boot-profile 3 --timeout 40
+scripts/mister agent boot-profile 1 --supervised --timeout 40
 ```
 
 `ping` confirms the authenticated TCP path. `status` returns:
@@ -68,7 +69,9 @@ scripts/mister agent boot-profile 3 --timeout 40
 keeps the newest 512 lines and reports how many older lines were dropped.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
-agent response against first SSH command readiness. Rows are appended to:
+agent response against first SSH command readiness. It defaults to Linux
+`/sbin/reboot`; pass `--supervised` only when validating the MagiK visual
+lockdown reset path. Rows are appended to:
 
 ```text
 history/toolchain-bench/results-agent.tsv

@@ -2,3 +2,7 @@ kind	ts_unix_ms	sample	mode	host	reboot_issue_ms	down_ms	agent_ready_ms	ssh_exec
 agent-boot	1781729647881	1	supervised	192.168.1.117	244	753	13696	14397			753			1	0	0	6	0	0	0	1	274	272	80	7121	12.01	753:timeout,13696:ok	connection timed out
 agent-boot	1781729664528	2	supervised	192.168.1.117	349	738	11526	12131			738			1	0	0	5	0	0	0	0	231	138	84	5337	9.77	738:timeout,11526:ok	connection timed out
 agent-boot	1781729679015	3	supervised	192.168.1.117	432	758	13703	14456			758			1	0	0	6	0	0	0	0	168	271	161	7501	12.05	758:timeout,13703:ok	connection timed out
+agent-boot	1781730304879	1	raw	192.168.1.117	227	3204	17316	18281			3204			1	0	0	7	0	0	0	1	231	272	321	6301	11.37	3204:timeout,17316:ok	connection timed out
+agent-boot	1781730325391	2	raw	192.168.1.117	384	9384	23488	24242			9384			1	0	0	7	0	0	0	2	237	271	97	6254	11.13	9384:timeout,23488:ok	connection timed out
+agent-boot	1781730352024	3	raw	192.168.1.117	279	10698	24816	25541			10698			1	0	0	7	0	0	0	0	218	271	107	6665	11.20	10698:timeout,24816:ok	connection timed out
+agent-boot	1781730518766	1	raw	192.168.1.117	229	3093	17198	17891			3093			1	0	0	7	0	0	0	0	173	273	83	5953	10.92	3093:timeout,17198:ok	connection timed out
