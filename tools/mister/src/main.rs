@@ -2040,6 +2040,26 @@ fn agent_cli(args: &[String]) -> Result<()> {
                 serde_json::to_string_pretty(reply.response.get("result").unwrap_or(&Value::Null))?
             );
         }
+        "logs" => {
+            let json_out = args.iter().any(|arg| arg == "--json");
+            let reply = agent_request("logs", json!({}), Duration::from_secs(2))?;
+            let result = reply.response.get("result").unwrap_or(&Value::Null);
+            if json_out {
+                println!("{}", serde_json::to_string_pretty(result)?);
+            } else if let Some(lines) = result.get("lines").and_then(Value::as_array) {
+                for line in lines.iter().filter_map(Value::as_str) {
+                    println!("{line}");
+                }
+                eprintln!(
+                    "agent logs: {} line(s), {} dropped, {}ms",
+                    result.get("count").and_then(Value::as_u64).unwrap_or(0),
+                    result.get("dropped").and_then(Value::as_u64).unwrap_or(0),
+                    reply.elapsed_ms
+                );
+            } else {
+                println!("{}", serde_json::to_string_pretty(result)?);
+            }
+        }
         "boot-profile" => {
             agent_boot_profile(&args[1..])?;
         }
@@ -2051,7 +2071,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|boot-profile>\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw]"
+        "usage: scripts/mister agent <ping|status|logs|boot-profile>\n       logs [--json]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw]"
     );
 }
 
