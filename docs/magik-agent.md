@@ -56,6 +56,7 @@ scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
 scripts/mister agent diagnostics --out build/agent-diagnostics/sample
+scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 scripts/mister agent magik status
 scripts/mister agent magik restart-launcher
 scripts/mister agent reboot-wait --timeout 40
@@ -131,6 +132,14 @@ command, before/after MagiK pids, pid changes, and errors into the RAM ring.
 Responses return parsed Main and Slint status files plus current pids. The
 `slint_status_current` flag is `false` when the status file belongs to an exited
 launcher process, which is expected immediately after `suspend`.
+
+`deploy-magik-bin` uploads a local `mister-magik-fb` binary over the agent TCP
+port using a JSON header followed by raw payload bytes. The host includes byte
+count and FNV64 checksum. The agent verifies the payload in RAM, asks Main to
+suspend the launcher, writes a same-directory `.upload` file under
+`/media/fat/mister-magik/`, renames it over the final binary, marks it
+executable, then resumes the launcher. Existing `scripts/mister deploy-magik-bin`
+remains the SSH/SFTP fallback.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to Linux

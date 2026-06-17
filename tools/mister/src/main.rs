@@ -1947,6 +1947,15 @@ fn bytes_for_profile(size: usize) -> Vec<u8> {
     bytes
 }
 
+fn fnv64_hex(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 fn parse_profile_count(args: &[String], default: usize) -> usize {
     args.iter()
         .find(|arg| !arg.starts_with('-'))
@@ -2107,6 +2116,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "diagnostics" => {
             agent_diagnostics(&args[1..])?;
         }
+        "deploy-magik-bin" => {
+            agent_deploy_magik_bin(&args[1..])?;
+        }
         "magik" => {
             agent_magik(&args[1..])?;
         }
@@ -2124,8 +2136,47 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--supervised]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--supervised]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
     );
+}
+
+fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
+    let local = args
+        .first()
+        .ok_or("agent deploy-magik-bin needs LOCAL [REMOTE]")?;
+    let remote = args
+        .get(1)
+        .map(String::as_str)
+        .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+    let total_t = Instant::now();
+    let read_t = Instant::now();
+    let bytes = fs::read(local)?;
+    let read_ms = read_t.elapsed().as_millis();
+    let checksum = fnv64_hex(&bytes);
+    let args = json!({
+        "remote": remote,
+        "size": bytes.len() as u64,
+        "checksum": checksum,
+    });
+    let reply = agent_stream_request(
+        "deploy_magik_bin_stream",
+        args,
+        &bytes,
+        Duration::from_secs(120),
+    )?;
+    let result = reply.response.get("result").unwrap_or(&Value::Null);
+    println!(
+        "agent_deploy_magik_bin local={} remote={} bytes={} checksum={} total_ms={} read_ms={} request_ms={} result={}",
+        local,
+        remote,
+        bytes.len(),
+        checksum,
+        total_t.elapsed().as_millis(),
+        read_ms,
+        reply.elapsed_ms,
+        serde_json::to_string(result)?
+    );
+    Ok(())
 }
 
 fn agent_magik(args: &[String]) -> Result<()> {
@@ -2413,6 +2464,39 @@ fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result<AgentRespo
     stream.flush()?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
+    parse_agent_response_line(line, start)
+}
+
+fn agent_stream_request(
+    cmd: &str,
+    args: Value,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<AgentResponse> {
+    let token = agent_token()?;
+    let addr = format!("{}:{AGENT_PORT}", host())
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = json!({
+        "token": token,
+        "id": 1,
+        "cmd": cmd,
+        "args": args,
+    });
+    let start = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    writeln!(stream, "{request}")?;
+    stream.write_all(payload)?;
+    stream.flush()?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    parse_agent_response_line(line, start)
+}
+
+fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentResponse> {
     if line.trim().is_empty() {
         return Err("empty response from agent".into());
     }
