@@ -283,3 +283,36 @@ daemon is alive several seconds before the host can connect. The dominant
 remaining delay is Ethernet carrier/link readiness and host visibility after
 carrier, so the next serious experiment should target PHY/link negotiation or
 Mac-side neighbor discovery, one variable at a time.
+
+## Experiment 8 - Restrict FastNet Link Advertisement To 100 Full
+
+Hypothesis: gigabit autonegotiation might be the remaining carrier delay. If
+FastNet restricts eth0 advertisement to 100baseT/full with autoneg still on, the
+link might settle closer to early sshd readiness.
+
+Fresh before samples with FastNet + FastSSHD:
+
+- 13.376s SSH command-ready
+- 13.594s SSH command-ready
+- Average: 13.485s
+
+Live probe:
+
+- `ethtool -s eth0 advertise 0x008 autoneg on` succeeded.
+- The live link renegotiated to 100Mb/s full and SSH stayed reachable.
+
+After boot-time FastNet advertisement samples:
+
+- 13.371s SSH command-ready
+- 13.431s SSH command-ready
+- Average: 13.401s
+
+Device-side carrier timing moved only modestly. Before boots had carrier-ready
+around 9.84s and 9.38s; after boots had carrier-ready around 9.40s and 8.63s.
+However host TCP/22 visibility remained around 12.8s and command-ready remained
+around 13.4s. Stock networking later restored the normal gigabit/all-modes
+advertisement, so the tweak was also not a durable link-mode policy.
+
+Result: rejected. The boot-time 100/full advertisement was removed and the
+known-good FastNet service was reinstalled. The remaining delay is not explained
+by gigabit mode selection alone.
