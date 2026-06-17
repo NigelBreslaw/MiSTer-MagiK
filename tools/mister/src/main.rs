@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use ssh2::{ExtendedData, Session};
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -79,6 +79,12 @@ fn run_cli() -> Result<()> {
         "wait" => {
             let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
             std::process::exit(wait_up(secs)?);
+        }
+        "connection-profile" => {
+            connection_profile(&args)?;
+        }
+        "boot-net-profile" => {
+            boot_net_profile(&args)?;
         }
         "reboot" | "reboot-wait" => {
             let raw = take_raw_reboot_flag(&mut args);
@@ -216,7 +222,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|get|db|library-db|wait|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|get|db|library-db|wait|connection-profile|boot-net-profile|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
 }
 
@@ -1718,6 +1724,309 @@ fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
     let mut dst = File::create(local)?;
     io::copy(&mut src, &mut dst)?;
     Ok(())
+}
+
+struct TimedSession {
+    sess: Session,
+    resolve_ms: u128,
+    tcp_ms: u128,
+    handshake_ms: u128,
+    auth_ms: u128,
+}
+
+fn connect_timed(timeout_secs: u64) -> Result<TimedSession> {
+    let resolve_t = Instant::now();
+    let addr = format!("{}:22", host())
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer host")?;
+    let resolve_ms = resolve_t.elapsed().as_millis();
+
+    let tcp_t = Instant::now();
+    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(timeout_secs))?;
+    let tcp_ms = tcp_t.elapsed().as_millis();
+    tcp.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
+    tcp.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
+
+    let mut sess = Session::new()?;
+    sess.set_tcp_stream(tcp);
+    let handshake_t = Instant::now();
+    sess.handshake()?;
+    let handshake_ms = handshake_t.elapsed().as_millis();
+    let auth_t = Instant::now();
+    sess.userauth_password(&user(), &pass())?;
+    let auth_ms = auth_t.elapsed().as_millis();
+    if !sess.authenticated() {
+        return Err("SSH password authentication failed".into());
+    }
+    Ok(TimedSession {
+        sess,
+        resolve_ms,
+        tcp_ms,
+        handshake_ms,
+        auth_ms,
+    })
+}
+
+fn append_profile_row(path: &str, header: &str, row: &str) -> Result<()> {
+    let path = Path::new(path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let needs_header = !path.exists() || path.metadata()?.len() == 0;
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if needs_header {
+        writeln!(file, "{header}")?;
+    }
+    writeln!(file, "{row}")?;
+    Ok(())
+}
+
+fn unix_ms_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn bytes_for_profile(size: usize) -> Vec<u8> {
+    let mut x = 0x4d49_5354_4552_4d47u64;
+    let mut bytes = Vec::with_capacity(size);
+    while bytes.len() < size {
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+        bytes.extend_from_slice(&x.to_le_bytes());
+    }
+    bytes.truncate(size);
+    bytes
+}
+
+fn parse_profile_count(args: &[String], default: usize) -> usize {
+    args.iter()
+        .find(|arg| !arg.starts_with('-'))
+        .and_then(|arg| arg.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn parse_profile_bytes(args: &[String], default: usize) -> usize {
+    option_value(args, "--bytes")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn sftp_write_profile(sess: &Session, remote: &str, bytes: &[u8]) -> Result<u128> {
+    let sftp = sess.sftp()?;
+    let t = Instant::now();
+    let mut dst = sftp.create(Path::new(remote))?;
+    dst.write_all(bytes)?;
+    Ok(t.elapsed().as_millis())
+}
+
+fn connection_profile(args: &[String]) -> Result<()> {
+    let samples = parse_profile_count(args, 5);
+    let bytes_len = parse_profile_bytes(args, 4 * 1024 * 1024);
+    let out_path = "history/toolchain-bench/results-connection-profile.tsv";
+    let header = "kind\tts_unix_ms\tsample\thost\tbytes\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tsftp_init_ms\tput_tmp_ms\tput_tmp_mib_s\tput_fat_ms\tput_fat_mib_s\tuptime\tnote";
+    println!("{header}");
+    let bytes = bytes_for_profile(bytes_len);
+    for sample in 1..=samples {
+        let ts = unix_ms_now();
+        match connect_timed(10) {
+            Ok(timed) => {
+                let exec_t = Instant::now();
+                let uptime_out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                let exec_ms = exec_t.elapsed().as_millis();
+                let uptime = uptime_out.stdout.split_whitespace().next().unwrap_or("");
+                let sftp_t = Instant::now();
+                let _ = timed.sess.sftp()?;
+                let sftp_init_ms = sftp_t.elapsed().as_millis();
+                let tag = format!("{}-{sample}-{ts}", std::process::id());
+                let tmp_remote = format!("/tmp/mister-magik-profile-{tag}.bin");
+                let fat_remote = format!("/media/fat/mister-magik/profile-tmp-{tag}.bin");
+                let put_tmp_ms = sftp_write_profile(&timed.sess, &tmp_remote, &bytes)?;
+                let _ = exec(
+                    &timed.sess,
+                    "mkdir -p /media/fat/mister-magik >/dev/null 2>&1 || true",
+                    true,
+                );
+                let put_fat_ms = sftp_write_profile(&timed.sess, &fat_remote, &bytes)?;
+                let _ = exec(
+                    &timed.sess,
+                    &format!("rm -f {} {}", sh(&tmp_remote), sh(&fat_remote)),
+                    true,
+                );
+                let mib = bytes_len as f64 / (1024.0 * 1024.0);
+                let tmp_mib_s = if put_tmp_ms > 0 {
+                    mib * 1000.0 / put_tmp_ms as f64
+                } else {
+                    0.0
+                };
+                let fat_mib_s = if put_fat_ms > 0 {
+                    mib * 1000.0 / put_fat_ms as f64
+                } else {
+                    0.0
+                };
+                let row = format!(
+                    "connection\t{ts}\t{sample}\t{}\t{bytes_len}\t{}\t{}\t{}\t{}\t{exec_ms}\t{sftp_init_ms}\t{put_tmp_ms}\t{tmp_mib_s:.2}\t{put_fat_ms}\t{fat_mib_s:.2}\t{uptime}\tok",
+                    host(),
+                    timed.resolve_ms,
+                    timed.tcp_ms,
+                    timed.handshake_ms,
+                    timed.auth_ms
+                );
+                println!("{row}");
+                append_profile_row(out_path, header, &row)?;
+            }
+            Err(err) => {
+                let row = format!(
+                    "connection\t{ts}\t{sample}\t{}\t{bytes_len}\t\t\t\t\t\t\t\t\t\t\t\tERROR: {err}",
+                    host()
+                );
+                println!("{row}");
+                append_profile_row(out_path, header, &row)?;
+            }
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    eprintln!("connection-profile: appended {samples} row(s) to {out_path}");
+    Ok(())
+}
+
+fn boot_net_profile(args: &[String]) -> Result<()> {
+    let samples = parse_profile_count(args, 3);
+    let raw = args.iter().any(|arg| arg == "--raw");
+    let timeout_secs = option_value(args, "--timeout")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(120.0);
+    let mode = if raw { "raw" } else { "supervised" };
+    let out_path = "history/toolchain-bench/results-boot-net.tsv";
+    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\ttcp22_ms\tssh_exec_ready_ms\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tmain_status_ms\tslint_status_ms\tuptime\tlauncher_state\tslint_frames\tnote";
+    println!("{header}");
+    for sample in 1..=samples {
+        let ts = unix_ms_now();
+        let issue_t = Instant::now();
+        let reboot_note = {
+            let sess = connect(10)?;
+            issue_reboot(&sess, raw)?
+        };
+        let reboot_issue_ms = issue_t.elapsed().as_millis();
+        let start = Instant::now();
+        let mut down_ms = None;
+        while start.elapsed().as_secs_f64() < 40.0 {
+            if !port_open(Duration::from_millis(200)) {
+                down_ms = Some(start.elapsed().as_millis());
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let mut tcp22_ms = None;
+        let mut ssh_ready_ms = None;
+        let mut resolve_ms = None;
+        let mut tcp_ms = None;
+        let mut handshake_ms = None;
+        let mut auth_ms = None;
+        let mut exec_ms = None;
+        let mut uptime = String::new();
+        let mut launcher_state = String::new();
+        let mut slint_frames = String::new();
+        let mut main_status_ms = None;
+        let mut slint_status_ms = None;
+        let mut note = reboot_note;
+
+        while start.elapsed().as_secs_f64() < timeout_secs {
+            if tcp22_ms.is_none() && port_open(Duration::from_millis(150)) {
+                tcp22_ms = Some(start.elapsed().as_millis());
+            }
+            match connect_timed(2) {
+                Ok(timed) => {
+                    let exec_t = Instant::now();
+                    let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                    let this_exec_ms = exec_t.elapsed().as_millis();
+                    if out.rc == 0 {
+                        ssh_ready_ms = Some(start.elapsed().as_millis());
+                        resolve_ms = Some(timed.resolve_ms);
+                        tcp_ms = Some(timed.tcp_ms);
+                        handshake_ms = Some(timed.handshake_ms);
+                        auth_ms = Some(timed.auth_ms);
+                        exec_ms = Some(this_exec_ms);
+                        uptime = out
+                            .stdout
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+
+                        let status_deadline = Instant::now() + Duration::from_secs(20);
+                        while Instant::now() < status_deadline {
+                            if main_status_ms.is_none() {
+                                if let Some(text) =
+                                    remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
+                                {
+                                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                                        main_status_ms = Some(start.elapsed().as_millis());
+                                        launcher_state = value
+                                            .get("launcher_state")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string();
+                                    }
+                                }
+                            }
+                            if slint_status_ms.is_none() {
+                                if let Some(text) =
+                                    remote_read(&timed.sess, "/tmp/mister-magik/status.json")
+                                {
+                                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                                        slint_status_ms = Some(start.elapsed().as_millis());
+                                        slint_frames = value
+                                            .get("frames")
+                                            .and_then(Value::as_u64)
+                                            .map(|n| n.to_string())
+                                            .unwrap_or_default();
+                                    }
+                                }
+                            }
+                            if main_status_ms.is_some() && slint_status_ms.is_some() {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(250));
+                        }
+                        break;
+                    }
+                    note = format!("exec rc {}", out.rc);
+                }
+                Err(err) => {
+                    note = err.to_string();
+                }
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+
+        let row = format!(
+            "boot-net\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{uptime}\t{launcher_state}\t{slint_frames}\t{}",
+            host(),
+            opt_ms(down_ms),
+            opt_ms(tcp22_ms),
+            opt_ms(ssh_ready_ms),
+            opt_ms(resolve_ms),
+            opt_ms(tcp_ms),
+            opt_ms(handshake_ms),
+            opt_ms(auth_ms),
+            opt_ms(exec_ms),
+            opt_ms(main_status_ms),
+            opt_ms(slint_status_ms),
+            note.replace('\t', " ")
+        );
+        println!("{row}");
+        append_profile_row(out_path, header, &row)?;
+        thread::sleep(Duration::from_secs(2));
+    }
+    eprintln!("boot-net-profile: appended {samples} row(s) to {out_path}");
+    Ok(())
+}
+
+fn opt_ms(value: Option<u128>) -> String {
+    value.map(|v| v.to_string()).unwrap_or_default()
 }
 
 fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
