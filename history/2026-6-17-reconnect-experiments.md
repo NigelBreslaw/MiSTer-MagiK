@@ -883,3 +883,66 @@ host raw reboot. The extra wall-clock time is mostly before the board drops:
 the host raw path loses SSH after about 2.0s, while this agent-command sample
 did not see both TCP ports drop until 8.642s. Once the reboot was underway, the
 boot timeline was healthy and RX woke normally.
+
+## Experiment 22 - Agent MagiK Supervisor Controls
+
+Hypothesis: MagiK launcher control should move onto the agent TCP backplane
+while preserving Main_MiSTer's ownership model. The agent should write existing
+commands to `/dev/MiSTer_cmd`, not directly kill or spawn the launcher.
+
+Change: the agent now accepts `cmd:"magik"` with actions:
+
+```text
+status
+suspend
+resume
+restart-launcher
+```
+
+The host wrapper adds:
+
+```bash
+scripts/mister agent magik status
+scripts/mister agent magik suspend
+scripts/mister agent magik resume
+scripts/mister agent magik restart-launcher
+```
+
+Deployment note: one process-refresh reboot using `scripts/mister reboot-wait
+40` failed during this item. After manual recovery, persistent boot logs showed
+failed boot 20 had the familiar RX-dead shape: agent and sshd started, carrier
+was up, routes were present, TX packets increased, but RX stayed at `0` from
+8.60s through at least 50.67s. The next manual boot, boot 21, was healthy with
+first RX at 9.72s. This was a warm-reboot Ethernet failure, not a supervisor
+control failure.
+
+Before/control benchmark:
+
+- Existing SSH/FIFO restart dispatch:
+  `/usr/bin/time -p scripts/mister run "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"`
+  returned in 0.25s wall-clock.
+- It changed launcher pid from 642 to 1448 and Main reported
+  `LauncherActive`.
+
+Agent validation:
+
+- `scripts/mister agent magik status` returned parsed Main and Slint status
+  with `LauncherActive`, Main pid 612, launcher pid 1488, and
+  `slint_status_current=true`.
+- `scripts/mister agent magik restart-launcher` returned in 1637ms including a
+  1500ms settle window. It changed launcher pid from 1488 to 1686, Main
+  reported `LauncherActive`, and `slint_status_current=true`.
+- `scripts/mister agent magik suspend` returned in 530ms including a 400ms
+  settle window. Main reported `LauncherSuspended`, launcher pid list was empty,
+  and `slint_status_current=false` correctly marked the stale Slint status file.
+- `scripts/mister agent magik resume` returned in 1614ms including a 1500ms
+  settle window. It started launcher pid 1743, Main reported `LauncherActive`,
+  and `slint_status_current=true`.
+- Final `scripts/mister status` showed `MiSTer_MagiK pid=612`,
+  `mister-magik-fb pid=1743`, active VT `tty2`, and Slint launcher/home active.
+
+Result: keeper. Agent supervisor controls are slower than bare SSH/FIFO
+dispatch because they intentionally wait for Main/Slint state to settle and
+return structured status, but they are now useful as a TCP control-plane
+primitive for future deploy flows. Agent logs record command, before/after pids,
+pid changes, and errors.

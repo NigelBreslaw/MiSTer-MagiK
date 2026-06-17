@@ -56,6 +56,8 @@ scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
 scripts/mister agent diagnostics --out build/agent-diagnostics/sample
+scripts/mister agent magik status
+scripts/mister agent magik restart-launcher
 scripts/mister agent reboot-wait --timeout 40
 scripts/mister agent boot-profile 3 --timeout 40
 scripts/mister agent boot-profile 1 --supervised --timeout 40
@@ -112,6 +114,23 @@ The agent writes a synchronous `reboot_scheduled` breadcrumb to
 `/media/fat/mister-magik/bootlogs/agent.log` before rebooting so a failed reboot
 can still be root-caused after manual recovery. Pass `--supervised` only for
 explicit MagiK visual-lockdown reset validation.
+
+`magik` exposes Main-owned launcher supervisor controls:
+
+```bash
+scripts/mister agent magik status
+scripts/mister agent magik suspend
+scripts/mister agent magik resume
+scripts/mister agent magik restart-launcher
+```
+
+The control actions write `mister_magik_suspend`, `mister_magik_resume`, or
+`mister_magik_restart_launcher` to `/dev/MiSTer_cmd` only when `MiSTer_MagiK` is
+running. The agent does not directly kill or spawn the launcher. It logs the
+command, before/after MagiK pids, pid changes, and errors into the RAM ring.
+Responses return parsed Main and Slint status files plus current pids. The
+`slint_status_current` flag is `false` when the status file belongs to an exited
+launcher process, which is expected immediately after `suspend`.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to Linux
