@@ -14,9 +14,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_Arcade",
@@ -57,6 +57,7 @@ const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
         genre: "AmigaVision demos",
     },
 ];
+const DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
@@ -2111,16 +2112,54 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
 
 fn collection_listing_text(file: &FoundFile, listing: &CollectionListing) -> Option<String> {
     let tool = std::env::var("MISTER_7ZA").unwrap_or_else(|_| "/media/fat/linux/7za".to_string());
-    let output = Command::new(tool)
+    collection_listing_text_with_tool(
+        file,
+        listing,
+        Path::new(&tool),
+        collection_listing_timeout(),
+    )
+}
+
+fn collection_listing_timeout() -> Duration {
+    let secs = std::env::var("MISTER_7ZA_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS)
+        .clamp(1, 120);
+    Duration::from_secs(secs)
+}
+
+fn collection_listing_text_with_tool(
+    file: &FoundFile,
+    listing: &CollectionListing,
+    tool: &Path,
+    timeout: Duration,
+) -> Option<String> {
+    let mut child = Command::new(tool)
         .args(["e", "-so"])
         .arg(&file.path)
         .arg(listing.entry_path)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
-        return None;
+    let start = Instant::now();
+    loop {
+        if child.try_wait().ok()?.is_some() {
+            let output = child.wait_with_output().ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            return Some(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn collection_discoveries_from_listing_text(
@@ -5848,6 +5887,39 @@ mod tests {
             .contains_key(&outside.join("Mario.nes").display().to_string()));
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collection_listing_helper_times_out() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("collection-listing-timeout");
+        let helper = root.join("slow-7za.sh");
+        std::fs::write(&helper, "#!/bin/sh\nsleep 2\n").expect("write helper");
+        let mut permissions = std::fs::metadata(&helper).expect("stat helper").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).expect("chmod helper");
+        let archive = root.join("AmigaVision.7z");
+        std::fs::write(&archive, "fixture").expect("write archive fixture");
+        let file = FoundFile {
+            path: archive,
+            ext: "7z".to_string(),
+            size: 7,
+            mtime_secs: 0,
+        };
+        let listing = CollectionListing {
+            entry_path: "listings/games.txt",
+            genre: "AmigaVision",
+        };
+        let start = Instant::now();
+
+        let text =
+            collection_listing_text_with_tool(&file, &listing, &helper, Duration::from_millis(75));
+
+        assert!(text.is_none());
+        assert!(start.elapsed() < Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
