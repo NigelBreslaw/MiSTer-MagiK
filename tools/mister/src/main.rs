@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use ssh2::{ExtendedData, Session};
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +17,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
+const AGENT_PORT: u16 = 7497;
+const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing; use --raw only for recovery' >&2; exit 12; fi";
 
@@ -99,6 +101,9 @@ fn run_cli() -> Result<()> {
         }
         "boot-tcp-profile" => {
             boot_tcp_profile(&args)?;
+        }
+        "agent" => {
+            agent_cli(&args)?;
         }
         "watch-reboot" => {
             watch_external_reboot(&args)?;
@@ -239,7 +244,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|boot-profile>; reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
     );
 }
 
@@ -2012,6 +2017,260 @@ fn connection_profile(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+struct AgentResponse {
+    response: Value,
+    elapsed_ms: u128,
+}
+
+fn agent_cli(args: &[String]) -> Result<()> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("status");
+    match subcommand {
+        "ping" => {
+            let reply = agent_request("ping", json!({}), Duration::from_secs(2))?;
+            println!(
+                "agent pong after {}ms: {}",
+                reply.elapsed_ms,
+                serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
+            );
+        }
+        "status" => {
+            let reply = agent_request("status", json!({}), Duration::from_secs(2))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(reply.response.get("result").unwrap_or(&Value::Null))?
+            );
+        }
+        "boot-profile" => {
+            agent_boot_profile(&args[1..])?;
+        }
+        "-h" | "--help" => agent_usage(),
+        other => return Err(format!("unknown agent subcommand: {other}").into()),
+    }
+    Ok(())
+}
+
+fn agent_usage() {
+    println!(
+        "usage: scripts/mister agent <ping|status|boot-profile>\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw]"
+    );
+}
+
+fn agent_token() -> Result<String> {
+    if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
+        let token = token.trim().to_string();
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+    let token = fs::read_to_string(AGENT_TOKEN_LOCAL).map_err(|err| {
+        format!("read {AGENT_TOKEN_LOCAL}: {err}; run scripts/mister-magik-agent.sh install")
+    })?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        Err(format!("{AGENT_TOKEN_LOCAL} is empty").into())
+    } else {
+        Ok(token)
+    }
+}
+
+fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result<AgentResponse> {
+    let token = agent_token()?;
+    let addr = format!("{}:{AGENT_PORT}", host())
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = json!({
+        "token": token,
+        "id": 1,
+        "cmd": cmd,
+        "args": args,
+    });
+    let start = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    if line.trim().is_empty() {
+        return Err("empty response from agent".into());
+    }
+    let response: Value = serde_json::from_str(line.trim())?;
+    if response.get("ok").and_then(Value::as_bool) == Some(true) {
+        Ok(AgentResponse {
+            response,
+            elapsed_ms: start.elapsed().as_millis(),
+        })
+    } else {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("agent command failed");
+        Err(error.to_string().into())
+    }
+}
+
+fn agent_probe_label(timeout: Duration) -> String {
+    match agent_request("ping", json!({}), timeout) {
+        Ok(_) => "ok".to_string(),
+        Err(err) => {
+            let text = err.to_string();
+            if text.contains("Connection refused") || text.contains("connection refused") {
+                "refused".to_string()
+            } else if text.contains("timed out") || text.contains("TimedOut") {
+                "timeout".to_string()
+            } else if text.contains("No route to host") {
+                "noroute".to_string()
+            } else if text.contains("Host is down") {
+                "hostdown".to_string()
+            } else {
+                text.replace('\t', " ").replace(' ', "_")
+            }
+        }
+    }
+}
+
+fn agent_boot_profile(args: &[String]) -> Result<()> {
+    let _ = agent_token()?;
+    let samples = parse_profile_count(args, 1);
+    let raw = args.iter().any(|arg| arg == "--raw");
+    let timeout_secs = option_value(args, "--timeout")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(40.0);
+    let probe_timeout_ms = option_value(args, "--probe-timeout-ms")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(100);
+    let sleep_ms = option_value(args, "--sleep-ms")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(50);
+    let mode = if raw { "raw" } else { "supervised" };
+    let out_path = "history/toolchain-bench/results-agent.tsv";
+    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tagent_ready_ms\tssh_exec_ready_ms\tagent_first_hostdown_ms\tagent_first_noroute_ms\tagent_first_timeout_ms\tagent_first_refused_ms\tagent_first_other_ms\tagent_ok_count\tagent_hostdown_count\tagent_noroute_count\tagent_timeout_count\tagent_refused_count\tagent_other_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tagent_uptime_ms\tssh_uptime\tagent_transitions\tnote";
+    println!("{header}");
+
+    for sample in 1..=samples {
+        let ts = unix_ms_now();
+        let issue_t = Instant::now();
+        let reboot_note = {
+            let sess = connect(10)?;
+            issue_reboot(&sess, raw)?
+        };
+        let reboot_issue_ms = issue_t.elapsed().as_millis();
+        let start = Instant::now();
+        let mut down_ms = None;
+        while start.elapsed().as_secs_f64() < 40.0 {
+            let ssh_label = tcp_probe_label(Duration::from_millis(100));
+            let agent_label = tcp_probe_label_port(AGENT_PORT, Duration::from_millis(100));
+            if ssh_label != "ok" && agent_label != "ok" {
+                down_ms = Some(start.elapsed().as_millis());
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let mut agent_stats = TcpProbeStats::default();
+        let mut agent_ready_ms = None;
+        let mut agent_uptime_ms = String::new();
+        let mut ssh_ready_ms = None;
+        let mut resolve_ms = None;
+        let mut tcp_ms = None;
+        let mut handshake_ms = None;
+        let mut auth_ms = None;
+        let mut exec_ms = None;
+        let mut ssh_uptime = String::new();
+        let mut note = reboot_note;
+
+        while start.elapsed().as_secs_f64() < timeout_secs {
+            let elapsed_ms = start.elapsed().as_millis();
+            if agent_ready_ms.is_none() {
+                let label = agent_probe_label(Duration::from_millis(probe_timeout_ms));
+                agent_stats.observe(&label, elapsed_ms);
+                if label == "ok" {
+                    agent_ready_ms = Some(elapsed_ms);
+                    if let Ok(reply) =
+                        agent_request("status", json!({}), Duration::from_millis(500))
+                    {
+                        agent_uptime_ms = reply
+                            .response
+                            .pointer("/result/agent/uptime_ms")
+                            .and_then(Value::as_u64)
+                            .map(|n| n.to_string())
+                            .unwrap_or_default();
+                    }
+                }
+            }
+
+            if ssh_ready_ms.is_none() {
+                match connect_timed(2) {
+                    Ok(timed) => {
+                        let exec_t = Instant::now();
+                        let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                        let this_exec_ms = exec_t.elapsed().as_millis();
+                        if out.rc == 0 {
+                            ssh_ready_ms = Some(start.elapsed().as_millis());
+                            resolve_ms = Some(timed.resolve_ms);
+                            tcp_ms = Some(timed.tcp_ms);
+                            handshake_ms = Some(timed.handshake_ms);
+                            auth_ms = Some(timed.auth_ms);
+                            exec_ms = Some(this_exec_ms);
+                            ssh_uptime = out
+                                .stdout
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+                        } else {
+                            note = format!("exec rc {}", out.rc);
+                        }
+                    }
+                    Err(err) => {
+                        note = err.to_string();
+                    }
+                }
+            }
+
+            if agent_ready_ms.is_some() && ssh_ready_ms.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(sleep_ms));
+        }
+
+        let transitions = agent_stats.transitions.join(",");
+        let row = format!(
+            "agent-boot\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{agent_uptime_ms}\t{ssh_uptime}\t{}\t{}",
+            host(),
+            opt_ms(down_ms),
+            opt_ms(agent_ready_ms),
+            opt_ms(ssh_ready_ms),
+            opt_ms(agent_stats.first_hostdown_ms),
+            opt_ms(agent_stats.first_noroute_ms),
+            opt_ms(agent_stats.first_timeout_ms),
+            opt_ms(agent_stats.first_refused_ms),
+            opt_ms(agent_stats.first_other_ms),
+            agent_stats.ok_count,
+            agent_stats.hostdown_count,
+            agent_stats.noroute_count,
+            agent_stats.timeout_count,
+            agent_stats.refused_count,
+            agent_stats.other_count,
+            opt_ms(resolve_ms),
+            opt_ms(tcp_ms),
+            opt_ms(handshake_ms),
+            opt_ms(auth_ms),
+            opt_ms(exec_ms),
+            transitions.replace('\t', " "),
+            note.replace('\t', " ")
+        );
+        println!("{row}");
+        append_profile_row(out_path, header, &row)?;
+        thread::sleep(Duration::from_secs(2));
+    }
+
+    eprintln!("agent boot-profile: appended {samples} row(s) to {out_path}");
+    Ok(())
+}
+
 fn boot_net_profile(args: &[String]) -> Result<()> {
     let samples = parse_profile_count(args, 3);
     let raw = args.iter().any(|arg| arg == "--raw");
@@ -2201,7 +2460,11 @@ impl TcpProbeStats {
 }
 
 fn tcp_probe_label(timeout: Duration) -> String {
-    let addr = match format!("{}:22", host()).to_socket_addrs() {
+    tcp_probe_label_port(22, timeout)
+}
+
+fn tcp_probe_label_port(port: u16, timeout: Duration) -> String {
+    let addr = match format!("{}:{port}", host()).to_socket_addrs() {
         Ok(mut addrs) => match addrs.next() {
             Some(addr) => addr,
             None => return "resolve_none".to_string(),

@@ -615,3 +615,48 @@ Instrumentation changes from that finding:
   immediately when a reboot capture fails.
 - `scripts/mister wait` / `reboot-wait` timeout output now includes final TCP
   probe state, ARP table evidence, and one ping summary from the Mac side.
+
+## Experiment 16 - Agent Status/Control TCP Port
+
+Hypothesis: if the compiled boot agent stays resident and exposes a tiny
+token-authenticated TCP protocol, the Mac can get real status and reboot timing
+facts before SSH has finished handshake/auth/exec. This should also become the
+backplane for future deploy, diagnostics, and supervisor commands.
+
+Change: `mister-magik-agent` now listens on TCP `7497` after reading
+`/media/fat/mister-magik/agent.token`. The host wrapper gained:
+
+```bash
+scripts/mister agent ping
+scripts/mister agent status
+scripts/mister agent boot-profile 3 --timeout 40
+```
+
+The status response reports agent uptime and boot id, carrier/operstate/IP/MAC,
+routes, ARP entries, RX/TX counters, sshd pid, `MiSTer_MagiK` pid, and
+`mister-magik-fb` pid. The install script creates the token if absent and keeps
+a local copy at `build/mister-agent.token`.
+
+Before comparison point from Experiment 15 with the compiled network agent but
+without the TCP control port:
+
+- SSH command-ready average: 12.293s.
+
+After samples with the TCP control port:
+
+- Agent response at 13.696s, SSH command-ready at 14.397s.
+- Agent response at 11.526s, SSH command-ready at 12.131s.
+- Agent response at 13.703s, SSH command-ready at 14.456s.
+- Average: agent response at 12.975s, SSH command-ready at 13.661s.
+
+Live post-reboot checks:
+
+- `scripts/mister agent ping`: authenticated response in 6ms.
+- `scripts/mister agent status`: boot id 3, carrier `1`, operstate `up`,
+  `sshd`, `MiSTer_MagiK`, and `mister-magik-fb` pids present.
+
+Result: keeper for control/diagnostics, not a link-speed breakthrough. The
+agent port consistently answers before SSH command execution by about
+0.6-0.8s in these samples, but both are still gated by Ethernet carrier and the
+LAN neighbor path. This is the right foundation for RAM logs, boot timeline,
+diagnostics bundle, and faster deploy/control paths.

@@ -61,6 +61,7 @@ Common commands:
 
 ```bash
 scripts/mister status
+scripts/mister agent status
 scripts/mister reboot-wait
 scripts/mister recover
 scripts/restore-stock-boot.sh
@@ -76,6 +77,14 @@ device can run commands. Prefer it over blind sleeps.
 
 Use `scripts/mister reboot --raw` or `scripts/mister reboot-wait --raw` only for
 recovery/debugging when the Main fork or command FIFO is broken.
+
+The standalone `mister-magik-agent` may be installed as
+`/etc/init.d/S00magik-agent`. It provides the early Ethernet setup path and a
+token-protected TCP control port on `7497`; see `docs/magik-agent.md`. If it
+strands boot networking, remove `/etc/init.d/S00magik-agent` from the SD card.
+If needed, restore the parked legacy FastNet script by renaming
+`/etc/init.d/disabled-S00fastnet.magik-agent` back to
+`/etc/init.d/S00fastnet`.
 
 `scripts/restore-stock-boot.sh` restores stock menu boot by repairing inittab,
 restoring `MiSTer.ini` from `/media/fat/MiSTer.ini.bak` when appropriate, and

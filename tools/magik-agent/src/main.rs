@@ -8,20 +8,24 @@ mod linux {
         RTF_GATEWAY, RTF_UP, SIOCADDRT, SIOCGIFFLAGS, SIOCSIFADDR, SIOCSIFFLAGS, SIOCSIFNETMASK,
         SOCK_DGRAM, SOCK_RAW,
     };
+    use serde_json::{json, Value};
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
-    use std::io::{self, Write};
+    use std::io::{self, BufRead, BufReader, Write};
     use std::mem;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::os::fd::RawFd;
     use std::path::Path;
+    use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const IFACE: &str = "eth0";
     const IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 117);
     const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
+    const AGENT_PORT: u16 = 7497;
+    const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
@@ -51,6 +55,7 @@ mod linux {
             "worker_start boot={boot_id} pid={}",
             std::process::id()
         ));
+        start_control_server(boot_id);
 
         for _ in 0..80 {
             configure_network(IFACE, IP, NETMASK, GATEWAY, &mut log);
@@ -72,14 +77,20 @@ mod linux {
                     thread::sleep(Duration::from_secs(1));
                 }
                 persist_log(boot_id, &mut log);
-                return Ok(());
+                park_forever();
             }
             thread::sleep(Duration::from_millis(250));
         }
 
         log.line("gave_up".to_string());
         persist_log(boot_id, &mut log);
-        Ok(())
+        park_forever();
+    }
+
+    fn park_forever() -> ! {
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
     }
 
     struct Logger {
@@ -102,6 +113,204 @@ mod linux {
         fn line(&mut self, msg: String) {
             let _ = writeln!(self.file, "{} agent {msg}", stamp());
             let _ = self.file.flush();
+        }
+    }
+
+    fn start_control_server(boot_id: u64) {
+        let token = match fs::read_to_string(TOKEN_PATH) {
+            Ok(token) => token.trim().to_string(),
+            Err(err) => {
+                append_log_line(format!("control_token_missing path={TOKEN_PATH} err={err}"));
+                return;
+            }
+        };
+        if token.is_empty() {
+            append_log_line(format!("control_token_empty path={TOKEN_PATH}"));
+            return;
+        }
+
+        thread::spawn(move || {
+            let started = Instant::now();
+            let token = Arc::new(token);
+            let listener = match TcpListener::bind(("0.0.0.0", AGENT_PORT)) {
+                Ok(listener) => listener,
+                Err(err) => {
+                    append_log_line(format!("control_bind_error port={AGENT_PORT} err={err}"));
+                    return;
+                }
+            };
+            append_log_line(format!("control_listen port={AGENT_PORT} boot={boot_id}"));
+
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let token = Arc::clone(&token);
+                        thread::spawn(move || {
+                            handle_control_client(stream, token, boot_id, started)
+                        });
+                    }
+                    Err(err) => append_log_line(format!("control_accept_error err={err}")),
+                }
+            }
+        });
+    }
+
+    fn handle_control_client(
+        mut stream: TcpStream,
+        token: Arc<String>,
+        boot_id: u64,
+        started: Instant,
+    ) {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+        let peer = stream
+            .peer_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|_| "?".to_string());
+        append_log_line(format!("control_client peer={peer}"));
+
+        let mut line = String::new();
+        let read_result = match stream.try_clone() {
+            Ok(cloned) => BufReader::new(cloned).read_line(&mut line),
+            Err(err) => Err(err),
+        };
+        let response = match read_result {
+            Ok(0) => response(None, false, None, Some("empty request")),
+            Ok(_) => handle_control_line(&line, &token, boot_id, started),
+            Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
+        };
+        let _ = writeln!(stream, "{response}");
+    }
+
+    fn handle_control_line(line: &str, token: &str, boot_id: u64, started: Instant) -> String {
+        let parsed: Value = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(err) => return response(None, false, None, Some(&format!("invalid json: {err}"))),
+        };
+        let id = parsed.get("id").cloned();
+        if parsed.get("token").and_then(Value::as_str) != Some(token) {
+            append_log_line("control_auth_failed".to_string());
+            return response(id, false, None, Some("unauthorized"));
+        }
+        let cmd = match parsed.get("cmd").and_then(Value::as_str) {
+            Some(cmd) => cmd,
+            None => return response(id, false, None, Some("missing cmd")),
+        };
+
+        match cmd {
+            "ping" => response(id, true, Some(json!({"pong": true})), None),
+            "status" => response(id, true, Some(status_json(boot_id, started)), None),
+            _ => response(id, false, None, Some("unknown cmd")),
+        }
+    }
+
+    fn response(id: Option<Value>, ok: bool, result: Option<Value>, error: Option<&str>) -> String {
+        let value = if ok {
+            json!({"id": id.unwrap_or(Value::Null), "ok": true, "result": result.unwrap_or(Value::Null)})
+        } else {
+            json!({"id": id.unwrap_or(Value::Null), "ok": false, "error": error.unwrap_or("error")})
+        };
+        value.to_string()
+    }
+
+    fn status_json(boot_id: u64, started: Instant) -> Value {
+        json!({
+            "agent": {
+                "version": env!("CARGO_PKG_VERSION"),
+                "boot_id": boot_id,
+                "uptime_ms": started.elapsed().as_millis() as u64,
+                "port": AGENT_PORT,
+            },
+            "network": {
+                "interface": IFACE,
+                "ip": IP.to_string(),
+                "carrier": read_trimmed("/sys/class/net/eth0/carrier"),
+                "operstate": read_trimmed("/sys/class/net/eth0/operstate"),
+                "mac": read_trimmed("/sys/class/net/eth0/address"),
+                "stats": read_netdev_stats_value(IFACE),
+                "routes": read_routes(),
+                "arp": read_arp_entries(),
+            },
+            "processes": {
+                "sshd": read_pid_list("sshd"),
+                "MiSTer_MagiK": read_pid_list("MiSTer_MagiK"),
+                "mister-magik-fb": read_pid_list("mister-magik-fb"),
+            },
+            "system": {
+                "uptime": read_trimmed("/proc/uptime"),
+            }
+        })
+    }
+
+    fn read_routes() -> Value {
+        let routes: Vec<Value> = fs::read_to_string("/proc/net/route")
+            .ok()
+            .map(|text| {
+                text.lines()
+                    .skip(1)
+                    .map(|line| {
+                        let fields: Vec<_> = line.split_whitespace().collect();
+                        json!({
+                            "iface": fields.first().copied().unwrap_or(""),
+                            "destination": fields.get(1).copied().unwrap_or(""),
+                            "gateway": fields.get(2).copied().unwrap_or(""),
+                            "flags": fields.get(3).copied().unwrap_or(""),
+                            "metric": fields.get(6).copied().unwrap_or(""),
+                            "mask": fields.get(7).copied().unwrap_or(""),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Value::Array(routes)
+    }
+
+    fn read_arp_entries() -> Value {
+        let entries: Vec<Value> = fs::read_to_string("/proc/net/arp")
+            .ok()
+            .map(|text| {
+                text.lines()
+                    .skip(1)
+                    .map(|line| {
+                        let fields: Vec<_> = line.split_whitespace().collect();
+                        json!({
+                            "ip": fields.first().copied().unwrap_or(""),
+                            "flags": fields.get(2).copied().unwrap_or(""),
+                            "mac": fields.get(3).copied().unwrap_or(""),
+                            "device": fields.get(5).copied().unwrap_or(""),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Value::Array(entries)
+    }
+
+    fn read_netdev_stats_value(iface: &str) -> Value {
+        match read_netdev_stats_fields(iface) {
+            Some(fields) => json!({
+                "rx_bytes": fields[0],
+                "rx_packets": fields[1],
+                "tx_bytes": fields[8],
+                "tx_packets": fields[9],
+            }),
+            None => Value::Null,
+        }
+    }
+
+    fn read_pid_list(name: &str) -> Value {
+        let pids: Vec<Value> = read_pidof(name)
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|pid| pid.parse::<u64>().ok())
+            .map(Value::from)
+            .collect();
+        Value::Array(pids)
+    }
+
+    fn append_log_line(msg: String) {
+        if let Ok(mut logger) = Logger::append(LOG) {
+            logger.line(msg);
         }
     }
 
@@ -271,16 +480,26 @@ mod linux {
     }
 
     fn read_netdev_stats(iface: &str) -> Option<String> {
+        let fields = read_netdev_stats_fields(iface)?;
+        Some(format!(
+            "rx_bytes={} rx_packets={} tx_bytes={} tx_packets={}",
+            fields[0], fields[1], fields[8], fields[9]
+        ))
+    }
+
+    fn read_netdev_stats_fields(iface: &str) -> Option<[u64; 16]> {
         let text = fs::read_to_string("/proc/net/dev").ok()?;
         for line in text.lines() {
             let line = line.trim();
             if let Some(rest) = line.strip_prefix(&format!("{iface}:")) {
-                let fields: Vec<_> = rest.split_whitespace().collect();
+                let fields: Vec<u64> = rest
+                    .split_whitespace()
+                    .filter_map(|field| field.parse().ok())
+                    .collect();
                 if fields.len() >= 16 {
-                    return Some(format!(
-                        "rx_bytes={} rx_packets={} tx_bytes={} tx_packets={}",
-                        fields[0], fields[1], fields[8], fields[9]
-                    ));
+                    let mut values = [0u64; 16];
+                    values.copy_from_slice(&fields[..16]);
+                    return Some(values);
                 }
             }
         }
