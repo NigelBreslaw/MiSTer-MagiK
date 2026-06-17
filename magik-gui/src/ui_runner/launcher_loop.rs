@@ -272,6 +272,10 @@ pub(super) fn run_launcher_loop(
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
     let mut games_found_counter = GamesFoundCounter::default();
+    let mut route_reassert_count = 0u64;
+    let mut last_route_reassert_frame = 0u64;
+    let mut last_route_reassert_ok = false;
+    let mut last_route_reassert_error = String::new();
     while secs == 0 || run_start.elapsed().as_secs() < secs {
         let loop_start = Instant::now();
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
@@ -296,6 +300,10 @@ pub(super) fn run_launcher_loop(
                     FramebufferFormat::from_env(),
                 ) {
                     Ok(flag) => {
+                        route_reassert_count = route_reassert_count.saturating_add(1);
+                        last_route_reassert_frame = frames;
+                        last_route_reassert_ok = true;
+                        last_route_reassert_error.clear();
                         boot_analytics::event(
                             "launcher_fb_route_reasserted",
                             format!("frame={frames} support_flag={flag}"),
@@ -304,6 +312,10 @@ pub(super) fn run_launcher_loop(
                     Err(e) => {
                         eprintln!("failed to reassert Slint framebuffer route: {e}");
                         route_action.force_full_present = false;
+                        route_reassert_count = route_reassert_count.saturating_add(1);
+                        last_route_reassert_frame = frames;
+                        last_route_reassert_ok = false;
+                        last_route_reassert_error = e.to_string();
                         boot_analytics::event(
                             "launcher_fb_route_reassert_failed",
                             format!("frame={frames} error={e}"),
@@ -810,6 +822,8 @@ pub(super) fn run_launcher_loop(
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
+        let catalog_scan_title = bridge.get_catalog_scan_title().to_string();
+        let catalog_scan_detail = bridge.get_catalog_scan_detail().to_string();
         let games_found_detail_changed = if catalog_scan_visible && catalog_scan_percent < 0 {
             games_found_counter.tick(loop_start).is_some_and(|detail| {
                 bridge.set_catalog_scan_detail(detail.into());
@@ -985,6 +999,17 @@ pub(super) fn run_launcher_loop(
             catalog_refresh_done,
             launching,
             &loading_title,
+            catalog_scan_visible,
+            &catalog_scan_title,
+            &catalog_scan_detail,
+            catalog_scan_percent,
+            launcher_bench_scenario,
+            start_screen,
+            lock_screen,
+            route_reassert_count,
+            last_route_reassert_frame,
+            last_route_reassert_ok,
+            &last_route_reassert_error,
         );
         frames += 1;
     }
