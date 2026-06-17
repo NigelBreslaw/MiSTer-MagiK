@@ -788,3 +788,41 @@ Timeline for boot id 11:
 Result: keeper. The timeline explains the reboot sample without SSH status
 files or log scraping: on this raw reboot, the agent, network config, carrier,
 RX/TX, sshd, Main, and Slint launcher all came up normally.
+
+## Experiment 20 - Diagnostics Bundle Endpoint
+
+Hypothesis: a single agent TCP command should collect the files normally needed
+to debug reboot/device failures, and the host should materialize them into a
+local bundle. SSH should remain a fallback, not the happy path.
+
+Change: the agent now exposes `diagnostics`, and the host wrapper adds:
+
+```bash
+scripts/mister agent diagnostics --out DIR
+```
+
+The bundle includes agent status, RAM logs, timeline, net state, routes, ARP,
+`ps`, MagiK status files, recent Main/Slint logs, agent log tails, and boot
+analytics tails.
+
+After deployment:
+
+- `scripts/mister agent boot-profile 1 --timeout 40` returned without manual
+  intervention using `mode=raw`.
+- Agent response at 17.968s after host-observed reboot down; SSH command-ready
+  at 18.604s.
+- `scripts/mister agent diagnostics --out build/agent-diagnostics/item4-final`
+  collected over the TCP agent path.
+- Bundle wrote 14 files, including `bundle.json`, `status.json`,
+  `timeline.json`, `agent-logs.json`, `net.json`, `processes.json`, `ps.txt`,
+  MagiK status files, events tail, and Main/Slint/agent log tails.
+- `bundle.json` reported `transport=agent`, `schema=mister-magik-agent-diagnostics-v1`,
+  `request_ms=248`, and boot id 12.
+- Fallback was verified with a deliberately bad token:
+  `MISTER_AGENT_TOKEN=bad-token scripts/mister agent diagnostics --out build/agent-diagnostics/item4-fallback`.
+  It wrote a bundle with `transport=ssh-fallback` and
+  `agent_error=unauthorized`.
+
+Result: keeper. The diagnostics bundle gives a single command for the evidence
+needed after normal boots and provides an SSH fallback when the agent TCP path is
+not usable.
