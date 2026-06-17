@@ -549,3 +549,49 @@ ready, the one-second BusyBox `arping`, and successful TCP/SSH handshake. If
 revisited, the next version should replace slow `arping` with a tiny
 nonblocking gratuitous-ARP sender or make the host-side waiter actively repair
 the Mac neighbor entry during reboot.
+
+## Experiment 15 - Standalone Compiled Network Agent
+
+Hypothesis: the shell FastNet service was spending much of the hot path in
+process startup and BusyBox `arping`, and its intermittent failure mode still
+left the Mac with an incomplete ARP entry. A tiny compiled boot agent could
+replace the shell loop with direct interface ioctls plus raw gratuitous ARP
+frames, while staying separate from the Slint/MagiK UI binary.
+
+Change: add a standalone `tools/magik-agent` Rust crate and
+`scripts/mister-magik-agent.sh`. Installing it places:
+
+- `/media/fat/mister-magik/mister-magik-agent`
+- `/etc/init.d/S00magik-agent`
+
+and parks the shell FastNet service as
+`/etc/init.d/disabled-S00fastnet.magik-agent` so the experiment is isolated.
+FastSSHD remains installed.
+
+Fresh before samples with the shell FastNet keeper:
+
+- TCP/22 visible at 12.222s, SSH command-ready at 12.855s.
+- Failed sample: transitioned from `timeout` to `noroute` at 15.531s and
+  `hostdown` at 15.582s; no SSH command-ready by 35.559s.
+
+After samples with the compiled agent:
+
+- TCP/22 visible at 11.830s, SSH command-ready at 12.273s.
+- TCP/22 visible at 11.805s, SSH command-ready at 12.275s.
+- TCP/22 visible at 11.731s, SSH command-ready at 12.330s.
+- Average: TCP/22 visible at 11.789s, SSH command-ready at 12.293s.
+
+The inspected after boot showed the agent starting around 3.71s, configuring
+eth0 and sending raw gratuitous ARP frames in milliseconds on each 250ms retry,
+carrier-ready at 7.96s, and TCP/22 visible at 11.7-11.8s. This replaces the
+one-second BusyBox `arping` calls with direct packet sends and avoided the
+reproduced `hostdown` collapse across the three after samples.
+
+Result: keeper, but not a 5s breakthrough. The compiled agent makes the boot
+network path more deterministic and gives us a proper place to add faster
+control/deploy/diagnostic services, but the remaining wall is still below
+userspace: carrier/link readiness plus the time until TCP succeeds after link.
+
+Recovery if it strands SSH: delete `/etc/init.d/S00magik-agent`. If needed,
+rename `/etc/init.d/disabled-S00fastnet.magik-agent` back to
+`/etc/init.d/S00fastnet`.

@@ -1,0 +1,18 @@
+[package]
+name = "mister-magik-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Small MiSTer MagiK boot/network agent, independent from the Slint UI."
+
+[[bin]]
+name = "mister-magik-agent"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+panic = "abort"
