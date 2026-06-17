@@ -151,8 +151,28 @@ After samples:
 - 15.844s SSH command-ready
 - Average: 16.726s
 
-Result: keeper candidate. The Ethernet driver moved from roughly 9.5s after
-kernel start to roughly 5.46s. Link-up still happened around 13.7s in the
-inspected run, so physical link negotiation now looks like the cap, but this
-still cuts about 3.8s from command-ready average in this sample set. The service
-is currently installed on the device for follow-on testing.
+Initial result: promising but later rejected as unstable. The Ethernet driver
+moved from roughly 9.5s after kernel start to roughly 5.46s. Link-up still
+happened around 13.7s in the inspected run, so physical link negotiation looked
+like the cap, but the first sample set still cut about 3.8s from command-ready
+average.
+
+Follow-on failure: the next fresh before run for a force-100/full experiment
+with `S11staticeth0` still installed never recovered SSH:
+
+- `boot-net-profile` sample timed out after the device went down.
+- `scripts/mister wait 60` timed out.
+- ARP showed `192.168.1.117` as incomplete on the Mac.
+- Unsandboxed `ping -c 4 192.168.1.117` had 100% packet loss.
+
+Conclusion: do not keep direct static `ifconfig` boot setup as implemented. It
+can pull Ethernet driver initialization earlier, but it can also strand the
+device off-network. Remove it with `scripts/mister-static-eth0-boot.sh remove`
+once SSH is available again, or delete `/etc/init.d/S11staticeth0` from the
+MiSTer root image via offline recovery.
+
+Recovery: after a manual reboot, SSH returned and
+`scripts/mister-static-eth0-boot.sh remove` successfully removed the service.
+`scripts/mister-static-eth0-boot.sh status` then reported
+`static_eth0=not-installed`. The post-recovery boot log showed eth0 driver
+initialization around 6.37s and link-up around 15.59s on the normal path.
