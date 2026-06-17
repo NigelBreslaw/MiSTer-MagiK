@@ -42,7 +42,7 @@ type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 
-const SCHEMA_VERSION: u32 = 24;
+const SCHEMA_VERSION: u32 = 25;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -225,6 +225,19 @@ struct DbFingerprint {
 struct FileSignature {
     size: u64,
     mtime_secs: i64,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SoftwareHashCacheKey {
+    list_name: String,
+    file_path: String,
+    size: u64,
+    mtime_secs: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SoftwareHashCache {
+    entries: HashMap<SoftwareHashCacheKey, Option<String>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2582,7 +2595,8 @@ fn save_sqlite_scan_with_progress(
         }
     }
 
-    if let Err(e) = write_sqlite_scan(&build_tmp_path, scan, progress) {
+    let software_hash_cache = SoftwareHashCache::load(path);
+    if let Err(e) = write_sqlite_scan(&build_tmp_path, scan, progress, software_hash_cache) {
         let _ = std::fs::remove_file(&build_tmp_path);
         return Err(e);
     }
@@ -2881,11 +2895,12 @@ fn software_list_for_platform(platform_id: &str) -> Option<&'static str> {
 fn mame_software_identity_for_discovery(
     discovery: &GameDiscovery,
     metadata: &MameSoftwareMetadata,
+    software_hash_cache: &mut SoftwareHashCache,
 ) -> Option<SoftwareIdentity> {
     mame_software_identity_for_discovery_with_hash_matcher(discovery, metadata, |discovery,
                                                                                  list_name,
                                                                                  metadata| {
-        match_software_by_file_hash(discovery, list_name, metadata)
+        match_software_by_file_hash(discovery, list_name, metadata, software_hash_cache)
     })
 }
 
@@ -2945,20 +2960,23 @@ fn match_software_by_file_hash(
     discovery: &GameDiscovery,
     list_name: &str,
     metadata: &MameSoftwareMetadata,
+    software_hash_cache: &mut SoftwareHashCache,
 ) -> Option<String> {
-    match_software_by_file_hash_with_full_rom(
+    match_software_by_file_hash_with_cache(
         discovery,
         list_name,
         metadata,
         env_bool("MISTER_LIBRARY_SOFTWARE_HASH"),
+        software_hash_cache,
     )
 }
 
-fn match_software_by_file_hash_with_full_rom(
+fn match_software_by_file_hash_with_cache(
     discovery: &GameDiscovery,
     list_name: &str,
     metadata: &MameSoftwareMetadata,
     full_rom_hashing_enabled: bool,
+    software_hash_cache: &mut SoftwareHashCache,
 ) -> Option<String> {
     if !matches!(
         discovery.source_kind,
@@ -2990,6 +3008,16 @@ fn match_software_by_file_hash_with_full_rom(
     if !full_rom_hashing_enabled {
         return None;
     }
+    software_hash_cache.get_or_compute(list_name, source_path, || {
+        match_software_by_full_rom_hash(source_path, list_name, metadata)
+    })
+}
+
+fn match_software_by_full_rom_hash(
+    source_path: &str,
+    list_name: &str,
+    metadata: &MameSoftwareMetadata,
+) -> Option<String> {
     let bytes = std::fs::read(source_path).ok()?;
     for candidate in rom_hash_candidates(list_name, &bytes) {
         let crc = crc32(&candidate);
@@ -3003,6 +3031,70 @@ fn match_software_by_file_hash_with_full_rom(
         }
     }
     None
+}
+
+impl SoftwareHashCache {
+    fn load(path: &Path) -> Self {
+        let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+            return Self::default();
+        };
+        if !sqlite_table_exists(&conn, "software_hash_cache").unwrap_or(false) {
+            return Self::default();
+        }
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT list_name,file_path,size,mtime_secs,software_name FROM software_hash_cache",
+        ) else {
+            return Self::default();
+        };
+        let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                SoftwareHashCacheKey {
+                    list_name: row.get(0)?,
+                    file_path: row.get(1)?,
+                    size: row.get::<_, i64>(2)?.max(0) as u64,
+                    mtime_secs: row.get(3)?,
+                },
+                row.get::<_, Option<String>>(4)?,
+            ))
+        }) else {
+            return Self::default();
+        };
+        let mut cache = Self::default();
+        for row in rows.flatten() {
+            cache.entries.insert(row.0, row.1);
+        }
+        cache
+    }
+
+    fn get_or_compute(
+        &mut self,
+        list_name: &str,
+        source_path: &str,
+        compute: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        let Some(key) = software_hash_cache_key(list_name, source_path) else {
+            return compute();
+        };
+        if let Some(cached) = self.entries.get(&key) {
+            return cached.clone();
+        }
+        let computed = compute();
+        self.entries.insert(key, computed.clone());
+        computed
+    }
+}
+
+fn software_hash_cache_key(list_name: &str, source_path: &str) -> Option<SoftwareHashCacheKey> {
+    let signature = file_signature(Path::new(source_path));
+    if signature.size == 0 && signature.mtime_secs == 0 {
+        return None;
+    }
+    Some(SoftwareHashCacheKey {
+        list_name: list_name.to_string(),
+        file_path: source_path.to_string(),
+        size: signature.size,
+        mtime_secs: signature.mtime_secs,
+    })
 }
 
 fn chd_raw_sha1(path: &str) -> Option<String> {
@@ -3507,6 +3599,7 @@ fn write_sqlite_scan(
     path: &Path,
     scan: &LibraryScan,
     progress: ProgressCallback<'_>,
+    software_hash_cache: SoftwareHashCache,
 ) -> Result<(), String> {
     let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
         .map_err(|e| format!("preview archive index: {e}"))?;
@@ -3517,6 +3610,7 @@ fn write_sqlite_scan(
         &default_hbmame_sqlite_path(),
         &preview_asset_packs,
         progress,
+        software_hash_cache,
     )
 }
 
@@ -3729,7 +3823,15 @@ fn write_sqlite_scan_with_mame(
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, &PathBuf::new(), &[], None)
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        mame_sqlite_path,
+        &PathBuf::new(),
+        &[],
+        None,
+        SoftwareHashCache::load(path),
+    )
 }
 
 #[cfg(test)]
@@ -3739,7 +3841,15 @@ fn write_sqlite_scan_with_mame_and_hbmame(
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
 ) -> Result<(), String> {
-    write_sqlite_scan_with_sources(path, scan, mame_sqlite_path, hbmame_sqlite_path, &[], None)
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        mame_sqlite_path,
+        hbmame_sqlite_path,
+        &[],
+        None,
+        SoftwareHashCache::load(path),
+    )
 }
 
 #[cfg(test)]
@@ -3756,6 +3866,7 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
         &PathBuf::new(),
         std::slice::from_ref(preview_asset_pack),
         None,
+        SoftwareHashCache::load(path),
     )
 }
 
@@ -3766,6 +3877,7 @@ fn write_sqlite_scan_with_sources(
     hbmame_sqlite_path: &Path,
     preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
     mut progress: ProgressCallback<'_>,
+    mut software_hash_cache: SoftwareHashCache,
 ) -> Result<(), String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
@@ -3979,6 +4091,14 @@ fn write_sqlite_scan_with_sources(
             dir_mtime_secs INTEGER NOT NULL,
             child_count INTEGER NOT NULL,
             hash INTEGER NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE software_hash_cache (
+            list_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            mtime_secs INTEGER NOT NULL,
+            software_name TEXT,
+            PRIMARY KEY(list_name, file_path, size, mtime_secs)
         ) WITHOUT ROWID;
         "#,
     )
@@ -4218,7 +4338,11 @@ fn write_sqlite_scan_with_sources(
             }
             let system_id = catalog_system_id_for_discovery(discovery);
             let software_identity =
-                mame_software_identity_for_discovery(discovery, &software_metadata);
+                mame_software_identity_for_discovery(
+                    discovery,
+                    &software_metadata,
+                    &mut software_hash_cache,
+                );
             let software_image_path = software_identity.as_ref().and_then(|identity| {
                 console_preview_image_path(identity, &software_metadata, &console_assets)
             });
@@ -4567,6 +4691,30 @@ fn write_sqlite_scan_with_sources(
             "insert_directory_manifest",
             stage_t,
             format!("rows={}", scan.directory_manifest.len()),
+        );
+    }
+    {
+        let stage_t = Instant::now();
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO software_hash_cache(list_name,file_path,size,mtime_secs,software_name)
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .map_err(|e| format!("prepare software hash cache insert: {e}"))?;
+        for (key, software_name) in &software_hash_cache.entries {
+            stmt.execute(params![
+                key.list_name.as_str(),
+                key.file_path.as_str(),
+                key.size as i64,
+                key.mtime_secs,
+                software_name.as_deref()
+            ])
+            .map_err(|e| format!("insert software hash cache: {e}"))?;
+        }
+        report_library_import_timing(
+            "insert_software_hash_cache",
+            stage_t,
+            format!("rows={}", software_hash_cache.entries.len()),
         );
     }
     let commit_t = Instant::now();
@@ -5847,8 +5995,9 @@ mod tests {
             .insert(("snes".to_string(), 11, crc32(b"fixture-rom")), vec!["fixture".to_string()]);
         let discovery = payload(&rom_path.display().to_string());
 
+        let mut cache = SoftwareHashCache::default();
         let matched =
-            match_software_by_file_hash_with_full_rom(&discovery, "snes", &metadata, false);
+            match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, false, &mut cache);
 
         assert_eq!(matched, None);
         let _ = std::fs::remove_dir_all(root);
@@ -5865,10 +6014,74 @@ mod tests {
             .insert(("snes".to_string(), 11, crc32(b"fixture-rom")), vec!["fixture".to_string()]);
         let discovery = payload(&rom_path.display().to_string());
 
+        let mut cache = SoftwareHashCache::default();
         let matched =
-            match_software_by_file_hash_with_full_rom(&discovery, "snes", &metadata, true);
+            match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, true, &mut cache);
 
         assert_eq!(matched, Some("fixture".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn software_identity_hash_cache_hit_avoids_file_read() {
+        let root = unique_temp_dir("software-hash-cache-hit");
+        let payload_dir = root.join("Cached.sfc");
+        std::fs::create_dir(&payload_dir).expect("create payload dir");
+        let signature = file_signature(&payload_dir);
+        let db = root.join("library.sqlite3");
+        write_software_hash_cache_fixture(
+            &db,
+            &[(
+                "snes",
+                &payload_dir.display().to_string(),
+                signature.size,
+                signature.mtime_secs,
+                Some("cached"),
+            )],
+        );
+        let mut cache = SoftwareHashCache::load(&db);
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata
+            .hash_index
+            .insert(("snes".to_string(), 123, 456), vec!["wrong".to_string()]);
+        let discovery = payload(&payload_dir.display().to_string());
+
+        let matched =
+            match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, true, &mut cache);
+
+        assert_eq!(matched, Some("cached".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn software_identity_hash_cache_stale_signature_recomputes() {
+        let root = unique_temp_dir("software-hash-cache-stale");
+        let rom_path = root.join("Fixture.sfc");
+        std::fs::write(&rom_path, b"fresh-rom").expect("write rom");
+        let signature = file_signature(&rom_path);
+        let db = root.join("library.sqlite3");
+        write_software_hash_cache_fixture(
+            &db,
+            &[(
+                "snes",
+                &rom_path.display().to_string(),
+                signature.size + 1,
+                signature.mtime_secs,
+                Some("stale"),
+            )],
+        );
+        let mut cache = SoftwareHashCache::load(&db);
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata.hash_index.insert(
+            ("snes".to_string(), 9, crc32(b"fresh-rom")),
+            vec!["fresh".to_string()],
+        );
+        let discovery = payload(&rom_path.display().to_string());
+
+        let matched =
+            match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, true, &mut cache);
+
+        assert_eq!(matched, Some("fresh".to_string()));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7499,6 +7712,36 @@ mod tests {
             hash_stmt
                 .execute(params![list, name, size, format!("{crc:08x}")])
                 .expect("insert software fixture hash");
+        }
+    }
+
+    fn write_software_hash_cache_fixture(
+        path: &Path,
+        rows: &[(&str, &str, u64, i64, Option<&str>)],
+    ) {
+        let conn = Connection::open(path).expect("open software hash cache fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE software_hash_cache (
+                list_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_secs INTEGER NOT NULL,
+                software_name TEXT,
+                PRIMARY KEY(list_name, file_path, size, mtime_secs)
+            ) WITHOUT ROWID;
+            "#,
+        )
+        .expect("create software hash cache fixture");
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO software_hash_cache(list_name,file_path,size,mtime_secs,software_name)
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .expect("prepare software hash cache fixture insert");
+        for (list, path, size, mtime, software_name) in rows {
+            stmt.execute(params![list, path, *size as i64, mtime, software_name])
+                .expect("insert software hash cache fixture");
         }
     }
 
