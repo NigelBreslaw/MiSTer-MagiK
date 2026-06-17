@@ -992,10 +992,7 @@ fn normalize_screenshot_title(value: &str) -> String {
 }
 
 fn tsv_escape(value: &str) -> String {
-    value
-        .replace('\t', " ")
-        .replace('\r', " ")
-        .replace('\n', " ")
+    value.replace(['\t', '\r', '\n'], " ")
 }
 
 fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
