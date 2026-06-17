@@ -1,0 +1,3 @@
+kind	ts_unix_ms	sample	mode	host	reboot_issue_ms	down_ms	first_ok_ms	ssh_exec_ready_ms	first_hostdown_ms	first_noroute_ms	first_timeout_ms	first_refused_ms	first_other_ms	ok_count	hostdown_count	noroute_count	timeout_count	refused_count	other_count	resolve_ms	tcp_ms	handshake_ms	auth_ms	exec_ms	uptime	transitions	note
+boot-tcp	1781720982463	1	supervised	192.168.1.117	252	728	15005	15744			728			1	0	0	92	0	0	0	0	278	271	186	13.36	728:timeout,15005:ok	supervised
+boot-tcp	1781721023832	1	supervised	192.168.1.117	246	720	11828	12342			720		7262	1	0	0	71	0	1	0	1	295	137	76	9.91	720:timeout,7262:os49,7315:timeout,11828:ok	supervised

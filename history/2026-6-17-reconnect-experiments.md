@@ -458,3 +458,45 @@ Current interpretation: device-side boot is no longer dominated by sshd startup
 or SD-card logging. On good boots, sshd is ready around 4.5s device uptime and
 carrier is up around 8s. The remaining user-visible wall is the path from
 carrier/route readiness to the Mac seeing TCP/22, plus normal SSH handshake.
+
+## Experiment 13 - Raw TCP Reboot Probe Harness
+
+Hypothesis: the remaining gap needed better host-side classification. The old
+`boot-net-profile` only recorded first successful TCP/22 and SSH command-ready.
+It could not tell whether macOS was reporting host-down/no-route, timing out, or
+getting refused connections during the gap.
+
+Packet capture attempt:
+
+- Interface lookup showed MiSTer traffic uses Mac interface `en7`.
+- Unsandboxed `tcpdump` still lacked BPF permission.
+- `sudo tcpdump` could not run because this non-interactive session cannot
+  provide a sudo password.
+
+Implemented `scripts/mister boot-tcp-profile`, which records raw TCP probe
+states and transitions during reboot without changing MiSTer boot behavior.
+
+Before diagnostic detail:
+
+- Current keeper sample from `boot-net-profile`: 13.351s SSH command-ready,
+  TCP/22 visible at 12.770s.
+- It did not reveal what the host saw before TCP/22 succeeded.
+
+After diagnostic samples:
+
+- Slow sample: first TCP OK at 15.005s, SSH command-ready at 15.744s,
+  transitions `728:timeout,15005:ok`.
+- Normal sample: first TCP OK at 11.828s, SSH command-ready at 12.342s,
+  transitions `720:timeout,7262:os49,7315:timeout,11828:ok`.
+
+Matched MiSTer-side facts:
+
+- Slow sample had sshd at 5.18s, but carrier stayed down until about
+  12.3-12.7s, so the delay was real link readiness rather than Mac route state.
+- Normal sample had sshd at 5.39s, carrier around 8.5-9.2s, and TCP OK at
+  11.828s.
+
+Result: keeper diagnostic. The host is actively probing and mostly seeing TCP
+timeouts, not `hostdown`/`noroute`, before success. The next optimization should
+focus on making carrier/link readiness earlier and less variable, or adding a
+non-SSH early readiness path that can answer immediately after carrier.
