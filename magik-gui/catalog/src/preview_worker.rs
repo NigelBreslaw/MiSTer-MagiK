@@ -562,7 +562,7 @@ fn load_raw565_preview_timed(
     let path = raw565_preview_cache_path(image_path, resize);
     if let Some(archives) = preview_archives()? {
         if let Some(stem) = Path::new(&path).file_name().and_then(|s| s.to_str()) {
-            for archive in archives {
+            for archive in archives.iter() {
                 if let Some(loaded) = archive.load_timed(stem)? {
                     return Ok(loaded);
                 }
@@ -618,27 +618,54 @@ struct PreviewArchiveScratch {
     raw: Vec<u8>,
 }
 
-fn preview_archives() -> Result<Option<&'static Vec<PreviewArchive>>, String> {
-    static ARCHIVES: OnceLock<Option<Result<Vec<PreviewArchive>, String>>> = OnceLock::new();
-    let value = ARCHIVES.get_or_init(|| {
-        let paths = preview_archive_paths_from_env();
-        if paths.is_empty() {
-            return None;
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreviewArchiveFingerprint {
+    path: String,
+    size: u64,
+    mtime_secs: i64,
+}
+
+struct CachedPreviewArchives {
+    fingerprints: Vec<PreviewArchiveFingerprint>,
+    archives: Arc<Vec<PreviewArchive>>,
+}
+
+fn preview_archives() -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
+    preview_archives_for_paths(preview_archive_paths_from_env())
+}
+
+fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
+    static ARCHIVES: OnceLock<Mutex<Option<CachedPreviewArchives>>> = OnceLock::new();
+
+    let cache = ARCHIVES.get_or_init(|| Mutex::new(None));
+    if paths.is_empty() {
+        if let Ok(mut cached) = cache.lock() {
+            *cached = None;
         }
-        let mut archives = Vec::with_capacity(paths.len());
-        for path in paths {
-            match PreviewArchive::open(Path::new(&path)) {
-                Ok(archive) => archives.push(archive),
-                Err(err) => return Some(Err(err)),
+        return Ok(None);
+    }
+
+    let fingerprints = preview_archive_fingerprints_for_paths(paths)?;
+    if let Ok(cached) = cache.lock() {
+        if let Some(cached) = cached.as_ref() {
+            if cached.fingerprints == fingerprints {
+                return Ok(Some(Arc::clone(&cached.archives)));
             }
         }
-        Some(Ok(archives))
-    });
-    match value {
-        Some(Ok(archives)) => Ok(Some(archives)),
-        Some(Err(err)) => Err(err.clone()),
-        None => Ok(None),
     }
+
+    let mut archives = Vec::with_capacity(fingerprints.len());
+    for fingerprint in &fingerprints {
+        archives.push(PreviewArchive::open(Path::new(&fingerprint.path))?);
+    }
+    let archives = Arc::new(archives);
+    if let Ok(mut cached) = cache.lock() {
+        *cached = Some(CachedPreviewArchives {
+            fingerprints,
+            archives: Arc::clone(&archives),
+        });
+    }
+    Ok(Some(archives))
 }
 
 fn preview_archive_paths_from_env() -> Vec<String> {
@@ -709,7 +736,16 @@ pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64
 }
 
 pub fn preview_archive_fingerprints_from_env() -> Result<Vec<(String, u64, i64)>, String> {
-    preview_archive_paths_from_env()
+    Ok(preview_archive_fingerprints_for_paths(preview_archive_paths_from_env())?
+        .into_iter()
+        .map(|fingerprint| (fingerprint.path, fingerprint.size, fingerprint.mtime_secs))
+        .collect())
+}
+
+fn preview_archive_fingerprints_for_paths(
+    paths: Vec<String>,
+) -> Result<Vec<PreviewArchiveFingerprint>, String> {
+    paths
         .into_iter()
         .map(|path| {
             let meta = std::fs::metadata(&path)
@@ -720,7 +756,11 @@ pub fn preview_archive_fingerprints_from_env() -> Result<Vec<(String, u64, i64)>
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|duration| duration.as_secs() as i64)
                 .unwrap_or(0);
-            Ok((path, meta.len(), mtime_secs))
+            Ok(PreviewArchiveFingerprint {
+                path,
+                size: meta.len(),
+                mtime_secs,
+            })
         })
         .collect()
 }
@@ -1546,6 +1586,34 @@ mod tests {
         assert_eq!(image.height(), 1);
         assert_eq!(image.decoded_bytes(), 16);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_archive_cache_reopens_when_file_fingerprint_changes() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-refresh-{}.mmraw",
+            std::process::id()
+        ));
+        write_raw_archive(&path, "old.rgb565", &raw565_fixture(1, 1, &[0xf800]));
+        let first = preview_archives_for_paths(vec![path.display().to_string()])
+            .expect("open first archive")
+            .expect("first archive");
+
+        write_raw_archive(
+            &path,
+            "new-long.rgb565",
+            &raw565_fixture(2, 1, &[0x07e0, 0x001f]),
+        );
+        let second = preview_archives_for_paths(vec![path.display().to_string()])
+            .expect("open changed archive")
+            .expect("changed archive");
+
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(second[0]
+            .load_timed("new-long.rgb565")
+            .expect("load from changed archive")
+            .is_some());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
