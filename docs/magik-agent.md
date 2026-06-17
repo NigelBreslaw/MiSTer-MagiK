@@ -55,6 +55,7 @@ scripts/mister agent ping
 scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
+scripts/mister agent diagnostics --out build/agent-diagnostics/sample
 scripts/mister agent boot-profile 3 --timeout 40
 scripts/mister agent boot-profile 1 --supervised --timeout 40
 ```
@@ -86,6 +87,17 @@ keeps the newest 512 lines and reports how many older lines were dropped.
 
 Each event has `uptime_ms`, `event`, and `detail`. Use the timeline to explain
 boot samples without SSH and without scraping text logs.
+
+`diagnostics` writes a local bundle directory. It tries the TCP agent first and
+falls back to SSH when the agent port is unavailable. The bundle includes:
+
+- `bundle.json`
+- `status.json`
+- `timeline.json`
+- `agent-logs.json`
+- `net.json`
+- `processes.json` and `ps.txt`
+- MagiK status files and recent Main/Slint/agent log tails
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to Linux

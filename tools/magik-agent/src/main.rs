@@ -361,6 +361,7 @@ mod linux {
             "status" => response(id, true, Some(status_json(boot_id, started)), None),
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
+            "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
             _ => response(id, false, None, Some("unknown cmd")),
         }
     }
@@ -401,6 +402,70 @@ mod linux {
                 "uptime": read_trimmed("/proc/uptime"),
             }
         })
+    }
+
+    fn diagnostics_json(boot_id: u64, started: Instant) -> Value {
+        json!({
+            "schema": "mister-magik-agent-diagnostics-v1",
+            "collected_uptime_ms": uptime_ms_now(),
+            "status": status_json(boot_id, started),
+            "timeline": timeline_json(boot_id, started),
+            "agent_logs": log_ring_json(),
+            "net": {
+                "carrier": read_text_value("/sys/class/net/eth0/carrier"),
+                "operstate": read_text_value("/sys/class/net/eth0/operstate"),
+                "address": read_text_value("/sys/class/net/eth0/address"),
+                "route": read_text_value("/proc/net/route"),
+                "arp": read_text_value("/proc/net/arp"),
+                "dev": read_text_value("/proc/net/dev"),
+            },
+            "processes": {
+                "ps": command_text_value("ps", &["w"]),
+                "sshd": read_pid_list("sshd"),
+                "MiSTer_MagiK": read_pid_list("MiSTer_MagiK"),
+                "mister-magik-fb": read_pid_list("mister-magik-fb"),
+            },
+            "files": {
+                "slint_status": read_text_value("/tmp/mister-magik/status.json"),
+                "main_status": read_text_value("/tmp/mister-magik/main-status.json"),
+                "events_tail": tail_text_value("/tmp/mister-magik/events.jsonl", 80),
+                "slint_log_tail": tail_text_value("/tmp/mister-magik-slint.log", 120),
+                "main_log_tail": tail_text_value("/tmp/mister-magik-main.log", 120),
+                "agent_tmp_log_tail": tail_text_value(LOG, 160),
+                "agent_persistent_log_tail": tail_text_value(PLOG, 160),
+                "boot_analytics_tail": tail_text_value("/tmp/mister-magik-boot-analytics.tsv", 80),
+            }
+        })
+    }
+
+    fn read_text_value(path: &str) -> Value {
+        fs::read_to_string(path)
+            .map(Value::String)
+            .unwrap_or(Value::Null)
+    }
+
+    fn tail_text_value(path: &str, n: usize) -> Value {
+        let Ok(text) = fs::read_to_string(path) else {
+            return Value::Null;
+        };
+        let lines: Vec<_> = text.lines().collect();
+        let start = lines.len().saturating_sub(n);
+        Value::String(lines[start..].join("\n"))
+    }
+
+    fn command_text_value(program: &str, args: &[&str]) -> Value {
+        match std::process::Command::new(program).args(args).output() {
+            Ok(output) => {
+                let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    text.push_str("\n[stderr]\n");
+                    text.push_str(&stderr);
+                }
+                Value::String(text)
+            }
+            Err(err) => Value::String(format!("error: {err}")),
+        }
     }
 
     fn read_routes() -> Value {

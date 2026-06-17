@@ -2104,6 +2104,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(result)?);
             }
         }
+        "diagnostics" => {
+            agent_diagnostics(&args[1..])?;
+        }
         "boot-profile" => {
             agent_boot_profile(&args[1..])?;
         }
@@ -2115,8 +2118,145 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|boot-profile>\n       logs [--json]\n       timeline [--json]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
     );
+}
+
+fn agent_diagnostics(args: &[String]) -> Result<()> {
+    let out_dir = option_value(args, "--out")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(format!("build/agent-diagnostics/{}", unix_secs())));
+    fs::create_dir_all(&out_dir)?;
+
+    let bundle = match agent_request("diagnostics", json!({}), Duration::from_secs(3)) {
+        Ok(reply) => {
+            let mut result = reply.response.get("result").cloned().unwrap_or(Value::Null);
+            if let Value::Object(ref mut object) = result {
+                object.insert("transport".to_string(), Value::String("agent".to_string()));
+                object.insert(
+                    "request_ms".to_string(),
+                    Value::from(reply.elapsed_ms as u64),
+                );
+            }
+            result
+        }
+        Err(err) => {
+            eprintln!("agent diagnostics unavailable over TCP: {err}; falling back to SSH");
+            ssh_diagnostics_bundle(err.to_string())?
+        }
+    };
+
+    write_diagnostics_bundle(&out_dir, &bundle)?;
+    println!("diagnostics_dir={}", out_dir.display());
+    Ok(())
+}
+
+fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
+    let sess = connect(10)?;
+    let status = collect_status(&sess)?;
+    let ps = exec(&sess, "ps w", true)
+        .map(|out| out.stdout)
+        .unwrap_or_else(|err| format!("error: {err}"));
+    Ok(json!({
+        "schema": "mister-magik-agent-diagnostics-v1",
+        "transport": "ssh-fallback",
+        "agent_error": agent_error,
+        "status": status,
+        "timeline": Value::Null,
+        "agent_logs": Value::Null,
+        "net": {
+            "carrier": remote_read(&sess, "/sys/class/net/eth0/carrier"),
+            "operstate": remote_read(&sess, "/sys/class/net/eth0/operstate"),
+            "address": remote_read(&sess, "/sys/class/net/eth0/address"),
+            "route": remote_read(&sess, "/proc/net/route"),
+            "arp": remote_read(&sess, "/proc/net/arp"),
+            "dev": remote_read(&sess, "/proc/net/dev"),
+        },
+        "processes": {
+            "ps": ps,
+        },
+        "files": {
+            "slint_status": remote_read(&sess, "/tmp/mister-magik/status.json"),
+            "main_status": remote_read(&sess, "/tmp/mister-magik/main-status.json"),
+            "events_tail": tail_remote(&sess, "/tmp/mister-magik/events.jsonl", 80).map(|lines| lines.join("\n")),
+            "slint_log_tail": tail_remote(&sess, "/tmp/mister-magik-slint.log", 120).map(|lines| lines.join("\n")),
+            "main_log_tail": tail_remote(&sess, "/tmp/mister-magik-main.log", 120).map(|lines| lines.join("\n")),
+            "agent_tmp_log_tail": tail_remote(&sess, "/tmp/mister-magik-agent.log", 160).map(|lines| lines.join("\n")),
+            "agent_persistent_log_tail": tail_remote(&sess, "/media/fat/mister-magik/bootlogs/agent.log", 160).map(|lines| lines.join("\n")),
+            "boot_analytics_tail": tail_remote(&sess, "/tmp/mister-magik-boot-analytics.tsv", 80).map(|lines| lines.join("\n")),
+        }
+    }))
+}
+
+fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
+    fs::write(
+        out_dir.join("bundle.json"),
+        serde_json::to_vec_pretty(bundle)?,
+    )?;
+    write_json_member(out_dir, "status.json", bundle.get("status"))?;
+    write_json_member(out_dir, "timeline.json", bundle.get("timeline"))?;
+    write_json_member(out_dir, "agent-logs.json", bundle.get("agent_logs"))?;
+    write_json_member(out_dir, "net.json", bundle.get("net"))?;
+    write_json_member(out_dir, "processes.json", bundle.get("processes"))?;
+
+    write_string_pointer(out_dir, "ps.txt", bundle.pointer("/processes/ps"))?;
+    write_string_pointer(
+        out_dir,
+        "slint-status.json",
+        bundle.pointer("/files/slint_status"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "main-status.json",
+        bundle.pointer("/files/main_status"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "events-tail.jsonl",
+        bundle.pointer("/files/events_tail"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "slint-log-tail.log",
+        bundle.pointer("/files/slint_log_tail"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "main-log-tail.log",
+        bundle.pointer("/files/main_log_tail"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "agent-tmp-log-tail.log",
+        bundle.pointer("/files/agent_tmp_log_tail"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "agent-persistent-log-tail.log",
+        bundle.pointer("/files/agent_persistent_log_tail"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "boot-analytics-tail.tsv",
+        bundle.pointer("/files/boot_analytics_tail"),
+    )?;
+    Ok(())
+}
+
+fn write_json_member(out_dir: &Path, name: &str, value: Option<&Value>) -> Result<()> {
+    if let Some(value) = value {
+        if !value.is_null() {
+            fs::write(out_dir.join(name), serde_json::to_vec_pretty(value)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_string_pointer(out_dir: &Path, name: &str, value: Option<&Value>) -> Result<()> {
+    if let Some(text) = value.and_then(Value::as_str) {
+        fs::write(out_dir.join(name), text)?;
+    }
+    Ok(())
 }
 
 fn agent_token() -> Result<String> {
