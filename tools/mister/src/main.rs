@@ -19,6 +19,7 @@ const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
 const AGENT_PORT: u16 = 7497;
 const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
+const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 
@@ -2153,26 +2154,75 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
     let bytes = fs::read(local)?;
     let read_ms = read_t.elapsed().as_millis();
     let checksum = fnv64_hex(&bytes);
+    let requested_encoding =
+        env::var("MISTER_AGENT_DEPLOY_ENCODING").unwrap_or_else(|_| "auto".to_string());
+    let min_compress_bytes = env::var("MISTER_AGENT_DEPLOY_COMPRESS_MIN_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(AGENT_DEPLOY_COMPRESS_MIN_BYTES);
+    let compress_t = Instant::now();
+    let should_try_compress = match requested_encoding.as_str() {
+        "auto" => bytes.len() >= min_compress_bytes,
+        "lz4-block" => true,
+        "raw" => false,
+        other => return Err(format!("unsupported MISTER_AGENT_DEPLOY_ENCODING: {other}").into()),
+    };
+    let compressed = if should_try_compress {
+        Some(lz4_flex::block::compress(&bytes))
+    } else {
+        None
+    };
+    let compress_ms = compress_t.elapsed().as_millis();
+    let compression_decision;
+    let (encoding, payload) = match (requested_encoding.as_str(), compressed) {
+        ("raw", _) => {
+            compression_decision = "forced-raw".to_string();
+            ("raw", bytes.clone())
+        }
+        ("auto", None) => {
+            compression_decision = format!("below-min-size:{min_compress_bytes}");
+            ("raw", bytes.clone())
+        }
+        ("auto", Some(compressed)) if compressed.len() < bytes.len() => {
+            compression_decision = "smaller".to_string();
+            ("lz4-block", compressed)
+        }
+        ("auto", Some(_)) => {
+            compression_decision = "not-smaller".to_string();
+            ("raw", bytes.clone())
+        }
+        ("lz4-block", Some(compressed)) => {
+            compression_decision = "forced-lz4-block".to_string();
+            ("lz4-block", compressed)
+        }
+        _ => return Err("invalid deploy compression state".into()),
+    };
     let args = json!({
         "remote": remote,
         "size": bytes.len() as u64,
+        "payload_size": payload.len() as u64,
         "checksum": checksum,
+        "encoding": encoding,
     });
     let reply = agent_stream_request(
         "deploy_magik_bin_stream",
         args,
-        &bytes,
+        &payload,
         Duration::from_secs(120),
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
     println!(
-        "agent_deploy_magik_bin local={} remote={} bytes={} checksum={} total_ms={} read_ms={} request_ms={} result={}",
+        "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
         local,
         remote,
+        encoding,
+        compression_decision,
         bytes.len(),
+        payload.len(),
         checksum,
         total_t.elapsed().as_millis(),
         read_ms,
+        compress_ms,
         reply.elapsed_ms,
         serde_json::to_string(result)?
     );

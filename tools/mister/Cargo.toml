@@ -15,3 +15,6 @@ rayon = "1"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
 serde_json = "1"
 ssh2 = "0.9"
+
+[profile.dev.package.lz4_flex]
+opt-level = 3
