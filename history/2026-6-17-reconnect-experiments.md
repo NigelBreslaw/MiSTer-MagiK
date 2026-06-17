@@ -91,3 +91,35 @@ After samples:
 Result: small keeper. This does not change MiSTer boot/network readiness, but it
 removes coarse host-side polling and trims about 0.65s from the two-sample
 average while reducing worst-case miss time.
+
+## Experiment 4 - Buffered Single-Session Binary Deploy
+
+Hypothesis: development deploys waste time by opening several SSH sessions and
+streaming the real binary through `io::copy` into SFTP. A single-session helper
+plus a buffered `put()` should reduce the binary swap path.
+
+Before, manually timing the existing deploy-style sequence for a 6,098,636-byte
+`mister-magik-fb` binary:
+
+- prepare lock: 0.164s
+- suspend: 0.162s
+- direct `/media/fat` SFTP put: 3.603s
+- move/chmod/unlock: 0.153s
+- resume: 0.138s
+- final chmod/size: 0.154s
+- Total: 4.374s
+
+Intermediate finding: generated in-memory payloads of the same size wrote to
+`/media/fat` in 1.108-1.501s, while the real binary file took 4.817-5.865s with
+the old `io::copy` path. Reading the local file into memory and writing it with
+one `write_all()` removed most of that gap.
+
+After, `scripts/mister deploy-magik-bin`:
+
+- 1.926s helper-internal total, 2.046s outer wall
+- 1.902s helper-internal total, 2.017s outer wall
+- Put phase: 1.656s and 1.629s
+
+Result: keeper. The reviewed deploy swap path drops from about 4.374s to about
+1.914s helper-internal average for this binary, and `scripts/deploy-rust.sh`
+now uses the single-session helper for the main executable.

@@ -21,7 +21,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR="/media/fat/mister-magik"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
 REMOTE_ASSET_DIR="$REMOTE_DIR/assets"
-DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
 MAME_SQLITE="${MISTER_MAME_SQLITE:-$HERE/build/mame.sqlite3}"
 HBMAME_SQLITE="${MISTER_HBMAME_SQLITE:-$HERE/build/hbmame.sqlite3}"
 HBMAME_BIN="${MISTER_HBMAME_BIN:-}"
@@ -114,19 +113,9 @@ magik_command() {
   remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
 }
 
-cleanup_deploy_lock() {
-  remote_run "rm -f '$DEPLOY_LOCK'" >/dev/null 2>&1 || true
-  magik_command "mister_magik_resume"
-}
-trap cleanup_deploy_lock EXIT
-remote_run "mkdir -p '$REMOTE_DIR'; : > '$DEPLOY_LOCK'"
-magik_command "mister_magik_suspend"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" put "$BIN" "$REMOTE.upload"
-remote_run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'; rm -f '$DEPLOY_LOCK'"
-magik_command "mister_magik_resume"
-trap - EXIT
+  "$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE"
 if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   if [ ! -f "$VIDEO_SRC" ]; then
     echo "ERROR: --video requested but $VIDEO_SRC does not exist" >&2
