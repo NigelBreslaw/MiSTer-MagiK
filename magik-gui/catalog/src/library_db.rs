@@ -5498,6 +5498,36 @@ mod tests {
     }
 
     #[test]
+    fn dos_mgl_discovery_uses_dos_system_without_payload_inference() {
+        let root = unique_temp_dir("dos-mgl-profile");
+        let dos_dir = root.join("_DOS Games");
+        std::fs::create_dir_all(&dos_dir).expect("create dos dir");
+        let path = dos_dir.join("Doom (Ultimate).mgl");
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><rbf>AO486</rbf><file delay="1" type="s"/></mistergamelist>"#,
+        )
+        .expect("write dos mgl fixture");
+        let meta = std::fs::metadata(&path).expect("stat dos mgl fixture");
+        let file = FoundFile {
+            path: path.clone(),
+            ext: "mgl".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profile_for_path(&profiles, &path).expect("dos profile");
+        let payload_rule = profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+
+        assert_eq!(profile.id, "dos");
+        assert_eq!(discovery.platform_id, "dos");
+        assert_eq!(catalog_system_id_for_discovery(&discovery), "dos");
+        assert_eq!(system_title_for_discovery(&discovery, "dos"), "DOS Games");
+    }
+
+    #[test]
     fn mgl_discovery_preserves_script_as_launch_ref() {
         let path =
             std::env::temp_dir().join(format!("mister-magik-mgl-test-{}.mgl", std::process::id()));

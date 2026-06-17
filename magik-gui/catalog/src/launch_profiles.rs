@@ -245,6 +245,7 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
     vec![
         mra_profile(),
         mgl_profile(),
+        dos_mgl_profile(),
         saturn_profile(),
         psx_profile(),
         ao486_profile(),
@@ -370,12 +371,29 @@ fn mgl_profile() -> LaunchProfile {
         title: "MGL Launcher",
         core_name: "MGL",
         core_path: None,
-        game_dirs: vec!["_Games", "_DOS Games", "_Console (autoboot)"],
+        game_dirs: vec!["_Games", "_Console (autoboot)"],
         payload_rules: vec![launcher_payload_rule()],
         archive_entry_rules: Vec::new(),
         collection_rules: Vec::new(),
         ignore_rules: Vec::new(),
         provenance: RuleProvenance::mgl("Main mra_loader parses .mgl file mount actions"),
+    }
+}
+
+fn dos_mgl_profile() -> LaunchProfile {
+    LaunchProfile {
+        id: "dos",
+        system_id: "dos",
+        category: "Computer",
+        title: "DOS Games",
+        core_name: "AO486",
+        core_path: Some("_Computer/AO486"),
+        game_dirs: vec!["_DOS Games"],
+        payload_rules: vec![launcher_payload_rule()],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
+        ignore_rules: Vec::new(),
+        provenance: RuleProvenance::mgl("Installed DOS game launchers live under _DOS Games"),
     }
 }
 
@@ -736,6 +754,19 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn dos_mgl_profile_is_separate_from_generic_mgl_launchers() {
+        let profiles = builtin_profiles();
+        let dos = profile_for_game_dir(&profiles, "_DOS Games").expect("dos profile");
+        let mgl = profile_for_game_dir(&profiles, "_Games").expect("mgl profile");
+
+        assert_eq!(dos.id, "dos");
+        assert_eq!(dos.system_id, "dos");
+        assert_eq!(dos.category, "Computer");
+        assert_eq!(mgl.id, "mgl");
+        assert_eq!(mgl.system_id, "launcher");
     }
 
     #[test]

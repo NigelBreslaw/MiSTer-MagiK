@@ -228,6 +228,7 @@ fn system_sort_key(system: &GameSystemEntry) -> String {
         "gamegear" => 10,
         "vectrex" => 11,
         "ao486" => 12,
+        "dos" => 13,
         "unknown" => 999,
         _ => 100,
     };
@@ -254,6 +255,7 @@ pub fn system_title(id: &str) -> String {
         "sms" => "SMS".to_string(),
         "psx" => "PSX".to_string(),
         "ao486" => "ao486".to_string(),
+        "dos" => "DOS Games".to_string(),
         "megadrive" => "Mega Drive".to_string(),
         "megacd" => "Mega CD".to_string(),
         "gamegear" => "Game Gear".to_string(),
