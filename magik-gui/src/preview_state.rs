@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use mister_magik_ui as slint_ui;
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -79,11 +80,12 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
 #[derive(Default)]
 struct PreviewImageCache {
     entries: VecDeque<(String, Arc<PreviewImage>)>,
-    failed_paths: VecDeque<String>,
+    failed_paths: VecDeque<(String, Instant)>,
 }
 
 impl PreviewImageCache {
     const FAILED_CAP: usize = 128;
+    const FAILED_TTL: Duration = Duration::from_secs(5);
 
     fn get(&mut self, path: &str) -> Option<Arc<PreviewImage>> {
         let idx = self.entries.iter().position(|(p, _)| p == path)?;
@@ -120,10 +122,11 @@ impl PreviewImageCache {
     }
 
     fn insert_failed(&mut self, path: String) {
-        if let Some(idx) = self.failed_paths.iter().position(|p| p == &path) {
+        self.prune_failed();
+        if let Some(idx) = self.failed_paths.iter().position(|(p, _)| p == &path) {
             self.failed_paths.remove(idx);
         }
-        self.failed_paths.push_back(path);
+        self.failed_paths.push_back((path, Instant::now()));
         while self.failed_paths.len() > Self::FAILED_CAP {
             self.failed_paths.pop_front();
         }
@@ -156,8 +159,15 @@ impl PreviewImageCache {
         self.entries.iter().any(|(p, _)| p == path)
     }
 
-    fn contains_failed(&self, path: &str) -> bool {
-        self.failed_paths.iter().any(|p| p == path)
+    fn contains_failed(&mut self, path: &str) -> bool {
+        self.prune_failed();
+        self.failed_paths.iter().any(|(p, _)| p == path)
+    }
+
+    fn prune_failed(&mut self) {
+        let now = Instant::now();
+        self.failed_paths
+            .retain(|(_, failed_at)| now.duration_since(*failed_at) < Self::FAILED_TTL);
     }
 }
 
@@ -876,6 +886,19 @@ mod tests {
         ) = (&first_hit.pixels, &second_hit.pixels);
         assert!(Arc::ptr_eq(first_words, second_words));
         assert!(Arc::ptr_eq(&words, first_words));
+    }
+
+    #[test]
+    fn failed_preview_cache_expires_to_allow_same_process_asset_refresh() {
+        let mut cache = PreviewImageCache::default();
+        cache.insert_failed("missing.png".into());
+
+        assert!(cache.contains_failed("missing.png"));
+
+        cache.failed_paths[0].1 =
+            Instant::now() - PreviewImageCache::FAILED_TTL - Duration::from_millis(1);
+
+        assert!(!cache.contains_failed("missing.png"));
     }
 
     #[test]
