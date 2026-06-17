@@ -176,3 +176,33 @@ Recovery: after a manual reboot, SSH returned and
 `scripts/mister-static-eth0-boot.sh status` then reported
 `static_eth0=not-installed`. The post-recovery boot log showed eth0 driver
 initialization around 6.37s and link-up around 15.59s on the normal path.
+
+## Experiment 6 - Background FastNet Agent
+
+Hypothesis: the static `ifconfig` one-shot was unsafe because it fired once and
+lost the race. A background agent that starts early, waits for `eth0`, repeatedly
+applies static IPv4 setup, logs each attempt, and exits only after carrier
+appears should pull network initialization forward without stranding the device.
+
+Change: `scripts/mister-fastnet-agent.sh install` adds `/etc/init.d/S03fastnet`.
+It starts before normal rcS network services and writes
+`/tmp/mister-magik-fastnet.log`.
+
+Fresh before samples:
+
+- 20.638s SSH command-ready
+- 22.777s SSH command-ready
+- Average: 21.708s
+
+After samples:
+
+- 16.196s SSH command-ready
+- 14.594s SSH command-ready
+- 15.982s SSH command-ready
+- Average: 15.591s
+
+Result: keeper. The inspected boot moved Ethernet driver initialization to
+roughly 3.79s, link-up to roughly 7.91s, sshd listening to roughly 11s, and
+first SSH authentication to roughly 12s device uptime. This cuts about 6.1s from
+the fresh command-ready average while surviving three measured reboots. The
+agent remains installed for follow-on testing.
