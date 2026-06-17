@@ -710,3 +710,41 @@ the current boot's `/tmp` state. The failure itself is not an agent process
 crash or missing sshd; it is a warm-reboot Ethernet receive-path stall. The next
 commit should add agent-side recovery for `carrier=1`, routes present, TX
 increasing, and RX stuck at zero so a manual reboot is not required.
+
+## Experiment 18 - Reboot Primitive A/B
+
+Question: could the Ethernet receive-path stall be caused by switching the host
+wrapper to the Main fork's `mister_magik_reboot` path?
+
+Evidence for the supervised path:
+
+- `scripts/mister reboot-wait` was defaulting to
+  `printf 'mister_magik_reboot\n' > /dev/MiSTer_cmd`.
+- The fork handles that command by entering `LauncherRebooting`, suppressing OSD
+  and menu paths, then calling Main's direct `reboot(1)` reset-manager path.
+- The failed boot id 4 after a supervised reboot had carrier up, routes present,
+  and sshd alive, but RX stayed at zero while TX increased for the full captured
+  window.
+
+Raw Linux reboot A/B samples:
+
+- Raw sample 1: agent response at 17.316s, SSH command-ready at 18.281s.
+- Raw sample 2: agent response at 23.488s, SSH command-ready at 24.242s.
+- Raw sample 3: agent response at 24.816s, SSH command-ready at 25.541s.
+- All 3 raw samples returned without manual reboot.
+
+Result: probable root cause. The goal of the forked reboot is still valid:
+avoid OSD/menu/fb flicker by keeping MagiK visual ownership until reset. The
+risky part appears to be the final reset primitive, not the visual-lockdown
+state. Host tooling now defaults to Linux `/sbin/reboot` for unattended
+Ethernet development loops and keeps `--supervised` as an explicit
+HDMI/visual-validation mode. The long-term fix should be in the Main fork:
+preserve `LauncherRebooting` and OSD suppression, but hand the final reboot to a
+Linux/kernel reboot path that resets Ethernet cleanly.
+
+Post-change verification:
+
+- `scripts/mister agent boot-profile 1 --timeout 40` used `mode=raw` without a
+  `--raw` flag.
+- The device returned without manual intervention: agent response at 17.198s,
+  SSH command-ready at 17.891s.

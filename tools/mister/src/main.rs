@@ -20,7 +20,7 @@ const DEFAULT_FB_BPP: usize = 32;
 const AGENT_PORT: u16 = 7497;
 const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
-const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing; use --raw only for recovery' >&2; exit 12; fi";
+const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -109,7 +109,7 @@ fn run_cli() -> Result<()> {
             watch_external_reboot(&args)?;
         }
         "reboot" | "reboot-wait" => {
-            let raw = take_raw_reboot_flag(&mut args);
+            let raw = take_reboot_raw_flag(&mut args)?;
             let host = host();
             {
                 let sess = connect(10)?;
@@ -244,16 +244,37 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-repair-arcade-video|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|boot-profile>; reboot/reboot-wait use mister_magik_reboot when available; pass --raw for recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to /sbin/reboot for Ethernet reliability; pass --supervised for MagiK visual-lockdown reset validation"
     );
 }
 
-fn take_raw_reboot_flag(args: &mut Vec<String>) -> bool {
-    if let Some(pos) = args.iter().position(|arg| arg == "--raw") {
+fn take_reboot_raw_flag(args: &mut Vec<String>) -> Result<bool> {
+    let raw = if let Some(pos) = args.iter().position(|arg| arg == "--raw") {
         args.remove(pos);
         true
     } else {
         false
+    };
+    let supervised = if let Some(pos) = args.iter().position(|arg| arg == "--supervised") {
+        args.remove(pos);
+        true
+    } else {
+        false
+    };
+    if raw && supervised {
+        Err("use only one of --raw or --supervised".into())
+    } else {
+        Ok(!supervised)
+    }
+}
+
+fn reboot_raw_from_args(args: &[String]) -> Result<bool> {
+    let raw = args.iter().any(|arg| arg == "--raw");
+    let supervised = args.iter().any(|arg| arg == "--supervised");
+    if raw && supervised {
+        Err("use only one of --raw or --supervised".into())
+    } else {
+        Ok(!supervised)
     }
 }
 
@@ -2071,7 +2092,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|boot-profile>\n       logs [--json]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw]"
+        "usage: scripts/mister agent <ping|status|logs|boot-profile>\n       logs [--json]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
     );
 }
 
@@ -2154,7 +2175,7 @@ fn agent_probe_label(timeout: Duration) -> String {
 fn agent_boot_profile(args: &[String]) -> Result<()> {
     let _ = agent_token()?;
     let samples = parse_profile_count(args, 1);
-    let raw = args.iter().any(|arg| arg == "--raw");
+    let raw = reboot_raw_from_args(args)?;
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(40.0);
@@ -2293,7 +2314,7 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
 
 fn boot_net_profile(args: &[String]) -> Result<()> {
     let samples = parse_profile_count(args, 3);
-    let raw = args.iter().any(|arg| arg == "--raw");
+    let raw = reboot_raw_from_args(args)?;
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(120.0);
@@ -2543,7 +2564,7 @@ fn command_summary(program: &str, args: &[&str], contains: Option<&str>) -> Stri
 
 fn boot_tcp_profile(args: &[String]) -> Result<()> {
     let samples = parse_profile_count(args, 1);
-    let raw = args.iter().any(|arg| arg == "--raw");
+    let raw = reboot_raw_from_args(args)?;
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(40.0);
@@ -4396,18 +4417,17 @@ video_mode=14
     }
 
     #[test]
-    fn reboot_remote_command_prefers_supervised_magik_command() {
+    fn reboot_remote_command_supervised_uses_magik_command() {
         let cmd = reboot_remote_command(false);
 
         assert!(cmd.contains("mister_magik_reboot"));
         assert!(cmd.contains("/dev/MiSTer_cmd"));
         assert!(cmd.contains("MiSTer_MagiK"));
         assert!(!cmd.contains("/sbin/reboot"));
-        assert!(cmd.contains("use --raw only for recovery"));
     }
 
     #[test]
-    fn reboot_remote_command_raw_skips_supervised_command() {
+    fn reboot_remote_command_raw_uses_linux_reboot() {
         let cmd = reboot_remote_command(true);
 
         assert!(cmd.contains("/sbin/reboot"));
@@ -4415,12 +4435,19 @@ video_mode=14
     }
 
     #[test]
-    fn raw_reboot_flag_is_removed_before_timeout_parse() {
-        let mut args = vec!["--raw".to_string(), "180".to_string()];
+    fn reboot_defaults_to_raw_and_supervised_flag_is_removed_before_timeout_parse() {
+        let mut args = vec!["--supervised".to_string(), "180".to_string()];
 
-        assert!(take_raw_reboot_flag(&mut args));
+        assert!(!take_reboot_raw_flag(&mut args).unwrap());
         assert_eq!(args, vec!["180"]);
-        assert!(!take_raw_reboot_flag(&mut args));
+        assert!(take_reboot_raw_flag(&mut args).unwrap());
+    }
+
+    #[test]
+    fn reboot_raw_and_supervised_flags_conflict() {
+        let mut args = vec!["--raw".to_string(), "--supervised".to_string()];
+
+        assert!(take_reboot_raw_flag(&mut args).is_err());
     }
 
     #[test]
