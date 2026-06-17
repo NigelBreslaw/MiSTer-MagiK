@@ -346,3 +346,29 @@ slightly earlier and consistently moves carrier-ready earlier than the immediate
 pre-change boot. The host-visible command-ready improvement is only around
 0.1-0.2s, so the next limiter appears to be host visibility or post-carrier
 network/SSH readiness rather than only FastNet launch order.
+
+## Experiment 10 - Post-Carrier ARP Announcement Burst
+
+Hypothesis: the Mac might be losing time on neighbor discovery after carrier.
+FastNet already sends `arping -A` during each configure pass, but adding a burst
+of unsolicited and answer-style ARP announcements immediately after carrier
+could make TCP/22 visible earlier.
+
+Fresh before sample with clean `S00fastnet`:
+
+- 13.242s SSH command-ready
+- TCP/22 visible at 12.769s
+
+After samples with post-carrier ARP burst:
+
+- 13.255s SSH command-ready
+- 13.657s SSH command-ready
+- Average: 13.456s
+
+Logs showed that `arping -c 1` takes roughly a second per packet on this MiSTer,
+so the burst added several seconds of background FastNet delay and did not move
+host TCP/22 visibility earlier. The clean `S00fastnet` service was reinstalled.
+
+Result: rejected. Neighbor announcement is not the current answer in this form;
+if revisited, it needs a nonblocking raw packet sender rather than repeated
+`arping` processes.
