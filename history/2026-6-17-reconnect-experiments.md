@@ -438,3 +438,23 @@ earlier host visibility. Normal FastNet arping was restored and reinstalled.
 
 Result: rejected. Although `arping` is slow, its gratuitous ARP appears to be
 helping enough that removing it worsens reliability/timing.
+
+## Current Keeper Stack Checkpoint
+
+Installed keeper state after these experiments:
+
+- `S00fastnet`
+- `S04fastsshd`
+- deferred persistent boot diagnostics
+- normal FastNet `arping -A` retained
+
+Verification sample:
+
+- 13.351s SSH command-ready
+- TCP/22 visible at 12.770s
+- MiSTer-reported uptime 10.98s at command execution
+
+Current interpretation: device-side boot is no longer dominated by sshd startup
+or SD-card logging. On good boots, sshd is ready around 4.5s device uptime and
+carrier is up around 8s. The remaining user-visible wall is the path from
+carrier/route readiness to the Mac seeing TCP/22, plus normal SSH handshake.
