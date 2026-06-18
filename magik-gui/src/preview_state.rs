@@ -626,6 +626,21 @@ fn request_preview_prefetches(
     }
 }
 
+fn deferred_selected_preview_is_ready(preview: &mut PreviewState) -> bool {
+    let Some(path) = preview.selected_image_path.as_deref() else {
+        return false;
+    };
+    preview.visible_path != path
+        && (preview.cache.contains(path) || preview.cache.contains_failed(path))
+}
+
+fn same_selected_preview_needs_request(
+    preview: &mut PreviewState,
+    defer_selected_application: bool,
+) -> bool {
+    !defer_selected_application && deferred_selected_preview_is_ready(preview)
+}
+
 pub(crate) fn schedule_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
     games: &[ArcadeGameEntry],
@@ -646,6 +661,15 @@ pub(crate) fn schedule_arcade_preview_window(
         .as_deref()
         .is_some_and(|path| path == game.mra_path.as_ref())
     {
+        if same_selected_preview_needs_request(preview, defer_selected_application) {
+            return request_arcade_preview_window(
+                bridge,
+                games,
+                selected,
+                preview,
+                defer_selected_application,
+            );
+        }
         request_preview_prefetches(games, selected, preview);
         return false;
     }
@@ -949,6 +973,41 @@ mod tests {
     }
 
     #[test]
+    fn same_selected_preview_requests_cached_apply_after_deferral() {
+        let mut preview = PreviewState::new();
+        preview.selected_mra_path = Some("/_Arcade/selected.mra".into());
+        preview.selected_image_path = Some("selected.png".into());
+        preview.visible_path = "previous.png".into();
+        preview.has_visible_preview = true;
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["selected.png".into()],
+            Some("previous.png"),
+        );
+
+        assert!(!same_selected_preview_needs_request(&mut preview, true));
+        assert!(same_selected_preview_needs_request(&mut preview, false));
+    }
+
+    #[test]
+    fn same_selected_preview_skips_request_when_visible_is_current() {
+        let mut preview = PreviewState::new();
+        preview.selected_mra_path = Some("/_Arcade/selected.mra".into());
+        preview.selected_image_path = Some("selected.png".into());
+        preview.visible_path = "selected.png".into();
+        preview.has_visible_preview = true;
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["selected.png".into()],
+            Some("selected.png"),
+        );
+
+        assert!(!same_selected_preview_needs_request(&mut preview, false));
+    }
+
+    #[test]
     fn failed_preview_cache_expires_to_allow_same_process_asset_refresh() {
         let mut cache = PreviewImageCache::default();
         cache.insert_failed("missing.png".into());
@@ -1075,5 +1134,18 @@ mod tests {
             resize_filter: crate::preview_worker::PreviewResizeFilter::Off,
             priority,
         }
+    }
+
+    fn preview_image(word: u16) -> Arc<PreviewImage> {
+        Arc::new(PreviewImage {
+            pixels: PreviewImagePixels::Rgb565 {
+                words: Arc::from([word]),
+                stride_pixels: 1,
+            },
+            source_w: 1,
+            source_h: 1,
+            display_w: 1,
+            display_h: 1,
+        })
     }
 }
