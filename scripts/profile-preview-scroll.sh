@@ -110,12 +110,6 @@ case "$deploy" in
   skip) : ;;
 esac
 
-if [[ -z "$preview_format" && -z "$preview_resize_filter" && -z "$preview_resize_max" ]]; then
-  run_label="default derived-png nearest 320x320"
-else
-  run_label="${preview_format:-app-default} ${preview_resize_filter:-app-default} resize ${preview_resize_max:-320x320}"
-fi
-
 write_launcher_env() {
   local scenario_value="$1"
   local trace_path="$2"
@@ -140,7 +134,6 @@ write_launcher_env() {
     if [[ -n "$transition_segment_secs" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_SEGMENT_SECS=%q\n' "$transition_segment_secs"; fi
     if [[ -n "$transition_ms" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_MS=%q\n' "$transition_ms"; fi
     if [[ -n "$selected_index" ]]; then printf 'export MISTER_ARCADE_SELECTED_INDEX=%q\n' "$selected_index"; fi
-    printf 'export MISTER_PREVIEW_RUN_LABEL=%q\n' "$run_label"
   } >"$env_file"
 }
 
