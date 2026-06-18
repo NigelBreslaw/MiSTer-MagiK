@@ -303,6 +303,7 @@ impl ArcadeNav {
         !self.is_settled() || self.scroll.held_dir != 0 || self.scroll.intent_queue != 0
     }
 
+    #[cfg(test)]
     pub fn has_scroll_motion_or_queue(&self) -> bool {
         !self.is_settled() || self.scroll.intent_queue != 0
     }

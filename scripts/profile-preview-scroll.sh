@@ -10,14 +10,12 @@ REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--list-only] [--self-test] [--fb-format 565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-visual-pct N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--self-test] [--fb-format 565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 /media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
 
---list-only disables screenshot loading and the launcher's catalog refresh so
-list-renderer changes can be measured without preview/catalog noise.
 --fb-format is kept for old command lines, but UI profiling supports only 565.
 --transition selects raw-preview screenshot transitions. Default is fade; `cut`
 disables animation; `mega` cycles all effects.
@@ -32,9 +30,7 @@ secs="30"
 scenario="velocity-scroll"
 label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
-list_only="0"
 self_test="0"
-preview_visual_pct=""
 preview_resize_filter=""
 preview_resize_max=""
 preview_format=""
@@ -45,14 +41,13 @@ transition_segment_secs=""
 transition_ms=""
 visual_captures="4"
 allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
-allow_no_exact_preview="${MISTER_ALLOW_PREVIEW_NO_EXACT:-0}"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
-    --list-only) list_only="1"; shift ;;
+    --list-only) echo "--list-only was removed; preview-scroll benchmarks require visible screenshots" >&2; exit 2 ;;
     --self-test) self_test="1"; shift ;;
     --fb-format) fb_format="${2:-}"; shift 2 ;;
     --preview-blitter) echo "--preview-blitter was removed; previews are always raw565 via the Rust blitter" >&2; exit 2 ;;
@@ -60,7 +55,7 @@ while [[ $# -gt 0 ]]; do
     --transition-segment-secs) transition_segment_secs="${2:-}"; shift 2 ;;
     --transition-ms) transition_ms="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
-    --preview-visual-pct) preview_visual_pct="${2:-}"; shift 2 ;;
+    --preview-visual-pct) echo "--preview-visual-pct was removed; preview-scroll benchmarks require visible screenshots" >&2; exit 2 ;;
     --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
     --preview-resize-max) preview_resize_max="${2:-}"; shift 2 ;;
     --preview-format) preview_format="${2:-}"; shift 2 ;;
@@ -88,7 +83,6 @@ remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
-if [[ -n "$preview_visual_pct" && ! "$preview_visual_pct" =~ ^[0-9]+$ ]]; then echo "--preview-visual-pct must be an integer" >&2; exit 2; fi
 case "$preview_resize_filter" in ""|off|nearest|box|lanczos|hybrid) ;; *) echo "--preview-resize-filter must be off, nearest, box, lanczos, or hybrid" >&2; exit 2 ;; esac
 if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ ]]; then echo "--preview-resize-max must look like 320x320" >&2; exit 2; fi
 case "$preview_format" in ""|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be raw-rgb565" >&2; exit 2 ;; esac
@@ -128,8 +122,6 @@ write_launcher_env() {
     printf 'export MISTER_PREVIEW_TRACE=1\n'
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     if [[ -n "$trace_path" ]]; then printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$trace_path"; fi
-    if [[ "$list_only" == "1" ]]; then printf 'export MISTER_PREVIEW_LOADING=off\n'; fi
-    if [[ -n "$preview_visual_pct" ]]; then printf 'export MISTER_PREVIEW_VISUAL_PCT=%q\n' "$preview_visual_pct"; fi
     if [[ -n "$preview_resize_filter" ]]; then printf 'export MISTER_PREVIEW_RESIZE_FILTER=%q\n' "$preview_resize_filter"; fi
     if [[ -n "$preview_resize_max" ]]; then printf 'export MISTER_PREVIEW_RESIZE_MAX=%q\n' "$preview_resize_max"; fi
     if [[ -n "$preview_format" ]]; then printf 'export MISTER_PREVIEW_FORMAT=%q\n' "$preview_format"; fi
@@ -153,7 +145,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
 
-  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=${transition:-fade} list_only=$list_only preview_visual_pct=${preview_visual_pct:-100} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none}"
+  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=${transition:-fade} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none}"
   write_launcher_env "$remote_scenario" "$remote_tsv"
   restart_supervised_launcher "$remote_tsv"
   sleep $((secs + 7))
@@ -169,7 +161,7 @@ run_case() {
 
 capture_visuals() {
   local count="$visual_captures"
-  if [[ "$count" == "0" || "$list_only" == "1" ]]; then return; fi
+  if [[ "$count" == "0" ]]; then return; fi
   local visual_dir="$OUT_DIR/${label}-visuals"
   mkdir -p "$visual_dir"
   local indices=(0 7 14 21 28 35 42 49)
@@ -288,7 +280,7 @@ check_preview_hotpath_cache_gate() {
 
 check_preview_visibility_gate() {
   local name="$1" tsv="$2"
-  awk -v name="$name" -v list_only="$list_only" -v allow="$allow_no_exact_preview" '
+  awk -v name="$name" '
     BEGIN { FS="\t" }
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     NF {
@@ -298,11 +290,11 @@ check_preview_visibility_gate() {
     }
     END {
       exact = states["exact"] + 0
-      if (list_only != "1" && exact == 0 && allow != "1" && allow != "true" && allow != "yes" && allow != "on") {
-        printf "%s preview visibility gate failed: exact=0 frames=%d allow=%s\n", name, n, allow > "/dev/stderr"
+      if (exact == 0) {
+        printf "%s preview visibility gate failed: exact=0 frames=%d\n", name, n > "/dev/stderr"
         exit 6
       }
-      printf "%s preview_visibility_gate frames=%d exact=%d allow=%s list_only=%s\n", name, n, exact, allow, list_only
+      printf "%s preview_visibility_gate frames=%d exact=%d\n", name, n, exact
     }
   ' "$tsv"
 }
@@ -370,21 +362,12 @@ frame	cache_state
 1	exact
 EOF
 
-  list_only="0"
-  allow_no_exact_preview="0"
   if check_preview_visibility_gate selftest "$no_exact" >/dev/null 2>&1; then
     echo "preview visibility self-test expected exact=0 failure" >&2
     rm -rf "$tmp"
     exit 1
   fi
   check_preview_visibility_gate selftest "$exact" >/dev/null
-
-  allow_no_exact_preview="1"
-  check_preview_visibility_gate selftest "$no_exact" >/dev/null
-
-  list_only="1"
-  allow_no_exact_preview="0"
-  check_preview_visibility_gate selftest "$no_exact" >/dev/null
 
   rm -rf "$tmp"
   echo "profile-preview-scroll self-test ok"
