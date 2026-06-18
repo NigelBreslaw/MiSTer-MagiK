@@ -504,29 +504,61 @@ run_exit_menu_loop() {
 }
 
 run_crash_restart_lite() {
-  local i pid
+  local i
   for i in 1 2 3; do
-    restart_launcher
-    status_json "crash-lite-before-$i" || {
-      record_fail "crash-lite status before $i"
-      return
-    }
-    pid="$(json_value "$OUT/status-crash-lite-before-$i.json" "data['runtime']['main_status'].get('launcher_pid', '')" || true)"
-    if [ -z "$pid" ] || [ "$pid" = "0" ]; then
-      record_fail "crash-lite missing launcher pid $i"
-      return
-    fi
-    remote "kill -9 '$pid'"
-    wait_status_expr "crash-lite records crash $i" 30 \
-      "data['runtime']['main_status'].get('launcher_state') == 'LauncherCrashed' and int(data['runtime']['main_status'].get('launcher_pid', 0)) == 0" \
-      "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
-    if ! restart_launcher; then
-      record_fail "crash-lite restart after crash $i"
-      run_capture "crash-lite-raw-reboot-$i" "$MISTER" reboot-wait --raw
-      wait_for_launcher_active "wait-launcher-after-crash-lite-raw-reboot-$i" 90 || return
-      return
-    fi
+    run_crash_restart_smoke "crash-lite-$i" || return
   done
+}
+
+run_crash_restart_smoke() {
+  local label="$1"
+  local pid before_crash before_restart crash_expr after_expr
+
+  restart_launcher || return 1
+  status_json "$label-before" || {
+    record_fail "$label before status JSON"
+    return 1
+  }
+  pid="$(json_value "$OUT/status-$label-before.json" "data['runtime']['main_status'].get('launcher_pid', '')" || true)"
+  before_crash="$(json_value "$OUT/status-$label-before.json" "int(data['runtime']['main_status'].get('crash_count', 0))" || true)"
+  before_restart="$(json_value "$OUT/status-$label-before.json" "int(data['runtime']['main_status'].get('restart_count', 0))" || true)"
+  before_crash="${before_crash:-0}"
+  before_restart="${before_restart:-0}"
+
+  if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+    record_fail "$label missing launcher pid"
+    return 1
+  fi
+
+  remote "kill -9 '$pid'"
+  crash_expr="data['runtime']['main_status'].get('launcher_state') == 'LauncherCrashed' and int(data['runtime']['main_status'].get('launcher_pid', 0)) == 0 and int(data['runtime']['main_status'].get('crash_count', 0)) > $before_crash and len(data['runtime']['main_status'].get('last_crash_reason', '')) > 0 and int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
+  wait_status_expr "$label records LauncherCrashed" 30 \
+    "$crash_expr" \
+    "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
+  if status_json "$label-crashed"; then
+    assert_status "$OUT/status-$label-crashed.json" "$label crash telemetry is recorded" "$crash_expr"
+  else
+    record_fail "$label crashed status JSON"
+  fi
+
+  if restart_launcher; then
+    after_expr="data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher' and int(data['runtime']['main_status'].get('restart_count', 0)) > $before_restart and 'last_restart_error' in data['runtime']['main_status'] and data['runtime']['main_status'].get('last_restart_error') == '' and 'last_spawn_error' in data['runtime']['main_status'] and data['runtime']['main_status'].get('last_spawn_error') == '' and int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
+    status_json "$label-after" || {
+      record_fail "$label after status JSON"
+      return 1
+    }
+    if json_assert "$OUT/status-$label-after.json" "$label returns LauncherActive without raw reboot" "$after_expr"; then
+      record_ok "$label returns LauncherActive without raw reboot"
+      return 0
+    fi
+    record_fail "$label returns LauncherActive without raw reboot"
+    return 1
+  fi
+
+  record_fail "$label restart did not return to LauncherActive without raw reboot"
+  run_capture "$label-raw-reboot-recovery" "$MISTER" reboot-wait --raw
+  wait_for_launcher_active "wait-launcher-after-$label-raw-reboot-recovery" 90 || return 1
+  return 1
 }
 
 run_display_mode_smoke() {
@@ -738,38 +770,7 @@ status_json "normal-restart" || record_fail "normal restart status JSON"
 assert_status "$OUT/status-normal-restart.json" "normal restart returns to launcher" \
   "data['runtime']['slint_status'].get('scene') == 'launcher'"
 
-launcher_pid="$(python3 - "$OUT/status-normal-restart.json" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as f:
-    status = json.load(f)
-print(status["runtime"]["main_status"].get("launcher_pid", ""))
-PY
-)"
-if [ -n "$launcher_pid" ] && [ "$launcher_pid" != "0" ]; then
-  remote "kill -9 '$launcher_pid'"
-  wait_status_expr "wait killed Slint child crash policy" 30 \
-    "data['runtime']['main_status'].get('launcher_state') == 'LauncherCrashed'" \
-    "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
-  status_json "crash-policy" || record_fail "crash policy status JSON"
-  assert_status "$OUT/status-crash-policy.json" "killed Slint child is recorded as crash policy" \
-    "data['runtime']['main_status'].get('launcher_state') == 'LauncherCrashed' and int(data['runtime']['main_status'].get('launcher_pid', 0)) == 0 and int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
-else
-  record_fail "could not determine launcher PID for crash-policy smoke"
-fi
-
-if restart_launcher; then
-  status_json "post-crash-restart" || record_fail "post-crash restart status JSON"
-  assert_status "$OUT/status-post-crash-restart.json" "launcher restarts after crash-policy smoke" \
-    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
-else
-  record_fail "launcher restarts after crash-policy smoke"
-  run_capture "raw-reboot-after-crash-restart-failure" "$MISTER" reboot-wait --raw
-  wait_for_launcher_active "wait-launcher-after-crash-raw-reboot" 90 || exit 1
-  status_json "post-crash-raw-reboot" || record_fail "post crash raw reboot status JSON"
-  assert_status "$OUT/status-post-crash-raw-reboot.json" "launcher recovers after crash-restart failure" \
-    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
-fi
+run_crash_restart_smoke "crash-restart-gate" || true
 
 if [ "$ALLOW_RESET_CATALOG" -eq 1 ]; then
   BACKUP="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
