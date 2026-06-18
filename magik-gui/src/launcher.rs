@@ -294,8 +294,12 @@ impl ArcadeNav {
         self.scroll.turbo_active = false;
     }
 
-    fn is_settled(&self) -> bool {
+    pub fn is_settled(&self) -> bool {
         self.scroll.visual_px == self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT
+    }
+
+    pub fn is_scroll_active(&self) -> bool {
+        !self.is_settled() || self.scroll.held_dir != 0 || self.scroll.intent_queue != 0
     }
 
     fn enqueue_step(&mut self, dir: i32, count: usize) {
@@ -1335,6 +1339,21 @@ mod tests {
         input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(128));
         assert_eq!(nav.selected, 2);
         assert!(nav.visual_index > 1.0);
+    }
+
+    #[test]
+    fn arcade_scroll_stays_active_while_direction_is_held_between_steps() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 10, t0);
+        settle(&mut nav, 10, t0);
+
+        assert!(nav.is_settled());
+        assert!(nav.is_scroll_active());
+
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(140));
+
+        assert!(!nav.is_scroll_active());
     }
 
     #[test]

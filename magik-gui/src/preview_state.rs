@@ -430,7 +430,23 @@ fn next_ready_result_index(
     selected_image_path: Option<&str>,
     selected_processed: bool,
     prefetch_results: usize,
+    defer_selected_result: bool,
 ) -> Option<usize> {
+    if defer_selected_result {
+        if let Some(idx) = backlog.iter().position(|result| {
+            matches!(result.priority, PreviewPriority::Selected)
+                && !is_current_selected_result(result, current_generation, selected_image_path)
+        }) {
+            return Some(idx);
+        }
+        if prefetch_results < MAX_PREFETCH_RESULTS_PER_FRAME {
+            return backlog
+                .iter()
+                .position(|result| matches!(result.priority, PreviewPriority::Prefetch { .. }));
+        }
+        return None;
+    }
+
     if !selected_processed {
         if let Some(idx) = backlog.iter().position(|result| {
             is_current_selected_result(result, current_generation, selected_image_path)
@@ -451,6 +467,7 @@ pub(crate) fn request_arcade_preview_window(
     games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
+    defer_selected_application: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
@@ -491,6 +508,10 @@ pub(crate) fn request_arcade_preview_window(
         if let Some(path) = preview.selected_image_path.clone() {
             if preview.visible_path != path {
                 if let Some(image) = preview.cache.get(&path) {
+                    if defer_selected_application {
+                        request_preview_prefetches(games, selected, preview);
+                        return false;
+                    }
                     bridge.set_arcade_preview_title(game.title.as_ref().into());
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
@@ -524,6 +545,10 @@ pub(crate) fn request_arcade_preview_window(
             return true;
         }
         if let Some(image) = preview.cache.get(game.image_path.as_ref()) {
+            if defer_selected_application {
+                request_preview_prefetches(games, selected, preview);
+                return false;
+            }
             preview.current_generation = 0;
             preview.has_visible_preview = true;
             if preview_trace_enabled() {
@@ -606,6 +631,7 @@ pub(crate) fn schedule_arcade_preview_window(
     games: &[ArcadeGameEntry],
     selected: usize,
     preview: &mut PreviewState,
+    defer_selected_application: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
@@ -623,12 +649,13 @@ pub(crate) fn schedule_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return false;
     }
-    request_arcade_preview_window(bridge, games, selected, preview)
+    request_arcade_preview_window(bridge, games, selected, preview, defer_selected_application)
 }
 
 pub(crate) fn apply_ready_preview(
     app: &slint_ui::launcher::Launcher,
     preview: &mut PreviewState,
+    defer_selected_result: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
@@ -646,6 +673,7 @@ pub(crate) fn apply_ready_preview(
         preview.selected_image_path.as_deref(),
         selected_processed,
         prefetch_results,
+        defer_selected_result,
     ) {
         let Some(result) = preview.ready_backlog.remove(idx) else {
             break;
@@ -824,9 +852,41 @@ mod tests {
             ),
         ]);
 
-        let idx = next_ready_result_index(&backlog, 11, Some("selected.png"), false, 0);
+        let idx = next_ready_result_index(&backlog, 11, Some("selected.png"), false, 0, false);
 
         assert_eq!(idx, Some(1));
+    }
+
+    #[test]
+    fn ready_result_selector_defers_current_selected_preview_but_allows_prefetch() {
+        let backlog = VecDeque::from(vec![
+            preview_result(11, "selected.png", PreviewPriority::Selected),
+            preview_result(
+                12,
+                "prefetch-a.png",
+                PreviewPriority::Prefetch { distance: 1 },
+            ),
+        ]);
+
+        let idx = next_ready_result_index(&backlog, 11, Some("selected.png"), false, 0, true);
+
+        assert_eq!(idx, Some(1));
+    }
+
+    #[test]
+    fn ready_result_selector_applies_deferred_selected_preview_after_idle() {
+        let backlog = VecDeque::from(vec![
+            preview_result(11, "selected.png", PreviewPriority::Selected),
+            preview_result(
+                12,
+                "prefetch-a.png",
+                PreviewPriority::Prefetch { distance: 1 },
+            ),
+        ]);
+
+        let idx = next_ready_result_index(&backlog, 11, Some("selected.png"), false, 0, false);
+
+        assert_eq!(idx, Some(0));
     }
 
     #[test]
@@ -845,11 +905,11 @@ mod tests {
         ]);
 
         assert_eq!(
-            next_ready_result_index(&backlog, 99, Some("selected.png"), false, 0),
+            next_ready_result_index(&backlog, 99, Some("selected.png"), false, 0, false),
             Some(0)
         );
         assert_eq!(
-            next_ready_result_index(&backlog, 99, Some("selected.png"), false, 1),
+            next_ready_result_index(&backlog, 99, Some("selected.png"), false, 1, false),
             None
         );
     }

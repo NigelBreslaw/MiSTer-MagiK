@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-pub const DEFAULT_REASSERT_FRAMES: u64 = 60;
+// Keep periodic route checks out of the steady scroll hot path by default.
+// Diagnostics can restore the old one-second cadence with
+// MISTER_FB_ROUTE_REASSERT_FRAMES=60.
+pub const DEFAULT_REASSERT_FRAMES: u64 = 3600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramebufferRouteAction {

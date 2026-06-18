@@ -37,6 +37,10 @@ impl DirtyRect {
         }
     }
 
+    pub(super) fn area(self) -> usize {
+        self.width() * (self.y1 - self.y0)
+    }
+
     #[cfg_attr(not(feature = "video"), allow(dead_code))]
     pub(super) fn union(self, other: DirtyRect) -> DirtyRect {
         DirtyRect {
@@ -46,6 +50,82 @@ impl DirtyRect {
             y1: self.y1.max(other.y1),
         }
     }
+}
+
+fn subtract_rect(rect: DirtyRect, cut: DirtyRect) -> Vec<DirtyRect> {
+    let Some(overlap) = rect.intersection(cut) else {
+        return vec![rect];
+    };
+    let mut out = Vec::with_capacity(4);
+    if rect.y0 < overlap.y0 {
+        out.push(DirtyRect {
+            x0: rect.x0,
+            y0: rect.y0,
+            x1: rect.x1,
+            y1: overlap.y0,
+        });
+    }
+    if overlap.y1 < rect.y1 {
+        out.push(DirtyRect {
+            x0: rect.x0,
+            y0: overlap.y1,
+            x1: rect.x1,
+            y1: rect.y1,
+        });
+    }
+    if rect.x0 < overlap.x0 {
+        out.push(DirtyRect {
+            x0: rect.x0,
+            y0: overlap.y0,
+            x1: overlap.x0,
+            y1: overlap.y1,
+        });
+    }
+    if overlap.x1 < rect.x1 {
+        out.push(DirtyRect {
+            x0: overlap.x1,
+            y0: overlap.y0,
+            x1: rect.x1,
+            y1: overlap.y1,
+        });
+    }
+    out
+}
+
+fn subtract_rects(rects: Vec<DirtyRect>, cuts: &[DirtyRect]) -> Vec<DirtyRect> {
+    let mut current = rects;
+    for cut in cuts {
+        current = current
+            .into_iter()
+            .flat_map(|rect| subtract_rect(rect, *cut))
+            .collect();
+        if current.is_empty() {
+            break;
+        }
+    }
+    current
+}
+
+pub(super) fn build_launcher_present_plan(
+    base: Option<DirtyRect>,
+    cached_overlays: &[DirtyRect],
+    direct_overlays: &[DirtyRect],
+) -> Vec<DirtyRect> {
+    let mut layers = Vec::with_capacity(usize::from(base.is_some()) + cached_overlays.len());
+    if let Some(base) = base {
+        layers.push(base);
+    }
+    layers.extend_from_slice(cached_overlays);
+
+    let mut plan = Vec::new();
+    for idx in 0..layers.len() {
+        let mut cuts =
+            Vec::with_capacity(layers.len().saturating_sub(idx + 1) + direct_overlays.len());
+        cuts.extend_from_slice(&layers[idx + 1..]);
+        cuts.extend_from_slice(direct_overlays);
+        plan.extend(subtract_rects(vec![layers[idx]], &cuts));
+    }
+    plan
 }
 
 pub(super) fn dirty_rect_broad_pct() -> usize {
@@ -2002,6 +2082,13 @@ pub(super) fn copy_arcade_list_update(
     }
 }
 
+pub(super) fn arcade_update_dirty_rect(update: &ArcadeListUpdate) -> DirtyRect {
+    match update {
+        ArcadeListUpdate::Full(rect) => *rect,
+        ArcadeListUpdate::Scroll { .. } => ArcadeListRenderer::dirty_rect(),
+    }
+}
+
 pub(super) fn arcade_list_needs_forced_redraw(
     slint_dirty: Option<DirtyRect>,
     full_frame_present: bool,
@@ -2033,6 +2120,45 @@ pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
+        DirtyRect { x0, y0, x1, y1 }
+    }
+
+    fn assert_no_intersections(rects: &[DirtyRect]) {
+        for (idx, a) in rects.iter().enumerate() {
+            for b in rects.iter().skip(idx + 1) {
+                assert_eq!(a.intersection(*b), None, "{a:?} intersects {b:?}");
+            }
+        }
+    }
+
+    fn covered_area(rects: &[DirtyRect]) -> usize {
+        rects.iter().map(|rect| rect.area()).sum()
+    }
+
+    #[test]
+    fn present_plan_splits_full_frame_around_cached_and_direct_overlays() {
+        let base = rect(0, 0, 10, 10);
+        let cached_overlay = rect(2, 2, 7, 7);
+        let direct_overlay = rect(4, 4, 9, 9);
+
+        let plan = build_launcher_present_plan(Some(base), &[cached_overlay], &[direct_overlay]);
+        let mut all_copies = plan.clone();
+        all_copies.push(direct_overlay);
+
+        assert_no_intersections(&all_copies);
+        assert_eq!(covered_area(&all_copies), base.area());
+    }
+
+    #[test]
+    fn present_plan_keeps_cached_overlay_when_base_is_clean() {
+        let cached_overlay = rect(20, 30, 40, 50);
+
+        let plan = build_launcher_present_plan(None, &[cached_overlay], &[]);
+
+        assert_eq!(plan, vec![cached_overlay]);
+    }
 
     #[test]
     fn arcade_list_overlay_redraws_when_full_frame_present_overwrites_stationary_text() {

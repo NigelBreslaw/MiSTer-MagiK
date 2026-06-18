@@ -102,6 +102,9 @@ impl ArcadeListRenderer {
         if !force && self.last_draw.as_ref() == Some(&key) {
             return None;
         }
+        if force && self.last_draw.as_ref() == Some(&key) {
+            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+        }
         let content_delta = previous
             .as_ref()
             .map(|previous| previous.visual_px - visual_px)
@@ -116,7 +119,7 @@ impl ArcadeListRenderer {
         });
         let can_reuse_scrolled_surface = same_len && !visible_content_changed_at_same_position;
         self.last_draw = Some(key);
-        if force || previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
+        if previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
             self.surface_y = 0;
             self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
         } else if content_delta == 0 {
@@ -666,6 +669,33 @@ mod tests {
             renderer.draw(&games, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
+    }
+
+    #[test]
+    fn forced_present_reuses_surface_when_draw_key_is_unchanged() {
+        let mut renderer = ArcadeListRenderer::new();
+        let games = (0..20)
+            .map(|idx| {
+                game(
+                    "arcade",
+                    &format!("/media/fat/_Arcade/{idx}.mra"),
+                    &format!("Game {idx}"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            renderer.draw(&games, 7.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        let before = renderer.surface.clone();
+
+        assert!(matches!(
+            renderer.draw(&games, 7.0, true),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        assert_eq!(renderer.surface, before);
     }
 
     fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
