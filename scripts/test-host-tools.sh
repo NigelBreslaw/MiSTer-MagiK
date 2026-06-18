@@ -35,6 +35,7 @@ for script in \
   "$ROOT/scripts/check-no-main-kill.sh" \
   "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
+  "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/build-neogeo-screenshot-pack.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
   "$ROOT/scripts/device-catalog-acceptance.sh" \
@@ -42,6 +43,7 @@ for script in \
   "$ROOT/scripts/install-slint-boot.sh" \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
+  "$ROOT/scripts/mister-magik-agent.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"

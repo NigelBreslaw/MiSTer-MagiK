@@ -14,6 +14,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --mame-metadata --asset-packs
 #   MISTER_MAME_SOFTWARE_DIR=/path/to/mame/hash scripts/deploy-rust.sh --mame-metadata
 #   MISTER_HBMAME_BIN=/path/to/hbmame scripts/deploy-rust.sh --hbmame-metadata
+#   MISTER_DEPLOY_TRANSPORT=ssh scripts/deploy-rust.sh  # explicit fallback only
 #
 # Default installs the release-device (A3) binary.
 set -euo pipefail
@@ -38,6 +39,7 @@ if [ ! -f "$DEFAULT_VIDEO_SRC" ]; then
 fi
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$DEFAULT_VIDEO_SRC}"
 VIDEO_REMOTE="/media/fat/mister-magik/mslug3.mov"
+DEPLOY_TRANSPORT="${MISTER_DEPLOY_TRANSPORT:-agent}"
 
 PROFILE=release-device
 BUILD_FLAG=(--device)
@@ -102,7 +104,7 @@ echo "==> Cross-building (armv7 profile=$PROFILE)"
 LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
-echo "==> Deploying $BIN -> $REMOTE"
+echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
 remote_run() {
   MISTER_IP="${MISTER_IP:-192.168.1.117}" \
   MISTER_PASS="${MISTER_PASS:-1}" \
@@ -113,9 +115,23 @@ magik_command() {
   remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
 }
 
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE"
+case "$DEPLOY_TRANSPORT" in
+  agent)
+    MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+    MISTER_PASS="${MISTER_PASS:-1}" \
+      "$HERE/scripts/mister" agent deploy-magik-bin "$BIN" "$REMOTE"
+    ;;
+  ssh)
+    echo "==> Using explicit SSH/SFTP deploy fallback" >&2
+    MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+    MISTER_PASS="${MISTER_PASS:-1}" \
+      "$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE"
+    ;;
+  *)
+    echo "ERROR: unsupported MISTER_DEPLOY_TRANSPORT=$DEPLOY_TRANSPORT (expected agent or ssh)" >&2
+    exit 2
+    ;;
+esac
 if [ "$DEPLOY_VIDEO" -eq 1 ]; then
   if [ ! -f "$VIDEO_SRC" ]; then
     echo "ERROR: --video requested but $VIDEO_SRC does not exist" >&2

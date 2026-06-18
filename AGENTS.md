@@ -52,6 +52,9 @@ default. Override with `MISTER_MAIN_DIR`.
 - Prefer direct commands such as `scripts/mister ...`, `scripts/deploy-rust.sh`,
   and `scripts/bench-toolchain.sh ...`. Avoid `/bin/zsh -lc` wrappers for normal
   device work because sandbox approvals key off the outer command.
+- `scripts/deploy-rust.sh` deploys the MagiK binary through the agent by
+  default. Use `MISTER_DEPLOY_TRANSPORT=ssh` only as an explicit fallback test or
+  recovery path.
 - Local ARM builds on Apple Silicon use Apple's `container` runtime by default.
   Do not route local builds through Docker/OrbStack unless
   `MISTER_ARM_BUILD_BACKEND=cross` is explicitly requested for a comparison.

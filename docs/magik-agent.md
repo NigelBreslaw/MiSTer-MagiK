@@ -144,7 +144,9 @@ into RAM, decompresses if needed, verifies the original bytes, asks Main to
 suspend the launcher, writes a same-directory `.upload` file under
 `/media/fat/mister-magik/`, renames it over the final binary, marks it
 executable, then resumes the launcher. Existing `scripts/mister deploy-magik-bin`
-remains the SSH/SFTP fallback.
+remains the explicit SSH/SFTP fallback. `scripts/deploy-rust.sh` uses the agent
+transport by default; set `MISTER_DEPLOY_TRANSPORT=ssh` only when intentionally
+testing or recovering through the old path.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to Linux
