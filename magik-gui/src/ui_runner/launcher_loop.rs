@@ -4,8 +4,6 @@ use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 
-const PREVIEW_SCROLL_IDLE_APPLY_AFTER: Duration = Duration::from_millis(120);
-
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
@@ -131,7 +129,6 @@ pub(super) fn run_launcher_loop(
     let mut effect_label_overlay = preview_transition
         .label_overlay_enabled()
         .then(EffectLabelOverlay::new);
-    let mut last_arcade_scroll_active: Option<Instant> = None;
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
@@ -290,7 +287,7 @@ pub(super) fn run_launcher_loop(
             reassert_route: false,
             force_full_present: false,
         };
-        let mut defer_selected_preview = false;
+        let defer_selected_preview = false;
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
@@ -783,18 +780,6 @@ pub(super) fn run_launcher_loop(
             if let Some(screen) = lock_screen {
                 nav.screen = screen;
             }
-
-            let arcade_scroll_active = !launching
-                && nav.screen == Screen::Arcade
-                && (nav.arcade.has_scroll_motion_or_queue()
-                    || launcher_bench_scenario
-                        .is_some_and(LauncherBenchScenario::continuously_scrolls_arcade));
-            if arcade_scroll_active {
-                last_arcade_scroll_active = Some(loop_start);
-            }
-            defer_selected_preview = last_arcade_scroll_active.is_some_and(|last_active| {
-                loop_start.saturating_duration_since(last_active) < PREVIEW_SCROLL_IDLE_APPLY_AFTER
-            });
 
             if full_bridge_dirty {
                 sync_bridge_launcher(
