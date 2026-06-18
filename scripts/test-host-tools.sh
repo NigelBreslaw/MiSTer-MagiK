@@ -44,6 +44,7 @@ for script in \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
   "$ROOT/scripts/mister-magik-agent.sh" \
+  "$ROOT/scripts/profile-preview-scroll.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"
@@ -51,6 +52,7 @@ done
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
+"$ROOT/scripts/profile-preview-scroll.sh" --self-test
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
 python3 "$ROOT/scripts/import-wikipedia-neogeo-screenshots.py" --self-test
 
