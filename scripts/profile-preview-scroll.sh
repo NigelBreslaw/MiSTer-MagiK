@@ -43,6 +43,7 @@ transition=""
 transition_segment_secs=""
 transition_ms=""
 visual_captures="4"
+allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -220,6 +221,74 @@ summarize_trace() {
   done
 }
 
+check_steady_wall_gate() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" -v allow="$allow_hotpath_misses" '
+    BEGIN { FS="\t" }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    NF && $(col["frame"]) + 0 > 30 {
+      n++
+      wall = $(col["wall_us"]) + 0
+      if (wall > 16667) {
+        slow++
+        if (slow <= 10) printf "%s steady miss frame=%s wall_us=%s\n", name, $(col["frame"]), wall > "/dev/stderr"
+      }
+    }
+    END {
+      if (slow > 0 && allow != "1" && allow != "true" && allow != "yes" && allow != "on") {
+        printf "%s steady wall gate failed: frames_after_30=%d slow_gt_16667=%d\n", name, n, slow > "/dev/stderr"
+        exit 4
+      }
+      printf "%s steady_wall_gate frames_after_30=%d slow_gt_16667=%d allow=%s\n", name, n, slow + 0, allow
+    }
+  ' "$tsv"
+}
+
+summarize_preview_timing() {
+  local name="$1" log="$2"
+  awk -v name="$name" '
+    /preview_trace (decoded|apply) / {
+      total = read = decode = 0
+      cache_hit = "unknown"
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        if (kv[1] == "total_us") total = kv[2] + 0
+        else if (kv[1] == "read_us") read = kv[2] + 0
+        else if (kv[1] == "decode_us") decode = kv[2] + 0
+        else if (kv[1] == "cache_hit") cache_hit = kv[2]
+      }
+      n++
+      total_sum += total; read_sum += read; decode_sum += decode
+      if (total > total_max) total_max = total
+      if (read > read_max) read_max = read
+      if (decode > decode_max) decode_max = decode
+      if (cache_hit == "true") cache_hits++
+      if (read > 0) file_reads++
+      if (read > 5000) slow_reads++
+    }
+    END {
+      if (n == 0) {
+        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
+      } else {
+        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\n",
+          name, n, total_sum / n, total_max, read_sum / n, read_max, decode_sum / n, decode_max,
+          cache_hits + 0, file_reads + 0, slow_reads + 0
+      }
+    }
+  ' "$log"
+}
+
+check_preview_hotpath_cache_gate() {
+  local name="$1" log="$2"
+  local failures
+  failures="$(grep -c 'preview_trace cache_failed' "$log" 2>/dev/null || true)"
+  if [[ "$failures" != "0" && "$allow_hotpath_misses" != "1" && "$allow_hotpath_misses" != "true" && "$allow_hotpath_misses" != "yes" && "$allow_hotpath_misses" != "on" ]]; then
+    echo "$name preview hot-path cache gate failed: cache_failed=$failures" >&2
+    return 5
+  fi
+  echo "$name preview_hotpath_cache_gate cache_failed=$failures allow=$allow_hotpath_misses"
+}
+
 summarize_trace_by_effect() {
   local tsv="$1"
   awk '
@@ -289,3 +358,11 @@ echo "preview trace counts:"
 printf "arcade decoded=%s apply=%s\n" \
   "$(grep -c 'preview_trace decoded' "$arcade_log" 2>/dev/null || true)" \
   "$(grep -c 'preview_trace apply' "$arcade_log" 2>/dev/null || true)"
+
+echo
+echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tfile_reads\tslow_reads'
+summarize_preview_timing arcade "$arcade_log"
+
+echo
+check_steady_wall_gate arcade "$arcade_tsv"
+check_preview_hotpath_cache_gate arcade "$arcade_log"
