@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measure local Rust/cross build iteration time for the MiSTer Slint frontend.
+# Measure local Rust/ARM build iteration time for the MiSTer Slint frontend.
 #
 # Raw run logs and TSV rows are written under build/ (gitignored). Curated
 # conclusions belong in history/toolchain-bench/compile-time-experiments-*.md.
@@ -121,7 +121,7 @@ command_spec() {
   case "$1" in
     arm-check-lib) echo "scripts/dev-rust check-arm-lib" ;;
     arm-check-launcher) echo "scripts/dev-rust check-arm-ui" ;;
-    arm-check-launcher-sccache) echo "cd magik-gui && CROSS_CONFIG=Cross.sccache.toml DOCKER_DEFAULT_PLATFORM=linux/amd64 MISTER_UI_BUILD_SCOPE=launcher SCCACHE_DIR=/target/sccache SCCACHE_IDLE_TIMEOUT=0 cross check --target armv7-unknown-linux-gnueabihf --features ui --timings --locked" ;;
+    arm-check-launcher-sccache) echo "echo 'legacy direct cross/sccache scenario disabled; use arm-check-launcher, or set MISTER_ARM_BUILD_BACKEND=cross manually for a comparison' >&2; exit 2" ;;
     arm-check-arcade) echo "scripts/dev-rust check-arm-arcade-ui" ;;
     arm-check-full) echo "scripts/dev-rust check-arm-ui-full" ;;
     arm-build-launcher) echo "scripts/dev-rust build-arm-debug" ;;
@@ -129,7 +129,7 @@ command_spec() {
     arm-build-full) echo "scripts/dev-rust build-arm-debug-full" ;;
     build-ui-opt2) echo "magik-gui/build-arm.sh --opt2" ;;
     build-ui-opts) echo "magik-gui/build-arm.sh --opts" ;;
-    build-ui-opts-sccache) echo "cd magik-gui && CROSS_CONFIG=Cross.sccache.toml DOCKER_DEFAULT_PLATFORM=linux/amd64 MISTER_UI_BUILD_SCOPE=launcher SCCACHE_DIR=/target/sccache SCCACHE_IDLE_TIMEOUT=0 RUSTFLAGS='-C target-cpu=cortex-a9 -C target-feature=+neon' cross build --target armv7-unknown-linux-gnueabihf --profile release-opts --features ui --timings --locked" ;;
+    build-ui-opts-sccache) echo "echo 'legacy direct cross/sccache scenario disabled; use build-ui-opts, or set MISTER_ARM_BUILD_BACKEND=cross manually for a comparison' >&2; exit 2" ;;
     build-ui-incr) echo "magik-gui/build-arm.sh --incr" ;;
     build-ui-device) echo "magik-gui/build-arm.sh --device" ;;
     *) return 1 ;;

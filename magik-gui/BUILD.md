@@ -281,6 +281,13 @@ toolchain, builds the ARMv7 target directly, then mirrors the final binary back
 to the normal `magik-gui/target/armv7-unknown-linux-gnueabihf/<profile>/` path so
 deploy and benchmark scripts do not need special cases.
 
+Local ARM helper scripts also prefer Apple's `container` runtime on Apple
+Silicon. This includes `scripts/build-mister-agent.sh`,
+`magik-gui/scripts/check-arm-shared-libs.sh`, and
+`magik-gui/scripts/analyze-binary-size.sh`. Docker/cross remains the Linux and
+CI backend, and can be forced locally only for comparison with
+`MISTER_ARM_BUILD_BACKEND=cross`.
+
 One-time setup:
 
 ```bash

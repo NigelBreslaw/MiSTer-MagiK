@@ -6,6 +6,7 @@ ROOT="$(cd "$HERE/.." && pwd)"
 BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb}"
 OUT_DIR="${2:-$ROOT/build/binary-size-analysis}"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
+APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 
 if [ ! -f "$BIN" ]; then
   echo "ERROR: binary missing: $BIN" >&2
@@ -13,31 +14,41 @@ if [ ! -f "$BIN" ]; then
   exit 1
 fi
 
-export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "==> building cross helper image $IMAGE"
-  docker build -t "$IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
-fi
-
 mkdir -p "$OUT_DIR"
 RAW="$OUT_DIR/nm-symbols.tsv"
 GROUPS_FILE="$OUT_DIR/groups.tsv"
 TOP="$OUT_DIR/top-symbols.tsv"
 
-REL_BIN="/project/${BIN#"$HERE/"}"
 if [[ "$BIN" != "$HERE/"* ]]; then
-  echo "ERROR: binary must be under $HERE so the Docker helper can read it" >&2
+  echo "ERROR: binary must be under $HERE so the container helper can read it" >&2
   exit 1
 fi
+REL_BIN="/project/${BIN#"$HERE/"}"
 
-docker run --rm \
-  --platform linux/amd64 \
-  --user "$(id -u):$(id -g)" \
-  -v "$HERE:/project" \
-  -w /project \
-  "$IMAGE" \
-  bash -lc "arm-linux-gnueabihf-nm -S --size-sort --radix=d '$REL_BIN' 2>/dev/null" \
-  >"$RAW.tmp" || true
+if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && command -v container >/dev/null 2>&1; then
+  echo "==> using Apple-container helper image $APPLE_IMAGE"
+  container build --arch arm64 --file "$HERE/Dockerfile.cross-armv7" --tag "$APPLE_IMAGE" "$HERE" >/dev/null
+  container run --arch arm64 --rm \
+    --volume "$HERE:/project" \
+    --workdir /project \
+    "$APPLE_IMAGE" \
+    bash -lc "arm-linux-gnueabihf-nm -S --size-sort --radix=d '$REL_BIN' 2>/dev/null" \
+    >"$RAW.tmp" || true
+else
+  export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> building cross helper image $IMAGE"
+    docker build -t "$IMAGE" -f "$HERE/Dockerfile.cross-armv7" "$HERE"
+  fi
+  docker run --rm \
+    --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    -v "$HERE:/project" \
+    -w /project \
+    "$IMAGE" \
+    bash -lc "arm-linux-gnueabihf-nm -S --size-sort --radix=d '$REL_BIN' 2>/dev/null" \
+    >"$RAW.tmp" || true
+fi
 
 if [ ! -s "$RAW.tmp" ]; then
   rm -f "$RAW.tmp"
