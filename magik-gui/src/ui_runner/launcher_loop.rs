@@ -4,6 +4,8 @@ use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 
+const PREVIEW_SCROLL_IDLE_APPLY_AFTER: Duration = Duration::from_millis(120);
+
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
@@ -129,6 +131,7 @@ pub(super) fn run_launcher_loop(
     let mut effect_label_overlay = preview_transition
         .label_overlay_enabled()
         .then(EffectLabelOverlay::new);
+    let mut last_arcade_scroll_active: Option<Instant> = None;
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
@@ -250,6 +253,7 @@ pub(super) fn run_launcher_loop(
         &mut preview,
         &mut bridge_models,
         catalog_version,
+        false,
     );
     print_startup_event(
         start,
@@ -286,6 +290,7 @@ pub(super) fn run_launcher_loop(
             reassert_route: false,
             force_full_present: false,
         };
+        let mut defer_selected_preview = false;
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
@@ -431,6 +436,7 @@ pub(super) fn run_launcher_loop(
                             &mut preview,
                             &mut bridge_models,
                             catalog_version,
+                            false,
                         );
                         print_startup_event(
                             start,
@@ -622,6 +628,7 @@ pub(super) fn run_launcher_loop(
                                     &mut preview,
                                     &mut bridge_models,
                                     catalog_version,
+                                    false,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -652,6 +659,7 @@ pub(super) fn run_launcher_loop(
                                     &mut preview,
                                     &mut bridge_models,
                                     catalog_version,
+                                    false,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -682,6 +690,7 @@ pub(super) fn run_launcher_loop(
                                     &mut preview,
                                     &mut bridge_models,
                                     catalog_version,
+                                    false,
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -717,6 +726,7 @@ pub(super) fn run_launcher_loop(
                             &mut preview,
                             &mut bridge_models,
                             catalog_version,
+                            false,
                         );
                         window.request_redraw();
                         update_slint_animations(animation_clock);
@@ -747,6 +757,7 @@ pub(super) fn run_launcher_loop(
                                     &mut preview,
                                     &mut bridge_models,
                                     catalog_version,
+                                    false,
                                 );
                                 recover_launcher_ui(f, ui, &mut launch_spawned_mister);
                             }
@@ -773,6 +784,18 @@ pub(super) fn run_launcher_loop(
                 nav.screen = screen;
             }
 
+            let arcade_scroll_active = !launching
+                && nav.screen == Screen::Arcade
+                && (nav.arcade.is_scroll_active()
+                    || launcher_bench_scenario
+                        .is_some_and(LauncherBenchScenario::continuously_scrolls_arcade));
+            if arcade_scroll_active {
+                last_arcade_scroll_active = Some(loop_start);
+            }
+            defer_selected_preview = last_arcade_scroll_active.is_some_and(|last_active| {
+                loop_start.saturating_duration_since(last_active) < PREVIEW_SCROLL_IDLE_APPLY_AFTER
+            });
+
             if full_bridge_dirty {
                 sync_bridge_launcher(
                     &app,
@@ -785,6 +808,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     &mut bridge_models,
                     catalog_version,
+                    defer_selected_preview,
                 );
                 window.request_redraw();
             } else if light_bridge_dirty {
@@ -802,6 +826,7 @@ pub(super) fn run_launcher_loop(
                     &catalog,
                     active_games,
                     &mut preview,
+                    defer_selected_preview,
                 );
                 window.request_redraw();
             }
@@ -854,11 +879,12 @@ pub(super) fn run_launcher_loop(
                 active_arcade_games,
                 nav.arcade.selected,
                 &mut preview,
+                defer_selected_preview,
             ) {
                 window.request_redraw();
             }
         }
-        if !launching && apply_ready_preview(&app, &mut preview) {
+        if !launching && apply_ready_preview(&app, &mut preview, defer_selected_preview) {
             window.request_redraw();
         }
 
@@ -926,32 +952,34 @@ pub(super) fn run_launcher_loop(
         }
         let mut copied_rows = 0u32;
         let mut cached_present_frame_us = 0u128;
-        if full_frame_present {
-            let cached_copy_start = Instant::now();
-            copied_rows = target.present_rows(f, disp, ui, 0, ui.render_h());
-            cached_present_frame_us = cached_copy_start.elapsed().as_micros();
-        } else if let Some(rect) = this_rect {
-            let cached_copy_start = Instant::now();
-            copied_rows = target.present_rect(f, disp, ui, rect);
-            cached_present_frame_us = cached_copy_start.elapsed().as_micros();
-        }
-        if let Some(rect) = raw_preview_rect {
-            let cached_copy_start = Instant::now();
-            copied_rows += target.present_rect(f, disp, ui, rect);
-            cached_present_frame_us += cached_copy_start.elapsed().as_micros();
-        }
-        if let Some(rect) = effect_label_rect {
-            if !this_rect.is_some_and(|slint_rect| slint_rect.contains(rect)) {
-                let cached_copy_start = Instant::now();
-                copied_rows += target.present_rect(f, disp, ui, rect);
-                cached_present_frame_us += cached_copy_start.elapsed().as_micros();
-            }
-        }
         let arcade_update_label = match arcade_list_rect.as_ref() {
             Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
             Some(ArcadeListUpdate::Scroll { delta_y }) => format!("scroll:{delta_y}"),
             None => "none".to_string(),
         };
+        let arcade_overlay_rect = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
+        let cached_base_rect = if full_frame_present {
+            Some(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: ui.render_w(),
+                y1: ui.render_h(),
+            })
+        } else {
+            this_rect
+        };
+        let cached_overlays: Vec<DirtyRect> = [raw_preview_rect, effect_label_rect]
+            .into_iter()
+            .flatten()
+            .collect();
+        let direct_overlays: Vec<DirtyRect> = arcade_overlay_rect.into_iter().collect();
+        let cached_present_rects =
+            build_launcher_present_plan(cached_base_rect, &cached_overlays, &direct_overlays);
+        for rect in cached_present_rects {
+            let cached_copy_start = Instant::now();
+            copied_rows += target.present_rect(f, disp, ui, rect);
+            cached_present_frame_us += cached_copy_start.elapsed().as_micros();
+        }
         let mut overlay_present_frame_us = 0u128;
         if let Some(update) = arcade_list_rect {
             let overlay_copy_start = Instant::now();

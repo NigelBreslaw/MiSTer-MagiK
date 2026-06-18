@@ -104,6 +104,7 @@ pub(super) fn sync_bridge_launcher(
     preview: &mut PreviewState,
     models: &mut LauncherBridgeModels,
     catalog_version: usize,
+    defer_selected_preview: bool,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_startup_visible(false);
@@ -119,8 +120,10 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
-    bridge.set_arcade_selected(nav.arcade.selected as i32);
-    bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    if !(defer_selected_preview && nav.screen == Screen::Arcade) {
+        bridge.set_arcade_selected(nav.arcade.selected as i32);
+        bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    }
     let mut active_games_for_preview: Option<&[ArcadeGameEntry]> = None;
     if let Some(catalog) = catalog {
         let games = active_system_game_slice(catalog, nav);
@@ -141,7 +144,13 @@ pub(super) fn sync_bridge_launcher(
         let games = active_games_for_preview
             .or_else(|| catalog.map(|catalog| active_system_game_slice(catalog, nav)))
             .unwrap_or(&[]);
-        let _ = request_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
+        let _ = request_arcade_preview_window(
+            &bridge,
+            games,
+            nav.arcade.selected,
+            preview,
+            defer_selected_preview,
+        );
     } else {
         preview.clear(&bridge);
     }
@@ -157,6 +166,7 @@ pub(super) fn sync_bridge_launcher_light(
     catalog: &ArcadeCatalog,
     active_arcade_games: Option<&[ArcadeGameEntry]>,
     preview: &mut PreviewState,
+    defer_selected_preview: bool,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_screen_mode(match nav.screen {
@@ -169,8 +179,10 @@ pub(super) fn sync_bridge_launcher_light(
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
-    bridge.set_arcade_selected(nav.arcade.selected as i32);
-    bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    if !(defer_selected_preview && nav.screen == Screen::Arcade) {
+        bridge.set_arcade_selected(nav.arcade.selected as i32);
+        bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+    }
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
@@ -178,7 +190,13 @@ pub(super) fn sync_bridge_launcher_light(
     bridge.set_loading_detail(loading_detail.into());
     if nav.screen == Screen::Arcade {
         let games = active_arcade_games.unwrap_or_else(|| active_system_game_slice(catalog, nav));
-        schedule_arcade_preview_window(&bridge, games, nav.arcade.selected, preview);
+        schedule_arcade_preview_window(
+            &bridge,
+            games,
+            nav.arcade.selected,
+            preview,
+            defer_selected_preview,
+        );
     } else {
         preview.clear(&bridge);
     }

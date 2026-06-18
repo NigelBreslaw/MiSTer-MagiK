@@ -70,6 +70,10 @@ impl LauncherBenchScenario {
                 | Self::PreviewStepHold
         )
     }
+
+    pub(super) fn continuously_scrolls_arcade(self) -> bool {
+        matches!(self, Self::HeldScroll | Self::TurboHold)
+    }
 }
 
 pub(super) fn launcher_start_screen_from_env() -> Option<Screen> {
