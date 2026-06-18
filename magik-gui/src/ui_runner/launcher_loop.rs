@@ -786,7 +786,7 @@ pub(super) fn run_launcher_loop(
 
             let arcade_scroll_active = !launching
                 && nav.screen == Screen::Arcade
-                && (nav.arcade.is_scroll_active()
+                && (nav.arcade.has_scroll_motion_or_queue()
                     || launcher_bench_scenario
                         .is_some_and(LauncherBenchScenario::continuously_scrolls_arcade));
             if arcade_scroll_active {
