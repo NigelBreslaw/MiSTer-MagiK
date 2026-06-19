@@ -601,6 +601,31 @@ pub(super) fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565
     Rgb565Pixel((rb | g) as u16)
 }
 
+fn blend_565_row(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha: u8,
+) {
+    let a = ((alpha as u32 + 4) >> 3).min(32);
+    if a == 0 {
+        dst.copy_from_slice(previous);
+        return;
+    }
+    if a >= 32 {
+        dst.copy_from_slice(current);
+        return;
+    }
+    let ia = 32 - a;
+    for x in 0..dst.len() {
+        let prev = previous[x].0 as u32;
+        let curr = current[x].0 as u32;
+        let rb = (((prev & 0xf81f) * ia + (curr & 0xf81f) * a) >> 5) & 0xf81f;
+        let g = (((prev & 0x07e0) * ia + (curr & 0x07e0) * a) >> 5) & 0x07e0;
+        dst[x] = Rgb565Pixel((rb | g) as u16);
+    }
+}
+
 #[cfg(mister_bench_scenes)]
 pub(super) fn darken_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     let v = pixel.0 as u32;
@@ -1031,8 +1056,75 @@ fn blit_transition_565_fade(
     if alpha == 255 {
         return blit_preview_frame_565_cut(cached, ui, screen, &frame.current);
     }
+    if let (Some(previous), Some(current)) = (previous.as_ref(), current.as_ref()) {
+        if blit_transition_565_fade_same_geometry(cached, ui, screen, previous, current, alpha)
+            .is_some()
+        {
+            return Some(());
+        }
+    }
+    blit_transition_565_fade_generic(
+        cached,
+        ui,
+        screen,
+        previous.as_ref(),
+        current.as_ref(),
+        alpha,
+    )
+}
+
+fn blit_transition_565_fade_same_geometry(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    previous: &Raw565View<'_>,
+    current: &Raw565View<'_>,
+    alpha: u8,
+) -> Option<()> {
+    if previous.x != current.x
+        || previous.y != current.y
+        || previous.w != current.w
+        || previous.h != current.h
+    {
+        return None;
+    }
+    let rect = raw565_view_screen_rect(previous, ui, screen)?;
+    if Some(rect) != raw565_view_screen_rect(current, ui, screen) {
+        return None;
+    }
+    if previous.x < 0
+        || previous.y < 0
+        || rect.x0 != previous.x as usize
+        || rect.y0 != previous.y as usize
+        || rect.width() != previous.w
+        || rect.y1 - rect.y0 != previous.h
+    {
+        return None;
+    }
+    let width = rect.width();
+    for y in rect.y0..rect.y1 {
+        let src_y = y - previous.y as usize;
+        let previous_start = src_y * previous.stride_pixels;
+        let current_start = src_y * current.stride_pixels;
+        let dst_start = y * ui.render_w() + rect.x0;
+        let previous_row = &previous.pixels[previous_start..previous_start + width];
+        let current_row = &current.pixels[current_start..current_start + width];
+        let dst_row = &mut cached[dst_start..dst_start + width];
+        blend_565_row(dst_row, previous_row, current_row, alpha);
+    }
+    Some(())
+}
+
+fn blit_transition_565_fade_generic(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    previous: Option<&Raw565View<'_>>,
+    current: Option<&Raw565View<'_>>,
+    alpha: u8,
+) -> Option<()> {
     let mut fade_rect: Option<DirtyRect> = None;
-    for view in [previous.as_ref(), current.as_ref()].into_iter().flatten() {
+    for view in [previous, current].into_iter().flatten() {
         if let Some(rect) = raw565_view_screen_rect(view, ui, screen) {
             fade_rect = Some(fade_rect.map_or(rect, |existing| existing.union(rect)));
         }
@@ -1048,8 +1140,8 @@ fn blit_transition_565_fade(
             .as_ref()
             .and_then(|view| raw565_row_for_screen_y(view, y));
         for x in fade_rect.x0..fade_rect.x1.min(ui.render_w()) {
-            let prev = raw565_row_pixel_or(previous_row, previous.as_ref(), x, black);
-            let curr = raw565_row_pixel_or(current_row, current.as_ref(), x, black);
+            let prev = raw565_row_pixel_or(previous_row, previous, x, black);
+            let curr = raw565_row_pixel_or(current_row, current, x, black);
             cached[row + x] = blend_565(prev, curr, alpha);
         }
     }
@@ -2257,5 +2349,88 @@ mod tests {
             cached[image_y * ui.render_w() + image_x],
             blend_565(red, blue, 128)
         );
+    }
+
+    #[test]
+    fn rgb565_same_geometry_fade_matches_generic_path() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let screen = preview_screen_rect(&ui);
+        let previous_pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xffe0),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x7bef),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x07ff),
+        ];
+        let current_pixels = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x7bef),
+            Rgb565Pixel(0xffe0),
+        ];
+        let previous = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &previous_pixels,
+                stride_pixels: 4,
+            },
+            source_w: 3,
+            source_h: 3,
+            display_w: 3,
+            display_h: 3,
+        };
+        let current = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &current_pixels,
+                stride_pixels: 4,
+            },
+            source_w: 3,
+            source_h: 3,
+            display_w: 3,
+            display_h: 3,
+        };
+        let previous = raw565_view(&previous, screen, 0).expect("previous raw565 view");
+        let current = raw565_view(&current, screen, 0).expect("current raw565 view");
+
+        for alpha in [1, 64, 128, 192, 254] {
+            let sentinel = Rgb565Pixel(0x4208);
+            let mut optimized = vec![sentinel; ui.render_w() * ui.render_h()];
+            let mut generic = optimized.clone();
+
+            blit_transition_565_fade_same_geometry(
+                &mut optimized,
+                &ui,
+                screen,
+                &previous,
+                &current,
+                alpha,
+            )
+            .expect("same-geometry fast path");
+            blit_transition_565_fade_generic(
+                &mut generic,
+                &ui,
+                screen,
+                Some(&previous),
+                Some(&current),
+                alpha,
+            )
+            .expect("generic fade path");
+
+            assert_eq!(optimized, generic, "alpha={alpha}");
+        }
     }
 }
