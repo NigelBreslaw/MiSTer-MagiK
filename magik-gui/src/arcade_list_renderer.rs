@@ -19,6 +19,8 @@ pub(crate) const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x001a1424);
 pub(crate) const ARCADE_LIST_FADE_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
 pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
+pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
+const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
 
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -28,6 +30,7 @@ pub(crate) struct ArcadeListRenderer {
     band_scratch: Vec<Pixel>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
+    row_cache_epoch: u64,
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
 }
@@ -35,6 +38,7 @@ pub(crate) struct ArcadeListRenderer {
 pub(crate) struct CachedArcadeRow {
     pub(crate) title: String,
     pub(crate) pixels: Vec<Rgb565Pixel>,
+    pub(crate) last_used: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +70,7 @@ impl ArcadeListRenderer {
             band_scratch: Vec::new(),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
+            row_cache_epoch: 0,
             surface_y: 0,
             last_draw: None,
         }
@@ -227,17 +232,24 @@ impl ArcadeListRenderer {
             .get(&idx)
             .is_none_or(|cached| cached.title != title);
         if needs_render {
-            if self.row_cache.len() > 128 {
-                self.row_cache.clear();
+            if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
+                prune_arcade_row_cache(&mut self.row_cache);
             }
             let row = self.render_row(title, idx);
+            let last_used = self.next_row_cache_epoch();
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
                     title: title.to_string(),
                     pixels: row,
+                    last_used,
                 },
             );
+        } else {
+            let last_used = self.next_row_cache_epoch();
+            if let Some(cached) = self.row_cache.get_mut(&idx) {
+                cached.last_used = last_used;
+            }
         }
         let row = &self.row_cache.get(&idx).expect("row cache insert").pixels;
         let row_h = ARCADE_ROW_HEIGHT as isize;
@@ -264,6 +276,11 @@ impl ArcadeListRenderer {
             let dst = dst_y * ARCADE_LIST_W;
             self.surface[dst..dst + ARCADE_LIST_W].fill(color);
         }
+    }
+
+    fn next_row_cache_epoch(&mut self) -> u64 {
+        self.row_cache_epoch = self.row_cache_epoch.wrapping_add(1);
+        self.row_cache_epoch
     }
 
     fn copy_band_to_surface(&mut self, band: &[Pixel], band_y: usize, band_h: usize) {
@@ -388,6 +405,21 @@ impl ArcadeListRenderer {
         );
         row.into_iter().map(pixel_to_rgb565).collect()
     }
+}
+
+pub(crate) fn prune_arcade_row_cache(row_cache: &mut HashMap<usize, CachedArcadeRow>) {
+    if row_cache.len() < ARCADE_ROW_CACHE_MAX {
+        return;
+    }
+    let keep = ARCADE_ROW_CACHE_PRUNE_TO.min(row_cache.len());
+    let mut last_used = row_cache
+        .values()
+        .map(|row| row.last_used)
+        .collect::<Vec<_>>();
+    let cutoff_index = last_used.len().saturating_sub(keep);
+    let (_, cutoff, _) = last_used.select_nth_unstable(cutoff_index);
+    let cutoff = *cutoff;
+    row_cache.retain(|_, row| row.last_used >= cutoff);
 }
 
 const ARCADE_LIST_HASH_OFFSET: u64 = 0xcbf29ce484222325;

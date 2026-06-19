@@ -3,9 +3,10 @@
 use crate::arcade_catalog::ARCADE_ROW_HEIGHT;
 use crate::arcade_list_renderer::{
     blend_row_towards, blend_velocity_fade_h_from_env, draw_arcade_row_background,
-    fade_blend_constants, ArcadeListRenderer, CachedArcadeRow, FadeBlendConstants,
-    ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FADE_COLOR_565, ARCADE_LIST_FONT_PX, ARCADE_LIST_H,
-    ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ARCADE_TITLE_GRADIENT,
+    fade_blend_constants, prune_arcade_row_cache, ArcadeListRenderer, CachedArcadeRow,
+    FadeBlendConstants, ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FADE_COLOR_565, ARCADE_LIST_FONT_PX,
+    ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ARCADE_ROW_CACHE_MAX,
+    ARCADE_TITLE_GRADIENT,
 };
 use crate::bitmap_text::ConsoleFont;
 use crate::cpu_profile;
@@ -138,6 +139,7 @@ struct BlendVelocityBench {
     variant: BlendVelocityVariant,
     title_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
+    row_cache_epoch: u64,
     surface: Vec<Rgb565Pixel>,
     fade_scratch: Vec<Rgb565Pixel>,
     fade_constants: Vec<FadeBlendConstants>,
@@ -155,6 +157,7 @@ impl BlendVelocityBench {
             variant,
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             row_cache: HashMap::new(),
+            row_cache_epoch: 0,
             surface: vec![ARCADE_LIST_FADE_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             fade_scratch: Vec::new(),
             fade_constants: Vec::new(),
@@ -294,8 +297,8 @@ impl BlendVelocityBench {
 
     fn copy_real_text_row_to_surface(&mut self, idx: usize, src_y: usize, viewport_y: usize) {
         if !self.row_cache.contains_key(&idx) {
-            if self.row_cache.len() > 128 {
-                self.row_cache.clear();
+            if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
+                prune_arcade_row_cache(&mut self.row_cache);
             }
             let title = blend_velocity_title(idx);
             let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
@@ -325,19 +328,31 @@ impl BlendVelocityBench {
                     Pixel(0x00e8e0f0),
                 );
             }
+            let last_used = self.next_row_cache_epoch();
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
                     title,
                     pixels: row.into_iter().map(pixel_to_rgb565).collect(),
+                    last_used,
                 },
             );
+        } else {
+            let last_used = self.next_row_cache_epoch();
+            if let Some(cached) = self.row_cache.get_mut(&idx) {
+                cached.last_used = last_used;
+            }
         }
         let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         let dst = dst_y * ARCADE_LIST_W;
         let src = src_y * ARCADE_LIST_W;
         let row = &self.row_cache.get(&idx).expect("row cache insert").pixels;
         self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+    }
+
+    fn next_row_cache_epoch(&mut self) -> u64 {
+        self.row_cache_epoch = self.row_cache_epoch.wrapping_add(1);
+        self.row_cache_epoch
     }
 
     fn prepare_fade_bands(&mut self) -> u64 {
