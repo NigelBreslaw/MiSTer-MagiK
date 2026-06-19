@@ -74,7 +74,7 @@ jobs:
 
     steps:
       - name: Checkout app repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Check HBMAME metadata database cache
         id: hbmame-db-cache
@@ -99,7 +99,7 @@ jobs:
 
     steps:
       - name: Checkout app repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Expose HBMAME cache key
         id: hbmame-outputs
@@ -114,7 +114,7 @@ jobs:
 
       - name: Checkout HBMAME
         if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: Robbbert/hbmame
           ref: ${{ needs.resolve-hbmame.outputs.ref }}
@@ -169,10 +169,10 @@ jobs:
 
     steps:
       - name: Checkout app repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Checkout Main_MiSTer fork
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: NigelBreslaw/Main_MiSTer
           ref: ${{ github.event.inputs.main_ref }}
