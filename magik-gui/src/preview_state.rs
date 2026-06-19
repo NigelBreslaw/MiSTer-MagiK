@@ -16,6 +16,7 @@ use crate::ui_display::{UI_FB_H, UI_FB_W};
 
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
 const MAX_PREFETCH_RESULTS_PER_FRAME: usize = 1;
+const DIRECTIONAL_PREFETCH_TAIL_RADIUS: usize = 2;
 pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
 pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
 pub(crate) const ARCADE_PREVIEW_BOX_W: u32 = 320;
@@ -233,6 +234,8 @@ pub(crate) struct PreviewState {
     pending_prefetch_paths: HashSet<String>,
     ready_backlog: VecDeque<PreviewResult>,
     raw_dirty: bool,
+    last_prefetch_selected: Option<usize>,
+    prefetch_direction: i8,
 }
 
 pub(crate) struct PreviewRawFrame<'a> {
@@ -276,6 +279,8 @@ impl PreviewState {
             pending_prefetch_paths: HashSet::new(),
             ready_backlog: VecDeque::new(),
             raw_dirty: false,
+            last_prefetch_selected: None,
+            prefetch_direction: 0,
         }
     }
 
@@ -295,6 +300,8 @@ impl PreviewState {
             self.pending_prefetch_paths.clear();
             self.ready_backlog.clear();
             self.raw_dirty = false;
+            self.last_prefetch_selected = None;
+            self.prefetch_direction = 0;
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
@@ -482,6 +489,8 @@ pub(crate) fn request_arcade_preview_window(
         preview.visible_path.clear();
         preview.window_paths.clear();
         preview.pending_prefetch_paths.clear();
+        preview.last_prefetch_selected = None;
+        preview.prefetch_direction = 0;
         bridge.set_arcade_preview_placeholder_visible(true);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
@@ -592,10 +601,24 @@ fn request_preview_prefetches(
     selected: usize,
     preview: &mut PreviewState,
 ) {
-    for idx in preview_window_indices(games.len(), selected, DEFAULT_PREVIEW_RADIUS) {
-        if idx == selected {
-            continue;
+    if let Some(previous) = preview.last_prefetch_selected {
+        if selected > previous {
+            preview.prefetch_direction = 1;
+        } else if selected < previous {
+            preview.prefetch_direction = -1;
         }
+    }
+    preview.last_prefetch_selected = Some(selected);
+
+    for (rank, idx) in direction_aware_prefetch_indices(
+        games.len(),
+        selected,
+        DEFAULT_PREVIEW_RADIUS,
+        preview.prefetch_direction,
+    )
+    .into_iter()
+    .enumerate()
+    {
         let Some(game) = games.get(idx) else {
             continue;
         };
@@ -615,15 +638,72 @@ fn request_preview_prefetches(
         preview.worker.request_prefetch(
             game.title.to_string(),
             game.image_path.to_string(),
-            distance,
+            rank + 1,
         );
         if preview_trace_enabled() {
             eprintln!(
-                "preview_trace prefetch distance={} title={} path={}",
-                distance, game.title, game.image_path
+                "preview_trace prefetch distance={} rank={} direction={} title={} path={}",
+                distance,
+                rank + 1,
+                preview.prefetch_direction,
+                game.title,
+                game.image_path
             );
         }
     }
+}
+
+fn direction_aware_prefetch_indices(
+    len: usize,
+    selected: usize,
+    radius: usize,
+    direction: i8,
+) -> Vec<usize> {
+    if len == 0 {
+        return Vec::new();
+    }
+    let selected = selected.min(len - 1);
+    if direction == 0 {
+        return preview_window_indices(len, selected, radius)
+            .into_iter()
+            .filter(|idx| *idx != selected)
+            .collect();
+    }
+
+    let mut out = Vec::new();
+    let mut push_unique = |idx: usize| {
+        if idx < len && idx != selected && !out.contains(&idx) {
+            out.push(idx);
+        }
+    };
+
+    if direction > 0 {
+        let end = selected.saturating_add(radius).min(len - 1);
+        for idx in selected.saturating_add(1)..=end {
+            push_unique(idx);
+        }
+        for distance in 1..=DIRECTIONAL_PREFETCH_TAIL_RADIUS.min(radius) {
+            if let Some(idx) = selected.checked_sub(distance) {
+                push_unique(idx);
+            }
+        }
+    } else {
+        for distance in 1..=radius {
+            if let Some(idx) = selected.checked_sub(distance) {
+                push_unique(idx);
+            } else {
+                break;
+            }
+        }
+        let end = selected
+            .saturating_add(DIRECTIONAL_PREFETCH_TAIL_RADIUS.min(radius))
+            .min(len - 1);
+        for idx in selected.saturating_add(1)..=end {
+            push_unique(idx);
+        }
+    }
+
+    out
 }
 
 fn deferred_selected_preview_is_ready(preview: &mut PreviewState) -> bool {
@@ -725,11 +805,12 @@ pub(crate) fn apply_ready_preview(
         if let Some(image) = result.image {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace apply generation={} priority={:?} selected={} age_us={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    "preview_trace apply generation={} priority={:?} selected={} age_us={} load_source={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
                     result.generation,
                     result.priority,
                     is_selected_result,
                     result.request_age_us,
+                    result.load_source.label(),
                     result.storage_format.label(),
                     result.resize_filter,
                     result.source_width,
@@ -939,6 +1020,22 @@ mod tests {
     }
 
     #[test]
+    fn direction_aware_prefetch_orders_ahead_before_small_tail() {
+        assert_eq!(
+            direction_aware_prefetch_indices(30, 10, 4, 1),
+            vec![11, 12, 13, 14, 9, 8]
+        );
+        assert_eq!(
+            direction_aware_prefetch_indices(30, 10, 4, -1),
+            vec![9, 8, 7, 6, 11, 12]
+        );
+        assert_eq!(
+            direction_aware_prefetch_indices(30, 10, 4, 0),
+            vec![9, 11, 8, 12, 7, 13, 6, 14]
+        );
+    }
+
+    #[test]
     fn preview_cache_hits_share_image_payload() {
         let mut cache = PreviewImageCache::default();
         let words = Arc::<[u16]>::from([0xffff]);
@@ -1130,6 +1227,7 @@ mod tests {
             decoded_bytes: 0,
             source_width: 0,
             source_height: 0,
+            load_source: crate::preview_worker::PreviewLoadSource::RawFile,
             storage_format: crate::preview_worker::PreviewStorageFormat::RawRgb565,
             resize_filter: crate::preview_worker::PreviewResizeFilter::Off,
             priority,
