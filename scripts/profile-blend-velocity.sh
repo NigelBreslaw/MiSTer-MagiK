@@ -18,10 +18,11 @@ Optional host env:
   MISTER_BLEND_BENCH_FADE_H=<px>  override fade band height for this run
 
 VARIANT:
-  baseline   real fade blend + fade/body/selection copies (default)
-  real-text  same fade/copy path, with cached text rows instead of synthetic rows
-  copy-only  copy fade rows without blending, isolating framebuffer writes
-  no-fade    copy only the moving body + selection frame
+  baseline       real fade blend + fade/body/selection copies (default)
+  real-text      same fade/copy path, with cached solid text rows
+  gradient-text  cached gradient text rows, full list copy, no viewport fade
+  copy-only      copy fade rows without blending, isolating framebuffer writes
+  no-fade        copy only the moving body + selection frame
 
 Default: --skip-build, useful when the desired binary is already deployed.
 EOF
@@ -69,9 +70,9 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   exit 2
 fi
 case "$variant" in
-  baseline|real-text|real_text|text|copy-only|copy|no-fade|nofade|body-only) ;;
+  baseline|real-text|real_text|text|gradient-text|gradient_text|gradient|copy-only|copy|no-fade|nofade|body-only) ;;
   *)
-    echo "variant must be baseline, real-text, copy-only, or no-fade" >&2
+    echo "variant must be baseline, real-text, gradient-text, copy-only, or no-fade" >&2
     exit 2
     ;;
 esac

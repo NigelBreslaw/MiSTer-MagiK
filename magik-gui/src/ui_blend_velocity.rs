@@ -5,7 +5,7 @@ use crate::arcade_list_renderer::{
     blend_row_towards, blend_velocity_fade_h_from_env, draw_arcade_row_background,
     fade_blend_constants, ArcadeListRenderer, CachedArcadeRow, FadeBlendConstants,
     ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FADE_COLOR_565, ARCADE_LIST_FONT_PX, ARCADE_LIST_H,
-    ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y,
+    ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ARCADE_TITLE_GRADIENT,
 };
 use crate::bitmap_text::ConsoleFont;
 use crate::cpu_profile;
@@ -42,6 +42,7 @@ enum BlendVelocityVariant {
     CopyOnly,
     NoFade,
     RealText,
+    GradientText,
 }
 
 impl BlendVelocityVariant {
@@ -55,6 +56,7 @@ impl BlendVelocityVariant {
             "copy-only" | "copy" => Self::CopyOnly,
             "no-fade" | "nofade" | "body-only" => Self::NoFade,
             "real-text" | "real_text" | "text" => Self::RealText,
+            "gradient-text" | "gradient_text" | "gradient" => Self::GradientText,
             _ => Self::Baseline,
         }
     }
@@ -65,7 +67,16 @@ impl BlendVelocityVariant {
             Self::CopyOnly => "copy-only",
             Self::NoFade => "no-fade",
             Self::RealText => "real-text",
+            Self::GradientText => "gradient-text",
         }
+    }
+
+    fn uses_real_text_rows(self) -> bool {
+        matches!(self, Self::RealText | Self::GradientText)
+    }
+
+    fn uses_viewport_fade(self) -> bool {
+        !matches!(self, Self::NoFade | Self::GradientText)
     }
 }
 
@@ -177,8 +188,8 @@ impl BlendVelocityBench {
         let mut px = 0u32;
 
         let fade_blend_start = Instant::now();
-        let fade_blend_us = if self.variant == BlendVelocityVariant::Baseline
-            || self.variant == BlendVelocityVariant::RealText
+        let fade_blend_us = if self.variant.uses_viewport_fade()
+            && self.variant != BlendVelocityVariant::CopyOnly
         {
             self.prepare_fade_bands()
         } else {
@@ -189,7 +200,7 @@ impl BlendVelocityBench {
 
         let fade_copy_start = Instant::now();
         let mut fade_copy_us = 0u64;
-        if self.variant != BlendVelocityVariant::NoFade {
+        if self.variant.uses_viewport_fade() {
             let fade_h = self.fade_h;
             let top_px = self.copy_top_fade_to_display(disp, fade_h);
             let bottom_px = self.copy_bottom_fade_to_display(disp, fade_h);
@@ -200,15 +211,15 @@ impl BlendVelocityBench {
 
         let body_copy_start = Instant::now();
         let fade_h = self.fade_h;
-        let body_y = if self.variant == BlendVelocityVariant::NoFade {
-            0
-        } else {
+        let body_y = if self.variant.uses_viewport_fade() {
             fade_h
-        };
-        let body_h = if self.variant == BlendVelocityVariant::NoFade {
-            ARCADE_LIST_H
         } else {
+            0
+        };
+        let body_h = if self.variant.uses_viewport_fade() {
             ARCADE_LIST_H - fade_h * 2
+        } else {
+            ARCADE_LIST_H
         };
         self.copy_viewport_band_to_display(disp, body_y, body_h);
         let body_copy_us = body_copy_start.elapsed().as_micros() as u64;
@@ -257,7 +268,7 @@ impl BlendVelocityBench {
             let world_y = self.visual_px + viewport_y as i32;
             let row_idx = world_y.div_euclid(ARCADE_ROW_HEIGHT);
             let src_y = (world_y.rem_euclid(ARCADE_ROW_HEIGHT)) as usize;
-            if self.variant == BlendVelocityVariant::RealText {
+            if self.variant.uses_real_text_rows() {
                 self.copy_real_text_row_to_surface(row_idx.max(0) as usize, src_y, viewport_y);
                 continue;
             }
@@ -293,17 +304,31 @@ impl BlendVelocityBench {
             let title = blend_velocity_title(idx);
             let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
             draw_arcade_row_background(&mut row, idx);
-            self.title_font.draw_text_clipped(
-                &mut row,
-                ARCADE_LIST_W,
-                ARCADE_LIST_W,
-                0,
-                ARCADE_ROW_HEIGHT as usize,
-                12,
-                30,
-                &title,
-                Pixel(0x00e8e0f0),
-            );
+            if self.variant == BlendVelocityVariant::GradientText {
+                self.title_font.draw_text_clipped_gradient(
+                    &mut row,
+                    ARCADE_LIST_W,
+                    ARCADE_LIST_W,
+                    0,
+                    ARCADE_ROW_HEIGHT as usize,
+                    12,
+                    30,
+                    &title,
+                    ARCADE_TITLE_GRADIENT,
+                );
+            } else {
+                self.title_font.draw_text_clipped(
+                    &mut row,
+                    ARCADE_LIST_W,
+                    ARCADE_LIST_W,
+                    0,
+                    ARCADE_ROW_HEIGHT as usize,
+                    12,
+                    30,
+                    &title,
+                    Pixel(0x00e8e0f0),
+                );
+            }
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
