@@ -37,7 +37,8 @@ impl DirtyRect {
         }
     }
 
-    pub(super) fn area(self) -> usize {
+    #[cfg(test)]
+    fn area(self) -> usize {
         self.width() * (self.y1 - self.y0)
     }
 
