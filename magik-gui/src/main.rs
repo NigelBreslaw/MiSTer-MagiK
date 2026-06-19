@@ -67,7 +67,7 @@ pub use mister_magik_fb::{
     preview_worker,
 };
 
-use fb::{Display, Pixel, VsyncPacer};
+use fb::{Display, Pixel, VsyncPacer, VsyncWaitStatus};
 use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::FramebufferFormat;
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
@@ -454,26 +454,43 @@ fn run_cpu_profile_smoke() {
 }
 
 fn run_vsync_probe() {
-    let frames = std::env::args()
-        .nth(2)
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let frames = args
+        .first()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(300);
+    let work_us = args.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let mode = args.get(2).map(|s| s.as_str()).unwrap_or("pacer");
+    if mode == "direct" {
+        run_direct_vsync_probe(frames, work_us);
+        return;
+    }
     let mut pacer = VsyncPacer::from_env();
-    println!("frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tmessage");
+    println!("frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tloop_delta_us\tmessage");
+    let mut last_frame_at: Option<std::time::Instant> = None;
     for frame in 0..frames {
+        let frame_at = std::time::Instant::now();
         let pace = pacer.wait();
+        let loop_delta_us = last_frame_at
+            .map(|prev| frame_at.saturating_duration_since(prev).as_micros() as u64)
+            .unwrap_or(0);
+        last_frame_at = Some(frame_at);
         println!(
-            "{frame}\t{}\t{}\t{}\t{:.2}\t{}\t{}",
+            "{frame}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}",
             pace.source.label(),
             pace.wait_us,
             pace.period_us,
             1_000_000.0 / pace.period_us as f64,
             pace.miss_streak,
+            loop_delta_us,
             pace.message.as_deref().unwrap_or("")
         );
+        if work_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(work_us));
+        }
     }
     println!(
-        "vsync_probe_summary frames={frames} hits={} timeouts={} fallback_frames={} errors={} max_miss_streak={} inferred_hz={:.2}",
+        "vsync_probe_summary mode=pacer frames={frames} work_us={work_us} hits={} timeouts={} fallback_frames={} errors={} max_miss_streak={} inferred_hz={:.2}",
         pacer.hits(),
         pacer.timeouts(),
         pacer.fallback_frames(),
@@ -482,6 +499,83 @@ fn run_vsync_probe() {
         1_000_000.0 / pacer.period_us() as f64
     );
     if pacer.errors() > 0 {
+        std::process::exit(1);
+    }
+}
+
+fn run_direct_vsync_probe(frames: u64, work_us: u64) {
+    let info = match Display::current_info() {
+        Ok(info) => info,
+        Err(e) => {
+            eprintln!("vsync-probe direct: failed to read current display info: {e}");
+            std::process::exit(1);
+        }
+    };
+    let format = FramebufferFormat::from_bits_per_pixel(info.bits_per_pixel);
+    let disp =
+        match Display::open_with_format(info.visible_w, info.virtual_h.max(info.visible_h), format)
+        {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("vsync-probe direct: failed to open current display: {e}");
+                std::process::exit(1);
+            }
+        };
+    println!("frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tloop_delta_us\tmessage");
+    let mut hits = 0u64;
+    let mut timeouts = 0u64;
+    let mut errors = 0u64;
+    let mut miss_streak = 0u32;
+    let mut max_miss_streak = 0u32;
+    let mut period_us = 16_667u64;
+    let mut last_hit_at: Option<std::time::Instant> = None;
+    let mut last_frame_at: Option<std::time::Instant> = None;
+    for frame in 0..frames {
+        let frame_at = std::time::Instant::now();
+        let status = disp.wait_vsync_status();
+        let loop_delta_us = last_frame_at
+            .map(|prev| frame_at.saturating_duration_since(prev).as_micros() as u64)
+            .unwrap_or(0);
+        last_frame_at = Some(frame_at);
+        let (source, wait_us, message) = match status {
+            VsyncWaitStatus::Hit { wait_us, at } => {
+                hits += 1;
+                miss_streak = 0;
+                if let Some(prev) = last_hit_at {
+                    let observed = at.saturating_duration_since(prev).as_micros() as u64;
+                    if (8_000..=25_000).contains(&observed) {
+                        period_us = ((period_us * 7) + observed) / 8;
+                    }
+                }
+                last_hit_at = Some(at);
+                ("vsync", wait_us, String::new())
+            }
+            VsyncWaitStatus::Timeout { wait_us } => {
+                timeouts += 1;
+                miss_streak += 1;
+                max_miss_streak = max_miss_streak.max(miss_streak);
+                ("timeout", wait_us, String::new())
+            }
+            VsyncWaitStatus::Error { wait_us, message } => {
+                errors += 1;
+                miss_streak += 1;
+                max_miss_streak = max_miss_streak.max(miss_streak);
+                ("error", wait_us, message)
+            }
+        };
+        println!(
+            "{frame}\t{source}\t{wait_us}\t{period_us}\t{:.2}\t{miss_streak}\t{loop_delta_us}\t{message}",
+            1_000_000.0 / period_us as f64
+        );
+        if work_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(work_us));
+        }
+    }
+    println!(
+        "vsync_probe_summary mode=direct frames={frames} work_us={work_us} hits={hits} timeouts={timeouts} fallback_frames=0 errors={errors} max_miss_streak={max_miss_streak} inferred_hz={:.2}",
+        1_000_000.0 / period_us as f64
+    );
+    if errors > 0 {
         std::process::exit(1);
     }
 }
