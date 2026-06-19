@@ -156,18 +156,18 @@ if ! docker info >/dev/null 2>"$DOCKER_INFO_ERR"; then
 fi
 rm -f "$DOCKER_INFO_ERR"
 
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9 -C target-feature=+neon"
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9"
 if [ "$PROFILE" = release-device-profile ]; then
   export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
-  echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 + NEON target)"
+  echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-device ]; then
-  echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 + NEON target)"
+  echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-opt2 ]; then
-  echo "==> cross build profile=release-opt2 ui_scope=$UI_SCOPE (opt-level=2 + thin LTO + Cortex-A9 + NEON target)"
+  echo "==> cross build profile=release-opt2 ui_scope=$UI_SCOPE (opt-level=2 + thin LTO + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-opts ]; then
-  echo "==> cross build profile=release-opts ui_scope=$UI_SCOPE (opt-level=s + thin LTO + Cortex-A9 + NEON target)"
+  echo "==> cross build profile=release-opts ui_scope=$UI_SCOPE (opt-level=s + thin LTO + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-incr ]; then
-  echo "==> cross build profile=release-incr ui_scope=$UI_SCOPE (thin LTO + incremental + Cortex-A9 + NEON target)"
+  echo "==> cross build profile=release-incr ui_scope=$UI_SCOPE (thin LTO + incremental + Cortex-A9 target, warnings denied)"
 fi
 
 BUILD_LOG="$(mktemp)"

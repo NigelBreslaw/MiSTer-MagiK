@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK."
 
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
 [dependencies]
 libc = "0.2"
 lz4_flex = "0.13.1"

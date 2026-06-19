@@ -41,6 +41,8 @@ const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, (u64, i64)>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
+type MachineMetadataRow = (String, String, Option<String>, Option<String>);
+type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
 const SCHEMA_VERSION: u32 = 25;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1040,8 +1042,7 @@ fn write_hbmame_metadata_from_library(
             ))
         })
         .map_err(|e| format!("query hbmame metadata rows: {e}"))?;
-    let mut machines: BTreeMap<String, (String, String, Option<String>, Option<String>)> =
-        BTreeMap::new();
+    let mut machines: MachineMetadataRows = BTreeMap::new();
     for row in rows {
         let (setname, parent, title, year, manufacturer) =
             row.map_err(|e| format!("read hbmame metadata row: {e}"))?;
@@ -1198,8 +1199,8 @@ fn refresh_sqlite_database(
     }
 
     let artifact = match progress.as_mut() {
-        Some(report) => scan_library_artifact(&cfg, Some(&mut **report)),
-        None => scan_library_artifact(&cfg, None),
+        Some(report) => scan_library_artifact(cfg, Some(&mut **report)),
+        None => scan_library_artifact(cfg, None),
     };
     let scan_us = scan_t.elapsed().as_micros() as u64;
 
@@ -1212,7 +1213,7 @@ fn refresh_sqlite_database(
             ),
         );
     }
-    let mut summary = save_scan_artifact_to_sqlite(&cfg, artifact, progress)?;
+    let mut summary = save_scan_artifact_to_sqlite(cfg, artifact, progress)?;
     summary.scan_us = scan_us;
     Ok(summary)
 }
@@ -2870,7 +2871,7 @@ fn load_arcade_machine_metadata(mame_path: &Path, hbmame_path: &Path) -> ArcadeM
 
 fn write_simple_mame_metadata_db(
     path: &Path,
-    rows: &BTreeMap<String, (String, String, Option<String>, Option<String>)>,
+    rows: &MachineMetadataRows,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -4449,21 +4450,22 @@ fn write_sqlite_scan_with_sources(
                 None
             };
             let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
-            if is_launcher_launch_ref(&plan_launch_ref) {
-                if system_id != "arcade" && system_id != "neogeo" {
-                    launcher_rows.push(CatalogRow {
-                        game: ArcadeGameEntry {
-                            title: discovery.title.clone().into(),
-                            mra_path: plan_launch_ref.clone().into(),
-                            image_path: game_image_path.unwrap_or_default().into(),
-                            has_image: game_has_image,
-                            system_id: system_id.clone().into(),
-                        },
-                        source_kind: launch_kind_for_discovery(discovery).to_string(),
-                        setname: discovery.setname.clone().unwrap_or_default(),
-                        parent: discovery.parent.clone().unwrap_or_default(),
-                    });
-                }
+            if is_launcher_launch_ref(&plan_launch_ref)
+                && system_id != "arcade"
+                && system_id != "neogeo"
+            {
+                launcher_rows.push(CatalogRow {
+                    game: ArcadeGameEntry {
+                        title: discovery.title.clone().into(),
+                        mra_path: plan_launch_ref.clone().into(),
+                        image_path: game_image_path.unwrap_or_default().into(),
+                        has_image: game_has_image,
+                        system_id: system_id.clone().into(),
+                    },
+                    source_kind: launch_kind_for_discovery(discovery).to_string(),
+                    setname: discovery.setname.clone().unwrap_or_default(),
+                    parent: discovery.parent.clone().unwrap_or_default(),
+                });
             }
             plan_stmt
                 .execute(params![
@@ -5389,6 +5391,14 @@ fn unix_now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type MameMachineFixture<'a> = (
+        &'a str,
+        Option<&'a str>,
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
 
     #[test]
     fn profile_ignored_support_files_do_not_become_payloads() {
@@ -7813,10 +7823,7 @@ mod tests {
         std::fs::write(path, out).expect("write zip fixture");
     }
 
-    fn write_mame_fixture_db(
-        path: &Path,
-        rows: &[(&str, Option<&str>, &str, Option<&str>, Option<&str>)],
-    ) {
+    fn write_mame_fixture_db(path: &Path, rows: &[MameMachineFixture<'_>]) {
         let conn = Connection::open(path).expect("open mame fixture");
         conn.execute_batch(
             r#"

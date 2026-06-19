@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Small MiSTer MagiK boot/network agent, independent from the Slint UI."
 
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
 [[bin]]
 name = "mister-magik-agent"
 path = "src/main.rs"

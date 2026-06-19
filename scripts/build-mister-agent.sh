@@ -69,7 +69,7 @@ build_with_apple_container() {
     --env CARGO_HOME=/cargo \
     --env CARGO_TARGET_DIR=/target \
     --env RUSTC_WRAPPER= \
-    --env RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9" \
+    --env RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9" \
     --volume "$cargo_cache:/cargo" \
     --volume "$rust_toolchain:/rust:ro" \
     --volume "$HERE:/project" \
@@ -92,7 +92,7 @@ build_with_apple_container() {
 build_with_cross() {
   export DOCKER_DEFAULT_PLATFORM=linux/amd64
   export RUSTC_WRAPPER=""
-  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=cortex-a9"
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9"
 
   cross build \
     --manifest-path "$MANIFEST" \
