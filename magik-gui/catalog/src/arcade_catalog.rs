@@ -361,4 +361,90 @@ mod tests {
         assert_eq!(catalog.system_game_slice("amiga").len(), 1);
         assert_eq!(catalog.system_preview_game_count("amiga"), 0);
     }
+
+    #[test]
+    fn catalog_lookup_falls_back_cleanly_for_missing_paths_and_systems() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![ArcadeGameEntry {
+                title: "1942".into(),
+                mra_path: "/media/fat/_Arcade/1942.mra".into(),
+                image_path: "/media/fat/_Arcade/media/screenshot/1942.png".into(),
+                has_image: true,
+                system_id: "arcade".into(),
+            }],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 1,
+            }],
+        );
+
+        assert_eq!(catalog.len(), 1);
+        assert!(!catalog.is_empty());
+        assert_eq!(catalog.title_for_path("/missing.mra"), "Game");
+        assert!(catalog.system_games("missing").is_empty());
+        assert_eq!(catalog.system_game_count("missing"), 0);
+        assert!(catalog.system_game_at("missing", 0).is_none());
+        assert!(catalog.system_preview_games("missing").is_empty());
+        assert_eq!(catalog.system_preview_game_count("missing"), 0);
+        assert!(catalog.system_preview_game_at("missing", 0).is_none());
+    }
+
+    #[test]
+    fn systems_from_games_uses_runtime_order_and_human_titles() {
+        let games = vec![
+            ArcadeGameEntry {
+                title: "Unknown Thing".into(),
+                mra_path: "/media/fat/_Arcade/Unknown.mra".into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: "unknown".into(),
+            },
+            ArcadeGameEntry {
+                title: "Sonic".into(),
+                mra_path: "/media/fat/games/MegaDrive/Sonic.md".into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: "megadrive".into(),
+            },
+            ArcadeGameEntry {
+                title: "1942".into(),
+                mra_path: "/media/fat/_Arcade/1942.mra".into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: "arcade".into(),
+            },
+            ArcadeGameEntry {
+                title: "Another Sonic".into(),
+                mra_path: "/media/fat/games/MegaDrive/Another Sonic.md".into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: "megadrive".into(),
+            },
+        ];
+
+        let systems = systems_from_games(&games);
+
+        assert_eq!(
+            systems,
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1
+                },
+                GameSystemEntry {
+                    id: "megadrive".into(),
+                    title: "Mega Drive".into(),
+                    count: 2
+                },
+                GameSystemEntry {
+                    id: "unknown".into(),
+                    title: "Unknown".into(),
+                    count: 1
+                }
+            ]
+        );
+    }
 }
