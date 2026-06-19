@@ -177,10 +177,10 @@ impl ArcadeListRenderer {
             return;
         }
         let band_h = band_h.min(ARCADE_LIST_H - band_y);
-        let mut band = std::mem::take(&mut self.band_scratch);
-        band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_FADE_COLOR);
-        band.fill(ARCADE_LIST_FADE_COLOR);
         if games.is_empty() {
+            let mut band = std::mem::take(&mut self.band_scratch);
+            band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_FADE_COLOR);
+            band.fill(ARCADE_LIST_FADE_COLOR);
             self.meta_font.draw_text_clipped(
                 &mut band,
                 ARCADE_LIST_W,
@@ -196,11 +196,10 @@ impl ArcadeListRenderer {
             self.band_scratch = band;
             return;
         }
+        self.fill_surface_band(band_y, band_h, ARCADE_LIST_FADE_COLOR_565);
         let row_h = ARCADE_ROW_HEIGHT as isize;
         let local_anchor_y = Self::selection_y() as isize;
         let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
-            self.copy_band_to_surface(&band, band_y, band_h);
-            self.band_scratch = band;
             return;
         };
         for idx in first..=end {
@@ -211,15 +210,12 @@ impl ArcadeListRenderer {
             if clip_y1 <= clip_y0 {
                 continue;
             }
-            self.blit_cached_row_to_band(&mut band, band_h, band_y, &games[idx].title, idx, y);
+            self.blit_cached_row_to_surface(band_h, band_y, &games[idx].title, idx, y);
         }
-        self.copy_band_to_surface(&band, band_y, band_h);
-        self.band_scratch = band;
     }
 
-    fn blit_cached_row_to_band(
+    fn blit_cached_row_to_surface(
         &mut self,
-        band: &mut [Pixel],
         band_h: usize,
         band_y: usize,
         title: &str,
@@ -255,11 +251,18 @@ impl ArcadeListRenderer {
         let dst_y = (clip_y0 as usize).saturating_sub(band_y);
         for row_y in 0..copy_h {
             let src = (src_y + row_y) * ARCADE_LIST_W;
-            let dst = (dst_y + row_y) * ARCADE_LIST_W;
-            copy_rgb565_to_pixel_row(
-                &row[src..src + ARCADE_LIST_W],
-                &mut band[dst..dst + ARCADE_LIST_W],
-            );
+            let viewport_y = band_y + dst_y + row_y;
+            let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+            let dst = dst_y * ARCADE_LIST_W;
+            self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+        }
+    }
+
+    fn fill_surface_band(&mut self, band_y: usize, band_h: usize, color: Rgb565Pixel) {
+        for row in 0..band_h {
+            let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
+            let dst = dst_y * ARCADE_LIST_W;
+            self.surface[dst..dst + ARCADE_LIST_W].fill(color);
         }
     }
 
@@ -477,16 +480,6 @@ const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
 fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
         *dst = pixel_to_rgb565(*src);
-    }
-}
-
-fn copy_rgb565_to_pixel_row(src: &[Rgb565Pixel], dst: &mut [Pixel]) {
-    for (src, dst) in src.iter().zip(dst.iter_mut()) {
-        let value = src.0 as u32;
-        let r = ((value >> 11) & 0x1f) << 3;
-        let g = ((value >> 5) & 0x3f) << 2;
-        let b = (value & 0x1f) << 3;
-        *dst = Pixel((r << 16) | (g << 8) | b);
     }
 }
 
