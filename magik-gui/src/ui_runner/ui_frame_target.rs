@@ -601,28 +601,104 @@ pub(super) fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565
     Rgb565Pixel((rb | g) as u16)
 }
 
+const BLEND_565_ALPHA_BUCKETS: usize = 33;
+const BLEND_565_RB_VALUES: usize = 32;
+const BLEND_565_G_VALUES: usize = 64;
+
+struct Blend565Tables {
+    r: Box<[u16]>,
+    g: Box<[u16]>,
+    b: Box<[u16]>,
+}
+
+fn blend_565_tables() -> &'static Blend565Tables {
+    static TABLES: OnceLock<Blend565Tables> = OnceLock::new();
+    TABLES.get_or_init(Blend565Tables::new)
+}
+
+fn warm_blend_565_tables() {
+    let _ = blend_565_tables();
+}
+
+impl Blend565Tables {
+    fn new() -> Self {
+        let mut r = vec![0; BLEND_565_ALPHA_BUCKETS * BLEND_565_RB_VALUES * BLEND_565_RB_VALUES];
+        let mut g = vec![0; BLEND_565_ALPHA_BUCKETS * BLEND_565_G_VALUES * BLEND_565_G_VALUES];
+        let mut b = vec![0; BLEND_565_ALPHA_BUCKETS * BLEND_565_RB_VALUES * BLEND_565_RB_VALUES];
+        for alpha in 0..BLEND_565_ALPHA_BUCKETS {
+            let inv = BLEND_565_ALPHA_BUCKETS - 1 - alpha;
+            for from in 0..BLEND_565_RB_VALUES {
+                for to in 0..BLEND_565_RB_VALUES {
+                    let value = ((from * inv + to * alpha) >> 5) as u16;
+                    let idx = blend_565_pair_index(alpha, from, to, BLEND_565_RB_VALUES);
+                    r[idx] = value << 11;
+                    b[idx] = value;
+                }
+            }
+            for from in 0..BLEND_565_G_VALUES {
+                for to in 0..BLEND_565_G_VALUES {
+                    let value = ((from * inv + to * alpha) >> 5) as u16;
+                    let idx = blend_565_pair_index(alpha, from, to, BLEND_565_G_VALUES);
+                    g[idx] = value << 5;
+                }
+            }
+        }
+        Self {
+            r: r.into_boxed_slice(),
+            g: g.into_boxed_slice(),
+            b: b.into_boxed_slice(),
+        }
+    }
+
+    #[inline(always)]
+    fn blend_bucket(
+        &self,
+        previous: Rgb565Pixel,
+        current: Rgb565Pixel,
+        alpha: usize,
+    ) -> Rgb565Pixel {
+        let prev = previous.0 as usize;
+        let curr = current.0 as usize;
+        let r = self.r[blend_565_pair_index(
+            alpha,
+            (prev >> 11) & 0x1f,
+            (curr >> 11) & 0x1f,
+            BLEND_565_RB_VALUES,
+        )];
+        let g = self.g[blend_565_pair_index(
+            alpha,
+            (prev >> 5) & 0x3f,
+            (curr >> 5) & 0x3f,
+            BLEND_565_G_VALUES,
+        )];
+        let b = self.b[blend_565_pair_index(alpha, prev & 0x1f, curr & 0x1f, BLEND_565_RB_VALUES)];
+        Rgb565Pixel(r | g | b)
+    }
+}
+
+#[inline(always)]
+fn blend_565_pair_index(alpha: usize, from: usize, to: usize, values: usize) -> usize {
+    (alpha * values + from) * values + to
+}
+
 fn blend_565_row(
     dst: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
     current: &[Rgb565Pixel],
     alpha: u8,
+    tables: &Blend565Tables,
 ) {
-    let a = ((alpha as u32 + 4) >> 3).min(32);
+    let a = ((alpha as usize + 4) >> 3).min(BLEND_565_ALPHA_BUCKETS - 1);
     if a == 0 {
         dst.copy_from_slice(previous);
         return;
     }
-    if a >= 32 {
+    if a >= BLEND_565_ALPHA_BUCKETS - 1 {
         dst.copy_from_slice(current);
         return;
     }
-    let ia = 32 - a;
     for x in 0..dst.len() {
-        let prev = previous[x].0 as u32;
-        let curr = current[x].0 as u32;
-        let rb = (((prev & 0xf81f) * ia + (curr & 0xf81f) * a) >> 5) & 0xf81f;
-        let g = (((prev & 0x07e0) * ia + (curr & 0x07e0) * a) >> 5) & 0x07e0;
-        dst[x] = Rgb565Pixel((rb | g) as u16);
+        dst[x] = tables.blend_bucket(previous[x], current[x], a);
     }
 }
 
@@ -1102,6 +1178,7 @@ fn blit_transition_565_fade_same_geometry(
         return None;
     }
     let width = rect.width();
+    let tables = blend_565_tables();
     for y in rect.y0..rect.y1 {
         let src_y = y - previous.y as usize;
         let previous_start = src_y * previous.stride_pixels;
@@ -1110,7 +1187,7 @@ fn blit_transition_565_fade_same_geometry(
         let previous_row = &previous.pixels[previous_start..previous_start + width];
         let current_row = &current.pixels[current_start..current_start + width];
         let dst_row = &mut cached[dst_start..dst_start + width];
-        blend_565_row(dst_row, previous_row, current_row, alpha);
+        blend_565_row(dst_row, previous_row, current_row, alpha, tables);
     }
     Some(())
 }
@@ -1891,6 +1968,7 @@ impl UiFrameTarget {
             "slint-render-target=cached fb-format={}",
             FramebufferFormat::production_default().label()
         );
+        warm_blend_565_tables();
         Self::cached(ui)
     }
 
@@ -2349,6 +2427,51 @@ mod tests {
             cached[image_y * ui.render_w() + image_x],
             blend_565(red, blue, 128)
         );
+    }
+
+    #[test]
+    fn rgb565_row_table_blend_matches_scalar_blend() {
+        let previous = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xffe0),
+            Rgb565Pixel(0x7bef),
+        ];
+        let current = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x7bef),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0xffe0),
+        ];
+        let tables = blend_565_tables();
+
+        for alpha in 0..=255 {
+            let mut optimized = [Rgb565Pixel(0); 12];
+            blend_565_row(&mut optimized, &previous, &current, alpha, tables);
+            let expected: Vec<_> = previous
+                .iter()
+                .zip(current.iter())
+                .map(|(&prev, &curr)| blend_565(prev, curr, alpha))
+                .collect();
+
+            assert_eq!(optimized.as_slice(), expected.as_slice(), "alpha={alpha}");
+        }
     }
 
     #[test]
