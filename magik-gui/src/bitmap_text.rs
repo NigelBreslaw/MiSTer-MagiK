@@ -264,6 +264,8 @@ mod tests {
 
     const TEST_GRADIENT: TextGradient =
         TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
+    const ALT_TEST_GRADIENT: TextGradient =
+        TextGradient::new(Pixel(0x00ffffff), Pixel(0x00c8bfd8), Pixel(0x00887f90));
 
     #[test]
     fn gradient_glyph_cache_reuses_colored_glyphs_for_repeated_draws() {
@@ -275,6 +277,18 @@ mod tests {
 
         font.draw_text_clipped_gradient(&mut dst, 160, 160, 0, 40, 32, 24, "A", TEST_GRADIENT);
         assert_eq!(font.gradient_glyph_cache_len(), 1);
+    }
+
+    #[test]
+    fn gradient_glyph_cache_is_keyed_by_character_and_palette() {
+        let mut font = ConsoleFont::new(16.0);
+        let mut dst = vec![Pixel(0); 160 * 40];
+
+        font.draw_text_clipped_gradient(&mut dst, 160, 160, 0, 40, 0, 24, "ABBA", TEST_GRADIENT);
+        assert_eq!(font.gradient_glyph_cache_len(), 2);
+
+        font.draw_text_clipped_gradient(&mut dst, 160, 160, 0, 40, 0, 24, "AB", ALT_TEST_GRADIENT);
+        assert_eq!(font.gradient_glyph_cache_len(), 4);
     }
 
     #[test]
@@ -341,7 +355,19 @@ mod tests {
             .copied()
             .expect("bottom colored pixel");
 
-        assert!(luma(top_px) > luma(bottom_px));
+        let top_luma = luma(top_px);
+        let bottom_luma = luma(bottom_px);
+        let delta = top_luma.saturating_sub(bottom_luma);
+
+        assert!(top_luma > bottom_luma);
+        assert!(
+            bottom_luma >= 12_000,
+            "bottom luma {bottom_luma} should stay readable"
+        );
+        assert!(
+            (7_000..=15_000).contains(&delta),
+            "gradient delta {delta} should stay subtle"
+        );
     }
 
     fn luma(pixel: Pixel) -> u32 {
