@@ -70,7 +70,6 @@ impl LauncherBenchScenario {
                 | Self::PreviewStepHold
         )
     }
-
 }
 
 pub(super) fn launcher_start_screen_from_env() -> Option<Screen> {

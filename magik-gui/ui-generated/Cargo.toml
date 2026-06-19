@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Generated Slint UI modules for MiSTer MagiK."
 
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 slint = { version = "1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
 

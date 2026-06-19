@@ -147,12 +147,13 @@ impl PreviewStorageFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PreviewLoadSource {
     DecodedCache,
     ArchiveMem,
     ArchiveWarmupFile,
     ArchiveFile,
+    #[default]
     RawFile,
 }
 
@@ -165,12 +166,6 @@ impl PreviewLoadSource {
             Self::ArchiveFile => "archive_file",
             Self::RawFile => "raw_file",
         }
-    }
-}
-
-impl Default for PreviewLoadSource {
-    fn default() -> Self {
-        Self::RawFile
     }
 }
 
@@ -1046,7 +1041,7 @@ impl PreviewArchive {
                 compressed_slice
             }
         };
-        let image = decode_raw565_preview_bytes(&data)?;
+        let image = decode_raw565_preview_bytes(data)?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let total_us = total_t.elapsed().as_micros() as u64;
         Ok(Some(LoadedPreviewPixels {
@@ -1198,7 +1193,7 @@ fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
     let height = u32::from_le_bytes(data[12..16].try_into().unwrap());
     let stride_bytes = u32::from_le_bytes(data[16..20].try_into().unwrap());
     let min_stride = width as usize * 2;
-    if stride_bytes as usize % 16 != 0 || (stride_bytes as usize) < min_stride {
+    if !(stride_bytes as usize).is_multiple_of(16) || (stride_bytes as usize) < min_stride {
         return Err(format!(
             "raw565 preview bad stride width={} stride={}",
             width, stride_bytes
@@ -1214,9 +1209,8 @@ fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
     }
     #[cfg(target_endian = "little")]
     let words = {
-        let mut words = Vec::with_capacity(expected / 2);
+        let mut words = vec![0; expected / 2];
         unsafe {
-            words.set_len(expected / 2);
             std::ptr::copy_nonoverlapping(
                 data[20..].as_ptr(),
                 words.as_mut_ptr() as *mut u8,
@@ -1430,7 +1424,7 @@ mod tests {
             timing: ImageLoadTiming {
                 source_width: 2,
                 source_height: 1,
-                ..first.timing.clone()
+                ..first.timing
             },
             image: PreviewPixels::Rgb565 {
                 width: 2,

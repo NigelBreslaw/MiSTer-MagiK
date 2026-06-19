@@ -4,5 +4,5 @@
 [build]
 rustc-wrapper = ""
 
-# Cortex-A9 + NEON for MiSTer are set via RUSTFLAGS in build-arm.sh for all
+# Cortex-A9 tuning for MiSTer is set via RUSTFLAGS in build-arm.sh for all
 # armv7 cross-build profiles.

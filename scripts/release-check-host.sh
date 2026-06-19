@@ -16,7 +16,7 @@ Runs the host/build side of the public-beta release gate:
   - host logic tests
   - catalog crate tests
   - host tool tests
-  - clippy for app host logic and tools
+  - clippy for app host logic, catalog, tools, and agent
   - ARM release-device build
   - ARM shared-library check
   - distribution package dry-run and zip layout validation
@@ -59,8 +59,14 @@ step "Clippy magik-gui host logic"
   cargo clippy --lib --no-default-features -- -D warnings
 )
 
+step "Clippy catalog crate"
+cargo clippy --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml" --all-targets -- -D warnings
+
 step "Clippy host tools"
 cargo clippy --manifest-path "$ROOT/tools/mister/Cargo.toml" --all-targets -- -D warnings
+
+step "Clippy MagiK agent"
+cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets -- -D warnings
 
 step "ARM release-device build"
 "$ROOT/magik-gui/build-arm.sh" --device
