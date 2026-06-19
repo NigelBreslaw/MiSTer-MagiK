@@ -542,7 +542,7 @@ pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
         return Err(format!("{} is empty", path.display()));
     }
 
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = open_sqlite_read_only(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
@@ -594,7 +594,7 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
 
 pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunchPlan>, String> {
     let path = default_sqlite_path();
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = open_sqlite_read_only(&path)
         .map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
@@ -666,7 +666,7 @@ fn load_arcade_catalog_from_sqlite_at(
     let root = root.as_ref().to_path_buf();
     let t = Instant::now();
     let open_t = Instant::now();
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = open_sqlite_read_only(path)
         .map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let open_us = open_t.elapsed().as_micros() as u64;
@@ -784,6 +784,28 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
     )
     .map(|exists| exists != 0)
     .map_err(|e| format!("check sqlite table {table}: {e}"))
+}
+
+fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection> {
+    let uri = format!("file:{}?mode=ro&immutable=1", sqlite_uri_path(path));
+    Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+}
+
+fn sqlite_uri_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'%' => "%25".bytes().collect::<Vec<_>>(),
+            b'?' => "%3F".bytes().collect(),
+            b'#' => "%23".bytes().collect(),
+            b' ' => "%20".bytes().collect(),
+            other => vec![other],
+        })
+        .map(char::from)
+        .collect()
 }
 
 fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry>, String> {
@@ -989,7 +1011,7 @@ fn write_hbmame_metadata_from_library(
     library_path: &Path,
     hbmame_path: &Path,
 ) -> Result<HbmameMetadataSummary, String> {
-    let conn = Connection::open_with_flags(library_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = open_sqlite_read_only(library_path)
         .map_err(|e| format!("open library db {}: {e}", library_path.display()))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
@@ -2710,7 +2732,7 @@ fn file_signature(path: &Path) -> FileSignature {
 }
 
 fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadata> {
-    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+    let Ok(conn) = open_sqlite_read_only(path) else {
         return HashMap::new();
     };
     let Ok(mut stmt) =
@@ -2735,7 +2757,7 @@ fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadat
 }
 
 fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
-    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+    let Ok(conn) = open_sqlite_read_only(path) else {
         return MameSoftwareMetadata::default();
     };
     if !sqlite_table_exists(&conn, "mame_software_items").unwrap_or(false) {
@@ -3075,7 +3097,7 @@ fn match_software_by_full_rom_hash(
 
 impl SoftwareHashCache {
     fn load(path: &Path) -> Self {
-        let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        let Ok(conn) = open_sqlite_read_only(path) else {
             return Self::default();
         };
         if !sqlite_table_exists(&conn, "software_hash_cache").unwrap_or(false) {
@@ -4800,7 +4822,7 @@ fn report_sqlite_import_finalizing(progress: &mut ProgressCallback<'_>) {
 }
 
 fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
-    let conn = Connection::open(path).ok()?;
+    let conn = open_sqlite_read_only(path).ok()?;
     if sqlite_meta_usize(&conn, "version")? != SCHEMA_VERSION as usize {
         return None;
     }
@@ -7539,6 +7561,58 @@ mod tests {
             .iter()
             .any(|game| game.title.as_ref() == "Game 20004"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_arcade_load_ignores_hot_rollback_journal() {
+        let root = unique_temp_dir("sqlite-hot-journal");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Hot Journal")]))
+            .expect("write catalog database");
+
+        let child = std::process::Command::new(std::env::current_exe().expect("current test exe"))
+            .arg("--exact")
+            .arg("library_db::tests::sqlite_hot_journal_child_abort")
+            .env("MISTER_MAGIK_HOT_JOURNAL_DB", &db)
+            .output()
+            .expect("run hot journal child");
+        assert!(
+            !child.status.success(),
+            "hot journal child should abort, stdout={}, stderr={}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let journal = PathBuf::from(format!("{}-journal", db.display()));
+        assert!(
+            journal.exists(),
+            "child abort should leave rollback journal at {}",
+            journal.display()
+        );
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load cached catalog despite hot rollback journal");
+        assert_eq!(loaded.catalog.games.len(), 1);
+        assert_eq!(loaded.catalog.games[0].title.as_ref(), "Hot Journal");
+        assert!(
+            read_sqlite_fingerprint(&db).is_some(),
+            "fingerprint reads should also ignore the stale rollback journal"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_hot_journal_child_abort() {
+        let Some(path) = std::env::var_os("MISTER_MAGIK_HOT_JOURNAL_DB").map(PathBuf::from) else {
+            return;
+        };
+        let conn = Connection::open(&path).expect("open child sqlite");
+        conn.execute_batch(
+            "PRAGMA journal_mode=DELETE;
+             BEGIN IMMEDIATE;
+             UPDATE meta SET value = value + 1 WHERE key = 'normal_files';",
+        )
+        .expect("create hot rollback journal");
+        std::process::abort();
     }
 
     #[test]
