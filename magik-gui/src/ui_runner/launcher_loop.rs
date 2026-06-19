@@ -835,8 +835,23 @@ pub(super) fn run_launcher_loop(
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
-        let catalog_scan_title = bridge.get_catalog_scan_title().to_string();
-        let catalog_scan_detail = bridge.get_catalog_scan_detail().to_string();
+        let status_write_due = frame_accounting.status_write_due();
+        let status_string_copy_start = (status_write_due
+            && frame_accounting.preview_scroll_trace_enabled())
+        .then(Instant::now);
+        let status_catalog_scan_text = status_write_due.then(|| {
+            (
+                bridge.get_catalog_scan_title().to_string(),
+                bridge.get_catalog_scan_detail().to_string(),
+            )
+        });
+        let status_string_copy_us = status_string_copy_start
+            .map(|start| start.elapsed().as_micros())
+            .unwrap_or(0);
+        let status_string_copy_bytes = status_catalog_scan_text
+            .as_ref()
+            .map(|(title, detail)| title.len() + detail.len())
+            .unwrap_or(0);
         let games_found_detail_changed = if catalog_scan_visible && catalog_scan_percent < 0 {
             games_found_counter.tick(loop_start).is_some_and(|detail| {
                 bridge.set_catalog_scan_detail(detail.into());
@@ -1011,6 +1026,9 @@ pub(super) fn run_launcher_loop(
                 arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
+                status_write_due,
+                status_string_copy_us,
+                status_string_copy_bytes,
             },
             start,
             disp,
@@ -1022,8 +1040,14 @@ pub(super) fn run_launcher_loop(
             launching,
             &loading_title,
             catalog_scan_visible,
-            &catalog_scan_title,
-            &catalog_scan_detail,
+            status_catalog_scan_text
+                .as_ref()
+                .map(|(title, _)| title.as_str())
+                .unwrap_or(""),
+            status_catalog_scan_text
+                .as_ref()
+                .map(|(_, detail)| detail.as_str())
+                .unwrap_or(""),
             catalog_scan_percent,
             launcher_bench_scenario,
             start_screen,

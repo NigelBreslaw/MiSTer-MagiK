@@ -54,6 +54,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) arcade_update_label: ArcadeUpdateTrace,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
+    pub(super) status_write_due: bool,
+    pub(super) status_string_copy_us: u128,
+    pub(super) status_string_copy_bytes: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +122,14 @@ impl LauncherFrameAccounting {
         self.first_visible_copy_done
     }
 
+    pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
+        self.preview_scroll_trace.is_some()
+    }
+
+    pub(super) fn status_write_due(&self) -> bool {
+        self.last_status_write.elapsed() >= Duration::from_secs(1)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn finish_frame(
         &mut self,
@@ -151,6 +162,7 @@ impl LauncherFrameAccounting {
         self.record_boot_frame_profile(&frame, disp);
         self.record_first_frame(start, catalog_ready);
         self.write_runtime_status(
+            frame.status_write_due,
             frame.frames,
             frame.run_start,
             nav,
@@ -201,7 +213,7 @@ impl LauncherFrameAccounting {
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frame.frames,
                     frame.loop_start.duration_since(frame.run_start).as_micros(),
                     loop_delta_us,
@@ -226,6 +238,9 @@ impl LauncherFrameAccounting {
                         .unwrap_or("none"),
                     frame.vsync_period_us,
                     frame.vsync_miss_streak,
+                    u8::from(frame.status_write_due),
+                    frame.status_string_copy_us,
+                    frame.status_string_copy_bytes,
                     (frame.frame_t4 - frame.loop_start).as_micros()
                 ),
             );
@@ -372,6 +387,7 @@ impl LauncherFrameAccounting {
     #[allow(clippy::too_many_arguments)]
     fn write_runtime_status(
         &mut self,
+        status_write_due: bool,
         frames: u64,
         run_start: Instant,
         nav: &LauncherNav,
@@ -398,7 +414,7 @@ impl LauncherFrameAccounting {
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
     ) {
-        if self.last_status_write.elapsed() < Duration::from_secs(1) {
+        if !status_write_due {
             return;
         }
         let fps_estimate = if run_start.elapsed().as_secs_f64() > 0.0 {
@@ -475,7 +491,7 @@ fn open_preview_scroll_trace() -> Option<std::fs::File> {
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
