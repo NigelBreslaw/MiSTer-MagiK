@@ -77,6 +77,7 @@ pub(crate) enum PreviewTransitionEffect {
 }
 
 impl PreviewTransitionEffect {
+    #[cfg(not(mister_bench_scenes))]
     pub(crate) const PRODUCTION: [Self; 2] = [Self::Cut, Self::Fade];
 
     #[cfg(mister_bench_scenes)]
