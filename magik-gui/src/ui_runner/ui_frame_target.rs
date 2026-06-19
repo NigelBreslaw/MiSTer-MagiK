@@ -53,11 +53,90 @@ impl DirtyRect {
     }
 }
 
-fn subtract_rect(rect: DirtyRect, cut: DirtyRect) -> Vec<DirtyRect> {
+// Current launcher composition is one Slint base layer, up to two cached custom
+// overlays, and one direct arcade-list overlay. Subtracting those rectangles can
+// produce more than 16 fragments in adversarial layouts, so keep enough stack
+// space for the known worst case without heap allocation.
+const DIRTY_RECT_LIST_CAP: usize = 32;
+const EMPTY_DIRTY_RECT: DirtyRect = DirtyRect {
+    x0: 0,
+    y0: 0,
+    x1: 0,
+    y1: 0,
+};
+
+#[derive(Clone, Copy)]
+pub(super) struct DirtyRectList {
+    rects: [DirtyRect; DIRTY_RECT_LIST_CAP],
+    len: usize,
+}
+
+impl DirtyRectList {
+    pub(super) fn new() -> Self {
+        Self {
+            rects: [EMPTY_DIRTY_RECT; DIRTY_RECT_LIST_CAP],
+            len: 0,
+        }
+    }
+
+    pub(super) fn from_one(rect: DirtyRect) -> Self {
+        let mut list = Self::new();
+        list.push(rect);
+        list
+    }
+
+    pub(super) fn push_if_some(&mut self, rect: Option<DirtyRect>) {
+        if let Some(rect) = rect {
+            self.push(rect);
+        }
+    }
+
+    pub(super) fn extend_from(&mut self, other: &Self) {
+        for rect in other.iter() {
+            self.push(rect);
+        }
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = DirtyRect> + '_ {
+        self.rects[..self.len].iter().copied()
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn push(&mut self, rect: DirtyRect) {
+        if self.len < DIRTY_RECT_LIST_CAP {
+            self.rects[self.len] = rect;
+            self.len += 1;
+        } else {
+            debug_assert!(false, "dirty rect list capacity exceeded");
+            let last = DIRTY_RECT_LIST_CAP - 1;
+            self.rects[last] = self.rects[last].union(rect);
+        }
+    }
+
+    #[cfg(test)]
+    fn to_vec(self) -> Vec<DirtyRect> {
+        self.iter().collect()
+    }
+}
+
+impl Default for DirtyRectList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn subtract_rect_into(rect: DirtyRect, cut: DirtyRect, out: &mut DirtyRectList) {
     let Some(overlap) = rect.intersection(cut) else {
-        return vec![rect];
+        out.push(rect);
+        return;
     };
-    let mut out = Vec::with_capacity(4);
     if rect.y0 < overlap.y0 {
         out.push(DirtyRect {
             x0: rect.x0,
@@ -90,16 +169,17 @@ fn subtract_rect(rect: DirtyRect, cut: DirtyRect) -> Vec<DirtyRect> {
             y1: overlap.y1,
         });
     }
-    out
 }
 
-fn subtract_rects(rects: Vec<DirtyRect>, cuts: &[DirtyRect]) -> Vec<DirtyRect> {
+fn subtract_rects(rects: DirtyRectList, cuts: &DirtyRectList) -> DirtyRectList {
     let mut current = rects;
-    for cut in cuts {
-        current = current
-            .into_iter()
-            .flat_map(|rect| subtract_rect(rect, *cut))
-            .collect();
+    let mut next = DirtyRectList::new();
+    for cut in cuts.iter() {
+        next.clear();
+        for rect in current.iter() {
+            subtract_rect_into(rect, cut, &mut next);
+        }
+        std::mem::swap(&mut current, &mut next);
         if current.is_empty() {
             break;
         }
@@ -109,22 +189,25 @@ fn subtract_rects(rects: Vec<DirtyRect>, cuts: &[DirtyRect]) -> Vec<DirtyRect> {
 
 pub(super) fn build_launcher_present_plan(
     base: Option<DirtyRect>,
-    cached_overlays: &[DirtyRect],
-    direct_overlays: &[DirtyRect],
-) -> Vec<DirtyRect> {
-    let mut layers = Vec::with_capacity(usize::from(base.is_some()) + cached_overlays.len());
-    if let Some(base) = base {
-        layers.push(base);
-    }
-    layers.extend_from_slice(cached_overlays);
+    cached_overlays: &DirtyRectList,
+    direct_overlays: &DirtyRectList,
+) -> DirtyRectList {
+    let mut layers = DirtyRectList::new();
+    layers.push_if_some(base);
+    layers.extend_from(cached_overlays);
 
-    let mut plan = Vec::new();
-    for idx in 0..layers.len() {
-        let mut cuts =
-            Vec::with_capacity(layers.len().saturating_sub(idx + 1) + direct_overlays.len());
-        cuts.extend_from_slice(&layers[idx + 1..]);
-        cuts.extend_from_slice(direct_overlays);
-        plan.extend(subtract_rects(vec![layers[idx]], &cuts));
+    let mut plan = DirtyRectList::new();
+    let layer_count = layers.len;
+    for idx in 0..layer_count {
+        let mut cuts = DirtyRectList::new();
+        for later_idx in (idx + 1)..layer_count {
+            cuts.push(layers.rects[later_idx]);
+        }
+        cuts.extend_from(direct_overlays);
+        plan.extend_from(&subtract_rects(
+            DirtyRectList::from_one(layers.rects[idx]),
+            &cuts,
+        ));
     }
     plan
 }
@@ -2314,7 +2397,12 @@ mod tests {
         let cached_overlay = rect(2, 2, 7, 7);
         let direct_overlay = rect(4, 4, 9, 9);
 
-        let plan = build_launcher_present_plan(Some(base), &[cached_overlay], &[direct_overlay]);
+        let mut cached_overlays = DirtyRectList::new();
+        cached_overlays.push(cached_overlay);
+        let mut direct_overlays = DirtyRectList::new();
+        direct_overlays.push(direct_overlay);
+        let plan =
+            build_launcher_present_plan(Some(base), &cached_overlays, &direct_overlays).to_vec();
         let mut all_copies = plan.clone();
         all_copies.push(direct_overlay);
 
@@ -2326,7 +2414,10 @@ mod tests {
     fn present_plan_keeps_cached_overlay_when_base_is_clean() {
         let cached_overlay = rect(20, 30, 40, 50);
 
-        let plan = build_launcher_present_plan(None, &[cached_overlay], &[]);
+        let mut cached_overlays = DirtyRectList::new();
+        cached_overlays.push(cached_overlay);
+        let direct_overlays = DirtyRectList::new();
+        let plan = build_launcher_present_plan(None, &cached_overlays, &direct_overlays).to_vec();
 
         assert_eq!(plan, vec![cached_overlay]);
     }

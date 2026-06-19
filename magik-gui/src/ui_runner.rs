@@ -89,6 +89,7 @@ use console_scroll_loop::*;
 use controller_loop::*;
 use launcher_bench::*;
 use launcher_bridge::*;
+use launcher_frame_accounting::*;
 use launcher_loop::*;
 use raster_effects_loop::run_raster_effects_loop;
 use screensaver_loop::*;

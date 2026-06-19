@@ -947,11 +947,7 @@ pub(super) fn run_launcher_loop(
         }
         let mut copied_rows = 0u32;
         let mut cached_present_frame_us = 0u128;
-        let arcade_update_label = match arcade_list_rect.as_ref() {
-            Some(ArcadeListUpdate::Full(_)) => "full".to_string(),
-            Some(ArcadeListUpdate::Scroll { delta_y }) => format!("scroll:{delta_y}"),
-            None => "none".to_string(),
-        };
+        let arcade_update_label = ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
         let arcade_overlay_rect = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
         let cached_base_rect = if full_frame_present {
             Some(DirtyRect {
@@ -963,14 +959,14 @@ pub(super) fn run_launcher_loop(
         } else {
             this_rect
         };
-        let cached_overlays: Vec<DirtyRect> = [raw_preview_rect, effect_label_rect]
-            .into_iter()
-            .flatten()
-            .collect();
-        let direct_overlays: Vec<DirtyRect> = arcade_overlay_rect.into_iter().collect();
+        let mut cached_overlays = DirtyRectList::new();
+        cached_overlays.push_if_some(raw_preview_rect);
+        cached_overlays.push_if_some(effect_label_rect);
+        let mut direct_overlays = DirtyRectList::new();
+        direct_overlays.push_if_some(arcade_overlay_rect);
         let cached_present_rects =
             build_launcher_present_plan(cached_base_rect, &cached_overlays, &direct_overlays);
-        for rect in cached_present_rects {
+        for rect in cached_present_rects.iter() {
             let cached_copy_start = Instant::now();
             copied_rows += target.present_rect(f, disp, ui, rect);
             cached_present_frame_us += cached_copy_start.elapsed().as_micros();
