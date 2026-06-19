@@ -74,6 +74,20 @@ Acceptance fields for Arcade preview pacing:
 - `p99_work_us < 14500` for the preservation-of-fade milestone.
 - Visual captures must preserve the current fade appearance when enabled.
 
+After the preview fade optimization work, run the final release gate with:
+
+```bash
+scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
+```
+
+The gate runs 60s held-scroll fade and 60s turbo-hold fade, then fails if either
+trace has true work misses, non-vsync pacing sources, non-zero max miss streak,
+or p99 work at/above the configured threshold. Its parser self-test is:
+
+```bash
+scripts/gate-preview-60fps.sh --self-test
+```
+
 These scripts write `/media/fat/mister-magik/launcher.env`, send
 `mister_magik_restart_launcher`, and lock the real launcher on Arcade with:
 
