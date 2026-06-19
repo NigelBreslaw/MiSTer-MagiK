@@ -121,12 +121,10 @@ Block a public beta release if any of these fail:
 
 ## Current Evidence
 
-As of 2026-06-17, the host gate passes, and the hardware gate passes every
-checked path except restart after crash-policy smoke. The telemetry-expanded
-fast run is recorded under `build/device-release/20260617T153044Z/`; that build
-is not public-beta ready until crash restart returns the launcher to
-`LauncherActive` without raw reboot recovery. Tracked notes from that run live in
-`history/2026-6-17-telemetry-device-gate.md`.
+As of 2026-06-18, the host gate passes, and the fast hardware acceptance run
+recorded under `build/device-release/20260618T073924Z/` passes. That run
+records `LauncherCrashed`, returns to `LauncherActive` after crash-policy smoke
+without raw reboot recovery, and reports an overall `PASS` result.
 
 ## Public Beta Limits
 
