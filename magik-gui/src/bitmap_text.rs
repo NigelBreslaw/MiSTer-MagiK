@@ -17,7 +17,7 @@ struct ConsoleGradientGlyph {
     width: usize,
     height: usize,
     advance: i32,
-    pixels: Vec<Pixel>,
+    row_colors: Vec<Pixel>,
     mask: Vec<bool>,
 }
 
@@ -131,13 +131,12 @@ impl ConsoleFont {
             let height = glyph.height;
             let advance = glyph.advance;
             let data = glyph.data.clone();
-            let mut pixels = Vec::with_capacity(data.len());
+            let mut row_colors = Vec::with_capacity(height);
             let mut mask = Vec::with_capacity(data.len());
             for gy in 0..height {
-                let color = gradient.color_at(gy, height);
+                row_colors.push(gradient.color_at(gy, height));
                 for gx in 0..width {
                     let alpha = data[gy * width + gx];
-                    pixels.push(color);
                     mask.push(alpha >= 128);
                 }
             }
@@ -149,7 +148,7 @@ impl ConsoleFont {
                     width,
                     height,
                     advance,
-                    pixels,
+                    row_colors,
                     mask,
                 },
             );
@@ -227,7 +226,7 @@ impl ConsoleFont {
                     }
                     let src = gy * glyph.width + gx;
                     if glyph.mask[src] {
-                        dst[dy as usize * stride + dx as usize] = glyph.pixels[src];
+                        dst[dy as usize * stride + dx as usize] = glyph.row_colors[gy];
                     }
                 }
             }
