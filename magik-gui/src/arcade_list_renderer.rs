@@ -21,6 +21,7 @@ pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
 pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
 const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
+const ARCADE_LIST_LAYER_COPY_BANDS: [(usize, usize); 1] = [(0, ARCADE_LIST_H)];
 
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -301,7 +302,9 @@ impl ArcadeListRenderer {
         disp: &mut Display,
         ui: &UiDisplay,
     ) {
-        self.copy_viewport_band_to_target(target, disp, ui, 0, ARCADE_LIST_H);
+        for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
+            self.copy_viewport_band_to_target(target, disp, ui, viewport_y, h);
+        }
         self.copy_selection_frame_to_target(target, disp, ui);
     }
 
@@ -684,6 +687,32 @@ mod tests {
         let max_luma = title_pixels.iter().copied().map(rgb565_luma).max().unwrap();
 
         assert!(max_luma > min_luma);
+    }
+
+    #[test]
+    fn arcade_layer_copy_bands_cover_full_surface_without_fade_split() {
+        assert_eq!(ARCADE_LIST_LAYER_COPY_BANDS, [(0, ARCADE_LIST_H)]);
+    }
+
+    #[test]
+    fn row_cache_prune_keeps_recent_rows() {
+        let mut cache = HashMap::new();
+        for idx in 0..ARCADE_ROW_CACHE_MAX {
+            cache.insert(
+                idx,
+                CachedArcadeRow {
+                    title: format!("Game {idx}"),
+                    pixels: Vec::new(),
+                    last_used: idx as u64,
+                },
+            );
+        }
+
+        prune_arcade_row_cache(&mut cache);
+
+        assert_eq!(cache.len(), ARCADE_ROW_CACHE_PRUNE_TO);
+        assert!(cache.values().all(|row| row.last_used >= 32));
+        assert!(cache.contains_key(&(ARCADE_ROW_CACHE_MAX - 1)));
     }
 
     fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
