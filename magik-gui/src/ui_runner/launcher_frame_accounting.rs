@@ -13,6 +13,7 @@ pub(super) struct LauncherFrameAccounting {
     rows: u128,
     preview_scroll_trace: Option<std::fs::File>,
     preview_scroll_trace_duration: Option<Duration>,
+    last_preview_trace_loop_start: Option<Instant>,
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     last_status_write: Instant,
     first_copy_logged: bool,
@@ -47,6 +48,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) cached_present_us: u128,
     pub(super) overlay_present_us: u128,
     pub(super) present_probe_us: u128,
+    pub(super) vsync_source: Option<VsyncPaceSource>,
+    pub(super) vsync_period_us: u64,
+    pub(super) vsync_miss_streak: u32,
     pub(super) arcade_update_label: String,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
@@ -67,6 +71,7 @@ impl LauncherFrameAccounting {
             rows: 0,
             preview_scroll_trace: open_preview_scroll_trace(),
             preview_scroll_trace_duration: preview_scroll_trace_duration_from_env(),
+            last_preview_trace_loop_start: None,
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             first_copy_logged: false,
@@ -156,12 +161,23 @@ impl LauncherFrameAccounting {
             return;
         }
         if let Some(file) = self.preview_scroll_trace.as_mut() {
+            let loop_delta_us = self
+                .last_preview_trace_loop_start
+                .map(|previous| {
+                    frame
+                        .loop_start
+                        .saturating_duration_since(previous)
+                        .as_micros()
+                })
+                .unwrap_or(0);
+            self.last_preview_trace_loop_start = Some(frame.loop_start);
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frame.frames,
                     frame.loop_start.duration_since(frame.run_start).as_micros(),
+                    loop_delta_us,
                     frame.selected,
                     frame.visual_index,
                     frame.preview_cache_state,
@@ -177,6 +193,12 @@ impl LauncherFrameAccounting {
                     frame.cached_present_us,
                     frame.overlay_present_us,
                     frame.present_probe_us,
+                    frame
+                        .vsync_source
+                        .map(VsyncPaceSource::label)
+                        .unwrap_or("none"),
+                    frame.vsync_period_us,
+                    frame.vsync_miss_streak,
                     (frame.frame_t4 - frame.loop_start).as_micros()
                 ),
             );
@@ -426,7 +448,7 @@ fn open_preview_scroll_trace() -> Option<std::fs::File> {
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

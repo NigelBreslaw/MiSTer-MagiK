@@ -926,6 +926,13 @@ pub(super) fn run_launcher_loop(
             (None, Instant::now())
         };
         let frame_t3 = pace.1;
+        let vsync_source = pace.0.as_ref().map(|pace| pace.source);
+        let vsync_period_us = pace
+            .0
+            .as_ref()
+            .map(|pace| pace.period_us)
+            .unwrap_or_else(|| pacer.period_us());
+        let vsync_miss_streak = pace.0.as_ref().map(|pace| pace.miss_streak).unwrap_or(0);
         if !first_vsync_logged
             && pace
                 .0
@@ -999,6 +1006,9 @@ pub(super) fn run_launcher_loop(
                 cached_present_us: cached_present_frame_us,
                 overlay_present_us: overlay_present_frame_us,
                 present_probe_us: present_probe_frame_us,
+                vsync_source,
+                vsync_period_us,
+                vsync_miss_streak,
                 arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,

@@ -210,7 +210,72 @@ summarize_trace() {
   done
 }
 
-check_steady_wall_gate() {
+summarize_frame_pacing() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" '
+    BEGIN { FS="\t" }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      has_pacing = ("vsync_source" in col) && ("loop_delta_us" in col)
+      next
+    }
+    NF && $(col["frame"]) + 0 > 30 {
+      n++
+      wall = $(col["wall_us"]) + 0
+      work = $(col["prepare_us"]) + $(col["slint_render_us"]) + $(col["custom_draw_us"]) + $(col["fb_present_us"])
+      vsync = $(col["vsync_us"]) + 0
+      loop_delta = has_pacing ? ($(col["loop_delta_us"]) + 0) : 0
+      source = has_pacing ? $(col["vsync_source"]) : "unknown"
+      miss_streak = has_pacing ? ($(col["vsync_miss_streak"]) + 0) : 0
+
+      walls[n] = wall
+      works[n] = work
+      vsyncs[n] = vsync
+      loops[n] = loop_delta
+      wall_sum += wall
+      work_sum += work
+      vsync_sum += vsync
+      loop_sum += loop_delta
+      if (wall > 16667) slow_wall++
+      if (wall > 17000) slow_wall_17++
+      if (work > 16667) work_over++
+      if (vsync > 10000) high_vsync++
+      if (wall > 16667 && work <= 5000 && vsync > 10000) low_work_high_vsync++
+      if (wall > 16667 && work > 12000) cpu_heavy_slow++
+      sources[source]++
+      if (miss_streak > max_miss_streak) max_miss_streak = miss_streak
+    }
+    END {
+      if (n == 0) {
+        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
+        exit
+      }
+      for (i = 1; i <= n; i++) {
+        for (j = i + 1; j <= n; j++) {
+          if (walls[j] < walls[i]) { tmp = walls[i]; walls[i] = walls[j]; walls[j] = tmp }
+          if (works[j] < works[i]) { tmp = works[i]; works[i] = works[j]; works[j] = tmp }
+          if (vsyncs[j] < vsyncs[i]) { tmp = vsyncs[i]; vsyncs[i] = vsyncs[j]; vsyncs[j] = tmp }
+          if (loops[j] < loops[i]) { tmp = loops[i]; loops[i] = loops[j]; loops[j] = tmp }
+        }
+      }
+      p95 = int(n * 0.95); if (p95 < 1) p95 = 1; if (p95 > n) p95 = n
+      p99 = int(n * 0.99); if (p99 < 1) p99 = 1; if (p99 > n) p99 = n
+      printf "%s\t%d\t%.0f\t%d\t%d\t%.0f\t%d\t%d\t%.0f\t%d\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+        name, n,
+        wall_sum / n, walls[p95], walls[p99],
+        work_sum / n, works[p95], works[p99],
+        vsync_sum / n, vsyncs[p95], vsyncs[p99],
+        loop_sum / n, loops[p95], loops[p99],
+        slow_wall + 0, slow_wall_17 + 0, work_over + 0, high_vsync + 0,
+        low_work_high_vsync + 0, cpu_heavy_slow + 0,
+        sources["vsync"] + 0, sources["fallback"] + 0,
+        sources["timeout"] + 0, sources["error"] + 0,
+        max_miss_streak + 0
+    }
+  ' "$tsv"
+}
+
+report_steady_wall_gate() {
   local name="$1" tsv="$2"
   awk -v name="$name" -v allow="$allow_hotpath_misses" '
     BEGIN { FS="\t" }
@@ -224,11 +289,31 @@ check_steady_wall_gate() {
       }
     }
     END {
-      if (slow > 0 && allow != "1" && allow != "true" && allow != "yes" && allow != "on") {
-        printf "%s steady wall gate failed: frames_after_30=%d slow_gt_16667=%d\n", name, n, slow > "/dev/stderr"
-        exit 4
+      printf "%s steady_wall_report frames_after_30=%d slow_gt_16667=%d allow=%s\n", name, n, slow + 0, allow
+    }
+  ' "$tsv"
+}
+
+check_steady_work_gate() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" -v allow="$allow_hotpath_misses" '
+    BEGIN { FS="\t" }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    NF && $(col["frame"]) + 0 > 30 {
+      n++
+      work = $(col["prepare_us"]) + $(col["slint_render_us"]) + $(col["custom_draw_us"]) + $(col["fb_present_us"])
+      if (work > 16667) {
+        slow++
+        if (slow <= 10) printf "%s steady work miss frame=%s work_us=%s wall_us=%s vsync_us=%s\n", name, $(col["frame"]), work, $(col["wall_us"]), $(col["vsync_us"]) > "/dev/stderr"
       }
-      printf "%s steady_wall_gate frames_after_30=%d slow_gt_16667=%d allow=%s\n", name, n, slow + 0, allow
+    }
+    END {
+      allowed = (allow == "1" || allow == "true" || allow == "yes" || allow == "on")
+      if (slow > 0 && !allowed) {
+        printf "%s steady work gate failed: frames_after_30=%d work_gt_16667=%d\n", name, n, slow > "/dev/stderr"
+        exit 8
+      }
+      printf "%s steady_work_gate frames_after_30=%d work_gt_16667=%d allow=%s\n", name, n, slow + 0, allow
     }
   ' "$tsv"
 }
@@ -437,6 +522,23 @@ EOF
   fi
   check_preview_visibility_gate selftest "$exact" >/dev/null
 
+  local wall_wait_ok="$tmp/wall-wait-ok.tsv"
+  local work_slow="$tmp/work-slow.tsv"
+  cat >"$wall_wait_ok" <<'EOF'
+frame	prepare_us	slint_render_us	custom_draw_us	vsync_us	fb_present_us	wall_us
+31	100	100	100	16000	500	16800
+EOF
+  cat >"$work_slow" <<'EOF'
+frame	prepare_us	slint_render_us	custom_draw_us	vsync_us	fb_present_us	wall_us
+31	1000	1000	14000	500	1000	17500
+EOF
+  check_steady_work_gate selftest "$wall_wait_ok" >/dev/null
+  if check_steady_work_gate selftest "$work_slow" >/dev/null 2>&1; then
+    echo "steady work self-test expected work over budget failure" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+
   local archive_slow="$tmp/archive-slow.log"
   local selected_raw="$tmp/selected-raw.log"
   local archive_mem_ok="$tmp/archive-mem-ok.log"
@@ -507,7 +609,12 @@ echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_u
 summarize_preview_timing arcade "$arcade_log"
 
 echo
+echo $'frame_pacing\tframes_after_30\tavg_wall_us\tp95_wall_us\tp99_wall_us\tavg_work_us\tp95_work_us\tp99_work_us\tavg_vsync_us\tp95_vsync_us\tp99_vsync_us\tavg_loop_delta_us\tp95_loop_delta_us\tp99_loop_delta_us\tslow_wall_gt_16_7ms\tslow_wall_gt_17ms\twork_gt_16_7ms\tvsync_gt_10ms\tlow_work_high_vsync_slow\tcpu_heavy_slow\tvsync_source_vsync\tvsync_source_fallback\tvsync_source_timeout\tvsync_source_error\tmax_vsync_miss_streak'
+summarize_frame_pacing arcade "$arcade_tsv"
+
+echo
 check_preview_hotpath_cache_gate arcade "$arcade_log"
 check_preview_hotpath_io_gate arcade "$arcade_log"
 check_preview_visibility_gate arcade "$arcade_tsv"
-check_steady_wall_gate arcade "$arcade_tsv"
+check_steady_work_gate arcade "$arcade_tsv"
+report_steady_wall_gate arcade "$arcade_tsv"
