@@ -4567,17 +4567,25 @@ fn sh(s: &str) -> String {
 }
 
 fn option_value(args: &[String], name: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == name)
-        .and_then(|idx| args.get(idx + 1))
-        .cloned()
+    args.windows(2)
+        .find(|pair| pair[0] == name && !looks_like_option_token(&pair[1]))
+        .map(|pair| pair[1].clone())
 }
 
 fn option_values(args: &[String], name: &str) -> Vec<String> {
     args.windows(2)
         .filter(|pair| pair[0] == name)
+        .filter(|pair| !looks_like_option_token(&pair[1]))
         .map(|pair| pair[1].clone())
         .collect()
+}
+
+fn looks_like_option_token(value: &str) -> bool {
+    value.starts_with("--")
+        || value
+            .strip_prefix('-')
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
 }
 
 fn timestamp() -> String {
@@ -5124,6 +5132,38 @@ H: Handlers=event3 js0"#
             option_values(&args, "--item"),
             vec!["first".to_string(), "second".to_string()]
         );
+    }
+
+    #[test]
+    fn option_values_do_not_treat_following_flags_as_values() {
+        let args = vec![
+            "--software-list".to_string(),
+            "nes.xml".to_string(),
+            "--software-list".to_string(),
+            "--software-dir".to_string(),
+            "lists".to_string(),
+            "--offset".to_string(),
+            "-1".to_string(),
+            "--out".to_string(),
+            "--dry-run".to_string(),
+            "--out".to_string(),
+            "build/mame.sqlite3".to_string(),
+        ];
+
+        assert_eq!(
+            option_value(&args, "--software-list"),
+            Some("nes.xml".to_string())
+        );
+        assert_eq!(
+            option_values(&args, "--software-list"),
+            vec!["nes.xml".to_string()]
+        );
+        assert_eq!(option_value(&args, "--offset"), Some("-1".to_string()));
+        assert_eq!(
+            option_value(&args, "--out"),
+            Some("build/mame.sqlite3".to_string())
+        );
+        assert_eq!(option_value(&args, "--missing"), None);
     }
 
     #[test]

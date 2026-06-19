@@ -1152,6 +1152,46 @@ mod tests {
         )
     }
 
+    fn multi_system_catalog() -> ArcadeCatalog {
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            vec![
+                ArcadeGameEntry {
+                    title: "1942".into(),
+                    mra_path: "/media/fat/_Arcade/1942.mra".into(),
+                    image_path: "/media/fat/_Arcade/media/screenshot/1942.png".into(),
+                    has_image: true,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "Agony".into(),
+                    mra_path: "magik-plan:amiga-agony".into(),
+                    image_path: "".into(),
+                    has_image: false,
+                    system_id: "amiga".into(),
+                },
+            ],
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
+                    count: 1,
+                },
+            ],
+        )
+    }
+
+    fn pad_with(mut set: impl FnMut(&mut PadState)) -> PadState {
+        let mut pad = PadState::default();
+        set(&mut pad);
+        pad
+    }
+
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         let path =
             std::env::temp_dir().join(format!("mister-magik-{label}-{}", std::process::id()));
@@ -1169,13 +1209,177 @@ mod tests {
     }
 
     #[test]
+    fn launcher_ignores_home_launch_when_catalog_has_no_systems() {
+        let catalog = ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            vec![],
+            vec![],
+        );
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.selected, 0);
+        assert_eq!(nav.scroll_x, 0);
+    }
+
+    #[test]
+    fn launcher_home_selection_clamps_when_catalog_shrinks() {
+        let catalog = image_less_amiga_catalog();
+        let mut nav = LauncherNav::new();
+        nav.selected = 8;
+        nav.scroll_x = 9999;
+
+        assert!(nav
+            .handle_input(&PadState::default(), Instant::now(), &catalog)
+            .is_none());
+
+        assert_eq!(nav.selected, 0);
+        assert_eq!(nav.scroll_x, 0);
+    }
+
+    #[test]
+    fn launcher_settings_can_open_controller_and_return_home() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+
+        let up = pad_with(|pad| pad.dpad_up = true);
+        assert!(nav.handle_input(&up, t0, &catalog).is_none());
+        assert!(nav.settings_focused);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(16),
+                &catalog,
+            )
+            .is_none());
+
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav
+            .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Settings);
+        assert_eq!(nav.settings_selected, 0);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(48),
+                &catalog,
+            )
+            .is_none());
+
+        let down = pad_with(|pad| pad.dpad_down = true);
+        assert!(nav
+            .handle_input(&down, t0 + Duration::from_millis(64), &catalog)
+            .is_none());
+        assert_eq!(nav.settings_selected, 1);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(80),
+                &catalog,
+            )
+            .is_none());
+
+        assert!(nav
+            .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Controller);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(112),
+                &catalog,
+            )
+            .is_none());
+
+        let back = pad_with(|pad| pad.btn_b = true);
+        assert!(nav
+            .handle_input(&back, t0 + Duration::from_millis(128), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn launcher_confirm_defaults_cancel_destructive_actions_until_confirmed() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 2;
+
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::ResetDatabase));
+        assert_eq!(nav.confirm_selected, 0);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(16),
+                &catalog,
+            )
+            .is_none());
+
+        let right = pad_with(|pad| pad.dpad_right = true);
+        assert!(nav
+            .handle_input(&right, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.confirm_selected, 1);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(48),
+                &catalog,
+            )
+            .is_none());
+
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .expect("confirmed reset should emit event");
+        assert_eq!(event.action, LauncherAction::ResetDatabase);
+        assert_eq!(event.path, None);
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn launcher_exit_confirmation_defaults_to_cancel() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 0;
+
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::ExitToMister));
+        assert_eq!(nav.confirm_selected, 1);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(16),
+                &catalog,
+            )
+            .is_none());
+
+        assert!(nav
+            .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
     fn launcher_launches_image_less_system_games() {
         let catalog = image_less_amiga_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
 
-        let mut press_a = PadState::default();
-        press_a.btn_a = true;
+        let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Arcade);
 
