@@ -187,16 +187,16 @@ impl BlendVelocityBench {
         let mut rows = 0u32;
         let mut px = 0u32;
 
-        let fade_blend_start = Instant::now();
         let fade_blend_us = if self.variant.uses_viewport_fade()
             && self.variant != BlendVelocityVariant::CopyOnly
         {
-            self.prepare_fade_bands()
+            let fade_blend_start = Instant::now();
+            let fade_blend_us = self.prepare_fade_bands();
+            let measured_fade_blend_us = fade_blend_start.elapsed().as_micros() as u64;
+            fade_blend_us.max(measured_fade_blend_us)
         } else {
             0
         };
-        let measured_fade_blend_us = fade_blend_start.elapsed().as_micros() as u64;
-        let fade_blend_us = fade_blend_us.max(measured_fade_blend_us);
 
         let fade_copy_start = Instant::now();
         let mut fade_copy_us = 0u64;
@@ -293,11 +293,7 @@ impl BlendVelocityBench {
     }
 
     fn copy_real_text_row_to_surface(&mut self, idx: usize, src_y: usize, viewport_y: usize) {
-        let needs_render = self
-            .row_cache
-            .get(&idx)
-            .is_none_or(|cached| cached.title != blend_velocity_title(idx));
-        if needs_render {
+        if !self.row_cache.contains_key(&idx) {
             if self.row_cache.len() > 128 {
                 self.row_cache.clear();
             }
