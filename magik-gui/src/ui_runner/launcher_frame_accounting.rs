@@ -51,9 +51,36 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
-    pub(super) arcade_update_label: String,
+    pub(super) arcade_update_label: ArcadeUpdateTrace,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ArcadeUpdateTrace {
+    None,
+    Full,
+    Scroll { delta_y: isize },
+}
+
+impl ArcadeUpdateTrace {
+    pub(super) fn from_update(update: Option<&ArcadeListUpdate>) -> Self {
+        match update {
+            Some(ArcadeListUpdate::Full(_)) => Self::Full,
+            Some(ArcadeListUpdate::Scroll { delta_y }) => Self::Scroll { delta_y: *delta_y },
+            None => Self::None,
+        }
+    }
+}
+
+impl std::fmt::Display for ArcadeUpdateTrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Full => f.write_str("full"),
+            Self::Scroll { delta_y } => write!(f, "scroll:{delta_y}"),
+        }
+    }
 }
 
 impl LauncherFrameAccounting {
