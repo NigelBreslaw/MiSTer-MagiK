@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
-use crate::bitmap_text::ConsoleFont;
+use crate::bitmap_text::{ConsoleFont, TextGradient};
 use crate::fb::{pixel_to_rgb565, Display, Pixel};
 use crate::ui_display::UiDisplay;
 use crate::ui_runner::ui_frame_target::{DirtyRect, UiFrameTarget};
@@ -17,6 +17,8 @@ pub(crate) const ARCADE_LIST_FADE_H: usize = 48;
 pub(crate) const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
 pub(crate) const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x001a1424);
 pub(crate) const ARCADE_LIST_FADE_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
+pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
+    TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
 
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -24,8 +26,6 @@ pub(crate) struct ArcadeListRenderer {
     row_cache: HashMap<usize, CachedArcadeRow>,
     surface: Vec<Rgb565Pixel>,
     band_scratch: Vec<Pixel>,
-    fade_scratch: Vec<Rgb565Pixel>,
-    fade_constants: Vec<FadeBlendConstants>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
     surface_y: usize,
@@ -64,8 +64,6 @@ impl ArcadeListRenderer {
             row_cache: HashMap::new(),
             surface: vec![ARCADE_LIST_FADE_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
-            fade_scratch: Vec::new(),
-            fade_constants: fade_blend_constants(ARCADE_LIST_FADE_H, ARCADE_LIST_FADE_COLOR_565),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             surface_y: 0,
@@ -283,9 +281,7 @@ impl ArcadeListRenderer {
         disp: &mut Display,
         ui: &UiDisplay,
     ) {
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        self.copy_fade_to_target(target, disp, ui);
-        self.copy_viewport_band_to_target(target, disp, ui, fade_h, ARCADE_LIST_H - fade_h * 2);
+        self.copy_viewport_band_to_target(target, disp, ui, 0, ARCADE_LIST_H);
         self.copy_selection_frame_to_target(target, disp, ui);
     }
 
@@ -317,58 +313,6 @@ impl ArcadeListRenderer {
             );
             copied += copy_h;
         }
-    }
-
-    fn surface_row(&self, viewport_y: usize) -> &[Rgb565Pixel] {
-        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
-        let src = src_y * ARCADE_LIST_W;
-        &self.surface[src..src + ARCADE_LIST_W]
-    }
-
-    fn copy_fade_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut Display,
-        ui: &UiDisplay,
-    ) {
-        let fade_h = ARCADE_LIST_FADE_H.min(ARCADE_LIST_H / 2);
-        let mut band = std::mem::take(&mut self.fade_scratch);
-        band.resize(ARCADE_LIST_W * fade_h, Rgb565Pixel(0));
-        for row in 0..fade_h {
-            blend_row_towards(
-                self.surface_row(row),
-                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                self.fade_constants[row],
-            );
-        }
-        target.copy_rect_from_565(
-            disp,
-            ui,
-            ARCADE_LIST_X,
-            ARCADE_LIST_Y,
-            ARCADE_LIST_W,
-            fade_h,
-            &band,
-        );
-
-        for row in 0..fade_h {
-            let viewport_y = ARCADE_LIST_H - fade_h + row;
-            blend_row_towards(
-                self.surface_row(viewport_y),
-                &mut band[row * ARCADE_LIST_W..(row + 1) * ARCADE_LIST_W],
-                self.fade_constants[fade_h - 1 - row],
-            );
-        }
-        target.copy_rect_from_565(
-            disp,
-            ui,
-            ARCADE_LIST_X,
-            ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
-            ARCADE_LIST_W,
-            fade_h,
-            &band,
-        );
-        self.fade_scratch = band;
     }
 
     fn copy_selection_frame_to_target(
@@ -428,7 +372,7 @@ impl ArcadeListRenderer {
         let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, idx);
         let title = clipped_title(title, 30);
-        self.title_font.draw_text_clipped(
+        self.title_font.draw_text_clipped_gradient(
             &mut row,
             ARCADE_LIST_W,
             ARCADE_LIST_W,
@@ -437,7 +381,7 @@ impl ArcadeListRenderer {
             12,
             30,
             &title,
-            Pixel(0x00e8e0f0),
+            ARCADE_TITLE_GRADIENT,
         );
         row.into_iter().map(pixel_to_rgb565).collect()
     }
@@ -698,6 +642,25 @@ mod tests {
         assert_eq!(renderer.surface, before);
     }
 
+    #[test]
+    fn arcade_row_title_uses_gradient_pixels() {
+        let mut renderer = ArcadeListRenderer::new();
+        let row = renderer.render_row("MAGIK", 0);
+        let bg = pixel_to_rgb565(Pixel(0x001a1424));
+        let border = pixel_to_rgb565(Pixel(0x00251c34));
+        let title_pixels = row
+            .iter()
+            .copied()
+            .filter(|px| *px != bg && *px != border)
+            .collect::<Vec<_>>();
+
+        assert!(!title_pixels.is_empty());
+        let min_luma = title_pixels.iter().copied().map(rgb565_luma).min().unwrap();
+        let max_luma = title_pixels.iter().copied().map(rgb565_luma).max().unwrap();
+
+        assert!(max_luma > min_luma);
+    }
+
     fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
         ArcadeGameEntry {
             title: title.into(),
@@ -706,5 +669,13 @@ mod tests {
             has_image: false,
             system_id: system_id.into(),
         }
+    }
+
+    fn rgb565_luma(pixel: Rgb565Pixel) -> u32 {
+        let value = pixel.0 as u32;
+        let r = ((value >> 11) & 0x1f) << 3;
+        let g = ((value >> 5) & 0x3f) << 2;
+        let b = (value & 0x1f) << 3;
+        r * 30 + g * 59 + b * 11
     }
 }

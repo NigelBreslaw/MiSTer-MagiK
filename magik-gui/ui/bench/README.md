@@ -79,6 +79,7 @@ real renderer, not pure black.
 ```bash
 scripts/profile-blend-velocity.sh 15 BLENDVEL baseline --deploy-device
 scripts/profile-blend-velocity.sh 15 BLENDVEL-TEXT real-text --skip-build
+scripts/profile-blend-velocity.sh 15 BLENDVEL-GRAD gradient-text --skip-build
 scripts/profile-blend-velocity.sh 15 BLENDVEL-COPY copy-only --skip-build
 scripts/profile-blend-velocity.sh 15 BLENDVEL-NOFADE no-fade --skip-build
 ```
@@ -88,13 +89,15 @@ Variants:
 - `baseline`: blend the top/bottom fades, copy fades, copy body, copy selection.
 - `real-text`: same fade/copy path, but the moving surface uses cached title rows
   rendered with the arcade list font/background path.
+- `gradient-text`: cached gradient title rows with the production full-list copy
+  path and no viewport fade.
 - `copy-only`: copy the fade rows without blending, isolating framebuffer writes.
 - `no-fade`: copy the moving body plus selection frame only.
 
 Useful env:
 
 - `MISTER_BLEND_BENCH_TRACE=/tmp/blend.tsv` writes per-frame split timings.
-- `MISTER_BLEND_BENCH_VARIANT=baseline|real-text|copy-only|no-fade` chooses the variant.
+- `MISTER_BLEND_BENCH_VARIANT=baseline|real-text|gradient-text|copy-only|no-fade` chooses the variant.
 - `MISTER_BLEND_BENCH_PX_PER_FRAME=6` changes synthetic scroll velocity.
 - `MISTER_BLEND_BENCH_FADE_H=48` changes the benchmark fade-band height; this is
   for measuring design tradeoffs and does not change the production arcade fade.
