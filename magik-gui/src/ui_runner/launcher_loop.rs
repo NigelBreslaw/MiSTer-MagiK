@@ -268,6 +268,7 @@ pub(super) fn run_launcher_loop(
     } else {
         start
     };
+    let preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
@@ -277,7 +278,9 @@ pub(super) fn run_launcher_loop(
     let mut last_route_reassert_frame = 0u64;
     let mut last_route_reassert_ok = false;
     let mut last_route_reassert_error = String::new();
-    while secs == 0 || run_start.elapsed().as_secs() < secs {
+    while (secs == 0 || run_start.elapsed().as_secs() < secs)
+        && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
+    {
         let loop_start = Instant::now();
         let launching = launcher::launch_in_progress() || !loading_title.is_empty();
         let setup_active = setup.is_active();
@@ -1044,6 +1047,20 @@ pub(super) fn run_launcher_loop(
     if let Err(e) = cpu_profile::finish(cpu) {
         eprintln!("{e}");
     }
+}
+
+fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instant> {
+    if !matches!(
+        std::env::var("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE").as_deref(),
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+    ) {
+        return None;
+    }
+    let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    (secs > 0).then(|| run_start + Duration::from_secs(secs))
 }
 
 #[derive(Debug)]

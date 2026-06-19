@@ -10,7 +10,7 @@ REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--self-test] [--fb-format 565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--fb-format 565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -19,6 +19,9 @@ Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 --fb-format is kept for old command lines, but UI profiling supports only 565.
 --transition selects raw-preview screenshot transitions. Default is fade; `cut`
 disables animation; `mega` cycles all effects.
+--cpu-profile builds/deploys the profiling binary, runs the same supervised
+Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
+non-empty CPU SVG artifact.
 --visual-captures captures fixed Arcade indices from the real launcher screen.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for Arcade
@@ -41,12 +44,15 @@ transition_segment_secs=""
 transition_ms=""
 visual_captures="4"
 allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
+cpu_profile="0"
+cpu_profile_remote_svg=""
 positionals=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
+    --cpu-profile) cpu_profile="1"; shift ;;
     --list-only) echo "--list-only was removed; preview-scroll benchmarks require visible screenshots" >&2; exit 2 ;;
     --self-test) self_test="1"; shift ;;
     --fb-format) fb_format="${2:-}"; shift 2 ;;
@@ -108,6 +114,14 @@ case "$deploy" in
   skip) : ;;
 esac
 
+if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
+  profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+  echo "==> Build profiling binary for supervised Arcade CPU profile"
+  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher
+  echo "==> Deploy profiling binary for supervised Arcade CPU profile"
+  "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
+fi
+
 write_launcher_env() {
   local scenario_value="$1"
   local trace_path="$2"
@@ -130,6 +144,11 @@ write_launcher_env() {
     if [[ -n "$transition_segment_secs" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_SEGMENT_SECS=%q\n' "$transition_segment_secs"; fi
     if [[ -n "$transition_ms" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_MS=%q\n' "$transition_ms"; fi
     if [[ -n "$selected_index" ]]; then printf 'export MISTER_ARCADE_SELECTED_INDEX=%q\n' "$selected_index"; fi
+    if [[ "$cpu_profile" == "1" ]]; then
+      printf 'export MISTER_PPROF=1\n'
+      printf 'export MISTER_PPROF_OUT=%q\n' "$cpu_profile_remote_svg"
+      printf 'export MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE=1\n'
+    fi
   } >"$env_file"
 }
 
@@ -144,8 +163,13 @@ run_case() {
   local remote_tsv="/tmp/${label}-${name}.tsv"
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
+  local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
+  cpu_profile_remote_svg="/tmp/${label}-${name}-cpu.svg"
 
-  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=${transition:-fade} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none}"
+  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=${transition:-fade} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none} cpu_profile=$cpu_profile"
+  if [[ "$cpu_profile" == "1" ]]; then
+    "$MISTER" run "rm -f '$cpu_profile_remote_svg'" >/dev/null
+  fi
   write_launcher_env "$remote_scenario" "$remote_tsv"
   restart_supervised_launcher "$remote_tsv"
   sleep $((secs + 7))
@@ -157,6 +181,17 @@ run_case() {
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
   echo "wrote $local_tsv"
   echo "wrote $local_log"
+  if [[ "$cpu_profile" == "1" ]]; then
+    if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
+      echo "$name CPU profile failed or produced an empty SVG; see $local_log" >&2
+      exit 9
+    fi
+    if ! grep -q 'cpu_profile:' "$local_log"; then
+      echo "$name CPU profile log does not contain cpu_profile output; see $local_log" >&2
+      exit 9
+    fi
+    echo "wrote $local_cpu_svg"
+  fi
 }
 
 capture_visuals() {

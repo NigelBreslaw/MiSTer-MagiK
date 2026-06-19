@@ -46,6 +46,34 @@ scripts/profile-preview-scroll.sh LABEL
 scripts/profile-preview-transition-mega.sh LABEL --deploy-device
 ```
 
+For the "perfect 60fps Arcade preview" work, each single-commit PR must record
+before/after device evidence with the same command set. Use labels that include
+the PR slice and BEFORE/AFTER state:
+
+```bash
+scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --transition fade --visual-captures 0
+scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --transition fade --visual-captures 0
+scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CUT-VEL --skip-build --transition cut --visual-captures 0
+scripts/profile-preview-transition-mega.sh LABEL-MEGA --skip-build --segment-secs 5 --transition-ms 320
+scripts/profile-blend-velocity.sh 30 LABEL-BLEND-BASE baseline --skip-build
+scripts/profile-blend-velocity.sh 30 LABEL-BLEND-COPY copy-only --skip-build
+scripts/profile-blend-velocity.sh 30 LABEL-BLEND-NOFADE no-fade --skip-build
+scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CPU-FADE-VEL --cpu-profile --transition fade --visual-captures 0
+```
+
+The CPU profile command builds/deploys the profiling binary, runs the real
+Main-supervised Arcade screen with `MISTER_PPROF=1`, exits after the trace
+window so the profiler can flush, and pulls
+`build/preview-scroll-profiles/LABEL-CPU-FADE-VEL-arcade-cpu.svg`.
+
+Acceptance fields for Arcade preview pacing:
+
+- `work_gt_16_7ms=0` after frame 30.
+- `vsync_source_fallback=0`, `vsync_source_timeout=0`,
+  `vsync_source_error=0`, and `max_vsync_miss_streak=0`.
+- `p99_work_us < 14500` for the preservation-of-fade milestone.
+- Visual captures must preserve the current fade appearance when enabled.
+
 These scripts write `/media/fat/mister-magik/launcher.env`, send
 `mister_magik_restart_launcher`, and lock the real launcher on Arcade with:
 
