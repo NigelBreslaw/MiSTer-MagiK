@@ -9,6 +9,9 @@ use crate::launch_profiles::{
     PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
 };
 use crate::preview_worker;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader as XmlReader;
+use quick_xml::XmlVersion;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -593,8 +596,7 @@ pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
         return Err(format!("{} is empty", path.display()));
     }
 
-    let conn = open_sqlite_read_only(&path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
         .prepare(&query)
@@ -645,8 +647,7 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
 
 pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunchPlan>, String> {
     let path = default_sqlite_path();
-    let conn = open_sqlite_read_only(&path)
-        .map_err(|e| format!("open library db: {e}"))?;
+    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let mut stmt = conn
         .prepare(
@@ -717,8 +718,7 @@ fn load_arcade_catalog_from_sqlite_at(
     let root = root.as_ref().to_path_buf();
     let t = Instant::now();
     let open_t = Instant::now();
-    let conn = open_sqlite_read_only(path)
-        .map_err(|e| format!("open library db: {e}"))?;
+    let conn = open_sqlite_read_only(path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     let open_us = open_t.elapsed().as_micros() as u64;
     let query_t = Instant::now();
@@ -2611,28 +2611,14 @@ fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
     let mut data = vec![0u8; MRA_PREFIX_BYTES];
     let n = file.read(&mut data).ok()?;
     data.truncate(n);
-    let text = String::from_utf8_lossy(&data);
-    Some(MraMetadata {
-        name: tag_text(&text, "name"),
-        rbf: tag_text(&text, "rbf"),
-        platform: tag_text(&text, "platform"),
-        manufacturer: tag_text(&text, "manufacturer"),
-        category: tag_text(&text, "category"),
-        catver: tag_text(&text, "catver"),
-        year: tag_text(&text, "year"),
-        setname: tag_text(&text, "setname"),
-        parent: tag_text(&text, "parent"),
-    })
+    parse_mra_metadata_xml(&String::from_utf8_lossy(&data))
 }
 
 fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
     let mut file = File::open(path).ok()?;
     let mut data = String::new();
     file.read_to_string(&mut data).ok()?;
-    Some(MglMetadata {
-        rbf: tag_text(&data, "rbf"),
-        file_path: attr_text(&data, "path"),
-    })
+    parse_mgl_metadata_xml(&data)
 }
 
 fn neogeo_mgl_setname(mgl_path: &Path, payload_path: Option<&str>) -> Option<String> {
@@ -2641,33 +2627,171 @@ fn neogeo_mgl_setname(mgl_path: &Path, payload_path: Option<&str>) -> Option<Str
         .or_else(|| parenthesized_setname(&mgl_path.display().to_string()))
 }
 
-fn tag_text(text: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = text.find(&open)? + open.len();
-    let end = text[start..].find(&close)? + start;
-    let value = text[start..end].trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(html_unescape_minimal(value))
+fn parse_mra_metadata_xml(text: &str) -> Option<MraMetadata> {
+    let mut reader = XmlReader::from_str(text);
+    let mut metadata = MraMetadata::default();
+    let mut field: Option<&'static str> = None;
+    let mut field_text = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                field = mra_metadata_field(e.name().as_ref());
+                field_text.clear();
+            }
+            Ok(Event::Text(e)) => {
+                if field.is_some() {
+                    if let Ok(value) = e.xml10_content() {
+                        field_text.push_str(&value);
+                    }
+                }
+            }
+            Ok(Event::CData(e)) => {
+                if field.is_some() {
+                    if let Ok(value) = e.xml10_content() {
+                        field_text.push_str(&value);
+                    }
+                }
+            }
+            Ok(Event::GeneralRef(e)) => {
+                if field.is_some() {
+                    if let Some(value) = xml_general_ref_text(e.as_ref()) {
+                        field_text.push_str(value);
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if let Some(ended_field) = mra_metadata_field(e.name().as_ref()) {
+                    if field == Some(ended_field) {
+                        set_mra_metadata_field(&mut metadata, ended_field, &field_text);
+                    }
+                    field = None;
+                    field_text.clear();
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    Some(metadata)
+}
+
+fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
+    let mut reader = XmlReader::from_str(text);
+    let mut metadata = MglMetadata::default();
+    let mut in_rbf = false;
+    let mut rbf_text = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let tag = e.name();
+                if tag.as_ref().eq_ignore_ascii_case(b"rbf") {
+                    in_rbf = true;
+                    rbf_text.clear();
+                } else if tag.as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none()
+                {
+                    metadata.file_path = xml_attr_value(&e, b"path");
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if e.name().as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none() {
+                    metadata.file_path = xml_attr_value(&e, b"path");
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_rbf {
+                    if let Ok(value) = e.xml10_content() {
+                        rbf_text.push_str(&value);
+                    }
+                }
+            }
+            Ok(Event::CData(e)) => {
+                if in_rbf {
+                    if let Ok(value) = e.xml10_content() {
+                        rbf_text.push_str(&value);
+                    }
+                }
+            }
+            Ok(Event::GeneralRef(e)) => {
+                if in_rbf {
+                    if let Some(value) = xml_general_ref_text(e.as_ref()) {
+                        rbf_text.push_str(value);
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.name().as_ref().eq_ignore_ascii_case(b"rbf") {
+                    set_optional_trimmed(&mut metadata.rbf, &rbf_text);
+                    in_rbf = false;
+                    rbf_text.clear();
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    Some(metadata)
+}
+
+fn mra_metadata_field(name: &[u8]) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_slice() {
+        b"name" => Some("name"),
+        b"rbf" => Some("rbf"),
+        b"platform" => Some("platform"),
+        b"manufacturer" => Some("manufacturer"),
+        b"category" => Some("category"),
+        b"catver" => Some("catver"),
+        b"year" => Some("year"),
+        b"setname" => Some("setname"),
+        b"parent" => Some("parent"),
+        _ => None,
     }
 }
 
-fn attr_text(text: &str, attr: &str) -> Option<String> {
-    let needle = format!("{attr}=\"");
-    let start = text.find(&needle)? + needle.len();
-    let end = text[start..].find('"')? + start;
-    Some(html_unescape_minimal(text[start..end].trim()))
+fn set_mra_metadata_field(metadata: &mut MraMetadata, field: &str, value: &str) {
+    match field {
+        "name" => set_optional_trimmed(&mut metadata.name, value),
+        "rbf" => set_optional_trimmed(&mut metadata.rbf, value),
+        "platform" => set_optional_trimmed(&mut metadata.platform, value),
+        "manufacturer" => set_optional_trimmed(&mut metadata.manufacturer, value),
+        "category" => set_optional_trimmed(&mut metadata.category, value),
+        "catver" => set_optional_trimmed(&mut metadata.catver, value),
+        "year" => set_optional_trimmed(&mut metadata.year, value),
+        "setname" => set_optional_trimmed(&mut metadata.setname, value),
+        "parent" => set_optional_trimmed(&mut metadata.parent, value),
+        _ => {}
+    }
 }
 
-fn html_unescape_minimal(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
+fn set_optional_trimmed(slot: &mut Option<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        *slot = Some(value.to_string());
+    }
+}
+
+fn xml_attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
+    e.attributes()
+        .with_checks(false)
+        .flatten()
+        .find(|attr| attr.key.as_ref().eq_ignore_ascii_case(key))
+        .and_then(|attr| {
+            attr.normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|value| value.into_owned())
+        })
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn xml_general_ref_text(name: &[u8]) -> Option<&'static str> {
+    match name {
+        b"amp" => Some("&"),
+        b"quot" => Some("\""),
+        b"apos" => Some("'"),
+        b"lt" => Some("<"),
+        b"gt" => Some(">"),
+        _ => None,
+    }
 }
 
 fn normalize_id(value: &str) -> String {
@@ -2989,10 +3113,7 @@ fn load_arcade_machine_metadata(mame_path: &Path, hbmame_path: &Path) -> ArcadeM
     }
 }
 
-fn write_simple_mame_metadata_db(
-    path: &Path,
-    rows: &MachineMetadataRows,
-) -> Result<(), String> {
+fn write_simple_mame_metadata_db(path: &Path, rows: &MachineMetadataRows) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create metadata dir {}: {e}", parent.display()))?;
@@ -5714,6 +5835,70 @@ mod tests {
     }
 
     #[test]
+    fn mra_metadata_parser_tolerates_attributes_and_entities() {
+        let root = unique_temp_dir("mra-xml-metadata");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("fixture.mra");
+        std::fs::write(
+            &path,
+            r#"
+            <misterromdescription>
+                <name lang="en">Battle &amp; Chase</name>
+                <rbf version="1">JTCPS2</rbf>
+                <platform>Capcom Play System II</platform>
+                <manufacturer>Capcom &quot;Co&quot;</manufacturer>
+                <category>Driving</category>
+                <catver>Racing / Chase</catver>
+                <year>1997</year>
+                <setname>batcir</setname>
+                <parent>batcirj</parent>
+            </misterromdescription>
+            "#,
+        )
+        .expect("write mra fixture");
+
+        let metadata = read_mra_metadata(&path).expect("read mra metadata");
+
+        assert_eq!(metadata.name.as_deref(), Some("Battle & Chase"));
+        assert_eq!(metadata.rbf.as_deref(), Some("JTCPS2"));
+        assert_eq!(metadata.platform.as_deref(), Some("Capcom Play System II"));
+        assert_eq!(metadata.manufacturer.as_deref(), Some("Capcom \"Co\""));
+        assert_eq!(metadata.category.as_deref(), Some("Driving"));
+        assert_eq!(metadata.catver.as_deref(), Some("Racing / Chase"));
+        assert_eq!(metadata.year.as_deref(), Some("1997"));
+        assert_eq!(metadata.setname.as_deref(), Some("batcir"));
+        assert_eq!(metadata.parent.as_deref(), Some("batcirj"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mgl_metadata_parser_uses_file_path_not_unrelated_path_attribute() {
+        let root = unique_temp_dir("mgl-xml-file-path");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Fixture.mgl");
+        std::fs::write(
+            &path,
+            r#"
+            <mistergamelist>
+                <metadata path="not/a/game.rom"/>
+                <rbf>NES</rbf>
+                <file delay="1" type="s" path='games/NES/Super Mario Bros.nes'/>
+            </mistergamelist>
+            "#,
+        )
+        .expect("write mgl fixture");
+
+        let metadata = read_mgl_metadata(&path).expect("read mgl metadata");
+
+        assert_eq!(metadata.rbf.as_deref(), Some("NES"));
+        assert_eq!(
+            metadata.file_path.as_deref(),
+            Some("games/NES/Super Mario Bros.nes")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn mgl_discovery_preserves_script_as_launch_ref() {
         let path =
             std::env::temp_dir().join(format!("mister-magik-mgl-test-{}.mgl", std::process::id()));
@@ -6129,7 +6314,9 @@ mod tests {
         let root = unique_temp_dir("collection-listing-timeout");
         let helper = root.join("slow-7za.sh");
         std::fs::write(&helper, "#!/bin/sh\nsleep 2\n").expect("write helper");
-        let mut permissions = std::fs::metadata(&helper).expect("stat helper").permissions();
+        let mut permissions = std::fs::metadata(&helper)
+            .expect("stat helper")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&helper, permissions).expect("chmod helper");
         let archive = root.join("AmigaVision.7z");
@@ -8095,8 +8282,11 @@ mod tests {
     fn sqlite_arcade_load_ignores_hot_rollback_journal() {
         let root = unique_temp_dir("sqlite-hot-journal");
         let db = root.join("library.sqlite3");
-        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Hot Journal")]))
-            .expect("write catalog database");
+        save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Hot Journal")]),
+        )
+        .expect("write catalog database");
 
         let child = std::process::Command::new(std::env::current_exe().expect("current test exe"))
             .arg("--exact")
