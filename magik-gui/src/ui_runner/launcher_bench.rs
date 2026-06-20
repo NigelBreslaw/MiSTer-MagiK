@@ -231,14 +231,7 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            let (dir, previous_dir) = match step {
-                0 => (1, 0),
-                1 => (0, 1),
-                2 => (1, 0),
-                _ => (1, 1),
-            };
-            nav.arcade
-                .bench_direction_tick(dir, previous_dir, count, now);
+            nav.arcade.bench_turbo_bounce_tick(count, now);
             true
         }
     }

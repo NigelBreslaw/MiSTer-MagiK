@@ -263,6 +263,48 @@ impl ArcadeNav {
         self.tick(count);
     }
 
+    // Benchmark-only turbo motion: keep stressing preview scroll by bouncing at
+    // list edges instead of parking after the selection clamps.
+    pub fn bench_turbo_bounce_tick(&mut self, count: usize, now: Instant) {
+        if count == 0 {
+            self.reset();
+            return;
+        }
+        if count == 1 {
+            self.scroll.held_dir = 0;
+            self.scroll.turbo_candidate = false;
+            self.scroll.turbo_active = false;
+            self.tick(count);
+            return;
+        }
+        if self.selected >= count {
+            self.selected = count - 1;
+            self.snap_to_selected();
+            return;
+        }
+
+        let current_dir = self.scroll.held_dir.signum();
+        let mut dir = if current_dir == 0 { 1 } else { current_dir };
+        if self.scroll.target_index + 1 >= count && dir > 0 {
+            dir = -1;
+        } else if self.scroll.target_index == 0 && dir < 0 {
+            dir = 1;
+        }
+
+        if current_dir != dir {
+            self.scroll.held_dir = dir;
+            self.scroll.hold_started_at = Some(now);
+            self.scroll.intent_queue = 0;
+        }
+        self.scroll.turbo_candidate = false;
+        self.scroll.turbo_active = true;
+
+        if self.is_settled() {
+            self.enqueue_step(dir, count);
+        }
+        self.tick(count);
+    }
+
     fn begin_press(&mut self, dir: i32, now: Instant) {
         self.scroll.held_dir = dir;
         self.scroll.hold_started_at = Some(now);
@@ -2460,6 +2502,38 @@ mod tests {
             nav.scroll.visual_px,
             visual_before_turbo + ARCADE_TURBO_PX_PER_FRAME
         );
+    }
+
+    #[test]
+    fn arcade_bench_turbo_bounce_reverses_at_edges() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        let mut saw_bottom = false;
+        let mut saw_upward_after_bottom = false;
+        let mut saw_top_after_bottom = false;
+        let mut saw_downward_after_top = false;
+
+        for frame in 0..160 {
+            nav.bench_turbo_bounce_tick(5, t0 + Duration::from_millis(frame * 16));
+            if nav.selected == 4 {
+                saw_bottom = true;
+            }
+            if saw_bottom && nav.scroll.held_dir < 0 {
+                saw_upward_after_bottom = true;
+            }
+            if saw_upward_after_bottom && nav.selected == 0 {
+                saw_top_after_bottom = true;
+            }
+            if saw_top_after_bottom && nav.scroll.held_dir > 0 {
+                saw_downward_after_top = true;
+                break;
+            }
+        }
+
+        assert!(saw_bottom);
+        assert!(saw_upward_after_bottom);
+        assert!(saw_top_after_bottom);
+        assert!(saw_downward_after_top);
     }
 
     #[test]
