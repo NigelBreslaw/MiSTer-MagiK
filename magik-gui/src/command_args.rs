@@ -21,6 +21,7 @@ pub const COMMANDS: &[&str] = &[
     "library-sql",
     "hbmame-metadata-from-library",
     "library-scan-bench",
+    "launch-prep-bench",
     "audio-tone",
 ];
 

@@ -257,6 +257,7 @@ pub struct HbmameMetadataSummary {
 pub struct VirtualLaunchPlan {
     pub launch_ref: String,
     pub title: String,
+    pub system_id: String,
     pub core_path: String,
     pub payload_path: String,
     pub mount_kind: String,
@@ -675,6 +676,7 @@ pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunch
         .prepare(
             "SELECT launch_plans.launch_ref,
                     games.title,
+                    games.system_id,
                     COALESCE(profiles.core_path, launch_plans.core_id),
                     COALESCE(launch_plans.payload_path, ''),
                     COALESCE(payloads.mount_kind, 'mount-image'),
@@ -706,24 +708,138 @@ pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunch
         title: row
             .get::<_, String>(1)
             .map_err(|e| format!("read title: {e}"))?,
-        core_path: row
+        system_id: row
             .get::<_, String>(2)
+            .map_err(|e| format!("read system_id: {e}"))?,
+        core_path: row
+            .get::<_, String>(3)
             .map_err(|e| format!("read core_path: {e}"))?,
         payload_path: row
-            .get::<_, String>(3)
+            .get::<_, String>(4)
             .map_err(|e| format!("read payload_path: {e}"))?,
         mount_kind: row
-            .get::<_, String>(4)
+            .get::<_, String>(5)
             .map_err(|e| format!("read mount_kind: {e}"))?,
         mount_index: row
-            .get::<_, i64>(5)
+            .get::<_, i64>(6)
             .map_err(|e| format!("read mount_index: {e}"))?
             .clamp(0, u8::MAX as i64) as u8,
         mount_delay_secs: row
-            .get::<_, i64>(6)
+            .get::<_, i64>(7)
             .map_err(|e| format!("read mount_delay_secs: {e}"))?
             .clamp(0, u8::MAX as i64) as u8,
     }))
+}
+
+pub fn load_virtual_launch_plans_for_system(
+    system_id: &str,
+    limit: usize,
+) -> Result<Vec<VirtualLaunchPlan>, String> {
+    let path = default_sqlite_path();
+    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    load_virtual_launch_plans_for_system_from_conn(&conn, system_id, limit)
+}
+
+pub fn load_virtual_launch_plans() -> Result<Vec<VirtualLaunchPlan>, String> {
+    let path = default_sqlite_path();
+    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn
+        .prepare(
+            "SELECT launch_plans.launch_ref,
+                    games.title,
+                    games.system_id,
+                    COALESCE(profiles.core_path, launch_plans.core_id),
+                    COALESCE(launch_plans.payload_path, ''),
+                    COALESCE(payloads.mount_kind, 'mount-image'),
+                    COALESCE(payloads.mount_index, 0),
+                    COALESCE(payloads.mount_delay_secs, 1)
+             FROM launch_plans
+             JOIN games ON games.game_id = launch_plans.game_id
+             LEFT JOIN profiles ON profiles.profile_id = launch_plans.profile_id
+             LEFT JOIN payloads
+                    ON payloads.launch_ref = launch_plans.payload_path
+                   AND payloads.profile_id = launch_plans.profile_id
+             WHERE launch_plans.launch_kind = 'virtual-mgl'
+             ORDER BY games.system_id, games.sort_title, launch_plans.launch_ref",
+        )
+        .map_err(|e| format!("prepare virtual launch list query: {e}"))?;
+    let rows = stmt
+        .query_map([], virtual_launch_plan_from_row)
+        .map_err(|e| format!("query virtual launch list: {e}"))?;
+    rows.map(|row| row.map_err(|e| format!("read virtual launch row: {e}")))
+        .collect()
+}
+
+fn load_virtual_launch_plans_for_system_from_conn(
+    conn: &Connection,
+    system_id: &str,
+    limit: usize,
+) -> Result<Vec<VirtualLaunchPlan>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT launch_plans.launch_ref,
+                    games.title,
+                    games.system_id,
+                    COALESCE(profiles.core_path, launch_plans.core_id),
+                    COALESCE(launch_plans.payload_path, ''),
+                    COALESCE(payloads.mount_kind, 'mount-image'),
+                    COALESCE(payloads.mount_index, 0),
+                    COALESCE(payloads.mount_delay_secs, 1)
+             FROM launch_plans
+             JOIN games ON games.game_id = launch_plans.game_id
+             LEFT JOIN profiles ON profiles.profile_id = launch_plans.profile_id
+             LEFT JOIN payloads
+                    ON payloads.launch_ref = launch_plans.payload_path
+                   AND payloads.profile_id = launch_plans.profile_id
+             WHERE launch_plans.launch_kind = 'virtual-mgl'
+               AND games.system_id = ?1
+             ORDER BY games.sort_title, launch_plans.launch_ref
+             LIMIT ?2",
+        )
+        .map_err(|e| format!("prepare virtual launch list query: {e}"))?;
+    let rows = stmt
+        .query_map(
+            params![system_id, limit as i64],
+            virtual_launch_plan_from_row,
+        )
+        .map_err(|e| format!("query virtual launch list: {e}"))?;
+    rows.map(|row| row.map_err(|e| format!("read virtual launch row: {e}")))
+        .collect()
+}
+
+pub fn load_amigavision_launch_refs(limit: usize) -> Result<Vec<String>, String> {
+    let path = default_sqlite_path();
+    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn
+        .prepare(
+            "SELECT launch_ref
+             FROM launchables
+             WHERE launch_ref LIKE 'magik-amigavision:%'
+             ORDER BY title, launch_ref
+             LIMIT ?1",
+        )
+        .map_err(|e| format!("prepare AmigaVision launch query: {e}"))?;
+    let rows = stmt
+        .query_map([limit as i64], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query AmigaVision launches: {e}"))?;
+    rows.map(|row| row.map_err(|e| format!("read AmigaVision launch_ref: {e}")))
+        .collect()
+}
+
+fn virtual_launch_plan_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VirtualLaunchPlan> {
+    Ok(VirtualLaunchPlan {
+        launch_ref: row.get(0)?,
+        title: row.get(1)?,
+        system_id: row.get(2)?,
+        core_path: row.get(3)?,
+        payload_path: row.get(4)?,
+        mount_kind: row.get(5)?,
+        mount_index: row.get::<_, i64>(6)?.clamp(0, u8::MAX as i64) as u8,
+        mount_delay_secs: row.get::<_, i64>(7)?.clamp(0, u8::MAX as i64) as u8,
+    })
 }
 
 pub fn load_arcade_catalog_from_sqlite(
@@ -8825,6 +8941,29 @@ mod tests {
         assert_eq!(loaded.rows, 1);
         assert_eq!(loaded.catalog.games[0].title.as_ref(), "Moon Patrol (US)");
         assert!(loaded.catalog.games[0].has_image);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_launch_plan_query_returns_system_scoped_rows() {
+        let root = unique_temp_dir("sqlite-virtual-launch-plans");
+        let db = root.join("library.sqlite3");
+        let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
+        let mut snes = payload("/media/fat/games/SNES/F-Zero.sfc");
+        snes.platform_id = "snes".to_string();
+        snes.core_id = "SNES".to_string();
+        snes.hardware_id = "snes".to_string();
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn, snes]))
+            .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let plans = load_virtual_launch_plans_for_system_from_conn(&conn, "saturn", 8)
+            .expect("load virtual launch plans");
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].system_id, "saturn");
+        assert_eq!(plans[0].core_path, "_Console/Saturn");
+        assert_eq!(plans[0].payload_path, "/media/fat/games/Saturn/Nights.chd");
         let _ = std::fs::remove_dir_all(root);
     }
 

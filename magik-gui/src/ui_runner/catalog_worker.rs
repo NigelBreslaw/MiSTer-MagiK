@@ -63,6 +63,7 @@ pub(super) fn start_library_catalog_worker(
             });
             match plan {
                 CatalogWorkerPlan::UseCacheOnly => {
+                    materialize_virtual_launch_cache(&tx);
                     let _ = tx.send(CatalogWorkerMessage::Done);
                     return;
                 }
@@ -119,6 +120,7 @@ pub(super) fn start_library_catalog_worker(
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
                         });
+                        materialize_virtual_launch_cache(&tx);
                         match library_db::load_arcade_catalog_from_sqlite(&root) {
                             Ok(loaded) => {
                                 send_catalog_load_timing(
@@ -161,6 +163,7 @@ pub(super) fn start_library_catalog_worker(
             };
             if let Some(summary) = summary.as_ref().filter(|summary| summary.skipped) {
                 if cache_state == CatalogCacheState::Ready {
+                    materialize_virtual_launch_cache(&tx);
                     let _ = tx.send(CatalogWorkerMessage::Unchanged {
                         summary: summary.clone(),
                     });
@@ -168,6 +171,7 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             if summary.is_some() {
+                materialize_virtual_launch_cache(&tx);
                 let _ = tx.send(CatalogWorkerMessage::Progress {
                     title: "Loading library".to_string(),
                     detail: "Opening SQLite catalog...".to_string(),
@@ -366,6 +370,22 @@ fn send_catalog_load_timing(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: name.to_string(),
         detail: catalog_load_timing_detail(loaded),
+    });
+}
+
+fn materialize_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
+    let start = Instant::now();
+    let summary = launcher::materialize_virtual_launch_cache_from_default_db();
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "virtual_launch_cache_materialized".to_string(),
+        detail: format!(
+            "total={} written={} unchanged={} errors={} us={}",
+            summary.total,
+            summary.written,
+            summary.unchanged,
+            summary.errors,
+            start.elapsed().as_micros()
+        ),
     });
 }
 
