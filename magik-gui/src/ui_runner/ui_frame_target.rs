@@ -877,7 +877,6 @@ fn transition_gate(
     let reveal_w = ((w as f32) * progress).round() as usize;
     let reveal_h = ((h as f32) * progress).round() as usize;
     match effect {
-        PreviewTransitionEffect::Cut => 255,
         PreviewTransitionEffect::Fade => alpha,
         PreviewTransitionEffect::Wipe => {
             if local_x < reveal_w {
@@ -1129,15 +1128,6 @@ fn transition_gate(
     }
 }
 
-fn blit_transition_565_cut(
-    cached: &mut [Rgb565Pixel],
-    ui: &UiDisplay,
-    screen: DirtyRect,
-    frame: &PreviewRawTransitionFrame<'_>,
-) -> Option<()> {
-    blit_preview_frame_565_cut(cached, ui, screen, &frame.current)
-}
-
 fn blit_preview_frame_565_cut(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
@@ -1323,7 +1313,6 @@ fn blit_transition_565_via_rgb(
             let current = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
                 .unwrap_or((0, 0, 0));
             let rgb = match effect {
-                PreviewTransitionEffect::Cut => current,
                 PreviewTransitionEffect::Fade => {
                     let prev = frame
                         .previous
@@ -1387,7 +1376,6 @@ pub(super) fn blit_transition_565_fast(
                 .unwrap_or(black);
             let curr = sample_raw565(&current, x, y).unwrap_or(black);
             cached[row + x] = match effect {
-                PreviewTransitionEffect::Cut => curr,
                 PreviewTransitionEffect::Fade => blend_565(prev, curr, alpha),
                 PreviewTransitionEffect::Wipe => {
                     if local_x < reveal_w {
@@ -1729,7 +1717,6 @@ pub(super) fn transition_rgb(
         sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024).unwrap_or((0, 0, 0));
 
     match effect {
-        PreviewTransitionEffect::Cut => current,
         PreviewTransitionEffect::Fade => blend_rgb(prev, current, alpha),
         PreviewTransitionEffect::Wipe => {
             let reveal_w = ((screen.width() as f32) * progress).round() as usize;
@@ -2219,11 +2206,6 @@ impl UiFrameTarget {
         let screen = preview_screen_rect(ui);
         match self {
             Self::Rgb565 { cached } => match effect {
-                PreviewTransitionEffect::Cut => {
-                    if blit_transition_565_cut(cached, ui, screen, frame).is_none() {
-                        blit_transition_565_via_rgb(cached, ui, screen, frame, effect, progress);
-                    }
-                }
                 PreviewTransitionEffect::Fade => {
                     if blit_transition_565_fade(cached, ui, screen, frame, progress).is_none() {
                         blit_transition_565_via_rgb(cached, ui, screen, frame, effect, progress);

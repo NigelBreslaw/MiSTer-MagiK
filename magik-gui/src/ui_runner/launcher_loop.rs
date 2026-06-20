@@ -1,6 +1,7 @@
 use super::launcher_frame_accounting::{LauncherFrameAccounting, LauncherPresentedFrame};
 use super::*;
 use crate::fb::VsyncWaitStatus;
+use crate::preview_worker;
 use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
@@ -138,7 +139,7 @@ pub(super) fn run_launcher_loop(
     let mut launch_spawned_mister = false;
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
-    let mut launcher_bench_next_step = Instant::now();
+    let mut launcher_bench_next_step: Instant;
     let mut launcher_bench_step_idx = 0usize;
     let auto_launch_selected = launcher_auto_launch_selected_enabled();
     let mut auto_launch_selected_done = false;
@@ -182,6 +183,25 @@ pub(super) fn run_launcher_loop(
     }
     let mut pacer = VsyncPacer::from_env();
     let mut present_probe = PresentProbe::from_env();
+    if launcher_bench_scenario.is_some() {
+        let warm_t = Instant::now();
+        match preview_worker::warm_preview_archives_from_env() {
+            Ok(loaded) => print_startup_event(
+                start,
+                "preview_archive_warm",
+                format!(
+                    "loaded={} elapsed_us={}",
+                    if loaded { 1 } else { 0 },
+                    warm_t.elapsed().as_micros()
+                ),
+            ),
+            Err(e) => {
+                eprintln!("preview archive warm failed before launcher benchmark: {e}");
+                print_startup_event(start, "preview_archive_warm_failed", e);
+                std::process::exit(13);
+            }
+        }
+    }
     let mut preview = PreviewState::new();
     let mut route_guard = FramebufferRouteGuard::from_env();
     let mut preview_transition = PreviewTransitionDemo::from_env();
@@ -328,6 +348,7 @@ pub(super) fn run_launcher_loop(
     } else {
         start
     };
+    launcher_bench_next_step = run_start;
     let preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;

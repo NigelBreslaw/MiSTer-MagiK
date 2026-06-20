@@ -370,7 +370,7 @@ mod tests {
             arcade_selected: 0,
             arcade_visual_index: 0.0,
             preview_cache_state: "placeholder",
-            preview_transition_effect: "cut",
+            preview_transition_effect: "fade",
             preview_transition_progress: 1.0,
             bench_scenario: "none",
             start_screen: "home",

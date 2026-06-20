@@ -17,8 +17,8 @@ Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 /media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
 
 --fb-format is kept for old command lines, but UI profiling supports only 565.
---transition selects raw-preview screenshot transitions. Default is fade; `cut`
-disables animation; `mega` cycles all effects.
+--transition selects raw-preview screenshot transitions. Default is fade;
+`mega` cycles all effects.
 --cpu-profile builds/deploys the profiling binary, runs the same supervised
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
 non-empty CPU SVG artifact.
@@ -72,6 +72,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_transition_arg() {
+  local transition_value="$1"
+  local transition_part transition_key
+  local -a transition_parts
+  if [[ -z "$transition_value" ]]; then return 0; fi
+  IFS=',' read -r -a transition_parts <<< "$transition_value"
+  for transition_part in "${transition_parts[@]}"; do
+    transition_key="${transition_part//_/-}"
+    transition_key="${transition_key,,}"
+    case "$transition_key" in
+      cut|none|off|0|false|no)
+        echo "--transition $transition_part was removed; use fade or mega" >&2
+        return 2
+        ;;
+    esac
+  done
+}
+
 if [[ "${#positionals[@]}" -ge 1 ]]; then secs="${positionals[0]}"; fi
 if [[ "${#positionals[@]}" -ge 2 ]]; then scenario="${positionals[1]}"; fi
 if [[ "${#positionals[@]}" -ge 3 ]]; then label="${positionals[2]}"; fi
@@ -95,6 +113,7 @@ case "$preview_format" in ""|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview
 if [[ -n "$preview_archive" && ! "$preview_archive" =~ ^[A-Za-z0-9_./:-]+$ ]]; then echo "--preview-archive contains unsupported characters" >&2; exit 2; fi
 case "$fb_format" in 565) ;; *) echo "--fb-format must be 565; RGB888 UI support was removed" >&2; exit 2 ;; esac
 if [[ -n "$transition" && ! "$transition" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--transition must be a comma-separated transition label list or mega" >&2; exit 2; fi
+validate_transition_arg "$transition"
 if [[ -n "$transition_segment_secs" && ! "$transition_segment_secs" =~ ^[0-9]+$ ]]; then echo "--transition-segment-secs must be an integer" >&2; exit 2; fi
 if [[ -n "$transition_ms" && ! "$transition_ms" =~ ^[0-9]+$ ]]; then echo "--transition-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
@@ -563,6 +582,20 @@ EOF
   check_steady_work_gate selftest "$wall_wait_ok" >/dev/null
   if check_steady_work_gate selftest "$work_slow" >/dev/null 2>&1; then
     echo "steady work self-test expected work over budget failure" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+
+  validate_transition_arg "fade"
+  validate_transition_arg "mega"
+  validate_transition_arg "fade,mega"
+  if validate_transition_arg "cut" >/dev/null 2>&1; then
+    echo "transition self-test expected cut rejection" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  if validate_transition_arg "none" >/dev/null 2>&1; then
+    echo "transition self-test expected none rejection" >&2
     rm -rf "$tmp"
     exit 1
   fi
