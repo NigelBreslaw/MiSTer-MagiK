@@ -896,6 +896,7 @@ fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry
                 source_kind: row.get::<_, String>(5)?,
                 setname: row.get::<_, String>(6)?,
                 parent: row.get::<_, String>(7)?,
+                family_key: None,
             })
         })
         .map_err(|e| format!("query arcade catalog: {e}"))?;
@@ -913,6 +914,7 @@ struct CatalogRow {
     source_kind: String,
     setname: String,
     parent: String,
+    family_key: Option<String>,
 }
 
 fn collapse_catalog_variants(rows: Vec<CatalogRow>) -> Vec<ArcadeGameEntry> {
@@ -935,6 +937,9 @@ fn collapse_catalog_variants(rows: Vec<CatalogRow>) -> Vec<ArcadeGameEntry> {
 }
 
 fn catalog_variant_group_key(row: &CatalogRow) -> String {
+    if let Some(family_key) = row.family_key.as_deref() {
+        return format!("family:{}", normalize_id(family_key));
+    }
     if row.source_kind == "mra" {
         if !row.setname.trim().is_empty() {
             let parent = row.parent.trim();
@@ -1022,7 +1027,71 @@ fn variant_score_from_haystack(haystack: &str) -> i32 {
         }
     }
 
+    if let Some(disc_number) = first_disc_number_from_haystack(haystack) {
+        if disc_number == 1 {
+            score += 100;
+        } else {
+            score -= 100;
+        }
+    }
+
     score
+}
+
+fn first_disc_number_from_haystack(haystack: &str) -> Option<u32> {
+    let haystack = haystack.to_ascii_lowercase();
+    let haystack = haystack.as_str();
+    for marker in ["disc", "disk", "cd"] {
+        if let Some(number) = number_after_marker(haystack, marker) {
+            return Some(number);
+        }
+    }
+    for number in 1..=9 {
+        if haystack.contains(&format!("({number} of ")) {
+            return Some(number);
+        }
+    }
+    None
+}
+
+fn number_after_marker(haystack: &str, marker: &str) -> Option<u32> {
+    let bytes = haystack.as_bytes();
+    let marker_bytes = marker.as_bytes();
+    let mut start = 0usize;
+    while let Some(pos) = haystack[start..].find(marker) {
+        let marker_start = start + pos;
+        let marker_end = marker_start + marker_bytes.len();
+        let before = marker_start
+            .checked_sub(1)
+            .and_then(|idx| bytes.get(idx))
+            .copied();
+        let after_marker = bytes.get(marker_end).copied();
+        if before.is_none_or(|byte| !byte.is_ascii_alphanumeric())
+            && after_marker.is_some_and(|byte| !byte.is_ascii_alphabetic())
+        {
+            let mut digit_start = marker_end;
+            while bytes
+                .get(digit_start)
+                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'-' || *byte == b'_')
+            {
+                digit_start += 1;
+            }
+            let mut digit_end = digit_start;
+            while bytes
+                .get(digit_end)
+                .is_some_and(|byte| byte.is_ascii_digit())
+            {
+                digit_end += 1;
+            }
+            if digit_end > digit_start {
+                if let Ok(number) = haystack[digit_start..digit_end].parse() {
+                    return Some(number);
+                }
+            }
+        }
+        start = marker_end;
+    }
+    None
 }
 
 fn canonical_variant_title(title: &str) -> String {
@@ -1420,6 +1489,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
             source_kind: launch_kind_for_discovery(discovery).to_string(),
             setname,
             parent,
+            family_key: None,
         });
     }
     rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
@@ -4531,6 +4601,9 @@ fn write_sqlite_scan_with_sources(
                 && system_id != "arcade"
                 && system_id != "neogeo"
             {
+                let software_family_key = software_identity
+                    .as_ref()
+                    .map(|identity| format!("mame-software:{}", identity.family_id));
                 launcher_rows.push(CatalogRow {
                     game: ArcadeGameEntry {
                         title: discovery.title.clone().into(),
@@ -4542,6 +4615,7 @@ fn write_sqlite_scan_with_sources(
                     source_kind: launch_kind_for_discovery(discovery).to_string(),
                     setname: discovery.setname.clone().unwrap_or_default(),
                     parent: discovery.parent.clone().unwrap_or_default(),
+                    family_key: software_family_key,
                 });
             }
             plan_stmt
@@ -5788,6 +5862,22 @@ mod tests {
     }
 
     #[test]
+    fn disc_variant_scoring_does_not_treat_disc_ten_as_disc_one() {
+        assert_eq!(
+            first_disc_number_from_haystack("/media/fat/games/Saturn/Game Disc 1.chd"),
+            Some(1)
+        );
+        assert_eq!(
+            first_disc_number_from_haystack("/media/fat/games/Saturn/Game Disc 10.chd"),
+            Some(10)
+        );
+        assert!(
+            variant_score_from_haystack("/media/fat/games/Saturn/Game Disc 1.chd")
+                > variant_score_from_haystack("/media/fat/games/Saturn/Game Disc 10.chd")
+        );
+    }
+
+    #[test]
     fn catalog_entries_with_shared_collection_launch_ref_stay_separate() {
         let rows = vec![
             catalog_entry_row("Agony", "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
@@ -6572,6 +6662,100 @@ mod tests {
             .expect("software identity");
         assert_eq!(identity, "saturn:nights");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saturn_multidisc_software_identity_materializes_one_launcher_game() {
+        let root = unique_temp_dir("saturn-multidisc-identity");
+        let disc1_path = root.join("Fixture RPG (Disc 1).chd");
+        let disc2_path = root.join("Fixture RPG (Disc 2).chd");
+        let sha1_disc1 = [0x41u8; 20];
+        let sha1_disc2 = [0x42u8; 20];
+        std::fs::write(&disc1_path, chd_v5_header(sha1_disc1)).expect("write disc 1 chd");
+        std::fs::write(&disc2_path, chd_v5_header(sha1_disc2)).expect("write disc 2 chd");
+
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "saturn",
+                "fixturerpg",
+                None,
+                "Fixture RPG (USA)",
+                Some("1997"),
+                Some("Example"),
+                Some("usa"),
+            )],
+            &[],
+        );
+        let conn = Connection::open(&mame_db).expect("open mame fixture");
+        conn.execute(
+            "INSERT INTO mame_software_hashes(list_name,software_name,disk_sha1)
+             VALUES ('saturn','fixturerpg',?1)",
+            [hex_lower(&sha1_disc1)],
+        )
+        .expect("insert disc 1 hash");
+        conn.execute(
+            "INSERT INTO mame_software_hashes(list_name,software_name,disk_sha1)
+             VALUES ('saturn','fixturerpg',?1)",
+            [hex_lower(&sha1_disc2)],
+        )
+        .expect("insert disc 2 hash");
+        drop(conn);
+
+        let mut disc1 = saturn_payload(&disc1_path.display().to_string());
+        disc1.title = "Fixture RPG Disc 1".to_string();
+        let mut disc2 = saturn_payload(&disc2_path.display().to_string());
+        disc2.title = "Fixture RPG Disc 2".to_string();
+        let db = root.join("library.sqlite3");
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![disc2, disc1]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let launcher: (i64, String, String) = conn
+            .query_row(
+                "SELECT
+                    (SELECT count(*) FROM launcher_catalog WHERE system_id='saturn'),
+                    title,
+                    launch_ref
+                 FROM launcher_catalog
+                 WHERE system_id='saturn'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("saturn launcher row");
+        let identity_count: i64 = conn
+            .query_row(
+                "SELECT count(*)
+                 FROM launchable_identities
+                 WHERE namespace='mame-software'
+                   AND identity_id='saturn:fixturerpg'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("software identity count");
+
+        assert_eq!(launcher.0, 1);
+        assert_eq!(launcher.1, "Fixture RPG Disc 1");
+        assert!(launcher.2.ends_with("Fixture RPG (Disc 1).chd"));
+        assert_eq!(identity_count, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn chd_v5_header(sha1: [u8; 20]) -> [u8; 124] {
+        let mut header = [0u8; 124];
+        header[..8].copy_from_slice(b"MComprHD");
+        header[8..12].copy_from_slice(&124u32.to_be_bytes());
+        header[12..16].copy_from_slice(&5u32.to_be_bytes());
+        header[56..60].copy_from_slice(&4096u32.to_be_bytes());
+        header[60..64].copy_from_slice(&2448u32.to_be_bytes());
+        header[64..84].copy_from_slice(&sha1);
+        header
     }
 
     #[test]
@@ -8046,6 +8230,7 @@ mod tests {
             source_kind: "mra".to_string(),
             setname: setname.to_string(),
             parent: parent.to_string(),
+            family_key: None,
         }
     }
 
@@ -8061,6 +8246,7 @@ mod tests {
             source_kind: "mgl".to_string(),
             setname: String::new(),
             parent: String::new(),
+            family_key: None,
         }
     }
 
@@ -8076,6 +8262,7 @@ mod tests {
             source_kind: "catalog-entry".to_string(),
             setname: String::new(),
             parent: String::new(),
+            family_key: None,
         }
     }
 
