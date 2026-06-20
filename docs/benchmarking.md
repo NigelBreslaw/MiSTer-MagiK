@@ -26,7 +26,7 @@ This document defines current benchmark policy. Dated measurement logs live in
 Approved arcade scroll scenarios:
 
 - `held-scroll` - normal continuous movement.
-- `turbo-hold` - fast continuous movement.
+- `turbo-hold` - fast synthetic movement that reverses at list edges.
 - `velocity-scroll` - alias for `held-scroll`.
 
 Deprecated for arcade performance conclusions:
@@ -69,6 +69,8 @@ Preview-scroll benchmarks synchronously warm the screenshot archive cache before
 the benchmark timing window and first launcher step. The removed `cut`
 screenshot transition is intentionally rejected by the benchmark script; use
 `fade` for production-like evidence or `mega` for effect stress runs.
+`turbo-hold` ping-pongs between the Arcade list edges so long traces keep
+exercising preview selection changes after reaching the bottom.
 
 Acceptance fields for Arcade preview pacing:
 
