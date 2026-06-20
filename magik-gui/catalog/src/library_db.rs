@@ -40,6 +40,7 @@ pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
 pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
 pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
 
+const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, FileFingerprintEntry>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
@@ -287,6 +288,20 @@ struct FileFingerprintEntry {
 struct FileSignature {
     size: u64,
     mtime_secs: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SqliteBuildTempSource {
+    EnvOverride,
+    DefaultTmpfs,
+    BesideFinal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SqliteBuildTempPlan {
+    build_tmp_path: PathBuf,
+    final_tmp_path: PathBuf,
+    source: SqliteBuildTempSource,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -2918,9 +2933,68 @@ fn save_sqlite_scan_with_progress(
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
 
-    let build_tmp_path = sqlite_build_temp_path(path);
-    let final_tmp_path = sqlite_temp_path(path);
-    for tmp_path in [&build_tmp_path, &final_tmp_path] {
+    let mut writer =
+        |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
+            let software_hash_cache = SoftwareHashCache::load(path);
+            write_sqlite_scan(
+                build_path,
+                scan,
+                reborrow_progress(progress),
+                software_hash_cache,
+            )
+        };
+    save_sqlite_scan_with_progress_using_writer(
+        path,
+        scan,
+        progress,
+        sqlite_build_temp_plan(path),
+        &mut writer,
+    )
+}
+
+fn save_sqlite_scan_with_progress_using_writer(
+    path: &Path,
+    scan: &LibraryScan,
+    progress: ProgressCallback<'_>,
+    initial_plan: SqliteBuildTempPlan,
+    writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
+) -> Result<u64, String> {
+    let mut progress = progress;
+    let first =
+        save_sqlite_scan_attempt_with_writer(path, scan, &mut progress, &initial_plan, writer);
+    match first {
+        Ok(bytes) => Ok(bytes),
+        Err(e)
+            if initial_plan.source == SqliteBuildTempSource::DefaultTmpfs
+                && sqlite_build_error_should_retry_beside_final(&e) =>
+        {
+            eprintln!(
+                "library sqlite build temp failed at {}; retrying beside final DB: {e}",
+                initial_plan.build_tmp_path.display()
+            );
+            let fallback_plan = sqlite_build_temp_plan_beside_final(path);
+            save_sqlite_scan_attempt_with_writer(path, scan, &mut progress, &fallback_plan, writer)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn save_sqlite_scan_attempt_with_writer(
+    path: &Path,
+    scan: &LibraryScan,
+    progress: &mut ProgressCallback<'_>,
+    plan: &SqliteBuildTempPlan,
+    writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
+) -> Result<u64, String> {
+    if let Some(parent) = plan.build_tmp_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create sqlite build dir {}: {e}", parent.display()))?;
+    }
+    if let Some(parent) = plan.final_tmp_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create sqlite final temp dir {}: {e}", parent.display()))?;
+    }
+    for tmp_path in [&plan.build_tmp_path, &plan.final_tmp_path] {
         match std::fs::remove_file(tmp_path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -2928,21 +3002,20 @@ fn save_sqlite_scan_with_progress(
         }
     }
 
-    let software_hash_cache = SoftwareHashCache::load(path);
-    if let Err(e) = write_sqlite_scan(&build_tmp_path, scan, progress, software_hash_cache) {
-        let _ = std::fs::remove_file(&build_tmp_path);
+    if let Err(e) = writer(&plan.build_tmp_path, scan, progress) {
+        let _ = std::fs::remove_file(&plan.build_tmp_path);
         return Err(e);
     }
-    sync_file_best_effort(&build_tmp_path, "sqlite build temp")?;
-    if build_tmp_path != final_tmp_path {
-        std::fs::copy(&build_tmp_path, &final_tmp_path)
+    sync_file_best_effort(&plan.build_tmp_path, "sqlite build temp")?;
+    if plan.build_tmp_path != plan.final_tmp_path {
+        std::fs::copy(&plan.build_tmp_path, &plan.final_tmp_path)
             .map_err(|e| format!("copy sqlite temp into final dir: {e}"))?;
-        let _ = std::fs::remove_file(&build_tmp_path);
+        let _ = std::fs::remove_file(&plan.build_tmp_path);
     }
-    sync_file_best_effort(&final_tmp_path, "sqlite temp")?;
-    std::fs::rename(&final_tmp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&final_tmp_path);
-        let _ = std::fs::remove_file(&build_tmp_path);
+    sync_file_best_effort(&plan.final_tmp_path, "sqlite temp")?;
+    std::fs::rename(&plan.final_tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&plan.final_tmp_path);
+        let _ = std::fs::remove_file(&plan.build_tmp_path);
         format!("replace sqlite: {e}")
     })?;
     sync_parent_dir(path);
@@ -2951,17 +3024,88 @@ fn save_sqlite_scan_with_progress(
         .map_err(|e| format!("stat sqlite: {e}"))
 }
 
-fn sqlite_build_temp_path(path: &Path) -> PathBuf {
-    let Some(build_dir) = std::env::var_os("MISTER_LIBRARY_SQLITE_BUILD_DIR").map(PathBuf::from)
-    else {
-        return sqlite_temp_path(path);
-    };
+fn reborrow_progress<'a>(progress: &'a mut ProgressCallback<'_>) -> ProgressCallback<'a> {
+    progress
+        .as_mut()
+        .map(|callback| &mut **callback as &mut dyn FnMut(&str, &str))
+}
+
+fn sqlite_build_error_should_retry_beside_final(error: &str) -> bool {
+    [
+        "database or disk is full",
+        "disk I/O error",
+        "No space left on device",
+        "Read-only file system",
+        "Permission denied",
+        "Input/output error",
+        "Not a directory",
+        "No such file or directory",
+    ]
+    .iter()
+    .any(|needle| error.contains(needle))
+}
+
+fn sqlite_build_temp_plan(path: &Path) -> SqliteBuildTempPlan {
+    sqlite_build_temp_plan_for(
+        path,
+        std::env::var_os("MISTER_LIBRARY_SQLITE_BUILD_DIR")
+            .map(PathBuf::from)
+            .as_deref(),
+    )
+}
+
+fn sqlite_build_temp_plan_for(
+    path: &Path,
+    build_dir_override: Option<&Path>,
+) -> SqliteBuildTempPlan {
+    if let Some(build_dir) = build_dir_override {
+        return SqliteBuildTempPlan {
+            build_tmp_path: sqlite_build_temp_path_in_dir(path, build_dir),
+            final_tmp_path: sqlite_temp_path(path),
+            source: SqliteBuildTempSource::EnvOverride,
+        };
+    }
+    if is_media_fat_path(path) {
+        return SqliteBuildTempPlan {
+            build_tmp_path: sqlite_build_temp_path_in_dir(
+                path,
+                Path::new(DEFAULT_SQLITE_BUILD_DIR),
+            ),
+            final_tmp_path: sqlite_temp_path(path),
+            source: SqliteBuildTempSource::DefaultTmpfs,
+        };
+    }
+    sqlite_build_temp_plan_beside_final(path)
+}
+
+fn sqlite_build_temp_plan_beside_final(path: &Path) -> SqliteBuildTempPlan {
+    let final_tmp_path = sqlite_temp_path(path);
+    SqliteBuildTempPlan {
+        build_tmp_path: final_tmp_path.clone(),
+        final_tmp_path,
+        source: SqliteBuildTempSource::BesideFinal,
+    }
+}
+
+fn sqlite_build_temp_path_in_dir(path: &Path, build_dir: &Path) -> PathBuf {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("library.sqlite3");
-    let _ = std::fs::create_dir_all(&build_dir);
     build_dir.join(format!(".{name}.build.{}", std::process::id()))
+}
+
+fn is_media_fat_path(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(std::path::Component::RootDir))
+        && matches!(
+            components.next(),
+            Some(std::path::Component::Normal(component)) if component == "media"
+        )
+        && matches!(
+            components.next(),
+            Some(std::path::Component::Normal(component)) if component == "fat"
+        )
 }
 
 fn sqlite_temp_path(path: &Path) -> PathBuf {
@@ -8363,6 +8507,174 @@ mod tests {
             !sqlite_temp_path(&db).exists(),
             "failed temp database should be cleaned up"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_build_temp_defaults_to_tmpfs_for_media_fat_database() {
+        let path = Path::new("/media/fat/mister-magik/library.sqlite3");
+        let plan = sqlite_build_temp_plan_for(path, None);
+
+        assert_eq!(plan.source, SqliteBuildTempSource::DefaultTmpfs);
+        assert!(plan
+            .build_tmp_path
+            .starts_with(Path::new(DEFAULT_SQLITE_BUILD_DIR)));
+        let expected_name = format!(".library.sqlite3.build.{}", std::process::id());
+        assert_eq!(
+            plan.build_tmp_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(expected_name.as_str())
+        );
+        assert_eq!(
+            plan.final_tmp_path,
+            PathBuf::from(format!(
+                "/media/fat/mister-magik/.library.sqlite3.tmp.{}",
+                std::process::id()
+            ))
+        );
+    }
+
+    #[test]
+    fn sqlite_build_temp_env_override_wins_for_media_fat_database() {
+        let override_dir = Path::new("/custom/sqlite-build");
+        let path = Path::new("/media/fat/mister-magik/library.sqlite3");
+        let plan = sqlite_build_temp_plan_for(path, Some(override_dir));
+
+        assert_eq!(plan.source, SqliteBuildTempSource::EnvOverride);
+        assert!(plan.build_tmp_path.starts_with(override_dir));
+        assert_ne!(plan.build_tmp_path, plan.final_tmp_path);
+    }
+
+    #[test]
+    fn sqlite_build_temp_stays_beside_non_media_fat_database() {
+        let root = unique_temp_dir("sqlite-build-host-path");
+        let db = root.join("library.sqlite3");
+        let plan = sqlite_build_temp_plan_for(&db, None);
+
+        assert_eq!(plan.source, SqliteBuildTempSource::BesideFinal);
+        assert_eq!(plan.build_tmp_path, sqlite_temp_path(&db));
+        assert_eq!(plan.build_tmp_path, plan.final_tmp_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_retries_beside_final_after_tmpfs_filesystem_error() {
+        let root = unique_temp_dir("sqlite-build-fallback");
+        let db = root.join("library.sqlite3");
+        let build_tmp = root
+            .join("tmpfs-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp.clone(),
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::DefaultTmpfs,
+        };
+        let mut attempts = Vec::<PathBuf>::new();
+        let mut writer = |path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            attempts.push(path.to_path_buf());
+            if path == build_tmp {
+                return Err("database or disk is full".to_string());
+            }
+            std::fs::write(path, b"fallback-db").map_err(|e| e.to_string())
+        };
+
+        let bytes = save_sqlite_scan_with_progress_using_writer(
+            &db,
+            &sqlite_scan_with_normal_files(&[]),
+            None,
+            initial_plan,
+            &mut writer,
+        )
+        .expect("fallback save");
+
+        assert_eq!(bytes, b"fallback-db".len() as u64);
+        assert_eq!(attempts, vec![build_tmp, sqlite_temp_path(&db)]);
+        assert_eq!(
+            std::fs::read(&db).expect("read fallback db"),
+            b"fallback-db"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_does_not_retry_logical_import_error() {
+        let root = unique_temp_dir("sqlite-build-no-logical-retry");
+        let db = root.join("library.sqlite3");
+        let build_tmp = root
+            .join("tmpfs-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp.clone(),
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::DefaultTmpfs,
+        };
+        let mut attempts = 0usize;
+        let mut writer = |_path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            attempts += 1;
+            Err("insert payload file: UNIQUE constraint failed".to_string())
+        };
+
+        let err = save_sqlite_scan_with_progress_using_writer(
+            &db,
+            &sqlite_scan_with_normal_files(&[]),
+            None,
+            initial_plan,
+            &mut writer,
+        )
+        .expect_err("logical import error should not retry");
+
+        assert!(
+            err.contains("insert payload file"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(attempts, 1);
+        assert!(!db.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_does_not_retry_explicit_build_dir_failure() {
+        let root = unique_temp_dir("sqlite-build-env-no-retry");
+        let db = root.join("library.sqlite3");
+        let build_tmp = root
+            .join("explicit-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp,
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::EnvOverride,
+        };
+        let mut attempts = 0usize;
+        let mut writer = |_path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            attempts += 1;
+            Err("database or disk is full".to_string())
+        };
+
+        let err = save_sqlite_scan_with_progress_using_writer(
+            &db,
+            &sqlite_scan_with_normal_files(&[]),
+            None,
+            initial_plan,
+            &mut writer,
+        )
+        .expect_err("explicit build dir failure should not retry");
+
+        assert!(
+            err.contains("database or disk is full"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(attempts, 1);
+        assert!(!db.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
