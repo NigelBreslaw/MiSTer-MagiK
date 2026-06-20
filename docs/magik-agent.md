@@ -9,11 +9,12 @@ separate from the Slint/MagiK UI binary and is installed as an early init script
 ```
 
 The agent currently configures the static Ethernet path at boot and exposes a
-token-protected line-delimited JSON control port on TCP `7497`.
+token-protected line-delimited JSON control port on TCP `7498`. Zaparoo Core
+uses TCP `7497`, so the MagiK agent must not bind that port.
 
 ## Protocol
 
-The listener binds to `0.0.0.0:7497`. Each request is one JSON line:
+The listener binds to `0.0.0.0:7498`. Each request is one JSON line:
 
 ```json
 {"token":"...","id":1,"cmd":"status","args":{}}

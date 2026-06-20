@@ -26,7 +26,7 @@ mod linux {
     const IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 117);
     const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
-    const AGENT_PORT: u16 = 7497;
+    const AGENT_PORT: u16 = 7498;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";

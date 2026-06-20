@@ -81,9 +81,10 @@ visual lockdown.
 
 The standalone `mister-magik-agent` may be installed as
 `/etc/init.d/S00magik-agent`. It provides the early Ethernet setup path and a
-token-protected TCP control port on `7497`; see `docs/magik-agent.md`. If it
-strands boot networking, remove `/etc/init.d/S00magik-agent` from the SD card.
-If needed, restore the parked legacy FastNet script by renaming
+token-protected TCP control port on `7498`; see `docs/magik-agent.md`. TCP
+`7497` is reserved for Zaparoo Core. If the agent strands boot networking,
+remove `/etc/init.d/S00magik-agent` from the SD card. If needed, restore the
+parked legacy FastNet script by renaming
 `/etc/init.d/disabled-S00fastnet.magik-agent` back to
 `/etc/init.d/S00fastnet`.
 

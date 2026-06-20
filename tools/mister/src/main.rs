@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
-const AGENT_PORT: u16 = 7497;
+const AGENT_PORT: u16 = 7498;
 const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
