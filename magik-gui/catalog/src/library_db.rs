@@ -41,13 +41,13 @@ pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3
 pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
-type FileFingerprint = BTreeMap<String, (u64, i64)>;
+type FileFingerprint = BTreeMap<String, FileFingerprintEntry>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 type MachineMetadataRow = (String, String, Option<String>, Option<String>);
 type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
-const SCHEMA_VERSION: u32 = 27;
+const SCHEMA_VERSION: u32 = 28;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -274,6 +274,13 @@ struct DbFingerprint {
     file_fingerprints: FileFingerprint,
     container_fingerprints: BTreeMap<String, (u64, i64)>,
     directory_manifest: DirectoryManifest,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct FileFingerprintEntry {
+    size: u64,
+    mtime_ns: i64,
+    content_hash: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1572,7 +1579,10 @@ fn scan_library_with_progress(
                 break;
             }
         };
-        file_fingerprints.insert(f.path.display().to_string(), (f.size, f.mtime_secs));
+        file_fingerprints.insert(
+            f.path.display().to_string(),
+            file_fingerprint_entry(&f.path, f.size, f.mtime_secs),
+        );
         if idx.is_multiple_of(250) {
             if let Some(report) = progress.as_mut() {
                 report(
@@ -1686,7 +1696,10 @@ fn scan_library_with_progress(
     }
     if let Ok(fingerprints) = preview_worker::preview_archive_fingerprints_from_env() {
         for (path, size, mtime_secs) in fingerprints {
-            file_fingerprints.insert(path, (size, mtime_secs));
+            file_fingerprints.insert(
+                path.clone(),
+                file_fingerprint_entry(Path::new(&path), size, mtime_secs),
+            );
         }
     }
     if discover_us == 0 {
@@ -1792,10 +1805,11 @@ fn preview_archive_fingerprint_matches(
         return false;
     }
     current.into_iter().all(|(path, size, mtime_secs)| {
+        let current = file_fingerprint_entry(Path::new(&path), size, mtime_secs);
         existing
             .file_fingerprints
             .get(&path)
-            .is_some_and(|fingerprint| *fingerprint == (size, mtime_secs))
+            .is_some_and(|fingerprint| *fingerprint == current)
     })
 }
 
@@ -1874,12 +1888,12 @@ impl DirectorySignatureBuilder {
 
     fn add_dir_child(&mut self, name: &str) {
         self.child_count += 1;
-        self.hash ^= manifest_child_hash(b"d", name.as_bytes(), 0, 0);
+        self.hash ^= manifest_child_hash(b"d", name.as_bytes(), 0, 0, 0);
     }
 
-    fn add_file_child(&mut self, name: &str, size: u64, mtime_secs: i64) {
+    fn add_file_child(&mut self, name: &str, size: u64, mtime_secs: i64, content_hash: u64) {
         self.child_count += 1;
-        self.hash ^= manifest_child_hash(b"f", name.as_bytes(), size, mtime_secs);
+        self.hash ^= manifest_child_hash(b"f", name.as_bytes(), size, mtime_secs, content_hash);
     }
 
     fn finish(self) -> DirectorySignature {
@@ -1892,9 +1906,21 @@ impl DirectorySignatureBuilder {
     }
 }
 
-fn manifest_child_hash(kind: &[u8], name: &[u8], size: u64, mtime_secs: i64) -> u64 {
+fn manifest_child_hash(
+    kind: &[u8],
+    name: &[u8],
+    size: u64,
+    mtime_secs: i64,
+    content_hash: u64,
+) -> u64 {
     let mut hash = MANIFEST_HASH_OFFSET;
-    for bytes in [kind, name, &size.to_le_bytes(), &mtime_secs.to_le_bytes()] {
+    for bytes in [
+        kind,
+        name,
+        &size.to_le_bytes(),
+        &mtime_secs.to_le_bytes(),
+        &content_hash.to_le_bytes(),
+    ] {
         for b in bytes {
             hash ^= *b as u64;
             hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
@@ -1980,10 +2006,12 @@ fn build_directory_manifest(
                     continue;
                 };
                 let mtime_secs = mtime_secs(&meta);
+                let content_hash = fingerprint_content_hash(p, meta.len()).unwrap_or(0);
                 manifest_builders.entry(parent).or_default().add_file_child(
                     &name,
                     meta.len(),
                     mtime_secs,
+                    content_hash,
                 );
                 let file = FoundFile {
                     path: p.to_path_buf(),
@@ -2974,6 +3002,68 @@ fn file_signature(path: &Path) -> FileSignature {
             mtime_secs: mtime_secs(&metadata),
         })
         .unwrap_or_default()
+}
+
+fn file_fingerprint_entry(path: &Path, size: u64, mtime_ns: i64) -> FileFingerprintEntry {
+    FileFingerprintEntry {
+        size,
+        mtime_ns,
+        content_hash: fingerprint_content_hash(path, size).unwrap_or(0),
+    }
+}
+
+fn fingerprint_content_hash(path: &Path, size: u64) -> Option<u64> {
+    if is_preview_archive_fingerprint_path(&path.display().to_string()) {
+        return bounded_file_hash(path, size, 256 * 1024, 64 * 1024);
+    }
+    if should_hash_small_metadata_path(path, size) {
+        return bounded_file_hash(path, size, 256 * 1024, 0);
+    }
+    None
+}
+
+fn should_hash_small_metadata_path(path: &Path, size: u64) -> bool {
+    const MAX_HASHED_METADATA_BYTES: u64 = 256 * 1024;
+    if size > MAX_HASHED_METADATA_BYTES {
+        return false;
+    }
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(ext.as_str(), "mra" | "mgl") || is_amigavision_listing_path(path)
+}
+
+fn bounded_file_hash(path: &Path, size: u64, head_len: u64, tail_len: u64) -> Option<u64> {
+    let mut file = File::open(path).ok()?;
+    let mut hash = MANIFEST_HASH_OFFSET;
+    let head = head_len.min(size);
+    hash_file_chunk(&mut file, 0, head, &mut hash).ok()?;
+    if tail_len > 0 && size > head {
+        let tail = tail_len.min(size - head);
+        hash_file_chunk(&mut file, size - tail, tail, &mut hash).ok()?;
+    }
+    Some(hash)
+}
+
+fn hash_file_chunk(file: &mut File, offset: u64, len: u64, hash: &mut u64) -> std::io::Result<()> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut remaining = len;
+    let mut buf = [0u8; 8192];
+    while remaining > 0 {
+        let to_read = remaining.min(buf.len() as u64) as usize;
+        let n = file.read(&mut buf[..to_read])?;
+        if n == 0 {
+            break;
+        }
+        for byte in &buf[..n] {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
+        }
+        remaining -= n as u64;
+    }
+    Ok(())
 }
 
 fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadata> {
@@ -4075,9 +4165,16 @@ fn refresh_sqlite_preview_assets(
         }
     }
     for (path, size, mtime_secs) in preview_fingerprints {
+        let fingerprint = file_fingerprint_entry(Path::new(&path), size, mtime_secs);
         tx.execute(
-            "INSERT OR REPLACE INTO file_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
-            params![path, size as i64, mtime_secs],
+            "INSERT OR REPLACE INTO file_fingerprints(file_path,size,mtime_secs,content_hash)
+             VALUES (?1,?2,?3,?4)",
+            params![
+                path,
+                fingerprint.size as i64,
+                fingerprint.mtime_ns,
+                fingerprint.content_hash as i64
+            ],
         )
         .map_err(|e| format!("insert preview fingerprint: {e}"))?;
     }
@@ -4409,7 +4506,8 @@ fn write_sqlite_scan_with_sources(
         CREATE TABLE file_fingerprints (
             file_path TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
-            mtime_secs INTEGER NOT NULL
+            mtime_secs INTEGER NOT NULL,
+            content_hash INTEGER NOT NULL
         ) WITHOUT ROWID;
         CREATE TABLE container_fingerprints (
             file_path TEXT PRIMARY KEY,
@@ -4505,7 +4603,7 @@ fn write_sqlite_scan_with_sources(
                  VALUES (?1,?2,?3,?4,?5,?6)",
             )
             .map_err(|e| format!("prepare file fact insert: {e}"))?;
-        for (path, (size, mtime_secs)) in &scan.file_fingerprints {
+        for (path, fingerprint) in &scan.file_fingerprints {
             let role = if container_paths.contains(path) {
                 "container"
             } else if normal_paths.contains(path) {
@@ -4515,8 +4613,8 @@ fn write_sqlite_scan_with_sources(
             };
             stmt.execute(params![
                 path.as_str(),
-                *size as i64,
-                *mtime_secs,
+                fingerprint.size as i64,
+                fingerprint.mtime_ns,
                 path_ext(path).unwrap_or_default(),
                 role,
                 Option::<&str>::None
@@ -4539,7 +4637,11 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("prepare payload insert: {e}"))?;
         for payload in &scan.normal_files {
             let path = &payload.path;
-            let (size, mtime_secs) = scan.file_fingerprints.get(path).copied().unwrap_or((0, 0));
+            let fingerprint = scan
+                .file_fingerprints
+                .get(path)
+                .copied()
+                .unwrap_or_default();
             stmt.execute(params![
                 format!("file:{path}"),
                 path.as_str(),
@@ -4551,8 +4653,8 @@ fn write_sqlite_scan_with_sources(
                 payload.rule.mount.index as i64,
                 payload.rule.mount.delay_secs as i64,
                 payload_disposition_str(payload.rule.disposition),
-                size as i64,
-                mtime_secs,
+                fingerprint.size as i64,
+                fingerprint.mtime_ns,
                 source_kind_name(payload.rule.provenance.kind),
                 payload.rule.provenance.detail
             ])
@@ -4984,11 +5086,19 @@ fn write_sqlite_scan_with_sources(
     {
         let stage_t = Instant::now();
         let mut stmt = tx
-            .prepare("INSERT INTO file_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)")
+            .prepare(
+                "INSERT INTO file_fingerprints(file_path,size,mtime_secs,content_hash)
+                 VALUES (?1,?2,?3,?4)",
+            )
             .map_err(|e| format!("prepare file fingerprint insert: {e}"))?;
-        for (path, (size, mtime_secs)) in &scan.file_fingerprints {
-            stmt.execute(params![path.as_str(), *size as i64, *mtime_secs])
-                .map_err(|e| format!("insert file fingerprint: {e}"))?;
+        for (path, fingerprint) in &scan.file_fingerprints {
+            stmt.execute(params![
+                path.as_str(),
+                fingerprint.size as i64,
+                fingerprint.mtime_ns,
+                fingerprint.content_hash as i64
+            ])
+            .map_err(|e| format!("insert file fingerprint: {e}"))?;
         }
         report_library_import_timing(
             "insert_file_fingerprints",
@@ -5105,7 +5215,7 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
     }
     let mut file_fingerprints = BTreeMap::new();
     let mut file_stmt = conn
-        .prepare("SELECT file_path,size,mtime_secs FROM file_fingerprints")
+        .prepare("SELECT file_path,size,mtime_secs,content_hash FROM file_fingerprints")
         .ok()?;
     let file_rows = file_stmt
         .query_map([], |row| {
@@ -5113,12 +5223,20 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         })
         .ok()?;
     for row in file_rows {
-        let (path, size, mtime) = row.ok()?;
-        file_fingerprints.insert(path, (size.max(0) as u64, mtime));
+        let (path, size, mtime, content_hash) = row.ok()?;
+        file_fingerprints.insert(
+            path,
+            FileFingerprintEntry {
+                size: size.max(0) as u64,
+                mtime_ns: mtime,
+                content_hash: content_hash as u64,
+            },
+        );
     }
 
     let mut container_fingerprints = BTreeMap::new();
@@ -5652,7 +5770,7 @@ fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+        .map(|d| d.as_nanos().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
 }
 
@@ -7946,6 +8064,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn directory_manifest_validation_detects_same_size_metadata_edit() {
+        let root = unique_temp_dir("manifest-metadata-content");
+        let arcade_dir = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade_dir).expect("create arcade dir");
+        let mra = arcade_dir.join("same.mra");
+        std::fs::write(&mra, b"<name>Alpha</name>").expect("write original mra");
+        set_file_mtime_for_test(&mra, 1_700_000_000, 123_000_000);
+        let root_key = root.display().to_string();
+        let mut stored_manifest = build_directory_manifest(std::slice::from_ref(&root_key), None);
+
+        std::fs::write(&mra, b"<name>Bravo</name>").expect("write changed mra");
+        set_file_mtime_for_test(&mra, 1_700_000_000, 123_000_000);
+        if let Some(root_sig) = stored_manifest.get_mut(&root_key) {
+            let meta = std::fs::metadata(&root).expect("stat root after edit");
+            root_sig.dir_size = meta.len();
+            root_sig.dir_mtime_secs = mtime_secs(&meta);
+        }
+        let fingerprint = fingerprint_with_manifest(stored_manifest);
+
+        let validated =
+            validate_or_rebuild_directory_manifest(std::slice::from_ref(&root_key), &fingerprint);
+
+        assert_eq!(validated, Some(DirectoryManifest::new()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn refresh_plan_uses_unchanged_database_without_refresh() {
         let manifest = single_dir_manifest("/media/fat/_Arcade", 1);
@@ -8061,7 +8207,11 @@ mod tests {
                 .expect("read fingerprint")
                 .file_fingerprints
                 .get(pack_path),
-            Some(&(1234, 77))
+            Some(&FileFingerprintEntry {
+                size: 1234,
+                mtime_ns: 77,
+                content_hash: 0,
+            })
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -8783,6 +8933,26 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
+    fn set_file_mtime_for_test(path: &Path, sec: i64, nsec: i64) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("path cstring");
+        let times = [
+            libc::timespec {
+                tv_sec: sec as libc::time_t,
+                tv_nsec: nsec as libc::c_long,
+            },
+            libc::timespec {
+                tv_sec: sec as libc::time_t,
+                tv_nsec: nsec as libc::c_long,
+            },
+        ];
+        let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(rc, 0, "utimensat failed for {}", path.display());
+    }
+
     fn fingerprint_with_manifest(directory_manifest: DirectoryManifest) -> DbFingerprint {
         DbFingerprint {
             normal_files: 0,
@@ -8801,7 +8971,16 @@ mod tests {
         let mut fingerprint = fingerprint_with_manifest(DirectoryManifest::new());
         fingerprint.file_fingerprints = files
             .iter()
-            .map(|(path, size, mtime_secs)| (path.to_string(), (*size, *mtime_secs)))
+            .map(|(path, size, mtime_secs)| {
+                (
+                    path.to_string(),
+                    FileFingerprintEntry {
+                        size: *size,
+                        mtime_ns: *mtime_secs,
+                        content_hash: 0,
+                    },
+                )
+            })
             .collect();
         fingerprint
     }

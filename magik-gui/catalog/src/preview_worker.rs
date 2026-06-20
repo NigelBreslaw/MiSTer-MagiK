@@ -798,7 +798,7 @@ fn preview_archive_fingerprints_for_paths(
                 .modified()
                 .ok()
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs() as i64)
+                .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
                 .unwrap_or(0);
             Ok(PreviewArchiveFingerprint {
                 path,
