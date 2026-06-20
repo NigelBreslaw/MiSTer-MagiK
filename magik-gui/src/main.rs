@@ -68,11 +68,12 @@ pub use mister_magik_fb::{
     preview_worker,
 };
 
+use display_config::detect_runtime_display_geometry;
 use fb::{Display, Pixel, VsyncPacer, VsyncWaitStatus};
 use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::FramebufferFormat;
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
-use ui_display::UiDisplayPlan;
+use ui_display::{RuntimeDisplayGeometry, UiDisplayPlan};
 use ui_runner::ui_boot::{boot_framebuffer_format, settle_boot_black_frame, ui_fpga_scaled_mode};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
@@ -651,7 +652,8 @@ fn route_framebuffer(f: &mut Fpga) {
 }
 
 fn early_black_route(f: &mut Fpga) {
-    let display_plan = UiDisplayPlan::from_mister_ini_file();
+    let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "early-black");
+    let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
     println!("{}", display_plan.log_line());
     if display_plan.fallback {
         boot_analytics::event("display_plan_fallback", display_plan.log_line());
@@ -736,6 +738,47 @@ fn early_black_route(f: &mut Fpga) {
         route_mode.hact,
         route_mode.vact
     );
+}
+
+fn detect_runtime_display_geometry_for_plan(
+    f: &mut Fpga,
+    label: &str,
+) -> Option<RuntimeDisplayGeometry> {
+    match detect_runtime_display_geometry(f) {
+        Ok(detected) => {
+            println!("runtime-video-info[{label}]: {}", detected.video.log_line());
+            match detected.geometry {
+                Some(geometry) => {
+                    boot_analytics::event(
+                        "runtime_display_geometry_detected",
+                        format!(
+                            "label={label} output={}x{} scan={}x{}",
+                            geometry.output_w, geometry.output_h, geometry.scan_w, geometry.scan_h
+                        ),
+                    );
+                    Some(geometry)
+                }
+                None => {
+                    eprintln!(
+                        "warning: runtime display geometry invalid for {label}; falling back to MiSTer.ini"
+                    );
+                    boot_analytics::event(
+                        "runtime_display_geometry_invalid",
+                        format!("label={label} {}", detected.video.log_line()),
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("warning: failed to detect runtime display geometry for {label}: {e}");
+            boot_analytics::event(
+                "runtime_display_geometry_detect_failed",
+                format!("label={label} error={e}"),
+            );
+            None
+        }
+    }
 }
 
 fn fb_probe(f: &mut Fpga) {

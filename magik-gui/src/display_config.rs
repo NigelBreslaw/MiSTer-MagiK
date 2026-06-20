@@ -1,6 +1,6 @@
 use crate::fb::FbInfo;
 use crate::fpga::{FbParams, Fpga, VideoInfo};
-use crate::ui_display::UiDisplay;
+use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay};
 use std::io;
 
 #[derive(Clone, Copy, Debug)]
@@ -11,6 +11,25 @@ pub struct DisplayConfig {
     pub render_w: usize,
     pub render_h: usize,
     pub fb_scale: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeDisplayDetection {
+    pub video: VideoInfo,
+    pub geometry: Option<RuntimeDisplayGeometry>,
+}
+
+pub fn detect_runtime_display_geometry(f: &mut Fpga) -> io::Result<RuntimeDisplayDetection> {
+    let video = f.read_video_info()?;
+    Ok(RuntimeDisplayDetection {
+        video,
+        geometry: RuntimeDisplayGeometry::from_video_words(
+            video.width,
+            video.height,
+            video.de_h,
+            video.de_v,
+        ),
+    })
 }
 
 impl DisplayConfig {

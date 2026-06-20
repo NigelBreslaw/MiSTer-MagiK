@@ -30,7 +30,7 @@ use crate::bitmap_text::ConsoleFont;
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
-use crate::display_config::DisplayConfig;
+use crate::display_config::{detect_runtime_display_geometry, DisplayConfig};
 #[cfg(mister_bench_scenes)]
 use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
 use crate::input::{PadInfo, PadPool};
@@ -47,7 +47,7 @@ use crate::screenshot_transitions::{
     PreviewTransitionDemo, PreviewTransitionEffect, PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
+use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
@@ -225,6 +225,47 @@ macro_rules! with_scene_app {
     }};
 }
 
+fn detect_runtime_display_geometry_for_plan(
+    f: &mut Fpga,
+    label: &str,
+) -> Option<RuntimeDisplayGeometry> {
+    match detect_runtime_display_geometry(f) {
+        Ok(detected) => {
+            println!("runtime-video-info[{label}]: {}", detected.video.log_line());
+            match detected.geometry {
+                Some(geometry) => {
+                    boot_analytics::event(
+                        "runtime_display_geometry_detected",
+                        format!(
+                            "label={label} output={}x{} scan={}x{}",
+                            geometry.output_w, geometry.output_h, geometry.scan_w, geometry.scan_h
+                        ),
+                    );
+                    Some(geometry)
+                }
+                None => {
+                    eprintln!(
+                        "warning: runtime display geometry invalid for {label}; falling back to MiSTer.ini"
+                    );
+                    boot_analytics::event(
+                        "runtime_display_geometry_invalid",
+                        format!("label={label} {}", detected.video.log_line()),
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("warning: failed to detect runtime display geometry for {label}: {e}");
+            boot_analytics::event(
+                "runtime_display_geometry_detect_failed",
+                format!("label={label} error={e}"),
+            );
+            None
+        }
+    }
+}
+
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
@@ -234,7 +275,8 @@ pub fn run_ui(f: &mut Fpga) {
     let _vt = VtGraphicsGuard::enter_or_warn();
 
     let fb_format = boot_framebuffer_format();
-    let display_plan = UiDisplayPlan::from_mister_ini_file();
+    let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "ui");
+    let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
     println!("{}", display_plan.log_line());
     if display_plan.fallback {
         boot_analytics::event("display_plan_fallback", display_plan.log_line());

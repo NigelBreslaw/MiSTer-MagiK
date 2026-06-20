@@ -12,6 +12,8 @@ pub const DEFAULT_OUTPUT_W: u16 = 1920;
 pub const DEFAULT_OUTPUT_H: u16 = 1080;
 pub const UI_FB_W: usize = 960;
 pub const UI_FB_H: usize = 540;
+const MIN_RUNTIME_SCAN_W: u16 = 320;
+const MIN_RUNTIME_SCAN_H: u16 = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiDisplayPlan {
@@ -27,19 +29,44 @@ pub struct UiDisplayPlan {
 }
 
 impl UiDisplayPlan {
-    pub fn from_mister_ini_file() -> Self {
-        std::fs::read_to_string(MISTER_INI_PATH)
-            .ok()
-            .and_then(|ini| Self::from_mister_ini_text(&ini))
+    pub fn from_runtime_or_mister_ini_file(runtime: Option<RuntimeDisplayGeometry>) -> Self {
+        let ini = std::fs::read_to_string(MISTER_INI_PATH).ok();
+        if let Some(runtime) = runtime {
+            return Self::from_runtime_geometry(
+                runtime,
+                ini.as_deref()
+                    .is_some_and(Self::direct_video_policy_from_mister_ini_text),
+            );
+        }
+        ini.and_then(|ini| Self::from_mister_ini_text(&ini))
             .unwrap_or_else(Self::fallback_1080p)
     }
 
     pub fn from_mister_ini_text(ini: &str) -> Option<Self> {
         let parsed = ParsedIni::parse(ini);
-        let direct_video = parsed
-            .value("MiSTer", "direct_video")
-            .or_else(|| parsed.value("global", "direct_video"))
-            .is_some_and(|value| value == "1" || value == "2");
+        Self::from_parsed_mister_ini(&parsed)
+    }
+
+    #[cfg(test)]
+    pub fn from_runtime_or_mister_ini_text(
+        runtime: Option<RuntimeDisplayGeometry>,
+        ini: &str,
+    ) -> Option<Self> {
+        if let Some(runtime) = runtime {
+            return Some(Self::from_runtime_geometry(
+                runtime,
+                Self::direct_video_policy_from_mister_ini_text(ini),
+            ));
+        }
+        Self::from_mister_ini_text(ini)
+    }
+
+    pub fn direct_video_policy_from_mister_ini_text(ini: &str) -> bool {
+        direct_video_from_parsed(&ParsedIni::parse(ini))
+    }
+
+    fn from_parsed_mister_ini(parsed: &ParsedIni<'_>) -> Option<Self> {
+        let direct_video = direct_video_from_parsed(parsed);
         if direct_video {
             let pal = parsed
                 .value("MiSTer", "menu_pal")
@@ -73,6 +100,19 @@ impl UiDisplayPlan {
             false,
             "mister-ini-video-mode",
         ))
+    }
+
+    pub fn from_runtime_geometry(runtime: RuntimeDisplayGeometry, direct_video: bool) -> Self {
+        Self::from_geometry(
+            VideoModeGeometry::with_scan(
+                runtime.output_w,
+                runtime.output_h,
+                runtime.scan_w,
+                runtime.scan_h,
+            ),
+            direct_video,
+            "runtime-video-info",
+        )
     }
 
     pub fn fallback_1080p() -> Self {
@@ -123,6 +163,36 @@ impl UiDisplayPlan {
             self.direct_video,
             self.fallback
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeDisplayGeometry {
+    pub output_w: u16,
+    pub output_h: u16,
+    pub scan_w: u16,
+    pub scan_h: u16,
+}
+
+impl RuntimeDisplayGeometry {
+    pub fn from_video_words(width: u32, height: u32, de_h: u16, de_v: u16) -> Option<Self> {
+        let scan_w = u16::try_from(width).ok().filter(|value| *value > 0)?;
+        let scan_h = u16::try_from(height).ok().filter(|value| *value > 0)?;
+        let output_w = if de_h > 0 { de_h } else { scan_w };
+        let output_h = if de_v > 0 { de_v } else { scan_h };
+        if scan_w < MIN_RUNTIME_SCAN_W
+            || scan_h < MIN_RUNTIME_SCAN_H
+            || output_w < MIN_RUNTIME_SCAN_W
+            || output_h < MIN_RUNTIME_SCAN_H
+        {
+            return None;
+        }
+        Some(Self {
+            output_w,
+            output_h,
+            scan_w,
+            scan_h,
+        })
     }
 }
 
@@ -299,6 +369,13 @@ fn predefined_video_mode(mode: usize) -> Option<VideoModeGeometry> {
     MODES.get(mode).copied()
 }
 
+fn direct_video_from_parsed(parsed: &ParsedIni<'_>) -> bool {
+    parsed
+        .value("MiSTer", "direct_video")
+        .or_else(|| parsed.value("global", "direct_video"))
+        .is_some_and(|value| value == "1" || value == "2")
+}
+
 struct ParsedIni<'a> {
     entries: Vec<(&'a str, &'a str, &'a str)>,
 }
@@ -408,6 +485,69 @@ mod tests {
         assert_eq!((plan.fb_w, plan.fb_h), (960, 540));
         assert!(!plan.direct_video);
         assert!(!plan.fallback);
+    }
+
+    #[test]
+    fn detected_geometry_wins_over_ini_geometry() {
+        let runtime = RuntimeDisplayGeometry::from_video_words(1280, 720, 1280, 720);
+        let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=8\n";
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini).expect("plan");
+
+        assert_eq!(plan.source, "runtime-video-info");
+        assert_eq!((plan.output_w, plan.output_h), (1280, 720));
+        assert_eq!((plan.fb_w, plan.fb_h), (1280, 720));
+        assert!(!plan.direct_video);
+    }
+
+    #[test]
+    fn detected_geometry_preserves_ini_direct_video_policy() {
+        let runtime = RuntimeDisplayGeometry::from_video_words(640, 480, 640, 480);
+        let ini =
+            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n[Menu]\nvideo_mode=8\n";
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini).expect("plan");
+
+        assert_eq!(plan.source, "runtime-video-info");
+        assert_eq!((plan.output_w, plan.output_h), (640, 480));
+        assert!(plan.direct_video);
+    }
+
+    #[test]
+    fn ini_geometry_is_fallback_when_detection_fails() {
+        let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=8\n";
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini).expect("plan");
+
+        assert_eq!(plan.source, "mister-ini-video-mode");
+        assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
+        assert_eq!((plan.fb_w, plan.fb_h), (960, 540));
+    }
+
+    #[test]
+    fn custom_ini_geometry_stays_compatible_as_fallback() {
+        let ini = "[MiSTer]\ndirect_video=0\n[Menu]\nvideo_mode=1280,110,40,220,720,5,5,20,74250\n";
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(None, ini).expect("plan");
+
+        assert_eq!(plan.source, "mister-ini-video-mode");
+        assert_eq!((plan.output_w, plan.output_h), (1280, 720));
+        assert_eq!((plan.fb_w, plan.fb_h), (1280, 720));
+    }
+
+    #[test]
+    fn detected_pixel_repeat_geometry_uses_de_as_output_and_width_as_scan() {
+        let runtime =
+            RuntimeDisplayGeometry::from_video_words(1280, 1440, 2560, 1440).expect("runtime");
+        let plan = UiDisplayPlan::from_runtime_geometry(runtime, false);
+
+        assert_eq!((plan.output_w, plan.output_h), (2560, 1440));
+        assert_eq!((plan.scan_w, plan.scan_h), (1280, 1440));
+        assert_eq!((plan.fb_w, plan.fb_h), (1280, 720));
+    }
+
+    #[test]
+    fn invalid_tiny_runtime_geometry_is_rejected_for_ini_fallback() {
+        assert_eq!(
+            RuntimeDisplayGeometry::from_video_words(192, 30, 192, 30),
+            None
+        );
     }
 
     #[test]
