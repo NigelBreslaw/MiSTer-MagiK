@@ -68,18 +68,16 @@ scripts/restore-stock-boot.sh
 scripts/install-slint-boot.sh
 ```
 
-`scripts/mister reboot` and `scripts/mister reboot-wait` default to Linux
-`/sbin/reboot` because the Main fork's direct reset path has reproduced an
-Ethernet receive-path stall after warm reboot. `reboot-wait` then waits for the
-down-to-up transition and confirms the device can run commands. Prefer it over
-blind sleeps.
+`scripts/mister reboot` and `scripts/mister reboot-wait` default to the
+supervised MagiK reboot path. That sends `mister_magik_reboot` through
+`/dev/MiSTer_cmd`, keeps MagiK display ownership until reset, and the Main fork
+then asks Linux to reboot through `/sbin/reboot` so Ethernet gets the normal
+kernel shutdown path. `reboot-wait` waits for the down-to-up transition and
+confirms the device can run commands. Prefer it over blind sleeps.
 
-Use `scripts/mister reboot --supervised` or
-`scripts/mister reboot-wait --supervised` only for HDMI/visual-lockdown
-validation. That path sends `mister_magik_reboot` through `/dev/MiSTer_cmd`,
-keeps MagiK display ownership until reset, and is valuable for checking OSD/menu
-flicker, but it is not the default for unattended Ethernet dev loops until the
-fork's final reset primitive is fixed.
+Use `scripts/mister reboot --raw` or `scripts/mister reboot-wait --raw` only for
+fallback recovery or for testing the detached Linux reboot path without MagiK
+visual lockdown.
 
 The standalone `mister-magik-agent` may be installed as
 `/etc/init.d/S00magik-agent`. It provides the early Ethernet setup path and a

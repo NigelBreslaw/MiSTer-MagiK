@@ -61,7 +61,7 @@ scripts/mister agent magik status
 scripts/mister agent magik restart-launcher
 scripts/mister agent reboot-wait --timeout 40
 scripts/mister agent boot-profile 3 --timeout 40
-scripts/mister agent boot-profile 1 --supervised --timeout 40
+scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
 ```
 
 `ping` confirms the authenticated TCP path. `status` returns:
@@ -104,17 +104,18 @@ falls back to SSH when the agent port is unavailable. The bundle includes:
 - MagiK status files and recent Main/Slint/agent log tails
 
 `reboot-wait` asks the agent to schedule a reboot, then waits for the agent port
-first and SSH second. It defaults to the same detached Linux reboot primitive as
-the host wrapper:
+first and SSH second. It defaults to the supervised MagiK visual-lockdown reboot.
+The Main fork keeps OSD/menu/framebuffer paths suppressed, then asks Linux to
+reboot through:
 
 ```sh
-nohup /sbin/reboot >/dev/null 2>&1 &
+/sbin/reboot
 ```
 
 The agent writes a synchronous `reboot_scheduled` breadcrumb to
 `/media/fat/mister-magik/bootlogs/agent.log` before rebooting so a failed reboot
-can still be root-caused after manual recovery. Pass `--supervised` only for
-explicit MagiK visual-lockdown reset validation.
+can still be root-caused after manual recovery. Pass `--raw` only for fallback
+recovery or detached Linux reboot testing without MagiK visual lockdown.
 
 `magik` exposes Main-owned launcher supervisor controls:
 
@@ -149,9 +150,10 @@ transport by default; set `MISTER_DEPLOY_TRANSPORT=ssh` only when intentionally
 testing or recovering through the old path.
 
 `boot-profile` reboots the device, waits for ports to drop, then compares first
-agent response against first SSH command readiness. It defaults to Linux
-`/sbin/reboot`; pass `--supervised` only when validating the MagiK visual
-lockdown reset path. Rows are appended to:
+agent response against first SSH command readiness. It defaults to the
+supervised MagiK reboot path and accepts `--fail-on-timeout` for release gates
+such as the 15-reboot Ethernet soak. Pass `--raw` only when testing the detached
+Linux reboot path. Rows are appended to:
 
 ```text
 history/toolchain-bench/results-agent.tsv

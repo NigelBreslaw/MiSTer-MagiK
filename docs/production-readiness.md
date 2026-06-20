@@ -52,6 +52,18 @@ Run a quick non-destructive smoke while iterating on the deployed build:
 scripts/device-release-acceptance.sh --skip-deploy --fast
 ```
 
+Run only the health tier while iterating on basic device telemetry:
+
+```bash
+scripts/device-release-acceptance.sh --skip-deploy --tiers health
+```
+
+Run targeted tiers when validating one part of the release gate:
+
+```bash
+scripts/device-release-acceptance.sh --skip-deploy --tiers framebuffer-route,launcher-lifecycle,catalog,handoff
+```
+
 Run the long soak only when explicitly requested:
 
 ```bash
@@ -64,11 +76,12 @@ snapshots, logs, optional frame/profile files, and `report.md`.
 
 The device gate is telemetry-first: it waits on `scripts/mister status --json`,
 launcher status fields, Main status fields, `/tmp/mister-magik/events.jsonl`,
-and trace TSV row growth before falling back to timeout failure. The default
-gate includes the expanded route, preview, velocity-scroll, controller, audio,
-catalog mutation, first-boot scan, launch matrix, exit-menu, crash-loop,
-display-mode, and install/restore checks. The 30-60 minute soak is deliberately
-default-off behind `--soak`.
+and trace TSV row growth before falling back to timeout failure. The gate can
+run named tiers with `--tiers`: `health`, `framebuffer-route`,
+`launcher-lifecycle`, `catalog`, `handoff`, `display-modes`, `install-restore`,
+and `soak`. The default gate includes every tier except `soak`; `--fast`
+preserves the quick non-destructive preset. The 30-60 minute soak is
+deliberately default-off behind `--soak` or `--tiers soak`.
 
 The default launch smoke target is:
 
@@ -95,6 +108,16 @@ The gate verifies supervised reboot while the launcher is active. It uses raw
 reboot only as recovery after the exit-to-menu and game-handoff smokes, because
 those tests intentionally leave launcher command mode.
 
+In the non-fast release preset, the launcher lifecycle tier also runs a
+15-sample supervised reboot soak:
+
+```bash
+scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
+```
+
+Every sample must recover the agent port, SSH command execution, and Main
+`LauncherActive` status. Any missed recovery is a release blocker.
+
 The stock MiSTer OSD must not appear while the launcher owns the display. OSD is
 acceptable during the explicit exit-to-menu and game-handoff portions of the
 device gate, where the test intentionally leaves launcher ownership before
@@ -117,6 +140,8 @@ Block a public beta release if any of these fail:
 - Restart after crash-policy smoke does not return to `LauncherActive` without
   raw reboot recovery.
 - Supervised reboot does not return to `LauncherActive`.
+- Any sample in the 15-reboot supervised Ethernet soak misses agent, SSH, or
+  `LauncherActive` recovery.
 - The acceptance script does not produce a report and artifacts.
 
 ## Current Evidence
