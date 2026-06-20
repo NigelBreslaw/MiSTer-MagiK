@@ -2098,6 +2098,28 @@ impl UiFrameTarget {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn copy_rect_from_565_strided(
+        &mut self,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride: usize,
+        src_x: usize,
+        src_y: usize,
+    ) {
+        let _ = ui;
+        match self {
+            Self::Rgb565 { .. } => {
+                disp.copy_rect_from_565_strided(x, y, w, h, src, src_stride, src_x, src_y)
+            }
+        }
+    }
+
     pub(super) fn blit_raw_preview(
         &mut self,
         ui: &UiDisplay,
@@ -2322,7 +2344,7 @@ pub(super) fn copy_arcade_list_update(
 ) -> u32 {
     match update {
         ArcadeListUpdate::Full(rect) => {
-            renderer.copy_layer_to_target(target, disp, ui);
+            renderer.copy_layer_to_target(target, disp, ui, true);
             rect.rows()
         }
         ArcadeListUpdate::Scroll { .. } => {
@@ -2330,7 +2352,7 @@ pub(super) fn copy_arcade_list_update(
             // prior live-framebuffer scroll-present path was visually correct
             // but roughly doubled present cost because `/dev/fb0` reads are
             // expensive on the MiSTer write-combined framebuffer.
-            renderer.copy_layer_to_target(target, disp, ui);
+            renderer.copy_layer_to_target(target, disp, ui, false);
             ArcadeListRenderer::dirty_rect().rows()
         }
     }
