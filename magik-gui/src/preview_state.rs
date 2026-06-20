@@ -1264,7 +1264,7 @@ mod tests {
             decoded_bytes: 0,
             source_width: 0,
             source_height: 0,
-            load_source: crate::preview_worker::PreviewLoadSource::RawFile,
+            load_source: crate::preview_worker::PreviewLoadSource::ArchiveMem,
             storage_format: crate::preview_worker::PreviewStorageFormat::RawRgb565,
             resize_filter: crate::preview_worker::PreviewResizeFilter::Off,
             priority,

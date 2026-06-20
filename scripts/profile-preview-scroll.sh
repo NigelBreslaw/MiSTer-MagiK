@@ -377,25 +377,19 @@ summarize_preview_timing() {
       if (decode > decode_max) decode_max = decode
       if (cache_hit == "true" || cache_hit == "1") cache_hits++
       if (load_source == "archive_mem") archive_mem++
-      else if (load_source == "archive_warmup_file") archive_warmup_file++
-      else if (load_source == "archive_file") archive_file++
-      else if (load_source == "raw_file") raw_file++
       else if (load_source == "decoded_cache") decoded_cache++
-      if (load_source == "archive_file" || load_source == "raw_file" || (load_source == "unknown" && read > 0)) file_reads++
-      if (load_source == "archive_warmup_file") warmup_file_reads++
+      else if (read > 0) unexpected_file_reads++
       if (read > 5000) slow_reads++
-      if (load_source == "archive_warmup_file" && read > 5000) warmup_slow_reads++
-      if (selected == "true" && (load_source == "archive_file" || load_source == "raw_file")) selected_file_reads++
+      if (selected == "true" && load_source != "archive_mem" && load_source != "decoded_cache" && read > 0) selected_file_reads++
     }
     END {
       if (n == 0) {
-        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
+        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
       } else {
-        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
           name, n, total_sum / n, total_max, read_sum / n, read_max, decode_sum / n, decode_max,
-          cache_hits + 0, file_reads + 0, slow_reads + 0,
-          archive_mem + 0, archive_warmup_file + 0, archive_file + 0, raw_file + 0,
-          decoded_cache + 0, warmup_file_reads + 0, warmup_slow_reads + 0,
+          cache_hits + 0, unexpected_file_reads + 0, slow_reads + 0,
+          archive_mem + 0, decoded_cache + 0,
           selected_file_reads + 0
       }
     }
@@ -442,26 +436,25 @@ check_preview_hotpath_io_gate() {
         else if (kv[1] == "load_source") load_source = kv[2]
         else if (kv[1] == "selected") selected = kv[2]
       }
-      if (load_source == "archive_mem" || load_source == "archive_warmup_file" || load_source == "archive_file") archive_backed = 1
-      if (load_source == "archive_file" || load_source == "raw_file" || load_source == "unknown") {
+      if (load_source == "archive_mem") archive_backed = 1
+      if (load_source != "archive_mem" && load_source != "decoded_cache" && read > 0) {
+        unexpected_file_reads++
         if (read > 5000) slow_reads++
-      } else if (load_source == "archive_warmup_file" && read > 5000) {
-        warmup_slow_reads++
       }
-      if (is_apply && selected == "true" && (load_source == "archive_file" || load_source == "raw_file")) {
+      if (is_apply && selected == "true" && load_source != "archive_mem" && load_source != "decoded_cache" && read > 0) {
         selected_file_reads++
         if (selected_file_reads <= 10) {
-          printf "%s selected preview file read: source=%s read_us=%d line=%s\n", name, load_source, read, $0 > "/dev/stderr"
+          printf "%s selected preview unexpected file read: source=%s read_us=%d line=%s\n", name, load_source, read, $0 > "/dev/stderr"
         }
       }
     }
     END {
       allowed = (allow == "1" || allow == "true" || allow == "yes" || allow == "on")
-      if (archive_backed && !allowed && (slow_reads > 0 || selected_file_reads > 0)) {
-        printf "%s preview hot-path io gate failed: archive_backed=1 slow_reads=%d selected_file_reads=%d\n", name, slow_reads + 0, selected_file_reads + 0 > "/dev/stderr"
+      if (archive_backed && !allowed && (unexpected_file_reads > 0 || slow_reads > 0 || selected_file_reads > 0)) {
+        printf "%s preview hot-path io gate failed: archive_backed=1 unexpected_file_reads=%d slow_reads=%d selected_file_reads=%d\n", name, unexpected_file_reads + 0, slow_reads + 0, selected_file_reads + 0 > "/dev/stderr"
         exit 7
       }
-      printf "%s preview_hotpath_io_gate archive_backed=%d slow_reads=%d warmup_slow_reads=%d selected_file_reads=%d allow=%s\n", name, archive_backed + 0, slow_reads + 0, warmup_slow_reads + 0, selected_file_reads + 0, allow
+      printf "%s preview_hotpath_io_gate archive_backed=%d unexpected_file_reads=%d slow_reads=%d selected_file_reads=%d allow=%s\n", name, archive_backed + 0, unexpected_file_reads + 0, slow_reads + 0, selected_file_reads + 0, allow
     }
   ' "$log"
 }
@@ -574,37 +567,22 @@ EOF
     exit 1
   fi
 
-  local archive_slow="$tmp/archive-slow.log"
-  local selected_raw="$tmp/selected-raw.log"
+  local unexpected_read="$tmp/unexpected-read.log"
   local archive_mem_ok="$tmp/archive-mem-ok.log"
-  cat >"$archive_slow" <<'EOF'
-preview_trace decoded generation=1 priority=Selected cache_hit=0 load_source=archive_file format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=6500 read_us=6100 decode_us=400 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
-EOF
-  cat >"$selected_raw" <<'EOF'
-preview_trace apply generation=1 priority=Selected selected=true age_us=1 load_source=raw_file format=raw-rgb565 filter=Hybrid source=320x224 output=320x224 total_us=1000 read_us=900 decode_us=100 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
+  cat >"$unexpected_read" <<'EOF'
+preview_trace apply generation=1 priority=Selected selected=true age_us=1 load_source=unknown format=raw-rgb565 filter=Hybrid source=320x224 output=320x224 total_us=1000 read_us=900 decode_us=100 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
 preview_trace decoded generation=2 priority=Prefetch cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=b.png
 EOF
   cat >"$archive_mem_ok" <<'EOF'
 preview_trace decoded generation=1 priority=Selected cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
 preview_trace apply generation=1 priority=Selected selected=true age_us=1 load_source=archive_mem format=raw-rgb565 filter=Hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
 EOF
-  if check_preview_hotpath_io_gate selftest "$archive_slow" >/dev/null 2>&1; then
-    echo "preview hot-path io self-test expected slow archive read failure" >&2
-    rm -rf "$tmp"
-    exit 1
-  fi
-  if check_preview_hotpath_io_gate selftest "$selected_raw" >/dev/null 2>&1; then
-    echo "preview hot-path io self-test expected selected raw_file failure" >&2
+  if check_preview_hotpath_io_gate selftest "$unexpected_read" >/dev/null 2>&1; then
+    echo "preview hot-path io self-test expected unexpected file read failure" >&2
     rm -rf "$tmp"
     exit 1
   fi
   check_preview_hotpath_io_gate selftest "$archive_mem_ok" >/dev/null
-  local archive_warmup_ok="$tmp/archive-warmup-ok.log"
-  cat >"$archive_warmup_ok" <<'EOF'
-preview_trace apply generation=1 priority=Selected selected=true age_us=1 load_source=archive_warmup_file format=raw-rgb565 filter=Hybrid source=320x224 output=320x224 total_us=1000 read_us=900 decode_us=100 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
-preview_trace decoded generation=2 priority=Prefetch cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=b.png
-EOF
-  check_preview_hotpath_io_gate selftest "$archive_warmup_ok" >/dev/null
 
   rm -rf "$tmp"
   echo "profile-preview-scroll self-test ok"
@@ -640,7 +618,7 @@ printf "arcade decoded=%s apply=%s\n" \
   "$(grep -c 'preview_trace apply' "$arcade_log" 2>/dev/null || true)"
 
 echo
-echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tfile_reads\tslow_reads\tarchive_mem\tarchive_warmup_file\tarchive_file\traw_file\tdecoded_cache\twarmup_file_reads\twarmup_slow_reads\tselected_file_reads'
+echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tselected_file_reads'
 summarize_preview_timing arcade "$arcade_log"
 
 echo
