@@ -22,6 +22,8 @@ pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
 pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
 const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
 const ARCADE_LIST_LAYER_COPY_BANDS: [(usize, usize); 1] = [(0, ARCADE_LIST_H)];
+const ARCADE_SELECTION_FRAME_THICKNESS: usize = 3;
+const ARCADE_SELECTION_FRAME_COLOR: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
 
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -301,41 +303,99 @@ impl ArcadeListRenderer {
         target: &mut UiFrameTarget,
         disp: &mut Display,
         ui: &UiDisplay,
+        redraw_selection_frame: bool,
     ) {
         for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.copy_viewport_band_to_target(target, disp, ui, viewport_y, h);
+            self.copy_viewport_band_to_target(
+                target,
+                disp,
+                ui,
+                viewport_y,
+                h,
+                !redraw_selection_frame,
+            );
         }
-        self.copy_selection_frame_to_target(target, disp, ui);
+        if redraw_selection_frame {
+            self.copy_selection_frame_to_target(target, disp, ui);
+        }
     }
 
     fn copy_viewport_band_to_target(
-        &self,
+        &mut self,
         target: &mut UiFrameTarget,
         disp: &mut Display,
         ui: &UiDisplay,
         viewport_y: usize,
         h: usize,
+        preserve_selection_frame: bool,
     ) {
         if h == 0 || viewport_y >= ARCADE_LIST_H {
             return;
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
+        for_each_arcade_list_copy_segment(viewport_y, h, preserve_selection_frame, |x, y, w, h| {
+            self.copy_surface_rect_to_target(target, disp, ui, x, y, w, h);
+        });
+    }
+
+    fn copy_surface_rect_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
         let mut copied = 0usize;
         while copied < h {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            self.copy_surface_chunk_to_target(target, disp, ui, x, viewport_y + copied, w, copy_h);
+            copied += copy_h;
+        }
+    }
+
+    fn copy_surface_chunk_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut Display,
+        ui: &UiDisplay,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        if x == 0 && w == ARCADE_LIST_W {
             let src = src_y * ARCADE_LIST_W;
             target.copy_rect_from_565(
                 disp,
                 ui,
                 ARCADE_LIST_X,
-                ARCADE_LIST_Y + viewport_y + copied,
+                ARCADE_LIST_Y + viewport_y,
                 ARCADE_LIST_W,
-                copy_h,
-                &self.surface[src..src + copy_h * ARCADE_LIST_W],
+                h,
+                &self.surface[src..src + h * ARCADE_LIST_W],
             );
-            copied += copy_h;
+            return;
         }
+        target.copy_rect_from_565_strided(
+            disp,
+            ui,
+            ARCADE_LIST_X + x,
+            ARCADE_LIST_Y + viewport_y,
+            w,
+            h,
+            &self.surface,
+            ARCADE_LIST_W,
+            x,
+            src_y,
+        );
     }
 
     fn copy_selection_frame_to_target(
@@ -345,8 +405,8 @@ impl ArcadeListRenderer {
         ui: &UiDisplay,
     ) {
         let rect = Self::selection_rect();
-        let color = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
-        let thickness = 3usize;
+        let color = ARCADE_SELECTION_FRAME_COLOR;
+        let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
             .resize(ARCADE_LIST_W * thickness, color);
@@ -407,6 +467,64 @@ impl ArcadeListRenderer {
             ARCADE_TITLE_GRADIENT,
         );
         row.into_iter().map(pixel_to_rgb565).collect()
+    }
+}
+
+pub(crate) fn for_each_arcade_list_copy_segment(
+    viewport_y: usize,
+    h: usize,
+    preserve_selection_frame: bool,
+    mut emit: impl FnMut(usize, usize, usize, usize),
+) {
+    if h == 0 || viewport_y >= ARCADE_LIST_H {
+        return;
+    }
+    let y0 = viewport_y;
+    let y1 = (viewport_y + h).min(ARCADE_LIST_H);
+    if !preserve_selection_frame {
+        emit(0, y0, ARCADE_LIST_W, y1 - y0);
+        return;
+    }
+
+    let selection_y = ArcadeListRenderer::selection_y();
+    let selection_bottom = selection_y + ARCADE_ROW_HEIGHT as usize;
+    let inner_top = selection_y + ARCADE_SELECTION_FRAME_THICKNESS;
+    let inner_bottom = selection_bottom.saturating_sub(ARCADE_SELECTION_FRAME_THICKNESS);
+
+    emit_row_overlap(y0, y1, 0, selection_y, 0, ARCADE_LIST_W, &mut emit);
+    emit_row_overlap(
+        y0,
+        y1,
+        inner_top,
+        inner_bottom,
+        ARCADE_SELECTION_FRAME_THICKNESS,
+        ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
+        &mut emit,
+    );
+    emit_row_overlap(
+        y0,
+        y1,
+        selection_bottom,
+        ARCADE_LIST_H,
+        0,
+        ARCADE_LIST_W,
+        &mut emit,
+    );
+}
+
+fn emit_row_overlap(
+    y0: usize,
+    y1: usize,
+    band_y0: usize,
+    band_y1: usize,
+    x: usize,
+    w: usize,
+    emit: &mut impl FnMut(usize, usize, usize, usize),
+) {
+    let out_y0 = y0.max(band_y0);
+    let out_y1 = y1.min(band_y1);
+    if out_y1 > out_y0 && w > 0 {
+        emit(x, out_y0, w, out_y1 - out_y0);
     }
 }
 
@@ -692,6 +810,68 @@ mod tests {
     #[test]
     fn arcade_layer_copy_bands_cover_full_surface_without_fade_split() {
         assert_eq!(ARCADE_LIST_LAYER_COPY_BANDS, [(0, ARCADE_LIST_H)]);
+    }
+
+    #[test]
+    fn preserved_selection_frame_copy_segments_skip_only_frame_pixels() {
+        let mut segments = Vec::new();
+
+        for_each_arcade_list_copy_segment(0, ARCADE_LIST_H, true, |x, y, w, h| {
+            segments.push((x, y, w, h));
+        });
+
+        assert_eq!(
+            segments,
+            vec![
+                (0, 0, ARCADE_LIST_W, 192),
+                (
+                    ARCADE_SELECTION_FRAME_THICKNESS,
+                    195,
+                    ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
+                    42
+                ),
+                (0, 240, ARCADE_LIST_W, 144),
+            ]
+        );
+
+        let copied_px = segments.iter().map(|(_, _, w, h)| w * h).sum::<usize>();
+        let skipped_px = ARCADE_LIST_W * ARCADE_LIST_H - copied_px;
+        let frame_px = ARCADE_LIST_W * ARCADE_SELECTION_FRAME_THICKNESS * 2
+            + (ARCADE_ROW_HEIGHT as usize - ARCADE_SELECTION_FRAME_THICKNESS * 2)
+                * ARCADE_SELECTION_FRAME_THICKNESS
+                * 2;
+
+        assert_eq!(skipped_px, frame_px);
+    }
+
+    #[test]
+    fn full_redraw_copy_segment_keeps_complete_surface() {
+        let mut segments = Vec::new();
+
+        for_each_arcade_list_copy_segment(0, ARCADE_LIST_H, false, |x, y, w, h| {
+            segments.push((x, y, w, h));
+        });
+
+        assert_eq!(segments, vec![(0, 0, ARCADE_LIST_W, ARCADE_LIST_H)]);
+    }
+
+    #[test]
+    fn preserved_selection_frame_body_band_matches_blend_benchmark_rows() {
+        let mut rows = 0usize;
+        let mut pixels = 0usize;
+
+        for_each_arcade_list_copy_segment(
+            ARCADE_LIST_FADE_H,
+            ARCADE_LIST_H - ARCADE_LIST_FADE_H * 2,
+            true,
+            |_, _, w, h| {
+                rows += h;
+                pixels += w * h;
+            },
+        );
+
+        assert_eq!(rows, 282);
+        assert_eq!(pixels, 130_596);
     }
 
     #[test]

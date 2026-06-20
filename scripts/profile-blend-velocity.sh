@@ -18,11 +18,11 @@ Optional host env:
   MISTER_BLEND_BENCH_FADE_H=<px>  override fade band height for this run
 
 VARIANT:
-  baseline       real fade blend + fade/body/selection copies (default)
+  baseline       real fade blend + fade/body copies preserving selection frame (default)
   real-text      same fade/copy path, with cached solid text rows
   gradient-text  cached gradient text rows, full list copy, no viewport fade
   copy-only      copy fade rows without blending, isolating framebuffer writes
-  no-fade        copy only the moving body + selection frame
+  no-fade        copy only the moving body while preserving selection frame
 
 Default: --skip-build, useful when the desired binary is already deployed.
 EOF

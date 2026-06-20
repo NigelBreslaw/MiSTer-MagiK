@@ -3,10 +3,10 @@
 use crate::arcade_catalog::ARCADE_ROW_HEIGHT;
 use crate::arcade_list_renderer::{
     blend_row_towards, blend_velocity_fade_h_from_env, draw_arcade_row_background,
-    fade_blend_constants, prune_arcade_row_cache, ArcadeListRenderer, CachedArcadeRow,
-    FadeBlendConstants, ARCADE_LIST_FADE_COLOR, ARCADE_LIST_FADE_COLOR_565, ARCADE_LIST_FONT_PX,
-    ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ARCADE_ROW_CACHE_MAX,
-    ARCADE_TITLE_GRADIENT,
+    fade_blend_constants, for_each_arcade_list_copy_segment, prune_arcade_row_cache,
+    ArcadeListRenderer, CachedArcadeRow, FadeBlendConstants, ARCADE_LIST_FADE_COLOR,
+    ARCADE_LIST_FADE_COLOR_565, ARCADE_LIST_FONT_PX, ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X,
+    ARCADE_LIST_Y, ARCADE_ROW_CACHE_MAX, ARCADE_TITLE_GRADIENT,
 };
 use crate::bitmap_text::ConsoleFont;
 use crate::cpu_profile;
@@ -205,9 +205,9 @@ impl BlendVelocityBench {
         let mut fade_copy_us = 0u64;
         if self.variant.uses_viewport_fade() {
             let fade_h = self.fade_h;
-            let top_px = self.copy_top_fade_to_display(disp, fade_h);
-            let bottom_px = self.copy_bottom_fade_to_display(disp, fade_h);
-            rows += (fade_h * 2) as u32;
+            let (top_rows, top_px) = self.copy_top_fade_to_display(disp, fade_h);
+            let (bottom_rows, bottom_px) = self.copy_bottom_fade_to_display(disp, fade_h);
+            rows += top_rows + bottom_rows;
             px += top_px + bottom_px;
             fade_copy_us = fade_copy_start.elapsed().as_micros() as u64;
         }
@@ -224,16 +224,12 @@ impl BlendVelocityBench {
         } else {
             ARCADE_LIST_H
         };
-        self.copy_viewport_band_to_display(disp, body_y, body_h);
+        let (body_rows, body_px) = self.copy_viewport_band_to_display(disp, body_y, body_h, true);
         let body_copy_us = body_copy_start.elapsed().as_micros() as u64;
-        rows += body_h as u32;
-        px += (ARCADE_LIST_W * body_h) as u32;
+        rows += body_rows;
+        px += body_px;
 
-        let selection_copy_start = Instant::now();
-        self.copy_selection_frame_to_display(disp);
-        let selection_copy_us = selection_copy_start.elapsed().as_micros() as u64;
-        rows += (ARCADE_ROW_HEIGHT as u32) + 6;
-        px += (ARCADE_LIST_W * 6 + ARCADE_ROW_HEIGHT as usize * 6) as u32;
+        let selection_copy_us = 0;
 
         let wall_us = frame_start.elapsed().as_micros() as u64;
         BlendVelocitySample {
@@ -387,56 +383,106 @@ impl BlendVelocityBench {
         start.elapsed().as_micros() as u64
     }
 
-    fn copy_top_fade_to_display(&mut self, disp: &mut Display, fade_h: usize) -> u32 {
+    fn copy_top_fade_to_display(&mut self, disp: &mut Display, fade_h: usize) -> (u32, u32) {
         if self.variant == BlendVelocityVariant::CopyOnly {
-            self.copy_viewport_band_to_display(disp, 0, fade_h);
+            self.copy_viewport_band_to_display(disp, 0, fade_h, true)
         } else {
-            disp.copy_rect_from_565(
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y,
-                ARCADE_LIST_W,
-                fade_h,
+            copy_tight_band_to_display(
+                disp,
                 &self.fade_scratch[..ARCADE_LIST_W * fade_h],
-            );
+                0,
+                fade_h,
+                true,
+            )
         }
-        (ARCADE_LIST_W * fade_h) as u32
     }
 
-    fn copy_bottom_fade_to_display(&mut self, disp: &mut Display, fade_h: usize) -> u32 {
+    fn copy_bottom_fade_to_display(&mut self, disp: &mut Display, fade_h: usize) -> (u32, u32) {
         if self.variant == BlendVelocityVariant::CopyOnly {
-            self.copy_viewport_band_to_display(disp, ARCADE_LIST_H - fade_h, fade_h);
+            self.copy_viewport_band_to_display(disp, ARCADE_LIST_H - fade_h, fade_h, true)
         } else {
             let offset = ARCADE_LIST_W * fade_h;
-            disp.copy_rect_from_565(
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y + ARCADE_LIST_H - fade_h,
-                ARCADE_LIST_W,
-                fade_h,
+            copy_tight_band_to_display(
+                disp,
                 &self.fade_scratch[offset..offset + ARCADE_LIST_W * fade_h],
-            );
+                ARCADE_LIST_H - fade_h,
+                fade_h,
+                true,
+            )
         }
-        (ARCADE_LIST_W * fade_h) as u32
     }
 
-    fn copy_viewport_band_to_display(&self, disp: &mut Display, viewport_y: usize, h: usize) {
+    fn copy_viewport_band_to_display(
+        &mut self,
+        disp: &mut Display,
+        viewport_y: usize,
+        h: usize,
+        preserve_selection_frame: bool,
+    ) -> (u32, u32) {
         if h == 0 || viewport_y >= ARCADE_LIST_H {
-            return;
+            return (0, 0);
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
+        let mut rows = 0u32;
+        let mut px = 0u32;
+        for_each_arcade_list_copy_segment(viewport_y, h, preserve_selection_frame, |x, y, w, h| {
+            self.copy_surface_rect_to_display(disp, x, y, w, h);
+            rows += h as u32;
+            px += (w * h) as u32;
+        });
+        (rows, px)
+    }
+
+    fn copy_surface_rect_to_display(
+        &mut self,
+        disp: &mut Display,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
         let mut copied = 0usize;
         while copied < h {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            self.copy_surface_chunk_to_display(disp, x, viewport_y + copied, w, copy_h);
+            copied += copy_h;
+        }
+    }
+
+    fn copy_surface_chunk_to_display(
+        &mut self,
+        disp: &mut Display,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        if x == 0 && w == ARCADE_LIST_W {
             let src = src_y * ARCADE_LIST_W;
             disp.copy_rect_from_565(
                 ARCADE_LIST_X,
-                ARCADE_LIST_Y + viewport_y + copied,
+                ARCADE_LIST_Y + viewport_y,
                 ARCADE_LIST_W,
-                copy_h,
-                &self.surface[src..src + copy_h * ARCADE_LIST_W],
+                h,
+                &self.surface[src..src + h * ARCADE_LIST_W],
             );
-            copied += copy_h;
+            return;
         }
+        disp.copy_rect_from_565_strided(
+            ARCADE_LIST_X + x,
+            ARCADE_LIST_Y + viewport_y,
+            w,
+            h,
+            &self.surface,
+            ARCADE_LIST_W,
+            x,
+            src_y,
+        );
     }
 
     fn copy_selection_frame_to_display(&mut self, disp: &mut Display) {
@@ -474,9 +520,52 @@ impl BlendVelocityBench {
     }
 }
 
+fn copy_tight_band_to_display(
+    disp: &mut Display,
+    src: &[Rgb565Pixel],
+    viewport_y: usize,
+    h: usize,
+    preserve_selection_frame: bool,
+) -> (u32, u32) {
+    if h == 0 || viewport_y >= ARCADE_LIST_H {
+        return (0, 0);
+    }
+    let h = h.min(ARCADE_LIST_H - viewport_y);
+    let mut rows = 0u32;
+    let mut px = 0u32;
+    for_each_arcade_list_copy_segment(viewport_y, h, preserve_selection_frame, |x, y, w, h| {
+        let src_y = y - viewport_y;
+        if x == 0 && w == ARCADE_LIST_W {
+            let src_offset = src_y * ARCADE_LIST_W;
+            disp.copy_rect_from_565(
+                ARCADE_LIST_X,
+                ARCADE_LIST_Y + y,
+                ARCADE_LIST_W,
+                h,
+                &src[src_offset..src_offset + h * ARCADE_LIST_W],
+            );
+        } else {
+            disp.copy_rect_from_565_strided(
+                ARCADE_LIST_X + x,
+                ARCADE_LIST_Y + y,
+                w,
+                h,
+                src,
+                ARCADE_LIST_W,
+                x,
+                src_y,
+            );
+        }
+        rows += h as u32;
+        px += (w * h) as u32;
+    });
+    (rows, px)
+}
+
 pub(crate) fn run_blend_velocity_loop(secs: u64, disp: &mut Display) {
     let variant = BlendVelocityVariant::from_env();
     let mut bench = BlendVelocityBench::new(variant);
+    bench.copy_selection_frame_to_display(disp);
     let mut pacer = VsyncPacer::from_env();
     let cpu = cpu_profile::start();
     let start = Instant::now();

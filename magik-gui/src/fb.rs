@@ -1165,6 +1165,40 @@ impl Display {
         }
     }
 
+    /// Copy an RGB565 source rectangle with a wider source stride into the framebuffer.
+    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_rect_from_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride: usize,
+        src_x: usize,
+        src_y: usize,
+    ) {
+        debug_assert_eq!(self.format, FramebufferFormat::Rgb565);
+        if w == 0 || h == 0 || src_stride == 0 {
+            return;
+        }
+        let dst_w = self.w;
+        let x1 = (x + w).min(self.w);
+        let y1 = (y + h).min(self.h);
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        let copy_w = x1 - x;
+        let copy_h = y1 - y;
+        let dst = self.buffer_565_mut();
+        for row in 0..copy_h {
+            let src_a = (src_y + row) * src_stride + src_x;
+            let dst_a = (y + row) * dst_w + x;
+            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+        }
+    }
+
     /// Copy a logical source rectangle into an arbitrary framebuffer location,
     /// nearest-neighbour scaled by `scale`.
     #[allow(dead_code)]
