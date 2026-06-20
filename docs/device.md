@@ -79,6 +79,17 @@ Use `scripts/mister reboot --raw` or `scripts/mister reboot-wait --raw` only for
 fallback recovery or for testing the detached Linux reboot path without MagiK
 visual lockdown.
 
+To return from an active game core without a Linux reboot, send Main's generic
+core command instead of the MagiK supervisor restart command:
+
+```bash
+scripts/mister run "printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd"
+```
+
+`mister_magik_restart_launcher` is for the menu/supervised-launcher state. Once
+Main has handed off to a game, `load_core menu.rbf` exits the active core; the
+MagiK menu path then starts `mister-magik-fb` again.
+
 The standalone `mister-magik-agent` may be installed as
 `/etc/init.d/S00magik-agent`. It provides the early Ethernet setup path and a
 token-protected TCP control port on `7498`; see `docs/magik-agent.md`. TCP
