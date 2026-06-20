@@ -203,6 +203,8 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut preview = PreviewState::new();
+    let mut launcher_bench_waiting_for_initial_preview =
+        launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let mut route_guard = FramebufferRouteGuard::from_env();
     let mut preview_transition = PreviewTransitionDemo::from_env();
     let mut effect_label_overlay = preview_transition
@@ -590,7 +592,22 @@ pub(super) fn run_launcher_loop(
         }
 
         if let Some(scenario) = launcher_bench_scenario {
-            if catalog_ready && launcher_bench_next_step.elapsed() >= scenario.period() {
+            if catalog_ready && launcher_bench_waiting_for_initial_preview {
+                let cache_state = preview.trace_cache_state();
+                if launcher_bench_initial_preview_ready(scenario, cache_state) {
+                    launcher_bench_waiting_for_initial_preview = false;
+                    launcher_bench_next_step = Instant::now();
+                    print_startup_event(
+                        start,
+                        "launcher_bench_preview_ready",
+                        format!("cache_state={cache_state}"),
+                    );
+                }
+            }
+            if catalog_ready
+                && !launcher_bench_waiting_for_initial_preview
+                && launcher_bench_next_step.elapsed() >= scenario.period()
+            {
                 let before = LauncherBridgeKey::from_nav(&nav);
                 if launcher_bench_step(
                     scenario,
@@ -1372,6 +1389,13 @@ fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bo
     catalog_ready && cached_before_refresh
 }
 
+fn launcher_bench_initial_preview_ready(
+    scenario: LauncherBenchScenario,
+    preview_cache_state: &str,
+) -> bool {
+    !scenario.starts_on_arcade() || matches!(preview_cache_state, "exact" | "empty")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1455,28 @@ mod tests {
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
         assert!(!initial_catalog_scan_visible(true, false));
+    }
+
+    #[test]
+    pub(super) fn arcade_bench_waits_for_initial_visible_preview() {
+        let scenario = LauncherBenchScenario::HeldScroll;
+
+        assert!(!launcher_bench_initial_preview_ready(
+            scenario,
+            "placeholder"
+        ));
+        assert!(!launcher_bench_initial_preview_ready(scenario, "cached"));
+        assert!(!launcher_bench_initial_preview_ready(scenario, "stale"));
+        assert!(launcher_bench_initial_preview_ready(scenario, "exact"));
+        assert!(launcher_bench_initial_preview_ready(scenario, "empty"));
+    }
+
+    #[test]
+    pub(super) fn non_arcade_bench_does_not_wait_for_preview() {
+        assert!(launcher_bench_initial_preview_ready(
+            LauncherBenchScenario::HomeNav,
+            "placeholder"
+        ));
     }
 
     #[test]
