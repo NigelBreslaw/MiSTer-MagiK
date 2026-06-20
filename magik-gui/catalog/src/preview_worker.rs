@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -174,11 +174,8 @@ impl PreviewStorageFormat {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PreviewLoadSource {
     DecodedCache,
-    ArchiveMem,
-    ArchiveWarmupFile,
-    ArchiveFile,
     #[default]
-    RawFile,
+    ArchiveMem,
 }
 
 impl PreviewLoadSource {
@@ -186,9 +183,6 @@ impl PreviewLoadSource {
         match self {
             Self::DecodedCache => "decoded_cache",
             Self::ArchiveMem => "archive_mem",
-            Self::ArchiveWarmupFile => "archive_warmup_file",
-            Self::ArchiveFile => "archive_file",
-            Self::RawFile => "raw_file",
         }
     }
 }
@@ -574,7 +568,7 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
                 decoded_bytes: 0,
                 source_width: 0,
                 source_height: 0,
-                load_source: PreviewLoadSource::RawFile,
+                load_source: PreviewLoadSource::ArchiveMem,
                 storage_format: storage,
                 resize_filter: resize.filter,
                 priority: req.priority,
@@ -637,10 +631,9 @@ struct PreviewArchiveEntry {
 }
 
 struct PreviewArchive {
-    file: Mutex<File>,
     scratch: Mutex<PreviewArchiveScratch>,
     codec: PreviewArchiveCodec,
-    bytes: PreviewArchiveBytes,
+    bytes: Arc<[u8]>,
     entries: HashMap<String, PreviewArchiveEntry>,
 }
 
@@ -652,21 +645,7 @@ enum PreviewArchiveCodec {
 
 #[derive(Default)]
 struct PreviewArchiveScratch {
-    compressed: Vec<u8>,
     raw: Vec<u8>,
-}
-
-#[derive(Clone)]
-enum PreviewArchiveBytes {
-    Disabled,
-    MemorySlot(Arc<Mutex<Option<Arc<[u8]>>>>),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PreviewArchivePreloadMode {
-    Disabled,
-    Async,
-    Sync,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -930,13 +909,6 @@ impl PreviewArchive {
     const RAW_MAGIC: &'static [u8; 8] = b"MMRAWP1\0";
 
     fn open(path: &Path) -> Result<Self, String> {
-        Self::open_with_preload_mode(path, preview_archive_preload_mode())
-    }
-
-    fn open_with_preload_mode(
-        path: &Path,
-        preload_mode: PreviewArchivePreloadMode,
-    ) -> Result<Self, String> {
         let mut file = File::open(path)
             .map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
         let mut magic = [0u8; 8];
@@ -968,9 +940,9 @@ impl PreviewArchive {
                 },
             );
         }
+        let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
         Ok(Self {
-            bytes: preview_archive_bytes(path, preload_mode)?,
-            file: Mutex::new(file),
+            bytes,
             scratch: Mutex::new(PreviewArchiveScratch::default()),
             codec,
             entries,
@@ -988,37 +960,15 @@ impl PreviewArchive {
             .scratch
             .lock()
             .map_err(|_| "preview archive scratch lock poisoned".to_string())?;
-        let archive_bytes = self.archive_bytes();
-        let PreviewArchiveScratch { compressed, raw } = &mut *scratch;
-        let (compressed_slice, load_source) = if let Some(bytes) = archive_bytes.as_deref() {
-            let start = entry.offset as usize;
-            let end = start
-                .checked_add(entry.compressed_len)
-                .ok_or_else(|| format!("preview archive offset overflow {name}"))?;
-            (
-                bytes
-                    .get(start..end)
-                    .ok_or_else(|| format!("preview archive slice out of range {name}"))?,
-                PreviewLoadSource::ArchiveMem,
-            )
-        } else {
-            let load_source = match &self.bytes {
-                PreviewArchiveBytes::MemorySlot(_) => PreviewLoadSource::ArchiveWarmupFile,
-                PreviewArchiveBytes::Disabled => PreviewLoadSource::ArchiveFile,
-            };
-            compressed.resize(entry.compressed_len, 0);
-            {
-                let mut file = self
-                    .file
-                    .lock()
-                    .map_err(|_| "preview archive file lock poisoned".to_string())?;
-                file.seek(SeekFrom::Start(entry.offset))
-                    .map_err(|e| format!("preview archive seek {name}: {e}"))?;
-                file.read_exact(compressed)
-                    .map_err(|e| format!("preview archive read {name}: {e}"))?;
-            }
-            (compressed.as_slice(), load_source)
-        };
+        let PreviewArchiveScratch { raw } = &mut *scratch;
+        let start = entry.offset as usize;
+        let end = start
+            .checked_add(entry.compressed_len)
+            .ok_or_else(|| format!("preview archive offset overflow {name}"))?;
+        let compressed_slice = self
+            .bytes
+            .get(start..end)
+            .ok_or_else(|| format!("preview archive slice out of range {name}"))?;
         let read_us = read_t.elapsed().as_micros() as u64;
 
         let decode_t = Instant::now();
@@ -1050,88 +1000,10 @@ impl PreviewArchive {
                 encoded_bytes: entry.compressed_len,
                 source_width: image.width(),
                 source_height: image.height(),
-                load_source,
+                load_source: PreviewLoadSource::ArchiveMem,
             },
             image,
         }))
-    }
-
-    fn archive_bytes(&self) -> Option<Arc<[u8]>> {
-        match &self.bytes {
-            PreviewArchiveBytes::Disabled => None,
-            PreviewArchiveBytes::MemorySlot(slot) => slot.lock().ok().and_then(|bytes| bytes.clone()),
-        }
-    }
-}
-
-fn preview_archive_bytes(
-    path: &Path,
-    preload_mode: PreviewArchivePreloadMode,
-) -> Result<PreviewArchiveBytes, String> {
-    match preload_mode {
-        PreviewArchivePreloadMode::Disabled => Ok(PreviewArchiveBytes::Disabled),
-        PreviewArchivePreloadMode::Sync => {
-            let bytes = read_archive_bytes(path)?;
-            Ok(PreviewArchiveBytes::MemorySlot(Arc::new(Mutex::new(Some(
-                Arc::from(bytes.into_boxed_slice()),
-            )))))
-        }
-        PreviewArchivePreloadMode::Async => {
-            let slot = Arc::new(Mutex::new(None));
-            let thread_slot = Arc::clone(&slot);
-            let path = path.to_path_buf();
-            std::thread::Builder::new()
-                .name("preview-archive-preload".to_string())
-                .spawn(move || {
-                    lower_thread_priority();
-                    match read_archive_bytes(&path) {
-                        Ok(bytes) => {
-                            if let Ok(mut ready) = thread_slot.lock() {
-                                *ready = Some(Arc::from(bytes.into_boxed_slice()));
-                            }
-                        }
-                        Err(e) => {
-                            if preview_trace_enabled() {
-                                eprintln!(
-                                    "preview_trace archive_preload_failed path={} error={}",
-                                    path.display(),
-                                    e
-                                );
-                            }
-                        }
-                    }
-                })
-                .map_err(|e| format!("spawn preview archive preload: {e}"))?;
-            Ok(PreviewArchiveBytes::MemorySlot(slot))
-        }
-    }
-}
-
-fn preview_archive_preload_mode() -> PreviewArchivePreloadMode {
-    static MODE: OnceLock<PreviewArchivePreloadMode> = OnceLock::new();
-    *MODE.get_or_init(|| {
-        preview_archive_preload_mode_from_env(
-            std::env::var("MISTER_PREVIEW_ARCHIVE_PRELOAD")
-                .ok()
-                .as_deref(),
-        )
-    })
-}
-
-fn preview_archive_preload_mode_from_env(value: Option<&str>) -> PreviewArchivePreloadMode {
-    let Some(value) = value.map(str::trim) else {
-        return PreviewArchivePreloadMode::Sync;
-    };
-    if value == "0"
-        || value.eq_ignore_ascii_case("off")
-        || value.eq_ignore_ascii_case("false")
-        || value.eq_ignore_ascii_case("no")
-    {
-        PreviewArchivePreloadMode::Disabled
-    } else if value.eq_ignore_ascii_case("async") {
-        PreviewArchivePreloadMode::Async
-    } else {
-        PreviewArchivePreloadMode::Sync
     }
 }
 
@@ -1425,7 +1297,7 @@ mod tests {
                 encoded_bytes: 44,
                 source_width: 1,
                 source_height: 1,
-                load_source: PreviewLoadSource::RawFile,
+                load_source: PreviewLoadSource::ArchiveMem,
             },
             image: PreviewPixels::Rgb565 {
                 width: 1,
@@ -1564,9 +1436,7 @@ mod tests {
         let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
         write_raw_archive(&path, "sonic.rgb565", &payload);
 
-        let archive =
-            PreviewArchive::open_with_preload_mode(&path, PreviewArchivePreloadMode::Sync)
-                .expect("open raw archive");
+        let archive = PreviewArchive::open(&path).expect("open raw archive");
         let loaded = archive
             .load_timed("Sonic.rgb565")
             .expect("load mixed-case cache name")
@@ -1577,89 +1447,6 @@ mod tests {
         assert_eq!(loaded.image.decoded_bytes(), 16);
         assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
         let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn archive_async_preload_serves_file_until_memory_is_ready() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-warmup-{}.mmraw",
-            std::process::id()
-        ));
-        let payload = raw565_fixture(1, 1, &[0xf800]);
-        write_raw_archive(&path, "warmup.rgb565", &payload);
-
-        let archive =
-            PreviewArchive::open_with_preload_mode(&path, PreviewArchivePreloadMode::Disabled)
-                .expect("open raw archive");
-        let warmup_slot = Arc::new(Mutex::new(None));
-        let archive = PreviewArchive {
-            bytes: PreviewArchiveBytes::MemorySlot(warmup_slot),
-            ..archive
-        };
-        let loaded = archive
-            .load_timed("warmup.rgb565")
-            .expect("load warmup cache name")
-            .expect("archive entry");
-
-        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveWarmupFile);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn archive_disabled_preload_reads_entry_from_archive_file() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-lazy-{}.mmraw",
-            std::process::id()
-        ));
-        let payload = raw565_fixture(1, 1, &[0x07e0]);
-        write_raw_archive(&path, "lazy.rgb565", &payload);
-
-        let archive =
-            PreviewArchive::open_with_preload_mode(&path, PreviewArchivePreloadMode::Disabled)
-                .expect("open raw archive");
-        let loaded = archive
-            .load_timed("lazy.rgb565")
-            .expect("load lazy cache name")
-            .expect("archive entry");
-
-        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveFile);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn archive_preload_defaults_sync_and_can_be_configured() {
-        assert_eq!(
-            preview_archive_preload_mode_from_env(None),
-            PreviewArchivePreloadMode::Sync
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some("0")),
-            PreviewArchivePreloadMode::Disabled
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some("off")),
-            PreviewArchivePreloadMode::Disabled
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some("false")),
-            PreviewArchivePreloadMode::Disabled
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some("no")),
-            PreviewArchivePreloadMode::Disabled
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some("async")),
-            PreviewArchivePreloadMode::Async
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some("1")),
-            PreviewArchivePreloadMode::Sync
-        );
-        assert_eq!(
-            preview_archive_preload_mode_from_env(Some(" YES ")),
-            PreviewArchivePreloadMode::Sync
-        );
     }
 
     #[test]
