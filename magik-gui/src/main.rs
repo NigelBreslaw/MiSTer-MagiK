@@ -26,6 +26,7 @@
 //!     preview-transitions list screenshot transition labels
 //!     effect-bench       run framebuffer effect benchmarks
 //!     library-scan-bench benchmark cold scan, import, cached load, no-op rescan
+//!     launch-prep-bench  benchmark launch-ref preparation without core launch
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
 //!
@@ -113,6 +114,11 @@ fn main() {
 
     if cmd == "hbmame-metadata-from-library" {
         run_hbmame_metadata_from_library();
+        return;
+    }
+
+    if cmd == "launch-prep-bench" {
+        launcher::run_launch_prep_bench();
         return;
     }
 
@@ -209,9 +215,10 @@ fn run_library_refresh() {
     };
     match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
+            let launch_cache = launcher::materialize_virtual_launch_cache_from_default_db();
             drop(lock);
             println!(
-                "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+                "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={} virtual_launch_total={} virtual_launch_written={} virtual_launch_unchanged={} virtual_launch_errors={}",
                 summary.skipped,
                 summary.bytes,
                 summary.scan_us,
@@ -221,7 +228,11 @@ fn run_library_refresh() {
                 summary.discoveries,
                 summary.normal_files,
                 summary.containers,
-                summary.entries
+                summary.entries,
+                launch_cache.total,
+                launch_cache.written,
+                launch_cache.unchanged,
+                launch_cache.errors
             );
         }
         Err(e) => {
