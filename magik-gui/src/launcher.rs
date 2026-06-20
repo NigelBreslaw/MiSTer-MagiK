@@ -976,7 +976,7 @@ fn prepare_virtual_launch_ref(launch_ref: &str) -> Result<String, String> {
 }
 
 fn prepare_virtual_launch_ref_at(launch_ref: &str, dir: &Path) -> Result<String, String> {
-    if let Some(path) = warm_virtual_launch_path_at(launch_ref, &dir) {
+    if let Some(path) = warm_virtual_launch_path_at(launch_ref, dir) {
         return Ok(path.display().to_string());
     }
     materialize_virtual_launch_ref_at(launch_ref, dir)
@@ -1022,7 +1022,7 @@ fn materialize_virtual_launch_plan_at(
     }
     fs::create_dir_all(dir).map_err(|e| format!("create virtual launch cache: {e}"))?;
     let path = virtual_launch_path_at(&plan.launch_ref, dir);
-    let content = virtual_mgl_content(&plan);
+    let content = virtual_mgl_content(plan);
     let should_write = fs::read_to_string(&path)
         .map(|existing| existing != content)
         .unwrap_or(true);
