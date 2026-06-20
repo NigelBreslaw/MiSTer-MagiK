@@ -71,8 +71,8 @@ use fb::{Display, Pixel, VsyncPacer, VsyncWaitStatus};
 use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::FramebufferFormat;
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
-use ui_display::{UI_FB_H, UI_FB_W};
-use ui_runner::ui_boot::ui_fpga_scaled_mode;
+use ui_display::UiDisplayPlan;
+use ui_runner::ui_boot::{boot_framebuffer_format, settle_boot_black_frame, ui_fpga_scaled_mode};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
@@ -640,15 +640,29 @@ fn route_framebuffer(f: &mut Fpga) {
 }
 
 fn early_black_route(f: &mut Fpga) {
-    let format = FramebufferFormat::from_env();
-    if let Err(e) =
-        Display::write_mister_mode_format(format, UI_FB_W, UI_FB_H, format.stride_bytes(UI_FB_W))
-    {
+    let display_plan = UiDisplayPlan::from_mister_ini_file();
+    println!("{}", display_plan.log_line());
+    if display_plan.fallback {
+        boot_analytics::event("display_plan_fallback", display_plan.log_line());
+    }
+    let format = boot_framebuffer_format();
+    if std::env::var_os("MISTER_FB_FORMAT").is_some() {
+        boot_analytics::event(
+            "early_black_format_override_ignored",
+            format!("production_format={}", format.label()),
+        );
+    }
+    if let Err(e) = Display::write_mister_mode_format(
+        format,
+        display_plan.fb_w,
+        display_plan.fb_h,
+        format.stride_bytes(display_plan.fb_w),
+    ) {
         eprintln!("early-black: failed to set framebuffer mode: {e}");
         std::process::exit(1);
     }
 
-    let mut disp = match Display::open_with_format(UI_FB_W, UI_FB_H, format) {
+    let mut disp = match Display::open_with_format(display_plan.fb_w, display_plan.fb_h, format) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("early-black: failed to open /dev/fb0: {e}");
@@ -667,7 +681,7 @@ fn early_black_route(f: &mut Fpga) {
         ),
     );
 
-    let route_mode = ui_fpga_scaled_mode();
+    let route_mode = ui_fpga_scaled_mode(display_plan.scan_w, display_plan.scan_h);
     let flag = match f.fb_enable_format(
         0,
         disp.width() as u16,
@@ -675,7 +689,7 @@ fn early_black_route(f: &mut Fpga) {
         route_mode,
         Some(0),
         Some(0),
-        std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
+        display_plan.direct_video,
         format,
     ) {
         Ok(flag) => flag,
@@ -684,6 +698,14 @@ fn early_black_route(f: &mut Fpga) {
             std::process::exit(1);
         }
     };
+    settle_boot_black_frame(
+        "early-black",
+        &mut disp,
+        f,
+        route_mode,
+        display_plan.direct_video,
+        format,
+    );
     boot_analytics::event(
         "early_black_route_completed",
         format!(

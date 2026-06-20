@@ -34,10 +34,13 @@ launcher.
 
 ## Framebuffer Ownership
 
-The launcher path uses a small Linux framebuffer and FPGA scaling:
+The launcher path uses a planned Linux framebuffer and FPGA scaling:
 
 - Rust sets `/dev/fb0` to RGB565 for the launcher/UI path.
-- Slint renders a 960x540 UI into cached RAM.
+- Rust derives launcher geometry from `MiSTer.ini` menu output settings before
+  startup drawing. 1080p-class outputs use a half-resolution framebuffer such as
+  960x540; 720p, direct-video, and lower outputs run native.
+- Slint renders the planned launcher framebuffer into cached RAM.
 - The Rust frame loop copies dirty regions into the write-combined `/dev/fb0`.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
   to the output mode.
@@ -138,8 +141,6 @@ tracking, and CI details. Do not duplicate those details here.
 
 ## Open Areas
 
-- Derive launcher geometry from live output mode rather than assuming the known
-  stable 1080p HDMI path.
 - Return to launcher after game reset without a full reboot.
 - Continue controller mapping and hot-plug polish.
 - Keep the fork patch surface small and documented in `../Main_MiSTer`

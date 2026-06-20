@@ -2374,6 +2374,7 @@ pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MinimalSoftwareWindow
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_display::{UI_FB_H, UI_FB_W};
 
     fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
         DirtyRect { x0, y0, x1, y1 }

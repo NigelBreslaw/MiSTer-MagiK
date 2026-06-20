@@ -47,7 +47,7 @@ use crate::screenshot_transitions::{
     PreviewTransitionDemo, PreviewTransitionEffect, PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
-use crate::ui_display::{UiDisplay, SLINT_UI_SCALE, UI_FB_H, UI_FB_W, UI_HDMI_H, UI_HDMI_W};
+use crate::ui_display::{UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
@@ -233,10 +233,21 @@ pub fn run_ui(f: &mut Fpga) {
 
     let _vt = VtGraphicsGuard::enter_or_warn();
 
-    let fb_format = FramebufferFormat::production_default();
+    let fb_format = boot_framebuffer_format();
+    let display_plan = UiDisplayPlan::from_mister_ini_file();
+    println!("{}", display_plan.log_line());
+    if display_plan.fallback {
+        boot_analytics::event("display_plan_fallback", display_plan.log_line());
+    }
     println!(
-        "ui-fb-mode=temporary {UI_FB_W}x{UI_FB_H} format={} fpga-scale=1920x1080 restore=on-drop",
-        fb_format.label()
+        "ui-fb-mode=temporary {}x{} format={} output={}x{} scan={}x{} restore=on-drop",
+        display_plan.fb_w,
+        display_plan.fb_h,
+        fb_format.label(),
+        display_plan.output_w,
+        display_plan.output_h,
+        display_plan.scan_w,
+        display_plan.scan_h
     );
     if std::env::var_os("MISTER_FB_FORMAT").is_some() {
         println!(
@@ -244,27 +255,44 @@ pub fn run_ui(f: &mut Fpga) {
             fb_format.label()
         );
     }
-    let _fb_mode_guard = match FbModeGuard::set_temporary_format(UI_FB_W, UI_FB_H, fb_format) {
-        Ok(guard) => guard,
+    let current_fb = match Display::current_info() {
+        Ok(info) => info,
         Err(e) => {
-            eprintln!("failed to set temporary framebuffer mode for FPGA-scaled UI: {e}");
+            eprintln!("failed to read current framebuffer mode for FPGA-scaled UI: {e}");
             std::process::exit(1);
+        }
+    };
+    let fb_mode_action = fb_mode_action(current_fb, display_plan, fb_format);
+    println!("fb_mode_action={}", fb_mode_action.label());
+    boot_analytics::event("fb_mode_action", fb_mode_action.label());
+    let _fb_mode_guard = match fb_mode_action {
+        FbModeAction::AdoptCurrent => None,
+        FbModeAction::WriteMode => {
+            match FbModeGuard::set_temporary_format(display_plan.fb_w, display_plan.fb_h, fb_format)
+            {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    eprintln!("failed to set temporary framebuffer mode for FPGA-scaled UI: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     };
 
     println!("display-open-path=temporary-fb-fpga-scale");
-    let mut disp = match Display::open_with_format(UI_FB_W, UI_FB_H, fb_format) {
+    let mut disp = match Display::open_with_format(display_plan.fb_w, display_plan.fb_h, fb_format)
+    {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
             std::process::exit(1);
         }
     };
-    let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
+    let ui = UiDisplay::for_plan(display_plan);
     println!("{}", ui.log_line());
     disp.clear_black();
     boot_analytics::event(
-        "early_black_frame_copied",
+        "ui_black_frame_copied",
         format!(
             "format={} w={} h={}",
             fb_format.label(),
@@ -272,31 +300,31 @@ pub fn run_ui(f: &mut Fpga) {
             disp.height()
         ),
     );
-    disp.record_visual_sample("after_early_black_frame_before_initial_route");
-    let display_config = match DisplayConfig::detect(f, disp.info(), &ui) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("failed to read display configuration from FPGA: {e}");
-            std::process::exit(1);
+    disp.record_visual_sample("after_ui_black_frame_before_initial_route");
+    match DisplayConfig::detect(f, disp.info(), &ui) {
+        Ok(config) => {
+            println!("{}", config.log_line());
+            boot_analytics::event("display_config_detected", config.boot_analytics_detail());
         }
-    };
-    println!("{}", display_config.log_line());
-    boot_analytics::event(
-        "display_config_detected",
-        display_config.boot_analytics_detail(),
-    );
+        Err(e) => {
+            eprintln!("warning: failed to read display configuration from FPGA: {e}");
+            boot_analytics::event("display_config_detect_failed", format!("error={e}"));
+        }
+    }
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
     }
-    let route_mode = ui_fpga_scaled_mode();
-    let route_mode_label = "fpga-scale-1920x1080";
-    let set_vga_fb = std::env::var_os("MISTER_DIRECT_VIDEO").is_some();
+    let route_mode = ui_fpga_scaled_mode(ui.scan_w(), ui.scan_h());
+    let route_mode_label = "fpga-scale-scan";
+    let set_vga_fb = ui.direct_video();
     boot_analytics::event(
         "initial_fb_enable_direct_attempt",
         format!(
-            "w={} h={} mode={route_mode_label} set_vga_fb={set_vga_fb}",
+            "w={} h={} mode={route_mode_label} scan={}x{} set_vga_fb={set_vga_fb}",
             disp.width(),
-            disp.height()
+            disp.height(),
+            ui.scan_w(),
+            ui.scan_h()
         ),
     );
     let flag = match f.fb_enable_format(
@@ -322,14 +350,26 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event(
         "rust_framebuffer_route_completed",
         format!(
-            "format={} w={} h={} scan={}x{} support_flag={flag}",
+            "format={} w={} h={} output={}x{} scan={}x{} support_flag={flag}",
             fb_format.label(),
             disp.width(),
             disp.height(),
-            UI_HDMI_W,
-            UI_HDMI_H
+            ui.output_w(),
+            ui.output_h(),
+            ui.scan_w(),
+            ui.scan_h()
         ),
     );
+    if fb_mode_action == FbModeAction::WriteMode {
+        settle_boot_black_frame(
+            "ui-startup",
+            &mut disp,
+            f,
+            route_mode,
+            set_vga_fb,
+            fb_format,
+        );
+    }
     disp.record_visual_sample("after_initial_route_before_slint_draw");
     match f.set_audio_volume(0) {
         Ok(()) => boot_analytics::event("set_audio_volume", "attenuation=0"),
