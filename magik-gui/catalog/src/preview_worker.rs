@@ -1123,7 +1123,13 @@ fn preview_archive_preload_enabled() -> bool {
 }
 
 fn preview_archive_preload_enabled_from_env(value: Option<&str>) -> bool {
-    !matches!(value, Some("0") | Some("off") | Some("false") | Some("no"))
+    let Some(value) = value.map(str::trim) else {
+        return false;
+    };
+    value == "1"
+        || value.eq_ignore_ascii_case("on")
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
 }
 
 fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -1626,15 +1632,39 @@ mod tests {
     }
 
     #[test]
-    fn archive_preload_defaults_on_and_can_be_disabled() {
-        assert!(preview_archive_preload_enabled_from_env(None));
+    fn archive_disabled_preload_reads_entry_from_archive_file() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-lazy-{}.mmraw",
+            std::process::id()
+        ));
+        let payload = raw565_fixture(1, 1, &[0x07e0]);
+        write_raw_archive(&path, "lazy.rgb565", &payload);
+
+        let archive =
+            PreviewArchive::open_with_preload_mode(&path, PreviewArchivePreloadMode::Disabled)
+                .expect("open raw archive");
+        let loaded = archive
+            .load_timed("lazy.rgb565")
+            .expect("load lazy cache name")
+            .expect("archive entry");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveFile);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn archive_preload_defaults_lazy_and_can_be_enabled() {
+        assert!(!preview_archive_preload_enabled_from_env(None));
         assert!(!preview_archive_preload_enabled_from_env(Some("0")));
         assert!(!preview_archive_preload_enabled_from_env(Some("off")));
         assert!(!preview_archive_preload_enabled_from_env(Some("false")));
         assert!(!preview_archive_preload_enabled_from_env(Some("no")));
+        assert!(!preview_archive_preload_enabled_from_env(Some("")));
         assert!(preview_archive_preload_enabled_from_env(Some("1")));
         assert!(preview_archive_preload_enabled_from_env(Some("true")));
         assert!(preview_archive_preload_enabled_from_env(Some("on")));
+        assert!(preview_archive_preload_enabled_from_env(Some("yes")));
+        assert!(preview_archive_preload_enabled_from_env(Some(" YES ")));
     }
 
     #[test]
