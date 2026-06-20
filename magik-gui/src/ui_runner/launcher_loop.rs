@@ -11,11 +11,11 @@ pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: 
             0,
             ui.fb_w() as u16,
             ui.fb_h() as u16,
-            ui_fpga_scaled_mode(),
+            ui_fpga_scaled_mode(ui.scan_w(), ui.scan_h()),
             Some(0),
             Some(0),
-            std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-            FramebufferFormat::from_env(),
+            ui.direct_video(),
+            FramebufferFormat::production_default(),
         ) {
             eprintln!("failed to recover Slint framebuffer route after launch failure: {e}");
         }
@@ -298,11 +298,11 @@ pub(super) fn run_launcher_loop(
                     0,
                     ui.fb_w() as u16,
                     ui.fb_h() as u16,
-                    ui_fpga_scaled_mode(),
+                    ui_fpga_scaled_mode(ui.scan_w(), ui.scan_h()),
                     Some(0),
                     Some(0),
-                    std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-                    FramebufferFormat::from_env(),
+                    ui.direct_video(),
+                    FramebufferFormat::production_default(),
                 ) {
                     Ok(flag) => {
                         route_reassert_count = route_reassert_count.saturating_add(1);
