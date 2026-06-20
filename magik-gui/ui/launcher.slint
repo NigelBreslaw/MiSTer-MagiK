@@ -88,45 +88,6 @@ component OsdSideLabel inherits Rectangle {
     }
 }
 
-component LauncherHeader inherits Rectangle {
-    property <int> s: MisterUi.scale;
-
-    height: 42px * s;
-    background: #172131;
-    border-width: 1px;
-    border-color: #52647d;
-
-    HorizontalLayout {
-        padding-left: 14px * s;
-        padding-right: 10px * s;
-        spacing: 12px * s;
-        cross-axis-alignment: center;
-
-        Text {
-            text: "MiSTer MagiK";
-            color: #d7eef8;
-            font-size: 16px * s;
-            vertical-alignment: center;
-        }
-
-        Rectangle { horizontal-stretch: 1; background: transparent; }
-
-        Text {
-            text: MisterBridge.clock-text;
-            color: #d7eef8;
-            font-size: 16px * s;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-        }
-
-        SettingsButton {
-            width: 34px * s;
-            height: 34px * s;
-            focused: MisterBridge.settings-focused;
-        }
-    }
-}
-
 component HomeGrid inherits Rectangle {
     property <int> s: MisterUi.scale;
     property <length> tile-width: 220px * s;
@@ -144,7 +105,42 @@ component HomeGrid inherits Rectangle {
             padding: 18px * s;
             spacing: 14px * s;
 
-            LauncherHeader { }
+            Rectangle {
+                height: 42px * s;
+                background: #172131;
+                border-width: 1px;
+                border-color: #52647d;
+
+                HorizontalLayout {
+                    padding-left: 14px * s;
+                    padding-right: 10px * s;
+                    spacing: 12px * s;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: "MiSTer MagiK";
+                        color: #d7eef8;
+                        font-size: 16px * s;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                    Text {
+                        text: MisterBridge.clock-text;
+                        color: #d7eef8;
+                        font-size: 16px * s;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+
+                    SettingsButton {
+                        width: 34px * s;
+                        height: 34px * s;
+                        focused: MisterBridge.settings-focused;
+                    }
+                }
+            }
 
             system-list := ListView {
                 vertical-stretch: 1;
@@ -265,18 +261,17 @@ component CatalogScanPopup inherits Rectangle {
 component StartupSplash inherits Rectangle {
     property <int> s: MisterUi.scale;
 
-    background: #0b0d14;
+    background: #1a1424;
 
-    HorizontalLayout {
-        OsdSideLabel { }
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px * s;
 
-        VerticalLayout {
-            padding: 18px * s;
-            spacing: 14px * s;
-
-            LauncherHeader { }
-
-            Rectangle { vertical-stretch: 1; background: transparent; }
+        Text {
+            text: "MiSTer MagiK";
+            color: #e8e0f0;
+            font-size: 28px * s;
+            horizontal-alignment: center;
         }
     }
 }
