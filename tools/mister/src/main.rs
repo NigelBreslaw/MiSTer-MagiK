@@ -1,4 +1,4 @@
-use image::{imageops::FilterType, RgbImage};
+use image::RgbImage;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rayon::prelude::*;
@@ -317,16 +317,16 @@ fn validate_remote_run_command(command: &str) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewResizeChoice {
-    Nearest,
-    Lanczos,
+    SharpBilinear,
+    AreaUnsharp,
     Unchanged,
 }
 
 impl PreviewResizeChoice {
     fn label(self) -> &'static str {
         match self {
-            Self::Nearest => "nearest",
-            Self::Lanczos => "lanczos",
+            Self::SharpBilinear => "sharp-bilinear",
+            Self::AreaUnsharp => "area-unsharp",
             Self::Unchanged => "unchanged",
         }
     }
@@ -414,13 +414,13 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
     }
 
     ok.sort_by(|a, b| a.file.cmp(&b.file));
-    let nearest = ok
+    let upscaled = ok
         .iter()
-        .filter(|r| r.resize == PreviewResizeChoice::Nearest)
+        .filter(|r| r.resize == PreviewResizeChoice::SharpBilinear)
         .count();
-    let lanczos = ok
+    let downscaled = ok
         .iter()
-        .filter(|r| r.resize == PreviewResizeChoice::Lanczos)
+        .filter(|r| r.resize == PreviewResizeChoice::AreaUnsharp)
         .count();
     let unchanged = ok
         .iter()
@@ -450,11 +450,11 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
         );
     }
     println!(
-        "preview_cache_summary ok={} failed=0 elapsed_ms={} nearest={} lanczos={} unchanged={} raw_bytes={} png_dir={} raw565_dir={} archive={}",
+        "preview_cache_summary ok={} failed=0 elapsed_ms={} upscaled={} downscaled={} unchanged={} raw_bytes={} png_dir={} raw565_dir={} archive={}",
         ok.len(),
         total_t.elapsed().as_millis(),
-        nearest,
-        lanczos,
+        upscaled,
+        downscaled,
         unchanged,
         raw_bytes,
         png_dir.display(),
@@ -1617,15 +1617,166 @@ fn resize_preview_image(image: RgbImage, max_size: u32) -> (RgbImage, PreviewRes
     };
     if scale > 1.0 {
         (
-            image::imageops::resize(&image, target_w, target_h, FilterType::Nearest),
-            PreviewResizeChoice::Nearest,
+            sharp_bilinear_resize(&image, target_w, target_h),
+            PreviewResizeChoice::SharpBilinear,
         )
     } else {
         (
-            image::imageops::resize(&image, target_w, target_h, FilterType::Lanczos3),
-            PreviewResizeChoice::Lanczos,
+            mild_unsharp_mask(&exact_area_resize_down(&image, target_w, target_h)),
+            PreviewResizeChoice::AreaUnsharp,
         )
     }
+}
+
+fn exact_area_resize_down(image: &RgbImage, target_w: u32, target_h: u32) -> RgbImage {
+    let src_w = image.width() as usize;
+    let src_h = image.height() as usize;
+    let target_w_usize = target_w as usize;
+    let target_h_usize = target_h as usize;
+    let scale_x = src_w as f64 / target_w as f64;
+    let scale_y = src_h as f64 / target_h as f64;
+    let norm = scale_x * scale_y;
+    let mut out = RgbImage::new(target_w, target_h);
+
+    for dy in 0..target_h_usize {
+        let y0 = dy as f64 * scale_y;
+        let y1 = (dy + 1) as f64 * scale_y;
+        let sy0 = y0.floor().max(0.0) as usize;
+        let sy1 = y1.ceil().min(src_h as f64) as usize;
+        for dx in 0..target_w_usize {
+            let x0 = dx as f64 * scale_x;
+            let x1 = (dx + 1) as f64 * scale_x;
+            let sx0 = x0.floor().max(0.0) as usize;
+            let sx1 = x1.ceil().min(src_w as f64) as usize;
+            let mut acc = [0.0f64; 3];
+            for sy in sy0..sy1 {
+                let wy = ((sy + 1) as f64).min(y1) - (sy as f64).max(y0);
+                if wy <= 0.0 {
+                    continue;
+                }
+                for sx in sx0..sx1 {
+                    let wx = ((sx + 1) as f64).min(x1) - (sx as f64).max(x0);
+                    if wx <= 0.0 {
+                        continue;
+                    }
+                    let weight = wx * wy;
+                    let pixel = image.get_pixel(sx as u32, sy as u32).0;
+                    acc[0] += pixel[0] as f64 * weight;
+                    acc[1] += pixel[1] as f64 * weight;
+                    acc[2] += pixel[2] as f64 * weight;
+                }
+            }
+            out.put_pixel(
+                dx as u32,
+                dy as u32,
+                image::Rgb([
+                    clamp_u8(acc[0] / norm),
+                    clamp_u8(acc[1] / norm),
+                    clamp_u8(acc[2] / norm),
+                ]),
+            );
+        }
+    }
+
+    out
+}
+
+fn mild_unsharp_mask(image: &RgbImage) -> RgbImage {
+    const AMOUNT: f64 = 0.25;
+    const KERNEL: [[f64; 3]; 3] = [[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]];
+    let w = image.width() as i32;
+    let h = image.height() as i32;
+    let mut out = RgbImage::new(image.width(), image.height());
+
+    for y in 0..h {
+        for x in 0..w {
+            let original = image.get_pixel(x as u32, y as u32).0;
+            let mut blur = [0.0f64; 3];
+            for ky in -1..=1 {
+                let sy = (y + ky).clamp(0, h - 1) as u32;
+                for kx in -1..=1 {
+                    let sx = (x + kx).clamp(0, w - 1) as u32;
+                    let weight = KERNEL[(ky + 1) as usize][(kx + 1) as usize];
+                    let pixel = image.get_pixel(sx, sy).0;
+                    blur[0] += pixel[0] as f64 * weight;
+                    blur[1] += pixel[1] as f64 * weight;
+                    blur[2] += pixel[2] as f64 * weight;
+                }
+            }
+            let sharpened = [
+                original[0] as f64 + AMOUNT * (original[0] as f64 - blur[0] / 16.0),
+                original[1] as f64 + AMOUNT * (original[1] as f64 - blur[1] / 16.0),
+                original[2] as f64 + AMOUNT * (original[2] as f64 - blur[2] / 16.0),
+            ];
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgb([
+                    clamp_u8(sharpened[0]),
+                    clamp_u8(sharpened[1]),
+                    clamp_u8(sharpened[2]),
+                ]),
+            );
+        }
+    }
+
+    out
+}
+
+fn sharp_bilinear_resize(image: &RgbImage, target_w: u32, target_h: u32) -> RgbImage {
+    let src_w = image.width();
+    let src_h = image.height();
+    let scale_x = target_w as f64 / src_w as f64;
+    let scale_y = target_h as f64 / src_h as f64;
+    let mut out = RgbImage::new(target_w, target_h);
+
+    for dy in 0..target_h {
+        let src_y = ((dy as f64 + 0.5) / scale_y - 0.5).clamp(0.0, (src_h - 1) as f64);
+        let y0 = src_y.floor() as u32;
+        let y1 = (y0 + 1).min(src_h - 1);
+        let fy = sharp_bilinear_weight(src_y - y0 as f64, scale_y);
+        for dx in 0..target_w {
+            let src_x = ((dx as f64 + 0.5) / scale_x - 0.5).clamp(0.0, (src_w - 1) as f64);
+            let x0 = src_x.floor() as u32;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let fx = sharp_bilinear_weight(src_x - x0 as f64, scale_x);
+
+            let p00 = image.get_pixel(x0, y0).0;
+            let p10 = image.get_pixel(x1, y0).0;
+            let p01 = image.get_pixel(x0, y1).0;
+            let p11 = image.get_pixel(x1, y1).0;
+            let mut pixel = [0u8; 3];
+            for c in 0..3 {
+                let top = lerp(p00[c] as f64, p10[c] as f64, fx);
+                let bottom = lerp(p01[c] as f64, p11[c] as f64, fx);
+                pixel[c] = clamp_u8(lerp(top, bottom, fy));
+            }
+            out.put_pixel(dx, dy, image::Rgb(pixel));
+        }
+    }
+
+    out
+}
+
+fn sharp_bilinear_weight(frac: f64, scale: f64) -> f64 {
+    let transition = (1.0 / scale.max(1.0)).min(1.0);
+    let lo = 0.5 - transition * 0.5;
+    let hi = 0.5 + transition * 0.5;
+    if frac <= lo {
+        0.0
+    } else if frac >= hi {
+        1.0
+    } else {
+        (frac - lo) / (hi - lo)
+    }
+}
+
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t
+}
+
+fn clamp_u8(value: f64) -> u8 {
+    value.round().clamp(0.0, 255.0) as u8
 }
 
 fn preview_target_size(width: u32, height: u32, max_size: u32) -> Option<(u32, u32, f64)> {
@@ -1652,7 +1803,7 @@ fn encode_raw565_preview(image: &RgbImage) -> Vec<u8> {
         let dst_row = 20 + y * stride_bytes;
         for x in 0..image.width() as usize {
             let pixel = image.get_pixel(x as u32, y as u32).0;
-            let word = rgb8_to_rgb565_word(pixel[0], pixel[1], pixel[2]);
+            let word = rgb8_to_rgb565_word_dither(pixel[0], pixel[1], pixel[2], x, y);
             let dst = dst_row + x * 2;
             bytes[dst..dst + 2].copy_from_slice(&word.to_le_bytes());
         }
@@ -1660,8 +1811,24 @@ fn encode_raw565_preview(image: &RgbImage) -> Vec<u8> {
     bytes
 }
 
-fn rgb8_to_rgb565_word(r: u8, g: u8, b: u8) -> u16 {
-    ((r as u16 & 0xf8) << 8) | ((g as u16 & 0xfc) << 3) | (b as u16 >> 3)
+fn rgb8_to_rgb565_word_dither(r: u8, g: u8, b: u8, x: usize, y: usize) -> u16 {
+    let t = bayer4_threshold(x, y);
+    let rq = ordered_quantize(r, 5, t) as u16;
+    let gq = ordered_quantize(g, 6, t) as u16;
+    let bq = ordered_quantize(b, 5, t) as u16;
+    (rq << 11) | (gq << 5) | bq
+}
+
+fn ordered_quantize(value: u8, bits: u8, threshold: f64) -> u8 {
+    let levels = ((1u16 << bits) - 1) as f64;
+    ((value as f64 / 255.0) * levels + threshold)
+        .floor()
+        .clamp(0.0, levels) as u8
+}
+
+fn bayer4_threshold(x: usize, y: usize) -> f64 {
+    const BAYER4: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    (BAYER4[y & 3][x & 3] as f64 + 0.5) / 16.0
 }
 
 fn align16(n: usize) -> usize {
@@ -5547,20 +5714,55 @@ H: Handlers=event3 js0"#
         let small = RgbImage::from_pixel(2, 1, image::Rgb([255, 0, 0]));
         let (upscaled, up_filter) = resize_preview_image(small, 4);
         assert_eq!((upscaled.width(), upscaled.height()), (4, 2));
-        assert_eq!(up_filter, PreviewResizeChoice::Nearest);
-        assert_eq!(up_filter.label(), "nearest");
+        assert_eq!(up_filter, PreviewResizeChoice::SharpBilinear);
+        assert_eq!(up_filter.label(), "sharp-bilinear");
 
         let large = RgbImage::from_pixel(8, 4, image::Rgb([0, 255, 0]));
         let (downscaled, down_filter) = resize_preview_image(large, 4);
         assert_eq!((downscaled.width(), downscaled.height()), (4, 2));
-        assert_eq!(down_filter, PreviewResizeChoice::Lanczos);
-        assert_eq!(down_filter.label(), "lanczos");
+        assert_eq!(down_filter, PreviewResizeChoice::AreaUnsharp);
+        assert_eq!(down_filter.label(), "area-unsharp");
 
         let exact = RgbImage::from_pixel(4, 2, image::Rgb([0, 0, 255]));
         let (unchanged, unchanged_filter) = resize_preview_image(exact, 4);
         assert_eq!((unchanged.width(), unchanged.height()), (4, 2));
         assert_eq!(unchanged_filter, PreviewResizeChoice::Unchanged);
         assert_eq!(unchanged_filter.label(), "unchanged");
+    }
+
+    #[test]
+    fn exact_area_downscale_preserves_average_color() {
+        let image = RgbImage::from_raw(
+            2,
+            2,
+            vec![
+                0, 0, 0, //
+                255, 0, 0, //
+                0, 255, 0, //
+                0, 0, 255, //
+            ],
+        )
+        .unwrap();
+
+        let resized = exact_area_resize_down(&image, 1, 1);
+        assert_eq!(resized.get_pixel(0, 0).0, [64, 64, 64]);
+    }
+
+    #[test]
+    fn rgb565_preview_uses_ordered_dither_for_midtones() {
+        let image = RgbImage::from_pixel(4, 4, image::Rgb([128, 128, 128]));
+        let bytes = encode_raw565_preview(&image);
+        let stride = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+        let mut words = std::collections::BTreeSet::new();
+        for y in 0..4usize {
+            for x in 0..4usize {
+                let offset = 20 + y * stride + x * 2;
+                words.insert(u16::from_le_bytes(
+                    bytes[offset..offset + 2].try_into().unwrap(),
+                ));
+            }
+        }
+        assert!(words.len() > 1);
     }
 
     #[test]
