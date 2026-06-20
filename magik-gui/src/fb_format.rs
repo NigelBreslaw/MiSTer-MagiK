@@ -132,8 +132,17 @@ mod tests {
             FramebufferFormat::production_default(),
             FramebufferFormat::Rgb565
         );
+        assert_eq!(FramebufferFormat::Xrgb8888.bytes_per_pixel(), 4);
+        assert_eq!(FramebufferFormat::Rgb565.bytes_per_pixel(), 2);
         assert!(FramebufferFormat::Xrgb8888.is_diagnostic_override());
         assert!(!FramebufferFormat::Rgb565.is_diagnostic_override());
+    }
+
+    #[test]
+    fn fpga_format_bits_match_main_mister_route_values() {
+        assert_eq!(FramebufferFormat::Xrgb8888.fpga_format_bits(), FB_FMT_8888);
+        assert_eq!(FramebufferFormat::Rgb565.fpga_format_bits(), FB_FMT_565);
+        assert_eq!(FB_FMT_RXB, 0b10000);
     }
 
     #[test]

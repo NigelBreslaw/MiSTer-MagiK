@@ -279,6 +279,16 @@ pub fn system_title(id: &str) -> String {
 mod tests {
     use super::*;
 
+    fn game(title: &str, mra_path: &str, image_path: &str, system_id: &str) -> ArcadeGameEntry {
+        ArcadeGameEntry {
+            title: title.into(),
+            mra_path: mra_path.into(),
+            image_path: image_path.into(),
+            has_image: true,
+            system_id: system_id.into(),
+        }
+    }
+
     #[test]
     fn preview_games_require_images_and_collapse_parenthetical_clones() {
         let root = PathBuf::from("/media/fat/_Arcade");
@@ -389,6 +399,49 @@ mod tests {
         assert!(catalog.system_preview_games("missing").is_empty());
         assert_eq!(catalog.system_preview_game_count("missing"), 0);
         assert!(catalog.system_preview_game_at("missing", 0).is_none());
+    }
+
+    #[test]
+    fn preview_games_prefer_exact_or_shorter_title_for_same_family() {
+        let games = [
+            game(
+                "Puzzle Star (World)",
+                "/games/puzzle-world.mra",
+                "/media/puzzle-world.jpeg",
+                "arcade",
+            ),
+            game("Puzzle Star", "/games/puzzle.mra", "/media/puzzle.png", "arcade"),
+            game(
+                "Space   Duel Alpha",
+                "/games/space-extended.mra",
+                "/media/space-extended.jpg",
+                "arcade",
+            ),
+            game("Space Duel Alpha", "/games/space.mra", "/media/space.png", "arcade"),
+        ];
+
+        let previews = preview_games(games.iter());
+
+        assert_eq!(
+            previews
+                .iter()
+                .map(|game| game.title.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["Puzzle Star", "Space Duel Alpha"]
+        );
+    }
+
+    #[test]
+    fn preview_games_ignore_unsupported_image_extensions() {
+        let games = [
+            game("Still Image", "/games/still.mra", "/media/still.gif", "arcade"),
+            game("Photo", "/games/photo.mra", "/media/photo.JPEG", "arcade"),
+        ];
+
+        let previews = preview_games(games.iter());
+
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0].title.as_ref(), "Photo");
     }
 
     #[test]
