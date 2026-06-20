@@ -813,10 +813,14 @@ run_tier_catalog() {
     record_ok "no console screenshot packs installed; canonical asset projection skipped"
   fi
 
-  for platform in arcade neogeo saturn; do
+  if remote "test -f '/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b'"; then
+    count="$("$MISTER" db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='arcade';" | last_number || true)"
+    assert_gt_zero "arcade has_preview count" "$count"
+  fi
+  for platform in neogeo saturn; do
     if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
-      count="$("$MISTER" db "SELECT COALESCE(SUM(has_image),0) FROM launcher_catalog WHERE platform_id='$platform';" | last_number || true)"
-      assert_gt_zero "$platform has_image count" "$count"
+      count="$("$MISTER" db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';" | last_number || true)"
+      assert_gt_zero "$platform has_preview count" "$count"
     fi
   done
 

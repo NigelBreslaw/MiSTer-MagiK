@@ -225,8 +225,9 @@ pub(super) fn slint_arcade_games(
         .map(|g| slint_ui::launcher::ArcadeGame {
             title: g.title.as_ref().into(),
             mra_path: g.mra_path.as_ref().into(),
-            image_path: g.image_path.as_ref().into(),
-            has_image: g.has_image,
+            preview_archive_path: g.preview_archive_path.as_ref().into(),
+            preview_asset_key: g.preview_asset_key.as_ref().into(),
+            has_preview: g.has_preview,
             system_id: g.system_id.as_ref().into(),
         })
         .collect();

@@ -78,7 +78,7 @@ fi
 ORIGINALS="$WORK_DIR/originals"
 CACHE_DIR="$WORK_DIR/cache"
 RAW_DIR="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}"
-PACK="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}-lz4block-12.mmlz4b"
+PACK="$CACHE_DIR/${MAX_SIZE}x${MAX_SIZE}-screenshots.mmlz4b"
 
 mkdir -p "$ORIGINALS" "$CACHE_DIR"
 

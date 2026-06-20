@@ -17,9 +17,16 @@ pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
 pub struct PreviewRequest {
     pub generation: u64,
     pub title: String,
-    pub image_path: String,
+    pub preview_archive_path: String,
+    pub preview_asset_key: String,
     pub requested_at: Instant,
     pub priority: PreviewPriority,
+}
+
+impl PreviewRequest {
+    fn preview_key(&self) -> String {
+        preview_asset_cache_key(&self.preview_archive_path, &self.preview_asset_key)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +48,8 @@ impl PreviewPriority {
 pub struct PreviewResult {
     pub generation: u64,
     pub title: String,
-    pub image_path: String,
+    pub preview_archive_path: String,
+    pub preview_asset_key: String,
     pub image: Option<PreviewPixels>,
     pub request_age_us: u64,
     pub read_us: u64,
@@ -56,6 +64,22 @@ pub struct PreviewResult {
     pub storage_format: PreviewStorageFormat,
     pub resize_filter: PreviewResizeFilter,
     pub priority: PreviewPriority,
+}
+
+impl PreviewResult {
+    pub fn preview_key(&self) -> String {
+        preview_asset_cache_key(&self.preview_archive_path, &self.preview_asset_key)
+    }
+}
+
+pub fn preview_asset_cache_key(preview_archive_path: &str, preview_asset_key: &str) -> String {
+    let archive_path = preview_archive_path.trim();
+    let asset_key = preview_asset_key.trim();
+    if archive_path.is_empty() {
+        asset_key.to_string()
+    } else {
+        format!("{archive_path}|{asset_key}")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,26 +278,39 @@ impl PreviewWorker {
         }
     }
 
-    pub fn request_selected(&mut self, title: String, image_path: String) -> u64 {
+    pub fn request_selected(
+        &mut self,
+        title: String,
+        preview_archive_path: String,
+        preview_asset_key: String,
+    ) -> u64 {
         let generation = self.next_generation;
         self.next_generation += 1;
         let _ = self.tx.send(PreviewCommand::Request(PreviewRequest {
             generation,
             title,
-            image_path,
+            preview_archive_path,
+            preview_asset_key,
             requested_at: Instant::now(),
             priority: PreviewPriority::Selected,
         }));
         generation
     }
 
-    pub fn request_prefetch(&mut self, title: String, image_path: String, distance: usize) {
+    pub fn request_prefetch(
+        &mut self,
+        title: String,
+        preview_archive_path: String,
+        preview_asset_key: String,
+        distance: usize,
+    ) {
         let generation = self.next_generation;
         self.next_generation += 1;
         let _ = self.tx.send(PreviewCommand::Request(PreviewRequest {
             generation,
             title,
-            image_path,
+            preview_archive_path,
+            preview_asset_key,
             requested_at: Instant::now(),
             priority: PreviewPriority::Prefetch { distance },
         }));
@@ -421,7 +458,7 @@ fn enqueue_command(queue: &mut Vec<PreviewRequest>, command: PreviewCommand) {
             }
             if let Some(existing) = queue
                 .iter_mut()
-                .find(|existing| existing.image_path == req.image_path)
+                .find(|existing| existing.preview_key() == req.preview_key())
             {
                 if req.priority.rank() <= existing.priority.rank() {
                     *existing = req;
@@ -437,10 +474,14 @@ fn enqueue_command(queue: &mut Vec<PreviewRequest>, command: PreviewCommand) {
     }
 }
 
-fn preview_cache_key(image_path: &str, resize: PreviewResizeSpec) -> String {
+fn preview_cache_key(
+    preview_archive_path: &str,
+    preview_asset_key: &str,
+    resize: PreviewResizeSpec,
+) -> String {
     format!(
         "{}|{}|{}x{}",
-        image_path,
+        preview_asset_cache_key(preview_archive_path, preview_asset_key),
         resize.filter.label(),
         resize.max_w,
         resize.max_h
@@ -450,13 +491,13 @@ fn preview_cache_key(image_path: &str, resize: PreviewResizeSpec) -> String {
 fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) -> PreviewResult {
     let resize = PreviewResizeSpec::from_env();
     let storage = PreviewStorageFormat::from_env();
-    let cache_key = preview_cache_key(&req.image_path, resize);
+    let cache_key = preview_cache_key(&req.preview_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
     let loaded_result = if let Some(loaded) = decoded_cache.get(&cache_key) {
         cache_hit = true;
         Ok(loaded)
     } else {
-        load_preview_pixels(&req.image_path, resize).inspect(|loaded| {
+        load_preview_pixels(&req.preview_archive_path, &req.preview_asset_key, resize).inspect(|loaded| {
             decoded_cache.insert(cache_key, loaded);
         })
     };
@@ -464,7 +505,7 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
         Ok(loaded) => {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace decoded generation={} priority={:?} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    "preview_trace decoded generation={} priority={:?} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
                     req.generation,
                     req.priority,
                     if cache_hit { 1 } else { 0 },
@@ -481,14 +522,16 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
                     loaded.timing.resize_us,
                     loaded.timing.encoded_bytes,
                     loaded.image.decoded_bytes(),
-                    req.image_path
+                    req.preview_archive_path,
+                    req.preview_asset_key
                 );
             }
             let decoded_bytes = loaded.image.decoded_bytes();
             PreviewResult {
                 generation: req.generation,
                 title: req.title,
-                image_path: req.image_path,
+                preview_archive_path: req.preview_archive_path,
+                preview_asset_key: req.preview_asset_key,
                 image: Some(loaded.image),
                 request_age_us: req.requested_at.elapsed().as_micros() as u64,
                 read_us: loaded.timing.read_us,
@@ -508,17 +551,19 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
         Err(e) => {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace decode_failed generation={} age_us={} path={} error={}",
+                    "preview_trace decode_failed generation={} age_us={} archive_path={} asset_key={} error={}",
                     req.generation,
                     req.requested_at.elapsed().as_micros(),
-                    req.image_path,
+                    req.preview_archive_path,
+                    req.preview_asset_key,
                     e
                 );
             }
             PreviewResult {
                 generation: req.generation,
                 title: req.title,
-                image_path: req.image_path,
+                preview_archive_path: req.preview_archive_path,
+                preview_asset_key: req.preview_asset_key,
                 image: None,
                 request_age_us: req.requested_at.elapsed().as_micros() as u64,
                 read_us: 0,
@@ -545,80 +590,43 @@ struct LoadedPreviewPixels {
 }
 
 fn load_preview_pixels(
-    image_path: &str,
+    preview_archive_path: &str,
+    preview_asset_key: &str,
     resize: PreviewResizeSpec,
 ) -> Result<LoadedPreviewPixels, String> {
-    load_raw565_preview_timed(image_path, resize)
+    let _ = resize;
+    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key)
 }
 
-pub fn preview_cache_path(image_path: &str, resize: PreviewResizeSpec) -> PathBuf {
-    let source = Path::new(image_path);
-    let stem = source
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("preview");
-    let cache_dir = format!("raw565-{}", resize.cache_label());
-    if let Ok(root) = std::env::var("MISTER_PREVIEW_CACHE_DIR") {
-        return Path::new(&root)
-            .join(cache_dir)
-            .join(format!("{stem}.rgb565"));
-    }
-    if let Some(parent) = source.parent() {
-        if parent.file_name().and_then(|s| s.to_str()) == Some("screenshot") {
-            if let Some(media) = parent.parent() {
-                return media
-                    .join("screenshot-magik")
-                    .join(cache_dir)
-                    .join(format!("{stem}.rgb565"));
-            }
-        }
-        return parent
-            .join("screenshot-magik")
-            .join(cache_dir)
-            .join(format!("{stem}.rgb565"));
-    }
-    PathBuf::from(format!("{stem}.rgb565"))
+pub fn load_preview_asset_pixels(
+    preview_archive_path: &str,
+    preview_asset_key: &str,
+) -> Result<PreviewPixels, String> {
+    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key)
+        .map(|loaded| loaded.image)
 }
 
-pub fn raw565_preview_cache_path(image_path: &str, resize: PreviewResizeSpec) -> PathBuf {
-    preview_cache_path(image_path, resize)
-}
-
-fn load_raw565_preview_timed(
-    image_path: &str,
-    resize: PreviewResizeSpec,
+fn load_raw565_preview_asset_timed(
+    preview_archive_path: &str,
+    preview_asset_key: &str,
 ) -> Result<LoadedPreviewPixels, String> {
-    let path = raw565_preview_cache_path(image_path, resize);
-    if let Some(archives) = preview_archives()? {
-        if let Some(stem) = Path::new(&path).file_name().and_then(|s| s.to_str()) {
-            for archive in archives.iter() {
-                if let Some(loaded) = archive.load_timed(stem)? {
-                    return Ok(loaded);
-                }
-            }
+    let archive_path = preview_archive_path.trim();
+    let asset_key = preview_asset_key.trim();
+    if archive_path.is_empty() || asset_key.is_empty() {
+        return Err("preview asset missing archive path or key".to_string());
+    }
+    let entry_name = format!("{asset_key}.rgb565");
+    let Some(archives) = preview_archives_for_paths(vec![archive_path.to_string()])? else {
+        return Err(format!("preview archive not configured {archive_path}"));
+    };
+    for archive in archives.iter() {
+        if let Some(loaded) = archive.load_timed(&entry_name)? {
+            return Ok(loaded);
         }
     }
-    let total_t = Instant::now();
-    let read_t = Instant::now();
-    let data = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let read_us = read_t.elapsed().as_micros() as u64;
-    let decode_t = Instant::now();
-    let image = decode_raw565_preview_bytes(&data)?;
-    let decode_us = decode_t.elapsed().as_micros() as u64;
-    let total_us = total_t.elapsed().as_micros() as u64;
-    Ok(LoadedPreviewPixels {
-        timing: ImageLoadTiming {
-            read_us,
-            decode_us,
-            resize_us: 0,
-            total_us,
-            encoded_bytes: data.len(),
-            source_width: image.width(),
-            source_height: image.height(),
-            load_source: PreviewLoadSource::RawFile,
-        },
-        image,
-    })
+    Err(format!(
+        "preview asset {entry_name} missing from archive {archive_path}"
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -651,14 +659,13 @@ struct PreviewArchiveScratch {
 #[derive(Clone)]
 enum PreviewArchiveBytes {
     Disabled,
-    Loading(Arc<Mutex<Option<Arc<[u8]>>>>),
+    MemorySlot(Arc<Mutex<Option<Arc<[u8]>>>>),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewArchivePreloadMode {
     Disabled,
     Async,
-    #[cfg(test)]
     Sync,
 }
 
@@ -857,24 +864,19 @@ fn auto_preview_archive_path() -> Option<String> {
     ) {
         return None;
     }
-    let cache_label = PreviewResizeSpec::from_env().cache_label();
+    let resize = PreviewResizeSpec::from_env();
     let root = std::env::var("MISTER_PREVIEW_CACHE_DIR")
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/media/fat/_Arcade/media/screenshot-magik"));
-    auto_preview_archive_path_in_root(&root, &cache_label)
+    auto_preview_archive_path_in_root(&root, resize)
 }
 
-fn auto_preview_archive_path_in_root(root: &Path, cache_label: &str) -> Option<String> {
-    let lz4 = root.join(format!("raw565-{cache_label}-lz4block-12.mmlz4b"));
-    if lz4.exists() {
-        return Some(lz4.display().to_string());
-    }
-    let raw = root.join(format!("raw565-{cache_label}-rawpack.mmraw"));
-    if raw.exists() {
-        return Some(raw.display().to_string());
-    }
-    None
+fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> Option<String> {
+    let max_w = if resize.max_w == 0 { 320 } else { resize.max_w };
+    let max_h = if resize.max_h == 0 { 320 } else { resize.max_h };
+    let archive = root.join(format!("{max_w}x{max_h}-screenshots.mmlz4b"));
+    archive.exists().then(|| archive.display().to_string())
 }
 
 fn neogeo_preview_archive_path_from_env() -> Option<String> {
@@ -928,12 +930,7 @@ impl PreviewArchive {
     const RAW_MAGIC: &'static [u8; 8] = b"MMRAWP1\0";
 
     fn open(path: &Path) -> Result<Self, String> {
-        let preload_mode = if preview_archive_preload_enabled() {
-            PreviewArchivePreloadMode::Async
-        } else {
-            PreviewArchivePreloadMode::Disabled
-        };
-        Self::open_with_preload_mode(path, preload_mode)
+        Self::open_with_preload_mode(path, preview_archive_preload_mode())
     }
 
     fn open_with_preload_mode(
@@ -1006,7 +1003,7 @@ impl PreviewArchive {
             )
         } else {
             let load_source = match &self.bytes {
-                PreviewArchiveBytes::Loading(_) => PreviewLoadSource::ArchiveWarmupFile,
+                PreviewArchiveBytes::MemorySlot(_) => PreviewLoadSource::ArchiveWarmupFile,
                 PreviewArchiveBytes::Disabled => PreviewLoadSource::ArchiveFile,
             };
             compressed.resize(entry.compressed_len, 0);
@@ -1062,7 +1059,7 @@ impl PreviewArchive {
     fn archive_bytes(&self) -> Option<Arc<[u8]>> {
         match &self.bytes {
             PreviewArchiveBytes::Disabled => None,
-            PreviewArchiveBytes::Loading(slot) => slot.lock().ok().and_then(|bytes| bytes.clone()),
+            PreviewArchiveBytes::MemorySlot(slot) => slot.lock().ok().and_then(|bytes| bytes.clone()),
         }
     }
 }
@@ -1073,10 +1070,9 @@ fn preview_archive_bytes(
 ) -> Result<PreviewArchiveBytes, String> {
     match preload_mode {
         PreviewArchivePreloadMode::Disabled => Ok(PreviewArchiveBytes::Disabled),
-        #[cfg(test)]
         PreviewArchivePreloadMode::Sync => {
             let bytes = read_archive_bytes(path)?;
-            Ok(PreviewArchiveBytes::Loading(Arc::new(Mutex::new(Some(
+            Ok(PreviewArchiveBytes::MemorySlot(Arc::new(Mutex::new(Some(
                 Arc::from(bytes.into_boxed_slice()),
             )))))
         }
@@ -1106,15 +1102,15 @@ fn preview_archive_bytes(
                     }
                 })
                 .map_err(|e| format!("spawn preview archive preload: {e}"))?;
-            Ok(PreviewArchiveBytes::Loading(slot))
+            Ok(PreviewArchiveBytes::MemorySlot(slot))
         }
     }
 }
 
-fn preview_archive_preload_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        preview_archive_preload_enabled_from_env(
+fn preview_archive_preload_mode() -> PreviewArchivePreloadMode {
+    static MODE: OnceLock<PreviewArchivePreloadMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        preview_archive_preload_mode_from_env(
             std::env::var("MISTER_PREVIEW_ARCHIVE_PRELOAD")
                 .ok()
                 .as_deref(),
@@ -1122,14 +1118,21 @@ fn preview_archive_preload_enabled() -> bool {
     })
 }
 
-fn preview_archive_preload_enabled_from_env(value: Option<&str>) -> bool {
+fn preview_archive_preload_mode_from_env(value: Option<&str>) -> PreviewArchivePreloadMode {
     let Some(value) = value.map(str::trim) else {
-        return false;
+        return PreviewArchivePreloadMode::Sync;
     };
-    value == "1"
-        || value.eq_ignore_ascii_case("on")
-        || value.eq_ignore_ascii_case("true")
-        || value.eq_ignore_ascii_case("yes")
+    if value == "0"
+        || value.eq_ignore_ascii_case("off")
+        || value.eq_ignore_ascii_case("false")
+        || value.eq_ignore_ascii_case("no")
+    {
+        PreviewArchivePreloadMode::Disabled
+    } else if value.eq_ignore_ascii_case("async") {
+        PreviewArchivePreloadMode::Async
+    } else {
+        PreviewArchivePreloadMode::Sync
+    }
 }
 
 fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -1288,31 +1291,44 @@ mod tests {
         assert_eq!(paths, vec!["b", "a", "c", "d"]);
     }
 
+    fn preview_request(
+        generation: u64,
+        title: &str,
+        preview_archive_path: &str,
+        preview_asset_key: &str,
+        priority: PreviewPriority,
+    ) -> PreviewRequest {
+        PreviewRequest {
+            generation,
+            title: title.to_string(),
+            preview_archive_path: preview_archive_path.to_string(),
+            preview_asset_key: preview_asset_key.to_string(),
+            requested_at: Instant::now(),
+            priority,
+        }
+    }
+
+    fn queued_request(
+        generation: u64,
+        title: &str,
+        preview_asset_key: &str,
+        priority: PreviewPriority,
+    ) -> PreviewRequest {
+        preview_request(
+            generation,
+            title,
+            "/tmp/320x320-screenshots.mmlz4b",
+            preview_asset_key,
+            priority,
+        )
+    }
+
     #[test]
     fn preview_queue_pops_selected_before_prefetch_and_keeps_remaining_work() {
-        let now = Instant::now();
         let mut queue = vec![
-            PreviewRequest {
-                generation: 1,
-                title: "near".to_string(),
-                image_path: "near.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Prefetch { distance: 1 },
-            },
-            PreviewRequest {
-                generation: 2,
-                title: "selected".to_string(),
-                image_path: "selected.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Selected,
-            },
-            PreviewRequest {
-                generation: 3,
-                title: "far".to_string(),
-                image_path: "far.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Prefetch { distance: 4 },
-            },
+            queued_request(1, "near", "near", PreviewPriority::Prefetch { distance: 1 }),
+            queued_request(2, "selected", "selected", PreviewPriority::Selected),
+            queued_request(3, "far", "far", PreviewPriority::Prefetch { distance: 4 }),
         ];
 
         assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 2);
@@ -1324,39 +1340,35 @@ mod tests {
 
     #[test]
     fn enqueue_replaces_lower_priority_duplicate_and_drops_far_prefetch() {
-        let now = Instant::now();
         let mut queue = Vec::new();
         enqueue_command(
             &mut queue,
-            PreviewCommand::Request(PreviewRequest {
-                generation: 1,
-                title: "prefetch".to_string(),
-                image_path: "same.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Prefetch { distance: 3 },
-            }),
+            PreviewCommand::Request(queued_request(
+                1,
+                "prefetch",
+                "same",
+                PreviewPriority::Prefetch { distance: 3 },
+            )),
         );
         enqueue_command(
             &mut queue,
-            PreviewCommand::Request(PreviewRequest {
-                generation: 2,
-                title: "selected".to_string(),
-                image_path: "same.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Selected,
-            }),
+            PreviewCommand::Request(queued_request(
+                2,
+                "selected",
+                "same",
+                PreviewPriority::Selected,
+            )),
         );
         enqueue_command(
             &mut queue,
-            PreviewCommand::Request(PreviewRequest {
-                generation: 3,
-                title: "too far".to_string(),
-                image_path: "far.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Prefetch {
+            PreviewCommand::Request(queued_request(
+                3,
+                "too far",
+                "far",
+                PreviewPriority::Prefetch {
                     distance: DEFAULT_PREVIEW_CACHE_CAP + 1,
                 },
-            }),
+            )),
         );
 
         assert_eq!(queue.len(), 1);
@@ -1366,37 +1378,33 @@ mod tests {
 
     #[test]
     fn enqueue_selected_supersedes_older_selected_work() {
-        let now = Instant::now();
         let mut queue = Vec::new();
         enqueue_command(
             &mut queue,
-            PreviewCommand::Request(PreviewRequest {
-                generation: 1,
-                title: "old selected".to_string(),
-                image_path: "old.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Selected,
-            }),
+            PreviewCommand::Request(queued_request(
+                1,
+                "old selected",
+                "old",
+                PreviewPriority::Selected,
+            )),
         );
         enqueue_command(
             &mut queue,
-            PreviewCommand::Request(PreviewRequest {
-                generation: 2,
-                title: "near".to_string(),
-                image_path: "near.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Prefetch { distance: 1 },
-            }),
+            PreviewCommand::Request(queued_request(
+                2,
+                "near",
+                "near",
+                PreviewPriority::Prefetch { distance: 1 },
+            )),
         );
         enqueue_command(
             &mut queue,
-            PreviewCommand::Request(PreviewRequest {
-                generation: 3,
-                title: "new selected".to_string(),
-                image_path: "new.png".to_string(),
-                requested_at: now,
-                priority: PreviewPriority::Selected,
-            }),
+            PreviewCommand::Request(queued_request(
+                3,
+                "new selected",
+                "new",
+                PreviewPriority::Selected,
+            )),
         );
 
         assert_eq!(queue.len(), 2);
@@ -1465,13 +1473,13 @@ mod tests {
 
     #[test]
     fn load_preview_failure_preserves_request_metadata() {
-        let req = PreviewRequest {
-            generation: 77,
-            title: "Missing".to_string(),
-            image_path: "/tmp/missing/media/screenshot/missing.png".to_string(),
-            requested_at: Instant::now(),
-            priority: PreviewPriority::Selected,
-        };
+        let req = preview_request(
+            77,
+            "Missing",
+            "/tmp/missing/320x320-screenshots.mmlz4b",
+            "missing",
+            PreviewPriority::Selected,
+        );
         let mut cache = PreviewDecodedCache::new(2);
 
         let result = load_preview(req, &mut cache);
@@ -1479,9 +1487,10 @@ mod tests {
         assert_eq!(result.generation, 77);
         assert_eq!(result.title, "Missing");
         assert_eq!(
-            result.image_path,
-            "/tmp/missing/media/screenshot/missing.png"
+            result.preview_archive_path,
+            "/tmp/missing/320x320-screenshots.mmlz4b"
         );
+        assert_eq!(result.preview_asset_key, "missing");
         assert!(result.image.is_none());
         assert_eq!(result.decoded_bytes, 0);
         assert_eq!(result.source_width, 0);
@@ -1497,41 +1506,6 @@ mod tests {
             PreviewResizeFilter::Hybrid
         );
         assert_eq!(PreviewResizeFilter::Hybrid.label(), "hybrid");
-    }
-
-    #[test]
-    fn cache_path_lives_outside_original_screenshot_dir() {
-        let resize = PreviewResizeSpec {
-            filter: PreviewResizeFilter::Lanczos,
-            max_w: 320,
-            max_h: 320,
-        };
-        let original = "/media/fat/_Arcade/media/screenshot/1941u.png";
-        let raw565 = raw565_preview_cache_path(original, resize);
-        assert_eq!(
-            raw565,
-            PathBuf::from(
-                "/media/fat/_Arcade/media/screenshot-magik/raw565-lanczos-320x320/1941u.rgb565"
-            )
-        );
-        assert_ne!(raw565, PathBuf::from(original));
-    }
-
-    #[test]
-    fn cache_path_uses_source_stem_for_jpg_originals() {
-        let resize = PreviewResizeSpec {
-            filter: PreviewResizeFilter::Hybrid,
-            max_w: 320,
-            max_h: 320,
-        };
-        let original = "/media/fat/_Arcade/media/screenshot/astrass.jpg";
-        let raw565 = raw565_preview_cache_path(original, resize);
-        assert_eq!(
-            raw565,
-            PathBuf::from(
-                "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320/astrass.rgb565"
-            )
-        );
     }
 
     #[test]
@@ -1619,7 +1593,7 @@ mod tests {
                 .expect("open raw archive");
         let warmup_slot = Arc::new(Mutex::new(None));
         let archive = PreviewArchive {
-            bytes: PreviewArchiveBytes::Loading(warmup_slot),
+            bytes: PreviewArchiveBytes::MemorySlot(warmup_slot),
             ..archive
         };
         let loaded = archive
@@ -1653,38 +1627,60 @@ mod tests {
     }
 
     #[test]
-    fn archive_preload_defaults_lazy_and_can_be_enabled() {
-        assert!(!preview_archive_preload_enabled_from_env(None));
-        assert!(!preview_archive_preload_enabled_from_env(Some("0")));
-        assert!(!preview_archive_preload_enabled_from_env(Some("off")));
-        assert!(!preview_archive_preload_enabled_from_env(Some("false")));
-        assert!(!preview_archive_preload_enabled_from_env(Some("no")));
-        assert!(!preview_archive_preload_enabled_from_env(Some("")));
-        assert!(preview_archive_preload_enabled_from_env(Some("1")));
-        assert!(preview_archive_preload_enabled_from_env(Some("true")));
-        assert!(preview_archive_preload_enabled_from_env(Some("on")));
-        assert!(preview_archive_preload_enabled_from_env(Some("yes")));
-        assert!(preview_archive_preload_enabled_from_env(Some(" YES ")));
+    fn archive_preload_defaults_sync_and_can_be_configured() {
+        assert_eq!(
+            preview_archive_preload_mode_from_env(None),
+            PreviewArchivePreloadMode::Sync
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some("0")),
+            PreviewArchivePreloadMode::Disabled
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some("off")),
+            PreviewArchivePreloadMode::Disabled
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some("false")),
+            PreviewArchivePreloadMode::Disabled
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some("no")),
+            PreviewArchivePreloadMode::Disabled
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some("async")),
+            PreviewArchivePreloadMode::Async
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some("1")),
+            PreviewArchivePreloadMode::Sync
+        );
+        assert_eq!(
+            preview_archive_preload_mode_from_env(Some(" YES ")),
+            PreviewArchivePreloadMode::Sync
+        );
     }
 
     #[test]
-    fn auto_preview_archive_prefers_lz4_over_rawpack() {
+    fn auto_preview_archive_uses_size_named_screenshots_pack() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-preview-auto-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create archive root");
-        let label = "hybrid-320x320";
-        let raw = root.join(format!("raw565-{label}-rawpack.mmraw"));
-        let lz4 = root.join(format!("raw565-{label}-lz4block-12.mmlz4b"));
-        std::fs::write(&raw, b"raw").expect("write raw archive marker");
-        std::fs::write(&lz4, b"lz4").expect("write lz4 archive marker");
+        let archive = root.join("320x320-screenshots.mmlz4b");
+        std::fs::write(&archive, b"lz4").expect("write archive marker");
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Hybrid,
+            max_w: 320,
+            max_h: 320,
+        };
 
-        let selected = auto_preview_archive_path_in_root(&root, label).expect("archive path");
+        let selected = auto_preview_archive_path_in_root(&root, resize).expect("archive path");
 
-        assert_eq!(selected, lz4.display().to_string());
-        let _ = std::fs::remove_file(raw);
-        let _ = std::fs::remove_file(lz4);
+        assert_eq!(selected, archive.display().to_string());
+        let _ = std::fs::remove_file(archive);
         let _ = std::fs::remove_dir(root);
     }
 
@@ -1738,45 +1734,46 @@ mod tests {
     }
 
     #[test]
-    fn missing_raw565_cache_fails_without_original_decode_fallback() {
-        let resize = PreviewResizeSpec {
-            filter: PreviewResizeFilter::Hybrid,
-            max_w: 320,
-            max_h: 320,
-        };
-        let err = load_preview_pixels("/tmp/missing/media/screenshot/tiny.png", resize)
-            .expect_err("missing raw565 cache must not decode original screenshots");
-        assert!(err.contains("raw565-hybrid-320x320/tiny.rgb565"));
+    fn missing_archive_asset_fails_without_original_decode_fallback() {
+        let err = load_preview_pixels(
+            "/tmp/missing/320x320-screenshots.mmlz4b",
+            "tiny",
+            PreviewResizeSpec {
+                filter: PreviewResizeFilter::Hybrid,
+                max_w: 320,
+                max_h: 320,
+            },
+        )
+        .expect_err("missing archive must not decode original screenshots");
+        assert!(err.contains("320x320-screenshots.mmlz4b"));
     }
 
     #[test]
-    fn load_preview_reads_raw565_cache_and_reports_dimensions() {
-        let root =
-            std::env::temp_dir().join(format!("mister-magik-preview-load-{}", std::process::id()));
-        let image_path = root.join("media/screenshot/Tiny.png");
-        std::fs::create_dir_all(image_path.parent().unwrap()).expect("create screenshot dir");
-        let resize = PreviewResizeSpec {
-            filter: PreviewResizeFilter::Hybrid,
-            max_w: 320,
-            max_h: 320,
-        };
-        let cache_path = raw565_preview_cache_path(image_path.to_str().unwrap(), resize);
-        std::fs::create_dir_all(cache_path.parent().unwrap()).expect("create cache dir");
-        std::fs::write(&cache_path, raw565_fixture(3, 1, &[0xf800, 0x07e0, 0x001f]))
-            .expect("write raw565 cache");
+    fn load_preview_reads_requested_archive_asset_and_reports_dimensions() {
+        let archive_path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-load-{}.mmraw",
+            std::process::id()
+        ));
+        write_raw_archive(
+            &archive_path,
+            "tiny.rgb565",
+            &raw565_fixture(3, 1, &[0xf800, 0x07e0, 0x001f]),
+        );
 
-        let req = PreviewRequest {
-            generation: 88,
-            title: "Tiny".to_string(),
-            image_path: image_path.display().to_string(),
-            requested_at: Instant::now(),
-            priority: PreviewPriority::Selected,
-        };
+        let req = preview_request(
+            88,
+            "Tiny",
+            &archive_path.display().to_string(),
+            "tiny",
+            PreviewPriority::Selected,
+        );
         let mut cache = PreviewDecodedCache::new(2);
         let result = load_preview(req, &mut cache);
 
         assert_eq!(result.generation, 88);
         assert_eq!(result.title, "Tiny");
+        assert_eq!(result.preview_archive_path, archive_path.display().to_string());
+        assert_eq!(result.preview_asset_key, "tiny");
         assert_eq!(result.source_width, 3);
         assert_eq!(result.source_height, 1);
         assert_eq!(result.decoded_bytes, 16);
@@ -1786,7 +1783,7 @@ mod tests {
         assert_eq!(image.width(), 3);
         assert_eq!(image.height(), 1);
         assert_eq!(image.decoded_bytes(), 16);
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(archive_path);
     }
 
     #[test]

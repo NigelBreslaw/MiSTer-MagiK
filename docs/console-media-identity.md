@@ -130,15 +130,16 @@ the runtime still only sees canonical pack entries.
 
 ## Runtime Projection
 
-The launcher catalog marks `has_image=1` when it can resolve a current asset
-entry by:
+The launcher catalog marks `has_preview=1` and stores the resolved
+`preview_archive_path` plus `preview_asset_key` when it can resolve a current
+asset entry by:
 
 1. exact software item,
 2. parent software item,
 3. sibling in the same software family.
 
-Preview-only refreshes recompute console `image_path` and `has_image` from the
-current asset packs, so removing a pack clears stale image flags.
+Preview-only refreshes recompute console preview fields from the current asset
+packs, so removing a pack clears stale preview flags.
 
 ## Performance Notes
 

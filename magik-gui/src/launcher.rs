@@ -1637,8 +1637,9 @@ mod tests {
             vec![ArcadeGameEntry {
                 title: "Agony".into(),
                 mra_path: "magik-plan:amiga-agony".into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "amiga".into(),
             }],
             vec![GameSystemEntry {
@@ -1656,15 +1657,19 @@ mod tests {
                 ArcadeGameEntry {
                     title: "1942".into(),
                     mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                    image_path: "/media/fat/_Arcade/media/screenshot/1942.png".into(),
-                    has_image: true,
+                    preview_archive_path:
+                        "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b"
+                            .into(),
+                    preview_asset_key: "1942".into(),
+                    has_preview: true,
                     system_id: "arcade".into(),
                 },
                 ArcadeGameEntry {
                     title: "Agony".into(),
                     mra_path: "magik-plan:amiga-agony".into(),
-                    image_path: "".into(),
-                    has_image: false,
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
                     system_id: "amiga".into(),
                 },
             ],
@@ -1689,8 +1694,9 @@ mod tests {
             games.push(ArcadeGameEntry {
                 title: format!("Arcade {i}").into(),
                 mra_path: format!("/media/fat/_Arcade/arcade-{i}.mra").into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "arcade".into(),
             });
         }
@@ -1698,8 +1704,9 @@ mod tests {
             games.push(ArcadeGameEntry {
                 title: format!("Amiga {i}").into(),
                 mra_path: format!("magik-plan:amiga-{i}").into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "amiga".into(),
             });
         }
@@ -1728,22 +1735,25 @@ mod tests {
                 ArcadeGameEntry {
                     title: "Arcade 4".into(),
                     mra_path: "/media/fat/_Arcade/arcade-4.mra".into(),
-                    image_path: "".into(),
-                    has_image: false,
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
                     system_id: "arcade".into(),
                 },
                 ArcadeGameEntry {
                     title: "Arcade 2".into(),
                     mra_path: "/media/fat/_Arcade/arcade-2.mra".into(),
-                    image_path: "".into(),
-                    has_image: false,
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
                     system_id: "arcade".into(),
                 },
                 ArcadeGameEntry {
                     title: "Arcade 0".into(),
                     mra_path: "/media/fat/_Arcade/arcade-0.mra".into(),
-                    image_path: "".into(),
-                    has_image: false,
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
                     system_id: "arcade".into(),
                 },
             ],

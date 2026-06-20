@@ -30,11 +30,11 @@ WHERE i.namespace='mame'
 ORDER BY i.identity_id;
 "
 
-echo "== missing preferred screenshots by system =="
+echo "== missing preferred previews by system =="
 "$MISTER" db "
 SELECT system_id, count(*) AS missing
 FROM ui_arcade_preferred
-WHERE has_image=0
+WHERE has_preview=0
 GROUP BY system_id
 ORDER BY system_id;
 "

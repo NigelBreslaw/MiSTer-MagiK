@@ -385,9 +385,7 @@ fn preview_cache_build(args: &[String]) -> Result<()> {
     let output = PathBuf::from(output);
     let png_dir = output.join(format!("png-hybrid-{max_size}x{max_size}"));
     let raw_dir = output.join(format!("raw565-hybrid-{max_size}x{max_size}"));
-    let archive_path = output.join(format!(
-        "raw565-hybrid-{max_size}x{max_size}-lz4block-12.mmlz4b"
-    ));
+    let archive_path = output.join(format!("{max_size}x{max_size}-screenshots.mmlz4b"));
     fs::create_dir_all(&png_dir)?;
     fs::create_dir_all(&raw_dir)?;
 
@@ -5577,7 +5575,7 @@ H: Handlers=event3 js0"#
         fs::write(raw_dir.join("z-last.rgb565"), b"x").unwrap();
         fs::write(raw_dir.join("a-first.rgb565"), vec![0u8; 256]).unwrap();
 
-        let archive_path = dir.join("raw565-hybrid-320x320-lz4block-12.mmlz4b");
+        let archive_path = dir.join("320x320-screenshots.mmlz4b");
         let summary = build_preview_archive(&raw_dir, &archive_path).unwrap();
         assert_eq!(summary.entries, 2);
         assert_eq!(summary.raw_bytes, 257);
@@ -5638,7 +5636,7 @@ H: Handlers=event3 js0"#
             .join("raw565-hybrid-3x3")
             .join("b-title.rgb565")
             .exists());
-        let archive_path = output.join("raw565-hybrid-3x3-lz4block-12.mmlz4b");
+        let archive_path = output.join("3x3-screenshots.mmlz4b");
         assert!(archive_path.exists());
         let (entries, _) = read_test_archive(&archive_path);
         assert_eq!(

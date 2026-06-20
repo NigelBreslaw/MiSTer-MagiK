@@ -108,7 +108,7 @@ WORK_DIR="${WORK_DIR:-$ROOT/build/${SYSTEM}-screenshots}"
 CANONICAL="$WORK_DIR/canonical"
 CACHE_DIR="$WORK_DIR/cache"
 RAW_DIR="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}"
-PACK="$CACHE_DIR/raw565-hybrid-${MAX_SIZE}x${MAX_SIZE}-lz4block-12.mmlz4b"
+PACK="$CACHE_DIR/${MAX_SIZE}x${MAX_SIZE}-screenshots.mmlz4b"
 REMOTE_PACK="/media/fat/mister-magik/assets/${SYSTEM}-screenshots.mmlz4b"
 MAME_SQLITE="${MISTER_MAME_SQLITE:-$ROOT/build/mame.sqlite3}"
 
