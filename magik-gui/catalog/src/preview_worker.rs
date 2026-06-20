@@ -664,6 +664,11 @@ fn preview_archives() -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
     preview_archives_for_paths(preview_archive_paths_from_env())
 }
 
+/// Open and cache configured preview archives before latency-sensitive work starts.
+pub fn warm_preview_archives_from_env() -> Result<bool, String> {
+    preview_archives().map(|archives| archives.is_some())
+}
+
 fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
     static ARCHIVES: OnceLock<Mutex<Option<CachedPreviewArchives>>> = OnceLock::new();
 

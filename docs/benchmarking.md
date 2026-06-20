@@ -53,7 +53,6 @@ the PR slice and BEFORE/AFTER state:
 ```bash
 scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --transition fade --visual-captures 0
 scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --transition fade --visual-captures 0
-scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CUT-VEL --skip-build --transition cut --visual-captures 0
 scripts/profile-preview-transition-mega.sh LABEL-MEGA --skip-build --segment-secs 5 --transition-ms 320
 scripts/profile-blend-velocity.sh 30 LABEL-BLEND-BASE baseline --skip-build
 scripts/profile-blend-velocity.sh 30 LABEL-BLEND-COPY copy-only --skip-build
@@ -65,6 +64,11 @@ The CPU profile command builds/deploys the profiling binary, runs the real
 Main-supervised Arcade screen with `MISTER_PPROF=1`, exits after the trace
 window so the profiler can flush, and pulls
 `build/preview-scroll-profiles/LABEL-CPU-FADE-VEL-arcade-cpu.svg`.
+
+Preview-scroll benchmarks synchronously warm the screenshot archive cache before
+the benchmark timing window and first launcher step. The removed `cut`
+screenshot transition is intentionally rejected by the benchmark script; use
+`fade` for production-like evidence or `mega` for effect stress runs.
 
 Acceptance fields for Arcade preview pacing:
 

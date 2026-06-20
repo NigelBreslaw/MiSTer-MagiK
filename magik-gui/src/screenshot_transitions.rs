@@ -8,7 +8,6 @@ const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 160;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewTransitionEffect {
-    Cut,
     Fade,
     #[cfg(mister_bench_scenes)]
     Wipe,
@@ -78,11 +77,10 @@ pub(crate) enum PreviewTransitionEffect {
 
 impl PreviewTransitionEffect {
     #[cfg(not(mister_bench_scenes))]
-    pub(crate) const PRODUCTION: [Self; 2] = [Self::Cut, Self::Fade];
+    pub(crate) const PRODUCTION: [Self; 1] = [Self::Fade];
 
     #[cfg(mister_bench_scenes)]
-    pub(crate) const MEGA: [Self; 34] = [
-        Self::Cut,
+    pub(crate) const MEGA: [Self; 33] = [
         Self::Fade,
         Self::Wipe,
         Self::Slide,
@@ -131,7 +129,6 @@ impl PreviewTransitionEffect {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Cut => "cut",
             Self::Fade => "fade",
             #[cfg(mister_bench_scenes)]
             Self::Wipe => "wipe",
@@ -202,7 +199,6 @@ impl PreviewTransitionEffect {
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().replace('_', "-").as_str() {
-            "cut" | "none" | "off" | "0" | "false" | "no" => Some(Self::Cut),
             "fade" | "crossfade" | "cross-fade" => Some(Self::Fade),
             #[cfg(mister_bench_scenes)]
             "wipe" | "wipe-left" => Some(Self::Wipe),
@@ -442,16 +438,15 @@ impl PreviewTransitionDemo {
 
         if frame.transition_id != self.last_transition_id {
             self.last_transition_id = frame.transition_id;
-            self.active =
-                if frame.previous.is_some() && scheduled_effect != PreviewTransitionEffect::Cut {
-                    Some(ActivePreviewTransition {
-                        transition_id: frame.transition_id,
-                        effect: scheduled_effect,
-                        start_elapsed: elapsed,
-                    })
-                } else {
-                    None
-                };
+            self.active = if frame.previous.is_some() {
+                Some(ActivePreviewTransition {
+                    transition_id: frame.transition_id,
+                    effect: scheduled_effect,
+                    start_elapsed: elapsed,
+                })
+            } else {
+                None
+            };
         }
 
         if let Some(active) = self.active {
@@ -509,20 +504,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn production_transitions_are_cut_and_fade_only() {
-        assert_eq!(PreviewTransitionEffect::labels(), "cut\nfade");
+    fn production_transitions_are_fade_only() {
+        assert_eq!(PreviewTransitionEffect::labels(), "fade");
         assert_eq!(
             PreviewTransitionEffect::all(),
-            &[PreviewTransitionEffect::Cut, PreviewTransitionEffect::Fade]
+            &[PreviewTransitionEffect::Fade]
         );
     }
 
     #[test]
     fn production_parser_rejects_bench_only_effects() {
-        assert_eq!(
-            PreviewTransitionEffect::parse("cut"),
-            Some(PreviewTransitionEffect::Cut)
-        );
+        assert_eq!(PreviewTransitionEffect::parse("cut"), None);
+        assert_eq!(PreviewTransitionEffect::parse("off"), None);
         assert_eq!(
             PreviewTransitionEffect::parse("fade"),
             Some(PreviewTransitionEffect::Fade)
