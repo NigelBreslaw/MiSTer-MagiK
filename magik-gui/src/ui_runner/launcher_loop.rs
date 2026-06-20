@@ -1,8 +1,12 @@
 use super::launcher_frame_accounting::{LauncherFrameAccounting, LauncherPresentedFrame};
 use super::*;
+use crate::fb::VsyncWaitStatus;
 use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
+
+const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
+const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
@@ -31,23 +35,71 @@ pub(super) fn present_launcher_startup_frame(
     window: &Rc<MinimalSoftwareWindow>,
     target: &mut UiFrameTarget,
 ) {
-    let draw_t = Instant::now();
-    window.request_redraw();
-    window.draw_if_needed(|renderer| {
-        let _ = target.render(renderer, ui);
-    });
-    let render_us = draw_t.elapsed().as_micros();
+    if launcher_return_reveal_enabled() {
+        print_startup_event(
+            start,
+            "startup_splash_skipped",
+            "reason=return_to_launcher reveal=first_launcher_frame",
+        );
+        return;
+    }
+
+    let settle_frames = launcher_reveal_settle_frames();
+    let render_count = settle_frames.max(1);
+    let mut render_us = 0u128;
+    let mut vsync_hits = 0u32;
+    let mut vsync_timeouts = 0u32;
+    let mut vsync_errors = 0u32;
+
+    for frame in 0..render_count {
+        let draw_t = Instant::now();
+        window.request_redraw();
+        window.draw_if_needed(|renderer| {
+            let _ = target.render(renderer, ui);
+        });
+        render_us += draw_t.elapsed().as_micros();
+        if frame < settle_frames {
+            match disp.wait_vsync() {
+                VsyncWaitStatus::Hit { .. } => vsync_hits += 1,
+                VsyncWaitStatus::Timeout { .. } => vsync_timeouts += 1,
+                VsyncWaitStatus::Error { .. } => vsync_errors += 1,
+            }
+        }
+    }
+
     let copy_t = Instant::now();
     target.present_rows(f, disp, ui, 0, ui.render_h());
     print_startup_event(
         start,
         "startup_splash_presented",
         format!(
-            "render_us={} copy_us={}",
+            "settle_frames={} render_count={} render_us={} copy_us={} vsync_hits={} vsync_timeouts={} vsync_errors={}",
+            settle_frames,
+            render_count,
             render_us,
-            copy_t.elapsed().as_micros()
+            copy_t.elapsed().as_micros(),
+            vsync_hits,
+            vsync_timeouts,
+            vsync_errors
         ),
     );
+}
+
+fn launcher_return_reveal_enabled() -> bool {
+    matches!(
+        std::env::var("MISTER_MAGIK_RETURN_TO_LAUNCHER")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
+fn launcher_reveal_settle_frames() -> u32 {
+    std::env::var("MISTER_LAUNCHER_REVEAL_SETTLE_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES)
+        .min(MAX_LAUNCHER_REVEAL_SETTLE_FRAMES)
 }
 
 pub(super) fn run_launcher_loop(
