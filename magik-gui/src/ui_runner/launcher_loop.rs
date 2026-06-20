@@ -118,11 +118,16 @@ pub(super) fn run_launcher_loop(
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let bench_starts_on_arcade =
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
-    let start_screen = launcher_start_screen_from_env()
+    let env_start_screen = launcher_start_screen_from_env();
+    let start_screen = env_start_screen
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
     let lock_screen = launcher_lock_screen_from_env()
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
+    let launch_return_restore_allowed =
+        env_start_screen.is_none() && launcher_bench_scenario.is_none() && lock_screen.is_none();
+    let mut pending_launch_return_state =
+        launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed);
     let arcade_catalog_required_at_start =
         start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
     let mut nav = LauncherNav::new();
@@ -135,6 +140,8 @@ pub(super) fn run_launcher_loop(
     let mut last_clock_text = launcher_clock_text();
     let mut launcher_bench_next_step = Instant::now();
     let mut launcher_bench_step_idx = 0usize;
+    let auto_launch_selected = launcher_auto_launch_selected_enabled();
+    let mut auto_launch_selected_done = false;
     let dirty_opt = launcher_dirty_opt_enabled();
     let label = if secs == 0 {
         "forever".to_string()
@@ -217,6 +224,7 @@ pub(super) fn run_launcher_loop(
             catalog_ready = true;
             catalog_version = catalog_version.wrapping_add(1);
             apply_forced_arcade_selected(&mut nav, &catalog);
+            apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
             if ready_catalog_background_worker_needed(
                 catalog_refresh,
                 !arcade_catalog_required_at_start,
@@ -436,6 +444,11 @@ pub(super) fn run_launcher_loop(
                             catalog_version = catalog_version.wrapping_add(1);
                             catalog_ready = true;
                             apply_forced_arcade_selected(&mut nav, &catalog);
+                            apply_pending_launch_return_state(
+                                &mut nav,
+                                &catalog,
+                                &mut pending_launch_return_state,
+                            );
                             print_startup_event(
                                 start,
                                 "library_ready",
@@ -665,7 +678,24 @@ pub(super) fn run_launcher_loop(
                     }
                     transition_picker_prev_left = state.dpad_left;
                     transition_picker_prev_right = state.dpad_right;
-                    if let Some(event) = nav.handle_input(&state, frame_now, &catalog) {
+                    let event = if auto_launch_selected
+                        && !auto_launch_selected_done
+                        && catalog_ready
+                        && nav.screen == Screen::Arcade
+                    {
+                        auto_launch_selected_done = true;
+                        active_system(&catalog, &nav)
+                            .and_then(|system| {
+                                catalog.system_game_at(&system.id, nav.arcade.selected)
+                            })
+                            .map(|game| launcher::LauncherEvent {
+                                action: LauncherAction::LaunchGame,
+                                path: Some(game.mra_path.to_string()),
+                            })
+                    } else {
+                        nav.handle_input(&state, frame_now, &catalog)
+                    };
+                    if let Some(event) = event {
                         match event.action {
                             LauncherAction::ExitToMister => {
                                 loading_title = "Exit to MiSTer".to_string();
@@ -790,12 +820,20 @@ pub(super) fn run_launcher_loop(
                         });
                         let _pace = pacer.wait();
                         target.present_rows(f, disp, ui, 0, ui.render_h());
+                        if let Some(state) =
+                            launcher::capture_launch_return_state(&nav, &catalog, &mra)
+                        {
+                            if let Err(e) = launcher::save_launch_return_state(&state) {
+                                eprintln!("failed to save launch return state: {e}");
+                            }
+                        }
                         match launcher::execute_game_launch(&mra) {
                             Ok(spawned) => {
                                 launch_started = Instant::now();
                                 launch_spawned_mister = spawned;
                             }
                             Err(e) => {
+                                launcher::remove_launch_return_state();
                                 eprintln!("game launch failed: {e}");
                                 launch_spawned_mister |= e.spawned_mister();
                                 loading_title.clear();
@@ -1135,6 +1173,26 @@ fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instan
         .parse::<u64>()
         .ok()?;
     (secs > 0).then(|| run_start + Duration::from_secs(secs))
+}
+
+fn launcher_auto_launch_selected_enabled() -> bool {
+    matches!(
+        std::env::var("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
+fn apply_pending_launch_return_state(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    pending: &mut Option<launcher::LaunchReturnState>,
+) -> bool {
+    let Some(state) = pending.take() else {
+        return false;
+    };
+    launcher::apply_launch_return_state(nav, catalog, state)
 }
 
 #[derive(Debug)]

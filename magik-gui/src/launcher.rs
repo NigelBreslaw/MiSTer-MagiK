@@ -6,11 +6,13 @@ use crate::arcade_catalog::{
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
@@ -34,6 +36,8 @@ const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
+pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
+const LAUNCH_RETURN_STATE_SCHEMA: u32 = 1;
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
@@ -153,6 +157,18 @@ impl ArcadeNav {
         self.scroll.target_index = self.selected;
         self.scroll.intent_queue = 0;
         self.scroll.visual_px = self.selected as i32 * ARCADE_ROW_HEIGHT;
+        self.sync_visual_from_px();
+    }
+
+    fn restore_position(&mut self, selected: usize, scroll_y: i32, count: usize) {
+        if count == 0 {
+            self.reset();
+            return;
+        }
+        self.selected = selected.min(count - 1);
+        self.scroll = ArcadeScrollState::default();
+        self.scroll.target_index = self.selected;
+        self.scroll.visual_px = scroll_y.clamp(0, Self::max_scroll_y(count));
         self.sync_visual_from_px();
     }
 
@@ -340,8 +356,15 @@ pub struct LauncherNav {
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
     pub arcade: ArcadeNav,
+    game_list_memory: HashMap<String, GameListMemory>,
     repeat: RepeatNav,
     prev: PadState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GameListMemory {
+    selected: usize,
+    scroll_y: i32,
 }
 
 impl Default for LauncherNav {
@@ -361,6 +384,7 @@ impl LauncherNav {
             confirm_action: None,
             confirm_selected: 0,
             arcade: ArcadeNav::new(),
+            game_list_memory: HashMap::new(),
             repeat: RepeatNav::default(),
             prev: PadState::default(),
         }
@@ -377,7 +401,7 @@ impl LauncherNav {
             self.handle_confirm(now, frame_now)
         } else {
             match self.screen {
-                Screen::Home => self.handle_home(now, frame_now, catalog.systems.len()),
+                Screen::Home => self.handle_home(now, frame_now, catalog),
                 Screen::Controller => {
                     if rising(now.btn_home, self.prev.btn_home)
                         || rising(now.btn_b, self.prev.btn_b)
@@ -398,8 +422,9 @@ impl LauncherNav {
         &mut self,
         now: &PadState,
         frame_now: Instant,
-        system_count: usize,
+        catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
+        let system_count = catalog.systems.len();
         if self.repeat.tick_up(now.dpad_up, frame_now) {
             self.settings_focused = true;
         }
@@ -432,7 +457,12 @@ impl LauncherNav {
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
-            self.arcade.reset();
+            if let Some(system) = catalog.systems.get(self.selected) {
+                let count = catalog.system_game_count(&system.id);
+                self.restore_game_list_state(&system.id, count);
+            } else {
+                self.arcade.reset();
+            }
             self.screen = Screen::Arcade;
         }
 
@@ -453,8 +483,10 @@ impl LauncherNav {
         let count = catalog.system_game_count(system_id);
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+            if !system_id.is_empty() {
+                self.save_game_list_state(system_id);
+            }
             self.screen = Screen::Home;
-            self.arcade.reset();
             return None;
         }
 
@@ -551,6 +583,160 @@ impl LauncherNav {
         }
         None
     }
+
+    fn save_game_list_state(&mut self, system_id: &str) {
+        self.game_list_memory.insert(
+            system_id.to_string(),
+            GameListMemory {
+                selected: self.arcade.selected,
+                scroll_y: self.arcade.scroll_y,
+            },
+        );
+    }
+
+    fn restore_game_list_state(&mut self, system_id: &str, count: usize) {
+        if let Some(memory) = self.game_list_memory.get(system_id).copied() {
+            self.arcade
+                .restore_position(memory.selected, memory.scroll_y, count);
+        } else {
+            self.arcade.reset();
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchReturnState {
+    schema_version: u32,
+    screen: String,
+    system_id: String,
+    system_index: usize,
+    game_path: String,
+    game_index: usize,
+}
+
+pub fn capture_launch_return_state(
+    nav: &LauncherNav,
+    catalog: &ArcadeCatalog,
+    game_path: &str,
+) -> Option<LaunchReturnState> {
+    if nav.screen != Screen::Arcade {
+        return None;
+    }
+    let system = catalog.systems.get(nav.selected)?;
+    let games = catalog.system_game_slice(&system.id);
+    let game_index = games
+        .iter()
+        .position(|game| game.mra_path.as_ref() == game_path)
+        .unwrap_or(nav.arcade.selected.min(games.len().saturating_sub(1)));
+    Some(LaunchReturnState {
+        schema_version: LAUNCH_RETURN_STATE_SCHEMA,
+        screen: "arcade".to_string(),
+        system_id: system.id.clone(),
+        system_index: nav.selected,
+        game_path: game_path.to_string(),
+        game_index,
+    })
+}
+
+pub fn save_launch_return_state(state: &LaunchReturnState) -> Result<(), String> {
+    save_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH), state)
+}
+
+fn save_launch_return_state_at(path: &Path, state: &LaunchReturnState) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("launch return state path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|e| format!("create launch return state dir: {e}"))?;
+    let tmp = temp_state_path(path);
+    let text = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("serialize launch return state: {e}"))?;
+    fs::write(&tmp, text).map_err(|e| format!("write launch return state temp: {e}"))?;
+    fs::rename(&tmp, path).map_err(|e| format!("install launch return state: {e}"))?;
+    Ok(())
+}
+
+pub fn remove_launch_return_state() {
+    remove_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH));
+}
+
+fn remove_launch_return_state_at(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => eprintln!(
+            "failed to remove launch return state {}: {e}",
+            path.display()
+        ),
+    }
+}
+
+pub fn take_launch_return_state() -> Option<LaunchReturnState> {
+    take_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
+}
+
+fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
+    let text = fs::read_to_string(path).ok()?;
+    remove_launch_return_state_at(path);
+    match serde_json::from_str::<LaunchReturnState>(&text) {
+        Ok(state)
+            if state.schema_version == LAUNCH_RETURN_STATE_SCHEMA && state.screen == "arcade" =>
+        {
+            Some(state)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("invalid launch return state {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+pub fn apply_launch_return_state(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    state: LaunchReturnState,
+) -> bool {
+    let Some(system_index) = resolve_system_index(catalog, &state) else {
+        return false;
+    };
+    let system_id = &catalog.systems[system_index].id;
+    let games = catalog.system_game_slice(system_id);
+    if games.is_empty() {
+        return false;
+    }
+    let game_index = games
+        .iter()
+        .position(|game| game.mra_path.as_ref() == state.game_path)
+        .unwrap_or_else(|| state.game_index.min(games.len() - 1));
+
+    nav.selected = system_index;
+    nav.screen = Screen::Arcade;
+    nav.arcade.restore_position(
+        game_index,
+        game_index as i32 * ARCADE_ROW_HEIGHT,
+        games.len(),
+    );
+    true
+}
+
+fn resolve_system_index(catalog: &ArcadeCatalog, state: &LaunchReturnState) -> Option<usize> {
+    catalog
+        .systems
+        .iter()
+        .position(|system| system.id == state.system_id)
+        .or_else(|| {
+            (!catalog.systems.is_empty()).then(|| state.system_index.min(catalog.systems.len() - 1))
+        })
+}
+
+fn temp_state_path(path: &Path) -> PathBuf {
+    let mut tmp = path.to_path_buf();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launcher-return-state.json");
+    tmp.set_file_name(format!("{file_name}.tmp"));
+    tmp
 }
 
 fn home_max_scroll(count: usize) -> i32 {
@@ -1186,6 +1372,78 @@ mod tests {
         )
     }
 
+    fn multi_game_catalog() -> ArcadeCatalog {
+        let mut games = Vec::new();
+        for i in 0..5 {
+            games.push(ArcadeGameEntry {
+                title: format!("Arcade {i}").into(),
+                mra_path: format!("/media/fat/_Arcade/arcade-{i}.mra").into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: "arcade".into(),
+            });
+        }
+        for i in 0..3 {
+            games.push(ArcadeGameEntry {
+                title: format!("Amiga {i}").into(),
+                mra_path: format!("magik-plan:amiga-{i}").into(),
+                image_path: "".into(),
+                has_image: false,
+                system_id: "amiga".into(),
+            });
+        }
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            games,
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 5,
+                },
+                GameSystemEntry {
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
+                    count: 3,
+                },
+            ],
+        )
+    }
+
+    fn reordered_arcade_catalog() -> ArcadeCatalog {
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            vec![
+                ArcadeGameEntry {
+                    title: "Arcade 4".into(),
+                    mra_path: "/media/fat/_Arcade/arcade-4.mra".into(),
+                    image_path: "".into(),
+                    has_image: false,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "Arcade 2".into(),
+                    mra_path: "/media/fat/_Arcade/arcade-2.mra".into(),
+                    image_path: "".into(),
+                    has_image: false,
+                    system_id: "arcade".into(),
+                },
+                ArcadeGameEntry {
+                    title: "Arcade 0".into(),
+                    mra_path: "/media/fat/_Arcade/arcade-0.mra".into(),
+                    image_path: "".into(),
+                    has_image: false,
+                    system_id: "arcade".into(),
+                },
+            ],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 3,
+            }],
+        )
+    }
+
     fn pad_with(mut set: impl FnMut(&mut PadState)) -> PadState {
         let mut pad = PadState::default();
         set(&mut pad);
@@ -1302,6 +1560,185 @@ mod tests {
             .handle_input(&back, t0 + Duration::from_millis(128), &catalog)
             .is_none());
         assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn launcher_reopens_system_at_in_memory_arcade_position() {
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let back = pad_with(|pad| pad.btn_b = true);
+
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(16),
+                &catalog
+            )
+            .is_none());
+
+        nav.arcade.selected = 3;
+        nav.arcade.snap_to_selected();
+        assert!(nav
+            .handle_input(&back, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Home);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(48),
+                &catalog
+            )
+            .is_none());
+
+        assert!(nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.arcade.selected, 3);
+        assert_eq!(nav.arcade.scroll_y, 3 * ARCADE_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn launcher_remembers_game_list_position_per_system() {
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+
+        nav.selected = 0;
+        nav.screen = Screen::Arcade;
+        nav.arcade.selected = 4;
+        nav.arcade.snap_to_selected();
+        nav.save_game_list_state("arcade");
+
+        nav.selected = 1;
+        nav.restore_game_list_state("amiga", catalog.system_game_count("amiga"));
+        assert_eq!(nav.arcade.selected, 0);
+
+        nav.arcade.selected = 2;
+        nav.arcade.snap_to_selected();
+        nav.save_game_list_state("amiga");
+
+        nav.selected = 0;
+        nav.restore_game_list_state("arcade", catalog.system_game_count("arcade"));
+        assert_eq!(nav.arcade.selected, 4);
+        assert_eq!(nav.arcade.scroll_y, 4 * ARCADE_ROW_HEIGHT);
+
+        nav.selected = 1;
+        nav.restore_game_list_state("amiga", catalog.system_game_count("amiga"));
+        assert_eq!(nav.arcade.selected, 2);
+        assert_eq!(nav.arcade.scroll_y, 2 * ARCADE_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn launch_return_state_captures_arcade_location() {
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.selected = 0;
+        nav.arcade.selected = 2;
+        nav.arcade.snap_to_selected();
+
+        let state = capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/arcade-2.mra")
+            .expect("state should capture");
+
+        assert_eq!(state.schema_version, LAUNCH_RETURN_STATE_SCHEMA);
+        assert_eq!(state.screen, "arcade");
+        assert_eq!(state.system_id, "arcade");
+        assert_eq!(state.system_index, 0);
+        assert_eq!(state.game_path, "/media/fat/_Arcade/arcade-2.mra");
+        assert_eq!(state.game_index, 2);
+    }
+
+    #[test]
+    fn launch_return_state_restores_by_path_after_catalog_reorder() {
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.selected = 0;
+        nav.arcade.selected = 2;
+        nav.arcade.snap_to_selected();
+        let state = capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/arcade-2.mra")
+            .expect("state should capture");
+
+        let mut restored = LauncherNav::new();
+        assert!(apply_launch_return_state(
+            &mut restored,
+            &reordered_arcade_catalog(),
+            state
+        ));
+
+        assert_eq!(restored.screen, Screen::Arcade);
+        assert_eq!(restored.selected, 0);
+        assert_eq!(restored.arcade.selected, 1);
+        assert_eq!(restored.arcade.scroll_y, ARCADE_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn launch_return_state_falls_back_to_clamped_indices() {
+        let state = LaunchReturnState {
+            schema_version: LAUNCH_RETURN_STATE_SCHEMA,
+            screen: "arcade".into(),
+            system_id: "missing-system".into(),
+            system_index: 99,
+            game_path: "/missing.mra".into(),
+            game_index: 99,
+        };
+        let catalog = reordered_arcade_catalog();
+        let mut restored = LauncherNav::new();
+
+        assert!(apply_launch_return_state(&mut restored, &catalog, state));
+
+        assert_eq!(restored.screen, Screen::Arcade);
+        assert_eq!(restored.selected, 0);
+        assert_eq!(restored.arcade.selected, 2);
+        assert_eq!(restored.arcade.scroll_y, 2 * ARCADE_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn launch_return_state_file_is_consumed_and_invalid_state_is_removed() {
+        let root = unique_temp_dir("launch-return-state");
+        let path = root.join("state.json");
+        let state = LaunchReturnState {
+            schema_version: LAUNCH_RETURN_STATE_SCHEMA,
+            screen: "arcade".into(),
+            system_id: "arcade".into(),
+            system_index: 0,
+            game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
+            game_index: 2,
+        };
+
+        save_launch_return_state_at(&path, &state).expect("save return state");
+        assert_eq!(take_launch_return_state_at(&path), Some(state));
+        assert!(!path.exists());
+
+        std::fs::write(&path, "{not-json").expect("write invalid state");
+        assert_eq!(take_launch_return_state_at(&path), None);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launch_return_state_remove_deletes_pending_state() {
+        let root = unique_temp_dir("launch-return-state-remove");
+        let path = root.join("state.json");
+        let state = LaunchReturnState {
+            schema_version: LAUNCH_RETURN_STATE_SCHEMA,
+            screen: "arcade".into(),
+            system_id: "arcade".into(),
+            system_index: 0,
+            game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
+            game_index: 2,
+        };
+
+        save_launch_return_state_at(&path, &state).expect("save return state");
+        assert!(path.exists());
+        remove_launch_return_state_at(&path);
+
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
