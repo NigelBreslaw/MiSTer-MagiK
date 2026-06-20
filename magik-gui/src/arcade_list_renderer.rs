@@ -580,7 +580,8 @@ fn arcade_visible_window_range(len: usize, visual_index: f32) -> Option<(usize, 
 fn arcade_hash_game(hash: &mut u64, game: &ArcadeGameEntry) {
     arcade_hash_bytes(hash, game.system_id.as_bytes());
     arcade_hash_bytes(hash, game.mra_path.as_bytes());
-    arcade_hash_bytes(hash, game.image_path.as_bytes());
+    arcade_hash_bytes(hash, game.preview_archive_path.as_bytes());
+    arcade_hash_bytes(hash, game.preview_asset_key.as_bytes());
     arcade_hash_bytes(hash, game.title.as_bytes());
 }
 
@@ -899,8 +900,9 @@ mod tests {
         ArcadeGameEntry {
             title: title.into(),
             mra_path: mra_path.into(),
-            image_path: "".into(),
-            has_image: false,
+            preview_archive_path: "".into(),
+            preview_asset_key: "".into(),
+            has_preview: false,
             system_id: system_id.into(),
         }
     }

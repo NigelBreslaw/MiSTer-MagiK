@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
 DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
-DEFAULT_ASSET_PACK="$ROOT/build/neogeo-screenshots/cache/raw565-hybrid-320x320-lz4block-12.mmlz4b"
+DEFAULT_ASSET_PACK="$ROOT/build/neogeo-screenshots/cache/320x320-screenshots.mmlz4b"
 DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
 
 BIN="$DEFAULT_BIN"

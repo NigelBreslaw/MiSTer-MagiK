@@ -385,8 +385,6 @@ struct GameDiscovery {
     year: Option<u16>,
     setname: Option<String>,
     parent: Option<String>,
-    image_path: Option<String>,
-    has_image: bool,
     confidence: DiscoveryConfidence,
 }
 
@@ -896,8 +894,9 @@ fn load_materialized_ui_catalog(conn: &Connection) -> Result<Option<Vec<ArcadeGa
         conn,
         "SELECT title,
                 launch_ref,
-                image_path,
-                has_image,
+                preview_archive_path,
+                preview_asset_key,
+                has_preview,
                 system_id
          FROM ui_arcade_preferred
          ORDER BY ordinal",
@@ -908,8 +907,9 @@ fn load_materialized_ui_catalog(conn: &Connection) -> Result<Option<Vec<ArcadeGa
             conn,
             "SELECT title,
                     launch_ref,
-                    image_path,
-                    has_image,
+                    preview_archive_path,
+                    preview_asset_key,
+                    has_preview,
                     system_id
              FROM launcher_catalog
              WHERE system_id NOT IN ('arcade','neogeo')
@@ -930,8 +930,9 @@ fn load_materialized_launcher_catalog(
         conn,
         "SELECT title,
                 launch_ref,
-                image_path,
-                has_image,
+                preview_archive_path,
+                preview_asset_key,
+                has_preview,
                 system_id
          FROM launcher_catalog
          ORDER BY ordinal",
@@ -952,9 +953,10 @@ fn query_game_entries(
             Ok(ArcadeGameEntry {
                 title: row.get::<_, String>(0)?.into(),
                 mra_path: row.get::<_, String>(1)?.into(),
-                image_path: row.get::<_, String>(2)?.into(),
-                has_image: row.get::<_, i64>(3)? != 0,
-                system_id: row.get::<_, String>(4)?.into(),
+                preview_archive_path: row.get::<_, String>(2)?.into(),
+                preview_asset_key: row.get::<_, String>(3)?.into(),
+                has_preview: row.get::<_, i64>(4)? != 0,
+                system_id: row.get::<_, String>(5)?.into(),
             })
         })
         .map_err(|e| format!("query {label}: {e}"))?;
@@ -1002,8 +1004,9 @@ fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry
         .prepare(
             "SELECT games.title,
                     launch_plans.launch_ref,
-                    COALESCE(games.image_path,''),
-                    games.has_image,
+                    '',
+                    '',
+                    0,
                     COALESCE(games.system_id,'unknown'),
                     launch_plans.launch_kind,
                     COALESCE(launch_plans.setname,''),
@@ -1027,13 +1030,14 @@ fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry
                 game: ArcadeGameEntry {
                     title: row.get::<_, String>(0)?.into(),
                     mra_path: row.get::<_, String>(1)?.into(),
-                    image_path: row.get::<_, String>(2)?.into(),
-                    has_image: row.get::<_, i64>(3)? != 0,
-                    system_id: row.get::<_, String>(4)?.into(),
+                    preview_archive_path: row.get::<_, String>(2)?.into(),
+                    preview_asset_key: row.get::<_, String>(3)?.into(),
+                    has_preview: row.get::<_, i64>(4)? != 0,
+                    system_id: row.get::<_, String>(5)?.into(),
                 },
-                source_kind: row.get::<_, String>(5)?,
-                setname: row.get::<_, String>(6)?,
-                parent: row.get::<_, String>(7)?,
+                source_kind: row.get::<_, String>(6)?,
+                setname: row.get::<_, String>(7)?,
+                parent: row.get::<_, String>(8)?,
                 family_key: None,
             })
         })
@@ -1106,8 +1110,8 @@ fn prefer_catalog_variant(a: &CatalogRow, b: &CatalogRow) -> bool {
     if a_score != b_score {
         return a_score > b_score;
     }
-    if a.game.has_image != b.game.has_image {
-        return a.game.has_image;
+    if a.game.has_preview != b.game.has_preview {
+        return a.game.has_preview;
     }
     a.game.mra_path < b.game.mra_path
 }
@@ -1620,8 +1624,9 @@ fn build_arcade_catalog_from_scan_with_metadata(
             game: ArcadeGameEntry {
                 title: discovery.title.clone().into(),
                 mra_path: plan_launch_ref.into(),
-                image_path: discovery.image_path.clone().unwrap_or_default().into(),
-                has_image: discovery.has_image,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: system_id.into(),
             },
             source_kind: launch_kind_for_discovery(discovery).to_string(),
@@ -1680,7 +1685,6 @@ fn scan_library_with_progress(
     let discover_t = Instant::now();
     let rx = discover_files_pipelined(cfg.roots.clone());
     let profiles = launch_profiles::builtin_profiles();
-    let preview_images = PreviewImageIndex::from_env();
     let mut discover_us = 0;
     let mut file_fingerprints = FileFingerprint::new();
     let mut directory_manifest = DirectoryManifest::new();
@@ -1779,10 +1783,12 @@ fn scan_library_with_progress(
                     profile_id: profile.id.to_string(),
                     rule: payload_rule,
                 });
-                let mut discovery =
-                    discovery_from_profile_file(&f, profile, &payload_rule, &profiles);
-                attach_preview_image(&mut discovery, &preview_images);
-                discoveries.push(discovery);
+                discoveries.push(discovery_from_profile_file(
+                    &f,
+                    profile,
+                    &payload_rule,
+                    &profiles,
+                ));
             }
             Some((
                 profile,
@@ -2406,8 +2412,6 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
         year: None,
         setname: None,
         parent: None,
-        image_path: None,
-        has_image: false,
         confidence: DiscoveryConfidence::CatalogMetadata,
     }
 }
@@ -2487,8 +2491,6 @@ fn collection_discoveries_from_listing_text(
             year: None,
             setname: None,
             parent: None,
-            image_path: None,
-            has_image: false,
             confidence: DiscoveryConfidence::CatalogMetadata,
         })
         .collect()
@@ -2522,60 +2524,6 @@ fn parenthesized_setname(path: &str) -> Option<String> {
         None
     } else {
         Some(normalize_id(value))
-    }
-}
-
-#[derive(Default)]
-struct PreviewImageIndex {
-    arcade_stems: Option<HashSet<String>>,
-}
-
-impl PreviewImageIndex {
-    fn from_env() -> Self {
-        let mut index = Self::default();
-        if let Ok(archives) = preview_worker::preview_archive_indexes_from_env() {
-            for archive in archives {
-                if preview_asset_pack_platform(&archive.path) == "arcade" {
-                    index.arcade_stems.get_or_insert_with(HashSet::new).extend(
-                        archive
-                            .entries
-                            .into_iter()
-                            .map(|stem| stem.to_ascii_lowercase()),
-                    );
-                }
-            }
-        }
-        index
-    }
-
-    #[cfg(test)]
-    fn arcade(stems: &[&str]) -> Self {
-        Self {
-            arcade_stems: Some(stems.iter().map(|stem| stem.to_ascii_lowercase()).collect()),
-        }
-    }
-
-    fn has_arcade_stem(&self, stem: &str) -> bool {
-        self.arcade_stems
-            .as_ref()
-            .is_some_and(|stems| stems.contains(&stem.to_ascii_lowercase()))
-    }
-}
-
-fn attach_preview_image(discovery: &mut GameDiscovery, preview_images: &PreviewImageIndex) {
-    if discovery.platform_id == "arcade" {
-        let Some(setname) = discovery
-            .setname
-            .as_deref()
-            .filter(|setname| !setname.trim().is_empty())
-        else {
-            return;
-        };
-        if !preview_images.has_arcade_stem(setname) {
-            return;
-        }
-        discovery.image_path = Some(format!("/media/fat/_Arcade/media/screenshot/{setname}.png"));
-        discovery.has_image = true;
     }
 }
 
@@ -2615,8 +2563,6 @@ fn discovery_from_profile_file(
                 year: mra.year.and_then(|s| s.parse::<u16>().ok()),
                 setname: mra.setname,
                 parent: mra.parent,
-                image_path: None,
-                has_image: false,
                 confidence: if mra.platform.is_some() {
                     DiscoveryConfidence::MraHardware
                 } else {
@@ -2656,8 +2602,6 @@ fn discovery_from_profile_file(
                 year: None,
                 setname,
                 parent: None,
-                image_path: None,
-                has_image: false,
                 confidence: DiscoveryConfidence::PayloadPath,
             };
         }
@@ -2677,8 +2621,6 @@ fn discovery_from_profile_file(
         year: None,
         setname: None,
         parent: None,
-        image_path: None,
-        has_image: false,
         confidence: profile_confidence(rule),
     }
 }
@@ -2702,8 +2644,6 @@ fn discovery_from_profile_archive_entry(
         year: None,
         setname: parenthesized_setname(&entry.entry_path),
         parent: None,
-        image_path: None,
-        has_image: false,
         confidence: match rule.provenance.kind {
             RuleSourceKind::MainSource | RuleSourceKind::Mgl | RuleSourceKind::Mra => {
                 DiscoveryConfidence::ArchiveToc
@@ -3921,8 +3861,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             title,
             sort_title,
             launch_ref,
-            image_path,
-            has_image,
+            preview_archive_path,
+            preview_asset_key,
+            has_preview,
             system_id,
             identity_id,
             parent_setname,
@@ -3939,8 +3880,6 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                 l.title AS title,
                 lower(l.title) AS sort_title,
                 l.launch_ref AS launch_ref,
-                COALESCE(g.image_path, '') AS discovery_image_path,
-                g.has_image AS discovery_has_image,
                 l.system_id AS system_id,
                 i.identity_id AS identity_id,
                 CASE
@@ -3996,24 +3935,42 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                 END AS asset_link_reason
             FROM candidates
         ),
+        resolved_with_pack AS (
+            SELECT
+                resolved.*,
+                packs.local_path AS preview_archive_path
+            FROM resolved
+            LEFT JOIN asset_packs packs
+              ON packs.pack_id = resolved.asset_pack_id
+        ),
         ranked AS (
             SELECT
                 *,
                 row_number() OVER (
                     PARTITION BY family_id
                     ORDER BY is_parent DESC,
-                             CASE WHEN asset_key IS NOT NULL THEN 1 ELSE discovery_has_image END DESC,
+                             CASE asset_link_reason
+                                WHEN 'exact' THEN 3
+                                WHEN 'parent' THEN 2
+                                WHEN 'sibling' THEN 1
+                                ELSE 0
+                             END DESC,
                              sort_title ASC,
                              launch_ref ASC
                 ) AS family_rank,
                 row_number() OVER (
                     PARTITION BY family_id
                     ORDER BY is_parent DESC,
-                             CASE WHEN asset_key IS NOT NULL THEN 1 ELSE discovery_has_image END DESC,
+                             CASE asset_link_reason
+                                WHEN 'exact' THEN 3
+                                WHEN 'parent' THEN 2
+                                WHEN 'sibling' THEN 1
+                                ELSE 0
+                             END DESC,
                              sort_title ASC,
                              launch_ref ASC
                 ) - 1 AS variant_ordinal
-            FROM resolved
+            FROM resolved_with_pack
         )
         SELECT
             family_id,
@@ -4022,14 +3979,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             title,
             sort_title,
             launch_ref,
-            CASE
-                WHEN asset_key IS NOT NULL THEN '/media/fat/_Arcade/media/screenshot/' || asset_key || '.png'
-                ELSE discovery_image_path
-            END,
-            CASE
-                WHEN asset_key IS NOT NULL THEN 1
-                ELSE discovery_has_image
-            END,
+            COALESCE(preview_archive_path, ''),
+            COALESCE(asset_key, ''),
+            CASE WHEN asset_key IS NOT NULL THEN 1 ELSE 0 END,
             system_id,
             identity_id,
             parent_setname,
@@ -4051,8 +4003,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             title,
             sort_title,
             launch_ref,
-            image_path,
-            has_image,
+            preview_archive_path,
+            preview_asset_key,
+            has_preview,
             system_id,
             identity_id,
             family_id,
@@ -4068,8 +4021,9 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             title,
             sort_title,
             launch_ref,
-            image_path,
-            has_image,
+            preview_archive_path,
+            preview_asset_key,
+            has_preview,
             system_id,
             identity_id,
             family_id,
@@ -4216,9 +4170,15 @@ fn parse_software_asset_key(key: &str) -> Option<(String, String)> {
     Some((list_name.to_string(), software_name.to_string()))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConsolePreviewAsset {
+    archive_path: String,
+    asset_key: String,
+}
+
 fn console_preview_assets(
     indexes: &[preview_worker::PreviewArchiveIndex],
-) -> HashMap<String, String> {
+) -> HashMap<String, ConsolePreviewAsset> {
     let mut assets = HashMap::new();
     for index in indexes
         .iter()
@@ -4232,32 +4192,31 @@ fn console_preview_assets(
                 {
                     continue;
                 }
-                assets
-                    .entry(format!("{list_name}:{software_name}"))
-                    .or_insert_with(|| entry.to_string());
+                assets.entry(format!("{list_name}:{software_name}")).or_insert_with(|| {
+                    ConsolePreviewAsset {
+                        archive_path: index.path.clone(),
+                        asset_key: entry.to_string(),
+                    }
+                });
             }
         }
     }
     assets
 }
 
-fn console_preview_image_path(
+fn console_preview_asset(
     identity: &SoftwareIdentity,
     software_metadata: &MameSoftwareMetadata,
-    assets: &HashMap<String, String>,
-) -> Option<String> {
+    assets: &HashMap<String, ConsolePreviewAsset>,
+) -> Option<ConsolePreviewAsset> {
     let exact = format!("{}:{}", identity.list_name, identity.software_name);
     if let Some(asset_key) = assets.get(&exact) {
-        return Some(format!(
-            "/media/fat/mister-magik/assets/media/{asset_key}.png"
-        ));
+        return Some(asset_key.clone());
     }
     let family_name = identity.family_id.split_once(':')?.1;
     let parent = format!("{}:{family_name}", identity.list_name);
     if let Some(asset_key) = assets.get(&parent) {
-        return Some(format!(
-            "/media/fat/mister-magik/assets/media/{asset_key}.png"
-        ));
+        return Some(asset_key.clone());
     }
     let family_key = (identity.list_name.clone(), family_name.to_string());
     for sibling in software_metadata
@@ -4268,9 +4227,7 @@ fn console_preview_image_path(
     {
         let key = format!("{}:{sibling}", identity.list_name);
         if let Some(asset_key) = assets.get(&key) {
-            return Some(format!(
-                "/media/fat/mister-magik/assets/media/{asset_key}.png"
-            ));
+            return Some(asset_key.clone());
         }
     }
     None
@@ -4329,7 +4286,7 @@ fn refresh_sqlite_preview_assets(
     let preserved_launcher_rows = {
         let mut stmt = tx
             .prepare(
-                "SELECT title,sort_title,launch_ref,image_path,has_image,system_id
+                "SELECT title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id
                  FROM launcher_catalog
                  WHERE system_id NOT IN ('arcade','neogeo')
                  ORDER BY ordinal",
@@ -4342,8 +4299,9 @@ fn refresh_sqlite_preview_assets(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
                 ))
             })
             .map_err(|e| format!("query preserved launcher rows: {e}"))?
@@ -4367,8 +4325,8 @@ fn refresh_sqlite_preview_assets(
     tx.execute("DELETE FROM launcher_catalog", [])
         .map_err(|e| format!("delete launcher catalog: {e}"))?;
     tx.execute(
-        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
-         SELECT ordinal,title,sort_title,launch_ref,image_path,has_image,system_id
+        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id)
+         SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id
          FROM ui_arcade_preferred
          ORDER BY ordinal",
         [],
@@ -4382,8 +4340,8 @@ fn refresh_sqlite_preview_assets(
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare preserved launcher insert: {e}"))?;
         for (idx, row) in preserved_launcher_rows.iter().enumerate() {
@@ -4393,8 +4351,9 @@ fn refresh_sqlite_preview_assets(
                 row.1.as_str(),
                 row.2.as_str(),
                 row.3.as_str(),
-                row.4,
-                row.5.as_str()
+                row.4.as_str(),
+                row.5,
+                row.6.as_str()
             ])
             .map_err(|e| format!("insert preserved launcher row: {e}"))?;
         }
@@ -4448,8 +4407,45 @@ fn refresh_console_launcher_images(tx: &rusqlite::Transaction<'_>) -> Result<(),
         r#"
         UPDATE launcher_catalog
         SET
-            image_path = COALESCE((
-                SELECT '/media/fat/mister-magik/assets/media/' || resolved.asset_key || '.png'
+            preview_archive_path = COALESCE((
+                SELECT packs.local_path
+                FROM (
+                    SELECT exact.pack_id AS pack_id, exact.asset_key AS asset_key, 0 AS rank
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries exact
+                      ON exact.identity_namespace = 'mame-software'
+                     AND exact.identity_id = i.identity_id
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                    UNION ALL
+                    SELECT parent.pack_id AS pack_id, parent.asset_key AS asset_key, 1 AS rank
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries parent
+                      ON parent.identity_namespace = 'mame-software'
+                     AND parent.identity_id = i.family_id
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                    UNION ALL
+                    SELECT sibling.pack_id AS pack_id, sibling.asset_key AS asset_key, 2 AS rank
+                    FROM launchables l
+                    JOIN launchable_identities i
+                      ON i.launchable_id = l.launchable_id
+                     AND i.namespace = 'mame-software'
+                    JOIN asset_entries sibling
+                      ON sibling.identity_namespace = 'mame-software'
+                     AND sibling.family_id = i.family_id
+                    WHERE l.launch_ref = launcher_catalog.launch_ref
+                    ORDER BY rank, asset_key
+                    LIMIT 1
+                ) resolved
+                JOIN asset_packs packs ON packs.pack_id = resolved.pack_id
+            ), ''),
+            preview_asset_key = COALESCE((
+                SELECT resolved.asset_key
                 FROM (
                     SELECT exact.asset_key AS asset_key, 0 AS rank
                     FROM launchables l
@@ -4484,7 +4480,7 @@ fn refresh_console_launcher_images(tx: &rusqlite::Transaction<'_>) -> Result<(),
                     LIMIT 1
                 ) resolved
             ), ''),
-            has_image = CASE
+            has_preview = CASE
                 WHEN EXISTS (
                     SELECT 1
                     FROM launchables l
@@ -4639,9 +4635,7 @@ fn write_sqlite_scan_with_sources(
             system_id TEXT NOT NULL,
             manufacturer TEXT,
             genre TEXT,
-            year INTEGER,
-            image_path TEXT,
-            has_image INTEGER NOT NULL
+            year INTEGER
         ) WITHOUT ROWID;
         CREATE TABLE launch_plans (
             plan_id TEXT PRIMARY KEY,
@@ -4706,8 +4700,9 @@ fn write_sqlite_scan_with_sources(
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
-            image_path TEXT NOT NULL,
-            has_image INTEGER NOT NULL,
+            preview_archive_path TEXT NOT NULL,
+            preview_asset_key TEXT NOT NULL,
+            has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
             identity_id TEXT,
             family_id TEXT NOT NULL,
@@ -4724,8 +4719,9 @@ fn write_sqlite_scan_with_sources(
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
-            image_path TEXT NOT NULL,
-            has_image INTEGER NOT NULL,
+            preview_archive_path TEXT NOT NULL,
+            preview_asset_key TEXT NOT NULL,
+            has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
             identity_id TEXT,
             parent_setname TEXT,
@@ -4741,8 +4737,9 @@ fn write_sqlite_scan_with_sources(
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
-            image_path TEXT NOT NULL,
-            has_image INTEGER NOT NULL,
+            preview_archive_path TEXT NOT NULL,
+            preview_asset_key TEXT NOT NULL,
+            has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL
         );
         CREATE TABLE region_metadata (
@@ -4988,8 +4985,8 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
-                "INSERT INTO games(game_id,title,sort_title,system_id,manufacturer,genre,year,image_path,has_image)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO games(game_id,title,sort_title,system_id,manufacturer,genre,year)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut plan_stmt = tx
@@ -5039,13 +5036,10 @@ fn write_sqlite_scan_with_sources(
                 &software_metadata,
                 &mut software_hash_cache,
             );
-            let software_image_path = software_identity.as_ref().and_then(|identity| {
-                console_preview_image_path(identity, &software_metadata, &console_assets)
-            });
-            let game_image_path = software_image_path
-                .as_deref()
-                .or(discovery.image_path.as_deref());
-            let game_has_image = software_image_path.is_some() || discovery.has_image;
+            let preview_asset = software_identity
+                .as_ref()
+                .and_then(|identity| console_preview_asset(identity, &software_metadata, &console_assets));
+            let game_has_preview = preview_asset.is_some();
             system_stmt
                 .execute(params![
                     system_id.as_str(),
@@ -5061,9 +5055,7 @@ fn write_sqlite_scan_with_sources(
                     system_id.as_str(),
                     discovery.manufacturer.as_deref(),
                     discovery.genre.as_deref(),
-                    discovery.year.map(|n| n as i64),
-                    game_image_path,
-                    if game_has_image { 1 } else { 0 }
+                    discovery.year.map(|n| n as i64)
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             let launcher_path = match discovery.source_kind {
@@ -5091,8 +5083,17 @@ fn write_sqlite_scan_with_sources(
                     game: ArcadeGameEntry {
                         title: discovery.title.clone().into(),
                         mra_path: plan_launch_ref.clone().into(),
-                        image_path: game_image_path.unwrap_or_default().into(),
-                        has_image: game_has_image,
+                        preview_archive_path: preview_asset
+                            .as_ref()
+                            .map(|asset| asset.archive_path.as_str())
+                            .unwrap_or_default()
+                            .into(),
+                        preview_asset_key: preview_asset
+                            .as_ref()
+                            .map(|asset| asset.asset_key.as_str())
+                            .unwrap_or_default()
+                            .into(),
+                        has_preview: game_has_preview,
                         system_id: system_id.clone().into(),
                     },
                     source_kind: launch_kind_for_discovery(discovery).to_string(),
@@ -5234,8 +5235,8 @@ fn write_sqlite_scan_with_sources(
         report_library_import_timing("materialize_arcade_ui", projection_t, "");
         let launcher_arcade_t = Instant::now();
         tx.execute(
-            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
-             SELECT ordinal,title,sort_title,launch_ref,image_path,has_image,system_id
+            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id)
+             SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id
              FROM ui_arcade_preferred
              ORDER BY ordinal",
             [],
@@ -5252,8 +5253,8 @@ fn write_sqlite_scan_with_sources(
         let launcher_games = collapse_catalog_variants(launcher_rows);
         let mut launcher_stmt = tx
             .prepare(
-                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,image_path,has_image,system_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
         for (idx, game) in launcher_games.iter().enumerate() {
@@ -5263,8 +5264,9 @@ fn write_sqlite_scan_with_sources(
                     game.title.as_ref(),
                     normalize_title(&game.title),
                     game.mra_path.as_ref(),
-                    game.image_path.as_ref(),
-                    if game.has_image { 1 } else { 0 },
+                    game.preview_archive_path.as_ref(),
+                    game.preview_asset_key.as_ref(),
+                    if game.has_preview { 1 } else { 0 },
                     game.system_id.as_ref()
                 ])
                 .map_err(|e| format!("insert launcher catalog: {e}"))?;
@@ -6375,8 +6377,6 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
-            image_path: None,
-            has_image: false,
             confidence: DiscoveryConfidence::MraCore,
         };
 
@@ -6643,7 +6643,6 @@ mod tests {
 
         assert_eq!(scan.normal_files.len(), 1);
         assert_eq!(scan.discoveries.len(), 1);
-        assert!(!scan.discoveries[0].has_image);
         assert!(scan
             .file_fingerprints
             .contains_key(&nes_dir.join("Mario.nes").display().to_string()));
@@ -6758,21 +6757,6 @@ mod tests {
     }
 
     #[test]
-    fn preview_images_use_archive_stems_without_screenshot_stat() {
-        let mut discovery = mra_discovery(1, "Moon Patrol (US)");
-        discovery.setname = Some("mpatrol".to_string());
-        let preview_images = PreviewImageIndex::arcade(&["mpatrol"]);
-
-        attach_preview_image(&mut discovery, &preview_images);
-
-        assert!(discovery.has_image);
-        assert_eq!(
-            discovery.image_path.as_deref(),
-            Some("/media/fat/_Arcade/media/screenshot/mpatrol.png")
-        );
-    }
-
-    #[test]
     fn nes_software_identity_matches_title_and_preview_pack() {
         let root = unique_temp_dir("nes-software-identity");
         let rom_path = root.join("Super Mario Bros.nes");
@@ -6817,9 +6801,9 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, String, String, i64, String) = conn
+        let row: (String, String, String, String, String, i64, String) = conn
             .query_row(
-                "SELECT i.namespace,i.identity_id,i.family_id,l.has_image,r.confidence
+                "SELECT i.namespace,i.identity_id,i.family_id,l.preview_archive_path,l.preview_asset_key,l.has_preview,r.confidence
                  FROM launchable_identities i
                  JOIN launchables lb ON lb.launchable_id=i.launchable_id
                  JOIN launcher_catalog l ON l.launch_ref=lb.launch_ref
@@ -6833,6 +6817,8 @@ mod tests {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -6844,6 +6830,8 @@ mod tests {
                 "mame-software".to_string(),
                 "nes:smb".to_string(),
                 "nes:smb".to_string(),
+                "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b".to_string(),
+                software_asset_key("nes", "smb"),
                 1,
                 "filename".to_string()
             )
@@ -7040,17 +7028,18 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, i64, String) = conn
+        let row: (String, String, i64, String) = conn
             .query_row(
-                "SELECT image_path,has_image,system_id FROM launcher_catalog",
+                "SELECT preview_archive_path,preview_asset_key,has_preview,system_id FROM launcher_catalog",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .expect("launcher row");
 
-        assert_eq!(row.1, 1);
-        assert_eq!(row.2, "snes");
-        assert!(row.0.ends_with("mame-software__snes__parent.png"));
+        assert_eq!(row.0, "/media/fat/mister-magik/assets/snes-screenshots.mmlz4b");
+        assert_eq!(row.1, software_asset_key("snes", "parent"));
+        assert_eq!(row.2, 1);
+        assert_eq!(row.3, "snes");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7101,9 +7090,9 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, i64, i64) = conn
+        let row: (String, String, i64, i64) = conn
             .query_row(
-                "SELECT l.image_path,l.has_image,(
+                "SELECT l.preview_archive_path,l.preview_asset_key,l.has_preview,(
                     SELECT count(*)
                     FROM asset_entries
                     WHERE asset_key='albert-odyssey-legend-of-eldean-us'
@@ -7111,11 +7100,11 @@ mod tests {
                  FROM launcher_catalog l
                  WHERE l.system_id='saturn'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .expect("launcher and asset row");
 
-        assert_eq!(row, (String::new(), 0, 0));
+        assert_eq!(row, (String::new(), String::new(), 0, 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7161,7 +7150,7 @@ mod tests {
         let conn = Connection::open(&db).expect("open library sqlite");
         let row: (i64, i64) = conn
             .query_row(
-                "SELECT has_image,(SELECT count(*) FROM asset_entries) FROM launcher_catalog",
+                "SELECT has_preview,(SELECT count(*) FROM asset_entries) FROM launcher_catalog",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -7699,21 +7688,21 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("query override identity count");
-        let missing_image_count: i64 = conn
+        let missing_preview_count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM ui_arcade_variants
-                 WHERE family_id='mvsc' AND has_image=0",
+                 WHERE family_id='mvsc' AND has_preview=0",
                 [],
                 |row| row.get(0),
             )
-            .expect("query mvsc missing images");
+            .expect("query mvsc missing previews");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
 
         assert_eq!(preferred_count, 1);
         assert_eq!(variant_count, 5);
         assert_eq!(override_count, 4);
-        assert_eq!(missing_image_count, 0);
+        assert_eq!(missing_preview_count, 0);
         assert_eq!(loaded.catalog.system_game_count("arcade"), 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -7803,7 +7792,7 @@ mod tests {
         let hsf2_variants: i64 = conn
             .query_row(
                 "SELECT count(*) FROM ui_arcade_variants
-                 WHERE family_id='hsf2' AND has_image=1",
+                 WHERE family_id='hsf2' AND has_preview=1",
                 [],
                 |row| row.get(0),
             )
@@ -7811,7 +7800,7 @@ mod tests {
         let sf2ce_variants: i64 = conn
             .query_row(
                 "SELECT count(*) FROM ui_arcade_variants
-                 WHERE family_id='sf2ce' AND has_image=1",
+                 WHERE family_id='sf2ce' AND has_preview=1",
                 [],
                 |row| row.get(0),
             )
@@ -7905,8 +7894,6 @@ mod tests {
         parent.setname = Some("1942".to_string());
         let mut clone = mra_discovery(2, "1942 (First Version)");
         clone.setname = Some("1942b".to_string());
-        clone.has_image = true;
-        clone.image_path = Some("/media/fat/_Arcade/media/screenshot/1942b.png".to_string());
 
         write_sqlite_scan_with_mame(
             &db,
@@ -7918,7 +7905,7 @@ mod tests {
         let conn = Connection::open(&db).expect("open library sqlite");
         let preferred = conn
             .query_row(
-                "SELECT identity_id,family_id,preferred_reason,title,has_image
+                "SELECT identity_id,family_id,preferred_reason,title,has_preview
                  FROM ui_arcade_preferred",
                 [],
                 |row| {
@@ -7979,20 +7966,24 @@ mod tests {
         first.setname = Some("1942b".to_string());
         let mut world = mra_discovery(2, "1942 (World)");
         world.setname = Some("1942w".to_string());
-        world.has_image = true;
-        world.image_path = Some("/media/fat/_Arcade/media/screenshot/1942w.png".to_string());
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root.join("320x320-screenshots.mmlz4b").display().to_string(),
+            codec: "lz4-block",
+            entries: vec!["1942w".to_string()],
+        };
 
-        write_sqlite_scan_with_mame(
+        write_sqlite_scan_with_mame_and_preview_pack(
             &db,
             &sqlite_scan_with_discoveries(vec![first, world]),
             &mame_db,
+            &pack,
         )
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
         let preferred = conn
             .query_row(
-                "SELECT identity_id,family_id,preferred_reason,has_image
+                "SELECT identity_id,family_id,preferred_reason,has_preview
                  FROM ui_arcade_preferred",
                 [],
                 |row| {
@@ -8076,7 +8067,7 @@ mod tests {
         let conn = Connection::open(&db).expect("open library sqlite");
         let mut stmt = conn
             .prepare(
-                "SELECT identity_id,asset_key,asset_link_reason,image_path,has_image
+                "SELECT identity_id,asset_key,asset_link_reason,preview_archive_path,preview_asset_key,has_preview
                  FROM ui_arcade_variants
                  ORDER BY identity_id",
             )
@@ -8088,7 +8079,8 @@ mod tests {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })
             .expect("query variant assets")
@@ -8096,7 +8088,7 @@ mod tests {
             .collect::<Vec<_>>();
         let preferred = conn
             .query_row(
-                "SELECT identity_id,asset_key,asset_link_reason,image_path,has_image
+                "SELECT identity_id,asset_key,asset_link_reason,preview_archive_path,preview_asset_key,has_preview
                  FROM ui_arcade_preferred",
                 [],
                 |row| {
@@ -8105,7 +8097,8 @@ mod tests {
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
                     ))
                 },
             )
@@ -8114,8 +8107,9 @@ mod tests {
         assert_eq!(rows.len(), 4);
         for row in &rows {
             assert_eq!(row.1.as_deref(), Some("1941u"));
-            assert_eq!(row.3, "/media/fat/_Arcade/media/screenshot/1941u.png");
-            assert_eq!(row.4, 1);
+            assert_eq!(row.3, pack.path);
+            assert_eq!(row.4, "1941u");
+            assert_eq!(row.5, 1);
         }
         assert!(rows
             .iter()
@@ -8126,8 +8120,9 @@ mod tests {
         assert_eq!(preferred.0.as_deref(), Some("1941"));
         assert_eq!(preferred.1.as_deref(), Some("1941u"));
         assert_eq!(preferred.2, "sibling");
-        assert_eq!(preferred.3, "/media/fat/_Arcade/media/screenshot/1941u.png");
-        assert_eq!(preferred.4, 1);
+        assert_eq!(preferred.3, pack.path);
+        assert_eq!(preferred.4, "1941u");
+        assert_eq!(preferred.5, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -8407,13 +8402,13 @@ mod tests {
     #[test]
     fn preview_archive_paths_are_recognized_as_fingerprint_inputs() {
         assert!(is_preview_archive_fingerprint_path(
-            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw"
+            "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b"
         ));
         assert!(is_preview_archive_fingerprint_path(
-            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-lz4block-12.mmlz4b"
+            "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"
         ));
         assert!(!is_preview_archive_fingerprint_path(
-            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320/mpatrol.rgb565"
+            "/media/fat/_Arcade/media/screenshot-magik/mpatrol.rgb565"
         ));
     }
 
@@ -8424,8 +8419,7 @@ mod tests {
         let mut discovery = mra_discovery(1, "1941");
         discovery.setname = Some("game00001".to_string());
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![discovery])).expect("save sqlite");
-        let pack_path =
-            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw";
+        let pack_path = "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b";
         let pack = preview_worker::PreviewArchiveIndex {
             path: pack_path.to_string(),
             codec: "raw",
@@ -8440,23 +8434,25 @@ mod tests {
         let conn = Connection::open(&db).expect("open library sqlite");
         let row = conn
             .query_row(
-                "SELECT image_path,has_image,asset_key,asset_link_reason
+                "SELECT preview_archive_path,preview_asset_key,has_preview,asset_key,asset_link_reason
                  FROM ui_arcade_preferred",
                 [],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 },
             )
             .expect("query refreshed preferred row");
-        assert_eq!(row.0, "/media/fat/_Arcade/media/screenshot/game00001.png");
-        assert_eq!(row.1, 1);
-        assert_eq!(row.2.as_deref(), Some("game00001"));
-        assert_eq!(row.3, "exact");
+        assert_eq!(row.0, pack_path);
+        assert_eq!(row.1, "game00001");
+        assert_eq!(row.2, 1);
+        assert_eq!(row.3.as_deref(), Some("game00001"));
+        assert_eq!(row.4, "exact");
         assert_eq!(
             conn.query_row("SELECT count(*) FROM games", [], |row| row.get::<_, i64>(0))
                 .expect("count games"),
@@ -8521,7 +8517,7 @@ mod tests {
         let conn = Connection::open(&db).expect("open library sqlite");
         let row: (String, i64) = conn
             .query_row(
-                "SELECT image_path,has_image FROM launcher_catalog WHERE system_id='nes'",
+                "SELECT preview_archive_path,has_preview FROM launcher_catalog WHERE system_id='nes'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -8537,7 +8533,7 @@ mod tests {
         assert!(!preview_archive_fingerprint_matches(
             &fingerprint,
             vec![(
-                "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw"
+                "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b"
                     .to_string(),
                 1024,
                 42,
@@ -8547,7 +8543,7 @@ mod tests {
 
     #[test]
     fn matching_preview_archive_fingerprint_allows_catalog_refresh_skip() {
-        let path = "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw";
+        let path = "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b";
         let fingerprint = fingerprint_with_files(&[(path, 1024, 42)]);
 
         assert!(preview_archive_fingerprint_matches(
@@ -8558,8 +8554,7 @@ mod tests {
 
     #[test]
     fn matching_preview_archive_fingerprints_require_the_full_active_set() {
-        let arcade =
-            "/media/fat/_Arcade/media/screenshot-magik/raw565-hybrid-320x320-rawpack.mmraw";
+        let arcade = "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b";
         let neogeo = "/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b";
         let fingerprint = fingerprint_with_files(&[(arcade, 1024, 42), (neogeo, 2048, 77)]);
 
@@ -8915,6 +8910,8 @@ mod tests {
     fn sqlite_save_materializes_launcher_catalog_variants() {
         let root = unique_temp_dir("sqlite-launcher-catalog");
         let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(&mame_db, &[]);
         let mut world = mra_discovery(1, "Moon Patrol (World)");
         world.launch_ref = "/media/fat/_Arcade/Moon Patrol (World).mra".to_string();
         world.source_path = world.launch_ref.clone();
@@ -8923,10 +8920,18 @@ mod tests {
         us.launch_ref = "/media/fat/_Arcade/Moon Patrol (US).mra".to_string();
         us.source_path = us.launch_ref.clone();
         us.setname = Some("mpatrol".to_string());
-        us.image_path = Some("/media/fat/_Arcade/media/screenshot/mpatrol.png".to_string());
-        us.has_image = true;
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root.join("320x320-screenshots.mmlz4b").display().to_string(),
+            codec: "lz4-block",
+            entries: vec!["mpatrol".to_string()],
+        };
 
-        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![world, us]))
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![world, us]),
+            &mame_db,
+            &pack,
+        )
             .expect("write sqlite");
         let conn = Connection::open(&db).expect("open sqlite");
         let materialized_rows: i64 = conn
@@ -8940,7 +8945,7 @@ mod tests {
         assert_eq!(materialized_rows, 1);
         assert_eq!(loaded.rows, 1);
         assert_eq!(loaded.catalog.games[0].title.as_ref(), "Moon Patrol (US)");
-        assert!(loaded.catalog.games[0].has_image);
+        assert!(loaded.catalog.games[0].has_preview);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -8982,8 +8987,6 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
-            image_path: None,
-            has_image: false,
             confidence: DiscoveryConfidence::PayloadPath,
         }
     }
@@ -9003,8 +9006,6 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
-            image_path: None,
-            has_image: false,
             confidence: DiscoveryConfidence::PayloadPath,
         }
     }
@@ -9014,8 +9015,9 @@ mod tests {
             game: ArcadeGameEntry {
                 title: title.into(),
                 mra_path: path.into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "arcade".into(),
             },
             source_kind: "mra".to_string(),
@@ -9030,8 +9032,9 @@ mod tests {
             game: ArcadeGameEntry {
                 title: title.into(),
                 mra_path: path.into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "unknown".into(),
             },
             source_kind: "mgl".to_string(),
@@ -9046,8 +9049,9 @@ mod tests {
             game: ArcadeGameEntry {
                 title: title.into(),
                 mra_path: path.into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "amiga".into(),
             },
             source_kind: "catalog-entry".to_string(),
@@ -9301,8 +9305,6 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
-            image_path: None,
-            has_image: false,
             confidence: DiscoveryConfidence::PayloadPath,
         }
     }
@@ -9323,8 +9325,6 @@ mod tests {
             year: None,
             setname: Some(format!("game{idx:05}")),
             parent: None,
-            image_path: None,
-            has_image: false,
             confidence: DiscoveryConfidence::MraCore,
         }
     }

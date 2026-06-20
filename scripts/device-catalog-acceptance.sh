@@ -18,7 +18,7 @@ Checks the deployed MiSTer catalog state through scripts/mister:
   - no active library-refresh after settling
   - non-empty library.sqlite3
   - launcher_catalog exists
-  - screenshot packs project nonzero has_image counts where installed
+  - screenshot packs project nonzero has_preview counts where installed
   - console screenshot packs register canonical mame-software asset entries
   - optional duplicate refresh race proves one refresh skips via single-flight
 USAGE
@@ -80,9 +80,13 @@ pack_exists() {
   remote "test -f '$REMOTE_ASSETS/$1' && echo yes || echo no" | awk 'NF { value=$NF } END { print value }'
 }
 
-image_count_for_platform() {
+preview_count_for_platform() {
   local platform="$1"
-  db "SELECT COALESCE(SUM(has_image),0) FROM launcher_catalog WHERE platform_id='$platform';" | last_number
+  db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';" | last_number
+}
+
+arcade_pack_exists() {
+  remote "test -f '/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b' && echo yes || echo no" | awk 'NF { value=$NF } END { print value }'
 }
 
 echo "==> Waiting ${SETTLE_SECS}s for startup refreshes to settle"
@@ -106,14 +110,14 @@ launcher_catalog_tables="$(
 )"
 assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
 
-if [ "$(pack_exists "arcade-screenshots.mmlz4b")" = "yes" ]; then
-  assert_gt_zero "arcade has_image count" "$(image_count_for_platform arcade)"
+if [ "$(arcade_pack_exists)" = "yes" ]; then
+  assert_gt_zero "arcade has_preview count" "$(preview_count_for_platform arcade)"
 fi
 if [ "$(pack_exists "neogeo-screenshots.mmlz4b")" = "yes" ]; then
-  assert_gt_zero "neogeo has_image count" "$(image_count_for_platform neogeo)"
+  assert_gt_zero "neogeo has_preview count" "$(preview_count_for_platform neogeo)"
 fi
 if [ "$(pack_exists "saturn-screenshots.mmlz4b")" = "yes" ]; then
-  assert_gt_zero "saturn has_image count" "$(image_count_for_platform saturn)"
+  assert_gt_zero "saturn has_preview count" "$(preview_count_for_platform saturn)"
 fi
 
 console_pack_count="$(

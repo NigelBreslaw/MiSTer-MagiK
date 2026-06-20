@@ -134,9 +134,16 @@ tools/mister preview-cache-build
 ```
 
 `preview-cache-build` writes resized PNGs, `.rgb565` files, and the sibling
-compressed LZ4 block archive. The real app auto-detects a sibling raw565 raw
-pack first, then falls back to the compressed archive or individual `.rgb565`
-files.
+compressed LZ4 block archive named `320x320-screenshots.mmlz4b` for the default
+size. Runtime preview loading uses the archive path and asset key projected by
+the catalog; it must not derive cache paths from PNG/JPG screenshot locations.
+
+The preview loader preloads configured archives into memory by default. Set
+`MISTER_PREVIEW_ARCHIVE_PRELOAD=0` to force per-entry archive file reads, or
+`MISTER_PREVIEW_ARCHIVE_PRELOAD=async` to warm memory in the background while
+serving early requests from the archive file. The arcade pack measured on the
+MiSTer at 34,623,433 bytes takes about 1.75s to cold-read from `/media/fat` into
+RAM and about 0.24s once the filesystem cache is warm.
 
 The library scanner must not walk screenshot/cache media directories, read
 `gamelist.xml`, or probe normal PNG/JPG screenshots for metadata.

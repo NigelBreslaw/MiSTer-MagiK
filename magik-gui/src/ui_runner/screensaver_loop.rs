@@ -1,9 +1,7 @@
 use super::*;
 use crate::preview_worker;
-use mister_magik_fb::raw565;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScreensaverMode {
@@ -283,42 +281,54 @@ pub(super) fn run_screensaver_loop(
 }
 
 fn load_screensaver_images(root: &str, cap: usize) -> Vec<SaverImage> {
-    let resize = preview_worker::PreviewResizeSpec::from_env();
-    let mut paths = Vec::new();
+    let mut assets = Vec::new();
     if let Ok(loaded) = library_db::load_arcade_catalog_from_sqlite(root) {
-        paths.extend(
+        assets.extend(
             loaded
                 .catalog
                 .games
                 .iter()
-                .filter(|game| game.has_image && !game.image_path.is_empty())
-                .map(|game| game.image_path.clone())
+                .filter(|game| {
+                    game.has_preview
+                        && !game.preview_archive_path.is_empty()
+                        && !game.preview_asset_key.is_empty()
+                })
+                .map(|game| {
+                    (
+                        game.preview_archive_path.to_string(),
+                        game.preview_asset_key.to_string(),
+                    )
+                })
                 .take(cap * 4),
         );
     }
     let mut images = Vec::new();
-    for path in paths {
+    for (archive_path, asset_key) in assets {
         if images.len() >= cap {
             break;
         }
-        let cache = preview_worker::raw565_preview_cache_path(&path, resize);
-        if let Ok(image) = read_raw565_image(&cache) {
+        if let Ok(image) = preview_worker::load_preview_asset_pixels(&archive_path, &asset_key) {
+            let image = preview_pixels_to_saver_image(image);
             images.push(image);
         }
     }
     images
 }
 
-fn read_raw565_image(path: &Path) -> Result<SaverImage, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{path:?}: {e}"))?;
-    let image = raw565::decode_raw565(&data).map_err(|e| format!("{path:?}: {e}"))?;
-    let pixels = image.words.into_iter().map(Rgb565Pixel).collect();
-    Ok(SaverImage {
-        pixels,
-        w: image.width,
-        h: image.height,
-        stride: image.stride_words,
-    })
+fn preview_pixels_to_saver_image(image: preview_worker::PreviewPixels) -> SaverImage {
+    match image {
+        preview_worker::PreviewPixels::Rgb565 {
+            width,
+            height,
+            stride_bytes,
+            words,
+        } => SaverImage {
+            pixels: words.iter().copied().map(Rgb565Pixel).collect(),
+            w: width as usize,
+            h: height as usize,
+            stride: stride_bytes as usize / 2,
+        },
+    }
 }
 
 fn render_screensaver_frame(

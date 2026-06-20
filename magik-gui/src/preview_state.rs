@@ -9,7 +9,7 @@ use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::ArcadeGameEntry;
 use crate::preview_worker::{
-    preview_window_indices, preview_window_paths, PreviewPixels, PreviewPriority, PreviewResult,
+    preview_asset_cache_key, preview_window_indices, PreviewPixels, PreviewPriority, PreviewResult,
     PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
@@ -112,14 +112,14 @@ impl PreviewImageCache {
         &mut self,
         path: String,
         image: Arc<PreviewImage>,
-        window_paths: &[String],
-        visible_path: Option<&str>,
+        window_preview_keys: &[String],
+        visible_preview_key: Option<&str>,
     ) {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == &path) {
             self.entries.remove(idx);
         }
         self.entries.push_back((path, image));
-        self.retain_window(window_paths, visible_path);
+        self.retain_window(window_preview_keys, visible_preview_key);
     }
 
     fn insert_failed(&mut self, path: String) {
@@ -133,18 +133,18 @@ impl PreviewImageCache {
         }
     }
 
-    fn retain_window(&mut self, window_paths: &[String], visible_path: Option<&str>) {
-        if !window_paths.is_empty() {
+    fn retain_window(&mut self, window_preview_keys: &[String], visible_preview_key: Option<&str>) {
+        if !window_preview_keys.is_empty() {
             self.entries.retain(|(path, _)| {
-                visible_path.is_some_and(|visible| visible == path)
-                    || window_paths.iter().any(|keep| keep == path)
+                visible_preview_key.is_some_and(|visible| visible == path)
+                    || window_preview_keys.iter().any(|keep| keep == path)
             });
         }
         while self.entries.len() > DEFAULT_PREVIEW_CACHE_CAP {
             if self
                 .entries
                 .front()
-                .is_some_and(|(path, _)| visible_path.is_some_and(|visible| visible == path))
+                .is_some_and(|(path, _)| visible_preview_key.is_some_and(|visible| visible == path))
                 && self.entries.len() > 1
             {
                 if let Some(entry) = self.entries.pop_front() {
@@ -223,15 +223,15 @@ fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
 pub(crate) struct PreviewState {
     worker: PreviewWorker,
     selected_mra_path: Option<String>,
-    selected_image_path: Option<String>,
+    selected_preview_key: Option<String>,
     current_generation: u64,
     cache: PreviewImageCache,
     has_visible_preview: bool,
-    visible_path: String,
+    visible_preview_key: String,
     previous_image: Option<Arc<PreviewImage>>,
     raw_transition_id: u64,
-    window_paths: Vec<String>,
-    pending_prefetch_paths: HashSet<String>,
+    window_preview_keys: Vec<String>,
+    pending_prefetch_keys: HashSet<String>,
     ready_backlog: VecDeque<PreviewResult>,
     raw_dirty: bool,
     last_prefetch_selected: Option<usize>,
@@ -268,15 +268,15 @@ impl PreviewState {
         Self {
             worker: PreviewWorker::new(),
             selected_mra_path: None,
-            selected_image_path: None,
+            selected_preview_key: None,
             current_generation: 0,
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
-            visible_path: String::new(),
+            visible_preview_key: String::new(),
             previous_image: None,
             raw_transition_id: 0,
-            window_paths: Vec::new(),
-            pending_prefetch_paths: HashSet::new(),
+            window_preview_keys: Vec::new(),
+            pending_prefetch_keys: HashSet::new(),
             ready_backlog: VecDeque::new(),
             raw_dirty: false,
             last_prefetch_selected: None,
@@ -290,14 +290,14 @@ impl PreviewState {
             || self.has_visible_preview
         {
             self.selected_mra_path = None;
-            self.selected_image_path = None;
+            self.selected_preview_key = None;
             self.current_generation = 0;
             self.has_visible_preview = false;
-            self.visible_path.clear();
+            self.visible_preview_key.clear();
             self.previous_image = None;
             self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
-            self.window_paths.clear();
-            self.pending_prefetch_paths.clear();
+            self.window_preview_keys.clear();
+            self.pending_prefetch_keys.clear();
             self.ready_backlog.clear();
             self.raw_dirty = false;
             self.last_prefetch_selected = None;
@@ -310,10 +310,10 @@ impl PreviewState {
     }
 
     pub(crate) fn trace_cache_state(&self) -> &'static str {
-        self.selected_image_path
+        self.selected_preview_key
             .as_deref()
             .map(|path| {
-                if self.visible_path == path {
+                if self.visible_preview_key == path {
                     "exact"
                 } else if self.cache.contains(path) {
                     "cached"
@@ -351,11 +351,13 @@ impl PreviewState {
     }
 
     fn begin_raw_transition_to(&mut self, next_path: &str) {
-        if self.visible_path == next_path {
+        if self.visible_preview_key == next_path {
             return;
         }
         self.previous_image = if self.has_visible_preview {
-            self.cache.peek_shared(&self.visible_path).map(Arc::clone)
+            self.cache
+                .peek_shared(&self.visible_preview_key)
+                .map(Arc::clone)
         } else {
             None
         };
@@ -363,28 +365,30 @@ impl PreviewState {
     }
 
     fn begin_raw_transition_to_empty(&mut self) {
-        if !self.has_visible_preview && self.visible_path.is_empty() {
+        if !self.has_visible_preview && self.visible_preview_key.is_empty() {
             return;
         }
         self.previous_image = if self.has_visible_preview {
-            self.cache.peek_shared(&self.visible_path).map(Arc::clone)
+            self.cache
+                .peek_shared(&self.visible_preview_key)
+                .map(Arc::clone)
         } else {
             None
         };
         self.has_visible_preview = false;
-        self.visible_path.clear();
+        self.visible_preview_key.clear();
         self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
         self.raw_dirty = true;
     }
 
     fn select_empty_preview(&mut self) {
         self.current_generation = 0;
-        self.selected_image_path = None;
+        self.selected_preview_key = None;
         self.begin_raw_transition_to_empty();
     }
 
     pub(crate) fn finish_raw_empty_transition_if_idle(&mut self) {
-        if !self.has_visible_preview && self.visible_path.is_empty() && !self.raw_dirty {
+        if !self.has_visible_preview && self.visible_preview_key.is_empty() && !self.raw_dirty {
             self.previous_image = None;
         }
     }
@@ -393,7 +397,7 @@ impl PreviewState {
         if !self.has_visible_preview {
             return None;
         }
-        let image = self.cache.peek(&self.visible_path)?;
+        let image = self.cache.peek(&self.visible_preview_key)?;
         Some(Self::raw_frame_from_image(image))
     }
 
@@ -425,16 +429,36 @@ impl PreviewState {
 fn is_current_selected_result(
     result: &PreviewResult,
     current_generation: u64,
-    selected_image_path: Option<&str>,
+    selected_preview_key: Option<&str>,
 ) -> bool {
     result.generation == current_generation
-        && selected_image_path.is_some_and(|path| path == result.image_path)
+        && selected_preview_key.is_some_and(|key| key == result.preview_key())
+}
+
+fn game_preview_key(game: &ArcadeGameEntry) -> Option<String> {
+    (game.has_preview
+        && !game.preview_archive_path.is_empty()
+        && !game.preview_asset_key.is_empty())
+    .then(|| preview_asset_cache_key(&game.preview_archive_path, &game.preview_asset_key))
+}
+
+fn preview_window_keys(games: &[ArcadeGameEntry], selected: usize, radius: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for idx in preview_window_indices(games.len(), selected, radius) {
+        if let Some(key) = game_preview_key(&games[idx]) {
+            if seen.insert(key.clone()) {
+                out.push(key);
+            }
+        }
+    }
+    out
 }
 
 fn next_ready_result_index(
     backlog: &VecDeque<PreviewResult>,
     current_generation: u64,
-    selected_image_path: Option<&str>,
+    selected_preview_key: Option<&str>,
     selected_processed: bool,
     prefetch_results: usize,
     defer_selected_result: bool,
@@ -442,7 +466,7 @@ fn next_ready_result_index(
     if defer_selected_result {
         if let Some(idx) = backlog.iter().position(|result| {
             matches!(result.priority, PreviewPriority::Selected)
-                && !is_current_selected_result(result, current_generation, selected_image_path)
+                && !is_current_selected_result(result, current_generation, selected_preview_key)
         }) {
             return Some(idx);
         }
@@ -456,7 +480,7 @@ fn next_ready_result_index(
 
     if !selected_processed {
         if let Some(idx) = backlog.iter().position(|result| {
-            is_current_selected_result(result, current_generation, selected_image_path)
+            is_current_selected_result(result, current_generation, selected_preview_key)
         }) {
             return Some(idx);
         }
@@ -483,12 +507,12 @@ pub(crate) fn request_arcade_preview_window(
     let game = games.get(selected);
     let Some(game) = game else {
         preview.selected_mra_path = None;
-        preview.selected_image_path = None;
+        preview.selected_preview_key = None;
         preview.current_generation = 0;
         preview.has_visible_preview = false;
-        preview.visible_path.clear();
-        preview.window_paths.clear();
-        preview.pending_prefetch_paths.clear();
+        preview.visible_preview_key.clear();
+        preview.window_preview_keys.clear();
+        preview.pending_prefetch_keys.clear();
         preview.last_prefetch_selected = None;
         preview.prefetch_direction = 0;
         bridge.set_arcade_preview_placeholder_visible(true);
@@ -499,23 +523,19 @@ pub(crate) fn request_arcade_preview_window(
     };
     bridge.set_arcade_preview_placeholder_visible(true);
 
-    preview.window_paths = preview_window_paths(games, selected, DEFAULT_PREVIEW_RADIUS, |game| {
-        game.has_image.then_some(game.image_path.as_ref())
-    })
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    preview
-        .cache
-        .retain_window(&preview.window_paths, Some(&preview.visible_path));
+    preview.window_preview_keys = preview_window_keys(games, selected, DEFAULT_PREVIEW_RADIUS);
+    preview.cache.retain_window(
+        &preview.window_preview_keys,
+        Some(&preview.visible_preview_key),
+    );
 
     if preview
         .selected_mra_path
         .as_deref()
         .is_some_and(|path| path == game.mra_path.as_ref())
     {
-        if let Some(path) = preview.selected_image_path.clone() {
-            if preview.visible_path != path {
+        if let Some(path) = preview.selected_preview_key.clone() {
+            if preview.visible_preview_key != path {
                 if let Some(image) = preview.cache.get(&path) {
                     if defer_selected_application {
                         request_preview_prefetches(games, selected, preview);
@@ -525,7 +545,7 @@ pub(crate) fn request_arcade_preview_window(
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
                     preview.begin_raw_transition_to(&path);
-                    preview.visible_path = path;
+                    preview.visible_preview_key = path;
                     preview.raw_dirty = true;
                     apply_preview_image_bridge(bridge, &image);
                     request_preview_prefetches(games, selected, preview);
@@ -545,15 +565,15 @@ pub(crate) fn request_arcade_preview_window(
     preview.selected_mra_path = Some(game.mra_path.to_string());
 
     bridge.set_arcade_preview_title(game.title.as_ref().into());
-    if game.has_image {
-        preview.selected_image_path = Some(game.image_path.to_string());
-        if preview.cache.contains_failed(game.image_path.as_ref()) {
+    if let Some(preview_key) = game_preview_key(game) {
+        preview.selected_preview_key = Some(preview_key.clone());
+        if preview.cache.contains_failed(&preview_key) {
             preview.select_empty_preview();
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             request_preview_prefetches(games, selected, preview);
             return true;
         }
-        if let Some(image) = preview.cache.get(game.image_path.as_ref()) {
+        if let Some(image) = preview.cache.get(&preview_key) {
             if defer_selected_application {
                 request_preview_prefetches(games, selected, preview);
                 return false;
@@ -562,24 +582,29 @@ pub(crate) fn request_arcade_preview_window(
             preview.has_visible_preview = true;
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace cache_hit title={} path={}",
-                    game.title, game.image_path
+                    "preview_trace cache_hit title={} archive_path={} asset_key={}",
+                    game.title, game.preview_archive_path, game.preview_asset_key
                 );
             }
-            preview.begin_raw_transition_to(game.image_path.as_ref());
-            preview.visible_path = game.image_path.to_string();
+            preview.begin_raw_transition_to(&preview_key);
+            preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &image);
             request_preview_prefetches(games, selected, preview);
             return true;
         }
-        preview.current_generation = preview
-            .worker
-            .request_selected(game.title.to_string(), game.image_path.to_string());
+        preview.current_generation = preview.worker.request_selected(
+            game.title.to_string(),
+            game.preview_archive_path.to_string(),
+            game.preview_asset_key.to_string(),
+        );
         if preview_trace_enabled() {
             eprintln!(
-                "preview_trace requested generation={} title={} path={}",
-                preview.current_generation, game.title, game.image_path
+                "preview_trace requested generation={} title={} archive_path={} asset_key={}",
+                preview.current_generation,
+                game.title,
+                game.preview_archive_path,
+                game.preview_asset_key
             );
         }
         if !preview.has_visible_preview {
@@ -622,32 +647,32 @@ fn request_preview_prefetches(
         let Some(game) = games.get(idx) else {
             continue;
         };
-        if !game.has_image
-            || preview.cache.contains(game.image_path.as_ref())
-            || preview.cache.contains_failed(game.image_path.as_ref())
-            || preview
-                .pending_prefetch_paths
-                .contains(game.image_path.as_ref())
+        let Some(preview_key) = game_preview_key(game) else {
+            continue;
+        };
+        if preview.cache.contains(&preview_key)
+            || preview.cache.contains_failed(&preview_key)
+            || preview.pending_prefetch_keys.contains(&preview_key)
         {
             continue;
         }
         let distance = idx.abs_diff(selected);
-        preview
-            .pending_prefetch_paths
-            .insert(game.image_path.to_string());
+        preview.pending_prefetch_keys.insert(preview_key);
         preview.worker.request_prefetch(
             game.title.to_string(),
-            game.image_path.to_string(),
+            game.preview_archive_path.to_string(),
+            game.preview_asset_key.to_string(),
             rank + 1,
         );
         if preview_trace_enabled() {
             eprintln!(
-                "preview_trace prefetch distance={} rank={} direction={} title={} path={}",
+                "preview_trace prefetch distance={} rank={} direction={} title={} archive_path={} asset_key={}",
                 distance,
                 rank + 1,
                 preview.prefetch_direction,
                 game.title,
-                game.image_path
+                game.preview_archive_path,
+                game.preview_asset_key
             );
         }
     }
@@ -707,10 +732,10 @@ fn direction_aware_prefetch_indices(
 }
 
 fn deferred_selected_preview_is_ready(preview: &mut PreviewState) -> bool {
-    let Some(path) = preview.selected_image_path.as_deref() else {
+    let Some(path) = preview.selected_preview_key.as_deref() else {
         return false;
     };
-    preview.visible_path != path
+    preview.visible_preview_key != path
         && (preview.cache.contains(path) || preview.cache.contains_failed(path))
 }
 
@@ -774,7 +799,7 @@ pub(crate) fn apply_ready_preview(
     while let Some(idx) = next_ready_result_index(
         &preview.ready_backlog,
         preview.current_generation,
-        preview.selected_image_path.as_deref(),
+        preview.selected_preview_key.as_deref(),
         selected_processed,
         prefetch_results,
         defer_selected_result,
@@ -782,11 +807,12 @@ pub(crate) fn apply_ready_preview(
         let Some(result) = preview.ready_backlog.remove(idx) else {
             break;
         };
-        preview.pending_prefetch_paths.remove(&result.image_path);
+        let result_preview_key = result.preview_key();
+        preview.pending_prefetch_keys.remove(&result_preview_key);
         let is_selected_result = is_current_selected_result(
             &result,
             preview.current_generation,
-            preview.selected_image_path.as_deref(),
+            preview.selected_preview_key.as_deref(),
         );
         if is_selected_result {
             selected_processed = true;
@@ -796,8 +822,11 @@ pub(crate) fn apply_ready_preview(
         if !is_selected_result && matches!(result.priority, PreviewPriority::Selected) {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace stale_result generation={} current_generation={} path={}",
-                    result.generation, preview.current_generation, result.image_path
+                    "preview_trace stale_result generation={} current_generation={} archive_path={} asset_key={}",
+                    result.generation,
+                    preview.current_generation,
+                    result.preview_archive_path,
+                    result.preview_asset_key
                 );
             }
             continue;
@@ -805,7 +834,7 @@ pub(crate) fn apply_ready_preview(
         if let Some(image) = result.image {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace apply generation={} priority={:?} selected={} age_us={} load_source={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} path={}",
+                    "preview_trace apply generation={} priority={:?} selected={} age_us={} load_source={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
                     result.generation,
                     result.priority,
                     is_selected_result,
@@ -823,7 +852,8 @@ pub(crate) fn apply_ready_preview(
                     result.resize_us,
                     result.encoded_bytes,
                     result.decoded_bytes,
-                    result.image_path
+                    result.preview_archive_path,
+                    result.preview_asset_key
                 );
             }
             let source_w = image.width();
@@ -846,8 +876,12 @@ pub(crate) fn apply_ready_preview(
             };
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace raw_image generation={} output={}x{} path={}",
-                    result.generation, source_w, source_h, result.image_path
+                    "preview_trace raw_image generation={} output={}x{} archive_path={} asset_key={}",
+                    result.generation,
+                    source_w,
+                    source_h,
+                    result.preview_archive_path,
+                    result.preview_asset_key
                 );
             }
             let image = Arc::new(PreviewImage {
@@ -857,29 +891,31 @@ pub(crate) fn apply_ready_preview(
                 display_w: display.w,
                 display_h: display.h,
             });
-            let image_path = result.image_path;
             preview.cache.insert(
-                image_path.clone(),
+                result_preview_key.clone(),
                 Arc::clone(&image),
-                &preview.window_paths,
-                Some(&preview.visible_path),
+                &preview.window_preview_keys,
+                Some(&preview.visible_preview_key),
             );
             if is_selected_result {
                 preview.current_generation = 0;
                 bridge.set_arcade_preview_title(result.title.into());
                 preview.has_visible_preview = true;
-                preview.begin_raw_transition_to(&image_path);
-                preview.visible_path = image_path;
+                preview.begin_raw_transition_to(&result_preview_key);
+                preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
                 dirty = true;
             }
         } else {
-            preview.cache.insert_failed(result.image_path.clone());
+            preview.cache.insert_failed(result_preview_key);
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace cache_failed priority={:?} selected={} path={}",
-                    result.priority, is_selected_result, result.image_path
+                    "preview_trace cache_failed priority={:?} selected={} archive_path={} asset_key={}",
+                    result.priority,
+                    is_selected_result,
+                    result.preview_archive_path,
+                    result.preview_asset_key
                 );
             }
             if is_selected_result {
@@ -1073,8 +1109,8 @@ mod tests {
     fn same_selected_preview_requests_cached_apply_after_deferral() {
         let mut preview = PreviewState::new();
         preview.selected_mra_path = Some("/_Arcade/selected.mra".into());
-        preview.selected_image_path = Some("selected.png".into());
-        preview.visible_path = "previous.png".into();
+        preview.selected_preview_key = Some("selected.png".into());
+        preview.visible_preview_key = "previous.png".into();
         preview.has_visible_preview = true;
         preview.cache.insert(
             "selected.png".into(),
@@ -1091,8 +1127,8 @@ mod tests {
     fn same_selected_preview_skips_request_when_visible_is_current() {
         let mut preview = PreviewState::new();
         preview.selected_mra_path = Some("/_Arcade/selected.mra".into());
-        preview.selected_image_path = Some("selected.png".into());
-        preview.visible_path = "selected.png".into();
+        preview.selected_preview_key = Some("selected.png".into());
+        preview.visible_preview_key = "selected.png".into();
         preview.has_visible_preview = true;
         preview.cache.insert(
             "selected.png".into(),
@@ -1136,16 +1172,16 @@ mod tests {
             &[],
             Some("visible.png"),
         );
-        preview.selected_image_path = Some("visible.png".into());
+        preview.selected_preview_key = Some("visible.png".into());
         preview.has_visible_preview = true;
-        preview.visible_path = "visible.png".into();
+        preview.visible_preview_key = "visible.png".into();
         let previous_transition_id = preview.raw_transition_id;
 
         preview.select_empty_preview();
 
-        assert_eq!(preview.selected_image_path, None);
+        assert_eq!(preview.selected_preview_key, None);
         assert!(!preview.has_visible_preview);
-        assert!(preview.visible_path.is_empty());
+        assert!(preview.visible_preview_key.is_empty());
         assert!(preview.raw_dirty);
         assert_eq!(
             preview.raw_transition_id,
@@ -1178,9 +1214,9 @@ mod tests {
             &[],
             Some("visible.png"),
         );
-        preview.selected_image_path = Some("visible.png".into());
+        preview.selected_preview_key = Some("visible.png".into());
         preview.has_visible_preview = true;
-        preview.visible_path = "visible.png".into();
+        preview.visible_preview_key = "visible.png".into();
 
         preview.select_empty_preview();
         let first_transition_id = preview.raw_transition_id;
@@ -1210,13 +1246,14 @@ mod tests {
 
     fn preview_result(
         generation: u64,
-        image_path: &str,
+        preview_asset_key: &str,
         priority: PreviewPriority,
     ) -> PreviewResult {
         PreviewResult {
             generation,
-            title: image_path.to_string(),
-            image_path: image_path.to_string(),
+            title: preview_asset_key.to_string(),
+            preview_archive_path: String::new(),
+            preview_asset_key: preview_asset_key.to_string(),
             image: None,
             request_age_us: 0,
             read_us: 0,

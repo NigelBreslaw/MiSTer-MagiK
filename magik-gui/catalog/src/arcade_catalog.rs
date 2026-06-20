@@ -4,7 +4,7 @@
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
@@ -21,8 +21,9 @@ pub const HOME_LIST_VISIBLE_W: i32 = 912;
 pub struct ArcadeGameEntry {
     pub title: Arc<str>,
     pub mra_path: Arc<str>,
-    pub image_path: Arc<str>,
-    pub has_image: bool,
+    pub preview_archive_path: Arc<str>,
+    pub preview_asset_key: Arc<str>,
+    pub has_preview: bool,
     pub system_id: Arc<str>,
 }
 
@@ -184,15 +185,7 @@ fn prefer_preview_game(a: &ArcadeGameEntry, b: &ArcadeGameEntry) -> bool {
 }
 
 fn has_preview_image(game: &ArcadeGameEntry) -> bool {
-    game.has_image
-        && Path::new(game.image_path.as_ref())
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("png")
-                    || ext.eq_ignore_ascii_case("jpg")
-                    || ext.eq_ignore_ascii_case("jpeg")
-            })
+    game.has_preview && !game.preview_archive_path.is_empty() && !game.preview_asset_key.is_empty()
 }
 
 pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
@@ -279,12 +272,23 @@ pub fn system_title(id: &str) -> String {
 mod tests {
     use super::*;
 
-    fn game(title: &str, mra_path: &str, image_path: &str, system_id: &str) -> ArcadeGameEntry {
+    fn game(
+        title: &str,
+        mra_path: &str,
+        preview_asset_key: &str,
+        system_id: &str,
+    ) -> ArcadeGameEntry {
+        let has_preview = !preview_asset_key.is_empty();
         ArcadeGameEntry {
             title: title.into(),
             mra_path: mra_path.into(),
-            image_path: image_path.into(),
-            has_image: true,
+            preview_archive_path: if has_preview {
+                "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into()
+            } else {
+                "".into()
+            },
+            preview_asset_key: preview_asset_key.into(),
+            has_preview,
             system_id: system_id.into(),
         }
     }
@@ -301,36 +305,41 @@ mod tests {
             ArcadeGameEntry {
                 title: "1941: Counter Attack (Japan)".into(),
                 mra_path: "/media/fat/_Arcade/1941 Japan.mra".into(),
-                image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
-                has_image: true,
+                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_asset_key: "1941u".into(),
+                has_preview: true,
                 system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "1941: Counter Attack (World)".into(),
                 mra_path: "/media/fat/_Arcade/1941 World.mra".into(),
-                image_path: "/media/fat/_Arcade/media/screenshot/1941u.png".into(),
-                has_image: true,
+                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_asset_key: "1941u".into(),
+                has_preview: true,
                 system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "1942".into(),
                 mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "1943".into(),
                 mra_path: "/media/fat/_Arcade/1943.mra".into(),
-                image_path: "/media/fat/_Arcade/media/screenshot/1943.png".into(),
-                has_image: true,
+                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_asset_key: "1943".into(),
+                has_preview: true,
                 system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "Astra SuperStars".into(),
                 mra_path: "/media/fat/_Arcade/Astra SuperStars.mra".into(),
-                image_path: "/media/fat/_Arcade/media/screenshot/astrass.jpg".into(),
-                has_image: true,
+                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_asset_key: "astrass".into(),
+                has_preview: true,
                 system_id: "arcade".into(),
             },
         ];
@@ -351,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn system_game_count_includes_games_without_preview_images() {
+    fn system_game_count_includes_games_without_preview_assets() {
         let root = PathBuf::from("/media/fat/_Arcade");
         let systems = vec![GameSystemEntry {
             id: "amiga".into(),
@@ -361,8 +370,9 @@ mod tests {
         let games = vec![ArcadeGameEntry {
             title: "Agony".into(),
             mra_path: "magik-plan:amiga-agony".into(),
-            image_path: "".into(),
-            has_image: false,
+            preview_archive_path: "".into(),
+            preview_asset_key: "".into(),
+            has_preview: false,
             system_id: "amiga".into(),
         }];
         let catalog = ArcadeCatalog::new(root, games, systems);
@@ -379,8 +389,9 @@ mod tests {
             vec![ArcadeGameEntry {
                 title: "1942".into(),
                 mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                image_path: "/media/fat/_Arcade/media/screenshot/1942.png".into(),
-                has_image: true,
+                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_asset_key: "1942".into(),
+                has_preview: true,
                 system_id: "arcade".into(),
             }],
             vec![GameSystemEntry {
@@ -407,17 +418,17 @@ mod tests {
             game(
                 "Puzzle Star (World)",
                 "/games/puzzle-world.mra",
-                "/media/puzzle-world.jpeg",
+                "puzzle-world",
                 "arcade",
             ),
-            game("Puzzle Star", "/games/puzzle.mra", "/media/puzzle.png", "arcade"),
+            game("Puzzle Star", "/games/puzzle.mra", "puzzle", "arcade"),
             game(
                 "Space   Duel Alpha",
                 "/games/space-extended.mra",
-                "/media/space-extended.jpg",
+                "space-extended",
                 "arcade",
             ),
-            game("Space Duel Alpha", "/games/space.mra", "/media/space.png", "arcade"),
+            game("Space Duel Alpha", "/games/space.mra", "space", "arcade"),
         ];
 
         let previews = preview_games(games.iter());
@@ -432,10 +443,10 @@ mod tests {
     }
 
     #[test]
-    fn preview_games_ignore_unsupported_image_extensions() {
+    fn preview_games_require_preview_archive_and_asset_key() {
         let games = [
-            game("Still Image", "/games/still.mra", "/media/still.gif", "arcade"),
-            game("Photo", "/games/photo.mra", "/media/photo.JPEG", "arcade"),
+            game("Still Image", "/games/still.mra", "", "arcade"),
+            game("Photo", "/games/photo.mra", "photo", "arcade"),
         ];
 
         let previews = preview_games(games.iter());
@@ -450,29 +461,33 @@ mod tests {
             ArcadeGameEntry {
                 title: "Unknown Thing".into(),
                 mra_path: "/media/fat/_Arcade/Unknown.mra".into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "unknown".into(),
             },
             ArcadeGameEntry {
                 title: "Sonic".into(),
                 mra_path: "/media/fat/games/MegaDrive/Sonic.md".into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "megadrive".into(),
             },
             ArcadeGameEntry {
                 title: "1942".into(),
                 mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "arcade".into(),
             },
             ArcadeGameEntry {
                 title: "Another Sonic".into(),
                 mra_path: "/media/fat/games/MegaDrive/Another Sonic.md".into(),
-                image_path: "".into(),
-                has_image: false,
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
                 system_id: "megadrive".into(),
             },
         ];
