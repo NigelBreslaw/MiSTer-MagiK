@@ -1,5 +1,28 @@
 use std::env;
 
+#[cfg(any(target_os = "linux", test))]
+use std::io;
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
+    let mut mac = [0u8; 6];
+    let mut parts = text.trim().split(':');
+    for byte in &mut mac {
+        let part = parts.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "too few MAC bytes")
+        })?;
+        *byte = u8::from_str_radix(part, 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad MAC byte"))?;
+    }
+    if parts.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "too many MAC bytes",
+        ));
+    }
+    Ok(mac)
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use libc::{
@@ -1247,18 +1270,7 @@ mod linux {
 
     fn read_mac(path: &str) -> io::Result<[u8; 6]> {
         let text = fs::read_to_string(Path::new(path))?;
-        let mut mac = [0u8; 6];
-        for (i, part) in text.trim().split(':').enumerate() {
-            if i >= 6 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "too many MAC bytes",
-                ));
-            }
-            mac[i] = u8::from_str_radix(part, 16)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad MAC byte"))?;
-        }
-        Ok(mac)
+        super::parse_mac_text(&text)
     }
 
     fn new_ifreq(iface: &str) -> io::Result<ifreq> {
@@ -1325,5 +1337,47 @@ fn main() {
     if let Err(err) = linux::run(&args) {
         eprintln!("{err}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mac_text_parser_accepts_exact_six_octets() {
+        assert_eq!(
+            parse_mac_text("aa:BB:01:23:45:ff\n").unwrap(),
+            [0xaa, 0xbb, 0x01, 0x23, 0x45, 0xff]
+        );
+    }
+
+    #[test]
+    fn mac_text_parser_rejects_wrong_octet_count_and_bad_hex() {
+        assert_eq!(
+            parse_mac_text("aa:bb:cc:dd:ee")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            parse_mac_text("aa:bb:cc:dd:ee:ff:00")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            parse_mac_text("aa:bb:cc:dd:ee:zz")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn non_linux_agent_reports_platform_error() {
+        let err = linux::run(&[]).unwrap_err().to_string();
+        assert!(err.contains("only run on Linux/MiSTer"));
     }
 }
