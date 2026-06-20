@@ -16,7 +16,13 @@ from pathlib import Path
 
 
 FLOAT_COLUMNS = {"visual_index", "transition_progress"}
-STRING_COLUMNS = {"update", "arcade_update", "cache_state", "transition_effect"}
+STRING_COLUMNS = {
+    "update",
+    "arcade_update",
+    "cache_state",
+    "transition_effect",
+    "vsync_source",
+}
 PHASES = [
     "prepare_us",
     "slint_render_us",

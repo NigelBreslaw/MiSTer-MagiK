@@ -44,11 +44,60 @@ type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 type MachineMetadataRow = (String, String, Option<String>, Option<String>);
 type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
-const SCHEMA_VERSION: u32 = 25;
+const SCHEMA_VERSION: u32 = 27;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
+const ARCADE_PARENT_OVERRIDES: &[(&str, &str)] = &[
+    ("dimahoo-1", "dimahoo"),
+    ("dimahoo-2", "dimahoo"),
+    ("dimahoo-3", "dimahoo"),
+    ("esprade-fp", "esprade"),
+    ("espradej-fp", "esprade"),
+    ("ffightae-cps2", "ffightae"),
+    ("msh-1", "msh"),
+    ("msh-2", "msh"),
+    ("mshvsf-1", "mshvsf"),
+    ("mshvsf-2", "mshvsf"),
+    ("mvsc-1", "mvsc"),
+    ("mvsc-2", "mvsc"),
+    ("mvsc-3", "mvsc"),
+    ("mvsc-4", "mvsc"),
+    ("progear-1", "progear"),
+    ("progear-2", "progear"),
+    ("progear-3", "progear"),
+    ("sfa2-1", "sfa2"),
+    ("sfa2-2", "sfa2"),
+    ("sfa3-1", "sfa3"),
+    ("sfa3-2", "sfa3"),
+    ("sf2ceaimedb", "sf2ce"),
+    ("sf2ceaimedf", "sf2ce"),
+    ("sf2cebfire", "sf2ce"),
+    ("sf2cebih", "sf2ce"),
+    ("sf2cebof", "sf2ce"),
+    ("sf2cefires", "sf2ce"),
+    ("sf2ces15", "sf2ce"),
+    ("sf2ces17", "sf2ce"),
+    ("sf2ces21", "sf2ce"),
+    ("sf2ces22", "sf2ce"),
+    ("sf2ces23", "sf2ce"),
+    ("sf2cevampiric", "sf2ce"),
+    ("sfz2al-1", "sfz2al"),
+    ("sfz2al-2", "sfz2al"),
+    ("sfz2al-3", "sfz2al"),
+    ("hsf2j1gouki", "hsf2"),
+    ("hsf2j1tgouki", "hsf2"),
+    ("ssf2t-3", "ssf2t"),
+    ("ssf2t-4", "ssf2t"),
+    ("ssf2t-5", "ssf2t"),
+    ("strider-fix", "strider"),
+    ("vsav-4", "vsav"),
+    ("vsav-5", "vsav"),
+    ("wofch-1", "wofch"),
+    ("xmcota-1", "xmcota"),
+    ("xmcota-2", "xmcota"),
+];
 const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
     CollectionListing {
         entry_path: "listings/games.txt",
@@ -1384,7 +1433,8 @@ fn catalog_family_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-        let (family_id, _, _, _, _) = mame_identity_projection(&identity_id, arcade_metadata);
+        let (family_id, _, _, _, _) =
+            mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
         let parent = if family_id == identity_id {
             String::new()
         } else {
@@ -3254,6 +3304,7 @@ fn parse_hex_u32(value: &str) -> Option<u32> {
 fn mame_identity_projection<'a>(
     identity_id: &str,
     metadata: &'a ArcadeMachineMetadata,
+    mra_parent: Option<&str>,
 ) -> (
     String,
     Option<&'a str>,
@@ -3289,9 +3340,34 @@ fn mame_identity_projection<'a>(
             machine.manufacturer.as_deref(),
             "hbmame",
         )
+    } else if let Some(family_id) = normalized_parent_family(mra_parent, identity_id) {
+        (family_id, None, None, None, "mra-parent")
+    } else if let Some(parent) = arcade_parent_override(identity_id) {
+        (
+            parent.to_string(),
+            None,
+            None,
+            None,
+            "arcade-parent-override",
+        )
     } else {
         (identity_id.to_string(), None, None, None, "setname")
     }
+}
+
+fn normalized_parent_family(parent: Option<&str>, identity_id: &str) -> Option<String> {
+    let parent_id = normalize_id(parent?.trim());
+    if parent_id.is_empty() || parent_id == identity_id {
+        None
+    } else {
+        Some(parent_id)
+    }
+}
+
+fn arcade_parent_override(identity_id: &str) -> Option<&'static str> {
+    ARCADE_PARENT_OVERRIDES
+        .iter()
+        .find_map(|(alias, parent)| (*alias == identity_id).then_some(*parent))
 }
 
 fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
@@ -3554,6 +3630,7 @@ fn preview_asset_entry_identity(
         .get(&identity_id)
         .and_then(|machine| machine.parent_setname.as_deref())
         .filter(|parent| !parent.trim().is_empty())
+        .or_else(|| arcade_parent_override(&identity_id))
         .unwrap_or(identity_id.as_str())
         .to_string();
     Some((identity_id.clone(), "mame", identity_id, family_id))
@@ -4500,8 +4577,11 @@ fn write_sqlite_scan_with_sources(
                 ])
                 .map_err(|e| format!("insert launchable: {e}"))?;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-                let (family_id, title, year, manufacturer, source) =
-                    mame_identity_projection(&identity_id, &arcade_metadata);
+                let (family_id, title, year, manufacturer, source) = mame_identity_projection(
+                    &identity_id,
+                    &arcade_metadata,
+                    discovery.parent.as_deref(),
+                );
                 identity_stmt
                     .execute(params![
                         key.as_str(),
@@ -6797,6 +6877,260 @@ mod tests {
             .expect("query hbmame row");
         assert_eq!(row.0, "bombjack");
         assert_eq!(row.1, "Bomb Jack");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn arcade_parent_override_collapses_mvsc_unlocked_variants() {
+        let root = unique_temp_dir("arcade-parent-override-mvsc");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[(
+                "mvsc",
+                None,
+                "Marvel Vs. Capcom: Clash of Super Heroes (Europe 980123)",
+                Some("1998"),
+                Some("Capcom"),
+            )],
+        );
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root.join("arcade-screenshots.mmlz4b").display().to_string(),
+            codec: "lz4-block",
+            entries: vec!["mvsc".to_string()],
+        };
+        let mut parent = mra_discovery(1, "Marvel Vs. Capcom: Clash of Super Heroes");
+        parent.setname = Some("mvsc".to_string());
+        let mut variants = (1..=4)
+            .map(|idx| {
+                let mut discovery = mra_discovery(
+                    idx + 1,
+                    &format!("Marvel Vs. Capcom: Clash of Super Heroes [Unlocked {idx}]"),
+                );
+                discovery.setname = Some(format!("mvsc_{idx}"));
+                discovery.source_path = format!(
+                    "/media/fat/_Arcade/_Arcade Offset/_CP System II/_Unlocked/mvsc_{idx}.mra"
+                );
+                discovery.launch_ref = discovery.source_path.clone();
+                discovery
+            })
+            .collect::<Vec<_>>();
+        let mut discoveries = vec![parent];
+        discoveries.append(&mut variants);
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(discoveries),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let preferred_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_preferred WHERE family_id='mvsc'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query preferred mvsc count");
+        let variant_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants WHERE family_id='mvsc'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query mvsc variant count");
+        let override_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launchable_identities
+                 WHERE family_id='mvsc' AND source='arcade-parent-override'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query override identity count");
+        let missing_image_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants
+                 WHERE family_id='mvsc' AND has_image=0",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query mvsc missing images");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(preferred_count, 1);
+        assert_eq!(variant_count, 5);
+        assert_eq!(override_count, 4);
+        assert_eq!(missing_image_count, 0);
+        assert_eq!(loaded.catalog.system_game_count("arcade"), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn arcade_parent_override_collapses_street_fighter_offset_variants() {
+        let root = unique_temp_dir("arcade-parent-override-street-fighter");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                (
+                    "hsf2",
+                    None,
+                    "Hyper Street Fighter II: The Anniversary Edition (USA 040202)",
+                    Some("2004"),
+                    Some("Capcom"),
+                ),
+                (
+                    "sf2ce",
+                    None,
+                    "Street Fighter II': Champion Edition (World 920513)",
+                    Some("1992"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root.join("arcade-screenshots.mmlz4b").display().to_string(),
+            codec: "lz4-block",
+            entries: vec!["hsf2".to_string(), "sf2ce".to_string()],
+        };
+        let mut hsf2 = mra_discovery(1, "Hyper Street Fighter II");
+        hsf2.setname = Some("hsf2".to_string());
+        let mut sf2ce = mra_discovery(2, "Street Fighter II': Champion Edition");
+        sf2ce.setname = Some("sf2ce".to_string());
+        let aliases = [
+            ("hsf2j1gouki", "hsf2"),
+            ("hsf2j1tgouki", "hsf2"),
+            ("sf2ceaimedb", "sf2ce"),
+            ("sf2ceaimedf", "sf2ce"),
+            ("sf2cebfire", "sf2ce"),
+            ("sf2cebih", "sf2ce"),
+            ("sf2cebof", "sf2ce"),
+            ("sf2cefires", "sf2ce"),
+            ("sf2ces15", "sf2ce"),
+            ("sf2ces17", "sf2ce"),
+            ("sf2ces21", "sf2ce"),
+            ("sf2ces22", "sf2ce"),
+            ("sf2ces23", "sf2ce"),
+            ("sf2cevampiric", "sf2ce"),
+        ];
+        let mut discoveries = vec![hsf2, sf2ce];
+        discoveries.extend(aliases.iter().enumerate().map(|(idx, (alias, _))| {
+            let mut discovery =
+                mra_discovery(idx + 3, &format!("Street Fighter offset variant {alias}"));
+            discovery.setname = Some((*alias).to_string());
+            discovery.source_path = format!("/media/fat/_Arcade/_Arcade Offset/{alias}.mra");
+            discovery.launch_ref = discovery.source_path.clone();
+            discovery
+        }));
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(discoveries),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let preferred_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
+                row.get(0)
+            })
+            .expect("query preferred count");
+        let override_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launchable_identities
+                 WHERE source='arcade-parent-override'
+                   AND family_id IN ('hsf2','sf2ce')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query override identity count");
+        let hsf2_variants: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants
+                 WHERE family_id='hsf2' AND has_image=1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query hsf2 variants");
+        let sf2ce_variants: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants
+                 WHERE family_id='sf2ce' AND has_image=1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query sf2ce variants");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(preferred_count, 2);
+        assert_eq!(override_count, aliases.len() as i64);
+        assert_eq!(hsf2_variants, 3);
+        assert_eq!(sf2ce_variants, 13);
+        assert_eq!(loaded.catalog.system_game_count("arcade"), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn arcade_mra_parent_tag_collapses_unknown_metadata_variants() {
+        let root = unique_temp_dir("arcade-mra-parent-fallback");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(&mame_db, &[]);
+        let mut parent = mra_discovery(1, "Mystery Parent");
+        parent.setname = Some("mystery".to_string());
+        let mut clone = mra_discovery(2, "Mystery Parent [Hack]");
+        clone.setname = Some("mystery_hack".to_string());
+        clone.parent = Some("mystery".to_string());
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![parent, clone]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let clone_identity = conn
+            .query_row(
+                "SELECT identity_id,family_id,source
+                 FROM launchable_identities
+                 WHERE identity_id='mystery-hack'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("query clone identity");
+        let preferred_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
+                row.get(0)
+            })
+            .expect("query preferred count");
+        let variant_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants WHERE family_id='mystery'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query variant count");
+
+        assert_eq!(clone_identity.0, "mystery-hack");
+        assert_eq!(clone_identity.1, "mystery");
+        assert_eq!(clone_identity.2, "mra-parent");
+        assert_eq!(preferred_count, 1);
+        assert_eq!(variant_count, 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
