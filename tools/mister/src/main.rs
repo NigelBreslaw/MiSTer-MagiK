@@ -245,7 +245,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to /sbin/reboot for Ethernet reliability; pass --supervised for MagiK visual-lockdown reset validation"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
     );
 }
 
@@ -265,7 +265,7 @@ fn take_reboot_raw_flag(args: &mut Vec<String>) -> Result<bool> {
     if raw && supervised {
         Err("use only one of --raw or --supervised".into())
     } else {
-        Ok(!supervised)
+        Ok(raw)
     }
 }
 
@@ -275,7 +275,7 @@ fn reboot_raw_from_args(args: &[String]) -> Result<bool> {
     if raw && supervised {
         Err("use only one of --raw or --supervised".into())
     } else {
-        Ok(!supervised)
+        Ok(raw)
     }
 }
 
@@ -2137,7 +2137,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--supervised]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--supervised]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw] [--fail-on-timeout]"
     );
 }
 
@@ -2589,6 +2589,7 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
     let _ = agent_token()?;
     let samples = parse_profile_count(args, 1);
     let raw = reboot_raw_from_args(args)?;
+    let fail_on_timeout = args.iter().any(|arg| arg == "--fail-on-timeout");
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(40.0);
@@ -2602,6 +2603,13 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
     let out_path = "history/toolchain-bench/results-agent.tsv";
     let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tagent_ready_ms\tssh_exec_ready_ms\tagent_first_hostdown_ms\tagent_first_noroute_ms\tagent_first_timeout_ms\tagent_first_refused_ms\tagent_first_other_ms\tagent_ok_count\tagent_hostdown_count\tagent_noroute_count\tagent_timeout_count\tagent_refused_count\tagent_other_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tagent_uptime_ms\tssh_uptime\tagent_transitions\tnote";
     println!("{header}");
+
+    let mut recovered = 0usize;
+    let mut worst_agent_ready_ms: Option<u128> = None;
+    let mut worst_ssh_ready_ms: Option<u128> = None;
+    let mut total_noroute = 0u64;
+    let mut total_timeout = 0u64;
+    let mut total_refused = 0u64;
 
     for sample in 1..=samples {
         let ts = unix_ms_now();
@@ -2633,6 +2641,8 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
         let mut auth_ms = None;
         let mut exec_ms = None;
         let mut ssh_uptime = String::new();
+        let mut main_status_ms = None;
+        let mut launcher_state = String::new();
         let mut note = reboot_note;
 
         while start.elapsed().as_secs_f64() < timeout_secs {
@@ -2674,6 +2684,28 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
                                 .next()
                                 .unwrap_or("")
                                 .to_string();
+
+                            let status_deadline = Instant::now() + Duration::from_secs(20);
+                            while Instant::now() < status_deadline
+                                && start.elapsed().as_secs_f64() < timeout_secs
+                            {
+                                if let Some(text) =
+                                    remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
+                                {
+                                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                                        main_status_ms = Some(start.elapsed().as_millis());
+                                        launcher_state = value
+                                            .get("launcher_state")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string();
+                                        if launcher_state == "LauncherActive" {
+                                            break;
+                                        }
+                                    }
+                                }
+                                thread::sleep(Duration::from_millis(250));
+                            }
                         } else {
                             note = format!("exec rc {}", out.rc);
                         }
@@ -2684,13 +2716,26 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
                 }
             }
 
-            if agent_ready_ms.is_some() && ssh_ready_ms.is_some() {
+            if agent_ready_ms.is_some()
+                && ssh_ready_ms.is_some()
+                && launcher_state == "LauncherActive"
+            {
                 break;
             }
             thread::sleep(Duration::from_millis(sleep_ms));
         }
 
         let transitions = agent_stats.transitions.join(",");
+        let note = format!(
+            "{} main_status_ms={} launcher_state={}",
+            note,
+            opt_ms(main_status_ms),
+            if launcher_state.is_empty() {
+                "missing"
+            } else {
+                &launcher_state
+            }
+        );
         let row = format!(
             "agent-boot\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{agent_uptime_ms}\t{ssh_uptime}\t{}\t{}",
             host(),
@@ -2718,9 +2763,46 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
         );
         println!("{row}");
         append_profile_row(out_path, header, &row)?;
+
+        total_noroute += agent_stats.noroute_count;
+        total_timeout += agent_stats.timeout_count;
+        total_refused += agent_stats.refused_count;
+        if let Some(ms) = agent_ready_ms {
+            worst_agent_ready_ms = Some(worst_agent_ready_ms.map_or(ms, |old| old.max(ms)));
+        }
+        if let Some(ms) = ssh_ready_ms {
+            worst_ssh_ready_ms = Some(worst_ssh_ready_ms.map_or(ms, |old| old.max(ms)));
+        }
+
+        let sample_recovered = down_ms.is_some()
+            && agent_ready_ms.is_some()
+            && ssh_ready_ms.is_some()
+            && launcher_state == "LauncherActive";
+        if sample_recovered {
+            recovered += 1;
+        } else if fail_on_timeout {
+            return Err(format!(
+                "agent boot-profile sample {sample}/{samples} failed mode={mode}: down_ms={} agent_ready_ms={} ssh_exec_ready_ms={} main_status_ms={} launcher_state={} note={}",
+                opt_ms(down_ms),
+                opt_ms(agent_ready_ms),
+                opt_ms(ssh_ready_ms),
+                opt_ms(main_status_ms),
+                if launcher_state.is_empty() { "missing" } else { &launcher_state },
+                note
+            )
+            .into());
+        }
         thread::sleep(Duration::from_secs(2));
     }
 
+    eprintln!(
+        "agent boot-profile: {recovered}/{samples} {mode} reboots recovered; worst_agent_ready_ms={} worst_ssh_ready_ms={} noroute={} timeout={} refused={}",
+        opt_ms(worst_agent_ready_ms),
+        opt_ms(worst_ssh_ready_ms),
+        total_noroute,
+        total_timeout,
+        total_refused
+    );
     eprintln!("agent boot-profile: appended {samples} row(s) to {out_path}");
     Ok(())
 }
@@ -4856,12 +4938,12 @@ video_mode=14
     }
 
     #[test]
-    fn reboot_defaults_to_raw_and_supervised_flag_is_removed_before_timeout_parse() {
-        let mut args = vec!["--supervised".to_string(), "180".to_string()];
+    fn reboot_defaults_to_supervised_and_raw_flag_is_removed_before_timeout_parse() {
+        let mut args = vec!["--raw".to_string(), "180".to_string()];
 
-        assert!(!take_reboot_raw_flag(&mut args).unwrap());
-        assert_eq!(args, vec!["180"]);
         assert!(take_reboot_raw_flag(&mut args).unwrap());
+        assert_eq!(args, vec!["180"]);
+        assert!(!take_reboot_raw_flag(&mut args).unwrap());
     }
 
     #[test]

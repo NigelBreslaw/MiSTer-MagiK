@@ -647,14 +647,14 @@ pub(super) fn run_launcher_loop(
                                 }
                             }
                             LauncherAction::ResetDatabase => {
-                                loading_title = "Resetting database…".to_string();
+                                loading_title = "Shutting down…".to_string();
                                 sync_bridge_launcher(
                                     &app,
                                     &pad,
                                     &nav,
                                     &setup,
                                     &loading_title,
-                                    "Rebooting MiSTer",
+                                    "Restarting MiSTer",
                                     Some(&catalog),
                                     &mut preview,
                                     &mut bridge_models,
@@ -669,6 +669,7 @@ pub(super) fn run_launcher_loop(
                                 });
                                 let _pace = pacer.wait();
                                 target.present_rows(f, disp, ui, 0, ui.render_h());
+                                std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
                                     Err(e) => {
@@ -678,14 +679,14 @@ pub(super) fn run_launcher_loop(
                                 }
                             }
                             LauncherAction::Restart => {
-                                loading_title = "Restarting MiSTer…".to_string();
+                                loading_title = "Shutting down…".to_string();
                                 sync_bridge_launcher(
                                     &app,
                                     &pad,
                                     &nav,
                                     &setup,
                                     &loading_title,
-                                    "Please wait",
+                                    "Restarting MiSTer",
                                     Some(&catalog),
                                     &mut preview,
                                     &mut bridge_models,
@@ -700,6 +701,7 @@ pub(super) fn run_launcher_loop(
                                 });
                                 let _pace = pacer.wait();
                                 target.present_rows(f, disp, ui, 0, ui.render_h());
+                                std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
                                     Err(e) => {

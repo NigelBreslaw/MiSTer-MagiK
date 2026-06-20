@@ -15,20 +15,31 @@ DEPLOY=0
 ALLOW_RESET_CATALOG=0
 FAST=0
 SOAK=0
+TIER_SPEC=""
+TIERS_EXPLICIT=0
+PRESET="release"
+SELECTED_TIERS=""
+SKIPPED_TIERS=""
 SKIP_DISPLAY_MODES=0
 SKIP_INSTALL_RESTORE=0
 SKIP_FIRST_BOOT_RESET=0
 SOAK_SECS="${MISTER_ACCEPTANCE_SOAK_SECS:-3600}"
+ALL_TIERS="health framebuffer-route launcher-lifecycle catalog handoff display-modes install-restore soak"
+DEFAULT_TIERS="health framebuffer-route launcher-lifecycle catalog handoff display-modes install-restore"
+FAST_TIERS="health framebuffer-route launcher-lifecycle catalog handoff"
 
 usage() {
   cat <<'EOF'
-usage: scripts/device-release-acceptance.sh [--skip-deploy|--deploy] [--allow-reset-catalog] [--fast] [--soak] [--skip-display-modes] [--skip-install-restore] [--skip-first-boot-reset]
+usage: scripts/device-release-acceptance.sh [--skip-deploy|--deploy] [--tiers LIST] [--allow-reset-catalog] [--fast] [--soak] [--skip-display-modes] [--skip-install-restore] [--skip-first-boot-reset]
 
 Runs the MiSTer hardware acceptance gate through scripts/mister only.
 
 Options:
   --skip-deploy          Test the currently deployed device build. This is the default.
   --deploy               Build and deploy app + Main_MiSTer fork before testing.
+  --tiers LIST           Run selected comma-separated tiers in canonical order.
+                         Tiers: health, framebuffer-route, launcher-lifecycle,
+                         catalog, handoff, display-modes, install-restore, soak.
   --allow-reset-catalog  Include destructive first-boot catalog recovery checks.
                          The existing library.sqlite3 is backed up first.
   --fast                 Run quick non-destructive checks only.
@@ -43,10 +54,102 @@ Environment:
 EOF
 }
 
-for arg in "$@"; do
-  case "$arg" in
+die_usage() {
+  echo "ERROR: $*" >&2
+  usage >&2
+  exit 2
+}
+
+is_known_tier() {
+  case "$1" in
+    health|framebuffer-route|launcher-lifecycle|catalog|handoff|display-modes|install-restore|soak)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+append_unique_tier() {
+  local tier="$1"
+  case " $SELECTED_TIERS " in
+    *" $tier "*) ;;
+    *) SELECTED_TIERS="${SELECTED_TIERS:+$SELECTED_TIERS }$tier" ;;
+  esac
+}
+
+tier_selected() {
+  case " $SELECTED_TIERS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_tier_spec() {
+  local spec="$1" tier
+  spec="${spec// /}"
+  [ -n "$spec" ] || die_usage "--tiers requires at least one tier"
+  IFS=, read -r -a requested_tiers <<< "$spec"
+  SELECTED_TIERS=""
+  for tier in "${requested_tiers[@]}"; do
+    [ -n "$tier" ] || die_usage "--tiers contains an empty tier"
+    is_known_tier "$tier" || die_usage "unknown tier: $tier"
+  done
+  for tier in $ALL_TIERS; do
+    case ",$spec," in
+      *",$tier,"*) append_unique_tier "$tier" ;;
+    esac
+  done
+}
+
+resolve_tiers() {
+  if [ "$FAST" -eq 1 ] && [ "$TIERS_EXPLICIT" -eq 1 ]; then
+    die_usage "--fast cannot be combined with --tiers"
+  fi
+
+  if [ "$TIERS_EXPLICIT" -eq 1 ]; then
+    PRESET="custom"
+    parse_tier_spec "$TIER_SPEC"
+  elif [ "$FAST" -eq 1 ]; then
+    PRESET="fast"
+    SELECTED_TIERS="$FAST_TIERS"
+  else
+    PRESET="release"
+    SELECTED_TIERS="$DEFAULT_TIERS"
+  fi
+
+  if tier_selected "soak"; then
+    SOAK=1
+  fi
+
+  if [ "$SOAK" -eq 1 ]; then
+    append_unique_tier "soak"
+    PRESET="$PRESET+soak"
+  fi
+
+  SKIPPED_TIERS=""
+  for tier in $ALL_TIERS; do
+    if ! tier_selected "$tier"; then
+      SKIPPED_TIERS="${SKIPPED_TIERS:+$SKIPPED_TIERS }$tier"
+    fi
+  done
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --skip-deploy) DEPLOY=0 ;;
     --deploy) DEPLOY=1 ;;
+    --tiers)
+      shift
+      [ "$#" -gt 0 ] || die_usage "--tiers requires a comma-separated list"
+      TIER_SPEC="$1"
+      TIERS_EXPLICIT=1
+      ;;
+    --tiers=*)
+      TIER_SPEC="${1#--tiers=}"
+      TIERS_EXPLICIT=1
+      ;;
     --allow-reset-catalog) ALLOW_RESET_CATALOG=1 ;;
     --fast) FAST=1 ;;
     --soak) SOAK=1 ;;
@@ -58,12 +161,13 @@ for arg in "$@"; do
       exit 0
       ;;
     *)
-      echo "ERROR: unknown argument: $arg" >&2
-      usage >&2
-      exit 2
+      die_usage "unknown argument: $1"
       ;;
   esac
+  shift
 done
+
+resolve_tiers
 
 mkdir -p "$OUT"
 REPORT="$OUT/report.md"
@@ -606,6 +710,237 @@ run_soak() {
   done
 }
 
+write_report_header() {
+  cat > "$REPORT" <<EOF
+# MiSTer MagiK Device Release Acceptance
+
+- started: $STAMP
+- launch_ref: $LAUNCH_REF
+- deploy: $DEPLOY
+- preset: $PRESET
+- selected_tiers: $SELECTED_TIERS
+- skipped_tiers: ${SKIPPED_TIERS:-none}
+- allow_reset_catalog: $ALLOW_RESET_CATALOG
+- fast: $FAST
+- soak: $SOAK
+- soak_secs: $SOAK_SECS
+- skip_display_modes: $SKIP_DISPLAY_MODES
+- skip_install_restore: $SKIP_INSTALL_RESTORE
+- skip_first_boot_reset: $SKIP_FIRST_BOOT_RESET
+- artifact_dir: $OUT
+EOF
+}
+
+run_deploy_if_requested() {
+  if [ "$DEPLOY" -eq 1 ]; then
+    run_required_capture "deploy-main-mister-experiment" "$ROOT/scripts/deploy-main-mister-experiment.sh"
+    run_required_capture "raw-reboot-after-deploy" "$MISTER" reboot-wait --raw
+  fi
+}
+
+run_initial_gate() {
+  run_required_capture "wait-device" "$MISTER" wait 120
+  wait_for_launcher_active "wait-launcher-initial" 90 || exit 1
+  run_capture "initial-status" "$MISTER" status
+  run_capture "initial-doctor" "$MISTER" doctor
+  status_json "initial" || {
+    record_fail "initial status JSON"
+    exit 1
+  }
+  doctor_json "initial" || {
+    record_fail "initial doctor JSON"
+    exit 1
+  }
+}
+
+run_tier_health() {
+  assert_status "$OUT/doctor-initial.json" "doctor has no error findings" \
+    "all(item[0] != 'error' for item in data.get('findings', []))"
+  assert_status "$OUT/status-initial.json" "boot main handoff is MiSTer_MagiK" \
+    "data['boot']['ini_keys']['MiSTer']['main']['value'] == 'MiSTer_MagiK'"
+  assert_status "$OUT/status-initial.json" "Main status is launcher active" \
+    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and data['runtime']['main_status'].get('launcher_active') is True and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0"
+  assert_status "$OUT/status-initial.json" "Main invariant count is zero" \
+    "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
+  assert_status "$OUT/status-initial.json" "Slint launcher status is alive" \
+    "data['runtime']['slint_status'].get('scene') == 'launcher' and int(data['runtime']['slint_status'].get('frames', 0)) > 0"
+
+  launcher_count="$(remote "ps w | grep '[m]ister-magik-fb ui launcher' | wc -l" | last_number || true)"
+  assert_eq "launcher process count" "1" "$launcher_count"
+
+  if remote "test -f '$LAUNCH_REF'"; then
+    record_ok "launch smoke target exists"
+  else
+    record_fail "launch smoke target missing: $LAUNCH_REF"
+  fi
+
+  run_preview_render_acceptance || true
+  run_velocity_scroll_acceptance || true
+  run_controller_acceptance || true
+  run_audio_probe || true
+}
+
+run_tier_framebuffer_route() {
+  assert_status "$OUT/status-initial.json" "active VT is tty2" \
+    "data['display']['active_vt'] == 'tty2'"
+  assert_status "$OUT/status-initial.json" "framebuffer is RGB565 launcher mode" \
+    "str(data['display']['fb_mode']).startswith('565 ')"
+
+  run_framebuffer_route_recovery || true
+}
+
+run_tier_catalog() {
+  assert_status "$OUT/status-initial.json" "catalog is ready with games" \
+    "data['runtime']['slint_status'].get('catalog_ready') is True and int(data['runtime']['slint_status'].get('catalog_games', 0)) > 0"
+
+  refresh_count="$(remote "ps w | grep '[m]ister-magik-fb library-refresh' | wc -l" | last_number || true)"
+  assert_eq "active library-refresh count" "0" "$refresh_count"
+
+  if remote "test -s '$REMOTE_DB'"; then
+    record_ok "$REMOTE_DB is present and non-empty"
+  else
+    record_fail "$REMOTE_DB is missing or empty"
+  fi
+
+  launcher_catalog_tables="$("$MISTER" db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';" | last_number || true)"
+  assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
+
+  console_pack_count="$(remote "ls '$REMOTE_ASSETS'/nes-screenshots.mmlz4b '$REMOTE_ASSETS'/snes-screenshots.mmlz4b '$REMOTE_ASSETS'/n64-screenshots.mmlz4b '$REMOTE_ASSETS'/sms-screenshots.mmlz4b '$REMOTE_ASSETS'/megadrive-screenshots.mmlz4b '$REMOTE_ASSETS'/saturn-screenshots.mmlz4b 2>/dev/null | wc -l" | last_number || true)"
+  if [ "${console_pack_count:-0}" -gt 0 ]; then
+    canonical_assets="$("$MISTER" db "SELECT count(*) FROM asset_entries WHERE identity_namespace='mame-software';" | last_number || true)"
+    assert_gt_zero "canonical mame-software asset entries" "$canonical_assets"
+  else
+    record_ok "no console screenshot packs installed; canonical asset projection skipped"
+  fi
+
+  for platform in arcade neogeo saturn; do
+    if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
+      count="$("$MISTER" db "SELECT COALESCE(SUM(has_image),0) FROM launcher_catalog WHERE platform_id='$platform';" | last_number || true)"
+      assert_gt_zero "$platform has_image count" "$count"
+    fi
+  done
+
+  if [ "$FAST" -eq 0 ]; then
+    run_catalog_mutation_acceptance || true
+    run_first_boot_visible_scan || true
+  fi
+
+  if [ "$ALLOW_RESET_CATALOG" -eq 1 ]; then
+    BACKUP="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
+    remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$BACKUP'; fi; rm -f '$REMOTE_DB'; sync"
+    append_report ""
+    append_report "catalog backup: $BACKUP"
+    restart_launcher
+    wait_remote_event "catalog reset first frame" "first_frame" 60
+    status_json "catalog-reset" || record_fail "catalog reset status JSON"
+    assert_status "$OUT/status-catalog-reset.json" "catalog reset shows launcher instead of black boot" \
+      "data['runtime']['slint_status'].get('scene') == 'launcher'"
+    remote "if [ -f '$BACKUP' ]; then mv '$BACKUP' '$REMOTE_DB'; fi; sync"
+    restart_launcher
+  else
+    record_ok "destructive catalog reset skipped"
+  fi
+}
+
+run_supervised_reboot_soak() {
+  run_capture "supervised-reboot-soak-15" "$MISTER" agent boot-profile 15 --timeout 60 --fail-on-timeout
+  wait_for_launcher_active "wait-launcher-after-supervised-reboot-soak" 90 || return 1
+  status_json "post-reboot-soak" || record_fail "post reboot soak status JSON"
+  assert_status "$OUT/status-post-reboot-soak.json" "post-reboot soak launcher active" \
+    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
+}
+
+run_tier_launcher_lifecycle() {
+  write_arcade_bench_env_and_restart
+  status_json "arcade-restart" || record_fail "arcade restart status JSON"
+  assert_status "$OUT/status-arcade-restart.json" "supervised restart reaches Arcade screen" \
+    "data['runtime']['slint_status'].get('screen') == 'arcade'"
+  assert_status "$OUT/status-arcade-restart.json" "supervised restart keeps invariant count zero" \
+    "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
+
+  restart_launcher
+  status_json "normal-restart" || record_fail "normal restart status JSON"
+  assert_status "$OUT/status-normal-restart.json" "normal restart returns to launcher" \
+    "data['runtime']['slint_status'].get('scene') == 'launcher'"
+
+  run_crash_restart_smoke "crash-restart-gate" || true
+
+  run_capture "supervised-reboot" "$MISTER" reboot-wait
+  wait_for_launcher_active "wait-launcher-after-supervised-reboot" 90 || return 1
+  status_json "post-reboot" || record_fail "post-reboot status JSON"
+  assert_status "$OUT/status-post-reboot.json" "post-reboot launcher active" \
+    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
+  assert_status "$OUT/status-post-reboot.json" "post-reboot invariant count is zero" \
+    "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
+
+  if [ "$FAST" -eq 0 ]; then
+    run_supervised_reboot_soak || true
+    run_crash_restart_lite || true
+  fi
+}
+
+run_tier_handoff() {
+  remote "printf 'mister_magik_exit_to_menu\n' > /dev/MiSTer_cmd"
+  wait_status_expr "wait exit-to-menu handoff" 30 \
+    "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')" \
+    "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
+  status_json "exit-menu" || record_fail "exit-to-menu status JSON"
+  assert_status "$OUT/status-exit-menu.json" "exit-to-menu reaches stock-menu handoff state" \
+    "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')"
+  run_capture "raw-reboot-after-exit-menu" "$MISTER" reboot-wait --raw
+  wait_for_launcher_active "wait-launcher-after-exit-menu-reboot" 90 || return 1
+  status_json "post-exit-menu-reboot" || record_fail "post exit-menu reboot status JSON"
+  assert_status "$OUT/status-post-exit-menu-reboot.json" "launcher recovers after exit-to-menu smoke" \
+    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
+
+  remote "printf 'mister_magik_launch %s\n' '$LAUNCH_REF' > /dev/MiSTer_cmd"
+  wait_status_expr "wait game handoff" 45 \
+    "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured')" \
+    "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
+  status_json "handoff-game" || record_fail "handoff game status JSON"
+  assert_status "$OUT/status-handoff-game.json" "game handoff leaves active launcher state" \
+    "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured')"
+  run_capture "raw-reboot-after-game-handoff" "$MISTER" reboot-wait --raw
+  wait_for_launcher_active "wait-launcher-after-game-reboot" 90 || return 1
+  status_json "post-game-reboot" || record_fail "post game reboot status JSON"
+  assert_status "$OUT/status-post-game-reboot.json" "launcher recovers after game handoff smoke" \
+    "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
+
+  if [ "$FAST" -eq 0 ]; then
+    run_exit_menu_loop || true
+    run_launch_matrix || true
+  fi
+}
+
+run_tier_display_modes() {
+  run_display_mode_smoke || true
+}
+
+run_tier_install_restore() {
+  run_install_restore_roundtrip || true
+}
+
+run_tier_soak() {
+  run_soak || true
+}
+
+run_selected_tiers() {
+  local tier
+  for tier in $ALL_TIERS; do
+    tier_selected "$tier" || continue
+    case "$tier" in
+      health) run_tier_health ;;
+      framebuffer-route) run_tier_framebuffer_route ;;
+      launcher-lifecycle) run_tier_launcher_lifecycle || exit 1 ;;
+      catalog) run_tier_catalog ;;
+      handoff) run_tier_handoff || exit 1 ;;
+      display-modes) run_tier_display_modes ;;
+      install-restore) run_tier_install_restore ;;
+      soak) run_tier_soak ;;
+    esac
+  done
+}
+
 assert_artifacts_complete() {
   local missing=0 path
   for path in "$REPORT" "$OUT/status-final.json" "$OUT/doctor-final.json" "$OUT/slint-status.json" "$OUT/main-status.json"; do
@@ -661,175 +996,10 @@ finish() {
 
 trap finish EXIT
 
-cat > "$REPORT" <<EOF
-# MiSTer MagiK Device Release Acceptance
-
-- started: $STAMP
-- launch_ref: $LAUNCH_REF
-- deploy: $DEPLOY
-- allow_reset_catalog: $ALLOW_RESET_CATALOG
-- fast: $FAST
-- soak: $SOAK
-- soak_secs: $SOAK_SECS
-- skip_display_modes: $SKIP_DISPLAY_MODES
-- skip_install_restore: $SKIP_INSTALL_RESTORE
-- skip_first_boot_reset: $SKIP_FIRST_BOOT_RESET
-- artifact_dir: $OUT
-EOF
-
-if [ "$DEPLOY" -eq 1 ]; then
-  run_required_capture "deploy-main-mister-experiment" "$ROOT/scripts/deploy-main-mister-experiment.sh"
-  run_required_capture "raw-reboot-after-deploy" "$MISTER" reboot-wait --raw
-fi
-
-run_required_capture "wait-device" "$MISTER" wait 120
-wait_for_launcher_active "wait-launcher-initial" 90 || exit 1
-run_capture "initial-status" "$MISTER" status
-run_capture "initial-doctor" "$MISTER" doctor
-status_json "initial" || {
-  record_fail "initial status JSON"
-  exit 1
-}
-doctor_json "initial" || {
-  record_fail "initial doctor JSON"
-  exit 1
-}
-
-assert_status "$OUT/doctor-initial.json" "doctor has no error findings" \
-  "all(item[0] != 'error' for item in data.get('findings', []))"
-assert_status "$OUT/status-initial.json" "boot main handoff is MiSTer_MagiK" \
-  "data['boot']['ini_keys']['MiSTer']['main']['value'] == 'MiSTer_MagiK'"
-assert_status "$OUT/status-initial.json" "active VT is tty2" \
-  "data['display']['active_vt'] == 'tty2'"
-assert_status "$OUT/status-initial.json" "framebuffer is RGB565 launcher mode" \
-  "str(data['display']['fb_mode']).startswith('565 ')"
-assert_status "$OUT/status-initial.json" "Main status is launcher active" \
-  "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and data['runtime']['main_status'].get('launcher_active') is True and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0"
-assert_status "$OUT/status-initial.json" "Main invariant count is zero" \
-  "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
-assert_status "$OUT/status-initial.json" "Slint launcher status is alive" \
-  "data['runtime']['slint_status'].get('scene') == 'launcher' and int(data['runtime']['slint_status'].get('frames', 0)) > 0"
-assert_status "$OUT/status-initial.json" "catalog is ready with games" \
-  "data['runtime']['slint_status'].get('catalog_ready') is True and int(data['runtime']['slint_status'].get('catalog_games', 0)) > 0"
-
-launcher_count="$(remote "ps w | grep '[m]ister-magik-fb ui launcher' | wc -l" | last_number || true)"
-assert_eq "launcher process count" "1" "$launcher_count"
-
-refresh_count="$(remote "ps w | grep '[m]ister-magik-fb library-refresh' | wc -l" | last_number || true)"
-assert_eq "active library-refresh count" "0" "$refresh_count"
-
-if remote "test -s '$REMOTE_DB'"; then
-  record_ok "$REMOTE_DB is present and non-empty"
-else
-  record_fail "$REMOTE_DB is missing or empty"
-fi
-
-launcher_catalog_tables="$("$MISTER" db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';" | last_number || true)"
-assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
-
-console_pack_count="$(remote "ls '$REMOTE_ASSETS'/nes-screenshots.mmlz4b '$REMOTE_ASSETS'/snes-screenshots.mmlz4b '$REMOTE_ASSETS'/n64-screenshots.mmlz4b '$REMOTE_ASSETS'/sms-screenshots.mmlz4b '$REMOTE_ASSETS'/megadrive-screenshots.mmlz4b '$REMOTE_ASSETS'/saturn-screenshots.mmlz4b 2>/dev/null | wc -l" | last_number || true)"
-if [ "${console_pack_count:-0}" -gt 0 ]; then
-  canonical_assets="$("$MISTER" db "SELECT count(*) FROM asset_entries WHERE identity_namespace='mame-software';" | last_number || true)"
-  assert_gt_zero "canonical mame-software asset entries" "$canonical_assets"
-else
-  record_ok "no console screenshot packs installed; canonical asset projection skipped"
-fi
-
-for platform in arcade neogeo saturn; do
-  if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
-    count="$("$MISTER" db "SELECT COALESCE(SUM(has_image),0) FROM launcher_catalog WHERE platform_id='$platform';" | last_number || true)"
-    assert_gt_zero "$platform has_image count" "$count"
-  fi
-done
-
-if remote "test -f '$LAUNCH_REF'"; then
-  record_ok "launch smoke target exists"
-else
-  record_fail "launch smoke target missing: $LAUNCH_REF"
-fi
-
-run_framebuffer_route_recovery || true
-run_preview_render_acceptance || true
-run_velocity_scroll_acceptance || true
-run_controller_acceptance || true
-run_audio_probe || true
-if [ "$FAST" -eq 0 ]; then
-  run_catalog_mutation_acceptance || true
-  run_first_boot_visible_scan || true
-fi
-
-write_arcade_bench_env_and_restart
-status_json "arcade-restart" || record_fail "arcade restart status JSON"
-assert_status "$OUT/status-arcade-restart.json" "supervised restart reaches Arcade screen" \
-  "data['runtime']['slint_status'].get('screen') == 'arcade'"
-assert_status "$OUT/status-arcade-restart.json" "supervised restart keeps invariant count zero" \
-  "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
-
-restart_launcher
-status_json "normal-restart" || record_fail "normal restart status JSON"
-assert_status "$OUT/status-normal-restart.json" "normal restart returns to launcher" \
-  "data['runtime']['slint_status'].get('scene') == 'launcher'"
-
-run_crash_restart_smoke "crash-restart-gate" || true
-
-if [ "$ALLOW_RESET_CATALOG" -eq 1 ]; then
-  BACKUP="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
-  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$BACKUP'; fi; rm -f '$REMOTE_DB'; sync"
-  append_report ""
-  append_report "catalog backup: $BACKUP"
-  restart_launcher
-  wait_remote_event "catalog reset first frame" "first_frame" 60
-  status_json "catalog-reset" || record_fail "catalog reset status JSON"
-  assert_status "$OUT/status-catalog-reset.json" "catalog reset shows launcher instead of black boot" \
-    "data['runtime']['slint_status'].get('scene') == 'launcher'"
-  remote "if [ -f '$BACKUP' ]; then mv '$BACKUP' '$REMOTE_DB'; fi; sync"
-  restart_launcher
-else
-  record_ok "destructive catalog reset skipped"
-fi
-
-run_capture "supervised-reboot" "$MISTER" reboot-wait
-wait_for_launcher_active "wait-launcher-after-supervised-reboot" 90 || exit 1
-status_json "post-reboot" || record_fail "post-reboot status JSON"
-assert_status "$OUT/status-post-reboot.json" "post-reboot launcher active" \
-  "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
-assert_status "$OUT/status-post-reboot.json" "post-reboot invariant count is zero" \
-  "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
-
-remote "printf 'mister_magik_exit_to_menu\n' > /dev/MiSTer_cmd"
-wait_status_expr "wait exit-to-menu handoff" 30 \
-  "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')" \
-  "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
-status_json "exit-menu" || record_fail "exit-to-menu status JSON"
-assert_status "$OUT/status-exit-menu.json" "exit-to-menu reaches stock-menu handoff state" \
-  "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')"
-run_capture "raw-reboot-after-exit-menu" "$MISTER" reboot-wait --raw
-wait_for_launcher_active "wait-launcher-after-exit-menu-reboot" 90 || exit 1
-status_json "post-exit-menu-reboot" || record_fail "post exit-menu reboot status JSON"
-assert_status "$OUT/status-post-exit-menu-reboot.json" "launcher recovers after exit-to-menu smoke" \
-  "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
-
-remote "printf 'mister_magik_launch %s\n' '$LAUNCH_REF' > /dev/MiSTer_cmd"
-wait_status_expr "wait game handoff" 45 \
-  "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured')" \
-  "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
-status_json "handoff-game" || record_fail "handoff game status JSON"
-assert_status "$OUT/status-handoff-game.json" "game handoff leaves active launcher state" \
-  "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured')"
-run_capture "raw-reboot-after-game-handoff" "$MISTER" reboot-wait --raw
-wait_for_launcher_active "wait-launcher-after-game-reboot" 90 || exit 1
-status_json "post-game-reboot" || record_fail "post game reboot status JSON"
-assert_status "$OUT/status-post-game-reboot.json" "launcher recovers after game handoff smoke" \
-  "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
-
-if [ "$FAST" -eq 0 ]; then
-  run_crash_restart_lite || true
-  run_exit_menu_loop || true
-  run_launch_matrix || true
-  run_display_mode_smoke || true
-  run_install_restore_roundtrip || true
-fi
-run_soak || true
+write_report_header
+run_deploy_if_requested
+run_initial_gate
+run_selected_tiers
 
 collect_artifacts
 assert_artifacts_complete

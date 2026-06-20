@@ -39,6 +39,7 @@ for script in \
   "$ROOT/scripts/build-neogeo-screenshot-pack.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
   "$ROOT/scripts/device-catalog-acceptance.sh" \
+  "$ROOT/scripts/device-release-acceptance.sh" \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/install-slint-boot.sh" \
   "$ROOT/scripts/mister" \
@@ -49,6 +50,16 @@ for script in \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"
 done
+
+"$ROOT/scripts/device-release-acceptance.sh" --help >/dev/null
+if "$ROOT/scripts/device-release-acceptance.sh" --tiers nope >/dev/null 2>&1; then
+  echo "expected invalid tier to fail" >&2
+  exit 1
+fi
+if "$ROOT/scripts/device-release-acceptance.sh" --fast --tiers health >/dev/null 2>&1; then
+  echo "expected --fast plus --tiers to fail" >&2
+  exit 1
+fi
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
