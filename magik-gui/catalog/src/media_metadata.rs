@@ -1,8 +1,8 @@
 //! Media metadata parsing helpers.
 
 use crate::catalog_scan::FoundFile;
-use crate::launch_profiles::{CollectionListing, CollectionRule, LaunchProfile};
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
+use crate::launch_profiles::{CollectionListing, CollectionRule, LaunchProfile};
 use crate::library_db::{
     AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_INSTALLED_LISTINGS, AMIGAVISION_LAUNCHER_REF,
     MRA_PREFIX_BYTES,

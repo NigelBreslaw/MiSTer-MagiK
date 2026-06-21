@@ -248,14 +248,20 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     metadata
 }
 
-pub(crate) fn load_arcade_machine_metadata(mame_path: &Path, hbmame_path: &Path) -> ArcadeMachineMetadata {
+pub(crate) fn load_arcade_machine_metadata(
+    mame_path: &Path,
+    hbmame_path: &Path,
+) -> ArcadeMachineMetadata {
     ArcadeMachineMetadata {
         mame: load_mame_machine_metadata(mame_path),
         hbmame: load_mame_machine_metadata(hbmame_path),
     }
 }
 
-pub(crate) fn write_simple_mame_metadata_db(path: &Path, rows: &MachineMetadataRows) -> Result<(), String> {
+pub(crate) fn write_simple_mame_metadata_db(
+    path: &Path,
+    rows: &MachineMetadataRows,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create metadata dir {}: {e}", parent.display()))?;
@@ -530,7 +536,10 @@ impl SoftwareHashCache {
     }
 }
 
-pub(crate) fn software_hash_cache_key(list_name: &str, source_path: &str) -> Option<SoftwareHashCacheKey> {
+pub(crate) fn software_hash_cache_key(
+    list_name: &str,
+    source_path: &str,
+) -> Option<SoftwareHashCacheKey> {
     let signature = library_db::file_signature(Path::new(source_path));
     if signature.size == 0 && signature.mtime_secs == 0 {
         return None;

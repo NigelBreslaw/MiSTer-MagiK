@@ -15,8 +15,8 @@ use crate::game_discovery::{
 };
 use crate::launch_profiles::{self, MountKind, PayloadDisposition, RuleSourceKind};
 use crate::library_db::{
-    self, BenchConfig, CatalogRow, CatalogStampCheckSummary, LibraryCatalogLoad,
-    FileSignature, LibraryRefreshSummary, LibraryScan, ProgressCallback, VirtualLaunchPlan,
+    self, BenchConfig, CatalogRow, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
+    LibraryRefreshSummary, LibraryScan, ProgressCallback, VirtualLaunchPlan,
 };
 use crate::media_metadata;
 use crate::preview_worker;
@@ -54,7 +54,9 @@ pub(crate) fn remove_default_sqlite_database() -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunchPlan>, String> {
+pub(crate) fn load_virtual_launch_plan(
+    launch_ref: &str,
+) -> Result<Option<VirtualLaunchPlan>, String> {
     let path = default_sqlite_path();
     let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
@@ -219,7 +221,9 @@ pub(crate) fn load_amigavision_launch_refs(limit: usize) -> Result<Vec<String>, 
         .collect()
 }
 
-pub(crate) fn virtual_launch_plan_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VirtualLaunchPlan> {
+pub(crate) fn virtual_launch_plan_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<VirtualLaunchPlan> {
     Ok(VirtualLaunchPlan {
         launch_ref: row.get(0)?,
         title: row.get(1)?,
@@ -279,7 +283,9 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     })
 }
 
-pub(crate) fn load_materialized_ui_catalog(conn: &Connection) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
+pub(crate) fn load_materialized_ui_catalog(
+    conn: &Connection,
+) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
     if !sqlite_table_exists(conn, "ui_arcade_preferred")? {
         return Ok(None);
     }
@@ -392,7 +398,9 @@ pub(crate) fn sqlite_uri_path(path: &Path) -> String {
         .collect()
 }
 
-pub(crate) fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<ArcadeGameEntry>, String> {
+pub(crate) fn load_joined_launcher_catalog(
+    conn: &Connection,
+) -> Result<Vec<ArcadeGameEntry>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT games.title,
@@ -443,7 +451,9 @@ pub(crate) fn load_joined_launcher_catalog(conn: &Connection) -> Result<Vec<Arca
     Ok(library_db::collapse_catalog_variants(rows_out))
 }
 
-pub(crate) fn sqlite_catalog_stamp_check(cfg: &BenchConfig) -> Result<CatalogStampCheckSummary, String> {
+pub(crate) fn sqlite_catalog_stamp_check(
+    cfg: &BenchConfig,
+) -> Result<CatalogStampCheckSummary, String> {
     let started = Instant::now();
     let open_t = Instant::now();
     let conn = open_sqlite_read_only(&cfg.sqlite_path)
@@ -889,7 +899,6 @@ pub(crate) fn materialize_arcade_ui_projections(
     .map(|_| ())
     .map_err(|e| format!("materialize arcade ui projections: {e}"))
 }
-
 
 pub(crate) fn write_sqlite_scan(
     path: &Path,
@@ -1645,7 +1654,11 @@ fn write_sqlite_scan_with_sources(
     Ok(())
 }
 
-pub(crate) fn report_library_import_timing(stage: &str, started: Instant, detail: impl std::fmt::Display) {
+pub(crate) fn report_library_import_timing(
+    stage: &str,
+    started: Instant,
+    detail: impl std::fmt::Display,
+) {
     println!(
         "library_import_timing\t{stage}\t{}\t{detail}",
         started.elapsed().as_micros()
