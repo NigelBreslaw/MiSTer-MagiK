@@ -177,3 +177,15 @@ CATV2-STAMP-GATE-20260621	3	fresh_build	3109850	discover_us=2879433
 CATV2-STAMP-GATE-20260621	3	import	11019170	bytes=17588224
 CATV2-STAMP-GATE-20260621	3	cached_arcade_load	142605	rows=7221
 CATV2-STAMP-GATE-20260621	3	root_stamp_check	3435	unchanged=true check_us=3109 compute_us=193 open_us=639 read_us=2245 compare_us=14 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
+CATV2-FINAL-20260621	1	fresh_build	3576330	discover_us=3366602
+CATV2-FINAL-20260621	1	import	11379485	bytes=17768448
+CATV2-FINAL-20260621	1	cached_arcade_load	163275	rows=7221
+CATV2-FINAL-20260621	1	root_stamp_check	3506	unchanged=true check_us=3070 compute_us=195 open_us=643 read_us=2206 compare_us=14 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
+CATV2-FINAL-20260621	2	fresh_build	3496565	discover_us=3285174
+CATV2-FINAL-20260621	2	import	11221459	bytes=17768448
+CATV2-FINAL-20260621	2	cached_arcade_load	163316	rows=7221
+CATV2-FINAL-20260621	2	root_stamp_check	3446	unchanged=true check_us=3085 compute_us=227 open_us=621 read_us=2211 compare_us=13 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
+CATV2-FINAL-20260621	3	fresh_build	3533151	discover_us=3326151
+CATV2-FINAL-20260621	3	import	11138881	bytes=17768448
+CATV2-FINAL-20260621	3	cached_arcade_load	164795	rows=7221
+CATV2-FINAL-20260621	3	root_stamp_check	3422	unchanged=true check_us=3072 compute_us=186 open_us=637 read_us=2215 compare_us=22 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
