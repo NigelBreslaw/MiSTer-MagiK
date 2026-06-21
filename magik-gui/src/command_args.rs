@@ -64,6 +64,10 @@ pub fn should_handoff_to_mister(arg: &str) -> bool {
     if COMMANDS.contains(&arg) || is_launcher_boot(arg) {
         return false;
     }
+    false
+}
+
+pub fn is_launchable_arg(arg: &str) -> bool {
     arg.ends_with(".rbf")
         || arg.ends_with(".mra")
         || arg.ends_with(".mgl")
@@ -183,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn hands_launchable_files_back_to_main() {
+    fn detects_launchable_files() {
         for path in [
             "/media/fat/_Arcade/foo.mra",
             "/media/fat/games/foo.rbf",
@@ -194,7 +198,19 @@ mod tests {
             "/media/fat/games/foo.lzh",
             "/media/fat/games/foo.rar",
         ] {
-            assert!(should_handoff_to_mister(path), "{path}");
+            assert!(is_launchable_arg(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn launchable_files_are_not_handed_off_by_slint() {
+        for path in [
+            "/media/fat/_Arcade/foo.mra",
+            "/media/fat/games/foo.rbf",
+            "/media/fat/games/foo.mgl",
+            "/media/fat/games/foo.zip",
+        ] {
+            assert!(!should_handoff_to_mister(path), "{path}");
         }
     }
 
