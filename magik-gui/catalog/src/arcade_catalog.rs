@@ -305,7 +305,8 @@ mod tests {
             ArcadeGameEntry {
                 title: "1941: Counter Attack (Japan)".into(),
                 mra_path: "/media/fat/_Arcade/1941 Japan.mra".into(),
-                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path:
+                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
@@ -313,7 +314,8 @@ mod tests {
             ArcadeGameEntry {
                 title: "1941: Counter Attack (World)".into(),
                 mra_path: "/media/fat/_Arcade/1941 World.mra".into(),
-                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path:
+                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
@@ -329,7 +331,8 @@ mod tests {
             ArcadeGameEntry {
                 title: "1943".into(),
                 mra_path: "/media/fat/_Arcade/1943.mra".into(),
-                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path:
+                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
                 preview_asset_key: "1943".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
@@ -337,7 +340,8 @@ mod tests {
             ArcadeGameEntry {
                 title: "Astra SuperStars".into(),
                 mra_path: "/media/fat/_Arcade/Astra SuperStars.mra".into(),
-                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path:
+                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
                 preview_asset_key: "astrass".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
@@ -389,7 +393,8 @@ mod tests {
             vec![ArcadeGameEntry {
                 title: "1942".into(),
                 mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                preview_archive_path: "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path:
+                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
                 preview_asset_key: "1942".into(),
                 has_preview: true,
                 system_id: "arcade".into(),

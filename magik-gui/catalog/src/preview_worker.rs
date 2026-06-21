@@ -492,9 +492,11 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
         cache_hit = true;
         Ok(loaded)
     } else {
-        load_preview_pixels(&req.preview_archive_path, &req.preview_asset_key, resize).inspect(|loaded| {
-            decoded_cache.insert(cache_key, loaded);
-        })
+        load_preview_pixels(&req.preview_archive_path, &req.preview_asset_key, resize).inspect(
+            |loaded| {
+                decoded_cache.insert(cache_key, loaded);
+            },
+        )
     };
     match loaded_result {
         Ok(loaded) => {
@@ -676,7 +678,9 @@ pub fn warm_preview_archives_from_env() -> Result<bool, String> {
     preview_archives().map(|archives| archives.is_some())
 }
 
-fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
+fn preview_archives_for_paths(
+    paths: Vec<String>,
+) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
     static ARCHIVES: OnceLock<Mutex<Option<CachedPreviewArchives>>> = OnceLock::new();
     static MISSING: OnceLock<Mutex<Vec<MissingPreviewArchive>>> = OnceLock::new();
 
@@ -800,9 +804,7 @@ pub fn preview_archive_paths_for_catalog_projection() -> Vec<String> {
     } else if let Some(path) = default_preview_archive_path() {
         paths.push(path);
     }
-    paths.push(
-        neogeo_preview_archive_path_from_env().unwrap_or_else(default_neogeo_archive_path),
-    );
+    paths.push(neogeo_preview_archive_path_from_env().unwrap_or_else(default_neogeo_archive_path));
     paths.extend(console_preview_archive_paths_from_env());
     paths.extend(default_console_archive_paths());
     let mut seen = HashSet::new();
@@ -863,10 +865,12 @@ pub fn preview_archive_fingerprint_from_env() -> Result<Option<(String, u64, i64
 }
 
 pub fn preview_archive_fingerprints_from_env() -> Result<Vec<(String, u64, i64)>, String> {
-    Ok(preview_archive_fingerprints_for_paths(preview_archive_paths_from_env())?
-        .into_iter()
-        .map(|fingerprint| (fingerprint.path, fingerprint.size, fingerprint.mtime_secs))
-        .collect())
+    Ok(
+        preview_archive_fingerprints_for_paths(preview_archive_paths_from_env())?
+            .into_iter()
+            .map(|fingerprint| (fingerprint.path, fingerprint.size, fingerprint.mtime_secs))
+            .collect(),
+    )
 }
 
 fn preview_archive_fingerprints_for_paths(
@@ -1607,10 +1611,8 @@ mod tests {
 
     #[test]
     fn auto_preview_archive_uses_size_named_screenshots_pack() {
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-preview-auto-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-preview-auto-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create archive root");
         let archive = root.join("320x320-screenshots.mmlz4b");
         std::fs::write(&archive, b"lz4").expect("write archive marker");
@@ -1725,7 +1727,10 @@ mod tests {
         assert!(first.contains(&archive_path));
         assert!(second.contains(&archive_path));
         assert_eq!(calls_after_first, 1);
-        assert_eq!(preview_archive_metadata_calls(&archive_path), calls_after_first);
+        assert_eq!(
+            preview_archive_metadata_calls(&archive_path),
+            calls_after_first
+        );
     }
 
     #[test]
@@ -1752,7 +1757,10 @@ mod tests {
 
         assert_eq!(result.generation, 88);
         assert_eq!(result.title, "Tiny");
-        assert_eq!(result.preview_archive_path, archive_path.display().to_string());
+        assert_eq!(
+            result.preview_archive_path,
+            archive_path.display().to_string()
+        );
         assert_eq!(result.preview_asset_key, "tiny");
         assert_eq!(result.source_width, 3);
         assert_eq!(result.source_height, 1);
@@ -1763,6 +1771,47 @@ mod tests {
         assert_eq!(image.width(), 3);
         assert_eq!(image.height(), 1);
         assert_eq!(image.decoded_bytes(), 16);
+        let _ = std::fs::remove_file(archive_path);
+    }
+
+    #[test]
+    fn preview_worker_decodes_selected_request_on_background_thread() {
+        let archive_path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-worker-{}.mmraw",
+            std::process::id()
+        ));
+        write_raw_archive(
+            &archive_path,
+            "selected.rgb565",
+            &raw565_fixture(2, 1, &[0xf800, 0x07e0]),
+        );
+        let mut worker = PreviewWorker::new();
+
+        let generation = worker.request_selected(
+            "Selected".to_string(),
+            archive_path.display().to_string(),
+            "selected".to_string(),
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let result = loop {
+            if let Some(result) = worker.drain().into_iter().next() {
+                break result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "preview worker did not return a result"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(result.generation, generation);
+        assert_eq!(result.title, "Selected");
+        assert_eq!(result.priority, PreviewPriority::Selected);
+        assert_eq!(result.load_source, PreviewLoadSource::ArchiveMem);
+        assert_eq!(result.source_width, 2);
+        assert_eq!(result.source_height, 1);
+        assert!(result.image.is_some());
         let _ = std::fs::remove_file(archive_path);
     }
 
@@ -1791,6 +1840,33 @@ mod tests {
             .load_timed("new-long.rgb565")
             .expect("load from changed archive")
             .is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn raw_archive_rejects_entry_length_mismatch() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-bad-length-{}.mmraw",
+            std::process::id()
+        ));
+        let payload = raw565_fixture(1, 1, &[0xf800]);
+        write_raw_archive_with_lengths(
+            &path,
+            "bad.rgb565",
+            &payload,
+            payload.len() + 1,
+            payload.len(),
+        );
+        let archive = PreviewArchive::open(&path).expect("open corrupt raw archive fixture");
+
+        let err = archive
+            .load_timed("bad.rgb565")
+            .expect_err("raw length mismatch should fail");
+
+        assert!(
+            err.contains("raw length mismatch"),
+            "unexpected error: {err}"
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -1853,13 +1929,23 @@ mod tests {
     }
 
     fn write_raw_archive(path: &Path, name: &str, payload: &[u8]) {
+        write_raw_archive_with_lengths(path, name, payload, payload.len(), payload.len());
+    }
+
+    fn write_raw_archive_with_lengths(
+        path: &Path,
+        name: &str,
+        payload: &[u8],
+        raw_len: usize,
+        compressed_len: usize,
+    ) {
         let index_len = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(PreviewArchive::RAW_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(raw_len as u32).to_le_bytes());
+        bytes.extend_from_slice(&(compressed_len as u32).to_le_bytes());
         bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
         bytes.extend_from_slice(name.as_bytes());
         bytes.extend_from_slice(payload);
