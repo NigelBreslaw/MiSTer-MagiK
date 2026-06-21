@@ -466,18 +466,6 @@ pub(super) fn run_launcher_loop(
                         deferred.root,
                         deferred.refresh_requested,
                     ));
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    bridge.set_catalog_background_scan_visible(true);
-                    bridge.set_catalog_scan_title("Validating library".into());
-                    bridge.set_catalog_scan_detail(
-                        format!(
-                            "Using cached {} games while checking for changes",
-                            catalog.len()
-                        )
-                        .into(),
-                    );
-                    bridge.set_catalog_scan_percent(-1);
-                    full_bridge_dirty = true;
                 }
             }
         }
