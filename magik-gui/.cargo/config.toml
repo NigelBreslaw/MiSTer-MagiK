@@ -1,6 +1,5 @@
-# Override any global ~/.cargo/config.toml compiler wrapper. This crate also has
-# a repo-root override, but keeping this local file protects direct invocations
-# from inside magik-gui if Cargo config discovery changes.
+# Override any global ~/.cargo/config.toml compiler wrapper for direct
+# invocations from inside magik-gui.
 [build]
 rustc-wrapper = ""
 

@@ -252,15 +252,17 @@ project-local minimal build.
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
 - **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — override the Slint modules
   compiled into the ARM binary; by default, deployable builds use `all`.
-- **root `.cargo/config.toml` + `.cargo/config.toml`** — disable any inherited
-  compiler wrapper such as sccache; no always-on `rustflags`.
+- **`magik-gui/.cargo/config.toml`** — disables any inherited compiler wrapper
+  such as sccache for direct Cargo invocations; no always-on `rustflags`.
 - **`build-arm.sh`** — sets Cortex-A9 `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
 
 Prerequisite for Cortex-A9 tuning: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
 
 ## Slint version
 
-**Default:** git `master` via `[patch.crates-io]` in `Cargo.toml` (currently 1.17.0 @ `9f5e4a49`). Comparison to crates.io 1.16: [`history/toolchain-bench/slint-master.md`](../history/toolchain-bench/slint-master.md).
+**Default:** git `master` via `[patch.crates-io]` in `Cargo.toml`; `Cargo.lock`
+records the exact revision used by the current workspace. Comparison to crates.io
+1.16: [`history/toolchain-bench/slint-master.md`](../history/toolchain-bench/slint-master.md).
 
 After `cargo update`, confirm `Cargo.lock` still points at the intended git rev before shipping.
 
