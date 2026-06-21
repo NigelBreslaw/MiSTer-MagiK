@@ -103,6 +103,18 @@ falls back to SSH when the agent port is unavailable. The bundle includes:
 - `net.json`
 - `processes.json` and `ps.txt`
 - MagiK status files and recent Main/Slint/agent log tails
+- `crashes.json` and `crash-latest.json` when local crash reports exist
+
+Crash reports are local JSON files under:
+
+```text
+/media/fat/mister-magik/crashes/
+```
+
+`latest.json` is a copy of the newest report. Reports use schema
+`mister-magik-crash-report-v1` and are written by either `mister-magik-fb` for
+Rust panics or `MiSTer_MagiK` when the supervised launcher child exits
+unexpectedly.
 
 `reboot-wait` asks the agent to schedule a reboot, then waits for the agent port
 first and SSH second. It defaults to the supervised MagiK visual-lockdown reboot.

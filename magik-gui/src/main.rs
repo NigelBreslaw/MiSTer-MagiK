@@ -83,6 +83,7 @@ use ui_runner::ui_boot::{boot_framebuffer_format, settle_boot_black_frame, ui_fp
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    mister_magik_fb::crash_report::install_panic_hook(args.clone());
     boot_analytics::event("process_start", format!("args={}", args.join(" ")));
 
     if args.len() >= 2 {

@@ -7,6 +7,7 @@
 pub mod camera_effects;
 pub mod command_args;
 pub mod controller_db;
+pub mod crash_report;
 pub mod effects;
 pub mod fb_format;
 pub mod framebuffer_copy;

@@ -2566,7 +2566,8 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "agent_tmp_log_tail": tail_remote(&sess, "/tmp/mister-magik-agent.log", 160).map(|lines| lines.join("\n")),
             "agent_persistent_log_tail": tail_remote(&sess, "/media/fat/mister-magik/bootlogs/agent.log", 160).map(|lines| lines.join("\n")),
             "boot_analytics_tail": tail_remote(&sess, "/tmp/mister-magik-boot-analytics.tsv", 80).map(|lines| lines.join("\n")),
-        }
+        },
+        "crashes": ssh_crash_reports_json(&sess),
     }))
 }
 
@@ -2580,6 +2581,12 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
     write_json_member(out_dir, "agent-logs.json", bundle.get("agent_logs"))?;
     write_json_member(out_dir, "net.json", bundle.get("net"))?;
     write_json_member(out_dir, "processes.json", bundle.get("processes"))?;
+    write_json_member(out_dir, "crashes.json", bundle.get("crashes"))?;
+    write_json_member(
+        out_dir,
+        "crash-latest.json",
+        bundle.pointer("/crashes/latest"),
+    )?;
 
     write_string_pointer(out_dir, "ps.txt", bundle.pointer("/processes/ps"))?;
     write_string_pointer(
@@ -2623,6 +2630,65 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
         bundle.pointer("/files/boot_analytics_tail"),
     )?;
     Ok(())
+}
+
+fn ssh_crash_reports_json(sess: &Session) -> Value {
+    let latest_path = "/media/fat/mister-magik/crashes/latest.json";
+    let latest = remote_read(sess, latest_path)
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    let latest_report_id = latest
+        .get("report_id")
+        .and_then(Value::as_str)
+        .map(|report_id| format!("{report_id}.json"));
+    let recent = remote_crash_report_paths(sess, 5, latest_report_id.as_deref())
+        .into_iter()
+        .map(|path| {
+            let report = remote_read(sess, &path)
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or(Value::Null);
+            json!({
+                "path": path,
+                "report": report,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "dir": "/media/fat/mister-magik/crashes",
+        "latest_path": latest_path,
+        "latest": latest,
+        "recent": recent,
+    })
+}
+
+fn remote_crash_report_paths(
+    sess: &Session,
+    limit: usize,
+    latest_name: Option<&str>,
+) -> Vec<String> {
+    let cmd = format!(
+        "ls -1 {} 2>/dev/null | grep '^report-.*\\.json$' | sort | tail -n {}",
+        sh("/media/fat/mister-magik/crashes"),
+        limit
+    );
+    let Ok(out) = exec(sess, &cmd, true) else {
+        return Vec::new();
+    };
+    if out.rc != 0 {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    if let Some(name) = latest_name {
+        paths.push(format!("/media/fat/mister-magik/crashes/{name}"));
+    }
+    paths.extend(
+        out.stdout
+            .lines()
+            .filter(|line| Some(*line) != latest_name)
+            .map(|line| format!("/media/fat/mister-magik/crashes/{line}")),
+    );
+    paths.truncate(limit);
+    paths
 }
 
 fn write_json_member(out_dir: &Path, name: &str, value: Option<&Value>) -> Result<()> {
