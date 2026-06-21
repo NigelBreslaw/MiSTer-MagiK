@@ -73,6 +73,7 @@ fi
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
+"$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
 python3 "$ROOT/scripts/import-wikipedia-neogeo-screenshots.py" --self-test

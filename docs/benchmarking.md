@@ -175,8 +175,10 @@ mister-magik-fb ui <scene> <secs>
 ```
 
 `scripts/bench-toolchain.sh` appends formal results to
-`history/toolchain-bench/results.tsv`. Build profiles and toolchain details live
-in `magik-gui/BUILD.md`.
+`history/toolchain-bench/results.tsv`. The TSV keeps the legacy `visual_ok`
+column as a combined pass bit and also records `timing_ok` and `capture_ok` so
+render/timing failures are distinguishable from framebuffer capture failures.
+Build profiles and toolchain details live in `magik-gui/BUILD.md`.
 
 Bench scene documentation lives in `magik-gui/ui/bench/README.md`.
 
