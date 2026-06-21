@@ -238,7 +238,9 @@ pub(super) fn run_launcher_loop(
     );
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
-    let catalog_refresh = catalog_refresh_requested();
+    let catalog_refresh_policy = catalog_refresh_policy();
+    let catalog_refresh = catalog_refresh_policy.force_requested();
+    let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
     let mut catalog_rx = None;
     let mut deferred_catalog_worker = None;
     let mut catalog_refresh_done = false;
@@ -255,8 +257,10 @@ pub(super) fn run_launcher_loop(
             catalog_version = catalog_version.wrapping_add(1);
             apply_forced_arcade_selected(&mut nav, &catalog);
             apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
-            let request =
-                ready_catalog_worker_request(catalog_refresh, !arcade_catalog_required_at_start);
+            let request = ready_catalog_worker_request(
+                catalog_refresh_policy,
+                !arcade_catalog_required_at_start,
+            );
             if request != CatalogWorkerRequest::LoadOnly {
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
@@ -278,7 +282,10 @@ pub(super) fn run_launcher_loop(
                 print_startup_event(
                     start,
                     "catalog_refresh_decision",
-                    "cache_state=ready refresh_requested=false background_validation=false plan=load_only",
+                    format!(
+                        "cache_state=ready refresh_policy={} background_validation=false plan=load_only",
+                        catalog_refresh_policy.label()
+                    ),
                 );
                 catalog_rx = None;
                 catalog_refresh_done = true;
@@ -290,20 +297,44 @@ pub(super) fn run_launcher_loop(
                 "catalog_cache_empty",
                 catalog_load_timing_detail(&loaded),
             );
-            print_startup_event(start, "catalog_worker_start", &arcade_root);
-            catalog_rx = Some(start_library_catalog_worker(
-                arcade_root.clone(),
-                CatalogWorkerRequest::ForceBuild,
-            ));
+            if catalog_worker_enabled {
+                print_startup_event(start, "catalog_worker_start", &arcade_root);
+                catalog_rx = Some(start_library_catalog_worker(
+                    arcade_root.clone(),
+                    CatalogWorkerRequest::ForceBuild,
+                ));
+            } else {
+                print_startup_event(
+                    start,
+                    "catalog_refresh_decision",
+                    format!(
+                        "cache_state=empty refresh_policy={} background_validation=false plan=load_only",
+                        catalog_refresh_policy.label()
+                    ),
+                );
+                catalog_refresh_done = true;
+            }
         }
         Err(e) => {
             eprintln!("arcade catalog cache load failed: {e}");
             print_startup_event(start, "catalog_cache_load_failed", e);
-            print_startup_event(start, "catalog_worker_start", &arcade_root);
-            catalog_rx = Some(start_library_catalog_worker(
-                arcade_root.clone(),
-                CatalogWorkerRequest::ForceBuild,
-            ));
+            if catalog_worker_enabled {
+                print_startup_event(start, "catalog_worker_start", &arcade_root);
+                catalog_rx = Some(start_library_catalog_worker(
+                    arcade_root.clone(),
+                    CatalogWorkerRequest::ForceBuild,
+                ));
+            } else {
+                print_startup_event(
+                    start,
+                    "catalog_refresh_decision",
+                    format!(
+                        "cache_state=missing refresh_policy={} background_validation=false plan=load_only",
+                        catalog_refresh_policy.label()
+                    ),
+                );
+                catalog_refresh_done = true;
+            }
         }
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -322,6 +353,7 @@ pub(super) fn run_launcher_loop(
     bridge.set_catalog_scan_visible(initial_catalog_scan_visible(
         catalog_ready,
         arcade_catalog_required_at_start,
+        catalog_worker_enabled,
     ));
     bridge.set_catalog_scan_title(if catalog_ready {
         if catalog_refresh {
@@ -329,11 +361,15 @@ pub(super) fn run_launcher_loop(
         } else {
             "".into()
         }
+    } else if !catalog_worker_enabled {
+        "".into()
     } else {
         "Indexing library".into()
     });
     bridge.set_catalog_scan_detail(if catalog_ready {
         format!("Using cached {} games", catalog.len()).into()
+    } else if !catalog_worker_enabled {
+        "Catalog worker disabled for benchmark restart".into()
     } else {
         "No cached catalog; scanning library...".into()
     });
@@ -1414,8 +1450,9 @@ fn catalog_background_validation_delay() -> Duration {
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
     _arcade_catalog_required_at_start: bool,
+    catalog_worker_enabled: bool,
 ) -> bool {
-    !catalog_ready
+    catalog_worker_enabled && !catalog_ready
 }
 
 fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -> String {
@@ -1457,10 +1494,12 @@ fn catalog_background_scan_progress_visible(
 }
 
 fn ready_catalog_worker_request(
-    refresh_requested: bool,
+    refresh_policy: CatalogRefreshPolicy,
     background_validation: bool,
 ) -> CatalogWorkerRequest {
-    if refresh_requested {
+    if refresh_policy == CatalogRefreshPolicy::Off {
+        CatalogWorkerRequest::LoadOnly
+    } else if refresh_policy.force_requested() {
         CatalogWorkerRequest::ForceBuild
     } else if background_validation {
         CatalogWorkerRequest::CheckStamp
@@ -1542,7 +1581,7 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(true, false));
+        assert!(!initial_catalog_scan_visible(true, false, true));
     }
 
     #[test]
@@ -1569,9 +1608,10 @@ mod tests {
 
     #[test]
     pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
-        assert!(initial_catalog_scan_visible(false, false));
-        assert!(initial_catalog_scan_visible(false, true));
-        assert!(!initial_catalog_scan_visible(true, true));
+        assert!(initial_catalog_scan_visible(false, false, true));
+        assert!(initial_catalog_scan_visible(false, true, true));
+        assert!(!initial_catalog_scan_visible(true, true, true));
+        assert!(!initial_catalog_scan_visible(false, true, false));
     }
 
     #[test]
@@ -1729,16 +1769,20 @@ mod tests {
     #[test]
     pub(super) fn ready_catalog_uses_background_worker_for_refresh_or_home_validation() {
         assert_eq!(
-            ready_catalog_worker_request(false, false),
+            ready_catalog_worker_request(CatalogRefreshPolicy::Default, false),
             CatalogWorkerRequest::LoadOnly
         );
         assert_eq!(
-            ready_catalog_worker_request(false, true),
+            ready_catalog_worker_request(CatalogRefreshPolicy::Default, true),
             CatalogWorkerRequest::CheckStamp
         );
         assert_eq!(
-            ready_catalog_worker_request(true, false),
+            ready_catalog_worker_request(CatalogRefreshPolicy::Force, false),
             CatalogWorkerRequest::ForceBuild
+        );
+        assert_eq!(
+            ready_catalog_worker_request(CatalogRefreshPolicy::Off, true),
+            CatalogWorkerRequest::LoadOnly
         );
     }
 

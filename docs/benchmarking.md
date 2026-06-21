@@ -98,7 +98,15 @@ MISTER_LAUNCHER_START_SCREEN=arcade
 MISTER_LAUNCHER_LOCK_SCREEN=arcade
 MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll|turbo-hold|preview-step-hold|idle
 MISTER_PREVIEW_SCROLL_TRACE_SECS=N
+MISTER_CATALOG_REFRESH=off
 ```
+
+`MISTER_CATALOG_REFRESH=off` is the benchmark load-only policy. It lets the
+launcher synchronously use an existing catalog cache, but it does not start
+background stamp validation, explicit rebuilds, missing-cache first scans, or
+virtual launch cache prewarming. Leave the variable unset for normal launcher
+behavior, where a ready cache still gets a delayed warm stamp check; set it to
+`on` or `force` only when intentionally benchmarking a catalog rebuild.
 
 Preview transition policy:
 
