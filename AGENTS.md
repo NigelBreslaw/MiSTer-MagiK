@@ -111,7 +111,6 @@ Benchmark entrypoints:
 scripts/profile-arcade-scroll.sh LABEL
 scripts/profile-preview-scroll.sh LABEL
 scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
-scripts/profile-blend-velocity.sh 30 LABEL baseline --skip-build
 scripts/bench-toolchain.sh LABEL --replace-label
 scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
 scripts/profile-library-io.sh LABEL --replace-label

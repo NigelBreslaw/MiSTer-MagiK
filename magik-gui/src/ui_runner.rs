@@ -133,7 +133,6 @@ pub const UI_SCENES: &[&str] = &[
     "raster-effects",
     #[cfg(mister_experiments)]
     "transition-effects",
-    "blend_velocity",
     #[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
     "demo",
     "controller_test",
@@ -436,11 +435,6 @@ pub fn run_ui(f: &mut Fpga) {
     println!(
         "fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
     );
-
-    if scene == "blend_velocity" {
-        crate::ui_blend_velocity::run_blend_velocity_loop(secs, &mut disp);
-        return;
-    }
 
     if scene == "screensaver" {
         run_screensaver_loop(secs, &ui, &mut disp, fb_format);

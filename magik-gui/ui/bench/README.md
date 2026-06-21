@@ -15,11 +15,10 @@ kill -9 $(pidof mister-magik-fb) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui full_motion 20
 ```
 
-Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, and
-`blend_velocity`. With a `--video` build, `video_playback` is also
-available. It expects `/media/fat/mister-magik/mslug3.mov` by default: H.264
-baseline video plus 48 kHz stereo `pcm_s16le` audio. Override with
-`MISTER_VIDEO_PATH`.
+Scenes: `demo`, `full_motion`, `static_ui`, and `local_motion`. With a
+`--video` build, `video_playback` is also available. It expects
+`/media/fat/mister-magik/mslug3.mov` by default: H.264 baseline video plus
+48 kHz stereo `pcm_s16le` audio. Override with `MISTER_VIDEO_PATH`.
 
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
 production benchmark scenes. Build them with `scripts/deploy-rust.sh
@@ -71,41 +70,6 @@ Use the frame TSV/reports first. Use the CPU flamegraph only when a phase is
 clearly CPU-bound and function attribution is needed; the in-process profiler
 uses SIGPROF/ITIMER_PROF sampling and should be smoke-tested before trusting a
 scene SVG.
-
-## Blend Velocity Scene
-
-`blend_velocity` is a Rust-only scene for isolating arcade-list fade/blend work
-under velocity-scroll-like conditions. It synthesizes the moving arcade list
-surface at 6 px/frame by default and reports split timings for surface update,
-fade blend, fade copy, body copy, selection copy, vsync, and wall time.
-The fade target is the same constant arcade/list background color used by the
-real renderer, not pure black.
-
-```bash
-scripts/profile-blend-velocity.sh 15 BLENDVEL baseline --deploy-device
-scripts/profile-blend-velocity.sh 15 BLENDVEL-TEXT real-text --skip-build
-scripts/profile-blend-velocity.sh 15 BLENDVEL-GRAD gradient-text --skip-build
-scripts/profile-blend-velocity.sh 15 BLENDVEL-COPY copy-only --skip-build
-scripts/profile-blend-velocity.sh 15 BLENDVEL-NOFADE no-fade --skip-build
-```
-
-Variants:
-
-- `baseline`: blend the top/bottom fades, copy fades, copy body, copy selection.
-- `real-text`: same fade/copy path, but the moving surface uses cached title rows
-  rendered with the arcade list font/background path.
-- `gradient-text`: cached gradient title rows with the production full-list copy
-  path and no viewport fade.
-- `copy-only`: copy the fade rows without blending, isolating framebuffer writes.
-- `no-fade`: copy the moving body plus selection frame only.
-
-Useful env:
-
-- `MISTER_BLEND_BENCH_TRACE=/tmp/blend.tsv` writes per-frame split timings.
-- `MISTER_BLEND_BENCH_VARIANT=baseline|real-text|gradient-text|copy-only|no-fade` chooses the variant.
-- `MISTER_BLEND_BENCH_PX_PER_FRAME=6` changes synthetic scroll velocity.
-- `MISTER_BLEND_BENCH_FADE_H=48` changes the benchmark fade-band height; this is
-  for measuring design tradeoffs and does not change the production arcade fade.
 
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 

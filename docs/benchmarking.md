@@ -52,9 +52,6 @@ the PR slice and BEFORE/AFTER state:
 ```bash
 scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --transition fade --visual-captures 0
 scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --transition fade --visual-captures 0
-scripts/profile-blend-velocity.sh 30 LABEL-BLEND-BASE baseline --skip-build
-scripts/profile-blend-velocity.sh 30 LABEL-BLEND-COPY copy-only --skip-build
-scripts/profile-blend-velocity.sh 30 LABEL-BLEND-NOFADE no-fade --skip-build
 scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CPU-FADE-VEL --cpu-profile --transition fade --visual-captures 0
 ```
 
