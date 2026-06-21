@@ -94,6 +94,15 @@ pub(super) fn start_library_catalog_worker(
                         bootstrap.launchers, bootstrap.scan_us
                     ),
                 });
+                if bootstrap.launchers > 50 {
+                    let title = "Finding games";
+                    let detail = format!("Games found: {}", bootstrap.launchers);
+                    let _ = tx.send(CatalogWorkerMessage::Progress {
+                        title: title.to_string(),
+                        percent: catalog_scan_percent(title, &detail),
+                        detail,
+                    });
+                }
                 let artifact = match library_db::scan_default_library(Some(&mut progress)) {
                     Ok(artifact) => artifact,
                     Err(e) => {

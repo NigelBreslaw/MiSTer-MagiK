@@ -86,6 +86,18 @@ restart.
 The full-screen scan UI is for foreground first-scan or forced build states where
 the user has no current usable catalog.
 
+When a cold or reset database uses the staged RAM catalog path, the worker first
+runs a cheap direct launcher bootstrap over top-level `_Arcade` `.mra` and
+`.mgl` files. This is not a synthetic count: it only reports files that exist on
+the device. The bootstrap exists to put a real game counter in motion before the
+recursive metadata/classification pass has enough discoveries to report.
+
+Cold first-scan game-count display is intentionally monotonic. The bootstrap
+phase may establish an early target floor so the visible counter keeps moving
+slowly while the full scanner catches up. Later `Classifying library` updates
+must not pull the displayed number down; they take over only after their real
+discovery count exceeds the currently displayed count.
+
 The bottom-right `scanning...` badge is progress-driven background UI. It appears
 only when the worker emits real background progress after a usable catalog is
 already visible. It clears on `Unchanged`, `Ready`, `Done`, persistence failure,
