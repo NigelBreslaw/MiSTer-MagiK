@@ -10,15 +10,12 @@ REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--fb-format 565] [--transition EFFECT|mega] [--transition-segment-secs N] [--transition-ms N] [--visual-captures N] [--preview-resize-filter off|nearest|box|lanczos|hybrid] [--preview-resize-max 320x320] [--preview-format raw-rgb565] [--preview-archive PATH]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--visual-captures N]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 /media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
 
---fb-format is kept for old command lines, but UI profiling supports only 565.
---transition selects raw-preview screenshot transitions. Default is fade;
-`mega` cycles all effects.
 --cpu-profile builds/deploys the profiling binary, runs the same supervised
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
 non-empty CPU SVG artifact.
@@ -34,14 +31,7 @@ scenario="velocity-scroll"
 label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 self_test="0"
-preview_resize_filter=""
-preview_resize_max=""
-preview_format=""
-preview_archive=""
 fb_format="565"
-transition=""
-transition_segment_secs=""
-transition_ms=""
 visual_captures="4"
 allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
 cpu_profile="0"
@@ -53,42 +43,13 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
-    --list-only) echo "--list-only was removed; preview-scroll benchmarks require visible screenshots" >&2; exit 2 ;;
     --self-test) self_test="1"; shift ;;
-    --fb-format) fb_format="${2:-}"; shift 2 ;;
-    --preview-blitter) echo "--preview-blitter was removed; previews are always raw565 via the Rust blitter" >&2; exit 2 ;;
-    --transition) transition="${2:-}"; shift 2 ;;
-    --transition-segment-secs) transition_segment_secs="${2:-}"; shift 2 ;;
-    --transition-ms) transition_ms="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
-    --preview-visual-pct) echo "--preview-visual-pct was removed; preview-scroll benchmarks require visible screenshots" >&2; exit 2 ;;
-    --preview-resize-filter) preview_resize_filter="${2:-}"; shift 2 ;;
-    --preview-resize-max) preview_resize_max="${2:-}"; shift 2 ;;
-    --preview-format) preview_format="${2:-}"; shift 2 ;;
-    --preview-archive) preview_archive="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
   esac
 done
-
-validate_transition_arg() {
-  local transition_value="$1"
-  local transition_part transition_key
-  local -a transition_parts
-  if [[ -z "$transition_value" ]]; then return 0; fi
-  IFS=',' read -r -a transition_parts <<< "$transition_value"
-  for transition_part in "${transition_parts[@]}"; do
-    transition_key="${transition_part//_/-}"
-    transition_key="${transition_key,,}"
-    case "$transition_key" in
-      cut|none|off|0|false|no)
-        echo "--transition $transition_part was removed; use fade or mega" >&2
-        return 2
-        ;;
-    esac
-  done
-}
 
 if [[ "${#positionals[@]}" -ge 1 ]]; then secs="${positionals[0]}"; fi
 if [[ "${#positionals[@]}" -ge 2 ]]; then scenario="${positionals[1]}"; fi
@@ -107,15 +68,6 @@ remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
-case "$preview_resize_filter" in ""|off|nearest|box|lanczos|hybrid) ;; *) echo "--preview-resize-filter must be off, nearest, box, lanczos, or hybrid" >&2; exit 2 ;; esac
-if [[ -n "$preview_resize_max" && ! "$preview_resize_max" =~ ^[0-9]+[xX][0-9]+$ ]]; then echo "--preview-resize-max must look like 320x320" >&2; exit 2; fi
-case "$preview_format" in ""|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be raw-rgb565" >&2; exit 2 ;; esac
-if [[ -n "$preview_archive" && ! "$preview_archive" =~ ^[A-Za-z0-9_./:-]+$ ]]; then echo "--preview-archive contains unsupported characters" >&2; exit 2; fi
-case "$fb_format" in 565) ;; *) echo "--fb-format must be 565; RGB888 UI support was removed" >&2; exit 2 ;; esac
-if [[ -n "$transition" && ! "$transition" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--transition must be a comma-separated transition label list or mega" >&2; exit 2; fi
-validate_transition_arg "$transition"
-if [[ -n "$transition_segment_secs" && ! "$transition_segment_secs" =~ ^[0-9]+$ ]]; then echo "--transition-segment-secs must be an integer" >&2; exit 2; fi
-if [[ -n "$transition_ms" && ! "$transition_ms" =~ ^[0-9]+$ ]]; then echo "--transition-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
@@ -154,13 +106,6 @@ write_launcher_env() {
     printf 'export MISTER_PREVIEW_TRACE=1\n'
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     if [[ -n "$trace_path" ]]; then printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$trace_path"; fi
-    if [[ -n "$preview_resize_filter" ]]; then printf 'export MISTER_PREVIEW_RESIZE_FILTER=%q\n' "$preview_resize_filter"; fi
-    if [[ -n "$preview_resize_max" ]]; then printf 'export MISTER_PREVIEW_RESIZE_MAX=%q\n' "$preview_resize_max"; fi
-    if [[ -n "$preview_format" ]]; then printf 'export MISTER_PREVIEW_FORMAT=%q\n' "$preview_format"; fi
-    if [[ -n "$preview_archive" ]]; then printf 'export MISTER_PREVIEW_ARCHIVE=%q\n' "$preview_archive"; fi
-    if [[ -n "$transition" ]]; then printf 'export MISTER_PREVIEW_TRANSITION=%q\n' "$transition"; fi
-    if [[ -n "$transition_segment_secs" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_SEGMENT_SECS=%q\n' "$transition_segment_secs"; fi
-    if [[ -n "$transition_ms" ]]; then printf 'export MISTER_PREVIEW_TRANSITION_MS=%q\n' "$transition_ms"; fi
     if [[ -n "$selected_index" ]]; then printf 'export MISTER_ARCADE_SELECTED_INDEX=%q\n' "$selected_index"; fi
     if [[ "$cpu_profile" == "1" ]]; then
       printf 'export MISTER_PPROF=1\n'
@@ -184,7 +129,7 @@ run_case() {
   local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
   cpu_profile_remote_svg="/tmp/${label}-${name}-cpu.svg"
 
-  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=${transition:-fade} preview_resize_filter=${preview_resize_filter:-app-default} preview_resize_max=${preview_resize_max:-app-default} preview_format=${preview_format:-app-default} preview_archive=${preview_archive:-none} cpu_profile=$cpu_profile"
+  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=fixed-fade cpu_profile=$cpu_profile"
   if [[ "$cpu_profile" == "1" ]]; then
     "$MISTER" run "rm -f '$cpu_profile_remote_svg'" >/dev/null
   fi
@@ -581,20 +526,6 @@ EOF
   check_steady_work_gate selftest "$wall_wait_ok" >/dev/null
   if check_steady_work_gate selftest "$work_slow" >/dev/null 2>&1; then
     echo "steady work self-test expected work over budget failure" >&2
-    rm -rf "$tmp"
-    exit 1
-  fi
-
-  validate_transition_arg "fade"
-  validate_transition_arg "mega"
-  validate_transition_arg "fade,mega"
-  if validate_transition_arg "cut" >/dev/null 2>&1; then
-    echo "transition self-test expected cut rejection" >&2
-    rm -rf "$tmp"
-    exit 1
-  fi
-  if validate_transition_arg "none" >/dev/null 2>&1; then
-    echo "transition self-test expected none rejection" >&2
     rm -rf "$tmp"
     exit 1
   fi
