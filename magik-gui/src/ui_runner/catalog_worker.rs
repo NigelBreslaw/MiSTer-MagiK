@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn start_library_catalog_worker(
     root: String,
     request: CatalogWorkerRequest,
+    initial_cache: CatalogWorkerInitialCache,
 ) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -21,25 +22,36 @@ pub(super) fn start_library_catalog_worker(
                 });
             };
             let mut cache_state = CatalogCacheState::Missing;
-            match library_db::load_arcade_catalog_from_sqlite(&root) {
-                Ok(loaded) => {
-                    send_catalog_load_timing(&tx, "catalog_worker_cache_load", &loaded);
-                    if loaded.catalog.games.is_empty() {
-                        cache_state = CatalogCacheState::Empty;
-                    } else {
-                        cache_state = CatalogCacheState::Ready;
-                        let _ = tx.send(CatalogWorkerMessage::Ready {
-                            catalog: loaded.catalog,
-                            summary: None,
-                            load_us: loaded.us,
-                        });
+            match initial_cache {
+                CatalogWorkerInitialCache::ProbeSqlite => {
+                    match library_db::load_arcade_catalog_from_sqlite(&root) {
+                        Ok(loaded) => {
+                            send_catalog_load_timing(&tx, "catalog_worker_cache_load", &loaded);
+                            if loaded.catalog.games.is_empty() {
+                                cache_state = CatalogCacheState::Empty;
+                            } else {
+                                cache_state = CatalogCacheState::Ready;
+                                let _ = tx.send(CatalogWorkerMessage::Ready {
+                                    catalog: loaded.catalog,
+                                    summary: None,
+                                    load_us: loaded.us,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("library catalog cache load failed: {e}");
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_worker_cache_load_failed".to_string(),
+                                detail: e,
+                            });
+                        }
                     }
                 }
-                Err(e) => {
-                    eprintln!("library catalog cache load failed: {e}");
+                CatalogWorkerInitialCache::AlreadyLoadedReady => {
+                    cache_state = CatalogCacheState::Ready;
                     let _ = tx.send(CatalogWorkerMessage::Timing {
-                        name: "catalog_worker_cache_load_failed".to_string(),
-                        detail: e,
+                        name: "catalog_worker_initial_cache".to_string(),
+                        detail: "source=already_loaded state=ready".to_string(),
                     });
                 }
             }
@@ -243,6 +255,12 @@ pub(super) enum CatalogWorkerRequest {
     LoadOnly,
     CheckStamp,
     ForceBuild,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogWorkerInitialCache {
+    ProbeSqlite,
+    AlreadyLoadedReady,
 }
 
 impl CatalogWorkerRequest {

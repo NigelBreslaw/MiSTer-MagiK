@@ -299,6 +299,7 @@ pub(super) fn run_launcher_loop(
                 catalog_rx = Some(start_library_catalog_worker(
                     arcade_root.clone(),
                     CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerInitialCache::ProbeSqlite,
                 ));
             } else {
                 print_startup_event(
@@ -320,6 +321,7 @@ pub(super) fn run_launcher_loop(
                 catalog_rx = Some(start_library_catalog_worker(
                     arcade_root.clone(),
                     CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerInitialCache::ProbeSqlite,
                 ));
             } else {
                 print_startup_event(
@@ -497,6 +499,7 @@ pub(super) fn run_launcher_loop(
                     catalog_rx = Some(start_library_catalog_worker(
                         deferred.root,
                         deferred.request,
+                        CatalogWorkerInitialCache::AlreadyLoadedReady,
                     ));
                 }
             }
