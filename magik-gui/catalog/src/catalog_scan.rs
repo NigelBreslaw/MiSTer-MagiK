@@ -526,3 +526,348 @@ fn is_arcade_non_game_tree(path: &Path) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_discovery::DiscoverySourceKind;
+    use crate::launch_profiles::{self, ProfilePathClass};
+    use crate::library_db::{mtime_secs, scan_library, BenchConfig};
+    use crate::sqlite_catalog::{load_arcade_catalog_from_sqlite_at, save_sqlite_scan};
+    use crate::test_support::*;
+    use std::path::Path;
+
+    #[test]
+    fn profile_ignored_support_files_do_not_become_payloads() {
+        let profiles = launch_profiles::builtin_profiles();
+
+        assert!(matches!(
+            classify_profile_path(&profiles, Path::new("/media/fat/games/Saturn/boot.rom")),
+            Some((profile, ProfilePathClass::Ignored { reason: launch_profiles::IgnoreReason::Bios, .. }))
+                if profile.id == "saturn"
+        ));
+        assert!(matches!(
+            classify_profile_path(&profiles, Path::new("/media/fat/games/AO486/boot1.rom")),
+            Some((profile, ProfilePathClass::Ignored { reason: launch_profiles::IgnoreReason::Bios, .. }))
+                if profile.id == "ao486"
+        ));
+    }
+
+    #[test]
+    fn rbf_cores_are_not_profile_candidates() {
+        let profiles = launch_profiles::builtin_profiles();
+
+        assert!(classify_profile_path(
+            &profiles,
+            Path::new("/media/fat/_Computer/AcornAtom_20251001.rbf")
+        )
+        .is_none());
+        assert!(classify_profile_path(
+            &profiles,
+            Path::new("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn profile_for_path_prefers_directory_after_games_component() {
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profile_for_path(
+            &profiles,
+            Path::new("/media/fat/collections/NES/games/NeoGeo/mslug3.neo"),
+        )
+        .expect("profile");
+
+        assert_eq!(profile.id, "neogeo");
+    }
+
+    #[test]
+    fn menu_mgl_launchers_are_not_profile_candidates() {
+        let profiles = launch_profiles::builtin_profiles();
+
+        assert!(
+            classify_profile_path(&profiles, Path::new("/media/fat/_Computer/Amiga.mgl")).is_none()
+        );
+        assert!(
+            classify_profile_path(&profiles, Path::new("/media/fat/_Console/Game Gear.mgl"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn neogeo_zip_entries_generate_virtual_launches_and_system() {
+        let root = unique_temp_dir("neogeo-zip-entries");
+        let neogeo_dir = root.join("games/NEOGEO");
+        std::fs::create_dir_all(&neogeo_dir).expect("create neogeo dir");
+        let zip_path = neogeo_dir.join("Neo Geo Mister FGPA Ultra Pack.zip");
+        write_stored_zip(
+            &zip_path,
+            &[
+                (
+                    "Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo",
+                    b"neo",
+                ),
+                ("Neo Geo Mister FGPA Ultra Pack/readme.txt", b"ignore"),
+            ],
+        );
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.containers.len(), 1);
+        assert_eq!(scan.entries.len(), 1);
+        assert!(scan.normal_files.is_empty());
+        let discovery = scan
+            .discoveries
+            .iter()
+            .find(|d| d.source_kind == DiscoverySourceKind::ArchiveEntry)
+            .expect("archive entry discovery");
+        assert_eq!(discovery.platform_id, "neogeo");
+        assert!(discovery.launch_ref.ends_with(
+            "Neo Geo Mister FGPA Ultra Pack.zip/Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo"
+        ));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(loaded.rows, 1);
+        assert_eq!(loaded.catalog.games[0].system_id.as_ref(), "neogeo");
+        assert!(loaded.catalog.games[0].mra_path.starts_with("magik-plan:"));
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "neogeo" && system.count == 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn zip_central_directory_scans_entries_with_extra_and_comment_padding() {
+        let root = unique_temp_dir("zip-central-padding");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let zip_path = root.join("games.zip");
+        write_stored_zip_with_central_metadata(
+            &zip_path,
+            &[("World A-Z/Neo Bomberman (neobombe).neo", b"neo".as_slice())],
+            b"extra",
+            b"comment",
+        );
+        let meta = std::fs::metadata(&zip_path).expect("stat zip");
+        let file = FoundFile {
+            path: zip_path.clone(),
+            ext: "zip".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "neogeo")
+            .expect("neogeo profile");
+
+        let entries = scan_zip_central_directory(&file, profile).expect("scan zip");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].entry_path,
+            "World A-Z/Neo Bomberman (neobombe).neo"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_ignores_gamelists_and_screenshot_media_dirs() {
+        let root = unique_temp_dir("ignore-screenshot-media");
+        let nes_dir = root.join("games/NES");
+        let screenshot_dir = nes_dir.join("screenshot");
+        std::fs::create_dir_all(&screenshot_dir).expect("create screenshot dir");
+        std::fs::write(nes_dir.join("Mario.nes"), "rom").expect("write rom");
+        std::fs::write(
+            nes_dir.join("gamelist.xml"),
+            "<game><path>./Mario.nes</path><image>./screenshot/Mario.png</image></game>",
+        )
+        .expect("write gamelist");
+        std::fs::write(screenshot_dir.join("Not A Game.nes"), "media").expect("write media");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(scan.discoveries.len(), 1);
+        assert_eq!(
+            scan.normal_files[0].path,
+            nes_dir.join("Mario.nes").display().to_string()
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("gamelist.xml")
+                && !discovery.launch_ref.contains("Not A Game.nes")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_uses_profile_game_dirs_instead_of_walking_every_games_child() {
+        let root = unique_temp_dir("target-profile-game-dirs");
+        let nes_dir = root.join("games/NES");
+        let unrelated_dir = root.join("games/NotACoreProfile");
+        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
+        std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
+        std::fs::write(nes_dir.join("Mario.nes"), "rom").expect("write nes rom");
+        std::fs::write(unrelated_dir.join("Ghost.nes"), "rom").expect("write unrelated rom");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(
+            scan.normal_files[0].path,
+            nes_dir.join("Mario.nes").display().to_string()
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("Ghost.nes")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_prunes_arcade_media_and_cores_but_keeps_arcade_game_mras() {
+        let root = unique_temp_dir("target-arcade-game-dirs");
+        let arcade_dir = root.join("_Arcade");
+        let media_dir = arcade_dir.join("media");
+        let cores_dir = arcade_dir.join("cores");
+        let alternatives_dir = arcade_dir.join("_alternatives/_Alt");
+        std::fs::create_dir_all(&media_dir).expect("create media dir");
+        std::fs::create_dir_all(&cores_dir).expect("create cores dir");
+        std::fs::create_dir_all(&alternatives_dir).expect("create alternatives dir");
+        std::fs::write(
+            arcade_dir.join("Real Game.mra"),
+            "<misterromdescription><name>Real Game</name><setname>realgame</setname></misterromdescription>",
+        )
+        .expect("write real mra");
+        std::fs::write(
+            alternatives_dir.join("Alt Game.mra"),
+            "<misterromdescription><name>Alt Game</name><setname>altgame</setname></misterromdescription>",
+        )
+        .expect("write alt mra");
+        std::fs::write(
+            media_dir.join("Fake Screenshot.mra"),
+            "<misterromdescription><name>Fake Screenshot</name></misterromdescription>",
+        )
+        .expect("write media fake");
+        std::fs::write(cores_dir.join("Core.rbf"), "core").expect("write rbf");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 2);
+        let titles = scan
+            .discoveries
+            .iter()
+            .map(|discovery| discovery.title.as_str())
+            .collect::<Vec<_>>();
+        assert!(titles.contains(&"Real Game"));
+        assert!(titles.contains(&"Alt Game"));
+        assert!(!titles.contains(&"Fake Screenshot"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_does_not_follow_symlinked_game_dirs() {
+        let root = unique_temp_dir("ignore-symlinked-game-dir");
+        let outside = unique_temp_dir("symlink-target-games");
+        let games_dir = root.join("games");
+        let linked_nes = games_dir.join("NES");
+        std::fs::create_dir_all(&games_dir).expect("create games dir");
+        std::fs::create_dir_all(&outside).expect("create symlink target");
+        std::fs::write(outside.join("Mario.nes"), "rom").expect("write outside rom");
+        std::os::unix::fs::symlink(&outside, &linked_nes).expect("create linked game dir");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn scanner_does_not_follow_symlinked_game_files() {
+        let root = unique_temp_dir("ignore-symlinked-game-file");
+        let outside = unique_temp_dir("symlink-target-file");
+        let nes_dir = root.join("games/NES");
+        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
+        std::fs::create_dir_all(&outside).expect("create symlink target dir");
+        let outside_rom = outside.join("Mario.nes");
+        std::fs::write(&outside_rom, "rom").expect("write outside rom");
+        std::os::unix::fs::symlink(&outside_rom, nes_dir.join("Mario.nes"))
+            .expect("create linked game file");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn scanner_ignores_organized_alias_dirs() {
+        let root = unique_temp_dir("ignore-organized-aliases");
+        let arcade_dir = root.join("_Arcade");
+        let organized_dir = arcade_dir.join("_Organized/_1 A-E");
+        std::fs::create_dir_all(&organized_dir).expect("create organized dir");
+        std::fs::write(
+            arcade_dir.join("Diamond Run.mra"),
+            "<misterromdescription><name>Diamond Run</name><setname>diamond</setname></misterromdescription>",
+        )
+        .expect("write source mra");
+        std::fs::write(
+            organized_dir.join("Diamond Run.mra"),
+            "<misterromdescription><name>Diamond Run Alias</name><setname>diamond-alias</setname></misterromdescription>",
+        )
+        .expect("write organized alias mra");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(scan.discoveries.len(), 1);
+        assert_eq!(scan.discoveries[0].title, "Diamond Run");
+        assert_eq!(
+            scan.normal_files[0].path,
+            arcade_dir.join("Diamond Run.mra").display().to_string()
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("_Organized")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
