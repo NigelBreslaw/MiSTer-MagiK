@@ -19,7 +19,7 @@ Checks the deployed MiSTer catalog state through scripts/mister:
   - non-empty library.sqlite3
   - launcher_catalog exists
   - screenshot packs project nonzero has_preview counts where installed
-  - console screenshot packs register canonical mame-software asset entries
+  - screenshot packs remain runtime-only and are not indexed into asset tables
   - optional duplicate refresh race proves one refresh skips via single-flight
 USAGE
 }
@@ -124,10 +124,10 @@ console_pack_count="$(
   remote "ls '$REMOTE_ASSETS'/nes-screenshots.mmlz4b '$REMOTE_ASSETS'/snes-screenshots.mmlz4b '$REMOTE_ASSETS'/n64-screenshots.mmlz4b '$REMOTE_ASSETS'/sms-screenshots.mmlz4b '$REMOTE_ASSETS'/megadrive-screenshots.mmlz4b '$REMOTE_ASSETS'/saturn-screenshots.mmlz4b 2>/dev/null | wc -l" | last_number
 )"
 if [ "$console_pack_count" -gt 0 ]; then
-  canonical_assets="$(
-    db "SELECT count(*) FROM asset_entries WHERE identity_namespace='mame-software';" | last_number
+  asset_entry_tables="$(
+    db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" | last_number
   )"
-  assert_gt_zero "canonical mame-software asset entries" "$canonical_assets"
+  assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
 fi
 
 if [ "$RACE_REFRESH" -eq 1 ]; then

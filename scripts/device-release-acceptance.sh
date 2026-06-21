@@ -813,10 +813,10 @@ run_tier_catalog() {
 
   console_pack_count="$(remote "ls '$REMOTE_ASSETS'/nes-screenshots.mmlz4b '$REMOTE_ASSETS'/snes-screenshots.mmlz4b '$REMOTE_ASSETS'/n64-screenshots.mmlz4b '$REMOTE_ASSETS'/sms-screenshots.mmlz4b '$REMOTE_ASSETS'/megadrive-screenshots.mmlz4b '$REMOTE_ASSETS'/saturn-screenshots.mmlz4b 2>/dev/null | wc -l" | last_number || true)"
   if [ "${console_pack_count:-0}" -gt 0 ]; then
-    canonical_assets="$("$MISTER" db "SELECT count(*) FROM asset_entries WHERE identity_namespace='mame-software';" | last_number || true)"
-    assert_gt_zero "canonical mame-software asset entries" "$canonical_assets"
+    asset_entry_tables="$("$MISTER" db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" | last_number || true)"
+    assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
   else
-    record_ok "no console screenshot packs installed; canonical asset projection skipped"
+    record_ok "no console screenshot packs installed; runtime-only preview check skipped"
   fi
 
   if remote "test -f '/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b'"; then

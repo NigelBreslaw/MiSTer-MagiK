@@ -7,7 +7,6 @@ use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, CATALOG_BUILD_VERSION, SCHEMA_VERSION,
 };
 use crate::launch_profiles::PROFILE_SET_VERSION;
-use crate::preview_worker;
 use std::path::Path;
 
 const STAMP_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -46,7 +45,6 @@ pub fn compute_default_catalog_stamp(roots: &[String]) -> CatalogStamp {
         roots,
         &default_mame_sqlite_path(),
         &default_hbmame_sqlite_path(),
-        preview_worker::preview_archive_fingerprints_from_env(),
     )
 }
 
@@ -54,7 +52,6 @@ pub fn compute_catalog_stamp_for_paths(
     roots: &[String],
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
-    preview_fingerprints: Result<Vec<(String, u64, i64)>, String>,
 ) -> CatalogStamp {
     let mut lines = vec![
         format!("schema\t{SCHEMA_VERSION}"),
@@ -64,28 +61,11 @@ pub fn compute_catalog_stamp_for_paths(
     ];
     for (idx, root) in roots.iter().enumerate() {
         append_path_signature(&mut lines, "root", idx, Path::new(root));
-        append_immediate_child_dirs(&mut lines, idx, Path::new(root));
     }
+    lines.push("stamp-targets\t0".to_string());
     append_named_file_signature(&mut lines, "mame-metadata", mame_sqlite_path);
     append_named_file_signature(&mut lines, "hbmame-metadata", hbmame_sqlite_path);
-    append_preview_fingerprints(&mut lines, preview_fingerprints);
     CatalogStamp { lines }
-}
-
-fn append_immediate_child_dirs(lines: &mut Vec<String>, root_idx: usize, root: &Path) {
-    let Ok(read_dir) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut children = read_dir
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false))
-        .filter(|entry| !should_ignore_stamp_dir_name(&entry.file_name().to_string_lossy()))
-        .map(|entry| entry.path())
-        .collect::<Vec<_>>();
-    children.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
-    for child in children {
-        append_path_signature(lines, "child-dir", root_idx, &child);
-    }
 }
 
 fn append_path_signature(lines: &mut Vec<String>, kind: &str, idx: usize, path: &Path) {
@@ -113,37 +93,6 @@ fn append_named_file_signature(lines: &mut Vec<String>, name: &str, path: &Path)
     }
 }
 
-fn append_preview_fingerprints(
-    lines: &mut Vec<String>,
-    preview_fingerprints: Result<Vec<(String, u64, i64)>, String>,
-) {
-    match preview_fingerprints {
-        Ok(mut fingerprints) => {
-            fingerprints.sort_by(|a, b| a.0.cmp(&b.0));
-            lines.push(format!("preview-packs\t{}", fingerprints.len()));
-            for (path, size, mtime) in fingerprints {
-                lines.push(format!("preview-pack\t{path}\t{size}\t{mtime}"));
-            }
-        }
-        Err(_) => lines.push("preview-packs\terror".to_string()),
-    }
-}
-
-fn should_ignore_stamp_dir_name(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "images"
-            | "manuals"
-            | "screenshot"
-            | "screenshots"
-            | "screenshot-magik"
-            | "_organized"
-            | "boxart"
-            | "__macosx"
-            | ".____padding_file"
-    ) || name.starts_with("._")
-}
-
 fn mtime_nanos(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
@@ -168,7 +117,7 @@ mod tests {
     #[test]
     fn matching_catalog_stamp_has_stable_fingerprint() {
         let root = unique_temp_dir("stamp-stable");
-        let system = root.join("NES");
+        let system = root.join("games/NES");
         std::fs::create_dir_all(&system).expect("create system dir");
         set_mtime_for_test(&system, 10, 0);
         let mame = root.join("mame.sqlite3");
@@ -176,58 +125,65 @@ mod tests {
         std::fs::write(&mame, b"mame").expect("write mame");
         std::fs::write(&hbmame, b"hbmame").expect("write hbmame");
         let roots = vec![root.display().to_string()];
-        let preview = Ok(vec![("/tmp/screens.mmlz4b".to_string(), 12, 34)]);
-
-        let first = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame, preview.clone());
-        let second = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame, preview);
+        let first = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
+        let second = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
 
         assert_eq!(first, second);
         assert_eq!(first.fingerprint_hex(), second.fingerprint_hex());
     }
 
     #[test]
-    fn child_directory_metadata_changes_catalog_stamp() {
-        let root = unique_temp_dir("stamp-child-change");
-        let system = root.join("SNES");
-        std::fs::create_dir_all(&system).expect("create system dir");
-        set_mtime_for_test(&system, 10, 0);
+    fn root_directory_metadata_changes_catalog_stamp() {
+        let root = unique_temp_dir("stamp-root-change");
+        set_mtime_for_test(&root, 10, 0);
         let roots = vec![root.display().to_string()];
-        let first = compute_catalog_stamp_for_paths(
-            &roots,
-            &root.join("mame"),
-            &root.join("hbmame"),
-            Ok(Vec::new()),
-        );
+        let first =
+            compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
-        set_mtime_for_test(&system, 20, 0);
-        let second = compute_catalog_stamp_for_paths(
-            &roots,
-            &root.join("mame"),
-            &root.join("hbmame"),
-            Ok(Vec::new()),
-        );
+        set_mtime_for_test(&root, 20, 0);
+        let second =
+            compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
         assert_ne!(first.fingerprint_hex(), second.fingerprint_hex());
+    }
+
+    #[test]
+    fn stamp_uses_roots_without_enumerating_nested_game_dirs() {
+        let root = unique_temp_dir("stamp-roots-only");
+        let system = root.join("games/NES");
+        let nested = system.join("Nested Game");
+        std::fs::create_dir_all(&nested).expect("create nested game dir");
+        let roots = vec![root.display().to_string()];
+
+        let stamp =
+            compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
+
+        assert!(stamp
+            .lines()
+            .iter()
+            .any(|line| line.contains(&root.display().to_string())));
+        assert!(stamp.lines().iter().any(|line| line == "stamp-targets\t0"));
+        assert!(!stamp
+            .lines()
+            .iter()
+            .any(|line| line.contains(&system.display().to_string())));
+        assert!(!stamp
+            .lines()
+            .iter()
+            .any(|line| line.contains(&nested.display().to_string())));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn root_missing_changes_catalog_stamp() {
         let root = unique_temp_dir("stamp-root-missing");
         let roots = vec![root.display().to_string()];
-        let first = compute_catalog_stamp_for_paths(
-            &roots,
-            &root.join("mame"),
-            &root.join("hbmame"),
-            Ok(Vec::new()),
-        );
+        let first =
+            compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
         std::fs::remove_dir_all(&root).expect("remove root");
-        let second = compute_catalog_stamp_for_paths(
-            &roots,
-            &root.join("mame"),
-            &root.join("hbmame"),
-            Ok(Vec::new()),
-        );
+        let second =
+            compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
         assert_ne!(first.fingerprint_hex(), second.fingerprint_hex());
         assert!(second
@@ -237,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_and_preview_changes_catalog_stamp() {
+    fn metadata_changes_catalog_stamp_but_preview_packs_are_runtime_only() {
         let root = unique_temp_dir("stamp-input-change");
         let mame = root.join("mame.sqlite3");
         let hbmame = root.join("hbmame.sqlite3");
@@ -245,28 +201,17 @@ mod tests {
         std::fs::write(&hbmame, b"hbmame").expect("write hbmame");
         let roots = vec![root.display().to_string()];
 
-        let first = compute_catalog_stamp_for_paths(
-            &roots,
-            &mame,
-            &hbmame,
-            Ok(vec![("preview-a".to_string(), 1, 1)]),
-        );
+        let first = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
         std::fs::write(&mame, b"changed").expect("change mame");
-        let second = compute_catalog_stamp_for_paths(
-            &roots,
-            &mame,
-            &hbmame,
-            Ok(vec![("preview-a".to_string(), 1, 1)]),
-        );
-        let third = compute_catalog_stamp_for_paths(
-            &roots,
-            &mame,
-            &hbmame,
-            Ok(vec![("preview-a".to_string(), 2, 1)]),
-        );
+        let second = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
+        let third = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
 
         assert_ne!(first.fingerprint_hex(), second.fingerprint_hex());
-        assert_ne!(second.fingerprint_hex(), third.fingerprint_hex());
+        assert_eq!(second.fingerprint_hex(), third.fingerprint_hex());
+        assert!(!third
+            .lines()
+            .iter()
+            .any(|line| line.starts_with("preview-pack")));
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
