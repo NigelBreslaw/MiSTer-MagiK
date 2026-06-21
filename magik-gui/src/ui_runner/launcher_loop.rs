@@ -965,6 +965,7 @@ pub(super) fn run_launcher_loop(
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
+        let catalog_background_scan_visible = bridge.get_catalog_background_scan_visible();
         let status_write_due = frame_accounting.status_write_due();
         let status_string_copy_start = (status_write_due
             && frame_accounting.preview_scroll_trace_enabled())
@@ -1179,6 +1180,7 @@ pub(super) fn run_launcher_loop(
                 .map(|(_, detail)| detail.as_str())
                 .unwrap_or(""),
             catalog_scan_percent,
+            catalog_background_scan_visible,
             launcher_bench_scenario,
             start_screen,
             lock_screen,
