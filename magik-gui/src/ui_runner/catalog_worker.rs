@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn start_library_catalog_worker(
     root: String,
-    refresh_requested: bool,
+    request: CatalogWorkerRequest,
 ) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -48,16 +48,16 @@ pub(super) fn start_library_catalog_worker(
                     });
                 }
             }
-            let plan = catalog_worker_plan(cache_state, refresh_requested);
+            let plan = catalog_worker_plan(cache_state, request);
             if cache_state.has_usable_catalog() {
                 lower_background_priority();
             }
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
                 detail: format!(
-                    "cache_state={} refresh_requested={} plan={}",
+                    "cache_state={} request={} plan={}",
                     cache_state.label(),
-                    refresh_requested,
+                    request.label(),
                     plan.label()
                 ),
             });
@@ -68,7 +68,7 @@ pub(super) fn start_library_catalog_worker(
                     let _ = tx.send(CatalogWorkerMessage::Done);
                     return;
                 }
-                CatalogWorkerPlan::RefreshInProcess => {
+                CatalogWorkerPlan::ValidateCached | CatalogWorkerPlan::RebuildIfNeeded => {
                     debug_assert!(catalog_worker_plan_prewarm_required(plan));
                     let (title, detail) = if cache_state.has_usable_catalog() {
                         (
@@ -204,6 +204,23 @@ pub(super) fn start_library_catalog_worker(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogWorkerRequest {
+    UseCacheOnly,
+    ValidateCached,
+    RebuildIfNeeded,
+}
+
+impl CatalogWorkerRequest {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::UseCacheOnly => "use_cache_only",
+            Self::ValidateCached => "validate_cached",
+            Self::RebuildIfNeeded => "rebuild_if_needed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatalogCacheState {
     Ready,
     ReadyWithStalePreviewArchive,
@@ -229,34 +246,43 @@ impl CatalogCacheState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatalogWorkerPlan {
     UseCacheOnly,
-    RefreshInProcess,
+    ValidateCached,
+    RebuildIfNeeded,
 }
 
 impl CatalogWorkerPlan {
     fn label(self) -> &'static str {
         match self {
             Self::UseCacheOnly => "use_cache_only",
-            Self::RefreshInProcess => "refresh_in_process",
+            Self::ValidateCached => "validate_cached",
+            Self::RebuildIfNeeded => "rebuild_if_needed",
         }
     }
 }
 
 fn catalog_worker_plan_prewarm_required(plan: CatalogWorkerPlan) -> bool {
-    matches!(plan, CatalogWorkerPlan::RefreshInProcess)
+    matches!(
+        plan,
+        CatalogWorkerPlan::ValidateCached | CatalogWorkerPlan::RebuildIfNeeded
+    )
 }
 
 fn catalog_worker_plan(
     cache_state: CatalogCacheState,
-    refresh_requested: bool,
+    request: CatalogWorkerRequest,
 ) -> CatalogWorkerPlan {
-    if refresh_requested {
-        return CatalogWorkerPlan::RefreshInProcess;
+    if request == CatalogWorkerRequest::RebuildIfNeeded {
+        return CatalogWorkerPlan::RebuildIfNeeded;
     }
     match cache_state {
-        CatalogCacheState::Ready => CatalogWorkerPlan::UseCacheOnly,
+        CatalogCacheState::Ready => match request {
+            CatalogWorkerRequest::UseCacheOnly => CatalogWorkerPlan::UseCacheOnly,
+            CatalogWorkerRequest::ValidateCached => CatalogWorkerPlan::ValidateCached,
+            CatalogWorkerRequest::RebuildIfNeeded => CatalogWorkerPlan::RebuildIfNeeded,
+        },
         CatalogCacheState::ReadyWithStalePreviewArchive
         | CatalogCacheState::Empty
-        | CatalogCacheState::Missing => CatalogWorkerPlan::RefreshInProcess,
+        | CatalogCacheState::Missing => CatalogWorkerPlan::RebuildIfNeeded,
     }
 }
 
@@ -425,24 +451,45 @@ mod tests {
 
     #[test]
     fn catalog_worker_uses_cached_database_without_refresh() {
-        let plan = catalog_worker_plan(CatalogCacheState::Ready, false);
+        let plan =
+            catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::UseCacheOnly);
         assert_eq!(plan, CatalogWorkerPlan::UseCacheOnly);
         assert!(!catalog_worker_plan_prewarm_required(plan));
     }
 
     #[test]
-    fn catalog_worker_refreshes_missing_empty_or_stale_preview_cache_without_refresh() {
+    fn catalog_worker_validates_ready_cache_when_requested() {
         assert_eq!(
-            catalog_worker_plan(CatalogCacheState::Missing, false),
-            CatalogWorkerPlan::RefreshInProcess
+            catalog_worker_plan(
+                CatalogCacheState::Ready,
+                CatalogWorkerRequest::ValidateCached,
+            ),
+            CatalogWorkerPlan::ValidateCached
+        );
+    }
+
+    #[test]
+    fn catalog_worker_rebuilds_missing_empty_or_stale_preview_cache_without_refresh() {
+        assert_eq!(
+            catalog_worker_plan(
+                CatalogCacheState::Missing,
+                CatalogWorkerRequest::ValidateCached,
+            ),
+            CatalogWorkerPlan::RebuildIfNeeded
         );
         assert_eq!(
-            catalog_worker_plan(CatalogCacheState::Empty, false),
-            CatalogWorkerPlan::RefreshInProcess
+            catalog_worker_plan(
+                CatalogCacheState::Empty,
+                CatalogWorkerRequest::ValidateCached
+            ),
+            CatalogWorkerPlan::RebuildIfNeeded
         );
         assert_eq!(
-            catalog_worker_plan(CatalogCacheState::ReadyWithStalePreviewArchive, false),
-            CatalogWorkerPlan::RefreshInProcess
+            catalog_worker_plan(
+                CatalogCacheState::ReadyWithStalePreviewArchive,
+                CatalogWorkerRequest::ValidateCached,
+            ),
+            CatalogWorkerPlan::RebuildIfNeeded
         );
     }
 
@@ -455,8 +502,8 @@ mod tests {
             CatalogCacheState::Missing,
         ] {
             assert_eq!(
-                catalog_worker_plan(state, true),
-                CatalogWorkerPlan::RefreshInProcess
+                catalog_worker_plan(state, CatalogWorkerRequest::RebuildIfNeeded),
+                CatalogWorkerPlan::RebuildIfNeeded
             );
         }
     }
@@ -474,7 +521,10 @@ mod tests {
     #[test]
     fn refresh_plan_keeps_virtual_launch_cache_prewarm() {
         assert!(catalog_worker_plan_prewarm_required(
-            CatalogWorkerPlan::RefreshInProcess
+            CatalogWorkerPlan::RebuildIfNeeded
+        ));
+        assert!(catalog_worker_plan_prewarm_required(
+            CatalogWorkerPlan::ValidateCached
         ));
     }
 
