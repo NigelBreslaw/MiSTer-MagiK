@@ -257,10 +257,7 @@ pub(super) fn run_launcher_loop(
             catalog_version = catalog_version.wrapping_add(1);
             apply_forced_arcade_selected(&mut nav, &catalog);
             apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
-            let request = ready_catalog_worker_request(
-                catalog_refresh_policy,
-                !arcade_catalog_required_at_start,
-            );
+            let request = ready_catalog_worker_request(catalog_refresh_policy);
             if request != CatalogWorkerRequest::LoadOnly {
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
@@ -1493,18 +1490,13 @@ fn catalog_background_scan_progress_visible(
         && !matches!(title, "Library scan failed" | "Library load failed")
 }
 
-fn ready_catalog_worker_request(
-    refresh_policy: CatalogRefreshPolicy,
-    background_validation: bool,
-) -> CatalogWorkerRequest {
+fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> CatalogWorkerRequest {
     if refresh_policy == CatalogRefreshPolicy::Off {
         CatalogWorkerRequest::LoadOnly
     } else if refresh_policy.force_requested() {
         CatalogWorkerRequest::ForceBuild
-    } else if background_validation {
-        CatalogWorkerRequest::CheckStamp
     } else {
-        CatalogWorkerRequest::LoadOnly
+        CatalogWorkerRequest::CheckStamp
     }
 }
 
@@ -1769,19 +1761,15 @@ mod tests {
     #[test]
     pub(super) fn ready_catalog_uses_background_worker_for_refresh_or_home_validation() {
         assert_eq!(
-            ready_catalog_worker_request(CatalogRefreshPolicy::Default, false),
-            CatalogWorkerRequest::LoadOnly
-        );
-        assert_eq!(
-            ready_catalog_worker_request(CatalogRefreshPolicy::Default, true),
+            ready_catalog_worker_request(CatalogRefreshPolicy::Default),
             CatalogWorkerRequest::CheckStamp
         );
         assert_eq!(
-            ready_catalog_worker_request(CatalogRefreshPolicy::Force, false),
+            ready_catalog_worker_request(CatalogRefreshPolicy::Force),
             CatalogWorkerRequest::ForceBuild
         );
         assert_eq!(
-            ready_catalog_worker_request(CatalogRefreshPolicy::Off, true),
+            ready_catalog_worker_request(CatalogRefreshPolicy::Off),
             CatalogWorkerRequest::LoadOnly
         );
     }
