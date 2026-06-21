@@ -2,6 +2,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$HERE/scripts/apple-container-resources.sh"
 VERSION="${MISTER_FFMPEG_VERSION:-8.1.1}"
 WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"
@@ -75,10 +76,15 @@ if [ "$BACKEND" = apple-container ]; then
     echo "ERROR: Apple container is not installed or not on PATH." >&2
     exit 1
   fi
+  CONTAINER_CPUS="$(apple_container_cpus)"
+  CONTAINER_MEMORY="$(apple_container_memory)"
   echo "==> building Apple-container FFmpeg helper image $APPLE_IMAGE"
   container build --arch arm64 --file "$HERE/Dockerfile.cross-armv7" --tag "$APPLE_IMAGE" "$HERE"
   RUNNER=(
     container run --arch arm64 --rm
+    --cpus "$CONTAINER_CPUS"
+    --memory "$CONTAINER_MEMORY"
+    --env MAKEFLAGS="-j$CONTAINER_CPUS"
     --volume "$HERE:/project"
     --workdir "/project/target/ffmpeg-minimal/armv7/ffmpeg-$VERSION"
     "$APPLE_IMAGE"
