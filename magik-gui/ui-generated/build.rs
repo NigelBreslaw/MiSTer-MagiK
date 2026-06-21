@@ -34,7 +34,6 @@ fn main() {
             "../ui/bench/full_motion.slint",
             "../ui/bench/static_ui.slint",
             "../ui/bench/local_motion.slint",
-            "../ui/bench/console_scroll.slint",
             "../ui/bench/effect_hud.slint",
         ]);
         if video {
@@ -60,7 +59,6 @@ fn main() {
     }
     if bench_scenes {
         inputs.extend([
-            "../ui/bench/console_scroll.slint",
             "../ui/bench/effect_hud.slint",
             "../ui/bench/full_motion.slint",
             "../ui/bench/local_motion.slint",

@@ -15,8 +15,8 @@ kill -9 $(pidof mister-magik-fb) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui full_motion 20
 ```
 
-Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, `console_scroll`,
-and `blend_velocity`. With a `--video` build, `video_playback` is also
+Scenes: `demo`, `full_motion`, `static_ui`, `local_motion`, and
+`blend_velocity`. With a `--video` build, `video_playback` is also
 available. It expects `/media/fat/mister-magik/mslug3.mov` by default: H.264
 baseline video plus 48 kHz stereo `pcm_s16le` audio. Override with
 `MISTER_VIDEO_PATH`.

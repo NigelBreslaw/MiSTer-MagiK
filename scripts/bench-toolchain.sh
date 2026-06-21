@@ -19,7 +19,7 @@ TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
 
 # Slint scenes (see magik-gui/ui/bench/README.md)
-BENCH_SCENES=(demo full_motion static_ui local_motion console_scroll)
+BENCH_SCENES=(demo full_motion static_ui local_motion)
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
 VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magik/mslug3.mov}"
 
@@ -600,8 +600,8 @@ while [ \$i -lt $secs ]; do
   fi
   i=\$((i + 1))
 done
-wait \$UI_PID
-UI_RC=\$?
+UI_RC=0
+wait \$UI_PID || UI_RC=\$?
 echo ___BENCH_FB_CAPTURED___
 echo \$FB_CAPTURED
 echo ___BENCH_FB_GEOMETRY___

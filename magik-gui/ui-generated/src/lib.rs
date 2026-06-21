@@ -21,11 +21,6 @@ pub mod local_motion {
 }
 
 #[cfg(mister_bench_scenes)]
-pub mod console_scroll {
-    include!(concat!(env!("OUT_DIR"), "/console_scroll.rs"));
-}
-
-#[cfg(mister_bench_scenes)]
 pub mod effect_hud {
     include!(concat!(env!("OUT_DIR"), "/effect_hud.rs"));
 }
