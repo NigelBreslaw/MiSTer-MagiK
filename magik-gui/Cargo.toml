@@ -50,6 +50,7 @@ profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:mister-magik-ui"]
 bench-scenes = ["mister-magik-ui?/bench-scenes"]
 experiments = ["bench-scenes"]
+diagnostics = []
 video = ["dep:ffmpeg-next", "bench-scenes", "mister-magik-ui?/video"]
 preview-archive-bench = ["dep:lz4_flex"]
 
