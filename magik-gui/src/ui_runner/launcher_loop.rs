@@ -257,7 +257,7 @@ pub(super) fn run_launcher_loop(
             apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
             let request =
                 ready_catalog_worker_request(catalog_refresh, !arcade_catalog_required_at_start);
-            if request != CatalogWorkerRequest::UseCacheOnly {
+            if request != CatalogWorkerRequest::LoadOnly {
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
                     start,
@@ -278,7 +278,7 @@ pub(super) fn run_launcher_loop(
                 print_startup_event(
                     start,
                     "catalog_refresh_decision",
-                    "cache_state=ready refresh_requested=false background_validation=false plan=use_cache_only",
+                    "cache_state=ready refresh_requested=false background_validation=false plan=load_only",
                 );
                 catalog_rx = None;
                 catalog_refresh_done = true;
@@ -293,7 +293,7 @@ pub(super) fn run_launcher_loop(
             print_startup_event(start, "catalog_worker_start", &arcade_root);
             catalog_rx = Some(start_library_catalog_worker(
                 arcade_root.clone(),
-                CatalogWorkerRequest::RebuildIfNeeded,
+                CatalogWorkerRequest::ForceBuild,
             ));
         }
         Err(e) => {
@@ -302,7 +302,7 @@ pub(super) fn run_launcher_loop(
             print_startup_event(start, "catalog_worker_start", &arcade_root);
             catalog_rx = Some(start_library_catalog_worker(
                 arcade_root.clone(),
-                CatalogWorkerRequest::RebuildIfNeeded,
+                CatalogWorkerRequest::ForceBuild,
             ));
         }
     }
@@ -1461,11 +1461,11 @@ fn ready_catalog_worker_request(
     background_validation: bool,
 ) -> CatalogWorkerRequest {
     if refresh_requested {
-        CatalogWorkerRequest::RebuildIfNeeded
+        CatalogWorkerRequest::ForceBuild
     } else if background_validation {
-        CatalogWorkerRequest::ValidateCached
+        CatalogWorkerRequest::CheckStamp
     } else {
-        CatalogWorkerRequest::UseCacheOnly
+        CatalogWorkerRequest::LoadOnly
     }
 }
 
@@ -1730,15 +1730,15 @@ mod tests {
     pub(super) fn ready_catalog_uses_background_worker_for_refresh_or_home_validation() {
         assert_eq!(
             ready_catalog_worker_request(false, false),
-            CatalogWorkerRequest::UseCacheOnly
+            CatalogWorkerRequest::LoadOnly
         );
         assert_eq!(
             ready_catalog_worker_request(false, true),
-            CatalogWorkerRequest::ValidateCached
+            CatalogWorkerRequest::CheckStamp
         );
         assert_eq!(
             ready_catalog_worker_request(true, false),
-            CatalogWorkerRequest::RebuildIfNeeded
+            CatalogWorkerRequest::ForceBuild
         );
     }
 

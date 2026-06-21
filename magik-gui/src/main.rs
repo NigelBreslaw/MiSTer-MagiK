@@ -243,7 +243,7 @@ fn run_library_refresh() {
     let mut progress = |title: &str, detail: &str| {
         println!("library_refresh\tprogress\t{title}\t{detail}");
     };
-    match library_db::refresh_default_sqlite_database(Some(&mut progress)) {
+    match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
             let launch_cache = launcher::materialize_virtual_launch_cache_from_default_db();
             drop(lock);
