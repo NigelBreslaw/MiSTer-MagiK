@@ -246,3 +246,111 @@ CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	library_db_saved	58281	bytes=1758822
 CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	library_ready	58599	games=7221 load_us=309861
 CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	catalog_bridge_sync_update	58604	games=7221 elapsed_us=4709
 CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	db_count	0	9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	first_frame	990	catalog_ready=false
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	16768	path=/media/fat/_Arcade dirs=486 files=2603 candidates=2599
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	1516	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	2383	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	4	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	72	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	3979	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	553	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	3671	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	2477	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	606	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	3344	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	709	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	132	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk_target	122	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_walk	38703	candidates=7757
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_profile_match	95	calls=7757
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_installed_collection	179	calls=7365
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_archive_toc	836	containers=154
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_collection_listings	0	collections=0
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_file_discovery	20045	files=7363
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	scan_stage_classify_total	39162	discoveries=9206 normal_files=7749 containers=154 entries=281
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	library_scan_complete	40731	scan_us=39162158 discover_us=38703435 classify_us=39161765 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_schema	28	tables=14
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_metadata_load	2980	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_begin_tx	0	-
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_profiles	1	rows=16
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_payloads	849	normal_files=7749 entries=281
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	405	from=0 to=1000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	353	from=1000 to=2000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	375	from=2000 to=3000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	452	from=3000 to=4000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	369	from=4000 to=5000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	386	from=5000 to=6000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	512	from=6000 to=7000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	526	from=7000 to=8000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	910	from=8000 to=9000 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_chunk	299	from=9000 to=9083 total=9083
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_games_total	4860	rows=9083 launcher_rows=6245
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_materialize_arcade_ui	772	-
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_launcher_arcade	20	-
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_launcher_console	427	rows=6185
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_meta	323	rows=11
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_catalog_stamp	0	rows=11
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_insert_software_hash_cache	0	rows=0
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_commit	21	-
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	import_stage_total	10327	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	library_db_saved	57932	bytes=17768448 scan_us=39162158 discover_us=38703435 classify_us=39161765 import_us=17133924 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	library_ready	58299	games=7221 load_us=353055
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	catalog_bridge_sync_update	58304	games=7221 elapsed_us=4908
+CATV2-VPREWARM-BEFORE-20260621	6bed32be	db_count	0	9083
+CATV2-VPREWARM-AFTER-20260621	673248af	first_frame	1299	catalog_ready=false
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	16654	path=/media/fat/_Arcade dirs=486 files=2603 candidates=2599
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	1581	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	2408	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	3	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	82	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	3989	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	557	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	3711	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	2446	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	625	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	3427	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	671	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	128	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk_target	135	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_walk	39067	candidates=7757
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_profile_match	94	calls=7757
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_installed_collection	205	calls=7365
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_archive_toc	893	containers=154
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_collection_listings	0	collections=0
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_file_discovery	19972	files=7363
+CATV2-VPREWARM-AFTER-20260621	673248af	scan_stage_classify_total	39543	discoveries=9206 normal_files=7749 containers=154 entries=281
+CATV2-VPREWARM-AFTER-20260621	673248af	library_scan_complete	41381	scan_us=39543744 discover_us=39067409 classify_us=39543397 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_schema	36	tables=14
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_metadata_load	3031	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_begin_tx	0	-
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_profiles	0	rows=16
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_payloads	824	normal_files=7749 entries=281
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	435	from=0 to=1000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	369	from=1000 to=2000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	377	from=2000 to=3000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	386	from=3000 to=4000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	368	from=4000 to=5000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	406	from=5000 to=6000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	512	from=6000 to=7000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	537	from=7000 to=8000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	859	from=8000 to=9000 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_chunk	287	from=9000 to=9083 total=9083
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_games_total	4816	rows=9083 launcher_rows=6245
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_materialize_arcade_ui	794	-
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_launcher_arcade	20	-
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_launcher_console	431	rows=6185
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_meta	308	rows=11
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_catalog_stamp	0	rows=11
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_insert_software_hash_cache	0	rows=0
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_commit	21	-
+CATV2-VPREWARM-AFTER-20260621	673248af	import_stage_total	10319	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.625
+CATV2-VPREWARM-AFTER-20260621	673248af	library_db_saved	58615	bytes=17768448 scan_us=39543744 discover_us=39067409 classify_us=39543397 import_us=17181237 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATV2-VPREWARM-AFTER-20260621	673248af	library_ready	58965	games=7221 load_us=343347
+CATV2-VPREWARM-AFTER-20260621	673248af	catalog_bridge_sync_update	58970	games=7221 elapsed_us=4783
+CATV2-VPREWARM-AFTER-20260621	673248af	db_count	0	9083

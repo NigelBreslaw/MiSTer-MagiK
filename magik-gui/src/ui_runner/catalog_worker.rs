@@ -134,7 +134,7 @@ pub(super) fn start_library_catalog_worker(
                                     summary: Some(summary),
                                     load_us: loaded.us,
                                 });
-                                materialize_virtual_launch_cache(&tx);
+                                materialize_virtual_launch_cache_after_ready(&tx);
                             }
                             Err(e) => {
                                 eprintln!("library catalog load failed after persistence: {e}");
@@ -233,7 +233,7 @@ pub(super) fn start_library_catalog_worker(
                         load_us: loaded.us,
                     });
                     if rebuilt {
-                        materialize_virtual_launch_cache(&tx);
+                        materialize_virtual_launch_cache_after_ready(&tx);
                     }
                 }
                 Err(e) => {
@@ -480,6 +480,16 @@ fn skip_virtual_launch_cache_prewarm(
     });
 }
 
+fn materialize_virtual_launch_cache_after_ready(tx: &mpsc::Sender<CatalogWorkerMessage>) {
+    lower_background_priority();
+    std::thread::sleep(post_ready_virtual_launch_cache_delay());
+    materialize_virtual_launch_cache(tx);
+}
+
+fn post_ready_virtual_launch_cache_delay() -> Duration {
+    Duration::from_millis(1500)
+}
+
 pub(super) fn lower_background_priority() {
     #[cfg(target_os = "linux")]
     unsafe {
@@ -554,6 +564,14 @@ mod tests {
         assert!(catalog_worker_plan_prewarm_required(
             CatalogWorkerPlan::CheckStamp
         ));
+    }
+
+    #[test]
+    fn post_ready_virtual_launch_cache_delay_is_short_and_fixed() {
+        assert_eq!(
+            post_ready_virtual_launch_cache_delay(),
+            Duration::from_millis(1500)
+        );
     }
 
     #[test]
