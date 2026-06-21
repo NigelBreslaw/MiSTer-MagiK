@@ -165,3 +165,15 @@ REVIEW-AFTER-20260617	1	cold_scan	12319922	discover_us=12300231
 REVIEW-AFTER-20260617	1	import	26463079	bytes=31608832
 REVIEW-AFTER-20260617	1	cached_arcade_load	156334	rows=8204
 REVIEW-AFTER-20260617	1	no_change_manifest	9506320	changed=false
+CATV2-STAMP-GATE-20260621	1	fresh_build	23210262	discover_us=22659392
+CATV2-STAMP-GATE-20260621	1	import	11955274	bytes=17588224
+CATV2-STAMP-GATE-20260621	1	cached_arcade_load	142514	rows=7221
+CATV2-STAMP-GATE-20260621	1	root_stamp_check	3364	unchanged=true check_us=3059 compute_us=221 open_us=601 read_us=2210 compare_us=16 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
+CATV2-STAMP-GATE-20260621	2	fresh_build	3218242	discover_us=3009434
+CATV2-STAMP-GATE-20260621	2	import	10921664	bytes=17588224
+CATV2-STAMP-GATE-20260621	2	cached_arcade_load	140259	rows=7221
+CATV2-STAMP-GATE-20260621	2	root_stamp_check	3451	unchanged=true check_us=3063 compute_us=195 open_us=651 read_us=2191 compare_us=14 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
+CATV2-STAMP-GATE-20260621	3	fresh_build	3109850	discover_us=2879433
+CATV2-STAMP-GATE-20260621	3	import	11019170	bytes=17588224
+CATV2-STAMP-GATE-20260621	3	cached_arcade_load	142605	rows=7221
+CATV2-STAMP-GATE-20260621	3	root_stamp_check	3435	unchanged=true check_us=3109 compute_us=193 open_us=639 read_us=2245 compare_us=14 stored=08ad6f11d1856af5 current=08ad6f11d1856af5 stored_lines=11 current_lines=11
