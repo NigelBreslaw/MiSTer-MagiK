@@ -151,6 +151,6 @@ SQLite does not load the full `library.sqlite3` into RAM at startup. The slow
 operation is building the database, especially the first identity pass over
 console ROM payloads on MiSTer's exFAT/FUSE storage.
 
-Avoid doing screenshot-pack construction on the MiSTer hot path. Longer term,
-prefer host-built identity/cache data or persistent per-file hashes so a first
-device build does not need to reread large console libraries.
+Avoid doing screenshot-pack construction on the MiSTer hot path. Runtime deploy
+does not build or copy screenshot packs or MAME/HBMAME metadata databases; treat
+those as fixed release artifacts produced by the host-side catalog/media tools.

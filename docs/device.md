@@ -53,7 +53,8 @@ Do not set `main=mister-magik-fb`. Slint is not Main and cannot initialize HDMI
 before Main's `video_init()`.
 
 Use only the Rust comment-preserving mutators in `scripts/mister` or the project
-install/restore scripts for `MiSTer.ini` changes. Do not use ad hoc sed/awk.
+install/restore scripts for `MiSTer.ini` changes. Stock inittab repair is
+centralized in `scripts/mister inittab-ensure-stock`. Do not use ad hoc sed/awk.
 
 ## Recovery
 

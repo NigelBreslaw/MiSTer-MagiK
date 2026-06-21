@@ -55,8 +55,10 @@ default. Override with `MISTER_MAIN_DIR`.
   and `scripts/bench-toolchain.sh ...`. Avoid `/bin/zsh -lc` wrappers for normal
   device work because sandbox approvals key off the outer command.
 - `scripts/deploy-rust.sh` deploys the MagiK binary through the agent by
-  default. Use `MISTER_DEPLOY_TRANSPORT=ssh` only as an explicit fallback test or
-  recovery path.
+  default. It is runtime-only; build/publish catalog metadata and screenshot
+  packs with the catalog/media tools, not deploy flags. Use
+  `MISTER_DEPLOY_TRANSPORT=ssh` only as an explicit fallback test or recovery
+  path.
 - Local ARM builds on Apple Silicon use Apple's `container` runtime by default.
   Do not route local builds through Docker/OrbStack unless
   `MISTER_ARM_BUILD_BACKEND=cross` is explicitly requested for a comparison.
@@ -135,9 +137,10 @@ Effect-scene and mega-transition work is experimental only; see
 - Do not use row-by-row selected-index jumps for arcade performance conclusions.
   Use velocity scenarios from `docs/benchmarking.md`.
 - Use RGB565 for production launcher/arcade performance conclusions.
-  `MISTER_FB_FORMAT=8888` is only for diagnostic color-route A/B runs.
+  RGB888/XRGB8888 app env overrides are retired; use explicit diagnostic
+  commands or feature-gated diagnostics for color-route A/B work.
 - Do not rebuild or write preview caches on the MiSTer hot path. Build raw565
-  caches from the Mac with `tools/mister preview-cache-build`.
+  caches from the Mac with `scripts/mister preview-cache-build`.
 - The library scanner must not walk screenshot/cache media directories, read
   `gamelist.xml`, or classify helper payloads as games.
 

@@ -144,10 +144,10 @@ magik-gui/build-arm.sh --video
 # Video builds force all-scenes UI scope because video_playback.slint is a bench scene.
 # Default media path on MiSTer: /media/fat/mister-magik/mslug3.mov
 
-# Deploy (default = release-device)
+# Deploy runtime binary only (default = release-device).
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
-# Deploy with every Slint scene included.
+# Deploy an experiment-enabled binary for lab scripts.
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh --all-scenes
 ```
 
@@ -244,6 +244,8 @@ project-local minimal build.
   experimental effect pickers, expanded preview transitions, and `effect-bench`.
   Ordinary UI builds omit it; `--all-scenes`, `--experiments`, and
   `scripts/bench-toolchain.sh` opt in.
+- **Cargo feature `diagnostics`** — enables low-level runtime probes that are
+  intentionally absent from the production command surface.
 - **`MISTER_ARM_BUILD_BACKEND`** — local Apple-Silicon builds default to
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
 - **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — override the Slint modules

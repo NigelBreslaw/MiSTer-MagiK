@@ -92,6 +92,9 @@ root stamp semantics, SQLite publish model, and benchmark gates.
 
 Current rules:
 
+- Production `mister-magik-fb` exposes the minimal command surface:
+  `ui`, `early-black`, `library-refresh`, and `experiment-capabilities`.
+  Low-level probes are diagnostic/experiment builds, not release commands.
 - Build/update the library cache outside the UI hot path with
   `mister-magik-fb library-refresh` or `scripts/mister` helpers.
 - Launcher boot loads the cached SQLite catalog before the first frame when a
@@ -125,8 +128,10 @@ Current rules:
 - MAME XML and MAME software-list XML are host-side metadata inputs only. Convert
   them to `mame.sqlite3` with `scripts/mister mame-metadata-build`; the runtime
   scanner consumes the SQLite rows, not those XML files.
-- Runtime preview loading is raw565-oriented. Build cache assets and the
-  compressed preview archive from the Mac with `tools/mister preview-cache-build`.
+- Runtime preview loading is raw565-oriented. Build cache assets and fixed
+  LZ4-block `.mmlz4b` preview packs from the Mac with
+  `scripts/mister preview-cache-build` or the host screenshot-pack scripts.
+  Runtime deploy does not build catalog/media artifacts.
 
 Relevant docs:
 

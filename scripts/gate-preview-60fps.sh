@@ -145,7 +145,7 @@ fi
 run_and_gate() {
   local scenario="$1" suffix="$2"
   local run_label="${label}-${suffix}"
-  "$PROFILE" "$secs" "$scenario" "$run_label" "$deploy_arg" --transition fade --visual-captures "$visual_captures"
+  "$PROFILE" "$secs" "$scenario" "$run_label" "$deploy_arg" --visual-captures "$visual_captures"
   gate_trace "$run_label" "$OUT_DIR/${run_label}-arcade.tsv"
 }
 
