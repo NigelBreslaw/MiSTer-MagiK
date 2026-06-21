@@ -36,6 +36,8 @@ use std::time::Instant;
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
 pub(crate) type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
+const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
+const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
 
 pub(crate) const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 pub(crate) const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
@@ -145,6 +147,12 @@ pub struct LibraryScanArtifact {
     scan: LibraryScan,
     stats: LibraryScanStats,
     stamp: catalog_stamp::CatalogStamp,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LibraryBootstrapSummary {
+    pub launchers: usize,
+    pub scan_us: u64,
 }
 
 impl LibraryScanArtifact {
@@ -337,6 +345,13 @@ pub fn rebuild_default_sqlite_database(
 pub fn scan_default_library(progress: ProgressCallback<'_>) -> Result<LibraryScanArtifact, String> {
     let cfg = BenchConfig::production();
     Ok(scan_library_artifact(&cfg, progress))
+}
+
+pub fn bootstrap_default_library_progress(
+    progress: ProgressCallback<'_>,
+) -> LibraryBootstrapSummary {
+    let cfg = BenchConfig::production();
+    bootstrap_library_progress(&cfg, progress)
 }
 
 pub fn write_default_hbmame_metadata_from_library() -> Result<HbmameMetadataSummary, String> {
@@ -606,12 +621,6 @@ fn scan_library_with_progress(
     let rx = catalog_scan::discover_files_pipelined(cfg.roots.clone());
     let profiles = launch_profiles::builtin_profiles();
     let mut discover_us = 0;
-    if let Some(report) = progress.as_mut() {
-        report(
-            "Classifying library",
-            "Walking candidates and parsing metadata...",
-        );
-    }
 
     let mut normal_files = Vec::new();
     let mut containers = Vec::new();
@@ -621,6 +630,7 @@ fn scan_library_with_progress(
     let classify_t = Instant::now();
     let mut timing = ScanTimingStats::default();
     let mut idx = 0usize;
+    let mut first_discovery_reported = false;
     while let Ok(event) = rx.recv() {
         let f = match event {
             DiscoveryEvent::File(file) => file,
@@ -631,15 +641,15 @@ fn scan_library_with_progress(
                 break;
             }
         };
-        if idx.is_multiple_of(250) {
-            if let Some(report) = progress.as_mut() {
-                report(
-                    "Classifying library",
-                    &format!("Games found: {}", discoveries.len()),
-                );
-            }
+        if idx == 0 {
+            report_library_scan_timing(
+                "first_candidate",
+                classify_t.elapsed().as_micros() as u64,
+                format!("path={}", f.path.display()),
+            );
         }
         idx += 1;
+        let discoveries_before = discoveries.len();
         let profile_match_t = Instant::now();
         let profile_match = catalog_scan::classify_profile_path(&profiles, &f.path);
         timing.profile_match_us += profile_match_t.elapsed().as_micros() as u64;
@@ -741,6 +751,27 @@ fn scan_library_with_progress(
             }
             Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
+        if discoveries.len() > discoveries_before && !first_discovery_reported {
+            first_discovery_reported = true;
+            report_library_scan_timing(
+                "first_discovery",
+                classify_t.elapsed().as_micros() as u64,
+                format!(
+                    "candidate={} discoveries={} path={}",
+                    idx,
+                    discoveries.len(),
+                    f.path.display()
+                ),
+            );
+        }
+        if idx.is_multiple_of(SCAN_PROGRESS_CANDIDATE_BATCH) {
+            if let Some(report) = progress.as_mut() {
+                report(
+                    "Classifying library",
+                    &format!("Games found: {}", discoveries.len()),
+                );
+            }
+        }
     }
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
@@ -793,6 +824,82 @@ fn scan_library_with_progress(
         discover_us,
         classify_us: classify_t.elapsed().as_micros() as u64,
     }
+}
+
+fn bootstrap_library_progress(
+    cfg: &BenchConfig,
+    mut progress: ProgressCallback<'_>,
+) -> LibraryBootstrapSummary {
+    let started = Instant::now();
+    let mut launchers = 0usize;
+    for target in bootstrap_launcher_targets(&cfg.roots) {
+        scan_bootstrap_launcher_target(&target, &mut launchers, &mut progress);
+        if launchers >= BOOTSTRAP_PROGRESS_BATCH {
+            break;
+        }
+    }
+    LibraryBootstrapSummary {
+        launchers,
+        scan_us: started.elapsed().as_micros() as u64,
+    }
+}
+
+fn bootstrap_launcher_targets(roots: &[String]) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    for root in roots {
+        let path = Path::new(root);
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("_Arcade"))
+        {
+            targets.push(path.to_path_buf());
+        } else {
+            targets.push(path.join("_Arcade"));
+        }
+    }
+    targets
+}
+
+fn scan_bootstrap_launcher_target(
+    target: &Path,
+    launchers: &mut usize,
+    progress: &mut ProgressCallback<'_>,
+) {
+    let Ok(entries) = std::fs::read_dir(target) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if *launchers >= BOOTSTRAP_PROGRESS_BATCH {
+            break;
+        }
+        let path = entry.path();
+        if !is_bootstrap_launcher_path(&path) {
+            continue;
+        }
+        *launchers += 1;
+        if launchers.is_multiple_of(BOOTSTRAP_PROGRESS_BATCH) {
+            if let Some(report) = progress.as_mut() {
+                report("Finding games", &format!("Games found: {launchers}"));
+            }
+        }
+    }
+}
+
+fn is_bootstrap_launcher_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.starts_with("._") {
+        return false;
+    }
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("mra" | "mgl")
+    )
 }
 
 pub(crate) fn normalize_id(value: &str) -> String {
@@ -1000,6 +1107,63 @@ mod tests {
             .expect("read catalog stamp")
             .expect("catalog stamp");
         assert_eq!(stored, expected_stamp);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_progress_waits_for_batch_before_reporting_found_games() {
+        let root = unique_temp_dir("scan-progress-first-batch");
+        let games = root.join("games");
+        let nes = games.join("NES");
+        std::fs::create_dir_all(&nes).expect("create NES dir");
+        std::fs::write(nes.join("Super Mario Bros.nes"), b"nes").expect("write NES game");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+        let mut messages = Vec::<(String, String)>::new();
+        let mut progress = |title: &str, detail: &str| {
+            messages.push((title.to_string(), detail.to_string()));
+        };
+
+        let scan = scan_library_with_progress(&cfg, Some(&mut progress));
+
+        assert_eq!(unique_discovery_count(&scan.discoveries), 1);
+        assert!(!messages
+            .iter()
+            .any(|(title, detail)| title == "Classifying library"
+                && detail.starts_with("Games found: ")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bootstrap_progress_reports_after_50_real_launchers() {
+        let root = unique_temp_dir("bootstrap-progress");
+        let arcade = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade).expect("create arcade dir");
+        for idx in 0..55 {
+            std::fs::write(arcade.join(format!("Game {idx:02}.mra")), b"<mra/>")
+                .expect("write mra");
+        }
+        std::fs::write(arcade.join("not-a-launcher.txt"), b"ignore").expect("write ignored file");
+        let cfg = BenchConfig {
+            roots: vec![arcade.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+        let mut messages = Vec::<(String, String)>::new();
+        let mut progress = |title: &str, detail: &str| {
+            messages.push((title.to_string(), detail.to_string()));
+        };
+
+        let summary = bootstrap_library_progress(&cfg, Some(&mut progress));
+
+        assert_eq!(summary.launchers, 50);
+        assert!(messages
+            .iter()
+            .any(|(title, detail)| title == "Finding games" && detail == "Games found: 50"));
+        assert!(!messages
+            .iter()
+            .any(|(title, detail)| title == "Finding games" && detail == "Games found: 1"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

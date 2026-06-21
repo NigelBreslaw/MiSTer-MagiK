@@ -86,6 +86,14 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             if staged_ram_catalog_enabled(cache_state) {
+                let bootstrap = library_db::bootstrap_default_library_progress(Some(&mut progress));
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "bootstrap_scan_complete".to_string(),
+                    detail: format!(
+                        "launchers={} scan_us={}",
+                        bootstrap.launchers, bootstrap.scan_us
+                    ),
+                });
                 let artifact = match library_db::scan_default_library(Some(&mut progress)) {
                     Ok(artifact) => artifact,
                     Err(e) => {

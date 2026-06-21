@@ -410,6 +410,8 @@ pub(super) fn run_launcher_loop(
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
     let mut games_found_counter = GamesFoundCounter::default();
+    let mut bootstrap_counter_climb_logged = false;
+    let mut full_scan_counter_climb_logged = false;
     let mut route_reassert_count = 0u64;
     let mut last_route_reassert_frame = 0u64;
     let mut last_route_reassert_ok = false;
@@ -524,6 +526,27 @@ pub(super) fn run_launcher_loop(
                             visible,
                             &title,
                         );
+                        let games_found_target = parse_games_found_detail(&detail);
+                        if games_found_target.is_some_and(counter_climb_target_is_meaningful) {
+                            let target = games_found_target.unwrap_or_default();
+                            if title == "Finding games" && !bootstrap_counter_climb_logged {
+                                bootstrap_counter_climb_logged = true;
+                                print_startup_event(
+                                    start,
+                                    "bootstrap_counter_climb",
+                                    format!("target={target}"),
+                                );
+                            } else if title == "Classifying library"
+                                && !full_scan_counter_climb_logged
+                            {
+                                full_scan_counter_climb_logged = true;
+                                print_startup_event(
+                                    start,
+                                    "full_scan_counter_climb",
+                                    format!("target={target}"),
+                                );
+                            }
+                        }
                         let detail = games_found_counter
                             .progress_detail(&title, &detail, loop_start)
                             .unwrap_or(detail);
@@ -1368,7 +1391,7 @@ struct GamesFoundCounter {
 
 impl GamesFoundCounter {
     fn progress_detail(&mut self, title: &str, detail: &str, now: Instant) -> Option<String> {
-        let target = if title == "Classifying library" {
+        let target = if matches!(title, "Finding games" | "Classifying library") {
             parse_games_found_detail(detail)
         } else {
             None
@@ -1418,6 +1441,10 @@ fn parse_games_found_detail(detail: &str) -> Option<usize> {
 
 fn format_games_found(count: usize) -> String {
     format!("Games found: {count}")
+}
+
+fn counter_climb_target_is_meaningful(target: usize) -> bool {
+    target >= 50
 }
 
 fn games_found_count_step(displayed: usize, target: usize, elapsed: Duration) -> usize {
@@ -1654,13 +1681,50 @@ mod tests {
             counter.tick(now + Duration::from_millis(66)),
             Some("Games found: 37".to_string())
         );
+        assert_eq!(
+            counter.progress_detail(
+                "Classifying library",
+                "Games found: 500",
+                now + Duration::from_millis(132)
+            ),
+            Some("Games found: 37".to_string())
+        );
+        let next = counter
+            .tick(now + Duration::from_millis(198))
+            .expect("counter should move after the target increases");
+        let first_tick_count = parse_games_found_detail(&next).expect("parse counter detail");
+        assert!(first_tick_count > 37);
+        assert!(first_tick_count < 500);
 
         let next = counter
-            .tick(now + Duration::from_millis(132))
+            .tick(now + Duration::from_millis(264))
             .expect("counter should keep moving");
         let count = parse_games_found_detail(&next).expect("parse counter detail");
-        assert!(count > 37);
-        assert!(count < 250);
+        assert!(count > first_tick_count);
+        assert!(count < 500);
+    }
+
+    #[test]
+    pub(super) fn counter_climb_metric_waits_for_meaningful_target() {
+        assert!(!counter_climb_target_is_meaningful(1));
+        assert!(!counter_climb_target_is_meaningful(49));
+        assert!(counter_climb_target_is_meaningful(50));
+        assert!(counter_climb_target_is_meaningful(250));
+    }
+
+    #[test]
+    pub(super) fn games_found_counter_accepts_bootstrap_title() {
+        let now = Instant::now();
+        let mut counter = GamesFoundCounter::default();
+
+        assert_eq!(
+            counter.progress_detail("Finding games", "Games found: 50", now),
+            Some("Games found: 0".to_string())
+        );
+        assert_eq!(
+            counter.tick(now + Duration::from_millis(66)),
+            Some("Games found: 8".to_string())
+        );
     }
 
     #[test]
