@@ -140,6 +140,21 @@ mirror of generated `.mgl` launchers for games already available through
 source/core game directories. Set `MISTER_LIBRARY_ROOTS` explicitly for a
 diagnostic build that includes `_Games`.
 
+## Supported Launch Profiles
+
+The supported built-in catalog profile set is intentionally fixed. Additions
+must update `PROFILE_SET_VERSION`, tests, and this document.
+
+- Launcher profiles: MRA, MGL, and DOS installed MGL launchers.
+- Disc/computer profiles: Saturn, PlayStation/PSX, AO486, and Amiga/Minimig.
+- Arcade/console profile: NeoGeo.
+- Cartridge profiles: NES, SNES, GBA, Game Boy Color, Game Gear, Sega Master
+  System, Mega Drive, and Nintendo 64.
+
+These profiles are source-backed by Main_MiSTer behavior, MRA/MGL launch files,
+or explicit MagiK profile rules. Generic extension guesses are not a supported
+product path.
+
 ## Collection Listings
 
 Normal copied-in games, MRA/MGL launchers, installed AmigaVision HDF listings,
@@ -152,6 +167,28 @@ while still allowing fast helpers to contribute extra collection rows. Set
 `MISTER_7ZA_TIMEOUT_SECS` for diagnostics when measuring or debugging collection
 listing extraction. 7z payload internals are not indexed as individual games
 unless a profile has a source-backed listing reader for that archive.
+
+AmigaVision is product-supported through the Amiga profile. Installed
+`AmigaVision*.hdf` media and `AmigaVision*.7z` archives generate the stable
+AmigaVision launcher row, and archive listings under
+`games/Amiga/listings/games.txt` and `games/Amiga/listings/demos.txt` enumerate
+individual AmigaVision titles. The archive itself is not a direct launch ref.
+
+## Preview And Metadata Artifacts
+
+Screenshot packs are fixed runtime artifacts, not catalog inputs. The runtime
+loads LZ4-block `.mmlz4b` packs from `/media/fat/mister-magik/assets`; the
+catalog stores only the pack path and asset key needed to request a preview.
+Raw preview archive formats and ad hoc on-device pack generation are retired.
+Build packs on the host with `scripts/build-console-screenshot-pack.sh`,
+`scripts/build-neogeo-screenshot-pack.sh`, or
+`scripts/mister preview-cache-build`, then install the resulting fixed artifact.
+
+MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
+offline with `scripts/mister mame-metadata-build`, include them in the release
+package with `scripts/package-distribution.sh`, and let the catalog stamp track
+their file signatures. Runtime deploy no longer builds or copies those metadata
+databases; changing them is a catalog/media artifact publish step.
 
 ## SQLite Build And Publish
 
