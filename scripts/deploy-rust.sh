@@ -5,9 +5,6 @@
 # launcher, deploy asks it to suspend MagiK, swaps the binary, then resumes.
 #
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
-#   MISTER_IP=... scripts/deploy-rust.sh --opt2
-#   MISTER_IP=... scripts/deploy-rust.sh --opts
-#   MISTER_IP=... scripts/deploy-rust.sh --incr
 #   MISTER_IP=... scripts/deploy-rust.sh --all-scenes
 #   MISTER_IP=... scripts/deploy-rust.sh --experiments
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
@@ -53,9 +50,6 @@ ARGS=("$@")
 for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
-    --opt2) PROFILE=release-opt2; BUILD_FLAG=(--opt2) ;;
-    --opts) PROFILE=release-opts; BUILD_FLAG=(--opts) ;;
-    --incr) PROFILE=release-incr; BUILD_FLAG=(--incr) ;;
     --device) PROFILE=release-device; BUILD_FLAG=(--device) ;;
     --video) DEPLOY_VIDEO=1; BUILD_FLAG+=(--video) ;;
     --mame-metadata) DEPLOY_MAME_METADATA=1 ;;
@@ -73,7 +67,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BUILD_FLAG+=(--ui-scope "${ARGS[$i]}")
       ;;
     -h|--help)
-      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)

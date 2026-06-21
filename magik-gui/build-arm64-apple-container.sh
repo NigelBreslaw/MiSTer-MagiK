@@ -61,9 +61,6 @@ usage() {
   cat <<'EOF'
 Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh              → release-device
-  ./build-arm64-apple-container.sh --opt2       → release-opt2
-  ./build-arm64-apple-container.sh --opts       → release-opts
-  ./build-arm64-apple-container.sh --incr       → release-incr
   ./build-arm64-apple-container.sh --device     → release-device
   ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
@@ -89,9 +86,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
-    --opt2|--release-opt2) PROFILE=release-opt2 ;;
-    --opts|--release-opts) PROFILE=release-opts ;;
-    --incr|--release-incr) PROFILE=release-incr ;;
     --profile)
       PROFILE=release-device-profile
       add_feature profile
@@ -129,10 +123,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
 done
 
 if [ -z "$UI_SCOPE" ]; then
-  case "$PROFILE" in
-    release-opt2|release-opts|release-incr) UI_SCOPE=launcher ;;
-    *) UI_SCOPE=all ;;
-  esac
+  UI_SCOPE=all
 fi
 case "$UI_SCOPE" in
   launcher|arcade|all) ;;

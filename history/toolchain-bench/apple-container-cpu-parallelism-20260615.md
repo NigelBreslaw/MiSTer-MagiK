@@ -27,9 +27,8 @@ Measured medians:
 
 | Scenario | 3 CPUs wall | 10 CPUs wall | 3 CPUs Cargo | 10 CPUs Cargo | Result |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `build-ui-opts` / `noop-warm` | 4.927s | 4.945s | 1.86s | 1.87s | noise |
 | `build-ui-device` / `noop-warm` | 4.901s | 4.919s | 1.84s | 1.85s | noise |
-| `build-ui-opts` / `touch-rust-bin` | 20.370s | 14.336s | 17.06s | 10.93s | 29.6% wall-time faster |
+| optimized build / `touch-rust-bin` | 20.370s | 14.336s | 17.06s | 10.93s | 29.6% wall-time faster |
 
 Clean all-CPU `release-device` timing:
 
@@ -46,10 +45,8 @@ Clean all-CPU `release-device` timing:
   transient Apple-container/target-dir archive failure rather than accepted
   behavior.
 
-Binary sizes stayed unchanged:
-
-- `release-opts`: `5041980` bytes.
-- `release-device`: `5893828` bytes.
+The `release-device` binary size for the clean all-CPU build was unchanged at
+`5893828` bytes.
 
 Regression checks:
 
@@ -66,6 +63,6 @@ Conclusion:
 - Accept the change. No-op warm builds are dominated by fixed launch/Cargo
   overhead, so more CPUs do not matter there.
 - Incremental Rust edit rebuilds benefit materially: the measured
-  `touch-rust-bin` `release-opts` median improved from `20.370s` to `14.336s`.
+  `touch-rust-bin` median improved from `20.370s` to `14.336s`.
 - The previous missing-header/linker failure modes did not recur because this
   change only adjusts parallelism, not build paths or linker selection.

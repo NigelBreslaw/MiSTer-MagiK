@@ -26,8 +26,6 @@ Options:
                     arm-check-launcher-sccache |
                     arm-check-full | arm-build-launcher | arm-build-arcade |
                     arm-build-full |
-                    build-ui-opt2 | build-ui-opts | build-ui-incr |
-                    build-ui-opts-sccache |
                     build-ui-device
   --state NAME      noop-warm | touch-rust-bin | touch-rust-lib |
                     touch-rust-catalog | touch-rust-core |
@@ -127,10 +125,6 @@ command_spec() {
     arm-build-launcher) echo "scripts/dev-rust build-arm-debug" ;;
     arm-build-arcade) echo "scripts/dev-rust build-arm-arcade-debug" ;;
     arm-build-full) echo "scripts/dev-rust build-arm-debug-full" ;;
-    build-ui-opt2) echo "magik-gui/build-arm.sh --opt2" ;;
-    build-ui-opts) echo "magik-gui/build-arm.sh --opts" ;;
-    build-ui-opts-sccache) echo "echo 'legacy direct cross/sccache scenario disabled; use build-ui-opts, or set MISTER_ARM_BUILD_BACKEND=cross manually for a comparison' >&2; exit 2" ;;
-    build-ui-incr) echo "magik-gui/build-arm.sh --incr" ;;
     build-ui-device) echo "magik-gui/build-arm.sh --device" ;;
     *) return 1 ;;
   esac
@@ -145,14 +139,11 @@ scenario_commands() {
         arm-check-arcade \
         arm-check-full \
         arm-build-launcher \
-        build-ui-opt2 \
-        build-ui-opts \
-        build-ui-incr \
         build-ui-device
       ;;
     arm-check-lib|arm-check-launcher|arm-check-launcher-sccache|arm-check-arcade|arm-check-full|\
     arm-build-launcher|arm-build-arcade|arm-build-full|\
-    build-ui-opt2|build-ui-opts|build-ui-opts-sccache|build-ui-incr|build-ui-device)
+    build-ui-device)
       printf '%s\n' "$scenario"
       ;;
     *)
@@ -305,9 +296,6 @@ binary_size_for_command() {
   local profile=""
   case "$cmd" in
     build-ui-device) profile="release-device" ;;
-    build-ui-opt2) profile="release-opt2" ;;
-    build-ui-opts|build-ui-opts-sccache) profile="release-opts" ;;
-    build-ui-incr) profile="release-incr" ;;
     *) profile="debug" ;;
   esac
 

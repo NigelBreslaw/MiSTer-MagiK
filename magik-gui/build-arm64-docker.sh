@@ -34,9 +34,6 @@ usage() {
   cat <<'EOF'
 Native ARM64 Docker ARMv7 build:
   ./build-arm64-docker.sh              → release-device
-  ./build-arm64-docker.sh --opt2       → release-opt2
-  ./build-arm64-docker.sh --opts       → release-opts
-  ./build-arm64-docker.sh --incr       → release-incr
   ./build-arm64-docker.sh --device     → release-device
   ./build-arm64-docker.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-docker.sh --experiments → compile experimental effect scenes
@@ -53,9 +50,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
-    --opt2|--release-opt2) PROFILE=release-opt2 ;;
-    --opts|--release-opts) PROFILE=release-opts ;;
-    --incr|--release-incr) PROFILE=release-incr ;;
     --profile)
       PROFILE=release-device-profile
       add_feature profile
@@ -89,10 +83,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
 done
 
 if [ -z "$UI_SCOPE" ]; then
-  case "$PROFILE" in
-    release-opt2|release-opts|release-incr) UI_SCOPE=launcher ;;
-    *) UI_SCOPE=all ;;
-  esac
+  UI_SCOPE=all
 fi
 case "$UI_SCOPE" in
   launcher|arcade|all) ;;
