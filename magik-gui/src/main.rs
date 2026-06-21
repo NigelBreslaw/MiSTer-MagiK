@@ -28,7 +28,7 @@
 //!     transition-effects list classic screen transition effect labels
 //!     preview-transitions list screenshot transition labels
 //!     effect-bench       run framebuffer effect benchmarks
-//!     library-scan-bench benchmark cold scan, import, cached load, no-op rescan
+//!     library-scan-bench benchmark build, import, cached load, stamp check
 //!     launch-prep-bench  benchmark launch-ref preparation without core launch
 //!
 //! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.

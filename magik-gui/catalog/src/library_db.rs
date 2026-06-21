@@ -12,8 +12,8 @@ use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, DEFAULT_SQLITE_PATH, SCHEM
 use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::launch_profiles::{
-    self, CollectionListing, CollectionRule, IgnoreReason, LaunchProfile, MountKind,
-    PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
+    self, CollectionListing, CollectionRule, LaunchProfile, MountKind,
+    PayloadDisposition, PayloadRule, ProfilePathClass, RuleSourceKind,
 };
 use crate::preview_worker;
 use quick_xml::events::{BytesStart, Event};
@@ -94,7 +94,7 @@ const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
         genre: "AmigaVision demos",
     },
 ];
-const DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS: u64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
@@ -160,7 +160,7 @@ struct LibraryScan {
     normal_files: Vec<LibraryPayloadFile>,
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
-    ignored_files: Vec<LibraryIgnoredFile>,
+    ignored_files: usize,
     discoveries: Vec<GameDiscovery>,
     discover_us: u64,
     classify_us: u64,
@@ -233,6 +233,10 @@ pub struct LibraryRefreshSummary {
 pub struct CatalogStampCheckSummary {
     pub unchanged: bool,
     pub check_us: u64,
+    pub compute_us: u64,
+    pub open_us: u64,
+    pub read_us: u64,
+    pub compare_us: u64,
     pub stored_fingerprint: Option<String>,
     pub current_fingerprint: String,
     pub stored_lines: usize,
@@ -349,16 +353,6 @@ struct GameDiscovery {
     setname: Option<String>,
     parent: Option<String>,
     confidence: DiscoveryConfidence,
-}
-
-#[derive(Clone, Debug)]
-struct LibraryIgnoredFile {
-    path: String,
-    profile_id: String,
-    size: u64,
-    mtime_secs: i64,
-    reason: IgnoreReason,
-    provenance: RuleProvenance,
 }
 
 #[derive(Clone, Debug)]
@@ -505,9 +499,13 @@ pub fn run_scan_bench() {
         );
         match stamp_check {
             Ok(check) => println!(
-                "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check\t{stamp_us}\tunchanged={} check_us={} stored={} current={} stored_lines={} current_lines={}",
+                "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check\t{stamp_us}\tunchanged={} check_us={} compute_us={} open_us={} read_us={} compare_us={} stored={} current={} stored_lines={} current_lines={}",
                 check.unchanged,
                 check.check_us,
+                check.compute_us,
+                check.open_us,
+                check.read_us,
+                check.compare_us,
                 check.stored_fingerprint.as_deref().unwrap_or("missing"),
                 check.current_fingerprint,
                 check.stored_lines,
@@ -1298,12 +1296,19 @@ pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSumma
 
 fn sqlite_catalog_stamp_check(cfg: &BenchConfig) -> Result<CatalogStampCheckSummary, String> {
     let started = Instant::now();
+    let open_t = Instant::now();
+    let conn = open_sqlite_read_only(&cfg.sqlite_path)
+        .map_err(|e| format!("open catalog stamp db {}: {e}", cfg.sqlite_path.display()))?;
+    let open_us = open_t.elapsed().as_micros() as u64;
+    let read_t = Instant::now();
+    let stored = catalog_store::read_catalog_stamp(&conn)?;
+    let read_us = read_t.elapsed().as_micros() as u64;
+    let compute_t = Instant::now();
     let current = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
     let current_fingerprint = current.fingerprint_hex();
     let current_lines = current.lines().len();
-    let conn = open_sqlite_read_only(&cfg.sqlite_path)
-        .map_err(|e| format!("open catalog stamp db {}: {e}", cfg.sqlite_path.display()))?;
-    let stored = catalog_store::read_catalog_stamp(&conn)?;
+    let compute_us = compute_t.elapsed().as_micros() as u64;
+    let compare_t = Instant::now();
     let (stored_fingerprint, stored_lines, unchanged) = match stored {
         Some(stored) => {
             let stored_fingerprint = stored.fingerprint_hex();
@@ -1313,9 +1318,14 @@ fn sqlite_catalog_stamp_check(cfg: &BenchConfig) -> Result<CatalogStampCheckSumm
         }
         None => (None, 0, false),
     };
+    let compare_us = compare_t.elapsed().as_micros() as u64;
     Ok(CatalogStampCheckSummary {
         unchanged,
         check_us: started.elapsed().as_micros() as u64,
+        compute_us,
+        open_us,
+        read_us,
+        compare_us,
         stored_fingerprint,
         current_fingerprint,
         stored_lines,
@@ -1514,6 +1524,20 @@ fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, u64) {
     (candidates, dirs, started.elapsed().as_micros() as u64)
 }
 
+#[derive(Default)]
+struct ScanTimingStats {
+    profile_match_us: u64,
+    profile_match_count: usize,
+    file_discovery_us: u64,
+    file_discovery_count: usize,
+    archive_toc_us: u64,
+    archive_toc_count: usize,
+    installed_collection_us: u64,
+    installed_collection_count: usize,
+    collection_listing_us: u64,
+    collection_listing_count: usize,
+}
+
 fn scan_library_with_progress(
     cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,
@@ -1532,9 +1556,10 @@ fn scan_library_with_progress(
     let mut normal_files = Vec::new();
     let mut containers = Vec::new();
     let mut entries = Vec::new();
-    let mut ignored_files = Vec::new();
+    let mut ignored_files = 0usize;
     let mut discoveries = Vec::new();
     let classify_t = Instant::now();
+    let mut timing = ScanTimingStats::default();
     let mut idx = 0usize;
     while let Ok(event) = rx.recv() {
         let f = match event {
@@ -1555,7 +1580,11 @@ fn scan_library_with_progress(
             }
         }
         idx += 1;
-        match classify_profile_path(&profiles, &f.path) {
+        let profile_match_t = Instant::now();
+        let profile_match = classify_profile_path(&profiles, &f.path);
+        timing.profile_match_us += profile_match_t.elapsed().as_micros() as u64;
+        timing.profile_match_count += 1;
+        match profile_match {
             Some((
                 profile,
                 ProfilePathClass::Payload {
@@ -1567,35 +1596,24 @@ fn scan_library_with_progress(
                 },
             )) => {
                 if is_amigavision_save_media_path(&f.path) {
-                    ignored_files.push(LibraryIgnoredFile {
-                        path: f.path.display().to_string(),
-                        profile_id: profile.id.to_string(),
-                        size: f.size,
-                        mtime_secs: f.mtime_secs,
-                        reason: IgnoreReason::SaveMedia,
-                        provenance: RuleProvenance::magik(
-                            "AmigaVision-Saves.hdf is save/support media for the AmigaVision launcher environment",
-                        ),
-                    });
+                    ignored_files += 1;
                     continue;
                 }
-                if let Some(installed) = installed_amigavision_discoveries_from_hdf(&f, profile) {
-                    ignored_files.push(LibraryIgnoredFile {
-                        path: f.path.display().to_string(),
-                        profile_id: profile.id.to_string(),
-                        size: f.size,
-                        mtime_secs: f.mtime_secs,
-                        reason: IgnoreReason::SupportArchive,
-                        provenance: RuleProvenance::magik(
-                            "AmigaVision.hdf is the launcher environment backing _Computer/Amiga.mgl, not a raw game payload",
-                        ),
-                    });
+                let installed_t = Instant::now();
+                let installed = installed_amigavision_discoveries_from_hdf(&f, profile);
+                timing.installed_collection_us += installed_t.elapsed().as_micros() as u64;
+                timing.installed_collection_count += 1;
+                if let Some(installed) = installed {
+                    ignored_files += 1;
                     discoveries.extend(installed);
                     continue;
                 }
                 let mut has_archive_entries = false;
                 if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                    let archive_t = Instant::now();
                     let scan = scan_archive_toc(&f, format, profile);
+                    timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
+                    timing.archive_toc_count += 1;
                     has_archive_entries = !scan.entries.is_empty();
                     for entry in scan.entries {
                         discoveries.push(discovery_from_profile_archive_entry(
@@ -1617,12 +1635,15 @@ fn scan_library_with_progress(
                     mtime_secs: f.mtime_secs,
                     rule: payload_rule,
                 });
+                let discovery_t = Instant::now();
                 discoveries.push(discovery_from_profile_file(
                     &f,
                     profile,
                     &payload_rule,
                     &profiles,
                 ));
+                timing.file_discovery_us += discovery_t.elapsed().as_micros() as u64;
+                timing.file_discovery_count += 1;
             }
             Some((
                 profile,
@@ -1641,32 +1662,19 @@ fn scan_library_with_progress(
                     mtime_secs: f.mtime_secs,
                     rule: payload_rule,
                 });
-                ignored_files.push(LibraryIgnoredFile {
-                    path: f.path.display().to_string(),
-                    profile_id: profile.id.to_string(),
-                    size: f.size,
-                    mtime_secs: f.mtime_secs,
-                    reason: IgnoreReason::SupportArchive,
-                    provenance: RuleProvenance::magik(
-                    "Attached media is indexed as payload support until a launcher references it",
-                    ),
-                });
+                ignored_files += 1;
             }
             Some((profile, ProfilePathClass::Collection { rule })) => {
                 if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
                     containers.push(scan_container_header(&f, format));
                 }
+                let collection_t = Instant::now();
                 discoveries.extend(collection_discoveries_from_container(&f, profile, &rule));
+                timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
+                timing.collection_listing_count += 1;
             }
-            Some((profile, ProfilePathClass::Ignored { reason, provenance })) => {
-                ignored_files.push(LibraryIgnoredFile {
-                    path: f.path.display().to_string(),
-                    profile_id: profile.id.to_string(),
-                    size: f.size,
-                    mtime_secs: f.mtime_secs,
-                    reason,
-                    provenance,
-                });
+            Some((_profile, ProfilePathClass::Ignored { .. })) => {
+                ignored_files += 1;
             }
             Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
@@ -1674,6 +1682,43 @@ fn scan_library_with_progress(
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
     }
+    report_library_scan_timing("walk", discover_us, format!("candidates={idx}"));
+    report_library_scan_timing(
+        "profile_match",
+        timing.profile_match_us,
+        format!("calls={}", timing.profile_match_count),
+    );
+    report_library_scan_timing(
+        "installed_collection",
+        timing.installed_collection_us,
+        format!("calls={}", timing.installed_collection_count),
+    );
+    report_library_scan_timing(
+        "archive_toc",
+        timing.archive_toc_us,
+        format!("containers={}", timing.archive_toc_count),
+    );
+    report_library_scan_timing(
+        "collection_listings",
+        timing.collection_listing_us,
+        format!("collections={}", timing.collection_listing_count),
+    );
+    report_library_scan_timing(
+        "file_discovery",
+        timing.file_discovery_us,
+        format!("files={}", timing.file_discovery_count),
+    );
+    report_library_scan_timing(
+        "classify_total",
+        classify_t.elapsed().as_micros() as u64,
+        format!(
+            "discoveries={} normal_files={} containers={} entries={}",
+            discoveries.len(),
+            normal_files.len(),
+            containers.len(),
+            entries.len()
+        ),
+    );
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: unix_now_secs(),
@@ -1748,58 +1793,213 @@ fn discover_files_streaming(roots: &[String], tx: &mpsc::SyncSender<DiscoveryEve
 
 fn walk_index_candidates(roots: &[String], tx: Option<&mpsc::SyncSender<DiscoveryEvent>>) -> usize {
     let profiles = launch_profiles::builtin_profiles();
+    let candidate_exts = source_index_extensions(&profiles);
+    let targets = scan_targets_for_roots(roots, &profiles);
+    report_library_scan_timing(
+        "walk_targets",
+        0,
+        format!(
+            "roots={} targets={} extensions={}",
+            roots.len(),
+            targets.len(),
+            candidate_exts.len()
+        ),
+    );
     let mut dirs = 0usize;
-    for root in roots {
-        let path = Path::new(root);
-        if path.is_dir() {
-            dirs += 1;
-            for entry in walkdir::WalkDir::new(path)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|e| !should_ignore_path(e.path()))
-                .filter_map(Result::ok)
-            {
-                let p = entry.path();
-                if p == path {
-                    continue;
-                }
-                if should_ignore_path(p) {
-                    continue;
-                }
-                if entry.file_type().is_dir() {
-                    dirs += 1;
-                    continue;
-                }
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-                let ext = p
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if !is_index_candidate(&profiles, p, &ext) {
-                    continue;
-                }
-                let Ok(meta) = entry.metadata() else {
-                    continue;
-                };
-                let mtime_secs = mtime_secs(&meta);
-                let file = FoundFile {
-                    path: p.to_path_buf(),
-                    ext,
-                    size: meta.len(),
-                    mtime_secs,
-                };
-                if let Some(tx) = tx {
-                    if tx.send(DiscoveryEvent::File(file)).is_err() {
-                        return dirs;
-                    }
+    for target in targets {
+        let target_t = Instant::now();
+        let mut target_dirs = 1usize;
+        let mut target_files = 0usize;
+        let mut target_candidates = 0usize;
+        dirs += 1;
+        for entry in walkdir::WalkDir::new(&target)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| !should_ignore_path(e.path()))
+            .filter_map(Result::ok)
+        {
+            let p = entry.path();
+            if p == target {
+                continue;
+            }
+            if should_ignore_path(p) {
+                continue;
+            }
+            if entry.file_type().is_dir() {
+                dirs += 1;
+                target_dirs += 1;
+                continue;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            target_files += 1;
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !is_source_index_extension(&candidate_exts, p, &ext) {
+                continue;
+            }
+            if !is_index_candidate(&profiles, p, &ext) {
+                continue;
+            }
+            let (size, mtime_secs) = candidate_signature_for_walk_entry(p, &ext, &entry);
+            let file = FoundFile {
+                path: p.to_path_buf(),
+                ext,
+                size,
+                mtime_secs,
+            };
+            target_candidates += 1;
+            if let Some(tx) = tx {
+                if tx.send(DiscoveryEvent::File(file)).is_err() {
+                    return dirs;
                 }
             }
         }
+        report_library_scan_timing(
+            "walk_target",
+            target_t.elapsed().as_micros() as u64,
+            format!(
+                "path={} dirs={} files={} candidates={}",
+                target.display(),
+                target_dirs,
+                target_files,
+                target_candidates
+            ),
+        );
     }
     dirs
+}
+
+fn source_index_extensions(profiles: &[LaunchProfile]) -> HashSet<String> {
+    let mut extensions = HashSet::new();
+    for profile in profiles {
+        for rule in &profile.payload_rules {
+            insert_extensions(&mut extensions, rule.extensions);
+        }
+        for rule in &profile.archive_entry_rules {
+            insert_extensions(&mut extensions, rule.extensions);
+            extensions.insert("zip".to_string());
+        }
+        for rule in &profile.collection_rules {
+            insert_extensions(&mut extensions, rule.archive_extensions);
+        }
+        for rule in &profile.ignore_rules {
+            insert_extensions(&mut extensions, rule.extensions);
+        }
+    }
+    extensions
+}
+
+fn insert_extensions(extensions: &mut HashSet<String>, values: &[&str]) {
+    for value in values {
+        let value = value.trim().to_ascii_lowercase();
+        if !value.is_empty() {
+            extensions.insert(value);
+        }
+    }
+}
+
+fn is_source_index_extension(candidate_exts: &HashSet<String>, path: &Path, ext: &str) -> bool {
+    candidate_exts.contains(ext) || is_amigavision_listing_path(path)
+}
+
+fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    for root in roots {
+        let path = Path::new(root);
+        if !is_real_dir(path) {
+            continue;
+        }
+        if is_direct_scan_root(path, profiles) {
+            push_scan_target(&mut targets, path.to_path_buf());
+            continue;
+        }
+        if path_name_eq(path, "games") {
+            push_profile_game_dirs(&mut targets, path, profiles);
+            continue;
+        }
+
+        for launcher_dir in ["_Arcade", "_Games", "_DOS Games", "_Console (autoboot)"] {
+            push_scan_target(&mut targets, path.join(launcher_dir));
+        }
+        push_profile_game_dirs(&mut targets, &path.join("games"), profiles);
+    }
+    dedupe_existing_scan_targets(targets)
+}
+
+fn push_profile_game_dirs(
+    targets: &mut Vec<PathBuf>,
+    games_dir: &Path,
+    profiles: &[LaunchProfile],
+) {
+    for profile in profiles {
+        for dir in &profile.game_dirs {
+            if dir.starts_with('_') {
+                continue;
+            }
+            push_scan_target(targets, games_dir.join(dir));
+        }
+    }
+}
+
+fn push_scan_target(targets: &mut Vec<PathBuf>, path: PathBuf) {
+    if is_real_dir(&path) {
+        targets.push(path);
+    }
+}
+
+fn dedupe_existing_scan_targets(targets: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for target in targets {
+        let key = target.display().to_string().to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(target);
+        }
+    }
+    out
+}
+
+fn is_direct_scan_root(path: &Path, profiles: &[LaunchProfile]) -> bool {
+    ["_Arcade", "_Games", "_DOS Games", "_Console (autoboot)"]
+        .iter()
+        .any(|name| path_name_eq(path, name))
+        || profiles.iter().any(|profile| {
+            profile
+                .game_dirs
+                .iter()
+                .any(|dir| !dir.starts_with('_') && path_name_eq(path, dir))
+        })
+}
+
+fn path_name_eq(path: &Path, expected: &str) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
+fn candidate_signature_for_walk_entry(
+    path: &Path,
+    ext: &str,
+    entry: &walkdir::DirEntry,
+) -> (u64, i64) {
+    if ext.eq_ignore_ascii_case("zip") {
+        if let Ok(meta) = entry.metadata() {
+            return (meta.len(), mtime_secs(&meta));
+        }
+    }
+    let _ = path;
+    (0, 0)
 }
 
 fn scan_archive_toc(
@@ -3433,8 +3633,12 @@ fn arcade_parent_override(identity_id: &str) -> Option<&'static str> {
         .find_map(|(alias, parent)| (*alias == identity_id).then_some(*parent))
 }
 
-fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
-    tx.execute_batch(
+fn materialize_arcade_ui_projections(
+    tx: &rusqlite::Transaction<'_>,
+    arcade_preview_archive_path: &str,
+    neogeo_preview_archive_path: &str,
+) -> Result<(), String> {
+    tx.execute(
         r#"
         INSERT INTO ui_arcade_variants(
             family_id,
@@ -3463,6 +3667,7 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                 lower(l.title) AS sort_title,
                 l.launch_ref AS launch_ref,
                 l.system_id AS system_id,
+                l.setname AS setname,
                 i.identity_id AS identity_id,
                 CASE
                     WHEN i.identity_id IS NOT NULL
@@ -3476,54 +3681,33 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                      AND i.identity_id = COALESCE(i.family_id, i.identity_id)
                     THEN 1
                     ELSE 0
-                END AS is_parent,
-                exact.pack_id AS exact_pack_id,
-                exact.asset_key AS exact_asset_key,
-                parent.pack_id AS parent_pack_id,
-                parent.asset_key AS parent_asset_key,
-                sibling.pack_id AS sibling_pack_id,
-                sibling.asset_key AS sibling_asset_key
+                END AS is_parent
             FROM launchables l
             JOIN games g ON g.game_id = l.launchable_id
             LEFT JOIN launchable_identities i
               ON i.launchable_id = l.launchable_id
              AND i.namespace = 'mame'
-            LEFT JOIN asset_entries exact
-              ON exact.identity_namespace = 'mame'
-             AND exact.identity_id = i.identity_id
-            LEFT JOIN asset_entries parent
-              ON parent.identity_namespace = 'mame'
-             AND parent.identity_id = i.family_id
-            LEFT JOIN (
-                SELECT family_id, MIN(pack_id) AS pack_id, MIN(asset_key) AS asset_key
-                FROM asset_entries
-                WHERE identity_namespace = 'mame'
-                GROUP BY family_id
-            ) sibling
-              ON sibling.family_id = COALESCE(i.family_id, l.launchable_id)
             WHERE l.system_id IN ('arcade','neogeo')
               AND l.launch_ref != ''
         ),
         resolved AS (
             SELECT
                 *,
-                COALESCE(exact_pack_id, parent_pack_id, sibling_pack_id) AS asset_pack_id,
-                COALESCE(exact_asset_key, parent_asset_key, sibling_asset_key) AS asset_key,
                 CASE
-                    WHEN exact_asset_key IS NOT NULL THEN 'exact'
-                    WHEN parent_asset_key IS NOT NULL THEN 'parent'
-                    WHEN sibling_asset_key IS NOT NULL THEN 'sibling'
-                    ELSE 'none'
-                END AS asset_link_reason
+                    WHEN system_id = 'neogeo' THEN ?2
+                    ELSE ?1
+                END AS preview_archive_path,
+                COALESCE(NULLIF(family_id, ''), NULLIF(identity_id, ''), NULLIF(setname, ''), '') AS preview_key
             FROM candidates
         ),
-        resolved_with_pack AS (
+        resolved_with_preview AS (
             SELECT
-                resolved.*,
-                packs.local_path AS preview_archive_path
+                *,
+                CASE
+                    WHEN preview_archive_path != '' AND preview_key != '' THEN 1
+                    ELSE 0
+                END AS preview_available
             FROM resolved
-            LEFT JOIN asset_packs packs
-              ON packs.pack_id = resolved.asset_pack_id
         ),
         ranked AS (
             SELECT
@@ -3531,28 +3715,16 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
                 row_number() OVER (
                     PARTITION BY family_id
                     ORDER BY is_parent DESC,
-                             CASE asset_link_reason
-                                WHEN 'exact' THEN 3
-                                WHEN 'parent' THEN 2
-                                WHEN 'sibling' THEN 1
-                                ELSE 0
-                             END DESC,
                              sort_title ASC,
                              launch_ref ASC
                 ) AS family_rank,
                 row_number() OVER (
                     PARTITION BY family_id
                     ORDER BY is_parent DESC,
-                             CASE asset_link_reason
-                                WHEN 'exact' THEN 3
-                                WHEN 'parent' THEN 2
-                                WHEN 'sibling' THEN 1
-                                ELSE 0
-                             END DESC,
                              sort_title ASC,
                              launch_ref ASC
                 ) - 1 AS variant_ordinal
-            FROM resolved_with_pack
+            FROM resolved_with_preview
         )
         SELECT
             family_id,
@@ -3561,15 +3733,15 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             title,
             sort_title,
             launch_ref,
-            COALESCE(preview_archive_path, ''),
-            COALESCE(asset_key, ''),
-            CASE WHEN asset_key IS NOT NULL THEN 1 ELSE 0 END,
+            preview_archive_path,
+            preview_key,
+            preview_available,
             system_id,
             identity_id,
             parent_setname,
-            asset_pack_id,
-            asset_key,
-            asset_link_reason,
+            NULL,
+            preview_key,
+            CASE WHEN preview_available = 1 THEN 'derived-family' ELSE 'none' END,
             CASE WHEN family_rank = 1 THEN 1 ELSE 0 END,
             CASE
                 WHEN family_rank = 1 AND is_parent = 1 THEN 'installed-parent'
@@ -3578,7 +3750,12 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
             END
         FROM ranked
         ORDER BY family_id, variant_ordinal;
-
+        "#,
+        params![arcade_preview_archive_path, neogeo_preview_archive_path],
+    )
+    .map_err(|e| format!("materialize arcade ui variants: {e}"))?;
+    tx.execute(
+        r#"
         INSERT INTO ui_arcade_preferred(
             ordinal,
             launchable_id,
@@ -3618,99 +3795,10 @@ fn materialize_arcade_ui_projections(tx: &rusqlite::Transaction<'_>) -> Result<(
         WHERE preferred = 1
         ORDER BY sort_title ASC, launch_ref ASC;
         "#,
+        [],
     )
+    .map(|_| ())
     .map_err(|e| format!("materialize arcade ui projections: {e}"))
-}
-
-fn register_preview_asset_packs(
-    tx: &rusqlite::Transaction<'_>,
-    mame_metadata: &HashMap<String, MameMachineMetadata>,
-    software_metadata: &MameSoftwareMetadata,
-    indexes: &[preview_worker::PreviewArchiveIndex],
-) -> Result<(), String> {
-    let mut pack_stmt = tx
-        .prepare(
-            "INSERT INTO asset_packs(pack_id,platform_id,asset_type,local_path,codec,version)
-             VALUES (?1,?2,?3,?4,?5,?6)",
-        )
-        .map_err(|e| format!("prepare preview asset pack insert: {e}"))?;
-    let mut entry_stmt = tx
-        .prepare(
-            "INSERT INTO asset_entries(pack_id,asset_key,identity_namespace,identity_id,family_id,width,height)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        )
-        .map_err(|e| format!("prepare preview asset entry insert: {e}"))?;
-    for (idx, index) in indexes.iter().enumerate() {
-        let platform = preview_asset_pack_platform(&index.path);
-        let pack_id = if idx == 0 {
-            format!("{platform}-screenshot-v1")
-        } else {
-            format!("{platform}-screenshot-v1-{idx}")
-        };
-        pack_stmt
-            .execute(params![
-                pack_id.as_str(),
-                platform,
-                "screenshot",
-                index.path.as_str(),
-                index.codec,
-                "v1"
-            ])
-            .map_err(|e| format!("insert preview asset pack: {e}"))?;
-        for entry in &index.entries {
-            let Some((asset_key, namespace, identity_id, family_id)) =
-                preview_asset_entry_identity(platform, entry, mame_metadata, software_metadata)
-            else {
-                continue;
-            };
-            entry_stmt
-                .execute(params![
-                    pack_id.as_str(),
-                    asset_key.as_str(),
-                    namespace,
-                    identity_id.as_str(),
-                    family_id.as_str(),
-                    Option::<i64>::None,
-                    Option::<i64>::None
-                ])
-                .map_err(|e| format!("insert preview asset entry: {e}"))?;
-        }
-    }
-    Ok(())
-}
-
-fn preview_asset_entry_identity(
-    platform: &str,
-    entry: &str,
-    mame_metadata: &HashMap<String, MameMachineMetadata>,
-    software_metadata: &MameSoftwareMetadata,
-) -> Option<(String, &'static str, String, String)> {
-    if let Some((list_name, software_name)) = parse_software_asset_key(entry) {
-        if software_list_for_platform(platform).is_some_and(|expected| expected != list_name) {
-            return None;
-        }
-        let identity_id = format!("{list_name}:{software_name}");
-        let family_id = software_metadata
-            .items
-            .get(&(list_name.clone(), software_name.clone()))
-            .and_then(|item| item.parent_name.as_deref())
-            .filter(|parent| !parent.trim().is_empty())
-            .map(|parent| format!("{list_name}:{parent}"))
-            .unwrap_or_else(|| identity_id.clone());
-        return Some((entry.to_string(), "mame-software", identity_id, family_id));
-    }
-    if software_list_for_platform(platform).is_some() {
-        return None;
-    }
-    let identity_id = normalize_id(entry);
-    let family_id = mame_metadata
-        .get(&identity_id)
-        .and_then(|machine| machine.parent_setname.as_deref())
-        .filter(|parent| !parent.trim().is_empty())
-        .or_else(|| arcade_parent_override(&identity_id))
-        .unwrap_or(identity_id.as_str())
-        .to_string();
-    Some((identity_id.clone(), "mame", identity_id, family_id))
 }
 
 fn preview_asset_pack_platform(path: &str) -> &'static str {
@@ -3734,22 +3822,8 @@ fn preview_asset_pack_platform(path: &str) -> &'static str {
     }
 }
 
-#[cfg(test)]
 fn software_asset_key(list_name: &str, software_name: &str) -> String {
     format!("mame-software__{list_name}__{software_name}")
-}
-
-fn parse_software_asset_key(key: &str) -> Option<(String, String)> {
-    let mut parts = key.split("__");
-    if parts.next()? != "mame-software" {
-        return None;
-    }
-    let list_name = parts.next()?.trim();
-    let software_name = parts.next()?.trim();
-    if list_name.is_empty() || software_name.is_empty() || parts.next().is_some() {
-        return None;
-    }
-    Some((list_name.to_string(), software_name.to_string()))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3758,61 +3832,54 @@ struct ConsolePreviewAsset {
     asset_key: String,
 }
 
-fn console_preview_assets(
-    indexes: &[preview_worker::PreviewArchiveIndex],
-) -> HashMap<String, ConsolePreviewAsset> {
-    let mut assets = HashMap::new();
-    for index in indexes
-        .iter()
-        .filter(|index| preview_asset_pack_platform(&index.path) != "arcade")
-    {
-        let platform = preview_asset_pack_platform(&index.path);
-        for entry in &index.entries {
-            if let Some((list_name, software_name)) = parse_software_asset_key(entry) {
-                if software_list_for_platform(platform)
-                    .is_some_and(|expected| expected != list_name)
-                {
-                    continue;
-                }
-                assets
-                    .entry(format!("{list_name}:{software_name}"))
-                    .or_insert_with(|| ConsolePreviewAsset {
-                        archive_path: index.path.clone(),
-                        asset_key: entry.to_string(),
-                    });
-            }
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PreviewArchivePaths {
+    by_platform: HashMap<String, String>,
+}
+
+impl PreviewArchivePaths {
+    fn from_paths(paths: Vec<String>) -> Self {
+        let mut by_platform = HashMap::new();
+        for path in paths {
+            by_platform
+                .entry(preview_asset_pack_platform(&path).to_string())
+                .or_insert(path);
         }
+        Self { by_platform }
     }
-    assets
+
+    fn archive_for_platform(&self, platform: &str) -> Option<&str> {
+        self.by_platform.get(platform).map(String::as_str)
+    }
+
+    fn len(&self) -> usize {
+        self.by_platform.len()
+    }
 }
 
 fn console_preview_asset(
     identity: &SoftwareIdentity,
-    software_metadata: &MameSoftwareMetadata,
-    assets: &HashMap<String, ConsolePreviewAsset>,
+    preview_paths: &PreviewArchivePaths,
 ) -> Option<ConsolePreviewAsset> {
-    let exact = format!("{}:{}", identity.list_name, identity.software_name);
-    if let Some(asset_key) = assets.get(&exact) {
-        return Some(asset_key.clone());
+    let platform = preview_platform_for_software_list(&identity.list_name);
+    let archive_path = preview_paths.archive_for_platform(platform)?;
+    let software_name = identity
+        .family_id
+        .split_once(':')
+        .filter(|(list_name, _)| *list_name == identity.list_name)
+        .map(|(_, family_name)| family_name)
+        .unwrap_or(identity.software_name.as_str());
+    Some(ConsolePreviewAsset {
+        archive_path: archive_path.to_string(),
+        asset_key: software_asset_key(&identity.list_name, software_name),
+    })
+}
+
+fn preview_platform_for_software_list(list_name: &str) -> &str {
+    match list_name {
+        "megadriv" => "megadrive",
+        value => value,
     }
-    let family_name = identity.family_id.split_once(':')?.1;
-    let parent = format!("{}:{family_name}", identity.list_name);
-    if let Some(asset_key) = assets.get(&parent) {
-        return Some(asset_key.clone());
-    }
-    let family_key = (identity.list_name.clone(), family_name.to_string());
-    for sibling in software_metadata
-        .family_members
-        .get(&family_key)
-        .into_iter()
-        .flatten()
-    {
-        let key = format!("{}:{sibling}", identity.list_name);
-        if let Some(asset_key) = assets.get(&key) {
-            return Some(asset_key.clone());
-        }
-    }
-    None
 }
 
 fn write_sqlite_scan(
@@ -3822,14 +3889,14 @@ fn write_sqlite_scan(
     software_hash_cache: SoftwareHashCache,
     stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
-    let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
-        .map_err(|e| format!("preview archive index: {e}"))?;
+    let preview_paths =
+        PreviewArchivePaths::from_paths(preview_worker::preview_archive_paths_from_env());
     write_sqlite_scan_with_sources(
         path,
         scan,
         &default_mame_sqlite_path(),
         &default_hbmame_sqlite_path(),
-        &preview_asset_packs,
+        &preview_paths,
         progress,
         software_hash_cache,
         stamp,
@@ -3847,7 +3914,7 @@ fn write_sqlite_scan_with_mame(
         scan,
         mame_sqlite_path,
         &PathBuf::new(),
-        &[],
+        &PreviewArchivePaths::default(),
         None,
         SoftwareHashCache::load(path),
         None,
@@ -3866,7 +3933,7 @@ fn write_sqlite_scan_with_mame_and_hbmame(
         scan,
         mame_sqlite_path,
         hbmame_sqlite_path,
-        &[],
+        &PreviewArchivePaths::default(),
         None,
         SoftwareHashCache::load(path),
         None,
@@ -3880,12 +3947,13 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
     mame_sqlite_path: &Path,
     preview_asset_pack: &preview_worker::PreviewArchiveIndex,
 ) -> Result<(), String> {
+    let preview_paths = PreviewArchivePaths::from_paths(vec![preview_asset_pack.path.clone()]);
     write_sqlite_scan_with_sources(
         path,
         scan,
         mame_sqlite_path,
         &PathBuf::new(),
-        std::slice::from_ref(preview_asset_pack),
+        &preview_paths,
         None,
         SoftwareHashCache::load(path),
         None,
@@ -3897,7 +3965,7 @@ fn write_sqlite_scan_with_sources(
     scan: &LibraryScan,
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
-    preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
+    preview_paths: &PreviewArchivePaths,
     mut progress: ProgressCallback<'_>,
     mut software_hash_cache: SoftwareHashCache,
     stamp: Option<&catalog_stamp::CatalogStamp>,
@@ -3921,23 +3989,6 @@ fn write_sqlite_scan_with_sources(
             source_kind TEXT NOT NULL,
             source_detail TEXT NOT NULL
         ) WITHOUT ROWID;
-        CREATE TABLE files (
-            path TEXT PRIMARY KEY,
-            size INTEGER NOT NULL,
-            mtime_secs INTEGER NOT NULL,
-            extension TEXT NOT NULL,
-            role TEXT NOT NULL,
-            profile_id TEXT
-        ) WITHOUT ROWID;
-        CREATE TABLE launchers (
-            launcher_id TEXT PRIMARY KEY,
-            file_path TEXT NOT NULL,
-            launcher_kind TEXT NOT NULL,
-            profile_id TEXT,
-            title TEXT NOT NULL,
-            source_kind TEXT NOT NULL,
-            source_detail TEXT NOT NULL
-        ) WITHOUT ROWID;
         CREATE TABLE payloads (
             payload_id TEXT PRIMARY KEY,
             file_path TEXT NOT NULL,
@@ -3953,14 +4004,6 @@ fn write_sqlite_scan_with_sources(
             mtime_secs INTEGER NOT NULL,
             source_kind TEXT NOT NULL,
             source_detail TEXT NOT NULL
-        ) WITHOUT ROWID;
-        CREATE TABLE ignored_files (
-            file_path TEXT NOT NULL,
-            profile_id TEXT,
-            reason TEXT NOT NULL,
-            source_kind TEXT NOT NULL,
-            source_detail TEXT NOT NULL,
-            PRIMARY KEY(file_path, profile_id, reason)
         ) WITHOUT ROWID;
         CREATE TABLE systems (
             system_id TEXT PRIMARY KEY,
@@ -4014,24 +4057,6 @@ fn write_sqlite_scan_with_sources(
             manufacturer TEXT,
             source TEXT NOT NULL,
             PRIMARY KEY(launchable_id, namespace, identity_id)
-        ) WITHOUT ROWID;
-        CREATE TABLE asset_packs (
-            pack_id TEXT PRIMARY KEY,
-            platform_id TEXT NOT NULL,
-            asset_type TEXT NOT NULL,
-            local_path TEXT NOT NULL,
-            codec TEXT,
-            version TEXT
-        ) WITHOUT ROWID;
-        CREATE TABLE asset_entries (
-            pack_id TEXT NOT NULL,
-            asset_key TEXT NOT NULL,
-            identity_namespace TEXT,
-            identity_id TEXT,
-            family_id TEXT,
-            width INTEGER,
-            height INTEGER,
-            PRIMARY KEY(pack_id, asset_key)
         ) WITHOUT ROWID;
         CREATE TABLE ui_arcade_preferred (
             ordinal INTEGER PRIMARY KEY,
@@ -4087,14 +4112,6 @@ fn write_sqlite_scan_with_sources(
             confidence TEXT NOT NULL,
             override_region TEXT
         ) WITHOUT ROWID;
-        CREATE VIRTUAL TABLE games_fts USING fts5(
-            game_id UNINDEXED,
-            title,
-            launch_ref,
-            system_id,
-            core_id,
-            hardware_id
-        );
         CREATE TABLE meta (
             key TEXT PRIMARY KEY,
             value INTEGER NOT NULL
@@ -4114,32 +4131,29 @@ fn write_sqlite_scan_with_sources(
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=20");
+    report_library_import_timing("schema", schema_t, "tables=14");
 
     let metadata_t = Instant::now();
     let mame_signature = file_signature(mame_sqlite_path);
     let hbmame_signature = file_signature(hbmame_sqlite_path);
-    let mame_metadata = load_mame_machine_metadata(mame_sqlite_path);
     let software_metadata = load_mame_software_metadata(mame_sqlite_path);
-    let console_assets = console_preview_assets(preview_asset_packs);
     let arcade_metadata = load_arcade_machine_metadata(mame_sqlite_path, hbmame_sqlite_path);
     report_library_import_timing(
         "metadata_load",
         metadata_t,
         format!(
-            "mame={} hbmame={} software_lists={} preview_packs={}",
+            "mame={} hbmame={} software_lists={} preview_paths={}",
             arcade_metadata.mame.len(),
             arcade_metadata.hbmame.len(),
             software_metadata.items.len(),
-            preview_asset_packs.len()
+            preview_paths.len()
         ),
     );
     let tx_t = Instant::now();
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
-    register_preview_asset_packs(&tx, &mame_metadata, &software_metadata, preview_asset_packs)?;
-    report_library_import_timing("begin_tx_asset_packs", tx_t, "");
+    report_library_import_timing("begin_tx", tx_t, "");
     {
         let stage_t = Instant::now();
         let mut stmt = tx
@@ -4166,60 +4180,6 @@ fn write_sqlite_scan_with_sources(
             stage_t,
             format!("rows={}", launch_profiles::builtin_profiles().len()),
         );
-    }
-    {
-        let stage_t = Instant::now();
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO files(path,size,mtime_secs,extension,role,profile_id)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
-            )
-            .map_err(|e| format!("prepare file fact insert: {e}"))?;
-        let mut seen = HashSet::<String>::new();
-        for container in &scan.containers {
-            if !seen.insert(container.file_path.clone()) {
-                continue;
-            }
-            stmt.execute(params![
-                container.file_path.as_str(),
-                container.size as i64,
-                container.mtime_secs,
-                path_ext(&container.file_path).unwrap_or_default(),
-                "container",
-                Option::<&str>::None
-            ])
-            .map_err(|e| format!("insert file fact: {e}"))?;
-        }
-        for payload in &scan.normal_files {
-            if !seen.insert(payload.path.clone()) {
-                continue;
-            }
-            stmt.execute(params![
-                payload.path.as_str(),
-                payload.size as i64,
-                payload.mtime_secs,
-                path_ext(&payload.path).unwrap_or_default(),
-                "candidate",
-                payload.profile_id.as_str()
-            ])
-            .map_err(|e| format!("insert file fact: {e}"))?;
-        }
-        for ignored in &scan.ignored_files {
-            if !seen.insert(ignored.path.clone()) {
-                continue;
-            }
-            stmt.execute(params![
-                ignored.path.as_str(),
-                ignored.size as i64,
-                ignored.mtime_secs,
-                path_ext(&ignored.path).unwrap_or_default(),
-                "ignored",
-                ignored.profile_id.as_str()
-            ])
-            .map_err(|e| format!("insert file fact: {e}"))?;
-        }
-        let rows = seen.len();
-        report_library_import_timing("insert_files", stage_t, format!("rows={rows}"));
     }
     {
         let stage_t = Instant::now();
@@ -4287,30 +4247,6 @@ fn write_sqlite_scan_with_sources(
     }
     {
         let stage_t = Instant::now();
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO ignored_files(file_path,profile_id,reason,source_kind,source_detail)
-                 VALUES (?1,?2,?3,?4,?5)",
-            )
-            .map_err(|e| format!("prepare ignored file insert: {e}"))?;
-        for ignored in &scan.ignored_files {
-            stmt.execute(params![
-                ignored.path.as_str(),
-                ignored.profile_id.as_str(),
-                ignore_reason_str(ignored.reason),
-                source_kind_name(ignored.provenance.kind),
-                ignored.provenance.detail
-            ])
-            .map_err(|e| format!("insert ignored file: {e}"))?;
-        }
-        report_library_import_timing(
-            "insert_ignored_files",
-            stage_t,
-            format!("rows={}", scan.ignored_files.len()),
-        );
-    }
-    {
-        let stage_t = Instant::now();
         let mut launcher_rows = Vec::<CatalogRow>::new();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
@@ -4345,12 +4281,6 @@ fn write_sqlite_scan_with_sources(
                  VALUES (?1,?2,?3,?4)",
             )
             .map_err(|e| format!("prepare region metadata insert: {e}"))?;
-        let mut fts_stmt = tx
-            .prepare(
-                "INSERT INTO games_fts(game_id,title,launch_ref,system_id,core_id,hardware_id)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
-            )
-            .map_err(|e| format!("prepare game fts insert: {e}"))?;
         let covered_payloads = covered_payload_paths(&scan.discoveries);
         let discoveries =
             preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
@@ -4368,9 +4298,9 @@ fn write_sqlite_scan_with_sources(
                 &software_metadata,
                 &mut software_hash_cache,
             );
-            let preview_asset = software_identity.as_ref().and_then(|identity| {
-                console_preview_asset(identity, &software_metadata, &console_assets)
-            });
+            let preview_asset = software_identity
+                .as_ref()
+                .and_then(|identity| console_preview_asset(identity, preview_paths));
             let game_has_preview = preview_asset.is_some();
             system_stmt
                 .execute(params![
@@ -4521,16 +4451,6 @@ fn write_sqlite_scan_with_sources(
                     Option::<&str>::None
                 ])
                 .map_err(|e| format!("insert region metadata: {e}"))?;
-            fts_stmt
-                .execute(params![
-                    key.as_str(),
-                    discovery.title.as_str(),
-                    plan_launch_ref.as_str(),
-                    system_id.as_str(),
-                    discovery.core_id.as_str(),
-                    discovery.hardware_id.as_str()
-                ])
-                .map_err(|e| format!("insert game fts: {e}"))?;
             let written = idx + 1;
             if written % 1000 == 0 || written == discovery_total {
                 report_library_import_timing(
@@ -4546,7 +4466,6 @@ fn write_sqlite_scan_with_sources(
             }
         }
         report_sqlite_import_progress(&mut progress, discovery_total, discovery_total);
-        drop(fts_stmt);
         drop(region_stmt);
         drop(identity_stmt);
         drop(launchable_stmt);
@@ -4563,7 +4482,15 @@ fn write_sqlite_scan_with_sources(
         );
         report_sqlite_import_finalizing(&mut progress);
         let projection_t = Instant::now();
-        materialize_arcade_ui_projections(&tx)?;
+        materialize_arcade_ui_projections(
+            &tx,
+            preview_paths
+                .archive_for_platform("arcade")
+                .unwrap_or_default(),
+            preview_paths
+                .archive_for_platform("neogeo")
+                .unwrap_or_default(),
+        )?;
         report_library_import_timing("materialize_arcade_ui", projection_t, "");
         let launcher_arcade_t = Instant::now();
         tx.execute(
@@ -4612,38 +4539,6 @@ fn write_sqlite_scan_with_sources(
     {
         let stage_t = Instant::now();
         let mut stmt = tx
-            .prepare(
-                "INSERT INTO launchers(launcher_id,file_path,launcher_kind,profile_id,title,source_kind,source_detail)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            )
-            .map_err(|e| format!("prepare launcher insert: {e}"))?;
-        let mut seen = HashSet::<String>::new();
-        for discovery in &scan.discoveries {
-            if !matches!(
-                discovery.source_kind,
-                DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl
-            ) {
-                continue;
-            }
-            if !seen.insert(discovery.launch_ref.clone()) {
-                continue;
-            }
-            stmt.execute(params![
-                format!("launcher:{}", discovery.launch_ref),
-                discovery.launch_ref.as_str(),
-                source_kind_str(discovery.source_kind),
-                Option::<&str>::None,
-                discovery.title.as_str(),
-                source_kind_str(discovery.source_kind),
-                "legacy launcher discovery before profile classification"
-            ])
-            .map_err(|e| format!("insert launcher: {e}"))?;
-        }
-        report_library_import_timing("insert_launchers", stage_t, "");
-    }
-    {
-        let stage_t = Instant::now();
-        let mut stmt = tx
             .prepare("INSERT INTO meta(key,value) VALUES (?1,?2)")
             .map_err(|e| format!("prepare meta insert: {e}"))?;
         stmt.execute(params!["version", scan.version as i64])
@@ -4656,6 +4551,8 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("insert container count: {e}"))?;
         stmt.execute(params!["entries", scan.entries.len() as i64])
             .map_err(|e| format!("insert entry count: {e}"))?;
+        stmt.execute(params!["ignored_files", scan.ignored_files as i64])
+            .map_err(|e| format!("insert ignored count: {e}"))?;
         stmt.execute(params![
             "discoveries",
             unique_discovery_count(&scan.discoveries) as i64
@@ -4675,7 +4572,7 @@ fn write_sqlite_scan_with_sources(
             hbmame_signature.mtime_secs
         ])
         .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
-        report_library_import_timing("insert_meta", stage_t, "rows=10");
+        report_library_import_timing("insert_meta", stage_t, "rows=11");
     }
     if let Some(stamp) = stamp {
         let stage_t = Instant::now();
@@ -4722,6 +4619,10 @@ fn report_library_import_timing(stage: &str, started: Instant, detail: impl std:
         "library_import_timing\t{stage}\t{}\t{detail}",
         started.elapsed().as_micros()
     );
+}
+
+fn report_library_scan_timing(stage: &str, us: u64, detail: impl std::fmt::Display) {
+    println!("library_scan_timing\t{stage}\t{us}\t{detail}");
 }
 
 fn report_sqlite_import_progress(
@@ -4925,16 +4826,6 @@ fn is_amigavision_listing_path(path: &Path) -> bool {
         || path.ends_with("/games/amiga/listings/demos.txt")
 }
 
-fn source_kind_str(kind: DiscoverySourceKind) -> &'static str {
-    match kind {
-        DiscoverySourceKind::Mra => "mra",
-        DiscoverySourceKind::Mgl => "mgl",
-        DiscoverySourceKind::PayloadFile => "payload",
-        DiscoverySourceKind::ArchiveEntry => "archive-entry",
-        DiscoverySourceKind::CatalogEntry => "catalog-entry",
-    }
-}
-
 fn source_kind_name(kind: RuleSourceKind) -> &'static str {
     match kind {
         RuleSourceKind::MainSource => "main-source",
@@ -4942,16 +4833,6 @@ fn source_kind_name(kind: RuleSourceKind) -> &'static str {
         RuleSourceKind::Mra => "mra",
         RuleSourceKind::ConfStr => "conf-str",
         RuleSourceKind::MagikProfile => "magik-profile",
-    }
-}
-
-fn ignore_reason_str(reason: IgnoreReason) -> &'static str {
-    match reason {
-        IgnoreReason::Bios => "bios",
-        IgnoreReason::CueTrack => "cue-track",
-        IgnoreReason::CoreBinary => "core-binary",
-        IgnoreReason::SaveMedia => "save-media",
-        IgnoreReason::SupportArchive => "support-archive",
     }
 }
 
@@ -5160,6 +5041,9 @@ fn should_ignore_path(path: &Path) -> bool {
     if path_str.contains("/.____padding_file/") || path_str.contains("/__macosx/") {
         return true;
     }
+    if is_arcade_non_game_tree(path) {
+        return true;
+    }
     path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy();
         s.starts_with("._")
@@ -5172,6 +5056,19 @@ fn should_ignore_path(path: &Path) -> bool {
             || s.eq_ignore_ascii_case("_organized")
             || s.eq_ignore_ascii_case("boxart")
     })
+}
+
+fn is_arcade_non_game_tree(path: &Path) -> bool {
+    let mut previous_was_arcade = false;
+    for component in path.components().filter_map(|c| c.as_os_str().to_str()) {
+        if previous_was_arcade
+            && (component.eq_ignore_ascii_case("media") || component.eq_ignore_ascii_case("cores"))
+        {
+            return true;
+        }
+        previous_was_arcade = component.eq_ignore_ascii_case("_Arcade");
+    }
+    false
 }
 
 fn normalize_title(path: &str) -> String {
@@ -5268,12 +5165,12 @@ mod tests {
 
         assert!(matches!(
             classify_profile_path(&profiles, Path::new("/media/fat/games/Saturn/boot.rom")),
-            Some((profile, ProfilePathClass::Ignored { reason: IgnoreReason::Bios, .. }))
+            Some((profile, ProfilePathClass::Ignored { reason: launch_profiles::IgnoreReason::Bios, .. }))
                 if profile.id == "saturn"
         ));
         assert!(matches!(
             classify_profile_path(&profiles, Path::new("/media/fat/games/AO486/boot1.rom")),
-            Some((profile, ProfilePathClass::Ignored { reason: IgnoreReason::Bios, .. }))
+            Some((profile, ProfilePathClass::Ignored { reason: launch_profiles::IgnoreReason::Bios, .. }))
                 if profile.id == "ao486"
         ));
     }
@@ -5862,6 +5759,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn scanner_uses_profile_game_dirs_instead_of_walking_every_games_child() {
+        let root = unique_temp_dir("target-profile-game-dirs");
+        let nes_dir = root.join("games/NES");
+        let unrelated_dir = root.join("games/NotACoreProfile");
+        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
+        std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
+        std::fs::write(nes_dir.join("Mario.nes"), "rom").expect("write nes rom");
+        std::fs::write(unrelated_dir.join("Ghost.nes"), "rom").expect("write unrelated rom");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(
+            scan.normal_files[0].path,
+            nes_dir.join("Mario.nes").display().to_string()
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("Ghost.nes")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_prunes_arcade_media_and_cores_but_keeps_arcade_game_mras() {
+        let root = unique_temp_dir("target-arcade-game-dirs");
+        let arcade_dir = root.join("_Arcade");
+        let media_dir = arcade_dir.join("media");
+        let cores_dir = arcade_dir.join("cores");
+        let alternatives_dir = arcade_dir.join("_alternatives/_Alt");
+        std::fs::create_dir_all(&media_dir).expect("create media dir");
+        std::fs::create_dir_all(&cores_dir).expect("create cores dir");
+        std::fs::create_dir_all(&alternatives_dir).expect("create alternatives dir");
+        std::fs::write(
+            arcade_dir.join("Real Game.mra"),
+            "<misterromdescription><name>Real Game</name><setname>realgame</setname></misterromdescription>",
+        )
+        .expect("write real mra");
+        std::fs::write(
+            alternatives_dir.join("Alt Game.mra"),
+            "<misterromdescription><name>Alt Game</name><setname>altgame</setname></misterromdescription>",
+        )
+        .expect("write alt mra");
+        std::fs::write(
+            media_dir.join("Fake Screenshot.mra"),
+            "<misterromdescription><name>Fake Screenshot</name></misterromdescription>",
+        )
+        .expect("write media fake");
+        std::fs::write(cores_dir.join("Core.rbf"), "core").expect("write rbf");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 2);
+        let titles = scan
+            .discoveries
+            .iter()
+            .map(|discovery| discovery.title.as_str())
+            .collect::<Vec<_>>();
+        assert!(titles.contains(&"Real Game"));
+        assert!(titles.contains(&"Alt Game"));
+        assert!(!titles.contains(&"Fake Screenshot"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn scanner_does_not_follow_symlinked_game_dirs() {
@@ -5873,6 +5843,31 @@ mod tests {
         std::fs::create_dir_all(&outside).expect("create symlink target");
         std::fs::write(outside.join("Mario.nes"), "rom").expect("write outside rom");
         std::os::unix::fs::symlink(&outside, &linked_nes).expect("create linked game dir");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scanner_does_not_follow_symlinked_game_files() {
+        let root = unique_temp_dir("ignore-symlinked-game-file");
+        let outside = unique_temp_dir("symlink-target-file");
+        let nes_dir = root.join("games/NES");
+        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
+        std::fs::create_dir_all(&outside).expect("create symlink target dir");
+        let outside_rom = outside.join("Mario.nes");
+        std::fs::write(&outside_rom, "rom").expect("write outside rom");
+        std::os::unix::fs::symlink(&outside_rom, nes_dir.join("Mario.nes"))
+            .expect("create linked game file");
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
             sqlite_path: root.join("library.sqlite3"),
@@ -6261,8 +6256,8 @@ mod tests {
     }
 
     #[test]
-    fn console_preview_ignores_noncanonical_console_pack_entries() {
-        let root = unique_temp_dir("noncanonical-console-preview");
+    fn console_preview_derives_key_without_reading_pack_entries() {
+        let root = unique_temp_dir("derived-console-preview");
         let db = root.join("library.sqlite3");
         let mame_db = root.join("mame.sqlite3");
         write_mame_software_fixture_db(
@@ -6295,21 +6290,25 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, String, i64, i64) = conn
+        let row: (String, String, i64) = conn
             .query_row(
-                "SELECT l.preview_archive_path,l.preview_asset_key,l.has_preview,(
-                    SELECT count(*)
-                    FROM asset_entries
-                    WHERE asset_key='albert-odyssey-legend-of-eldean-us'
-                 )
+                "SELECT l.preview_archive_path,l.preview_asset_key,l.has_preview
                  FROM launcher_catalog l
                  WHERE l.system_id='saturn'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .expect("launcher and asset row");
+            .expect("launcher row");
 
-        assert_eq!(row, (String::new(), String::new(), 0, 0));
+        assert_eq!(
+            row,
+            (
+                "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b".to_string(),
+                software_asset_key("saturn", "albert"),
+                1
+            )
+        );
+        assert!(!sqlite_table_exists(&conn, "asset_entries").expect("check asset_entries table"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6353,15 +6352,15 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (i64, i64) = conn
+        let row: (String, String, i64) = conn
             .query_row(
-                "SELECT has_preview,(SELECT count(*) FROM asset_entries) FROM launcher_catalog",
+                "SELECT preview_archive_path,preview_asset_key,has_preview FROM launcher_catalog",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("launcher row");
 
-        assert_eq!(row, (0, 0));
+        assert_eq!(row, (String::new(), String::new(), 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7210,7 +7209,7 @@ mod tests {
             })
             .expect("query variant count");
 
-        assert_eq!(preferred.0.as_deref(), Some("1942w"));
+        assert_eq!(preferred.0.as_deref(), Some("1942b"));
         assert_eq!(preferred.1, "1942");
         assert_eq!(preferred.2, "deterministic-child");
         assert_eq!(preferred.3, 1);
@@ -7219,8 +7218,8 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_pack_resolves_exact_parent_and_sibling_assets() {
-        let root = unique_temp_dir("screenshot-pack-family");
+    fn arcade_preview_keys_are_derived_from_family_without_pack_index() {
+        let root = unique_temp_dir("arcade-family-preview-key");
         let db = root.join("library.sqlite3");
         let mame_db = root.join("mame.sqlite3");
         write_mame_fixture_db(
@@ -7314,22 +7313,17 @@ mod tests {
 
         assert_eq!(rows.len(), 4);
         for row in &rows {
-            assert_eq!(row.1.as_deref(), Some("1941u"));
+            assert_eq!(row.1.as_deref(), Some("1941"));
+            assert_eq!(row.2, "derived-family");
             assert_eq!(row.3, pack.path);
-            assert_eq!(row.4, "1941u");
+            assert_eq!(row.4, "1941");
             assert_eq!(row.5, 1);
         }
-        assert!(rows
-            .iter()
-            .any(|row| row.0.as_deref() == Some("1941u") && row.2 == "exact"));
-        assert!(rows
-            .iter()
-            .any(|row| row.0.as_deref() == Some("1941") && row.2 == "sibling"));
         assert_eq!(preferred.0.as_deref(), Some("1941"));
-        assert_eq!(preferred.1.as_deref(), Some("1941u"));
-        assert_eq!(preferred.2, "sibling");
+        assert_eq!(preferred.1.as_deref(), Some("1941"));
+        assert_eq!(preferred.2, "derived-family");
         assert_eq!(preferred.3, pack.path);
-        assert_eq!(preferred.4, "1941u");
+        assert_eq!(preferred.4, "1941");
         assert_eq!(preferred.5, 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -7433,7 +7427,7 @@ mod tests {
         let scan = scan_library(&cfg);
 
         assert!(scan.normal_files.is_empty());
-        assert_eq!(scan.ignored_files.len(), 2);
+        assert_eq!(scan.ignored_files, 2);
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
         }));
@@ -7531,13 +7525,13 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_catalog_stamp_check_detects_match_and_child_change() {
+    fn sqlite_catalog_stamp_check_detects_match_and_root_change() {
         let root = unique_temp_dir("sqlite-catalog-stamp-check");
         let db = root.join("library.sqlite3");
         let games = root.join("games");
         let system = games.join("NES");
         std::fs::create_dir_all(&system).expect("create system dir");
-        set_file_mtime_for_test(&system, 10, 0);
+        set_file_mtime_for_test(&games, 10, 0);
         let cfg = BenchConfig {
             roots: vec![games.display().to_string()],
             sqlite_path: db.clone(),
@@ -7550,7 +7544,7 @@ mod tests {
         let summary = sqlite_cached_summary(&db, unchanged.check_us).expect("cached summary");
         assert!(summary.skipped);
 
-        set_file_mtime_for_test(&system, 20, 0);
+        set_file_mtime_for_test(&games, 20, 0);
         let changed = sqlite_catalog_stamp_check(&cfg).expect("check changed stamp");
 
         assert!(!changed.unchanged);
@@ -8321,13 +8315,15 @@ mod tests {
                         extensions: &["mgl"],
                         mount: launch_profiles::MountSpec::launcher(),
                         disposition: PayloadDisposition::Playable,
-                        provenance: RuleProvenance::mgl("test fixture launcher payload"),
+                        provenance: launch_profiles::RuleProvenance::mgl(
+                            "test fixture launcher payload",
+                        ),
                     },
                 })
                 .collect(),
             containers: Vec::new(),
             entries: Vec::new(),
-            ignored_files: Vec::new(),
+            ignored_files: 0,
             discoveries: Vec::new(),
             discover_us: 0,
             classify_us: 0,
@@ -8341,7 +8337,7 @@ mod tests {
             normal_files: Vec::new(),
             containers: Vec::new(),
             entries: Vec::new(),
-            ignored_files: Vec::new(),
+            ignored_files: 0,
             discoveries,
             discover_us: 0,
             classify_us: 0,

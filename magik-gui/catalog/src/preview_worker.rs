@@ -703,7 +703,7 @@ fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<Previ
     Ok(Some(archives))
 }
 
-fn preview_archive_paths_from_env() -> Vec<String> {
+pub fn preview_archive_paths_from_env() -> Vec<String> {
     let mut paths = Vec::new();
     if let Ok(value) = std::env::var("MISTER_PREVIEW_ARCHIVES") {
         for path in value

@@ -116,7 +116,12 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
     print label, commit, $2, ms, $4
   }
   $1 == "library_import_timing" {
-    print label, commit, "import_stage_" $2, int(($3 + 500) / 1000), $4
+    note = ($4 == "" ? "-" : $4)
+    print label, commit, "import_stage_" $2, int(($3 + 500) / 1000), note
+  }
+  $1 == "library_scan_timing" {
+    note = ($4 == "" ? "-" : $4)
+    print label, commit, "scan_stage_" $2, int(($3 + 500) / 1000), note
   }
 ' "$local_log" >>"$TSV"
 
