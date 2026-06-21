@@ -5,18 +5,38 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use crate::catalog_config;
-use crate::catalog_scan::{self, DiscoveryEvent};
-use crate::game_discovery::{
-    catalog_system_id_for_discovery, covered_payload_paths, discovery_from_profile_archive_entry,
-    discovery_from_profile_file, is_launcher_launch_ref, launch_kind_for_discovery,
-    launch_ref_for_discovery, preferred_playable_discoveries_by_key, unique_discovery_count,
-    variant_score_from_haystack, GameDiscovery,
+#[cfg(test)]
+use crate::catalog_config::DEFAULT_SQLITE_BUILD_DIR;
+pub use crate::catalog_config::{
+    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
-use crate::media_metadata;
+use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
+use crate::catalog_scan::{self, DiscoveryEvent};
 #[cfg(test)]
 use crate::catalog_scan::{
     classify_profile_path, profile_for_path, scan_zip_central_directory, FoundFile,
 };
+use crate::catalog_stamp;
+#[cfg(test)]
+use crate::catalog_store;
+use crate::game_discovery::{
+    catalog_system_id_for_discovery, covered_payload_paths, discovery_from_profile_archive_entry,
+    discovery_from_profile_file, is_launcher_launch_ref, launch_kind_for_discovery,
+    launch_ref_for_discovery, preferred_playable_discoveries_by_key, unique_discovery_count,
+    GameDiscovery,
+};
+#[cfg(test)]
+use crate::game_discovery::{
+    first_disc_number_from_haystack, is_playable_discovery, system_title_for_discovery,
+    variant_score_from_haystack, DiscoveryConfidence, DiscoverySourceKind,
+};
+use crate::launch_profiles::{
+    self, CollectionListing, PayloadDisposition, PayloadRule, ProfilePathClass,
+};
+pub(crate) use crate::library_cli::{
+    canonical_variant_title, collapse_catalog_variants, CatalogRow,
+};
+use crate::media_metadata;
 #[cfg(test)]
 use crate::media_metadata::{
     collection_discoveries_from_container, collection_discoveries_from_listing_text,
@@ -24,31 +44,13 @@ use crate::media_metadata::{
     read_mgl_metadata, read_mra_metadata, RegionInference,
 };
 #[cfg(test)]
-use crate::game_discovery::{
-    first_disc_number_from_haystack, is_playable_discovery, system_title_for_discovery,
-    DiscoveryConfidence, DiscoverySourceKind,
-};
+use crate::preview_worker;
 #[cfg(test)]
 use crate::software_identity::{
-    crc32, match_software_by_file_hash_with_cache,
-    mame_software_identity_for_discovery_with_hash_matcher, preview_asset_pack_platform,
-    rom_hash_candidates, software_asset_key, MameSoftwareItemMetadata, MameSoftwareMetadata,
-    SoftwareHashCache,
+    crc32, mame_software_identity_for_discovery_with_hash_matcher,
+    match_software_by_file_hash_with_cache, preview_asset_pack_platform, rom_hash_candidates,
+    software_asset_key, MameSoftwareItemMetadata, MameSoftwareMetadata, SoftwareHashCache,
 };
-#[cfg(test)]
-use crate::catalog_config::DEFAULT_SQLITE_BUILD_DIR;
-pub use crate::catalog_config::{
-    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
-};
-use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
-use crate::catalog_stamp;
-#[cfg(test)]
-use crate::catalog_store;
-use crate::launch_profiles::{
-    self, CollectionListing, PayloadDisposition, PayloadRule, ProfilePathClass,
-};
-#[cfg(test)]
-use crate::preview_worker;
 use crate::software_identity::{
     load_arcade_machine_metadata, mame_identity_for_discovery, mame_identity_projection,
     write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows,
@@ -59,7 +61,7 @@ use crate::sqlite_catalog::{SqliteBuildTempPlan, SqliteBuildTempSource};
 #[cfg(test)]
 use rusqlite::params;
 use rusqlite::Connection;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::time::Duration;
@@ -251,8 +253,6 @@ pub(crate) struct FileSignature {
     pub(crate) mtime_secs: i64,
 }
 
-
-
 #[derive(Clone, Debug)]
 pub(crate) struct LibraryPayloadFile {
     pub(crate) path: String,
@@ -263,315 +263,11 @@ pub(crate) struct LibraryPayloadFile {
 }
 
 pub fn run_scan_bench() {
-    let cfg = BenchConfig::from_env();
-    let label =
-        std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
-    let iterations = std::env::var("MISTER_LIBRARY_BENCH_ITERATIONS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1)
-        .max(1);
-    let bench_force_rebuild = env_bool("MISTER_LIBRARY_BENCH_FORCE_REBUILD");
-    let bench_precount = env_bool("MISTER_LIBRARY_BENCH_PRECOUNT");
-    println!("library-scan-bench label={label}");
-    println!("library-scan-bench roots={}", cfg.roots.join("|"));
-    println!(
-        "library-scan-bench sqlite_path={}",
-        cfg.sqlite_path.display()
-    );
-    for iteration in 1..=iterations {
-        match std::fs::remove_file(&cfg.sqlite_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("library-scan-bench remove old sqlite: {e}"),
-        }
-
-        if bench_precount {
-            let (candidates, dirs, precount_us) = catalog_scan::precount_discovery_candidates(&cfg.roots);
-            println!(
-                "library_scan_bench_tsv\t{label}\t{iteration}\tprecount_discovery\t{precount_us}\tcandidates={candidates}\tdirs={dirs}"
-            );
-        }
-
-        let build_t = Instant::now();
-        let artifact = scan_library_artifact(&cfg, None);
-        let stats = artifact.stats().clone();
-        let build_us = build_t.elapsed().as_micros() as u64;
-
-        let import_t = Instant::now();
-        let summary = match save_scan_artifact_to_sqlite(&cfg, artifact, None) {
-            Ok(summary) => summary,
-            Err(e) => {
-                println!(
-                    "library_scan_bench_tsv\t{label}\t{iteration}\timport_error\t{}\t{e}",
-                    import_t.elapsed().as_micros()
-                );
-                continue;
-            }
-        };
-        let import_us = import_t.elapsed().as_micros() as u64;
-        let bytes = summary.bytes;
-
-        let load_t = Instant::now();
-        let loaded = load_arcade_catalog_from_sqlite("/media/fat/_Arcade");
-        let (load_us, arcade_rows) = match loaded {
-            Ok(load) => (load.us, load.rows),
-            Err(e) => {
-                eprintln!("library-scan-bench arcade load failed: {e}");
-                (load_t.elapsed().as_micros() as u64, 0)
-            }
-        };
-
-        let stamp_t = Instant::now();
-        let stamp_check = sqlite_catalog_stamp_check(&cfg);
-        let stamp_us = stamp_t.elapsed().as_micros() as u64;
-
-        let force_rebuild = if bench_force_rebuild {
-            let change_dir = Path::new(&cfg.roots[0]).join("games/NES");
-            let change_parent = if change_dir.is_dir() {
-                change_dir
-            } else {
-                PathBuf::from(&cfg.roots[0])
-            };
-            let change_path =
-                change_parent.join(format!("Mister_Magik_Refresh_Bench_{iteration}.nes"));
-            if let Err(e) = std::fs::write(&change_path, b"[mister]\nrbf=menu\n") {
-                eprintln!(
-                    "library-scan-bench force rebuild setup failed at {}: {e}",
-                    change_path.display()
-                );
-            }
-            let force_rebuild_t = Instant::now();
-            let summary = rebuild_sqlite_database(&cfg, None);
-            Some((force_rebuild_t.elapsed().as_micros() as u64, summary))
-        } else {
-            None
-        };
-
-        println!(
-            "library_scan_bench_tsv\t{label}\t{iteration}\tfresh_build\t{build_us}\tdiscover_us={}\tclassify_us={}\tnormal_files={}\tcontainers={}\tentries={}\tdiscoveries={}",
-            stats.discover_us,
-            stats.classify_us,
-            stats.normal_files,
-            stats.containers,
-            stats.entries,
-            stats.discoveries
-        );
-        println!(
-            "library_scan_bench_tsv\t{label}\t{iteration}\timport\t{import_us}\tbytes={bytes}"
-        );
-        println!(
-            "library_scan_bench_tsv\t{label}\t{iteration}\tcached_arcade_load\t{load_us}\trows={arcade_rows}"
-        );
-        match stamp_check {
-            Ok(check) => println!(
-                "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check\t{stamp_us}\tunchanged={} check_us={} compute_us={} open_us={} read_us={} compare_us={} stored={} current={} stored_lines={} current_lines={}",
-                check.unchanged,
-                check.check_us,
-                check.compute_us,
-                check.open_us,
-                check.read_us,
-                check.compare_us,
-                check.stored_fingerprint.as_deref().unwrap_or("missing"),
-                check.current_fingerprint,
-                check.stored_lines,
-                check.current_lines
-            ),
-            Err(e) => println!(
-                "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check_error\t{stamp_us}\t{e}"
-            ),
-        }
-        if let Some((force_rebuild_us, force_rebuild_summary)) = force_rebuild {
-            match force_rebuild_summary {
-                Ok(summary) => println!(
-                    "library_scan_bench_tsv\t{label}\t{iteration}\tforce_rebuild\t{force_rebuild_us}\tscan_us={}\tdiscover_us={}\tclassify_us={}\timport_us={}\tskipped={}\tdiscoveries={}",
-                    summary.scan_us,
-                    summary.discover_us,
-                    summary.classify_us,
-                    summary.import_us,
-                    summary.skipped,
-                    summary.discoveries
-                ),
-                Err(e) => println!(
-                    "library_scan_bench_tsv\t{label}\t{iteration}\tforce_rebuild_error\t{force_rebuild_us}\t{e}"
-                ),
-            }
-        }
-    }
+    crate::library_cli::run_scan_bench();
 }
 
 pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
-    let mut path = default_sqlite_path();
-    let mut query_parts = Vec::new();
-    let mut i = 0usize;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--path" => {
-                let Some(value) = args.get(i + 1) else {
-                    return Err("library-sql: --path needs a value".into());
-                };
-                path = PathBuf::from(value);
-                i += 2;
-            }
-            other => {
-                query_parts.push(other.to_string());
-                i += 1;
-            }
-        }
-    }
-    if query_parts.is_empty() {
-        return Err("usage: library-sql [--path PATH] SELECT ...".into());
-    }
-    let query = query_parts.join(" ");
-    let trimmed = query.trim_start().to_ascii_lowercase();
-    if !trimmed.starts_with("select") && !trimmed.starts_with("with") {
-        return Err("library-sql only allows read-only SELECT/WITH queries".into());
-    }
-
-    let metadata = std::fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
-    if !metadata.is_file() {
-        return Err(format!("{} is not a file", path.display()));
-    }
-    if metadata.len() == 0 {
-        return Err(format!("{} is empty", path.display()));
-    }
-
-    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    let mut stmt = conn
-        .prepare(&query)
-        .map_err(|e| format!("prepare query: {e}"))?;
-    let column_count = stmt.column_count();
-    let mut out = String::new();
-    if column_count > 0 {
-        out.push_str(&stmt.column_names().join("\t"));
-        out.push('\n');
-    }
-    let mut rows = stmt.query([]).map_err(|e| format!("run query: {e}"))?;
-    while let Some(row) = rows.next().map_err(|e| format!("read row: {e}"))? {
-        for col in 0..column_count {
-            if col > 0 {
-                out.push('\t');
-            }
-            out.push_str(&sqlite_cell_to_string(row, col)?);
-        }
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> Result<String, String> {
-    use rusqlite::types::ValueRef;
-
-    match row
-        .get_ref(col)
-        .map_err(|e| format!("read column {col}: {e}"))?
-    {
-        ValueRef::Null => Ok(String::new()),
-        ValueRef::Integer(value) => Ok(value.to_string()),
-        ValueRef::Real(value) => Ok(value.to_string()),
-        ValueRef::Text(value) => Ok(String::from_utf8_lossy(value).into_owned()),
-        ValueRef::Blob(value) => Ok(format!("<blob:{}>", value.len())),
-    }
-}
-
-
-#[derive(Clone, Debug)]
-pub(crate) struct CatalogRow {
-    pub(crate) game: ArcadeGameEntry,
-    pub(crate) source_kind: String,
-    pub(crate) setname: String,
-    pub(crate) parent: String,
-    pub(crate) family_key: Option<String>,
-}
-
-pub(crate) fn collapse_catalog_variants(rows: Vec<CatalogRow>) -> Vec<ArcadeGameEntry> {
-    let mut best_idx: HashMap<String, usize> = HashMap::new();
-    let mut out: Vec<CatalogRow> = Vec::with_capacity(rows.len());
-
-    for row in rows {
-        let key = catalog_variant_group_key(&row);
-        if let Some(&idx) = best_idx.get(&key) {
-            if prefer_catalog_variant(&row, &out[idx]) {
-                out[idx] = row;
-            }
-        } else {
-            best_idx.insert(key, out.len());
-            out.push(row);
-        }
-    }
-
-    out.into_iter().map(|row| row.game).collect()
-}
-
-fn catalog_variant_group_key(row: &CatalogRow) -> String {
-    if let Some(family_key) = row.family_key.as_deref() {
-        return format!("family:{}", normalize_id(family_key));
-    }
-    if row.source_kind == "mra" {
-        if !row.setname.trim().is_empty() {
-            let parent = row.parent.trim();
-            let group = if parent.is_empty() {
-                row.setname.as_str()
-            } else {
-                parent
-            };
-            return format!("mra:set:{}", normalize_id(group));
-        }
-        return format!("mra:title:{}", canonical_variant_title(&row.game.title));
-    }
-    if row.source_kind == "catalog-entry" {
-        return format!(
-            "catalog-entry:{}:{}",
-            row.game.mra_path,
-            normalize_id(&row.game.title)
-        );
-    }
-    format!("{}:{}", row.source_kind, row.game.mra_path)
-}
-
-fn prefer_catalog_variant(a: &CatalogRow, b: &CatalogRow) -> bool {
-    let a_score = catalog_variant_score(a);
-    let b_score = catalog_variant_score(b);
-    if a_score != b_score {
-        return a_score > b_score;
-    }
-    if a.game.has_preview != b.game.has_preview {
-        return a.game.has_preview;
-    }
-    a.game.mra_path < b.game.mra_path
-}
-
-fn catalog_variant_score(row: &CatalogRow) -> i32 {
-    let haystack = format!(
-        "{} {} {} {}",
-        row.game.title, row.game.mra_path, row.setname, row.parent
-    )
-    .to_ascii_lowercase();
-
-    let mut score = variant_score_from_haystack(&haystack);
-    if row.source_kind == "mra" && !row.setname.trim().is_empty() && row.parent.trim().is_empty() {
-        score += 1000;
-    }
-    score
-}
-
-
-pub(crate) fn canonical_variant_title(title: &str) -> String {
-    let mut out = String::new();
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    for ch in title.chars() {
-        match ch {
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            _ if paren_depth == 0 && bracket_depth == 0 => out.push(ch),
-            _ => {}
-        }
-    }
-    normalize_id(out.trim_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == ','))
+    crate::library_cli::run_sqlite_inspect_cli(args)
 }
 
 pub fn remove_default_sqlite_database() -> Result<(), String> {
@@ -640,7 +336,9 @@ fn load_virtual_launch_plans_for_system_from_conn(
     sqlite_catalog::load_virtual_launch_plans_for_system_from_conn(conn, system_id, limit)
 }
 
-fn sqlite_catalog_stamp_check(cfg: &BenchConfig) -> Result<CatalogStampCheckSummary, String> {
+pub(crate) fn sqlite_catalog_stamp_check(
+    cfg: &BenchConfig,
+) -> Result<CatalogStampCheckSummary, String> {
     sqlite_catalog::sqlite_catalog_stamp_check(cfg)
 }
 
@@ -667,7 +365,11 @@ fn save_sqlite_scan_with_progress_using_writer(
     writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
 ) -> Result<u64, String> {
     sqlite_catalog::save_sqlite_scan_with_progress_using_writer(
-        path, scan, progress, initial_plan, writer,
+        path,
+        scan,
+        progress,
+        initial_plan,
+        writer,
     )
 }
 
@@ -700,7 +402,10 @@ fn write_sqlite_scan_with_mame_and_hbmame(
     hbmame_sqlite_path: &Path,
 ) -> Result<(), String> {
     sqlite_catalog::write_sqlite_scan_with_mame_and_hbmame(
-        path, scan, mame_sqlite_path, hbmame_sqlite_path,
+        path,
+        scan,
+        mame_sqlite_path,
+        hbmame_sqlite_path,
     )
 }
 
@@ -712,7 +417,10 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
     preview_asset_pack: &preview_worker::PreviewArchiveIndex,
 ) -> Result<(), String> {
     sqlite_catalog::write_sqlite_scan_with_mame_and_preview_pack(
-        path, scan, mame_sqlite_path, preview_asset_pack,
+        path,
+        scan,
+        mame_sqlite_path,
+        preview_asset_pack,
     )
 }
 
@@ -799,8 +507,7 @@ pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSumma
     sqlite_cached_summary(&default_sqlite_path(), scan_us)
 }
 
-
-fn rebuild_sqlite_database(
+pub(crate) fn rebuild_sqlite_database(
     cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
@@ -833,7 +540,7 @@ pub(crate) struct BenchConfig {
 }
 
 impl BenchConfig {
-    fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let roots = catalog_config::library_roots_from_env();
         let sqlite_path = std::env::var("MISTER_LIBRARY_BENCH_SQLITE")
             .map(PathBuf::from)
@@ -863,7 +570,7 @@ fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     scan_library_with_progress(cfg, None)
 }
 
-fn scan_library_artifact(
+pub(crate) fn scan_library_artifact(
     cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,
 ) -> LibraryScanArtifact {
@@ -885,7 +592,7 @@ fn scan_library_artifact(
     LibraryScanArtifact { scan, stats, stamp }
 }
 
-fn save_scan_artifact_to_sqlite(
+pub(crate) fn save_scan_artifact_to_sqlite(
     cfg: &BenchConfig,
     artifact: LibraryScanArtifact,
     progress: ProgressCallback<'_>,
@@ -974,7 +681,6 @@ fn catalog_family_fields_for_discovery(
     )
 }
 
-
 #[derive(Default)]
 struct ScanTimingStats {
     profile_match_us: u64,
@@ -1051,7 +757,8 @@ fn scan_library_with_progress(
                     continue;
                 }
                 let installed_t = Instant::now();
-                let installed = media_metadata::installed_amigavision_discoveries_from_hdf(&f, profile);
+                let installed =
+                    media_metadata::installed_amigavision_discoveries_from_hdf(&f, profile);
                 timing.installed_collection_us += installed_t.elapsed().as_micros() as u64;
                 timing.installed_collection_count += 1;
                 if let Some(installed) = installed {
@@ -1120,7 +827,9 @@ fn scan_library_with_progress(
                     containers.push(catalog_scan::scan_container_header(&f, format));
                 }
                 let collection_t = Instant::now();
-                discoveries.extend(media_metadata::collection_discoveries_from_container(&f, profile, &rule));
+                discoveries.extend(media_metadata::collection_discoveries_from_container(
+                    &f, profile, &rule,
+                ));
                 timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
                 timing.collection_listing_count += 1;
             }
@@ -1183,9 +892,6 @@ fn scan_library_with_progress(
     }
 }
 
-
-
-
 pub(crate) fn normalize_id(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -1208,12 +914,9 @@ pub(crate) fn normalize_id(value: &str) -> String {
     }
 }
 
-
-
 pub(crate) fn report_library_scan_timing(stage: &str, us: u64, detail: impl std::fmt::Display) {
     println!("library_scan_timing\t{stage}\t{us}\t{detail}");
 }
-
 
 pub(crate) fn normalize_title(path: &str) -> String {
     Path::new(path)
@@ -3612,9 +3315,9 @@ mod tests {
             "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"
         ));
         assert!(is_launcher_launch_ref(AMIGAVISION_LAUNCHER_REF));
-        assert!(is_launcher_launch_ref(&media_metadata::amigavision_game_launch_ref(
-            "4th & Inches (OCS)[en]"
-        )));
+        assert!(is_launcher_launch_ref(
+            &media_metadata::amigavision_game_launch_ref("4th & Inches (OCS)[en]")
+        ));
     }
 
     #[test]

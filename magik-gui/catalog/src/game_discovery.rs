@@ -188,9 +188,9 @@ pub(crate) fn discovery_from_profile_file(
                 source_path: file.path.display().to_string(),
                 launch_ref: file.path.display().to_string(),
                 source_kind: DiscoverySourceKind::Mra,
-                title: mra
-                    .name
-                    .unwrap_or_else(|| library_db::title_from_path(&file.path.display().to_string())),
+                title: mra.name.unwrap_or_else(|| {
+                    library_db::title_from_path(&file.path.display().to_string())
+                }),
                 category: profile.category.to_string(),
                 platform_id: profile.system_id.to_string(),
                 core_id,
@@ -376,7 +376,11 @@ pub(crate) fn discovery_unique_key(d: &GameDiscovery) -> String {
             if let Some(setname) = d.setname.as_deref().filter(|s| !s.trim().is_empty()) {
                 format!("mra:set:{setname}")
             } else {
-                format!("mra:title:{}:{}", d.hardware_id, library_db::normalize_id(&d.title))
+                format!(
+                    "mra:title:{}:{}",
+                    d.hardware_id,
+                    library_db::normalize_id(&d.title)
+                )
             }
         }
         DiscoverySourceKind::Mgl => format!("payload:{}", d.launch_ref),
@@ -447,7 +451,6 @@ pub(crate) fn launch_ref_for_discovery(game_id: &str, discovery: &GameDiscovery)
 pub(crate) fn virtual_launch_ref(game_id: &str) -> String {
     format!("magik-plan:{game_id}")
 }
-
 
 pub(crate) fn profile_id_for_discovery(discovery: &GameDiscovery) -> Option<&str> {
     if discovery.platform_id == "unknown" || discovery.platform_id.is_empty() {

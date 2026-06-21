@@ -48,7 +48,10 @@ pub(crate) fn classify_profile_path<'a>(
     Some((profile, profile.classify_path(path)))
 }
 
-pub(crate) fn profile_for_path<'a>(profiles: &'a [LaunchProfile], path: &Path) -> Option<&'a LaunchProfile> {
+pub(crate) fn profile_for_path<'a>(
+    profiles: &'a [LaunchProfile],
+    path: &Path,
+) -> Option<&'a LaunchProfile> {
     let mut previous_was_games = false;
     for component in path_components_str(path) {
         if previous_was_games {
