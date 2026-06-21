@@ -163,7 +163,7 @@ pub(super) fn run_launcher_loop(
     println!(
         "launcher_mode={} fb_format={}",
         "launcher",
-        FramebufferFormat::from_env().label()
+        FramebufferFormat::production_default().label()
     );
     if let Some(scenario) = launcher_bench_scenario {
         println!("launcher_bench_scenario={}", scenario.label());
