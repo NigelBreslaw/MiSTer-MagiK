@@ -241,14 +241,48 @@ pub(super) fn preview_run_label() -> String {
     std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
 }
 
-pub(super) fn catalog_refresh_requested() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CatalogRefreshPolicy {
+    Default,
+    Force,
+    Off,
+}
+
+impl CatalogRefreshPolicy {
+    pub(super) fn force_requested(self) -> bool {
+        self == Self::Force
+    }
+
+    pub(super) fn worker_enabled(self) -> bool {
+        self != Self::Off
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Force => "force",
+            Self::Off => "off",
+        }
+    }
+}
+
+pub(super) fn catalog_refresh_policy() -> CatalogRefreshPolicy {
+    static VALUE: OnceLock<CatalogRefreshPolicy> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_CATALOG_REFRESH").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
+        catalog_refresh_policy_from_value(std::env::var("MISTER_CATALOG_REFRESH").ok().as_deref())
     })
+}
+
+fn catalog_refresh_policy_from_value(value: Option<&str>) -> CatalogRefreshPolicy {
+    match value {
+        Some("1") | Some("on") | Some("true") | Some("yes") | Some("force") => {
+            CatalogRefreshPolicy::Force
+        }
+        Some("0") | Some("off") | Some("false") | Some("no") | Some("load-only") => {
+            CatalogRefreshPolicy::Off
+        }
+        _ => CatalogRefreshPolicy::Default,
+    }
 }
 
 pub(super) fn forced_arcade_selected_index() -> Option<usize> {
@@ -2394,6 +2428,34 @@ mod tests {
 
     fn covered_area(rects: &[DirtyRect]) -> usize {
         rects.iter().map(|rect| rect.area()).sum()
+    }
+
+    #[test]
+    fn catalog_refresh_policy_parses_force_off_and_default() {
+        assert_eq!(
+            catalog_refresh_policy_from_value(None),
+            CatalogRefreshPolicy::Default
+        );
+        assert_eq!(
+            catalog_refresh_policy_from_value(Some("on")),
+            CatalogRefreshPolicy::Force
+        );
+        assert_eq!(
+            catalog_refresh_policy_from_value(Some("force")),
+            CatalogRefreshPolicy::Force
+        );
+        assert_eq!(
+            catalog_refresh_policy_from_value(Some("off")),
+            CatalogRefreshPolicy::Off
+        );
+        assert_eq!(
+            catalog_refresh_policy_from_value(Some("load-only")),
+            CatalogRefreshPolicy::Off
+        );
+        assert_eq!(
+            catalog_refresh_policy_from_value(Some("later")),
+            CatalogRefreshPolicy::Default
+        );
     }
 
     #[test]

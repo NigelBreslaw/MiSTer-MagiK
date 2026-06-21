@@ -70,7 +70,16 @@ Explicit refresh:
 - `ForceBuild`: run the full builder regardless of cache state.
 
 Missing, empty, and old-schema caches are not usable. They always plan
-`ForceBuild`, even when the request was `CheckStamp`.
+`ForceBuild`, even when the request was `CheckStamp`, unless
+`MISTER_CATALOG_REFRESH=off` has disabled the catalog worker for a benchmark
+restart.
+
+`MISTER_CATALOG_REFRESH` is the single launcher policy knob:
+
+- unset: normal behavior; ready caches get delayed `CheckStamp` validation,
+- `on`/`force`: force a full catalog rebuild,
+- `off`/`load-only`: use only the synchronous cache load and start no catalog
+  worker.
 
 ## UI Progress Semantics
 
