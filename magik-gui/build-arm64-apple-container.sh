@@ -65,7 +65,8 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --opts       → release-opts
   ./build-arm64-apple-container.sh --incr       → release-incr
   ./build-arm64-apple-container.sh --device     → release-device
-  ./build-arm64-apple-container.sh --all-scenes → compile every Slint bench scene
+  ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
+  ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
   ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
@@ -101,7 +102,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BIN_NAME=preview-archive-bench
       ;;
     --video) add_feature video ;;
-    --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
+    --all-scenes) UI_SCOPE=all; add_feature experiments ;;
+    --experiments) UI_SCOPE=all; add_feature experiments ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
     --ui-scope)
       i=$((i + 1))

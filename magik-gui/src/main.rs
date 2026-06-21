@@ -15,8 +15,11 @@
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
+//!     experiment-capabilities
+//!                        print whether experimental scenes are compiled in
 //!   Benchmarks:
 //!     scenes             list Slint scene names
+//!   Experiments:
 //!     effects            list framebuffer effect benchmark names
 //!     camera-effects     list classic camera/background effect labels
 //!     sprite-effects     list classic sprite/object effect labels
@@ -56,6 +59,7 @@ mod screenshot_transitions;
 mod setup_nav;
 mod ui_blend_velocity;
 mod ui_display;
+#[cfg(mister_experiments)]
 mod ui_effect_bench;
 mod ui_runner;
 #[cfg(feature = "video")]
@@ -123,31 +127,41 @@ fn main() {
         return;
     }
 
+    if cmd == "experiment-capabilities" {
+        print_experiment_capabilities();
+        return;
+    }
+
     if cmd == "preview-transitions" {
         print_preview_transitions();
         return;
     }
 
+    #[cfg(mister_experiments)]
     if cmd == "camera-effects" {
         ui_runner::print_camera_effects();
         return;
     }
 
+    #[cfg(mister_experiments)]
     if cmd == "sprite-effects" {
         ui_runner::print_sprite_effects();
         return;
     }
 
+    #[cfg(mister_experiments)]
     if cmd == "text-effects" {
         ui_runner::print_text_effects();
         return;
     }
 
+    #[cfg(mister_experiments)]
     if cmd == "raster-effects" {
         ui_runner::print_raster_effects();
         return;
     }
 
+    #[cfg(mister_experiments)]
     if cmd == "transition-effects" {
         ui_runner::print_transition_effects();
         return;
@@ -169,7 +183,9 @@ fn main() {
         "early-black" => early_black_route(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
         "scenes" => ui_runner::print_scenes(),
+        #[cfg(mister_experiments)]
         "effects" => ui_runner::print_effects(),
+        #[cfg(mister_experiments)]
         "effect-bench" => ui_effect_bench::run_effect_bench(&mut f),
         "input" => run_input(),
         "library-scan-bench" => library_db::run_scan_bench(),
@@ -189,6 +205,19 @@ fn print_preview_transitions() {
         "{}",
         screenshot_transitions::PreviewTransitionEffect::labels()
     );
+}
+
+fn print_experiment_capabilities() {
+    #[cfg(mister_experiments)]
+    {
+        println!("experiments=1");
+        println!("commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench");
+    }
+    #[cfg(not(mister_experiments))]
+    {
+        println!("experiments=0");
+        println!("commands=");
+    }
 }
 
 fn run_library_refresh() {

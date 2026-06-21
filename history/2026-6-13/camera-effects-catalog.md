@@ -1,5 +1,9 @@
 # Camera effects catalog - 2026-06-13
 
+Current policy: effect catalogs are experiments, not release benchmark evidence.
+Use `docs/experiments/effects.md` and `scripts/experiments/` for current
+commands.
+
 This checkpoint adds a first-pass full-screen RGB565 catalog for classic arcade
 background/camera tricks. It is intentionally experimental: the effects are not
 launcher defaults yet, and several are deliberately unoptimized so the benchmark

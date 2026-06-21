@@ -1,5 +1,9 @@
 # Text Effects Catalog
 
+Current policy: effect catalogs are experiments, not release benchmark evidence.
+Use `docs/experiments/effects.md` and `scripts/experiments/` for current
+commands.
+
 Experimental full-screen RGB565 text effects live beside the camera and sprite
 catalogs. They are benchmark/demo scenes only; they are not launcher defaults.
 

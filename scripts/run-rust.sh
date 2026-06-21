@@ -6,11 +6,6 @@
 #
 #   scripts/run-rust.sh                  # restart supervised launcher, forever
 #   scripts/run-rust.sh launcher 0       # restart supervised launcher, forever
-#   scripts/run-rust.sh camera-effects 0 # full-screen classic camera effect picker
-#   scripts/run-rust.sh sprite-effects 0 # full-screen classic sprite effect picker
-#   scripts/run-rust.sh text-effects 0   # full-screen classic text effect picker
-#   scripts/run-rust.sh raster-effects 0 # full-screen classic raster/palette picker
-#   scripts/run-rust.sh transition-effects 0 # full-screen classic transition picker
 #   scripts/run-rust.sh console_scroll 15
 set -euo pipefail
 
@@ -29,20 +24,10 @@ case "$SCENE" in
     exit 2
     ;;
   demo|full_motion|static_ui|local_motion|console_scroll|controller_test|blend_velocity|video_playback|solid_fill|dirty_band) ;;
-  camera-effects)
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_CAMERA_EFFECTS_HUD=1"
-    ;;
-  sprite-effects)
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_SPRITE_EFFECTS_HUD=1"
-    ;;
-  text-effects)
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_TEXT_EFFECTS_HUD=1"
-    ;;
-  raster-effects)
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_RASTER_EFFECTS_HUD=1"
-    ;;
-  transition-effects)
-    EXTRA_ENV="MISTER_FB_FORMAT=565 MISTER_PREVIEW_FORMAT=raw-rgb565 MISTER_TRANSITION_EFFECTS_HUD=1"
+  camera-effects|sprite-effects|text-effects|raster-effects|transition-effects)
+    echo "'$SCENE' is an experimental effect scene, not a production UI scene." >&2
+    echo "Use scripts/experiments/ and deploy with scripts/deploy-rust.sh --experiments." >&2
+    exit 2
     ;;
   -h|--help)
     sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'

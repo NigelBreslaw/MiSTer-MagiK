@@ -1399,8 +1399,12 @@ fn launcher_bench_initial_preview_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(mister_experiments)]
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
+    #[cfg(mister_experiments)]
+    use mister_magik_fb::effects::EffectSize;
 
+    #[cfg(mister_experiments)]
     #[test]
     pub(super) fn effect_half_target_allows_640x448_at_native_scale() {
         let ui = UiDisplay::for_framebuffer(1920, 1080);

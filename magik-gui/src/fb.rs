@@ -10,6 +10,7 @@
 
 use crate::fb_format::FramebufferFormat;
 use crate::fpga::FB_SIZE_PX;
+#[cfg(mister_experiments)]
 use mister_magik_fb::camera_effects::CameraPixel;
 use mister_magik_fb::framebuffer_copy;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
@@ -1009,6 +1010,7 @@ impl Display {
         }
     }
 
+    #[cfg(mister_experiments)]
     pub fn copy_rows_camera_565(&mut self, src: &[CameraPixel], y0: usize, y1: usize) {
         assert_eq!(self.format, FramebufferFormat::Rgb565);
         let w = self.w;

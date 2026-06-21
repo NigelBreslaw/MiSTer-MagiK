@@ -21,6 +21,11 @@ available. It expects `/media/fat/mister-magik/mslug3.mov` by default: H.264
 baseline video plus 48 kHz stereo `pcm_s16le` audio. Override with
 `MISTER_VIDEO_PATH`.
 
+Classic camera/sprite/text/raster/transition effect scenes are experiments, not
+production benchmark scenes. Build them with `scripts/deploy-rust.sh
+--experiments` and run them through `scripts/experiments/`; see
+`docs/experiments/effects.md`.
+
 Shared window: [`../mister_window.slint`](../mister_window.slint).
 
 ## Profiling (per-frame timings + CPU flamegraph)

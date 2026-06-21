@@ -6,13 +6,21 @@ pub const COMMANDS: &[&str] = &[
     "early-black",
     "ui",
     "scenes",
-    "effects",
-    "camera-effects",
-    "sprite-effects",
-    "text-effects",
-    "raster-effects",
-    "transition-effects",
+    "experiment-capabilities",
     "preview-transitions",
+    #[cfg(mister_experiments)]
+    "effects",
+    #[cfg(mister_experiments)]
+    "camera-effects",
+    #[cfg(mister_experiments)]
+    "sprite-effects",
+    #[cfg(mister_experiments)]
+    "text-effects",
+    #[cfg(mister_experiments)]
+    "raster-effects",
+    #[cfg(mister_experiments)]
+    "transition-effects",
+    #[cfg(mister_experiments)]
     "effect-bench",
     "vsync-probe",
     "cpu-profile-smoke",
@@ -74,12 +82,46 @@ mod tests {
     fn recognizes_explicit_commands() {
         assert!(COMMANDS.contains(&"library-refresh"));
         assert!(COMMANDS.contains(&"library-sql"));
+        assert!(COMMANDS.contains(&"experiment-capabilities"));
+        assert!(COMMANDS.contains(&"preview-transitions"));
         for command in COMMANDS {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),
                 *command
             );
             assert!(!should_handoff_to_mister(command));
+        }
+    }
+
+    #[test]
+    #[cfg(not(mister_experiments))]
+    fn production_command_list_hides_experiments() {
+        for command in [
+            "camera-effects",
+            "sprite-effects",
+            "text-effects",
+            "raster-effects",
+            "transition-effects",
+            "effects",
+            "effect-bench",
+        ] {
+            assert!(!COMMANDS.contains(&command), "{command}");
+        }
+    }
+
+    #[test]
+    #[cfg(mister_experiments)]
+    fn experiment_command_list_exposes_experiments() {
+        for command in [
+            "camera-effects",
+            "sprite-effects",
+            "text-effects",
+            "raster-effects",
+            "transition-effects",
+            "effects",
+            "effect-bench",
+        ] {
+            assert!(COMMANDS.contains(&command), "{command}");
         }
     }
 

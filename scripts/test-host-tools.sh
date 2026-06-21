@@ -51,6 +51,16 @@ for script in \
   bash -n "$script"
 done
 
+for script in "$ROOT"/scripts/experiments/*.sh; do
+  bash -n "$script"
+done
+
+if grep -R -E 'scripts/(bench-effects|profile-preview-transition-mega|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh' \
+  "$ROOT/AGENTS.md" "$ROOT/docs/benchmarking.md" "$ROOT/magik-gui/BUILD.md" "$ROOT/magik-gui/ui/bench/README.md" >/dev/null; then
+  echo "old effect experiment script path found in current benchmark docs" >&2
+  exit 1
+fi
+
 "$ROOT/scripts/device-release-acceptance.sh" --help >/dev/null
 if "$ROOT/scripts/device-release-acceptance.sh" --tiers nope >/dev/null 2>&1; then
   echo "expected invalid tier to fail" >&2

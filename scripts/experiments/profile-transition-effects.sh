@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
-# Run the full-screen classic raster/palette effects scene on the MiSTer and summarize frame pacing.
+# Experimental: run the full-screen classic transition/palette effects scene on the MiSTer and summarize frame pacing.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+HERE="$(experiment_repo_root)"
 MISTER="$HERE/scripts/mister"
-OUT_DIR="$HERE/build/raster-effect-profiles"
-RESULTS="$HERE/history/toolchain-bench/results-raster-effects.tsv"
+OUT_DIR="$HERE/build/transition-effect-profiles"
+RESULTS="$HERE/history/toolchain-bench/results-transition-effects.tsv"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 EFFECT_COUNT=15
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-raster-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
+Usage: scripts/experiments/profile-transition-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
 
-Runs:
-  mister-magik-fb ui raster-effects
-with MISTER_RASTER_EFFECTS_TRACE, summarizes overall and by raster effect, and
+Runs the experimental scene:
+  mister-magik-fb ui transition-effects
+with MISTER_TRANSITION_EFFECTS_TRACE, summarizes overall and by transition effect, and
 uses the same process-owner cleanup hygiene as preview/screensaver benchmarks.
 EOF
 }
 
-label="raster-effects-$(date -u +%Y%m%dT%H%M%SZ)"
+label="transition-effects-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 mode="mega"
 segment_secs="20"
@@ -70,11 +71,12 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then echo "--secs must be a pos
 mkdir -p "$OUT_DIR" "$(dirname "$RESULTS")"
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
+  device) "$HERE/scripts/deploy-rust.sh" --device --experiments ;;
   skip) : ;;
 esac
+require_experiment_binary "$MISTER" "$REMOTE" "effect scene experiments"
 
-HEADER="label	effect	frames	fps	avg_wall_us	p95_wall_us	p99_wall_us	slow_gt_16_7ms	slow_gt_20ms	avg_cpu_pct	p95_cpu_pct	max_trace_cpu_pct	max_sample_cpu_pct	avg_cpu_us	p95_cpu_us	avg_draw_us	p95_draw_us	avg_present_us	p95_present_us	avg_vsync_us	p95_vsync_us	avg_clear_us	p95_clear_us	avg_background_us	p95_background_us	avg_projection_us	p95_projection_us	avg_image_blit_us	p95_image_blit_us	avg_sprite_us	p95_sprite_us	avg_post_us	p95_post_us	avg_hud_us	p95_hud_us	avg_palette_step_count	p95_palette_step_count	max_palette_step_count	avg_lut_lookup_count	p95_lut_lookup_count	max_lut_lookup_count	avg_row_op_count	p95_row_op_count	max_row_op_count	avg_dither_pixel_count	p95_dither_pixel_count	max_dither_pixel_count	avg_flash_pixel_count	p95_flash_pixel_count	max_flash_pixel_count	avg_trail_pixel_count	p95_trail_pixel_count	max_trail_pixel_count	avg_indexed_pixel_count	p95_indexed_pixel_count	max_indexed_pixel_count	avg_reflection_row_count	p95_reflection_row_count	max_reflection_row_count	rss_hwm_kb	visual_ok	date	notes"
+HEADER="label	effect	frames	fps	avg_wall_us	p95_wall_us	p99_wall_us	slow_gt_16_7ms	slow_gt_20ms	avg_cpu_pct	p95_cpu_pct	max_trace_cpu_pct	max_sample_cpu_pct	avg_cpu_us	p95_cpu_us	avg_draw_us	p95_draw_us	avg_present_us	p95_present_us	avg_vsync_us	p95_vsync_us	avg_clear_us	p95_clear_us	avg_background_us	p95_background_us	avg_projection_us	p95_projection_us	avg_image_blit_us	p95_image_blit_us	avg_sprite_us	p95_sprite_us	avg_post_us	p95_post_us	avg_hud_us	p95_hud_us	avg_mask_cell_count	p95_mask_cell_count	max_mask_cell_count	avg_revealed_pixel_count	p95_revealed_pixel_count	max_revealed_pixel_count	avg_hidden_pixel_count	p95_hidden_pixel_count	max_hidden_pixel_count	avg_source_a_pixel_count	p95_source_a_pixel_count	max_source_a_pixel_count	avg_source_b_pixel_count	p95_source_b_pixel_count	max_source_b_pixel_count	avg_shake_offset_px	p95_shake_offset_px	max_shake_offset_px	avg_flash_pixel_count	p95_flash_pixel_count	max_flash_pixel_count	avg_warp_sample_count	p95_warp_sample_count	max_warp_sample_count	avg_ghost_pixel_count	p95_ghost_pixel_count	max_ghost_pixel_count	avg_glitch_band_count	p95_glitch_band_count	max_glitch_band_count	rss_hwm_kb	visual_ok	date	notes"
 if [[ ! -f "$RESULTS" ]] || ! head -1 "$RESULTS" | grep -q $'^label\teffect'; then
   echo "$HEADER" >"$RESULTS"
 fi
@@ -84,18 +86,18 @@ if [[ "$replace_label" == "1" ]]; then
   mv "$tmp_results" "$RESULTS"
 fi
 
-remote_tsv="/tmp/${label}-raster-effects.tsv"
-remote_log="/tmp/${label}-raster-effects.log"
-local_tsv="$OUT_DIR/${label}-raster-effects.tsv"
-local_log="$OUT_DIR/${label}-raster-effects.log"
+remote_tsv="/tmp/${label}-transition-effects.tsv"
+remote_log="/tmp/${label}-transition-effects.log"
+local_tsv="$OUT_DIR/${label}-transition-effects.tsv"
+local_log="$OUT_DIR/${label}-transition-effects.log"
 
-echo "==> raster-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
+echo "==> transition-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_RASTER_EFFECTS='$mode' MISTER_RASTER_EFFECTS_AUTO=1 MISTER_RASTER_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_RASTER_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui raster-effects '$secs' >'$remote_log' 2>&1 &
+MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_TRANSITION_EFFECTS='$mode' MISTER_TRANSITION_EFFECTS_AUTO=1 MISTER_TRANSITION_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_TRANSITION_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui transition-effects '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
 CPU_SUM=0
@@ -138,7 +140,7 @@ fi
 test -s '$remote_tsv'
 " || {
   "$MISTER" get "$remote_log" "$local_log" || true
-  echo "raster-effects failed; see $local_log" >&2
+  echo "transition-effects failed; see $local_log" >&2
   exit 1
 }
 
@@ -157,7 +159,7 @@ if [[ "$visual_captures" != "0" ]]; then
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_RASTER_EFFECTS='$mode' MISTER_RASTER_EFFECTS_AUTO=1 MISTER_RASTER_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_RASTER_EFFECTS_HUD=1 '$REMOTE' ui raster-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
+MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_TRANSITION_EFFECTS='$mode' MISTER_TRANSITION_EFFECTS_AUTO=1 MISTER_TRANSITION_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_TRANSITION_EFFECTS_HUD=1 '$REMOTE' ui transition-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
 echo \$! >/tmp/${label}-visual-${i}.pid
 " >/dev/null
     sleep $((8 + i * segment_secs))
@@ -175,8 +177,8 @@ summarize_by_effect() {
   awk -v label="$label" -v rss="$rss" -v sample_cpu_max="$sample_cpu_max" -v visual_ok="$visual_ok" -v notes="$notes" -v run_date="$run_date" '
     BEGIN {
       FS="\t"; OFS="\t";
-      metric_count = split("wall_us cpu_pct cpu_us draw_us present_us vsync_us clear_us background_us projection_us image_blit_us sprite_us post_us hud_us palette_step_count lut_lookup_count row_op_count dither_pixel_count flash_pixel_count trail_pixel_count indexed_pixel_count reflection_row_count", metrics, " ");
-      counter_count = split("palette_step_count lut_lookup_count row_op_count dither_pixel_count flash_pixel_count trail_pixel_count indexed_pixel_count reflection_row_count", counters, " ");
+      metric_count = split("wall_us cpu_pct cpu_us draw_us present_us vsync_us clear_us background_us projection_us image_blit_us sprite_us post_us hud_us mask_cell_count revealed_pixel_count hidden_pixel_count source_a_pixel_count source_b_pixel_count shake_offset_px flash_pixel_count warp_sample_count ghost_pixel_count glitch_band_count", metrics, " ");
+      counter_count = split("mask_cell_count revealed_pixel_count hidden_pixel_count source_a_pixel_count source_b_pixel_count shake_offset_px flash_pixel_count warp_sample_count ghost_pixel_count glitch_band_count", counters, " ");
     }
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     NF {
@@ -229,14 +231,16 @@ summarize_by_effect() {
           avg[effect, "sprite_us"], pct95[effect, "sprite_us"],
           avg[effect, "post_us"], pct95[effect, "post_us"],
           avg[effect, "hud_us"], pct95[effect, "hud_us"],
-          avg[effect, "palette_step_count"], pct95[effect, "palette_step_count"], max_counter[effect, "palette_step_count"] + 0,
-          avg[effect, "lut_lookup_count"], pct95[effect, "lut_lookup_count"], max_counter[effect, "lut_lookup_count"] + 0,
-          avg[effect, "row_op_count"], pct95[effect, "row_op_count"], max_counter[effect, "row_op_count"] + 0,
-          avg[effect, "dither_pixel_count"], pct95[effect, "dither_pixel_count"], max_counter[effect, "dither_pixel_count"] + 0,
+          avg[effect, "mask_cell_count"], pct95[effect, "mask_cell_count"], max_counter[effect, "mask_cell_count"] + 0,
+          avg[effect, "revealed_pixel_count"], pct95[effect, "revealed_pixel_count"], max_counter[effect, "revealed_pixel_count"] + 0,
+          avg[effect, "hidden_pixel_count"], pct95[effect, "hidden_pixel_count"], max_counter[effect, "hidden_pixel_count"] + 0,
+          avg[effect, "source_a_pixel_count"], pct95[effect, "source_a_pixel_count"], max_counter[effect, "source_a_pixel_count"] + 0,
+          avg[effect, "source_b_pixel_count"], pct95[effect, "source_b_pixel_count"], max_counter[effect, "source_b_pixel_count"] + 0,
+          avg[effect, "shake_offset_px"], pct95[effect, "shake_offset_px"], max_counter[effect, "shake_offset_px"] + 0,
           avg[effect, "flash_pixel_count"], pct95[effect, "flash_pixel_count"], max_counter[effect, "flash_pixel_count"] + 0,
-          avg[effect, "trail_pixel_count"], pct95[effect, "trail_pixel_count"], max_counter[effect, "trail_pixel_count"] + 0,
-          avg[effect, "indexed_pixel_count"], pct95[effect, "indexed_pixel_count"], max_counter[effect, "indexed_pixel_count"] + 0,
-          avg[effect, "reflection_row_count"], pct95[effect, "reflection_row_count"], max_counter[effect, "reflection_row_count"] + 0,
+          avg[effect, "warp_sample_count"], pct95[effect, "warp_sample_count"], max_counter[effect, "warp_sample_count"] + 0,
+          avg[effect, "ghost_pixel_count"], pct95[effect, "ghost_pixel_count"], max_counter[effect, "ghost_pixel_count"] + 0,
+          avg[effect, "glitch_band_count"], pct95[effect, "glitch_band_count"], max_counter[effect, "glitch_band_count"] + 0,
           rss, visual_ok, run_date, notes
       }
     }
