@@ -13,10 +13,8 @@ pub(crate) const ARCADE_LIST_W: usize = 464;
 pub(crate) const ARCADE_LIST_H: usize = 384;
 pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
 pub(crate) const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
-pub(crate) const ARCADE_LIST_FADE_H: usize = 48;
-pub(crate) const ARCADE_LIST_FADE_MAX_ALPHA: u32 = 256;
-pub(crate) const ARCADE_LIST_FADE_COLOR: Pixel = Pixel(0x001a1424);
-pub(crate) const ARCADE_LIST_FADE_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
+pub(crate) const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
+pub(crate) const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
 pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
 pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
@@ -69,7 +67,7 @@ impl ArcadeListRenderer {
             title_font: ConsoleFont::new(ARCADE_LIST_FONT_PX),
             meta_font: ConsoleFont::new(ARCADE_LIST_META_FONT_PX),
             row_cache: HashMap::new(),
-            surface: vec![ARCADE_LIST_FADE_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
+            surface: vec![ARCADE_LIST_BG_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
@@ -187,8 +185,8 @@ impl ArcadeListRenderer {
         let band_h = band_h.min(ARCADE_LIST_H - band_y);
         if games.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
-            band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_FADE_COLOR);
-            band.fill(ARCADE_LIST_FADE_COLOR);
+            band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_BG_COLOR);
+            band.fill(ARCADE_LIST_BG_COLOR);
             self.meta_font.draw_text_clipped(
                 &mut band,
                 ARCADE_LIST_W,
@@ -204,7 +202,7 @@ impl ArcadeListRenderer {
             self.band_scratch = band;
             return;
         }
-        self.fill_surface_band(band_y, band_h, ARCADE_LIST_FADE_COLOR_565);
+        self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
         let row_h = ARCADE_ROW_HEIGHT as isize;
         let local_anchor_y = Self::selection_y() as isize;
         let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
@@ -619,14 +617,6 @@ pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
     }
 }
 
-fn fade_alpha(row_from_edge: usize, fade_h: usize) -> u32 {
-    if fade_h <= 1 {
-        return ARCADE_LIST_FADE_MAX_ALPHA;
-    }
-    let inv = (fade_h - 1 - row_from_edge) as u32;
-    (ARCADE_LIST_FADE_MAX_ALPHA * inv) / (fade_h - 1) as u32
-}
-
 const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
     Rgb565Pixel((((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)) as u16)
 }
@@ -634,61 +624,6 @@ const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
 fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
         *dst = pixel_to_rgb565(*src);
-    }
-}
-
-pub(crate) fn blend_velocity_fade_h_from_env() -> usize {
-    std::env::var("MISTER_BLEND_BENCH_FADE_H")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|h| *h > 0)
-        .unwrap_or(ARCADE_LIST_FADE_H)
-        .min(ARCADE_LIST_H / 2)
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct FadeBlendConstants {
-    inv: u32,
-    cr_alpha: u32,
-    cg_alpha: u32,
-    cb_alpha: u32,
-}
-
-impl FadeBlendConstants {
-    fn new(alpha: u32, color: Rgb565Pixel) -> Self {
-        let color = color.0 as u32;
-        let cr = (color >> 11) & 0x1f;
-        let cg = (color >> 5) & 0x3f;
-        let cb = color & 0x1f;
-        Self {
-            inv: 256 - alpha,
-            cr_alpha: cr * alpha,
-            cg_alpha: cg * alpha,
-            cb_alpha: cb * alpha,
-        }
-    }
-}
-
-pub(crate) fn fade_blend_constants(fade_h: usize, color: Rgb565Pixel) -> Vec<FadeBlendConstants> {
-    (0..fade_h)
-        .map(|row| FadeBlendConstants::new(fade_alpha(row, fade_h), color))
-        .collect()
-}
-
-pub(crate) fn blend_row_towards(
-    src: &[Rgb565Pixel],
-    dst: &mut [Rgb565Pixel],
-    constants: FadeBlendConstants,
-) {
-    for (src, dst) in src.iter().zip(dst.iter_mut()) {
-        let src = src.0 as u32;
-        let sr = (src >> 11) & 0x1f;
-        let sg = (src >> 5) & 0x3f;
-        let sb = src & 0x1f;
-        let r = (sr * constants.inv + constants.cr_alpha) >> 8;
-        let g = (sg * constants.inv + constants.cg_alpha) >> 8;
-        let b = (sb * constants.inv + constants.cb_alpha) >> 8;
-        *dst = Rgb565Pixel(((r << 11) | (g << 5) | b) as u16);
     }
 }
 
@@ -854,25 +789,6 @@ mod tests {
         });
 
         assert_eq!(segments, vec![(0, 0, ARCADE_LIST_W, ARCADE_LIST_H)]);
-    }
-
-    #[test]
-    fn preserved_selection_frame_body_band_matches_blend_benchmark_rows() {
-        let mut rows = 0usize;
-        let mut pixels = 0usize;
-
-        for_each_arcade_list_copy_segment(
-            ARCADE_LIST_FADE_H,
-            ARCADE_LIST_H - ARCADE_LIST_FADE_H * 2,
-            true,
-            |_, _, w, h| {
-                rows += h;
-                pixels += w * h;
-            },
-        );
-
-        assert_eq!(rows, 282);
-        assert_eq!(pixels, 130_596);
     }
 
     #[test]
