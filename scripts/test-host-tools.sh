@@ -89,7 +89,7 @@ if command -v sqlite3 >/dev/null 2>&1; then
   test ! -e "$TMP/neogeo/family/._orphan.png"
 fi
 
-if grep -R -E 'scripts/(bench-effects|profile-preview-transition-mega|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh' \
+if grep -R -E 'scripts/(bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh|scripts/experiments/profile-preview-transition-mega\.sh' \
   "$ROOT/AGENTS.md" "$ROOT/docs/benchmarking.md" "$ROOT/magik-gui/BUILD.md" "$ROOT/magik-gui/ui/bench/README.md" >/dev/null; then
   echo "old effect experiment script path found in current benchmark docs" >&2
   exit 1
