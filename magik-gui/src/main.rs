@@ -724,12 +724,6 @@ fn early_black_route(f: &mut Fpga) {
         boot_analytics::event("display_plan_fallback", display_plan.log_line());
     }
     let format = boot_framebuffer_format();
-    if std::env::var_os("MISTER_FB_FORMAT").is_some() {
-        boot_analytics::event(
-            "early_black_format_override_ignored",
-            format!("production_format={}", format.label()),
-        );
-    }
     if let Err(e) = Display::write_mister_mode_format(
         format,
         display_plan.fb_w,

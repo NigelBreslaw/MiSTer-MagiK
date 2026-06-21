@@ -31,7 +31,6 @@ scenario="velocity-scroll"
 label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 self_test="0"
-fb_format="565"
 visual_captures="4"
 allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
 cpu_profile="0"
@@ -98,7 +97,6 @@ write_launcher_env() {
   local trace_path="$2"
   local selected_index="${3:-}"
   {
-    printf 'export MISTER_FB_FORMAT=%q\n' "$fb_format"
     printf 'export MISTER_CATALOG_REFRESH=off\n'
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
@@ -129,7 +127,7 @@ run_case() {
   local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
   cpu_profile_remote_svg="/tmp/${label}-${name}-cpu.svg"
 
-  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs fb_format=$fb_format transition=fixed-fade cpu_profile=$cpu_profile"
+  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs transition=fixed-fade cpu_profile=$cpu_profile"
   if [[ "$cpu_profile" == "1" ]]; then
     "$MISTER" run "rm -f '$cpu_profile_remote_svg'" >/dev/null
   fi
@@ -167,15 +165,15 @@ capture_visuals() {
   for ((i = 0; i < count && i < ${#indices[@]}; i++)); do
     idx="${indices[$i]}"
     idx_pad="$(printf "%03d" "$idx")"
-    snap_dir="$visual_dir/${fb_format}-idx${idx_pad}.snapshot"
-    png_out="$visual_dir/${fb_format}-idx${idx_pad}.png"
-    echo "==> visual fb_format=$fb_format selected_index=$idx"
+    snap_dir="$visual_dir/idx${idx_pad}.snapshot"
+    png_out="$visual_dir/idx${idx_pad}.png"
+    echo "==> visual selected_index=$idx"
     write_launcher_env "idle" "" "$idx"
     restart_supervised_launcher "/tmp/${label}-visual-${idx_pad}.tsv"
     sleep 8
     "$MISTER" snapshot "$snap_dir" >/dev/null
     cp "$snap_dir/fb0.png" "$png_out"
-    "$MISTER" get "$REMOTE_LOG" "$visual_dir/${fb_format}-idx${idx_pad}.log" >/dev/null || true
+    "$MISTER" get "$REMOTE_LOG" "$visual_dir/idx${idx_pad}.log" >/dev/null || true
     echo "wrote $png_out"
   done
 }

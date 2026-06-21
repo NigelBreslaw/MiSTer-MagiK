@@ -445,7 +445,6 @@ write_launcher_env() {
   local remote_trace="$1" scenario="$2" selected="${3:-}"
   local env_file="$OUT/launcher.env"
   {
-    printf 'export MISTER_FB_FORMAT=565\n'
     printf 'export MISTER_CATALOG_REFRESH=off\n'
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'

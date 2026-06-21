@@ -304,12 +304,6 @@ pub fn run_ui(f: &mut Fpga) {
         display_plan.scan_w,
         display_plan.scan_h
     );
-    if std::env::var_os("MISTER_FB_FORMAT").is_some() {
-        println!(
-            "ui-fb-format-override-ignored=1 production_format={}",
-            fb_format.label()
-        );
-    }
     let current_fb = match Display::current_info() {
         Ok(info) => info,
         Err(e) => {
