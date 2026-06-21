@@ -16,4 +16,6 @@ mod media_metadata;
 pub mod preview_worker;
 mod software_identity;
 mod sqlite_catalog;
+#[cfg(test)]
+mod test_support;
 pub mod virtual_launch_cache;
