@@ -255,15 +255,9 @@ pub(super) fn run_launcher_loop(
             catalog_version = catalog_version.wrapping_add(1);
             apply_forced_arcade_selected(&mut nav, &catalog);
             apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
-            if ready_catalog_background_worker_needed(
-                catalog_refresh,
-                !arcade_catalog_required_at_start,
-            ) {
-                let request = if catalog_refresh {
-                    CatalogWorkerRequest::RebuildIfNeeded
-                } else {
-                    CatalogWorkerRequest::ValidateCached
-                };
+            let request =
+                ready_catalog_worker_request(catalog_refresh, !arcade_catalog_required_at_start);
+            if request != CatalogWorkerRequest::UseCacheOnly {
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
                     start,
@@ -1462,11 +1456,17 @@ fn catalog_background_scan_progress_visible(
         && !matches!(title, "Library scan failed" | "Library load failed")
 }
 
-fn ready_catalog_background_worker_needed(
+fn ready_catalog_worker_request(
     refresh_requested: bool,
     background_validation: bool,
-) -> bool {
-    refresh_requested || background_validation
+) -> CatalogWorkerRequest {
+    if refresh_requested {
+        CatalogWorkerRequest::RebuildIfNeeded
+    } else if background_validation {
+        CatalogWorkerRequest::ValidateCached
+    } else {
+        CatalogWorkerRequest::UseCacheOnly
+    }
 }
 
 fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bool) -> bool {
@@ -1728,9 +1728,18 @@ mod tests {
 
     #[test]
     pub(super) fn ready_catalog_uses_background_worker_for_refresh_or_home_validation() {
-        assert!(!ready_catalog_background_worker_needed(false, false));
-        assert!(ready_catalog_background_worker_needed(true, true));
-        assert!(ready_catalog_background_worker_needed(false, true));
+        assert_eq!(
+            ready_catalog_worker_request(false, false),
+            CatalogWorkerRequest::UseCacheOnly
+        );
+        assert_eq!(
+            ready_catalog_worker_request(false, true),
+            CatalogWorkerRequest::ValidateCached
+        );
+        assert_eq!(
+            ready_catalog_worker_request(true, false),
+            CatalogWorkerRequest::RebuildIfNeeded
+        );
     }
 
     #[test]

@@ -23,6 +23,9 @@ const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
 const VIRTUAL_LAUNCH_CACHE_DIR: &str = "/media/fat/mister-magik/launch-cache";
+const VIRTUAL_LAUNCH_CACHE_STAMP_FILE: &str = ".virtual-launch-cache.json";
+const VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA: u32 = 1;
+const VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION: u32 = 1;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
@@ -1001,6 +1004,14 @@ pub struct VirtualLaunchCacheSummary {
     pub errors: usize,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct VirtualLaunchCacheStamp {
+    schema: u32,
+    format_version: u32,
+    plan_count: usize,
+    fingerprint: String,
+}
+
 pub fn materialize_virtual_launch_cache_from_default_db() -> VirtualLaunchCacheSummary {
     let plans = match library_db::load_virtual_launch_plans() {
         Ok(plans) => plans,
@@ -1038,6 +1049,15 @@ fn materialize_virtual_launch_plans_at(
     plans: &[library_db::VirtualLaunchPlan],
     dir: &Path,
 ) -> VirtualLaunchCacheSummary {
+    let expected_stamp = virtual_launch_cache_stamp(plans);
+    if virtual_launch_cache_stamp_matches(dir, &expected_stamp) {
+        return VirtualLaunchCacheSummary {
+            total: plans.len(),
+            unchanged: plans.len(),
+            ..VirtualLaunchCacheSummary::default()
+        };
+    }
+
     let mut summary = VirtualLaunchCacheSummary {
         total: plans.len(),
         ..VirtualLaunchCacheSummary::default()
@@ -1052,7 +1072,67 @@ fn materialize_virtual_launch_plans_at(
             }
         }
     }
+    if summary.errors == 0 {
+        if let Err(e) = write_virtual_launch_cache_stamp(dir, &expected_stamp) {
+            summary.errors += 1;
+            eprintln!("virtual launch cache stamp write failed: {e}");
+        }
+    }
     summary
+}
+
+fn virtual_launch_cache_stamp(plans: &[library_db::VirtualLaunchPlan]) -> VirtualLaunchCacheStamp {
+    VirtualLaunchCacheStamp {
+        schema: VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA,
+        format_version: VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION,
+        plan_count: plans.len(),
+        fingerprint: format!("{:032x}", virtual_launch_cache_fingerprint(plans)),
+    }
+}
+
+fn virtual_launch_cache_fingerprint(plans: &[library_db::VirtualLaunchPlan]) -> u128 {
+    let mut entries = plans
+        .iter()
+        .map(|plan| {
+            (
+                virtual_launch_cache_basename(&plan.launch_ref),
+                virtual_mgl_content(plan),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut hash = FNV128_OFFSET;
+    hash = fnv128_update(hash, &VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION.to_le_bytes());
+    hash = fnv128_update(hash, &(entries.len() as u64).to_le_bytes());
+    for (basename, content) in entries {
+        hash = fnv128_update(hash, basename.as_bytes());
+        hash = fnv128_update(hash, &[0]);
+        hash = fnv128_update(hash, content.as_bytes());
+        hash = fnv128_update(hash, &[0xff]);
+    }
+    hash
+}
+
+fn virtual_launch_cache_stamp_matches(dir: &Path, expected: &VirtualLaunchCacheStamp) -> bool {
+    std::fs::read_to_string(virtual_launch_cache_stamp_path(dir))
+        .ok()
+        .and_then(|text| serde_json::from_str::<VirtualLaunchCacheStamp>(&text).ok())
+        .is_some_and(|stored| stored == *expected)
+}
+
+fn write_virtual_launch_cache_stamp(
+    dir: &Path,
+    stamp: &VirtualLaunchCacheStamp,
+) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| format!("create virtual launch cache: {e}"))?;
+    let text = serde_json::to_string(stamp).map_err(|e| format!("serialize stamp: {e}"))?;
+    fs::write(virtual_launch_cache_stamp_path(dir), format!("{text}\n"))
+        .map_err(|e| format!("write virtual launch cache stamp: {e}"))
+}
+
+fn virtual_launch_cache_stamp_path(dir: &Path) -> PathBuf {
+    dir.join(VIRTUAL_LAUNCH_CACHE_STAMP_FILE)
 }
 
 fn materialize_virtual_launch_plan_at(
@@ -1268,8 +1348,11 @@ fn launch_ref_slug(launch_ref: &str) -> String {
 }
 
 fn stable_launch_ref_hash(launch_ref: &str) -> u128 {
-    let mut hash = FNV128_OFFSET;
-    for byte in launch_ref.as_bytes() {
+    fnv128_update(FNV128_OFFSET, launch_ref.as_bytes())
+}
+
+fn fnv128_update(mut hash: u128, bytes: &[u8]) -> u128 {
+    for byte in bytes {
         hash ^= u128::from(*byte);
         hash = hash.wrapping_mul(FNV128_PRIME);
     }
@@ -2866,6 +2949,113 @@ mod tests {
         let target = prepare_virtual_launch_ref_at(&plan.launch_ref, &root)
             .expect("warm virtual launch should resolve refreshed file");
         assert_eq!(target, path.display().to_string());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn matching_virtual_launch_cache_stamp_skips_per_file_reads() {
+        let root = unique_temp_dir("virtual-launch-stamp-hit");
+        let plan = virtual_plan("magik-plan:payload-saturn-test");
+        let path = virtual_launch_path_at(&plan.launch_ref, &root);
+
+        let first = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
+        assert_eq!(
+            first,
+            VirtualLaunchCacheSummary {
+                total: 1,
+                written: 1,
+                unchanged: 0,
+                errors: 0,
+            }
+        );
+        assert!(virtual_launch_cache_stamp_path(&root).is_file());
+
+        std::fs::write(&path, "<manual-edit/>").expect("edit cached virtual mgl");
+        let second = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
+
+        assert_eq!(
+            second,
+            VirtualLaunchCacheSummary {
+                total: 1,
+                written: 0,
+                unchanged: 1,
+                errors: 0,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read cached virtual mgl"),
+            "<manual-edit/>"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn changed_virtual_launch_content_invalidates_cache_stamp() {
+        let root = unique_temp_dir("virtual-launch-stamp-content");
+        let mut plan = virtual_plan("magik-plan:payload-saturn-test");
+        materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
+        let path = virtual_launch_path_at(&plan.launch_ref, &root);
+
+        plan.payload_path = "/media/fat/games/Saturn/Changed.chd".to_string();
+        let summary = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
+
+        assert_eq!(
+            summary,
+            VirtualLaunchCacheSummary {
+                total: 1,
+                written: 1,
+                unchanged: 0,
+                errors: 0,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read refreshed virtual mgl"),
+            virtual_mgl_content(&plan)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn changed_virtual_launch_plan_set_invalidates_cache_stamp() {
+        let root = unique_temp_dir("virtual-launch-stamp-count");
+        let first = virtual_plan("magik-plan:payload-saturn-test");
+        materialize_virtual_launch_plans_at(std::slice::from_ref(&first), &root);
+        let second = virtual_plan("magik-plan:payload-saturn-extra");
+
+        let summary = materialize_virtual_launch_plans_at(&[first.clone(), second.clone()], &root);
+
+        assert_eq!(
+            summary,
+            VirtualLaunchCacheSummary {
+                total: 2,
+                written: 1,
+                unchanged: 1,
+                errors: 0,
+            }
+        );
+        assert!(virtual_launch_path_at(&first.launch_ref, &root).is_file());
+        assert!(virtual_launch_path_at(&second.launch_ref, &root).is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_launch_cache_errors_do_not_write_stamp() {
+        let root = unique_temp_dir("virtual-launch-stamp-error");
+        let mut plan = virtual_plan("magik-plan:payload-saturn-test");
+        plan.payload_path.clear();
+
+        let summary = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
+
+        assert_eq!(
+            summary,
+            VirtualLaunchCacheSummary {
+                total: 1,
+                written: 0,
+                unchanged: 0,
+                errors: 1,
+            }
+        );
+        assert!(!virtual_launch_cache_stamp_path(&root).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 }
