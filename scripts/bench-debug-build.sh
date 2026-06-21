@@ -23,7 +23,6 @@ Usage: scripts/bench-debug-build.sh [options]
 
 Options:
   --scenario NAME   all | arm-check-lib | arm-check-launcher | arm-check-arcade |
-                    arm-check-launcher-sccache |
                     arm-check-full | arm-build-launcher | arm-build-arcade |
                     arm-build-full |
                     build-ui-device
@@ -119,7 +118,6 @@ command_spec() {
   case "$1" in
     arm-check-lib) echo "scripts/dev-rust check-arm-lib" ;;
     arm-check-launcher) echo "scripts/dev-rust check-arm-ui" ;;
-    arm-check-launcher-sccache) echo "echo 'legacy direct cross/sccache scenario disabled; use arm-check-launcher, or set MISTER_ARM_BUILD_BACKEND=cross manually for a comparison' >&2; exit 2" ;;
     arm-check-arcade) echo "scripts/dev-rust check-arm-arcade-ui" ;;
     arm-check-full) echo "scripts/dev-rust check-arm-ui-full" ;;
     arm-build-launcher) echo "scripts/dev-rust build-arm-debug" ;;
@@ -141,7 +139,7 @@ scenario_commands() {
         arm-build-launcher \
         build-ui-device
       ;;
-    arm-check-lib|arm-check-launcher|arm-check-launcher-sccache|arm-check-arcade|arm-check-full|\
+    arm-check-lib|arm-check-launcher|arm-check-arcade|arm-check-full|\
     arm-build-launcher|arm-build-arcade|arm-build-full|\
     build-ui-device)
       printf '%s\n' "$scenario"
