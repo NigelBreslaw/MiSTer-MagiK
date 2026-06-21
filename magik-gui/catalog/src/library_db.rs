@@ -11,8 +11,6 @@ pub use crate::catalog_config::{
 use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
 use crate::catalog_scan::{self, DiscoveryEvent};
 use crate::catalog_stamp;
-#[cfg(test)]
-use crate::catalog_store;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, covered_payload_paths, discovery_from_profile_archive_entry,
     discovery_from_profile_file, is_launcher_launch_ref, launch_kind_for_discovery,
@@ -902,6 +900,7 @@ pub(crate) fn unix_now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog_store;
     use crate::test_support::*;
 
     #[test]
@@ -980,8 +979,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[cfg(unix)]
-    #[cfg(unix)]
     #[cfg(unix)]
     #[test]
     fn scan_artifact_save_writes_catalog_stamp() {
