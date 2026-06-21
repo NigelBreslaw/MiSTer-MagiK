@@ -68,7 +68,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open sqlite");
         create_catalog_stamp_schema(&conn).expect("create schema");
         let stamp = CatalogStamp::from_lines(vec![
-            "schema\t29".to_string(),
+            "schema\t30".to_string(),
             "root\t0\t/tmp/root\tdir\t1\t2".to_string(),
         ]);
 
