@@ -30,12 +30,12 @@ deployed binary and fails before appending TSV rows if experiments are missing.
 
 ```bash
 scripts/experiments/preview/profile-preview-transition-mega.sh LABEL --deploy-device --segment-secs 5 --transition-ms 320
-scripts/experiments/profile-camera-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/profile-sprite-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/profile-text-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/profile-raster-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/profile-transition-effects.sh LABEL --mode mega --segment-secs N
-scripts/experiments/bench-effects.sh LABEL --device --replace-label
+scripts/experiments/effects/profile-camera-effects.sh LABEL --mode mega --segment-secs N
+scripts/experiments/effects/profile-sprite-effects.sh LABEL --mode mega --segment-secs N
+scripts/experiments/effects/profile-text-effects.sh LABEL --mode mega --segment-secs N
+scripts/experiments/effects/profile-raster-effects.sh LABEL --mode mega --segment-secs N
+scripts/experiments/effects/profile-transition-effects.sh LABEL --mode mega --segment-secs N
+scripts/experiments/effects/bench-effects.sh LABEL --device --replace-label
 ```
 
 Use these outputs to compare experiment variants with each other. Do not cite

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Experimental: benchmark native retro framebuffer effects on the MiSTer.
 #
-#   scripts/experiments/bench-effects.sh EFFECTS-20260607 --device --replace-label
+#   scripts/experiments/effects/bench-effects.sh EFFECTS-20260607 --device --replace-label
 #
 # Appends one row per effect/mode/size to history/toolchain-bench/results-effects.tsv.
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 HERE="$(experiment_repo_root)"
 RUST_DIR="$HERE/magik-gui"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
