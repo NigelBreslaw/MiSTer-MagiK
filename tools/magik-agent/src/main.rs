@@ -880,7 +880,7 @@ mod linux {
     }
 
     fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
-        if hex.len() % 2 != 0 {
+        if !hex.len().is_multiple_of(2) {
             return Err("hex payload has odd length".to_string());
         }
         let mut bytes = Vec::with_capacity(hex.len() / 2);
@@ -1126,7 +1126,7 @@ mod linux {
         route.rt_gateway = sockaddr_from_ipv4(gateway);
         route.rt_dst = sockaddr_from_ipv4(Ipv4Addr::new(0, 0, 0, 0));
         route.rt_genmask = sockaddr_from_ipv4(Ipv4Addr::new(0, 0, 0, 0));
-        route.rt_flags = (RTF_UP | RTF_GATEWAY) as u16;
+        route.rt_flags = RTF_UP | RTF_GATEWAY;
         route.rt_dev = dev.as_ptr() as *mut c_char;
 
         let rc = unsafe { ioctl(fd, SIOCADDRT as c_ulong, &route) };
