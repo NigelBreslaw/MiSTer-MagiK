@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::preview_state::PreviewRawTransitionFrame;
 
-const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 160;
+const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewTransitionEffect {
@@ -511,6 +511,7 @@ mod tests {
             PreviewTransitionEffect::all(),
             &[PreviewTransitionEffect::Fade]
         );
+        assert_eq!(DEFAULT_PREVIEW_TRANSITION_MS, 200);
     }
 
     #[cfg(not(mister_experiments))]
