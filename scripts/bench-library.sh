@@ -110,6 +110,24 @@ OUT=$(run_with_launcher_suspended "chmod +x $REMOTE; $remote_env $REMOTE library
 echo "$OUT"
 
 echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
+if ! echo "$OUT" | awk -F '\t' '
+  $1 == "library_scan_bench_tsv" && $4 == "root_stamp_check_error" {
+    printf "root stamp check failed: iteration=%s us=%s error=%s\n", $3, $5, $6 > "/dev/stderr"
+    failed = 1
+  }
+  $1 == "library_scan_bench_tsv" && $4 == "root_stamp_check" {
+    us = $5 + 0
+    if (us >= 2000000) {
+      printf "root stamp check exceeded hard gate: iteration=%s us=%s\n", $3, $5 > "/dev/stderr"
+      failed = 1
+    } else if (us > 500000) {
+      printf "warning: root stamp check exceeded soft target: iteration=%s us=%s\n", $3, $5 > "/dev/stderr"
+    }
+  }
+  END { exit failed ? 1 : 0 }
+'; then
+  exit 1
+fi
 if [[ "$POST_REBOOT" -eq 1 ]]; then
   echo "== post-reboot explicit full rebuild =="
   "$HERE/scripts/mister" reboot-wait
