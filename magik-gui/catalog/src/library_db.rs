@@ -496,7 +496,11 @@ pub fn run_scan_bench() {
         let manifest_t = Instant::now();
         let manifest_changed = read_sqlite_fingerprint(&cfg.sqlite_path)
             .and_then(|fingerprint| {
-                validate_or_rebuild_directory_manifest(&cfg.roots, &fingerprint)
+                validate_or_rebuild_directory_manifest(
+                    &cfg.roots,
+                    &fingerprint,
+                    manifest_validation_mode_from_env(),
+                )
                     .map(|current| current != fingerprint.directory_manifest)
             })
             .unwrap_or(true);
@@ -1378,7 +1382,11 @@ fn refresh_sqlite_database(
         if let Some(report) = progress.as_mut() {
             report("Checking library", "Looking for changed files...");
         }
-        let current_manifest = validate_or_rebuild_directory_manifest(&cfg.roots, &existing);
+        let current_manifest = validate_or_rebuild_directory_manifest(
+            &cfg.roots,
+            &existing,
+            manifest_validation_mode_from_env(),
+        );
         let scan_us = scan_t.elapsed().as_micros() as u64;
         match library_refresh_plan(
             &existing,
@@ -1894,6 +1902,7 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
 fn validate_or_rebuild_directory_manifest(
     roots: &[String],
     existing: &DbFingerprint,
+    mode: ManifestValidationMode,
 ) -> Option<DirectoryManifest> {
     if existing.directory_manifest.is_empty() {
         return None;
@@ -1906,14 +1915,34 @@ fn validate_or_rebuild_directory_manifest(
     if directory_manifest_metadata_changed(&existing.directory_manifest) {
         return Some(DirectoryManifest::new());
     }
-    // Directory metadata can miss same-second child edits on some filesystems,
-    // so only use it as an early changed signal. The unchanged case still
-    // rebuilds and compares child signatures before trusting the cached DB.
+    if mode == ManifestValidationMode::FastUnchanged {
+        return Some(existing.directory_manifest.clone());
+    }
     let current = build_directory_manifest(roots, None);
     if current == existing.directory_manifest {
         Some(current)
     } else {
         Some(DirectoryManifest::new())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManifestValidationMode {
+    FastUnchanged,
+    Strict,
+}
+
+fn manifest_validation_mode_from_env() -> ManifestValidationMode {
+    let value = std::env::var("MISTER_LIBRARY_MANIFEST_VALIDATION").ok();
+    manifest_validation_mode_from_str(value.as_deref())
+}
+
+fn manifest_validation_mode_from_str(value: Option<&str>) -> ManifestValidationMode {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "strict" | "full" | "rebuild") => {
+            ManifestValidationMode::Strict
+        }
+        _ => ManifestValidationMode::FastUnchanged,
     }
 }
 
@@ -8296,15 +8325,50 @@ mod tests {
         );
         let fingerprint = fingerprint_with_manifest(manifest);
 
-        let validated =
-            validate_or_rebuild_directory_manifest(std::slice::from_ref(&root_key), &fingerprint);
+        let validated = validate_or_rebuild_directory_manifest(
+            std::slice::from_ref(&root_key),
+            &fingerprint,
+            ManifestValidationMode::Strict,
+        );
 
         assert_eq!(validated, Some(DirectoryManifest::new()));
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn directory_manifest_validation_keeps_unchanged_manifest() {
+    fn fast_directory_manifest_validation_trusts_unchanged_directory_metadata() {
+        let root = unique_temp_dir("manifest-fast-unchanged");
+        let rom_dir = root.join("games/NES");
+        std::fs::create_dir_all(&rom_dir).expect("create rom dir");
+        let rom = rom_dir.join("same-second.nes");
+        std::fs::write(&rom, b"rom").expect("write rom");
+        let root_key = root.display().to_string();
+        let current = build_directory_manifest(std::slice::from_ref(&root_key), None);
+        let current_sig = current[&root_key];
+        let mut manifest = DirectoryManifest::new();
+        manifest.insert(
+            root_key.clone(),
+            DirectorySignature {
+                dir_size: current_sig.dir_size,
+                dir_mtime_secs: current_sig.dir_mtime_secs,
+                child_count: 0,
+                hash: MANIFEST_HASH_OFFSET,
+            },
+        );
+        let fingerprint = fingerprint_with_manifest(manifest.clone());
+
+        let validated = validate_or_rebuild_directory_manifest(
+            std::slice::from_ref(&root_key),
+            &fingerprint,
+            ManifestValidationMode::FastUnchanged,
+        );
+
+        assert_eq!(validated, Some(manifest));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn strict_directory_manifest_validation_keeps_unchanged_manifest() {
         let root = unique_temp_dir("manifest-unchanged");
         let rom_dir = root.join("games/NES");
         std::fs::create_dir_all(&rom_dir).expect("create rom dir");
@@ -8313,7 +8377,11 @@ mod tests {
         let manifest = build_directory_manifest(std::slice::from_ref(&root_key), None);
         let fingerprint = fingerprint_with_manifest(manifest.clone());
 
-        let validated = validate_or_rebuild_directory_manifest(&[root_key], &fingerprint);
+        let validated = validate_or_rebuild_directory_manifest(
+            &[root_key],
+            &fingerprint,
+            ManifestValidationMode::Strict,
+        );
 
         assert_eq!(validated, Some(manifest));
         let _ = std::fs::remove_dir_all(root);
@@ -8340,11 +8408,34 @@ mod tests {
         }
         let fingerprint = fingerprint_with_manifest(stored_manifest);
 
-        let validated =
-            validate_or_rebuild_directory_manifest(std::slice::from_ref(&root_key), &fingerprint);
+        let validated = validate_or_rebuild_directory_manifest(
+            std::slice::from_ref(&root_key),
+            &fingerprint,
+            ManifestValidationMode::Strict,
+        );
 
         assert_eq!(validated, Some(DirectoryManifest::new()));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_validation_mode_defaults_fast_and_accepts_strict_aliases() {
+        assert_eq!(
+            manifest_validation_mode_from_str(None),
+            ManifestValidationMode::FastUnchanged
+        );
+        assert_eq!(
+            manifest_validation_mode_from_str(Some("")),
+            ManifestValidationMode::FastUnchanged
+        );
+        assert_eq!(
+            manifest_validation_mode_from_str(Some("strict")),
+            ManifestValidationMode::Strict
+        );
+        assert_eq!(
+            manifest_validation_mode_from_str(Some("FULL")),
+            ManifestValidationMode::Strict
+        );
     }
 
     #[test]
