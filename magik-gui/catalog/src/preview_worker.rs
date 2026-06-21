@@ -8,10 +8,11 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
+const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct PreviewRequest {
@@ -660,6 +661,12 @@ struct CachedPreviewArchives {
     archives: Arc<Vec<PreviewArchive>>,
 }
 
+struct MissingPreviewArchive {
+    path: String,
+    failed_at: Instant,
+    error: String,
+}
+
 fn preview_archives() -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
     preview_archives_for_paths(preview_archive_paths_from_env())
 }
@@ -671,6 +678,7 @@ pub fn warm_preview_archives_from_env() -> Result<bool, String> {
 
 fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
     static ARCHIVES: OnceLock<Mutex<Option<CachedPreviewArchives>>> = OnceLock::new();
+    static MISSING: OnceLock<Mutex<Vec<MissingPreviewArchive>>> = OnceLock::new();
 
     let cache = ARCHIVES.get_or_init(|| Mutex::new(None));
     if paths.is_empty() {
@@ -680,7 +688,18 @@ fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<Previ
         return Ok(None);
     }
 
-    let fingerprints = preview_archive_fingerprints_for_paths(paths)?;
+    let missing_cache = MISSING.get_or_init(|| Mutex::new(Vec::new()));
+    if let Some(error) = cached_missing_preview_archive_error(missing_cache, &paths) {
+        return Err(error);
+    }
+
+    let fingerprints = match preview_archive_fingerprints_for_paths(paths) {
+        Ok(fingerprints) => fingerprints,
+        Err(e) => {
+            cache_missing_preview_archive_error(missing_cache, &e);
+            return Err(e);
+        }
+    };
     if let Ok(cached) = cache.lock() {
         if let Some(cached) = cached.as_ref() {
             if cached.fingerprints == fingerprints {
@@ -691,7 +710,13 @@ fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<Previ
 
     let mut archives = Vec::with_capacity(fingerprints.len());
     for fingerprint in &fingerprints {
-        archives.push(PreviewArchive::open(Path::new(&fingerprint.path))?);
+        match PreviewArchive::open(Path::new(&fingerprint.path)) {
+            Ok(archive) => archives.push(archive),
+            Err(e) => {
+                cache_missing_preview_archive_error(missing_cache, &e);
+                return Err(e);
+            }
+        }
     }
     let archives = Arc::new(archives);
     if let Ok(mut cached) = cache.lock() {
@@ -701,6 +726,49 @@ fn preview_archives_for_paths(paths: Vec<String>) -> Result<Option<Arc<Vec<Previ
         });
     }
     Ok(Some(archives))
+}
+
+fn cached_missing_preview_archive_error(
+    cache: &Mutex<Vec<MissingPreviewArchive>>,
+    paths: &[String],
+) -> Option<String> {
+    let now = Instant::now();
+    let mut cache = cache.lock().ok()?;
+    cache.retain(|missing| now.duration_since(missing.failed_at) < MISSING_ARCHIVE_TTL);
+    paths.iter().find_map(|path| {
+        cache
+            .iter()
+            .find(|missing| missing.path == *path)
+            .map(|missing| missing.error.clone())
+    })
+}
+
+fn cache_missing_preview_archive_error(cache: &Mutex<Vec<MissingPreviewArchive>>, error: &str) {
+    let Some(path) = missing_preview_archive_path_from_error(error) else {
+        return;
+    };
+    if let Ok(mut cache) = cache.lock() {
+        let now = Instant::now();
+        if let Some(existing) = cache.iter_mut().find(|missing| missing.path == path) {
+            existing.failed_at = now;
+            existing.error = error.to_string();
+        } else {
+            cache.push(MissingPreviewArchive {
+                path,
+                failed_at: now,
+                error: error.to_string(),
+            });
+        }
+    }
+}
+
+fn missing_preview_archive_path_from_error(error: &str) -> Option<String> {
+    let marker = "preview archive ";
+    let start = error.find(marker)? + marker.len();
+    let tail = &error[start..];
+    let end = tail.find(':')?;
+    let path = tail[..end].trim();
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 pub fn preview_archive_paths_from_env() -> Vec<String> {
@@ -807,7 +875,7 @@ fn preview_archive_fingerprints_for_paths(
     paths
         .into_iter()
         .map(|path| {
-            let meta = std::fs::metadata(&path)
+            let meta = preview_archive_metadata(&path)
                 .map_err(|e| format!("metadata preview archive {path}: {e}"))?;
             let mtime_secs = meta
                 .modified()
@@ -822,6 +890,30 @@ fn preview_archive_fingerprints_for_paths(
             })
         })
         .collect()
+}
+
+fn preview_archive_metadata(path: &str) -> std::io::Result<std::fs::Metadata> {
+    #[cfg(test)]
+    {
+        let calls = PREVIEW_ARCHIVE_METADATA_CALLS.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut calls) = calls.lock() {
+            *calls.entry(path.to_string()).or_insert(0) += 1;
+        }
+    }
+    std::fs::metadata(path)
+}
+
+#[cfg(test)]
+static PREVIEW_ARCHIVE_METADATA_CALLS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+#[cfg(test)]
+fn preview_archive_metadata_calls(path: &str) -> usize {
+    PREVIEW_ARCHIVE_METADATA_CALLS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|calls| calls.get(path).copied())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1609,6 +1701,31 @@ mod tests {
         )
         .expect_err("missing archive must not decode original screenshots");
         assert!(err.contains("320x320-screenshots.mmlz4b"));
+    }
+
+    #[test]
+    fn missing_archive_failure_is_cached_by_archive_path() {
+        let archive_path = std::env::temp_dir().join(format!(
+            "mister-magik-missing-preview-{}.mmlz4b",
+            std::process::id()
+        ));
+        let archive_path = archive_path.display().to_string();
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Hybrid,
+            max_w: 320,
+            max_h: 320,
+        };
+
+        let first = load_preview_pixels(&archive_path, "first", resize)
+            .expect_err("first missing archive request should fail");
+        let calls_after_first = preview_archive_metadata_calls(&archive_path);
+        let second = load_preview_pixels(&archive_path, "second", resize)
+            .expect_err("second missing archive request should fail from archive cache");
+
+        assert!(first.contains(&archive_path));
+        assert!(second.contains(&archive_path));
+        assert_eq!(calls_after_first, 1);
+        assert_eq!(preview_archive_metadata_calls(&archive_path), calls_after_first);
     }
 
     #[test]
