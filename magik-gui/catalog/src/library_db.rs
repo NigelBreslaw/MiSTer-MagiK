@@ -235,6 +235,16 @@ pub struct LibraryRefreshSummary {
     pub discoveries: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogStampCheckSummary {
+    pub unchanged: bool,
+    pub check_us: u64,
+    pub stored_fingerprint: Option<String>,
+    pub current_fingerprint: String,
+    pub stored_lines: usize,
+    pub current_lines: usize,
+}
+
 pub struct HbmameMetadataSummary {
     pub path: PathBuf,
     pub rows: usize,
@@ -1233,6 +1243,13 @@ pub fn refresh_default_sqlite_database(
     refresh_sqlite_database(&cfg, progress)
 }
 
+pub fn rebuild_default_sqlite_database(
+    progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
+    let cfg = BenchConfig::production();
+    rebuild_sqlite_database(&cfg, progress)
+}
+
 pub fn scan_default_library(progress: ProgressCallback<'_>) -> Result<LibraryScanArtifact, String> {
     let cfg = BenchConfig::production();
     Ok(scan_library_artifact(&cfg, progress))
@@ -1305,6 +1322,42 @@ pub fn default_sqlite_preview_archive_fingerprint_unchanged() -> bool {
     read_sqlite_fingerprint(&cfg.sqlite_path)
         .as_ref()
         .is_some_and(preview_archive_fingerprint_unchanged)
+}
+
+pub fn default_sqlite_catalog_stamp_check() -> Result<CatalogStampCheckSummary, String> {
+    let cfg = BenchConfig::production();
+    sqlite_catalog_stamp_check(&cfg)
+}
+
+pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSummary, String> {
+    sqlite_cached_summary(&default_sqlite_path(), scan_us)
+}
+
+fn sqlite_catalog_stamp_check(cfg: &BenchConfig) -> Result<CatalogStampCheckSummary, String> {
+    let started = Instant::now();
+    let current = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
+    let current_fingerprint = current.fingerprint_hex();
+    let current_lines = current.lines().len();
+    let conn = open_sqlite_read_only(&cfg.sqlite_path)
+        .map_err(|e| format!("open catalog stamp db {}: {e}", cfg.sqlite_path.display()))?;
+    let stored = catalog_store::read_catalog_stamp(&conn)?;
+    let (stored_fingerprint, stored_lines, unchanged) = match stored {
+        Some(stored) => {
+            let stored_fingerprint = stored.fingerprint_hex();
+            let stored_lines = stored.lines().len();
+            let unchanged = stored == current;
+            (Some(stored_fingerprint), stored_lines, unchanged)
+        }
+        None => (None, 0, false),
+    };
+    Ok(CatalogStampCheckSummary {
+        unchanged,
+        check_us: started.elapsed().as_micros() as u64,
+        stored_fingerprint,
+        current_fingerprint,
+        stored_lines,
+        current_lines,
+    })
 }
 
 fn refresh_sqlite_database(
@@ -1441,6 +1494,33 @@ fn refresh_sqlite_database(
     };
     let scan_us = scan_t.elapsed().as_micros() as u64;
 
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Indexing library",
+            &format!(
+                "Writing {} games, {} archives...",
+                artifact.stats.discoveries, artifact.stats.containers
+            ),
+        );
+    }
+    let mut summary = save_scan_artifact_to_sqlite(cfg, artifact, progress)?;
+    summary.scan_us = scan_us;
+    Ok(summary)
+}
+
+fn rebuild_sqlite_database(
+    cfg: &BenchConfig,
+    mut progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
+    let scan_t = Instant::now();
+    if let Some(report) = progress.as_mut() {
+        report("Indexing library", "Full catalog build...");
+    }
+    let artifact = match progress.as_mut() {
+        Some(report) => scan_library_artifact(cfg, Some(&mut **report)),
+        None => scan_library_artifact(cfg, None),
+    };
+    let scan_us = scan_t.elapsed().as_micros() as u64;
     if let Some(report) = progress.as_mut() {
         report(
             "Indexing library",
@@ -5588,6 +5668,28 @@ fn read_sqlite_fingerprint(path: &Path) -> Option<DbFingerprint> {
     })
 }
 
+fn sqlite_cached_summary(path: &Path, scan_us: u64) -> Result<LibraryRefreshSummary, String> {
+    let conn = open_sqlite_read_only(path).map_err(|e| format!("open cached summary: {e}"))?;
+    if sqlite_meta_usize(&conn, "version") != Some(SCHEMA_VERSION as usize) {
+        return Err("cached summary schema mismatch".to_string());
+    }
+    let bytes = std::fs::metadata(path)
+        .map(|m| m.len())
+        .map_err(|e| format!("stat cached summary db: {e}"))?;
+    Ok(LibraryRefreshSummary {
+        skipped: true,
+        scan_us,
+        discover_us: 0,
+        classify_us: 0,
+        import_us: 0,
+        bytes,
+        normal_files: sqlite_meta_usize(&conn, "normal_files").unwrap_or(0),
+        containers: sqlite_meta_usize(&conn, "containers").unwrap_or(0),
+        entries: sqlite_meta_usize(&conn, "entries").unwrap_or(0),
+        discoveries: sqlite_meta_usize(&conn, "discoveries").unwrap_or(0),
+    })
+}
+
 fn sqlite_meta_i64(conn: &Connection, key: &str) -> Option<i64> {
     conn.query_row("SELECT value FROM meta WHERE key=?1", [key], |r| {
         r.get::<_, i64>(0)
@@ -8730,6 +8832,34 @@ mod tests {
             .expect("read catalog stamp")
             .expect("catalog stamp");
         assert_eq!(stored, expected_stamp);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_stamp_check_detects_match_and_child_change() {
+        let root = unique_temp_dir("sqlite-catalog-stamp-check");
+        let db = root.join("library.sqlite3");
+        let games = root.join("games");
+        let system = games.join("NES");
+        std::fs::create_dir_all(&system).expect("create system dir");
+        set_file_mtime_for_test(&system, 10, 0);
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        let unchanged = sqlite_catalog_stamp_check(&cfg).expect("check unchanged stamp");
+        assert!(unchanged.unchanged);
+        let summary = sqlite_cached_summary(&db, unchanged.check_us).expect("cached summary");
+        assert!(summary.skipped);
+
+        set_file_mtime_for_test(&system, 20, 0);
+        let changed = sqlite_catalog_stamp_check(&cfg).expect("check changed stamp");
+
+        assert!(!changed.unchanged);
+        assert_ne!(changed.stored_fingerprint, Some(changed.current_fingerprint));
         let _ = std::fs::remove_dir_all(root);
     }
 
