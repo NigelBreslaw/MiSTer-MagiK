@@ -29,7 +29,7 @@ deployed binary and fails before appending TSV rows if experiments are missing.
 ## Scripts
 
 ```bash
-scripts/experiments/profile-preview-transition-mega.sh LABEL --deploy-device --segment-secs 5 --transition-ms 320
+scripts/experiments/preview/profile-preview-transition-mega.sh LABEL --deploy-device --segment-secs 5 --transition-ms 320
 scripts/experiments/profile-camera-effects.sh LABEL --mode mega --segment-secs N
 scripts/experiments/profile-sprite-effects.sh LABEL --mode mega --segment-secs N
 scripts/experiments/profile-text-effects.sh LABEL --mode mega --segment-secs N

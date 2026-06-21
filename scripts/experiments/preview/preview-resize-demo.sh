@@ -2,7 +2,7 @@
 # Show screenshot resize filters on the real launcher Arcade screen.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MISTER="$HERE/scripts/mister"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 MAX_SIZE="${1:-320x320}"
@@ -11,11 +11,11 @@ FORMAT="${3:-raw-rgb565}"
 
 case "$MAX_SIZE" in
   *x*) ;;
-  *) echo "usage: scripts/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565]" >&2; exit 2 ;;
+  *) echo "usage: scripts/experiments/preview/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565]" >&2; exit 2 ;;
 esac
 case "$FORMAT" in
   raw-rgb565|raw565|rgb565|565) ;;
-  *) echo "usage: scripts/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565]" >&2; exit 2 ;;
+  *) echo "usage: scripts/experiments/preview/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565]" >&2; exit 2 ;;
 esac
 if [[ ! "$SECS" =~ ^[0-9]+$ ]]; then
   echo "SECS must be an integer" >&2

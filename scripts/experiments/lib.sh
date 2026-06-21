@@ -2,7 +2,17 @@
 # Shared helpers for experimental MiSTer MagiK profiling scripts.
 
 experiment_repo_root() {
-  cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd
+  local dir
+  dir="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -x "$dir/scripts/mister" && -f "$dir/AGENTS.md" ]]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo "ERROR: could not locate repository root for experiment script" >&2
+  return 1
 }
 
 require_experiment_binary() {
