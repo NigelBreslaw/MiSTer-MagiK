@@ -38,6 +38,8 @@ default. Override with `MISTER_MAIN_DIR`.
 - `tools/mister/` - Rust host-side MiSTer SSH/status/cache tooling.
 - `scripts/` - approved build, deploy, profiling, and device wrappers.
 - `docs/architecture.md` - current architecture and handoff model.
+- `docs/catalog.md` - catalog lifecycle, stamp validation, build/publish model,
+  and benchmark gates.
 - `docs/device.md` - MiSTer facts, INI policy, recovery, framebuffer/audio notes.
 - `docs/benchmarking.md` - benchmark scenario policy and profiling commands.
 - `docs/main-mister-fork.md` - external Main_MiSTer fork source of truth.
