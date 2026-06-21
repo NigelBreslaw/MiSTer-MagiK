@@ -12,7 +12,7 @@ const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_sec
 
 struct DeferredCatalogWorker {
     root: String,
-    refresh_requested: bool,
+    request: CatalogWorkerRequest,
     start_after: Option<Instant>,
 }
 
@@ -259,20 +259,25 @@ pub(super) fn run_launcher_loop(
                 catalog_refresh,
                 !arcade_catalog_required_at_start,
             ) {
+                let request = if catalog_refresh {
+                    CatalogWorkerRequest::RebuildIfNeeded
+                } else {
+                    CatalogWorkerRequest::ValidateCached
+                };
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
                     start,
                     "catalog_worker_deferred",
                     format!(
-                        "root={} refresh_requested={} delay_ms={}",
+                        "root={} request={} delay_ms={}",
                         arcade_root,
-                        catalog_refresh,
+                        request.label(),
                         delay.as_millis()
                     ),
                 );
                 deferred_catalog_worker = Some(DeferredCatalogWorker {
                     root: arcade_root.clone(),
-                    refresh_requested: catalog_refresh,
+                    request,
                     start_after: None,
                 });
             } else {
@@ -294,7 +299,7 @@ pub(super) fn run_launcher_loop(
             print_startup_event(start, "catalog_worker_start", &arcade_root);
             catalog_rx = Some(start_library_catalog_worker(
                 arcade_root.clone(),
-                catalog_refresh,
+                CatalogWorkerRequest::RebuildIfNeeded,
             ));
         }
         Err(e) => {
@@ -303,7 +308,7 @@ pub(super) fn run_launcher_loop(
             print_startup_event(start, "catalog_worker_start", &arcade_root);
             catalog_rx = Some(start_library_catalog_worker(
                 arcade_root.clone(),
-                catalog_refresh,
+                CatalogWorkerRequest::RebuildIfNeeded,
             ));
         }
     }
@@ -464,7 +469,7 @@ pub(super) fn run_launcher_loop(
                     print_startup_event(start, "catalog_worker_start", &deferred.root);
                     catalog_rx = Some(start_library_catalog_worker(
                         deferred.root,
-                        deferred.refresh_requested,
+                        deferred.request,
                     ));
                 }
             }
