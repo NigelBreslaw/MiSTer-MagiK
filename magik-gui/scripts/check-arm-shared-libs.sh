@@ -2,6 +2,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$HERE/scripts/apple-container-resources.sh"
 BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb}"
 IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
@@ -32,9 +33,13 @@ else
 
   if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && command -v container >/dev/null 2>&1; then
     echo "==> using Apple-container helper image $APPLE_IMAGE"
+    CONTAINER_CPUS="$(apple_container_cpus)"
+    CONTAINER_MEMORY="$(apple_container_memory)"
     container build --arch arm64 --file "$HERE/Dockerfile.cross-armv7" --tag "$APPLE_IMAGE" "$HERE" >/dev/null
     NEEDED="$(
       container run --arch arm64 --rm \
+        --cpus "$CONTAINER_CPUS" \
+        --memory "$CONTAINER_MEMORY" \
         --volume "$HERE:/project:ro" \
         --workdir /project \
         "$APPLE_IMAGE" \
@@ -42,6 +47,8 @@ else
     )"
     GLIBC_VERSIONS="$(
       container run --arch arm64 --rm \
+        --cpus "$CONTAINER_CPUS" \
+        --memory "$CONTAINER_MEMORY" \
         --volume "$HERE:/project:ro" \
         --workdir /project \
         "$APPLE_IMAGE" \

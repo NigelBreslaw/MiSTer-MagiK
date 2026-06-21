@@ -286,14 +286,12 @@ One-time setup:
 rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
 rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
 container system start
-container builder start --cpus "$(getconf _NPROCESSORS_ONLN)" --memory 5g
+container builder start --cpus "$(getconf _NPROCESSORS_ONLN)" --memory 8g
 ```
 
 Useful knobs:
 
 - `MISTER_ARM_BUILD_BACKEND=cross` — force the old cross-rs/Docker backend.
-- `MISTER_APPLE_CONTAINER_CPUS=3` — keep the old 3-CPU build limit for A/B
-  testing or to leave more CPU for other work.
 - `MISTER_APPLE_CONTAINER_TARGET_DIR=/path` — move the Apple-container Cargo
   target cache; default is `/private/tmp/mister-magik-apple-container-target`.
 - `MISTER_APPLE_CONTAINER_MIRROR_TARGET_DIR=/path` — mirror artifacts somewhere
@@ -302,9 +300,8 @@ Useful knobs:
   rebuild of the Linux/arm64 cross image. Otherwise the script rebuilds it only
   when the image is missing or `Dockerfile.cross-armv7` changes.
 
-The Apple builder VM must be restarted with the higher CPU count before the
-build script can use it. Raising only `MISTER_APPLE_CONTAINER_CPUS` cannot exceed
-the CPU allocation of the running builder VM.
+The Apple builder VM must be restarted with the full CPU/memory allocation before
+the build script can use it.
 
 ## cross-rs
 

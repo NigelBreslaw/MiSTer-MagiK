@@ -3,6 +3,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$HERE/magik-gui/scripts/apple-container-resources.sh"
 MANIFEST="$HERE/tools/magik-agent/Cargo.toml"
 TARGET=armv7-unknown-linux-gnueabihf
 BIN="$HERE/tools/magik-agent/target/$TARGET/release/mister-magik-agent"
@@ -18,6 +19,7 @@ esac
 
 build_with_apple_container() {
   local image target_dir mirror_target_dir cargo_cache rust_toolchain dockerfile image_stamp
+  local container_cpus container_memory
   image="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
   target_dir="${MISTER_APPLE_CONTAINER_AGENT_TARGET_DIR:-/private/tmp/mister-magik-agent-apple-container-target}"
   mirror_target_dir="$HERE/tools/magik-agent/target"
@@ -25,6 +27,8 @@ build_with_apple_container() {
   rust_toolchain="${MISTER_ARM64_RUST_TOOLCHAIN:-$HOME/.rustup/toolchains/stable-aarch64-unknown-linux-gnu}"
   dockerfile="$HERE/magik-gui/Dockerfile.cross-armv7"
   image_stamp="${MISTER_APPLE_CONTAINER_IMAGE_STAMP:-/private/tmp/mister-magik-apple-container-target.image.sha256}"
+  container_cpus="$(apple_container_cpus)"
+  container_memory="$(apple_container_memory)"
 
   if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
     echo "ERROR: Apple-container backend requires arm64 macOS; got $(uname -s)/$(uname -m)." >&2
@@ -64,10 +68,15 @@ build_with_apple_container() {
   fi
 
   echo "==> build backend: apple-container" >&2
+  echo "==> build CPUs: $container_cpus" >&2
+  echo "==> build memory: $container_memory" >&2
   echo "==> target dir: $target_dir" >&2
   container run --arch arm64 --rm \
+    --cpus "$container_cpus" \
+    --memory "$container_memory" \
     --env CARGO_HOME=/cargo \
     --env CARGO_TARGET_DIR=/target \
+    --env CARGO_BUILD_JOBS="$container_cpus" \
     --env RUSTC_WRAPPER= \
     --env RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9" \
     --volume "$cargo_cache:/cargo" \
