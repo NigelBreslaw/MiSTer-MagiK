@@ -95,22 +95,33 @@ fi
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
-  if grep -q $'^startup_timing\tlibrary_db_saved\t' "$local_log" || grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+  if grep -q $'^startup_timing\tlibrary_ready\t' "$local_log" || grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
     break
   fi
   sleep 2
 done
 
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
-if ! grep -q $'^startup_timing\tlibrary_db_saved\t' "$local_log"; then
+if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+  echo "first scan failed while saving the catalog; latest log follows" >&2
+  tail -80 "$local_log" >&2 || true
+  exit 1
+fi
+ready_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_ready" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
+if [[ -z "$ready_ms" ]]; then
   echo "first scan did not complete within ${TIMEOUT_SECS}s; latest log follows" >&2
+  tail -80 "$local_log" >&2 || true
+  exit 1
+fi
+if (( ready_ms > 60000 )); then
+  echo "first scan library_ready exceeded 60000ms: ${ready_ms}ms" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   BEGIN { OFS = "\t" }
-  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update") {
+  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update" || $2 == "virtual_launch_cache_materialized") {
     ms = $3
     sub(/ms$/, "", ms)
     print label, commit, $2, ms, $4
