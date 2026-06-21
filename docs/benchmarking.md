@@ -202,7 +202,14 @@ scripts/mister db "SELECT count(*) FROM games"
 `profile-first-scan.sh` deletes the production catalog database and reboots with
 `scripts/mister reboot-wait`, which uses the supervised `mister_magik_reboot`
 path when the Main fork is available. It records first-frame/catalog-ready
-timings in `history/toolchain-bench/results-first-scan.tsv`.
+timings in `history/toolchain-bench/results-first-scan.tsv`. For cold catalog
+UX, prefer `bootstrap_counter_sustained_climb` over the first
+`bootstrap_counter_climb`: the latter is only the first meaningful target
+(`Games found: 50`), while the sustained metric marks the point where enough
+real bootstrap count has reached the UI to keep the visible counter moving.
+`full_scan_counter_climb` should mean the classifier count has overtaken the
+currently displayed bootstrap count, not merely that classification reported its
+first small batch.
 
 `bench-library.sh` suspends the supervised launcher through `/dev/MiSTer_cmd`
 while running scanner/import CLI benchmarks. Do not benchmark by directly

@@ -834,9 +834,6 @@ fn bootstrap_library_progress(
     let mut launchers = 0usize;
     for target in bootstrap_launcher_targets(&cfg.roots) {
         scan_bootstrap_launcher_target(&target, &mut launchers, &mut progress);
-        if launchers >= BOOTSTRAP_PROGRESS_BATCH {
-            break;
-        }
     }
     LibraryBootstrapSummary {
         launchers,
@@ -870,9 +867,6 @@ fn scan_bootstrap_launcher_target(
         return;
     };
     for entry in entries.filter_map(Result::ok) {
-        if *launchers >= BOOTSTRAP_PROGRESS_BATCH {
-            break;
-        }
         let path = entry.path();
         if !is_bootstrap_launcher_path(&path) {
             continue;
@@ -1157,7 +1151,7 @@ mod tests {
 
         let summary = bootstrap_library_progress(&cfg, Some(&mut progress));
 
-        assert_eq!(summary.launchers, 50);
+        assert_eq!(summary.launchers, 55);
         assert!(messages
             .iter()
             .any(|(title, detail)| title == "Finding games" && detail == "Games found: 50"));

@@ -466,3 +466,61 @@ BOOTSTRAP-50-NOWALK-20260621	e79bc32f	library_db_saved	58065	bytes=17768448 scan
 BOOTSTRAP-50-NOWALK-20260621	e79bc32f	library_ready	58382	games=7221 load_us=323368
 BOOTSTRAP-50-NOWALK-20260621	e79bc32f	catalog_bridge_sync_update	58386	games=7221 elapsed_us=3775
 BOOTSTRAP-50-NOWALK-20260621	e79bc32f	db_count	0	unknown command 'library-sql' (use: early-black | ui | experiment-capabilities | library-refresh)
+BOOTSTRAP-SLOW-55-20260621	611e839f	first_frame	1185	catalog_ready=false
+BOOTSTRAP-SLOW-55-20260621	611e839f	bootstrap_counter_climb	1198	target=50
+BOOTSTRAP-SLOW-55-20260621	611e839f	bootstrap_counter_sustained_climb	1648	target=850
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_first_candidate	2438	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_first_discovery	2587	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	16614	path=/media/fat/_Arcade dirs=486 files=2603 candidates=2599
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	1704	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	2356	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	5	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	91	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	4038	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	545	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	3627	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	2449	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	655	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	3457	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	676	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	128	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk_target	135	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_walk	38884	candidates=7757
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_profile_match	97	calls=7757
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_installed_collection	189	calls=7365
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_archive_toc	901	containers=154
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_collection_listings	0	collections=0
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_file_discovery	20115	files=7363
+BOOTSTRAP-SLOW-55-20260621	611e839f	scan_stage_classify_total	39391	discoveries=9206 normal_files=7749 containers=154 entries=281
+BOOTSTRAP-SLOW-55-20260621	611e839f	library_scan_complete	41348	scan_us=39391613 discover_us=38884138 classify_us=39391329 discoveries=9083 normal_files=7749 containers=154 entries=281
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_schema	36	tables=14
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_metadata_load	3058	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_begin_tx	0	-
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_profiles	1	rows=16
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_payloads	827	normal_files=7749 entries=281
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	390	from=0 to=1000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	350	from=1000 to=2000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	376	from=2000 to=3000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	391	from=3000 to=4000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	367	from=4000 to=5000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	434	from=5000 to=6000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	475	from=6000 to=7000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	520	from=7000 to=8000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	798	from=8000 to=9000 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_chunk	309	from=9000 to=9083 total=9083
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_games_total	4710	rows=9083 launcher_rows=6245
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_materialize_arcade_ui	785	-
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_launcher_arcade	20	-
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_launcher_console	425	rows=6185
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_meta	306	rows=11
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_catalog_stamp	4	rows=11
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_insert_software_hash_cache	0	rows=0
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_commit	14	-
+BOOTSTRAP-SLOW-55-20260621	611e839f	import_stage_total	10218	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.622
+BOOTSTRAP-SLOW-55-20260621	611e839f	library_db_saved	58648	bytes=17768448 scan_us=39391613 discover_us=38884138 classify_us=39391329 import_us=17208776 discoveries=9083 normal_files=7749 containers=154 entries=281
+BOOTSTRAP-SLOW-55-20260621	611e839f	library_ready	58965	games=7221 load_us=307869
+BOOTSTRAP-SLOW-55-20260621	611e839f	catalog_bridge_sync_update	58969	games=7221 elapsed_us=3983
+BOOTSTRAP-SLOW-55-20260621	611e839f	db_count	0	unknown command 'library-sql' (use: early-black | ui | experiment-capabilities | library-refresh)

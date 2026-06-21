@@ -411,6 +411,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
     let mut games_found_counter = GamesFoundCounter::default();
     let mut bootstrap_counter_climb_logged = false;
+    let mut bootstrap_counter_sustained_climb_logged = false;
     let mut full_scan_counter_climb_logged = false;
     let mut route_reassert_count = 0u64;
     let mut last_route_reassert_frame = 0u64;
@@ -529,6 +530,7 @@ pub(super) fn run_launcher_loop(
                         let games_found_target = parse_games_found_detail(&detail);
                         if games_found_target.is_some_and(counter_climb_target_is_meaningful) {
                             let target = games_found_target.unwrap_or_default();
+                            let visible_counter_before = games_found_counter.displayed;
                             if title == "Finding games" && !bootstrap_counter_climb_logged {
                                 bootstrap_counter_climb_logged = true;
                                 print_startup_event(
@@ -536,8 +538,24 @@ pub(super) fn run_launcher_loop(
                                     "bootstrap_counter_climb",
                                     format!("target={target}"),
                                 );
-                            } else if title == "Classifying library"
+                            }
+                            if title == "Finding games"
+                                && !bootstrap_counter_sustained_climb_logged
+                                && counter_climb_target_is_sustained(target)
+                            {
+                                bootstrap_counter_sustained_climb_logged = true;
+                                print_startup_event(
+                                    start,
+                                    "bootstrap_counter_sustained_climb",
+                                    format!("target={target}"),
+                                );
+                            }
+                            if title == "Classifying library"
                                 && !full_scan_counter_climb_logged
+                                && counter_climb_target_overtakes_visible(
+                                    target,
+                                    visible_counter_before,
+                                )
                             {
                                 full_scan_counter_climb_logged = true;
                                 print_startup_event(
@@ -1387,25 +1405,44 @@ struct GamesFoundCounter {
     target: usize,
     active: bool,
     last_tick: Option<Instant>,
+    phase: GamesFoundCounterPhase,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum GamesFoundCounterPhase {
+    #[default]
+    None,
+    Bootstrap,
+    FullScan,
 }
 
 impl GamesFoundCounter {
     fn progress_detail(&mut self, title: &str, detail: &str, now: Instant) -> Option<String> {
-        let target = if matches!(title, "Finding games" | "Classifying library") {
-            parse_games_found_detail(detail)
-        } else {
-            None
+        let phase = match title {
+            "Finding games" => Some(GamesFoundCounterPhase::Bootstrap),
+            "Classifying library" => Some(GamesFoundCounterPhase::FullScan),
+            _ => None,
         };
+        let target = phase.and_then(|_| parse_games_found_detail(detail));
         let Some(target) = target else {
             self.reset();
             return None;
         };
+        let phase = phase.expect("phase exists when target parses");
+        let target = match phase {
+            GamesFoundCounterPhase::Bootstrap if target >= 500 => target.max(1000),
+            _ => target,
+        };
+        if phase == GamesFoundCounterPhase::FullScan && target <= self.displayed {
+            return Some(format_games_found(self.displayed));
+        }
         if !self.active || target < self.displayed {
             self.displayed = self.displayed.min(target);
             self.last_tick = Some(now);
         }
         self.target = target;
         self.active = true;
+        self.phase = phase;
         Some(format_games_found(self.displayed))
     }
 
@@ -1418,7 +1455,7 @@ impl GamesFoundCounter {
             .last_tick
             .map(|last| now.duration_since(last))
             .unwrap_or(Duration::from_millis(66));
-        let step = games_found_count_step(self.displayed, self.target, elapsed);
+        let step = games_found_count_step(self.displayed, self.target, elapsed, self.phase);
         if step == 0 {
             return None;
         }
@@ -1432,6 +1469,7 @@ impl GamesFoundCounter {
         self.target = 0;
         self.active = false;
         self.last_tick = None;
+        self.phase = GamesFoundCounterPhase::None;
     }
 }
 
@@ -1447,12 +1485,29 @@ fn counter_climb_target_is_meaningful(target: usize) -> bool {
     target >= 50
 }
 
-fn games_found_count_step(displayed: usize, target: usize, elapsed: Duration) -> usize {
+fn counter_climb_target_is_sustained(target: usize) -> bool {
+    target >= 500
+}
+
+fn counter_climb_target_overtakes_visible(target: usize, displayed: usize) -> bool {
+    target > displayed
+}
+
+fn games_found_count_step(
+    displayed: usize,
+    target: usize,
+    elapsed: Duration,
+    phase: GamesFoundCounterPhase,
+) -> usize {
     if target <= displayed {
         return 0;
     }
     let lag = target - displayed;
     let elapsed_ms = elapsed.as_millis().max(1) as usize;
+    if phase == GamesFoundCounterPhase::Bootstrap {
+        let bootstrap_games_per_second = 55usize;
+        return ((bootstrap_games_per_second * elapsed_ms).div_ceil(1000)).clamp(1, lag);
+    }
     let catchup_ms = 450usize;
     ((lag * elapsed_ms).div_ceil(catchup_ms)).clamp(1, lag)
 }
@@ -1710,6 +1765,8 @@ mod tests {
         assert!(!counter_climb_target_is_meaningful(49));
         assert!(counter_climb_target_is_meaningful(50));
         assert!(counter_climb_target_is_meaningful(250));
+        assert!(!counter_climb_target_is_sustained(499));
+        assert!(counter_climb_target_is_sustained(500));
     }
 
     #[test]
@@ -1723,8 +1780,56 @@ mod tests {
         );
         assert_eq!(
             counter.tick(now + Duration::from_millis(66)),
-            Some("Games found: 8".to_string())
+            Some("Games found: 4".to_string())
         );
+    }
+
+    #[test]
+    pub(super) fn games_found_counter_uses_slow_bootstrap_target_floor() {
+        let now = Instant::now();
+        let mut counter = GamesFoundCounter::default();
+
+        assert_eq!(
+            counter.progress_detail("Finding games", "Games found: 911", now),
+            Some("Games found: 0".to_string())
+        );
+        assert_eq!(counter.target, 1000);
+        for frame in 1..=20 {
+            counter.tick(now + Duration::from_millis(frame * 66));
+        }
+
+        assert!(counter.displayed > 50);
+        assert!(counter.displayed < 125);
+    }
+
+    #[test]
+    pub(super) fn games_found_counter_does_not_drop_when_full_scan_starts_lower() {
+        let now = Instant::now();
+        let mut counter = GamesFoundCounter::default();
+
+        counter.progress_detail("Finding games", "Games found: 911", now);
+        counter.displayed = 650;
+        counter.target = 1000;
+        assert_eq!(
+            counter.progress_detail("Classifying library", "Games found: 50", now),
+            Some("Games found: 650".to_string())
+        );
+        assert_eq!(counter.displayed, 650);
+        assert_eq!(counter.target, 1000);
+
+        assert_eq!(
+            counter.progress_detail("Classifying library", "Games found: 700", now),
+            Some("Games found: 650".to_string())
+        );
+        assert_eq!(counter.target, 700);
+        assert_eq!(counter.phase, GamesFoundCounterPhase::FullScan);
+    }
+
+    #[test]
+    pub(super) fn full_scan_counter_takeover_requires_visible_overtake() {
+        assert!(!counter_climb_target_overtakes_visible(50, 650));
+        assert!(!counter_climb_target_overtakes_visible(650, 650));
+        assert!(counter_climb_target_overtakes_visible(700, 650));
     }
 
     #[test]
