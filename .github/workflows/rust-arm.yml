@@ -19,7 +19,7 @@ env:
 jobs:
   host-dev:
     name: host-dev
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -82,7 +82,7 @@ jobs:
 
   ci-clippy:
     name: ci-clippy
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
