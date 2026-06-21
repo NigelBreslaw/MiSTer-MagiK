@@ -2,9 +2,10 @@
 
 use crate::catalog_scan::FoundFile;
 use crate::launch_profiles::{CollectionListing, CollectionRule, LaunchProfile};
+use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
 use crate::library_db::{
-    DiscoveryConfidence, DiscoverySourceKind, GameDiscovery, AMIGAVISION_GAME_LAUNCH_PREFIX,
-    AMIGAVISION_INSTALLED_LISTINGS, AMIGAVISION_LAUNCHER_REF, MRA_PREFIX_BYTES,
+    AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_INSTALLED_LISTINGS, AMIGAVISION_LAUNCHER_REF,
+    MRA_PREFIX_BYTES,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
