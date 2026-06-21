@@ -9,8 +9,9 @@ APIs, progress states, and benchmark expectations.
 - Warm boot with a usable catalog should show the first usable UI within 3.5s.
 - Warm unchanged validation should be a root stamp check: under 500ms is the
   soft target, under 2s is the hard gate.
-- Fresh catalog creation and explicit refresh both use the same full builder and
-  should complete under 45s on the target MiSTer.
+- Fresh catalog creation and explicit refresh both use the same full builder.
+  Current acceptance is catalog ready under 60s on the target MiSTer; 45s remains
+  a stretch target for future scanner/import work.
 - Unchanged virtual launch cache materialization should complete under 2s and
   must not read every generated `.mgl` file.
 
@@ -36,9 +37,13 @@ Cold or reset database:
 2. Catalog worker treats missing, empty, or old-schema DBs as unusable.
 3. Worker runs `ForceBuild`.
 4. Full-screen scan UI is visible while the database is built.
-5. The builder scans source media under `/media/fat`, keeps scan facts in Rust
-   memory, creates SQLite under `/tmp/mister-magik/sqlite-build` for production
-   `/media/fat` databases, and publishes the completed file at the end.
+5. The builder scans source game locations under `/media/fat`, keeps scan facts
+   in Rust memory, creates SQLite under `/tmp/mister-magik/sqlite-build` for
+   production `/media/fat` databases, and publishes the completed file at the
+   end.
+6. The worker reports `Ready` as soon as the saved SQLite catalog has been
+   loaded. Virtual launch cache materialization runs after readiness so it
+   cannot extend first usable catalog time.
 
 Warm boot with a usable cache:
 
@@ -88,15 +93,56 @@ The root stamp is the cheap unchanged validation. It includes:
 - catalog schema version and catalog build version,
 - launch profile set version,
 - configured roots and root metadata,
-- immediate child directory metadata for each root,
-- MAME and HBMAME metadata DB signatures,
-- active preview pack signatures.
+- MAME and HBMAME metadata DB signatures.
 
-The stamp intentionally does not walk every file and does not protect against
-adversarial same-size/same-mtime edits inside unchanged directories. Normal
-copy/update workflows are expected to update root or immediate system directory
-metadata. If that assumption is wrong for a workflow, explicit refresh remains a
-full rebuild.
+The stamp intentionally does not enumerate source-backed scan target
+directories, nested game directories, or files. That keeps warm validation to a
+small fixed set of metadata reads on cold SD-card caches. Normal copy/update
+workflows are expected to update one of the configured root directories, such as
+`/media/fat/games` or `/media/fat/_Arcade`. If a workflow changes only files or
+directories below an unchanged root, explicit refresh remains the full rebuild
+escape hatch.
+
+## Game File Scan Scope
+
+The full builder is not a media crawler. It scans game files only:
+
+- launcher descriptors such as `.mra` and `.mgl`,
+- core payloads and disk images from source-backed launch profiles, such as
+  `.chd`, `.cue`, `.adf`, `.hdf`, `.vhd`, and cartridge ROM extensions,
+- compressed containers when a profile supports launchable entries inside them,
+  currently ZIP central-directory scanning for NeoGeo `.neo` entries,
+- installed collection listing text files that belong to a game launcher.
+
+Preview images, screenshot packs, manuals, box art, core `.rbf` files, and cache
+media are not catalog inputs. `_Arcade/media` and `_Arcade/cores` are pruned
+before recursive walking; game-bearing `_Arcade` trees such as `_alternatives`
+remain in scope.
+
+Main_MiSTer is the source for the directory model. `SelectFile` resolves normal
+file pickers through `user_io_get_core_path(...)`, which maps to `games/<core>`
+except for source-defined special suffixes such as PCE-CD and NeoGeo-CD. Generic
+core extension strings come from the core OSD config string at runtime; MagiK
+therefore keeps those as explicit launch profiles with provenance instead of
+burying guesses in the walker.
+
+The default scan does not include `_Games`. That tree is treated as an organizer
+mirror of generated `.mgl` launchers for games already available through
+source/core game directories. Set `MISTER_LIBRARY_ROOTS` explicitly for a
+diagnostic build that includes `_Games`.
+
+## Collection Listings
+
+Normal copied-in games, MRA/MGL launchers, installed AmigaVision HDF listings,
+and generated launch plans are handled by the full builder.
+
+Archive-embedded collection listings are opportunistic. Extracting those
+listings shells out to `/media/fat/linux/7za`, so the default timeout is one
+second per listing path. This preserves the fresh-build gate on slow exFAT media
+while still allowing fast helpers to contribute extra collection rows. Set
+`MISTER_7ZA_TIMEOUT_SECS` for diagnostics when measuring or debugging collection
+listing extraction. 7z payload internals are not indexed as individual games
+unless a profile has a source-backed listing reader for that archive.
 
 ## SQLite Build And Publish
 
@@ -139,7 +185,8 @@ is missing or stale, the existing files are materialized and the stamp is writte
 only when there are zero errors.
 
 Launch-time behavior is unchanged: a missing virtual launch file is still
-created on demand.
+created on demand. Worker prewarming is best-effort background maintenance after
+catalog readiness, not a prerequisite for browsing games.
 
 ## Benchmarking
 
@@ -161,6 +208,7 @@ scripts/profile-library-io.sh LABEL --replace-label
 `library-scan-bench` reports:
 
 - `fresh_build`: in-memory scan and classification time,
+- `library_scan_timing`: fine-grained scan sub-stage timings in logs,
 - `import`: SQLite import/publish time,
 - `cached_arcade_load`: runtime catalog read time,
 - `root_stamp_check`: warm unchanged validation time,

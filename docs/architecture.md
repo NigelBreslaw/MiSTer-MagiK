@@ -117,8 +117,9 @@ Current rules:
   launchables.
 - Arcade and Neo Geo identities are keyed through MAME set names when metadata
   is available. See `history/2026-6-14/library-identity-model.md`.
-- Preview availability comes from the preview archive index plus MRA `<setname>`
-  virtual keys, not from walking PNG/JPG screenshot folders.
+- Preview requests use derived archive paths and identity keys. The catalog does
+  not index screenshot archives or walk PNG/JPG screenshot folders; missing
+  preview entries fail at runtime and show the blank preview state.
 - Catalog code must not read `gamelist.xml`; runtime catalog loading goes
   through the SQLite library cache and materialized projections.
 - MAME XML and MAME software-list XML are host-side metadata inputs only. Convert

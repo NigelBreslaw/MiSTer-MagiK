@@ -192,3 +192,57 @@ SLOWCAT-AFTER-HASH-CACHE-20260617	15f4a050	library_db_saved	109751	bytes=3160883
 SLOWCAT-AFTER-HASH-CACHE-20260617	15f4a050	library_ready	110084	games=8204 load_us=326474
 SLOWCAT-AFTER-HASH-CACHE-20260617	15f4a050	catalog_bridge_sync_update	110088	games=8204 elapsed_us=3379
 SLOWCAT-AFTER-HASH-CACHE-20260617	15f4a050	db_count	0	9960
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	first_frame	1257	catalog_ready=false
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	16193	path=/media/fat/_Arcade dirs=486 files=2603 candidates=2599
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	1548	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	13	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	2628	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	6	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	96	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	3970	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	545	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	3595	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	2445	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	625	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	3392	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	739	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	113	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk_target	124	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_walk	38350	candidates=7757
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_profile_match	98	calls=7757
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_installed_collection	237	calls=7365
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_archive_toc	865	containers=154
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_collection_listings	0	collections=0
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_file_discovery	19208	files=7363
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	scan_stage_classify_total	38763	discoveries=9206 normal_files=7749 containers=154 entries=281
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	library_scan_complete	40598	scan_us=38762882 discover_us=38350391 classify_us=38762578 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_schema	48	tables=14
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_metadata_load	3101	mame=50097 hbmame=608 software_lists=14979 preview_paths=3
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_begin_tx	0	-
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_profiles	1	rows=16
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_payloads	847	normal_files=7749 entries=281
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	404	from=0 to=1000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	363	from=1000 to=2000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	409	from=2000 to=3000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	419	from=3000 to=4000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	373	from=4000 to=5000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	398	from=5000 to=6000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	491	from=6000 to=7000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	527	from=7000 to=8000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	872	from=8000 to=9000 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_chunk	296	from=9000 to=9083 total=9083
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_games_total	4839	rows=9083 launcher_rows=6245
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_materialize_arcade_ui	767	-
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_launcher_arcade	24	-
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_launcher_console	416	rows=6185
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_meta	336	rows=11
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_catalog_stamp	0	rows=11
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_insert_software_hash_cache	0	rows=0
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_commit	21	-
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	import_stage_total	10426	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	library_db_saved	58281	bytes=17588224 scan_us=38762882 discover_us=38350391 classify_us=38762578 import_us=17631012 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	library_ready	58599	games=7221 load_us=309861
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	catalog_bridge_sync_update	58604	games=7221 elapsed_us=4709
+CATALOGV2-ROOT-ONLY-STAMP-20260621	5b9188f8	db_count	0	9083
