@@ -46,6 +46,8 @@ mod bitmap_text;
 mod boot_analytics;
 mod cpu_profile;
 mod display_config;
+#[cfg(mister_experiments)]
+mod experiments;
 mod fb;
 mod fpga;
 #[cfg(mister_bench_scenes)]
