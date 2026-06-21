@@ -105,39 +105,16 @@ fi
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 "$ROOT/scripts/mister" run '
 set -e
-mount -o remount,rw / 2>/dev/null || true
 INI=/media/fat/MiSTer.ini
 cp -n "$INI" "$INI.bak" 2>/dev/null || true
 
-tmp=/tmp/inittab.magik
-awk '"'"'
-BEGIN { wrote = 0 }
-/^::sysinit:\/media\/fat\/MiSTer[[:space:]]*&/ {
-  if (!wrote) {
-    print "::sysinit:/media/fat/MiSTer &"
-    wrote = 1
-  }
-  next
-}
-/^::sysinit:\/media\/fat\/MiSTer_MagiK/ { next }
-/^::sysinit:\/media\/fat\/mister-magik\/boot\.sh/ { next }
-{ print }
-END {
-  if (!wrote) print "::sysinit:/media/fat/MiSTer &"
-}
-'"'"' /etc/inittab > "$tmp"
-cp "$tmp" /etc/inittab
-echo "inittab ensured -> stock MiSTer"
-sync
-
-echo "=== post-install inittab ==="
-grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
 echo "=== post-install processes ==="
 ps | grep -E "[M]iSTer|[M]iSTer_MagiK|[m]ister-magik-fb" || true
 echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
 
+"$ROOT/scripts/mister" inittab-ensure-stock
 "$ROOT/scripts/mister" ini-repair-boot
 "$ROOT/scripts/mister" ini-repair-arcade-video
 

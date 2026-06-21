@@ -175,6 +175,11 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             edit_remote_ini(&sess, IniEdit::MagikBoot, dry_run)?;
         }
+        "inittab-ensure-stock" => {
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let sess = connect(10)?;
+            ensure_stock_inittab(&sess, dry_run)?;
+        }
         "ini-repair-arcade-video" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             let sess = connect(10)?;
@@ -240,7 +245,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|preview-cache-build|mame-metadata-build|console-screenshot-stage|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
     );
 }
 
@@ -3741,6 +3746,60 @@ fn edit_remote_ini(sess: &Session, edit: IniEdit, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+fn ensure_stock_inittab(sess: &Session, dry_run: bool) -> Result<()> {
+    const INITTAB: &str = "/etc/inittab";
+    let input = remote_read(sess, INITTAB).ok_or("could not read /etc/inittab")?;
+    let edited = ensure_stock_inittab_text(&input);
+    if dry_run {
+        print!("{edited}");
+        return Ok(());
+    }
+    let tmp = "/tmp/inittab.mister-tool-new";
+    remote_write(sess, tmp, edited.as_bytes())?;
+    let out = exec(
+        sess,
+        &format!(
+            "mount -o remount,rw / 2>/dev/null || true; cp {} {}; sync",
+            sh(tmp),
+            sh(INITTAB)
+        ),
+        true,
+    )?;
+    if out.rc != 0 {
+        return Err(format!("failed to replace {INITTAB}: {}", out.stdout).into());
+    }
+    println!("inittab ensured -> stock MiSTer");
+    Ok(())
+}
+
+fn ensure_stock_inittab_text(input: &str) -> String {
+    let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = Vec::new();
+    let mut wrote = false;
+    for raw in input.lines() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
+            if !wrote {
+                out.push("::sysinit:/media/fat/MiSTer &".to_string());
+                wrote = true;
+            }
+            continue;
+        }
+        if line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
+            || line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
+        {
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !wrote {
+        out.push("::sysinit:/media/fat/MiSTer &".to_string());
+    }
+    let mut edited = out.join(newline);
+    edited.push_str(newline);
+    edited
+}
+
 fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
     let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
     let mut lines: Vec<String> = input
@@ -5225,6 +5284,29 @@ video_mode=14
         let mut args = vec!["--raw".to_string(), "--supervised".to_string()];
 
         assert!(take_reboot_raw_flag(&mut args).is_err());
+    }
+
+    #[test]
+    fn stock_inittab_mutator_removes_old_magik_entries() {
+        let input = "::sysinit:/bin/mount -a\r\n::sysinit:/media/fat/MiSTer_MagiK &\r\n::sysinit:/media/fat/mister-magik/boot.sh &\r\n";
+
+        let edited = ensure_stock_inittab_text(input);
+
+        assert!(edited.contains("::sysinit:/bin/mount -a\r\n"));
+        assert!(edited.contains("::sysinit:/media/fat/MiSTer &\r\n"));
+        assert!(!edited.contains("MiSTer_MagiK"));
+        assert!(!edited.contains("mister-magik/boot.sh"));
+    }
+
+    #[test]
+    fn stock_inittab_mutator_deduplicates_stock_entry() {
+        let input =
+            "::sysinit:/media/fat/MiSTer &\n::sysinit:/media/fat/MiSTer &\n::respawn:/sbin/getty\n";
+
+        let edited = ensure_stock_inittab_text(input);
+
+        assert_eq!(edited.matches("::sysinit:/media/fat/MiSTer &").count(), 1);
+        assert!(edited.contains("::respawn:/sbin/getty\n"));
     }
 
     #[test]
