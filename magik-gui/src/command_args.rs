@@ -1,12 +1,18 @@
 pub const COMMANDS: &[&str] = &[
+    #[cfg(feature = "diagnostics")]
     "read",
+    #[cfg(feature = "diagnostics")]
     "route",
+    #[cfg(feature = "diagnostics")]
     "fb",
+    #[cfg(feature = "diagnostics")]
     "fb-format-smoke",
     "early-black",
     "ui",
+    #[cfg(mister_bench_scenes)]
     "scenes",
     "experiment-capabilities",
+    #[cfg(mister_experiments)]
     "preview-transitions",
     #[cfg(mister_experiments)]
     "effects",
@@ -22,14 +28,22 @@ pub const COMMANDS: &[&str] = &[
     "transition-effects",
     #[cfg(mister_experiments)]
     "effect-bench",
+    #[cfg(feature = "diagnostics")]
     "vsync-probe",
+    #[cfg(feature = "diagnostics")]
     "cpu-profile-smoke",
+    #[cfg(feature = "diagnostics")]
     "input",
     "library-refresh",
+    #[cfg(feature = "diagnostics")]
     "library-sql",
+    #[cfg(feature = "diagnostics")]
     "hbmame-metadata-from-library",
+    #[cfg(feature = "diagnostics")]
     "library-scan-bench",
+    #[cfg(feature = "diagnostics")]
     "launch-prep-bench",
+    #[cfg(feature = "diagnostics")]
     "audio-tone",
 ];
 
@@ -81,9 +95,7 @@ mod tests {
     #[test]
     fn recognizes_explicit_commands() {
         assert!(COMMANDS.contains(&"library-refresh"));
-        assert!(COMMANDS.contains(&"library-sql"));
         assert!(COMMANDS.contains(&"experiment-capabilities"));
-        assert!(COMMANDS.contains(&"preview-transitions"));
         for command in COMMANDS {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),
@@ -94,9 +106,52 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "diagnostics"))]
+    fn production_command_list_hides_diagnostics() {
+        for command in [
+            "read",
+            "route",
+            "fb",
+            "fb-format-smoke",
+            "vsync-probe",
+            "cpu-profile-smoke",
+            "input",
+            "library-sql",
+            "hbmame-metadata-from-library",
+            "library-scan-bench",
+            "launch-prep-bench",
+            "audio-tone",
+        ] {
+            assert!(!COMMANDS.contains(&command), "{command}");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "diagnostics")]
+    fn diagnostics_command_list_exposes_diagnostics() {
+        for command in [
+            "read",
+            "route",
+            "fb",
+            "fb-format-smoke",
+            "vsync-probe",
+            "cpu-profile-smoke",
+            "input",
+            "library-sql",
+            "hbmame-metadata-from-library",
+            "library-scan-bench",
+            "launch-prep-bench",
+            "audio-tone",
+        ] {
+            assert!(COMMANDS.contains(&command), "{command}");
+        }
+    }
+
+    #[test]
     #[cfg(not(mister_experiments))]
     fn production_command_list_hides_experiments() {
         for command in [
+            "preview-transitions",
             "camera-effects",
             "sprite-effects",
             "text-effects",
@@ -104,6 +159,7 @@ mod tests {
             "transition-effects",
             "effects",
             "effect-bench",
+            "scenes",
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");
         }
@@ -113,6 +169,7 @@ mod tests {
     #[cfg(mister_experiments)]
     fn experiment_command_list_exposes_experiments() {
         for command in [
+            "preview-transitions",
             "camera-effects",
             "sprite-effects",
             "text-effects",

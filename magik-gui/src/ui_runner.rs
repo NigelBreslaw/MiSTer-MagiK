@@ -168,6 +168,7 @@ fn normalize_scene(s: &str) -> String {
     }
 }
 
+#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 pub fn print_scenes() {
     println!("Slint UI scenes (runtime framebuffer sized, ui-scale {SLINT_UI_SCALE}):");
     for s in UI_SCENES {

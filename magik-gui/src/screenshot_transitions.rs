@@ -110,6 +110,7 @@ impl PreviewTransitionEffect {
         }
     }
 
+    #[cfg_attr(not(mister_experiments), allow(dead_code))]
     pub(crate) fn labels() -> String {
         Self::all()
             .iter()

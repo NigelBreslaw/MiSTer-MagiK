@@ -3,20 +3,21 @@
 //! Subcommands:
 //!   Production:
 //!     ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
-//!     input              gamepad log / sniff / calibrate
-//!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
+//!     early-black        route a black launcher framebuffer before full UI
+//!     library-refresh    build/update the SQLite library cache
+//!     experiment-capabilities
+//!                        print whether experimental scenes are compiled in
 //!   Diagnostics:
 //!     read               print live video mode + fb params
 //!     route              route the current /dev/fb0 buffer 0 to HDMI
 //!     fb                 paint + optionally route current fb size
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
-//!     library-refresh    build/update the SQLite library cache
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
-//!     experiment-capabilities
-//!                        print whether experimental scenes are compiled in
+//!     input              gamepad log / sniff / calibrate
+//!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
 //!   Benchmarks:
 //!     scenes             list Slint scene names
 //!   Experiments:
@@ -35,6 +36,8 @@
 //!
 //! See docs/architecture.md for display routing and boot handoff; see
 //! magik-gui/BUILD.md for toolchain details.
+
+#![cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -99,11 +102,13 @@ fn main() {
         println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
     }
 
+    #[cfg(feature = "diagnostics")]
     if cmd == "vsync-probe" {
         run_vsync_probe();
         return;
     }
 
+    #[cfg(feature = "diagnostics")]
     if cmd == "cpu-profile-smoke" {
         run_cpu_profile_smoke();
         return;
@@ -114,16 +119,19 @@ fn main() {
         return;
     }
 
+    #[cfg(feature = "diagnostics")]
     if cmd == "library-sql" {
         run_library_sql();
         return;
     }
 
+    #[cfg(feature = "diagnostics")]
     if cmd == "hbmame-metadata-from-library" {
         run_hbmame_metadata_from_library();
         return;
     }
 
+    #[cfg(feature = "diagnostics")]
     if cmd == "launch-prep-bench" {
         launcher::run_launch_prep_bench();
         return;
@@ -134,6 +142,7 @@ fn main() {
         return;
     }
 
+    #[cfg(mister_experiments)]
     if cmd == "preview-transitions" {
         print_preview_transitions();
         return;
@@ -169,6 +178,10 @@ fn main() {
         return;
     }
 
+    if !command_args::COMMANDS.contains(&cmd.as_str()) {
+        unknown_command(&cmd);
+    }
+
     let mut f = match Fpga::open() {
         Ok(f) => f,
         Err(e) => {
@@ -178,30 +191,41 @@ fn main() {
     };
 
     match cmd.as_str() {
+        #[cfg(feature = "diagnostics")]
         "read" => read_mode(&mut f),
+        #[cfg(feature = "diagnostics")]
         "route" => route_framebuffer(&mut f),
+        #[cfg(feature = "diagnostics")]
         "fb" => fb_probe(&mut f),
+        #[cfg(feature = "diagnostics")]
         "fb-format-smoke" => fb_format_smoke(&mut f),
         "early-black" => early_black_route(&mut f),
         "ui" => ui_runner::run_ui(&mut f),
+        #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),
         #[cfg(mister_experiments)]
         "effects" => ui_runner::print_effects(),
         #[cfg(mister_experiments)]
         "effect-bench" => ui_effect_bench::run_effect_bench(&mut f),
+        #[cfg(feature = "diagnostics")]
         "input" => run_input(),
+        #[cfg(feature = "diagnostics")]
         "library-scan-bench" => library_db::run_scan_bench(),
+        #[cfg(feature = "diagnostics")]
         "audio-tone" => run_audio_tone(&mut f),
-        other => {
-            eprintln!(
-                "unknown command '{other}' (use: {})",
-                command_args::COMMANDS.join(" | ")
-            );
-            std::process::exit(2);
-        }
+        other => unknown_command(other),
     }
 }
 
+fn unknown_command(cmd: &str) -> ! {
+    eprintln!(
+        "unknown command '{cmd}' (use: {})",
+        command_args::COMMANDS.join(" | ")
+    );
+    std::process::exit(2);
+}
+
+#[cfg(mister_experiments)]
 fn print_preview_transitions() {
     println!(
         "{}",
