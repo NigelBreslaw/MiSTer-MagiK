@@ -62,8 +62,9 @@ The generated launcher script invokes `mister-magik-fb library-refresh` only
 when the SQLite catalog is missing or empty. The Rust command intentionally
 defers that foreground refresh when `MISTER_MAGIK_PARENT` is set, so first boot
 and Reset Database reach Slint immediately and show the scan screen. With a
-usable catalog present, Rust launcher background validation is the only normal
-boot-time refresh owner; Main must not schedule a delayed external refresh.
+usable catalog present, the Rust launcher background stamp check is the only
+normal boot-time validation owner; Main must not schedule a delayed external
+refresh.
 
 The explicit command surface is:
 

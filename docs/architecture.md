@@ -92,9 +92,11 @@ Current rules:
 - Build/update the library cache outside the UI hot path with
   `mister-magik-fb library-refresh` or `scripts/mister` helpers.
 - Launcher boot loads the cached SQLite catalog before the first frame when a
-  usable database exists, then performs refresh/preview validation in the
-  background. Use `startup_timing` log lines to separate SQLite load, catalog
-  construction, Slint bridge sync, and refresh costs.
+  usable database exists, then performs a delayed catalog stamp check in the
+  background. If the stamp is stale, the launcher runs the same full database
+  builder used by explicit refresh. Use `startup_timing` log lines to separate
+  SQLite load, catalog construction, Slint bridge sync, stamp check, and build
+  costs.
 - Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
   `library-refresh` only for the missing/empty DB first-boot deferral path and
   must not schedule delayed background refreshes when a database already exists.

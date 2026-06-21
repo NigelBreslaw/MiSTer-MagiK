@@ -138,8 +138,10 @@ asset entry by:
 2. parent software item,
 3. sibling in the same software family.
 
-Preview-only refreshes recompute console preview fields from the current asset
-packs, so removing a pack clears stale preview flags.
+Preview asset changes are folded into the catalog stamp. When a pack is added
+or removed, the next validation treats the catalog as stale and runs the normal
+database builder, which recomputes console preview fields from the current asset
+packs.
 
 ## Performance Notes
 
@@ -149,4 +151,4 @@ console ROM payloads on MiSTer's exFAT/FUSE storage.
 
 Avoid doing screenshot-pack construction on the MiSTer hot path. Longer term,
 prefer host-built identity/cache data or persistent per-file hashes so a first
-device refresh does not need to reread large console libraries.
+device build does not need to reread large console libraries.

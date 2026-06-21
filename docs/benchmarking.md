@@ -207,8 +207,9 @@ process CPU ticks, process I/O bytes, system CPU/iowait, and SD-card diskstats
 once per second. Use it before claiming that a scanner/import change is CPU- or
 I/O-bound.
 
-Set `MISTER_LIBRARY_BENCH_CHANGED_REFRESH=1` only on disposable roots when
-measuring changed-refresh behavior; it creates a synthetic candidate file.
+Set `MISTER_LIBRARY_BENCH_FORCE_REBUILD=1` only on disposable roots when
+measuring explicit full-build refresh behavior; it creates a synthetic
+candidate file.
 
 Use `scripts/bench-library.sh LABEL --precount` only to measure the cost of a
 pre-scan candidate count for determinate discovery progress. Use

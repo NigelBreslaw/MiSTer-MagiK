@@ -111,7 +111,7 @@ echo "$OUT"
 
 echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
 if [[ "$POST_REBOOT" -eq 1 ]]; then
-  echo "== post-reboot no-change refresh =="
+  echo "== post-reboot explicit full rebuild =="
   "$HERE/scripts/mister" reboot-wait
   OUT=$(run_with_launcher_suspended "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-refresh" 2>&1) || true
   echo "$OUT"
@@ -126,7 +126,7 @@ if [[ "$POST_REBOOT" -eq 1 ]]; then
           sub(/^scan_us=/, "", us)
         }
       }
-      if (us != "") print label "\tpost-reboot\tpost_reboot_rescan\t" us "\t" notes
+      if (us != "") print label "\tpost-reboot\tpost_reboot_force_build\t" us "\t" notes
     }
   ' >> "$TSV"
 fi
