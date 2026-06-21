@@ -212,7 +212,7 @@ fn insert_extensions(extensions: &mut HashSet<String>, values: &[&str]) {
 }
 
 fn is_source_index_extension(candidate_exts: &HashSet<String>, path: &Path, ext: &str) -> bool {
-    candidate_exts.contains(ext) || library_db::is_amigavision_listing_path(path)
+    candidate_exts.contains(ext) || crate::media_metadata::is_amigavision_listing_path(path)
 }
 
 fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<PathBuf> {
@@ -486,7 +486,7 @@ pub(crate) fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: 
                 | ProfilePathClass::Collection { .. }
                 | ProfilePathClass::Ignored { .. }
         ))
-    ) || library_db::is_amigavision_listing_path(path)
+    ) || crate::media_metadata::is_amigavision_listing_path(path)
 }
 
 pub(crate) fn should_ignore_path(path: &Path) -> bool {

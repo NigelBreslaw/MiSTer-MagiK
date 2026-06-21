@@ -6,8 +6,15 @@
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
 use crate::catalog_config;
 use crate::catalog_scan::{self, DiscoveryEvent, FoundFile};
+use crate::media_metadata;
 #[cfg(test)]
 use crate::catalog_scan::{classify_profile_path, profile_for_path, scan_zip_central_directory};
+#[cfg(test)]
+use crate::media_metadata::{
+    collection_discoveries_from_container, collection_discoveries_from_listing_text,
+    collection_listing_text_with_tool, infer_region_metadata, parse_saturn_boot_header,
+    read_mgl_metadata, read_mra_metadata, RegionInference,
+};
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
@@ -15,28 +22,26 @@ use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, DEFAULT_SQLITE_PATH, SCHEM
 use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::launch_profiles::{
-    self, CollectionListing, CollectionRule, LaunchProfile, MountKind, PayloadDisposition,
-    PayloadRule, ProfilePathClass, RuleSourceKind,
+    self, CollectionListing, LaunchProfile, MountKind, PayloadDisposition, PayloadRule,
+    ProfilePathClass, RuleSourceKind,
 };
 use crate::preview_worker;
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader as XmlReader;
-use quick_xml::XmlVersion;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
-const MRA_PREFIX_BYTES: usize = 160 * 1024;
+pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 type MachineMetadataRow = (String, String, Option<String>, Option<String>);
 type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
-const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
-const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
+pub(crate) const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
+pub(crate) const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 const ARCADE_PARENT_OVERRIDES: &[(&str, &str)] = &[
     ("dimahoo-1", "dimahoo"),
     ("dimahoo-2", "dimahoo"),
@@ -86,7 +91,7 @@ const ARCADE_PARENT_OVERRIDES: &[(&str, &str)] = &[
     ("xmcota-1", "xmcota"),
     ("xmcota-2", "xmcota"),
 ];
-const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
+pub(crate) const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
     CollectionListing {
         entry_path: "listings/games.txt",
         genre: "AmigaVision",
@@ -96,8 +101,6 @@ const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
         genre: "AmigaVision demos",
     },
 ];
-const DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS: u64 = 1;
-
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
     pub file_path: String,
@@ -340,21 +343,21 @@ struct SoftwareIdentity {
 }
 
 #[derive(Clone, Debug)]
-struct GameDiscovery {
-    source_path: String,
-    launch_ref: String,
-    source_kind: DiscoverySourceKind,
-    title: String,
-    category: String,
-    platform_id: String,
-    core_id: String,
-    hardware_id: String,
-    manufacturer: Option<String>,
-    genre: Option<String>,
-    year: Option<u16>,
-    setname: Option<String>,
-    parent: Option<String>,
-    confidence: DiscoveryConfidence,
+pub(crate) struct GameDiscovery {
+    pub(crate) source_path: String,
+    pub(crate) launch_ref: String,
+    pub(crate) source_kind: DiscoverySourceKind,
+    pub(crate) title: String,
+    pub(crate) category: String,
+    pub(crate) platform_id: String,
+    pub(crate) core_id: String,
+    pub(crate) hardware_id: String,
+    pub(crate) manufacturer: Option<String>,
+    pub(crate) genre: Option<String>,
+    pub(crate) year: Option<u16>,
+    pub(crate) setname: Option<String>,
+    pub(crate) parent: Option<String>,
+    pub(crate) confidence: DiscoveryConfidence,
 }
 
 #[derive(Clone, Debug)]
@@ -367,7 +370,7 @@ struct LibraryPayloadFile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DiscoverySourceKind {
+pub(crate) enum DiscoverySourceKind {
     Mra,
     Mgl,
     PayloadFile,
@@ -376,7 +379,7 @@ enum DiscoverySourceKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum DiscoveryConfidence {
+pub(crate) enum DiscoveryConfidence {
     MraHardware,
     MraCore,
     PayloadPath,
@@ -1127,6 +1130,10 @@ fn variant_score_from_haystack(haystack: &str) -> i32 {
     score
 }
 
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
 fn first_disc_number_from_haystack(haystack: &str) -> Option<u32> {
     let haystack = haystack.to_ascii_lowercase();
     let haystack = haystack.as_str();
@@ -1568,12 +1575,12 @@ fn scan_library_with_progress(
                         },
                 },
             )) => {
-                if is_amigavision_save_media_path(&f.path) {
+                if media_metadata::is_amigavision_save_media_path(&f.path) {
                     ignored_files += 1;
                     continue;
                 }
                 let installed_t = Instant::now();
-                let installed = installed_amigavision_discoveries_from_hdf(&f, profile);
+                let installed = media_metadata::installed_amigavision_discoveries_from_hdf(&f, profile);
                 timing.installed_collection_us += installed_t.elapsed().as_micros() as u64;
                 timing.installed_collection_count += 1;
                 if let Some(installed) = installed {
@@ -1642,7 +1649,7 @@ fn scan_library_with_progress(
                     containers.push(catalog_scan::scan_container_header(&f, format));
                 }
                 let collection_t = Instant::now();
-                discoveries.extend(collection_discoveries_from_container(&f, profile, &rule));
+                discoveries.extend(media_metadata::collection_discoveries_from_container(&f, profile, &rule));
                 timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
                 timing.collection_listing_count += 1;
             }
@@ -1706,194 +1713,12 @@ fn scan_library_with_progress(
 }
 
 
-fn collection_discoveries_from_container(
-    file: &FoundFile,
-    profile: &LaunchProfile,
-    rule: &CollectionRule,
-) -> Vec<GameDiscovery> {
-    let mut out = Vec::new();
-    if is_amigavision_archive_path(&file.path.display().to_string()) {
-        out.push(amigavision_launcher_discovery(file, profile));
-    }
-    for listing in rule.listings {
-        let text = match collection_listing_text(file, listing) {
-            Some(text) => text,
-            None => continue,
-        };
-        out.extend(collection_discoveries_from_listing_text(
-            file, profile, listing, &text,
-        ));
-    }
-    out
-}
-
-fn installed_amigavision_discoveries_from_hdf(
-    file: &FoundFile,
-    profile: &LaunchProfile,
-) -> Option<Vec<GameDiscovery>> {
-    if !is_amigavision_installed_hdf_path(&file.path) {
-        return None;
-    }
-    let mut out = vec![amigavision_launcher_discovery(file, profile)];
-    for listing in AMIGAVISION_INSTALLED_LISTINGS {
-        let Some(listing_path) = installed_amigavision_listing_path(&file.path, listing) else {
-            continue;
-        };
-        let Some(text) = read_lossy_text(&listing_path) else {
-            continue;
-        };
-        out.extend(collection_discoveries_from_listing_text(
-            file, profile, listing, &text,
-        ));
-    }
-    Some(out)
-}
-
-fn installed_amigavision_listing_path(
-    hdf_path: &Path,
-    listing: &CollectionListing,
-) -> Option<PathBuf> {
-    let base = hdf_path.parent()?;
-    let relative = listing
-        .entry_path
-        .strip_prefix("games/Amiga/")
-        .unwrap_or(listing.entry_path);
-    Some(base.join(relative))
-}
-
-fn read_lossy_text(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> GameDiscovery {
-    GameDiscovery {
-        source_path: file.path.display().to_string(),
-        launch_ref: AMIGAVISION_LAUNCHER_REF.to_string(),
-        source_kind: DiscoverySourceKind::CatalogEntry,
-        title: "AmigaVision".to_string(),
-        category: profile.category.to_string(),
-        platform_id: profile.system_id.to_string(),
-        core_id: profile.core_name.to_string(),
-        hardware_id: profile.system_id.to_string(),
-        manufacturer: Some("Commodore".to_string()),
-        genre: Some("Launcher".to_string()),
-        year: None,
-        setname: None,
-        parent: None,
-        confidence: DiscoveryConfidence::CatalogMetadata,
-    }
-}
-
-fn collection_listing_text(file: &FoundFile, listing: &CollectionListing) -> Option<String> {
-    let tool = std::env::var("MISTER_7ZA").unwrap_or_else(|_| "/media/fat/linux/7za".to_string());
-    collection_listing_text_with_tool(
-        file,
-        listing,
-        Path::new(&tool),
-        collection_listing_timeout(),
-    )
-}
-
-fn collection_listing_timeout() -> Duration {
-    let secs = std::env::var("MISTER_7ZA_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS)
-        .clamp(1, 120);
-    Duration::from_secs(secs)
-}
-
-fn collection_listing_text_with_tool(
-    file: &FoundFile,
-    listing: &CollectionListing,
-    tool: &Path,
-    timeout: Duration,
-) -> Option<String> {
-    let mut child = Command::new(tool)
-        .args(["e", "-so"])
-        .arg(&file.path)
-        .arg(listing.entry_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let start = Instant::now();
-    loop {
-        if child.try_wait().ok()?.is_some() {
-            let output = child.wait_with_output().ok()?;
-            if !output.status.success() {
-                return None;
-            }
-            return Some(String::from_utf8_lossy(&output.stdout).into_owned());
-        }
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn collection_discoveries_from_listing_text(
-    file: &FoundFile,
-    profile: &LaunchProfile,
-    listing: &CollectionListing,
-    text: &str,
-) -> Vec<GameDiscovery> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|title| GameDiscovery {
-            source_path: format!("{}::{}::{title}", file.path.display(), listing.entry_path),
-            launch_ref: amigavision_game_launch_ref(title),
-            source_kind: DiscoverySourceKind::CatalogEntry,
-            title: title.to_string(),
-            category: profile.category.to_string(),
-            platform_id: profile.system_id.to_string(),
-            core_id: profile.core_name.to_string(),
-            hardware_id: profile.system_id.to_string(),
-            manufacturer: Some("Commodore".to_string()),
-            genre: Some(listing.genre.to_string()),
-            year: None,
-            setname: None,
-            parent: None,
-            confidence: DiscoveryConfidence::CatalogMetadata,
-        })
-        .collect()
-}
-
-fn normalize_match_path(path: &str) -> String {
-    path.split("::")
-        .next()
-        .unwrap_or(path)
-        .trim()
-        .trim_start_matches("./")
-        .to_ascii_lowercase()
-}
 
 fn normalize_launch_path(path: &str) -> String {
     path.replace("/./", "/")
         .trim()
         .trim_start_matches("./")
         .to_ascii_lowercase()
-}
-
-fn parenthesized_setname(path: &str) -> Option<String> {
-    let stem = Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(path);
-    let open = stem.rfind('(')?;
-    let close = stem[open + 1..].find(')')? + open + 1;
-    let value = stem[open + 1..close].trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(normalize_id(value))
-    }
 }
 
 fn discovery_from_profile_file(
@@ -1903,7 +1728,7 @@ fn discovery_from_profile_file(
     profiles: &[LaunchProfile],
 ) -> GameDiscovery {
     if file.ext == "mra" {
-        if let Some(mra) = read_mra_metadata(&file.path) {
+        if let Some(mra) = media_metadata::read_mra_metadata(&file.path) {
             let core_id = mra
                 .rbf
                 .as_deref()
@@ -1941,14 +1766,14 @@ fn discovery_from_profile_file(
         }
     }
     if file.ext == "mgl" {
-        if let Some(mgl) = read_mgl_metadata(&file.path) {
+        if let Some(mgl) = media_metadata::read_mgl_metadata(&file.path) {
             let payload_profile = mgl
                 .file_path
                 .as_deref()
                 .and_then(|payload| profile_for_mgl_payload(profiles, &file.path, payload));
             let profile = payload_profile.unwrap_or(profile);
             let setname = if profile.system_id == "neogeo" {
-                neogeo_mgl_setname(&file.path, mgl.file_path.as_deref())
+                media_metadata::neogeo_mgl_setname(&file.path, mgl.file_path.as_deref())
             } else {
                 None
             };
@@ -2011,7 +1836,7 @@ fn discovery_from_profile_archive_entry(
         manufacturer: None,
         genre: None,
         year: None,
-        setname: parenthesized_setname(&entry.entry_path),
+        setname: media_metadata::parenthesized_setname(&entry.entry_path),
         parent: None,
         confidence: match rule.provenance.kind {
             RuleSourceKind::MainSource | RuleSourceKind::Mgl | RuleSourceKind::Mra => {
@@ -2027,18 +1852,8 @@ fn profile_for_mgl_payload<'a>(
     mgl_path: &Path,
     payload: &str,
 ) -> Option<&'a LaunchProfile> {
-    let path = resolve_mgl_payload_path(mgl_path, payload);
+    let path = media_metadata::resolve_mgl_payload_path(mgl_path, payload);
     catalog_scan::profile_for_path(profiles, &path)
-}
-
-fn resolve_mgl_payload_path(mgl_path: &Path, payload: &str) -> PathBuf {
-    if payload.starts_with('/') {
-        PathBuf::from(payload)
-    } else if payload.starts_with("games/") {
-        PathBuf::from("/media/fat").join(payload)
-    } else {
-        mgl_path.parent().unwrap_or(Path::new("/")).join(payload)
-    }
 }
 
 fn profile_confidence(rule: &PayloadRule) -> DiscoveryConfidence {
@@ -2051,218 +1866,8 @@ fn profile_confidence(rule: &PayloadRule) -> DiscoveryConfidence {
     }
 }
 
-fn contains_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
 
-#[derive(Default)]
-struct MraMetadata {
-    name: Option<String>,
-    rbf: Option<String>,
-    platform: Option<String>,
-    manufacturer: Option<String>,
-    category: Option<String>,
-    catver: Option<String>,
-    year: Option<String>,
-    setname: Option<String>,
-    parent: Option<String>,
-}
-
-#[derive(Default)]
-struct MglMetadata {
-    rbf: Option<String>,
-    file_path: Option<String>,
-}
-
-fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
-    let mut file = File::open(path).ok()?;
-    let mut data = vec![0u8; MRA_PREFIX_BYTES];
-    let n = file.read(&mut data).ok()?;
-    data.truncate(n);
-    parse_mra_metadata_xml(&String::from_utf8_lossy(&data))
-}
-
-fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
-    let mut file = File::open(path).ok()?;
-    let mut data = String::new();
-    file.read_to_string(&mut data).ok()?;
-    parse_mgl_metadata_xml(&data)
-}
-
-fn neogeo_mgl_setname(mgl_path: &Path, payload_path: Option<&str>) -> Option<String> {
-    payload_path
-        .and_then(parenthesized_setname)
-        .or_else(|| parenthesized_setname(&mgl_path.display().to_string()))
-}
-
-fn parse_mra_metadata_xml(text: &str) -> Option<MraMetadata> {
-    let mut reader = XmlReader::from_str(text);
-    let mut metadata = MraMetadata::default();
-    let mut field: Option<&'static str> = None;
-    let mut field_text = String::new();
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                field = mra_metadata_field(e.name().as_ref());
-                field_text.clear();
-            }
-            Ok(Event::Text(e)) => {
-                if field.is_some() {
-                    if let Ok(value) = e.xml10_content() {
-                        field_text.push_str(&value);
-                    }
-                }
-            }
-            Ok(Event::CData(e)) => {
-                if field.is_some() {
-                    if let Ok(value) = e.xml10_content() {
-                        field_text.push_str(&value);
-                    }
-                }
-            }
-            Ok(Event::GeneralRef(e)) => {
-                if field.is_some() {
-                    if let Some(value) = xml_general_ref_text(e.as_ref()) {
-                        field_text.push_str(value);
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                if let Some(ended_field) = mra_metadata_field(e.name().as_ref()) {
-                    if field == Some(ended_field) {
-                        set_mra_metadata_field(&mut metadata, ended_field, &field_text);
-                    }
-                    field = None;
-                    field_text.clear();
-                }
-            }
-            Ok(Event::Eof) | Err(_) => break,
-            _ => {}
-        }
-    }
-    Some(metadata)
-}
-
-fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
-    let mut reader = XmlReader::from_str(text);
-    let mut metadata = MglMetadata::default();
-    let mut in_rbf = false;
-    let mut rbf_text = String::new();
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let tag = e.name();
-                if tag.as_ref().eq_ignore_ascii_case(b"rbf") {
-                    in_rbf = true;
-                    rbf_text.clear();
-                } else if tag.as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none()
-                {
-                    metadata.file_path = xml_attr_value(&e, b"path");
-                }
-            }
-            Ok(Event::Empty(e)) => {
-                if e.name().as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none() {
-                    metadata.file_path = xml_attr_value(&e, b"path");
-                }
-            }
-            Ok(Event::Text(e)) => {
-                if in_rbf {
-                    if let Ok(value) = e.xml10_content() {
-                        rbf_text.push_str(&value);
-                    }
-                }
-            }
-            Ok(Event::CData(e)) => {
-                if in_rbf {
-                    if let Ok(value) = e.xml10_content() {
-                        rbf_text.push_str(&value);
-                    }
-                }
-            }
-            Ok(Event::GeneralRef(e)) => {
-                if in_rbf {
-                    if let Some(value) = xml_general_ref_text(e.as_ref()) {
-                        rbf_text.push_str(value);
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                if e.name().as_ref().eq_ignore_ascii_case(b"rbf") {
-                    set_optional_trimmed(&mut metadata.rbf, &rbf_text);
-                    in_rbf = false;
-                    rbf_text.clear();
-                }
-            }
-            Ok(Event::Eof) | Err(_) => break,
-            _ => {}
-        }
-    }
-    Some(metadata)
-}
-
-fn mra_metadata_field(name: &[u8]) -> Option<&'static str> {
-    match name.to_ascii_lowercase().as_slice() {
-        b"name" => Some("name"),
-        b"rbf" => Some("rbf"),
-        b"platform" => Some("platform"),
-        b"manufacturer" => Some("manufacturer"),
-        b"category" => Some("category"),
-        b"catver" => Some("catver"),
-        b"year" => Some("year"),
-        b"setname" => Some("setname"),
-        b"parent" => Some("parent"),
-        _ => None,
-    }
-}
-
-fn set_mra_metadata_field(metadata: &mut MraMetadata, field: &str, value: &str) {
-    match field {
-        "name" => set_optional_trimmed(&mut metadata.name, value),
-        "rbf" => set_optional_trimmed(&mut metadata.rbf, value),
-        "platform" => set_optional_trimmed(&mut metadata.platform, value),
-        "manufacturer" => set_optional_trimmed(&mut metadata.manufacturer, value),
-        "category" => set_optional_trimmed(&mut metadata.category, value),
-        "catver" => set_optional_trimmed(&mut metadata.catver, value),
-        "year" => set_optional_trimmed(&mut metadata.year, value),
-        "setname" => set_optional_trimmed(&mut metadata.setname, value),
-        "parent" => set_optional_trimmed(&mut metadata.parent, value),
-        _ => {}
-    }
-}
-
-fn set_optional_trimmed(slot: &mut Option<String>, value: &str) {
-    let value = value.trim();
-    if !value.is_empty() {
-        *slot = Some(value.to_string());
-    }
-}
-
-fn xml_attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
-    e.attributes()
-        .with_checks(false)
-        .flatten()
-        .find(|attr| attr.key.as_ref().eq_ignore_ascii_case(key))
-        .and_then(|attr| {
-            attr.normalized_value(XmlVersion::Implicit1_0)
-                .ok()
-                .map(|value| value.into_owned())
-        })
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn xml_general_ref_text(name: &[u8]) -> Option<&'static str> {
-    match name {
-        b"amp" => Some("&"),
-        b"quot" => Some("\""),
-        b"apos" => Some("'"),
-        b"lt" => Some("<"),
-        b"gt" => Some(">"),
-        _ => None,
-    }
-}
-
-fn normalize_id(value: &str) -> String {
+pub(crate) fn normalize_id(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for ch in value.trim().chars().flat_map(char::to_lowercase) {
@@ -3983,10 +3588,14 @@ fn write_sqlite_scan_with_sources(
                     ])
                     .map_err(|e| format!("insert software launchable identity: {e}"))?;
             }
-            let region = infer_region_metadata(discovery);
+            let region = media_metadata::infer_region_metadata(discovery);
             let region = if let Some(identity) = software_identity.as_ref() {
-                if let Some(region) = identity.region.as_deref().and_then(canonical_region_static) {
-                    RegionInference {
+                if let Some(region) = identity
+                    .region
+                    .as_deref()
+                    .and_then(media_metadata::canonical_region_static)
+                {
+                    media_metadata::RegionInference {
                         region: Some(region),
                         confidence: identity.source,
                     }
@@ -4284,13 +3893,13 @@ fn covered_payload_paths(discoveries: &[GameDiscovery]) -> HashSet<String> {
             continue;
         }
         let path = Path::new(&discovery.source_path);
-        let Some(mgl) = read_mgl_metadata(path) else {
+        let Some(mgl) = media_metadata::read_mgl_metadata(path) else {
             continue;
         };
         let Some(payload) = mgl.file_path.as_deref() else {
             continue;
         };
-        let resolved = resolve_mgl_payload_path(path, payload);
+        let resolved = media_metadata::resolve_mgl_payload_path(path, payload);
         covered.insert(normalize_launch_path(&resolved.display().to_string()));
     }
     covered
@@ -4320,25 +3929,6 @@ fn virtual_launch_ref(game_id: &str) -> String {
     format!("magik-plan:{game_id}")
 }
 
-fn amigavision_game_launch_ref(title: &str) -> String {
-    format!(
-        "{AMIGAVISION_GAME_LAUNCH_PREFIX}{}",
-        encode_launch_component(title)
-    )
-}
-
-fn encode_launch_component(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*byte as char)
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
 
 fn profile_id_for_discovery(discovery: &GameDiscovery) -> Option<&str> {
     if discovery.platform_id == "unknown" || discovery.platform_id.is_empty() {
@@ -4361,25 +3951,6 @@ fn is_launcher_launch_ref(path: &str) -> bool {
     }
 }
 
-fn is_amigavision_archive_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.contains("/games/amiga/") && lower.contains("amigavision") && lower.ends_with(".7z")
-}
-
-fn is_amigavision_installed_hdf_path(path: &Path) -> bool {
-    normalize_match_path(&path.display().to_string()).ends_with("/games/amiga/amigavision.hdf")
-}
-
-fn is_amigavision_save_media_path(path: &Path) -> bool {
-    normalize_match_path(&path.display().to_string())
-        .ends_with("/games/amiga/amigavision-saves.hdf")
-}
-
-pub(crate) fn is_amigavision_listing_path(path: &Path) -> bool {
-    let path = normalize_match_path(&path.display().to_string());
-    path.ends_with("/games/amiga/listings/games.txt")
-        || path.ends_with("/games/amiga/listings/demos.txt")
-}
 
 fn source_kind_name(kind: RuleSourceKind) -> &'static str {
     match kind {
@@ -4407,161 +3978,6 @@ fn payload_disposition_str(disposition: PayloadDisposition) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RegionInference {
-    region: Option<&'static str>,
-    confidence: &'static str,
-}
-
-fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInference {
-    if discovery.platform_id != "saturn" {
-        return RegionInference {
-            region: None,
-            confidence: "unknown",
-        };
-    }
-
-    if let Some(region) = region_from_saturn_boot_header_file(&discovery.source_path) {
-        return RegionInference {
-            region: Some(region),
-            confidence: "disc-header",
-        };
-    }
-    if let Some(region) = region_from_filename(&discovery.source_path) {
-        return RegionInference {
-            region: Some(region),
-            confidence: "filename-high",
-        };
-    }
-    if let Some(region) = region_from_folder(&discovery.source_path) {
-        return RegionInference {
-            region: Some(region),
-            confidence: "folder-medium",
-        };
-    }
-    if let Some(region) = region_from_text(&discovery.title) {
-        return RegionInference {
-            region: Some(region),
-            confidence: "metadata-low",
-        };
-    }
-
-    RegionInference {
-        region: None,
-        confidence: "unknown",
-    }
-}
-
-fn region_from_saturn_boot_header_file(path: &str) -> Option<&'static str> {
-    let path = path.split("::").next().unwrap_or(path);
-    let mut file = File::open(path).ok()?;
-    let mut header = [0u8; 256];
-    file.read_exact(&mut header).ok()?;
-    parse_saturn_boot_header(&header)?.region
-}
-
-fn region_from_filename(path: &str) -> Option<&'static str> {
-    let stem = Path::new(path.split("::").next().unwrap_or(path))
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(path);
-    region_from_text(stem)
-}
-
-fn region_from_folder(path: &str) -> Option<&'static str> {
-    Path::new(path.split("::").next().unwrap_or(path))
-        .parent()?
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .rev()
-        .find_map(region_from_text)
-}
-
-fn region_from_text(text: &str) -> Option<&'static str> {
-    let lower = text.to_ascii_lowercase();
-    let token = lower.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
-    if matches!(token, "usa" | "us" | "u") {
-        return Some("usa");
-    }
-    if matches!(token, "europe" | "eu" | "e") {
-        return Some("europe");
-    }
-    if matches!(token, "japan" | "jp" | "j") {
-        return Some("japan");
-    }
-    if matches!(token, "world" | "w") {
-        return Some("world");
-    }
-    if contains_any(
-        &lower,
-        &["(usa", "(us)", "(u)", "[usa", "[us]", " usa", " ntsc-u"],
-    ) {
-        Some("usa")
-    } else if contains_any(
-        &lower,
-        &[
-            "(europe", "(eu", "(e)", "[europe", "[eu]", " europe", " pal",
-        ],
-    ) {
-        Some("europe")
-    } else if contains_any(
-        &lower,
-        &[
-            "(japan", "(jp", "(j)", "[japan", "[jp]", " japan", " ntsc-j",
-        ],
-    ) {
-        Some("japan")
-    } else if contains_any(&lower, &["(world", "(w)", "[world", " world"]) {
-        Some("world")
-    } else {
-        None
-    }
-}
-
-fn canonical_region_static(region: &str) -> Option<&'static str> {
-    match region.trim().to_ascii_lowercase().as_str() {
-        "usa" | "us" => Some("usa"),
-        "europe" | "eu" => Some("europe"),
-        "japan" | "jp" => Some("japan"),
-        "korea" | "kr" => Some("korea"),
-        "world" => Some("world"),
-        "unknown" => Some("unknown"),
-        _ => None,
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SaturnBootHeader {
-    product_id: Option<String>,
-    region: Option<&'static str>,
-}
-
-fn parse_saturn_boot_header(bytes: &[u8]) -> Option<SaturnBootHeader> {
-    if bytes.len() < 0x50 || !bytes.starts_with(b"SEGA SEGASATURN") {
-        return None;
-    }
-    let product_id = ascii_trim(&bytes[0x20..0x2a]);
-    let area = String::from_utf8_lossy(&bytes[0x40..0x50]).to_ascii_uppercase();
-    let region = if area.contains('U') {
-        Some("usa")
-    } else if area.contains('E') {
-        Some("europe")
-    } else if area.contains('J') {
-        Some("japan")
-    } else if area.contains('K') {
-        Some("korea")
-    } else {
-        None
-    };
-    Some(SaturnBootHeader { product_id, region })
-}
-
-fn ascii_trim(bytes: &[u8]) -> Option<String> {
-    let value = String::from_utf8_lossy(bytes)
-        .trim_matches(|ch: char| ch.is_ascii_whitespace() || ch == '\0')
-        .to_string();
-    (!value.is_empty()).then_some(value)
-}
 
 fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> String {
     if discovery.platform_id == "arcade"
@@ -6977,7 +6393,7 @@ mod tests {
             "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"
         ));
         assert!(is_launcher_launch_ref(AMIGAVISION_LAUNCHER_REF));
-        assert!(is_launcher_launch_ref(&amigavision_game_launch_ref(
+        assert!(is_launcher_launch_ref(&media_metadata::amigavision_game_launch_ref(
             "4th & Inches (OCS)[en]"
         )));
     }
