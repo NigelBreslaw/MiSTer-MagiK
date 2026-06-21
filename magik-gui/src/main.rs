@@ -32,7 +32,7 @@
 //!     library-scan-bench benchmark build, import, cached load, stamp check
 //!     launch-prep-bench  benchmark launch-ref preparation without core launch
 //!
-//! Core handoff argv (`.rbf` paths) re-execs `/media/fat/MiSTer_MagiK`.
+//! Game/core launch requests must go through MiSTer_MagiK supervision.
 //!
 //! See docs/architecture.md for display routing and boot handoff; see
 //! magik-gui/BUILD.md for toolchain details.
@@ -93,6 +93,9 @@ fn main() {
     if args.len() >= 2 {
         if command_args::should_handoff_to_mister(&args[1]) {
             exec_mister(&args);
+        }
+        if command_args::is_launchable_arg(&args[1]) {
+            reject_direct_launch_arg(&args[1]);
         }
     }
 
@@ -221,6 +224,13 @@ fn unknown_command(cmd: &str) -> ! {
     eprintln!(
         "unknown command '{cmd}' (use: {})",
         command_args::COMMANDS.join(" | ")
+    );
+    std::process::exit(2);
+}
+
+fn reject_direct_launch_arg(arg: &str) -> ! {
+    eprintln!(
+        "direct launch argument '{arg}' is unsupported; launch games through MiSTer_MagiK supervision"
     );
     std::process::exit(2);
 }
