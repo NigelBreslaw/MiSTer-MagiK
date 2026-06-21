@@ -12,8 +12,8 @@ use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, DEFAULT_SQLITE_PATH, SCHEM
 use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::launch_profiles::{
-    self, CollectionListing, CollectionRule, LaunchProfile, MountKind,
-    PayloadDisposition, PayloadRule, ProfilePathClass, RuleSourceKind,
+    self, CollectionListing, CollectionRule, LaunchProfile, MountKind, PayloadDisposition,
+    PayloadRule, ProfilePathClass, RuleSourceKind,
 };
 use crate::preview_worker;
 use quick_xml::events::{BytesStart, Event};
@@ -3889,8 +3889,9 @@ fn write_sqlite_scan(
     software_hash_cache: SoftwareHashCache,
     stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
-    let preview_paths =
-        PreviewArchivePaths::from_paths(preview_worker::preview_archive_paths_for_catalog_projection());
+    let preview_paths = PreviewArchivePaths::from_paths(
+        preview_worker::preview_archive_paths_for_catalog_projection(),
+    );
     write_sqlite_scan_with_sources(
         path,
         scan,
@@ -7758,6 +7759,39 @@ mod tests {
             "unexpected empty database error: {err}"
         );
         assert_eq!(std::fs::metadata(&db).expect("metadata").len(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_inspect_formats_common_cell_types() {
+        let root = unique_temp_dir("sqlite-inspect-cell-types");
+        let db = root.join("library.sqlite3");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE values_fixture(
+                int_value INTEGER,
+                real_value REAL,
+                text_value TEXT,
+                blob_value BLOB,
+                null_value TEXT
+             );
+             INSERT INTO values_fixture VALUES(42, 1.5, 'hello', x'010203', NULL);",
+        )
+        .expect("create inspect fixture");
+        drop(conn);
+
+        let out = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "SELECT int_value, real_value, text_value, blob_value, null_value".to_string(),
+            "FROM values_fixture".to_string(),
+        ])
+        .expect("inspect sqlite fixture");
+
+        assert_eq!(
+            out,
+            "int_value\treal_value\ttext_value\tblob_value\tnull_value\n42\t1.5\thello\t<blob:3>\t\n"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
