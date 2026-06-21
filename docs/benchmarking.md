@@ -5,10 +5,9 @@ This document defines current benchmark policy. Dated measurement logs live in
 
 ## General Rules
 
-- Use RGB565 for production launcher and arcade conclusions.
-- The UI/app benchmark path is RGB565-only. `MISTER_FB_FORMAT=8888` is ignored
-  by `mister-magik-fb ui ...`; use explicit low-level diagnostics such as
-  `fb-format-smoke 8888` for framebuffer/color-route experiments.
+- Use RGB565 for production launcher and arcade conclusions. The UI/app
+  benchmark path is RGB565-only; RGB888/XRGB8888 env overrides are retired.
+  Use explicit diagnostic/experiment builds for framebuffer/color-route work.
 - Start visual benchmarks from a clean display-owner state. If stock OSD/menu is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
@@ -50,9 +49,9 @@ before/after device evidence with the same command set. Use labels that include
 the PR slice and BEFORE/AFTER state:
 
 ```bash
-scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --transition fade --visual-captures 0
-scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --transition fade --visual-captures 0
-scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CPU-FADE-VEL --cpu-profile --transition fade --visual-captures 0
+scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --visual-captures 0
+scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --visual-captures 0
+scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CPU-FADE-VEL --cpu-profile --visual-captures 0
 ```
 
 The CPU profile command builds/deploys the profiling binary, runs the real
@@ -61,10 +60,10 @@ window so the profiler can flush, and pulls
 `build/preview-scroll-profiles/LABEL-CPU-FADE-VEL-arcade-cpu.svg`.
 
 Preview-scroll benchmarks synchronously warm the screenshot archive cache before
-the benchmark timing window and first launcher step. The removed `cut`
-screenshot transition is intentionally rejected by the benchmark script. Use
-`fade` for production evidence; `mega` transition coverage is experimental only
-and is not release benchmark evidence.
+the benchmark timing window and first launcher step. Production preview evidence
+uses the built-in 200ms fade; transition selection flags were removed from the
+release benchmark script. `mega` transition coverage is experimental only and is
+not release benchmark evidence.
 `turbo-hold` ping-pongs between the Arcade list edges so long traces keep
 exercising preview selection changes after reaching the bottom.
 
@@ -110,8 +109,8 @@ behavior, where a ready cache still gets a delayed warm stamp check; set it to
 
 Preview transition policy:
 
-- Default real-app preview transition is `fade`.
-- Add new transition experiments as new `MISTER_PREVIEW_TRANSITION` names in
+- Default real-app preview transition is fixed 200ms `fade`.
+- Add new transition experiments under `scripts/experiments/preview/` and
   experiment builds rather than replacing the production `fade` effect.
 - For visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
 
@@ -140,7 +139,7 @@ Only generated cache directories should be deleted/recreated. Runtime preview
 loading is raw565-oriented; build and deploy caches from the Mac with:
 
 ```bash
-tools/mister preview-cache-build
+scripts/mister preview-cache-build
 ```
 
 `preview-cache-build` writes resized PNGs, `.rgb565` files, and the sibling

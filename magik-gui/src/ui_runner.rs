@@ -68,6 +68,7 @@ mod launcher_frame_accounting;
 mod launcher_loop;
 #[cfg(mister_experiments)]
 mod raster_effects_loop;
+#[cfg(mister_experiments)]
 mod screensaver_loop;
 #[cfg(mister_experiments)]
 mod sprite_effects_loop;
@@ -93,6 +94,7 @@ use launcher_frame_accounting::*;
 use launcher_loop::*;
 #[cfg(mister_experiments)]
 use raster_effects_loop::run_raster_effects_loop;
+#[cfg(mister_experiments)]
 use screensaver_loop::*;
 #[cfg(mister_experiments)]
 use sprite_effects_loop::run_sprite_effects_loop;
@@ -122,6 +124,7 @@ fn screen_label(screen: Screen) -> &'static str {
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
+    #[cfg(mister_experiments)]
     "screensaver",
     #[cfg(mister_experiments)]
     "camera-effects",
@@ -431,6 +434,7 @@ pub fn run_ui(f: &mut Fpga) {
         "fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
     );
 
+    #[cfg(mister_experiments)]
     if scene == "screensaver" {
         run_screensaver_loop(secs, &ui, &mut disp, fb_format);
         return;

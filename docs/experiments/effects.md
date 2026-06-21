@@ -5,16 +5,18 @@ future MiSTer MagiK transitions, camera/background effects, sprite effects, text
 effects, and raster/palette ideas, but they are not part of the production
 launcher UI and their results are not release benchmark evidence.
 
-Production builds expose the real launcher and production preview transition
-surface. Experiment builds add:
+Production builds expose the real launcher, the fixed 200ms fade preview
+transition, and the minimal runtime command surface. Experiment builds add:
 
 - `ui camera-effects`
 - `ui sprite-effects`
 - `ui text-effects`
 - `ui raster-effects`
 - `ui transition-effects`
+- `ui screensaver`
 - `effect-bench`
-- expanded `preview-transitions` / `MISTER_PREVIEW_TRANSITION=mega`
+- expanded preview transition variants under
+  `scripts/experiments/preview/profile-preview-transition-mega.sh`
 
 Build and deploy an experiment-enabled binary before running these tools:
 
@@ -35,6 +37,7 @@ scripts/experiments/effects/profile-sprite-effects.sh LABEL --mode mega --segmen
 scripts/experiments/effects/profile-text-effects.sh LABEL --mode mega --segment-secs N
 scripts/experiments/effects/profile-raster-effects.sh LABEL --mode mega --segment-secs N
 scripts/experiments/effects/profile-transition-effects.sh LABEL --mode mega --segment-secs N
+scripts/experiments/effects/profile-screensaver.sh LABEL --mode mega --segment-secs N
 scripts/experiments/effects/bench-effects.sh LABEL --device --replace-label
 ```
 
