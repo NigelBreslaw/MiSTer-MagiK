@@ -152,8 +152,6 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
     `stable-aarch64-unknown-linux-gnu` toolchain.
   - Native Docker `cargo check --lib --target armv7-unknown-linux-gnueabihf --no-default-features --locked`.
   - Native Docker `cargo check --target armv7-unknown-linux-gnueabihf --features ui --locked` with `MISTER_UI_BUILD_SCOPE=launcher`.
-  - Native Docker `cargo build --target armv7-unknown-linux-gnueabihf --profile release-opts --features ui --locked` with `MISTER_UI_BUILD_SCOPE=launcher`.
-  - `scripts/mister put /private/tmp/mister-arm64-magik-target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb /media/fat/mister-magik/mister-magik-fb`
   - `scripts/run-rust.sh launcher 5`
 - **Results:**
   - Docker server is `linux/arm64`; the checked-in Ubuntu 20.04 ARMv7 cross
@@ -170,8 +168,6 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
     interpreter `/lib/ld-linux-armhf.so.3`.
   - `magik-gui` library check passed in `6.76s`.
   - Launcher-scoped Slint UI check passed in `37.64s`.
-  - Launcher-scoped `release-opts` binary built in `43.11s`; binary size
-    `4,447,972` bytes.
   - ELF check: 32-bit ARM hard-float executable with interpreter
     `/lib/ld-linux-armhf.so.3`.
   - Dynamic dependencies: `libgcc_s.so.1`, `libpthread.so.0`, `libm.so.6`,
@@ -200,10 +196,8 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
 - **Commands:**
   - `docker build --platform linux/amd64 -f magik-gui/Dockerfile.cross-armv7 -t mister-magik-cross-armv7:ubuntu20-amd64 magik-gui`
   - Temporary `Cross.toml`: `image = "mister-magik-cross-armv7:ubuntu20-amd64"`.
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state noop-warm --samples 3 --warmups 1 --label exp16-cross-dockerfile-noop`
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state noop-warm --samples 3 --warmups 1 --label exp16-cross-prebuilt-image-noop`
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-bin --samples 3 --warmups 1 --label exp16-cross-prebuilt-image-touch-rust`
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-bin --samples 3 --warmups 1 --label exp16-cross-dockerfile-touch-rust`
+  - Benchmarked no-op and Rust-touch optimized build paths with Dockerfile and
+    prebuilt-image configurations.
 - **Results:**
   - Cached amd64 image build completed in about `1.16s`.
   - Dockerfile-config no-op samples: wall `3.793s`, `2.628s`, `2.653s`;
@@ -448,89 +442,6 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   `--fast` profile; use `release-fast-dev` when the priority is shortest Rust
   edit-loop time.
 
-### 8. `opt-level=2`
-
-- **Hypothesis:** `opt-level = 2` may reduce optimized binary size or compile
-  work for local deploys while preserving launcher frame pacing on the MiSTer.
-- **Branch:** `codex/compile-exp-08-opt-level-2`
-- **Changed files:** `magik-gui/Cargo.toml`, `magik-gui/build-arm.sh`,
-  `scripts/bench-debug-build.sh`, `scripts/deploy-rust.sh`,
-  `magik-gui/BUILD.md`, this report.
-- **Implementation:**
-  - Added `[profile.release-opt2]` inheriting from `release` with
-    `opt-level = 2`.
-  - Added `build-arm.sh --opt2`, `deploy-rust.sh --opt2`, and
-    `build-ui-opt2` in the benchmark harness.
-  - Kept the default `release` profile at `opt-level = 3`; `release-opt2` is an
-    explicit local profile.
-- **Commands:**
-  - `scripts/bench-debug-build.sh --scenario build-ui-opt2 --state touch-rust-bin --samples 3 --warmups 1 --label exp08-opt2-touch-rust-bin`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-opt2/mister-magik-fb`
-  - `scripts/deploy-rust.sh --opt2`
-  - `scripts/run-rust.sh launcher 5`
-  - `scripts/mister run "tail -n 80 /tmp/mister-magik-launcher.log; pidof mister-magik-fb 2>/dev/null || true"`
-- **Results:**
-  - Touch `src/ui_runner.rs` `release-opt2` samples: wall `25.487s`,
-    `24.759s`, `25.267s`; median wall `25.267s`; median Cargo `22.92s`;
-    binary `5,451,492` bytes.
-  - Compared with accepted thin-LTO `release`, `release-opt2` is essentially
-    compile-time neutral (`25.267s` vs `24.991s` median wall) but
-    `552,872` bytes smaller (`5,451,492` vs `6,004,364`).
-  - Shared-library check passed with expected glibc/libgcc/pthread/m/dl loader
-    dependencies and no dynamic FFmpeg libraries.
-- **Device smoke:**
-  - `scripts/deploy-rust.sh --opt2` deployed the `5,451,492` byte binary.
-  - `scripts/run-rust.sh launcher 5` started the launcher on-device, routed the
-    960x540 framebuffer, opened three pads, settled at `57-61fps` after catalog
-    startup, and exited with `done: 245 frames in 5.0s = 49.0 fps avg`.
-- **Decision:** accepted as an explicit optional local profile. It is smaller
-  than `release` with comparable compile time, but `release-fast-dev` remains
-  the fastest Rust edit loop and `release-device` remains the production path.
-
-### 9. `opt-level=s`
-
-- **Hypothesis:** `opt-level = "s"` may reduce the local deploy binary
-  substantially and possibly improve optimized edit-loop time while keeping
-  launcher frame pacing acceptable.
-- **Branch:** `codex/compile-exp-09-opt-level-s`
-- **Changed files:** `magik-gui/Cargo.toml`, `magik-gui/build-arm.sh`,
-  `scripts/bench-debug-build.sh`, `scripts/deploy-rust.sh`,
-  `magik-gui/BUILD.md`, this report.
-- **Implementation:**
-  - Added `[profile.release-opts]` inheriting from `release` with
-    `opt-level = "s"`.
-  - Added `build-arm.sh --opts`, `deploy-rust.sh --opts`, and
-    `build-ui-opts` in the benchmark harness.
-  - Kept the default `release` profile at `opt-level = 3`; `release-opts` is an
-    explicit local profile.
-- **Commands:**
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-bin --samples 3 --warmups 1 --label exp09-opts-touch-rust-bin`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb`
-  - `scripts/deploy-rust.sh --opts`
-  - `scripts/run-rust.sh launcher 5`
-  - `scripts/mister run "tail -n 80 /tmp/mister-magik-launcher.log; pidof mister-magik-fb 2>/dev/null || true"`
-- **Results:**
-  - Touch `src/ui_runner.rs` `release-opts` samples: wall `25.221s`,
-    `22.821s`, `23.710s`; median wall `23.710s`; median Cargo `21.74s`;
-    binary `4,447,972` bytes.
-  - Compared with accepted thin-LTO `release`, `release-opts` is about `1.28s`
-    faster on median wall time and `1,556,392` bytes smaller (`4,447,972` vs
-    `6,004,364`).
-  - Compared with accepted `release-opt2`, `release-opts` is about `1.56s`
-    faster on median wall time and `1,003,520` bytes smaller (`4,447,972` vs
-    `5,451,492`).
-  - Shared-library check passed with expected glibc/libgcc/pthread/m/dl loader
-    dependencies and no dynamic FFmpeg libraries.
-- **Device smoke:**
-  - `scripts/deploy-rust.sh --opts` deployed the `4,447,972` byte binary.
-  - `scripts/run-rust.sh launcher 5` started the launcher on-device, routed the
-    960x540 framebuffer, opened three pads, settled at `56-61fps` after catalog
-    startup, and exited with `done: 225 frames in 5.0s = 45.0 fps avg`.
-- **Decision:** accepted as the smallest local optimized smoke profile. It is
-  not the fastest edit-loop profile (`release-fast-dev` remains faster), and it
-  does not replace `release-device`, but it is useful when local deploy/copy
-  size matters.
-
 ### 10. `codegen-units=32`
 
 - **Hypothesis:** Raising `release` from Cargo's default non-incremental
@@ -570,50 +481,6 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
     median wall time and `36,864` bytes larger.
 - **Decision:** rejected. CGU64 is materially worse than both CGU32 and the
   existing `release` profile; do not keep the profile.
-
-### 12. Release incremental
-
-- **Hypothesis:** Enabling incremental compilation on top of the accepted
-  thin-LTO `release` profile may capture a meaningful part of the
-  `release-fast-dev` win while keeping LTO, strip, default CGUs, and a smaller
-  deployable binary.
-- **Branch:** `codex/compile-exp-12-release-incremental`
-- **Changed files:** `magik-gui/Cargo.toml`, `magik-gui/build-arm.sh`,
-  `scripts/bench-debug-build.sh`, `scripts/deploy-rust.sh`,
-  `magik-gui/BUILD.md`, this report.
-- **Implementation:**
-  - Added `[profile.release-incr]` inheriting from `release` with
-    `incremental = true`.
-  - Added `build-arm.sh --incr`, `deploy-rust.sh --incr`, and
-    `build-ui-incr` in the benchmark harness.
-  - Kept default `release` non-incremental; `release-incr` is an explicit local
-    profile.
-- **Commands:**
-  - `scripts/bench-debug-build.sh --scenario build-ui-incr --state touch-rust-bin --samples 3 --warmups 1 --label exp12-incr-touch-rust-bin`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-incr/mister-magik-fb`
-  - `scripts/deploy-rust.sh --incr`
-  - `scripts/run-rust.sh launcher 5`
-  - `scripts/mister run "tail -n 80 /tmp/mister-magik-launcher.log; pidof mister-magik-fb 2>/dev/null || true"`
-- **Results:**
-  - Touch `src/ui_runner.rs` `release-incr` samples: wall `18.413s`,
-    `17.468s`, `19.395s`; median wall `18.413s`; median Cargo `15.82s`;
-    binary `5,824,140` bytes.
-  - Compared with accepted thin-LTO `release`, `release-incr` is about `6.58s`
-    faster on median wall time and `180,224` bytes smaller (`5,824,140` vs
-    `6,004,364`).
-  - Compared with `release-fast-dev`, `release-incr` is slower (`18.413s` vs
-    `9.874s`) but much smaller (`5,824,140` vs `11,224,828` bytes).
-  - Shared-library check passed with expected glibc/libgcc/pthread/m/dl loader
-    dependencies and no dynamic FFmpeg libraries.
-- **Device smoke:**
-  - `scripts/deploy-rust.sh --incr` deployed the `5,824,140` byte binary.
-  - `scripts/run-rust.sh launcher 5` started the launcher on-device, routed the
-    960x540 framebuffer, opened three pads, settled at `56-61fps` after catalog
-    startup, and exited with `done: 231 frames in 5.0s = 46.1 fps avg`.
-- **Decision:** accepted as an explicit local optimized profile. Keep normal
-  `release` non-incremental for the clean daily profile, use `release-incr`
-  when optimized edit-loop speed matters, and use `release-fast-dev` when raw
-  Rust edit-loop speed matters most.
 
 ### 13. Disable local strip
 
@@ -721,8 +588,7 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
     that image. Ubuntu 20.04 apt did not provide an `sccache` package.
   - Added `Cross.sccache.toml` so the wrapper is target/container-local:
     `[target.armv7-unknown-linux-gnueabihf] rustc-wrapper = "sccache"`.
-  - Added separate benchmark scenarios:
-    `arm-check-launcher-sccache` and `build-ui-opts-sccache`.
+  - Added separate benchmark scenarios for the sccache comparison.
   - Avoided global `RUSTC_WRAPPER=sccache`. A first attempt with global
     `RUSTC_WRAPPER` failed before Docker with:
     `could not execute process sccache ... rustc -vV`, because Cargo metadata
@@ -732,20 +598,16 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - `docker run --rm --platform linux/amd64 mister-magik-cross-armv7:sccache-amd64 sccache --version`
   - `scripts/bench-debug-build.sh --scenario arm-check-launcher-sccache --state noop-warm --samples 3 --warmups 1 --label exp18-sccache-check-noop`
   - `scripts/bench-debug-build.sh --scenario arm-check-launcher-sccache --state touch-rust-bin --samples 3 --warmups 1 --label exp18-sccache-check-touch-rust-bin`
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts-sccache --state touch-rust-bin --samples 3 --warmups 1 --label exp18-sccache-build-opts-touch-rust-bin`
 - **Results:**
   - Image sanity: `sccache 0.15.0`.
   - No-op launcher check: wall `2.927s`, `2.227s`, `2.246s`; median `2.246s`.
   - Rust edit launcher check: wall `3.090s`, `3.034s`, `3.078s`; median
     `3.078s`. Recent non-sccache launcher-scope check anchor after experiment
     30 was `3.748s` median.
-  - Rust edit `release-opts`: wall `24.782s`, `23.817s`, `24.801s`; median
-    `24.782s`. Recent non-sccache `release-opts` anchor after experiment 30 was
-    `24.348s` median. Binary size unchanged at `3,997,412` bytes.
 - **Interpretation:**
   - sccache is useful for the fast `check-ui` loop after the crate/UI split,
     saving roughly `0.67s` on the measured Rust edit check path.
-  - It does not materially improve the optimized `release-opts` build path.
+  - It does not materially improve the optimized build path.
   - The important correctness fix is isolation: if sccache is configured as a
     global `RUSTC_WRAPPER`, Cargo metadata on macOS still tries to run it even
     when the user has uninstalled host sccache. The repo default must continue
@@ -765,9 +627,8 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
     `magik-gui/target/sccache` host directory after the run.
   - Mounting `/private/tmp` robustly would require extra Cross volume plumbing
     and would make the cache path more host-specific.
-  - Because experiment 18 only improved the check loop and did not improve
-    `release-opts`, a cache-dir relocation is not worth merging without
-    stronger evidence.
+  - Because experiment 18 only improved the check loop, a cache-dir relocation is
+    not worth merging without stronger evidence.
 - **Decision:** rejected. Keep sccache isolated and simple.
 
 ### 20. sccache after crate split
@@ -802,8 +663,7 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - Rust build env:
     `CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=clang` and
     `RUSTFLAGS='-C link-arg=--target=arm-linux-gnueabihf -C link-arg=--sysroot=/usr/arm-linux-gnueabihf -C link-arg=-fuse-ld=lld'`.
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-bin --samples 3 --warmups 1 --label exp21-lld-touch-rust`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb`
+  - Benchmarked an optimized Rust-touch build with LLD enabled.
 - **Results:**
   - Cold LLD image build took about `71s` and pulled an extra LLVM/LLD package
     set. This is a one-time image cost, not the edit-loop metric.
@@ -830,8 +690,8 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
 - **Hypothesis:** `mold` might beat GNU ld and LLD for the final ARMv7 link,
   enough to justify a custom local cross image.
 - **Changed files:** temporary `magik-gui/Dockerfile.cross-armv7-mold`,
-  temporary `magik-gui/Cross.mold.toml`, and a temporary
-  `build-ui-opts-mold` benchmark scenario. All were removed after measurement.
+  temporary `magik-gui/Cross.mold.toml`, and temporary benchmark harness
+  wiring. All were removed after measurement.
 - **Research / setup:**
   - GitHub latest release lookup on 2026-06-10 found `mold 2.41.0`, published
     2026-04-13, with `mold-2.41.0-x86_64-linux.tar.gz` and SHA256
@@ -853,16 +713,14 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - Final linker attempt removed the explicit sysroot and used:
     `CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=clang` with
     `RUSTFLAGS='-C target-cpu=cortex-a9 -C target-feature=+neon -C link-arg=--target=arm-linux-gnueabihf -C link-arg=-fuse-ld=/usr/local/bin/mold'`.
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts-mold --state touch-rust-bin --samples 1 --warmups 0 --label exp22-mold-build-opts-touch-rust-bin-nosysroot`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb`
 - **Results:**
   - Successful no-sysroot sample: wall `70.250s`, Cargo `68.1s`, binary
     `3,996,752` bytes.
   - Shared-library check passed with expected glibc/libgcc/pthread/m/dl loader
     dependencies.
-  - The binary was about `660` bytes smaller than the GNU ld / sccache
-    `release-opts` anchor (`3,997,412` bytes), but the edit-loop was far slower
-    than the normal `24.348s` median and slower than LLD's `22.615s` median.
+  - The binary was about `660` bytes smaller than the GNU ld / sccache anchor
+    (`3,997,412` bytes), but the edit-loop was far slower than the normal
+    `24.348s` median and slower than LLD's `22.615s` median.
 - **Decision:** rejected. Mold is technically viable only with a more fragile
   clang invocation and is not a local compile-time win for this project.
 
@@ -918,11 +776,9 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - `scripts/dev-rust check-ui`
   - `scripts/bench-debug-build.sh --scenario arm-check-launcher --state touch-rust-bin --samples 3 --warmups 1 --label exp27-ui-crate-touch-rust-bin`
   - `scripts/bench-debug-build.sh --scenario arm-check-launcher --state touch-slint-launcher --samples 3 --warmups 1 --label exp27-ui-crate-touch-slint-launcher`
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-bin --samples 3 --warmups 1 --label exp27-ui-crate-build-opts-touch-rust-bin`
   - `scripts/dev-rust fmt`
   - `scripts/dev-rust check-ui`
   - `scripts/dev-rust check-ui-full`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb`
 - **Results:**
   - Launcher ARM check after touching `src/ui_runner.rs`: wall samples
     `3.593s`, `3.682s`, `3.542s`; median wall `3.593s`; median Cargo `2.0s`;
@@ -934,14 +790,8 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
     `32.805s`, `34.610s`, `32.802s`; median wall `32.805s`; median Cargo
     `30.0s`. Top units are now explicit: `mister-magik-ui` build script
     `21-22s`, `mister-magik-ui` check `5.0-5.4s`, app-bin check `1.1s`.
-  - `release-opts` build after touching `src/ui_runner.rs`: wall samples
-    `26.718s`, `23.441s`, `25.485s`; median wall `25.485s`; median Cargo
-    `22.87s`; binary `4,435,684` bytes.
-  - Compared with experiment 26's post-catalog `release-opts` anchor
-    (`39.455s` after catalog edits, binary `4,452,068`) and experiment 9's
-    Rust-edit `release-opts` anchor (`23.710s`, binary `4,447,972`), optimized
-    local builds remain in the same range while the check loop improves
-    materially.
+  - Optimized local builds remain in the same range while the check loop
+    improves materially.
   - `scripts/dev-rust check-ui` and `scripts/dev-rust check-ui-full` both pass
     with the new crate. The parallel verification run had Cargo lock waits, but
     both commands completed successfully.
@@ -1004,19 +854,13 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - `scripts/dev-rust check-arm-arcade-ui`
   - `scripts/dev-rust check-ui-full`
   - `scripts/bench-debug-build.sh --scenario arm-check-launcher --state touch-rust-bin --samples 3 --warmups 1 --label exp30-launcher-prune-touch-rust-bin-check`
-  - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-bin --samples 3 --warmups 1 --label exp30-launcher-prune-build-opts-touch-rust-bin`
-  - `magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb`
 - **Results:**
   - Launcher ARM check after touching `src/ui_runner.rs`: wall `5.432s`,
     `3.660s`, `3.748s`; median wall `3.748s`; median Cargo `2.1s`; app-bin
     check unit `0.7-0.8s`. This is effectively neutral against experiment 27's
     `3.593s` median.
-  - `release-opts` build after touching `src/ui_runner.rs`: wall `24.348s`,
-    `23.947s`, `25.772s`; median wall `24.348s`; median Cargo `21.01s`.
-    This is about `1.14s` faster than experiment 27's `25.485s` post-UI-crate
-    median.
   - Binary size dropped from `4,435,684` bytes to `3,997,412` bytes for
-    launcher-scope `release-opts` (`-438,272` bytes).
+    the launcher-scoped optimized binary (`-438,272` bytes).
   - `check-ui`, `check-arm-arcade-ui`, and `check-ui-full` all pass, proving the
     launcher prune does not remove the arcade/all-scene build paths.
   - Shared-library check passed with expected dependencies only:
@@ -1178,7 +1022,7 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
      into a platform crate only if experiments 24/26 show binary rebuild
      boundaries improve.
 - **Acceptance update:** each split must include before/after harness rows for
-  `arm-check-launcher`, `build-ui-opts`, and at least one Slint-touch state. A
+  `arm-check-launcher`, an optimized build, and at least one Slint-touch state. A
   split is rejected if it only moves files and the `mister-magik-fb` bin unit
   remains unchanged or slower.
 - **Experiment 25 follow-up:**
@@ -1196,14 +1040,13 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - Commands:
     - `bash -n scripts/bench-debug-build.sh`
     - `scripts/bench-debug-build.sh --scenario arm-check-launcher --state touch-rust-platform --samples 3 --warmups 1 --label exp25-preaudit-touch-rust-platform-check`
-    - `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-platform --samples 3 --warmups 1 --label exp25-preaudit-touch-rust-platform-build-opts`
   - Results:
     - `fb.rs` touch, launcher ARM check: wall `3.682s`, `4.103s`, `3.586s`;
       median wall `3.682s`; app-bin check unit `0.7-1.0s`.
-    - `fb.rs` touch, `release-opts` build: wall `25.368s`, `26.835s`,
+    - `fb.rs` touch, optimized build: wall `25.368s`, `26.835s`,
       `23.856s`; median wall `25.368s`; binary `4,435,684` bytes.
     - These are effectively the same as experiment 27's post-UI-crate
-      `ui_runner.rs` touch anchors: check median `3.593s`; `release-opts`
+      `ui_runner.rs` touch anchors: check median `3.593s`; optimized build
       median `25.485s`.
   - Interpretation: after the UI generated crate split, the remaining app-bin
     check cost is already below one second and the optimized app-bin rebuild is
@@ -1238,16 +1081,12 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
 - **Commands:**
   - Before split:
     `scripts/bench-debug-build.sh --scenario arm-check-launcher --state touch-rust-catalog --samples 3 --warmups 1 --label exp26-before-check-launcher-touch-catalog`
-  - Before split:
-    `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-catalog --samples 3 --warmups 1 --label exp26-before-build-opts-touch-catalog`
   - After split:
     `scripts/dev-rust check`
   - After split:
     `scripts/dev-rust check-ui`
   - After split:
     `scripts/bench-debug-build.sh --scenario arm-check-launcher --state touch-rust-catalog --samples 3 --warmups 1 --label exp26-after-check-launcher-touch-catalog`
-  - After split:
-    `scripts/bench-debug-build.sh --scenario build-ui-opts --state touch-rust-catalog --samples 3 --warmups 1 --label exp26-after-build-opts-touch-catalog`
 - **Results:**
   - Before split, catalog edit `check-ui` samples: wall `7.395s`, `7.309s`,
     `7.270s`; median wall `7.309s`; median Cargo `5.3s`; app bin check unit
@@ -1255,14 +1094,14 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - After split, catalog edit `check-ui` samples: wall `7.112s`, `6.969s`,
     `6.931s`; median wall `6.969s`; median Cargo `5.2s`; app bin check unit
     about `2.8s`; new catalog crate check unit about `0.5-0.6s`.
-  - Before split, catalog edit `release-opts` samples: wall `41.501s`,
+  - Before split, catalog edit optimized-build samples: wall `41.501s`,
     `41.152s`, `41.376s`; median wall `41.376s`; median Cargo about `37.98s`;
     binary `4,447,972` bytes.
-  - After split, catalog edit `release-opts` samples: wall `38.784s`,
+  - After split, catalog edit optimized-build samples: wall `38.784s`,
     `39.455s`, `39.858s`; median wall `39.455s`; median Cargo about `36.58s`;
     binary `4,452,068` bytes.
   - Delta: about `0.34s` faster on launcher check and about `1.92s` faster on
-    optimized `release-opts` catalog edits, with a `4,096` byte binary increase.
+    optimized catalog edits, with a `4,096` byte binary increase.
 - **Interpretation:**
   - This is not a huge compile-time win by itself, but it is a real targeted
     improvement and a clean architectural boundary for catalog/library work.
@@ -1311,10 +1150,10 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   - After crate move, `check-ui` samples: wall `7.257s`, `7.120s`, `7.162s`;
     median wall `7.162s`; median Cargo about `5.3s`; app bin check about
     `3.0s`; core crate check about `0.6s`.
-  - Before crate move, `release-opts` samples: wall `39.658s`, `37.851s`,
+  - Before crate move, optimized-build samples: wall `39.658s`, `37.851s`,
     `37.693s`; median wall `37.851s`; median Cargo about `34.94s`; binary
     `4,452,068` bytes.
-  - After crate move, `release-opts` samples: wall `35.250s`, `38.508s`,
+  - After crate move, optimized-build samples: wall `35.250s`, `38.508s`,
     `38.279s`; median wall `38.279s`; median Cargo about `35.30s`; binary
     `4,456,164` bytes.
   - The crate move was reverted after measurement because it failed the merge
@@ -1364,21 +1203,10 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
 - Experiment 7 is accepted: Cargo `lto = true` was fat LTO, not thin LTO.
   Switching local `release` to `lto = "thin"` cut the Rust edit-loop median to
   `24.991s` while keeping device smoke clean. `release-device` remains fat LTO.
-- Experiment 8 is accepted as an optional local profile: `release-opt2` keeps a
-  comparable Rust edit-loop median (`25.267s`) to thin-LTO `release` while
-  shrinking the launcher-scoped binary to `5,451,492` bytes and passing the
-  MiSTer launcher smoke.
-- Experiment 9 is accepted as the smallest local optimized smoke profile:
-  `release-opts` reached `23.710s` median Rust edit-loop wall time, shrank the
-  launcher-scoped binary to `4,447,972` bytes, and passed the MiSTer launcher
-  smoke.
 - Experiment 10 is rejected: CGU32 was slower and slightly larger than the
   accepted thin-LTO `release` profile.
 - Experiment 11 is rejected: CGU64 was slower/larger than CGU32 and the
   accepted thin-LTO `release` profile.
-- Experiment 12 is accepted: `release-incr` cut the optimized Rust edit-loop
-  median to `18.413s`, kept the binary to `5,824,140` bytes, passed
-  shared-library checks, and passed the MiSTer launcher smoke.
 - Experiment 13 is rejected: disabling strip alone was slower and produced a
   `10,489,492` byte binary.
 - Experiment 14 is accepted: `check-ui` / `check-ui-full` aliases and BUILD.md
@@ -1396,7 +1224,7 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   It did uncover a Docker/OrbStack recovery note after an aborted benchmark.
 - Experiment 18 is accepted as an opt-in sccache path for fast check loops:
   target/container-local sccache cut the launcher-scope Rust edit check median
-  from `3.748s` to `3.078s`, while optimized `release-opts` stayed neutral.
+  from `3.748s` to `3.078s`, while the optimized build stayed neutral.
   Host/global sccache remains deliberately disabled.
 - Experiment 19 is rejected: moving the sccache cache to `/private/tmp` would
   add Cross volume complexity without evidence of a release-build win.
@@ -1407,21 +1235,21 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   shared-library checks, but the measured win over GNU ld is too small for the
   added image/linker complexity.
 - Experiment 22 is rejected: mold can link a valid ARMv7 binary only with a
-  fragile no-sysroot clang setup, and the measured Rust edit `release-opts`
+  fragile no-sysroot clang setup, and the measured Rust edit optimized-build
   sample was `70.250s`, much slower than GNU ld/LLD.
 - Experiment 23 is rejected for local Cross builds: cargo-chef-style image
   prewarming is CI-shaped, while Cross bind-mounts `/target` and `/cargo` for
   exactly the caches the local loop needs.
 - Experiment 24 is rejected for the full core crate move: extracting
   `mister-magik-core` made `input_state` edit checks slower (`6.569s` →
-  `7.162s`) and slightly worsened `release-opts` median (`37.851s` →
+  `7.162s`) and slightly worsened the optimized-build median (`37.851s` →
   `38.279s`). The `input_state` / `SetupPadSource` boundary prep remains.
 - Experiment 25 is rejected: a platform crate would require moving intertwined
   runtime/framebuffer/boot-analytics code and measured platform-file edits were
   already in the same range as ordinary UI touches.
 - Experiment 26 is accepted: moving catalog/media scanning into
   `mister-magik-catalog` improved catalog edit rebuilds modestly
-  (`check-ui` median `7.309s` → `6.969s`; `release-opts` median `41.376s` →
+  (`check-ui` median `7.309s` → `6.969s`; optimized-build median `41.376s` →
   `39.455s`) and gives later split work a cleaner boundary.
 - Experiment 27 is accepted: moving Slint-generated modules into
   `mister-magik-ui` cut non-Slint UI runner check edits to about `3.593s`
@@ -1437,5 +1265,5 @@ Status values: `todo`, `running`, `accepted`, `rejected`, `blocked`.
   disabled; removing it produced Slint core `num_traits::Float` / float-method
   compile failures.
 - Experiment 30 is accepted: the LLVM-lines pass led to launcher-scope pruning,
-  reducing the launcher `release-opts` binary from `4,435,684` to `3,997,412`
+  reducing the launcher optimized binary from `4,435,684` to `3,997,412`
   bytes and improving the Rust edit optimized median to about `24.348s`.

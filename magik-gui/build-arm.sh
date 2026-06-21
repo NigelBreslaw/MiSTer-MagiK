@@ -3,9 +3,6 @@
 #
 # Profiles (see magik-gui/BUILD.md):
 #   ./build-arm.sh              → release-device (fat LTO + Cortex-A9, ship to MiSTer)
-#   ./build-arm.sh --opt2       → release-opt2 (experiment: opt-level=2)
-#   ./build-arm.sh --opts       → release-opts (experiment: opt-level=s)
-#   ./build-arm.sh --incr       → release-incr (experiment: incremental release)
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
 #   ./build-arm.sh --experiments → release-device with experimental effect scenes
@@ -76,9 +73,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
-    --opt2|--release-opt2) PROFILE=release-opt2 ;;
-    --opts|--release-opts) PROFILE=release-opts ;;
-    --incr|--release-incr) PROFILE=release-incr ;;
     --profile)
       PROFILE=release-device-profile
       add_feature profile
@@ -102,9 +96,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       UI_SCOPE="${ARGS[$i]}"
       ;;
     -h|--help)
-      sed -n '4,12p' ./build-arm.sh | sed 's/^# \{0,1\}//'
+      sed -n '4,9p' ./build-arm.sh | sed 's/^# \{0,1\}//'
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
-      echo "  ./build-arm.sh --experiments → include experimental effect scenes"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
       exit 0
@@ -121,16 +114,7 @@ export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}"
 export RUSTC_WRAPPER=""
 
 if [ -z "$UI_SCOPE" ]; then
-  case "$PROFILE" in
-    release-opt2|release-opts|release-incr)
-      if [[ " ${FEATURES[*]-} " != *" video "* ]]; then
-        UI_SCOPE=launcher
-      else
-        UI_SCOPE=all
-      fi
-      ;;
-    *) UI_SCOPE=all ;;
-  esac
+  UI_SCOPE=all
 fi
 case "$UI_SCOPE" in
   launcher|arcade|all) ;;
@@ -165,12 +149,6 @@ if [ "$PROFILE" = release-device-profile ]; then
   echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-device ]; then
   echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 target, warnings denied)"
-elif [ "$PROFILE" = release-opt2 ]; then
-  echo "==> cross build profile=release-opt2 ui_scope=$UI_SCOPE (opt-level=2 + thin LTO + Cortex-A9 target, warnings denied)"
-elif [ "$PROFILE" = release-opts ]; then
-  echo "==> cross build profile=release-opts ui_scope=$UI_SCOPE (opt-level=s + thin LTO + Cortex-A9 target, warnings denied)"
-elif [ "$PROFILE" = release-incr ]; then
-  echo "==> cross build profile=release-incr ui_scope=$UI_SCOPE (thin LTO + incremental + Cortex-A9 target, warnings denied)"
 fi
 
 BUILD_LOG="$(mktemp)"

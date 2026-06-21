@@ -72,18 +72,6 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 
-[profile.release-opt2]
-inherits = "release"
-opt-level = 2
-
-[profile.release-opts]
-inherits = "release"
-opt-level = "s"
-
-[profile.release-incr]
-inherits = "release"
-incremental = true
-
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"

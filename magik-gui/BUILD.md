@@ -1,12 +1,9 @@
 # Cross-build profiles (`mister-magik-fb`)
 
-`release-device` is the normal MiSTer build. The old thin-LTO fast deploy path was removed because the build-time win was too small to justify a second deployable binary.
+`release-device` is the normal MiSTer build.
 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
-| **`release-incr`** | `build-arm.sh --incr` | thin | 16 (default) | cortex-a9 | ~18s Rust edit loop | ~5.6 MB | Faster local optimized edit loop |
-| **`release-opt2`** | `build-arm.sh --opt2` | thin | 16 (default) | cortex-a9 | ~25s Rust edit loop | ~5.2 MB | Smaller local optimized smoke binary |
-| **`release-opts`** | `build-arm.sh --opts` | thin | 16 (default) | cortex-a9 | ~24s Rust edit loop | ~4.2 MB | Smallest local optimized smoke binary |
 | **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 | ~4 min | ~5.6 MB | SD card / bench / production |
 | **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
@@ -72,7 +69,6 @@ scripts/dev-rust check-ui-full
 
 # Only when a device binary is needed.
 magik-gui/build-arm.sh            # release-device
-magik-gui/build-arm.sh --incr     # optimized, faster edit-loop deploy
 ```
 
 Measured check-loop anchors from
@@ -133,18 +129,9 @@ magik-gui/build-arm.sh --all-scenes
 # Compile experimental effect scenes explicitly.
 magik-gui/build-arm.sh --experiments
 
-# Local optimized profile with incremental reuse.
-magik-gui/build-arm.sh --incr
-
-# Local optimized profile: opt-level=2 + thin LTO, smaller than release.
-magik-gui/build-arm.sh --opt2
-
-# Local size-optimized profile: opt-level=s + thin LTO.
-magik-gui/build-arm.sh --opts
-
 # Legacy native Apple-Silicon Docker path: linux/arm64 container,
 # linux/aarch64 Rust host toolchain, armv7 target.
-magik-gui/build-arm64-docker.sh --opts
+magik-gui/build-arm64-docker.sh
 
 # Explicit spelling for the same release-device build.
 magik-gui/build-arm.sh --device
@@ -263,9 +250,8 @@ project-local minimal build.
   `scripts/bench-toolchain.sh` opt in.
 - **`MISTER_ARM_BUILD_BACKEND`** — local Apple-Silicon builds default to
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
-- **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — local optimized profiles
-  (`release-incr`, `release-opt2`, `release-opts`) default to `launcher`;
-  `release-device`, profiling, `--video`, and `--all-scenes` use `all`.
+- **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — override the Slint modules
+  compiled into the ARM binary; by default, deployable builds use `all`.
 - **root `.cargo/config.toml` + `.cargo/config.toml`** — disable any inherited
   compiler wrapper such as sccache; no always-on `rustflags`.
 - **`build-arm.sh`** — sets Cortex-A9 `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
@@ -351,8 +337,8 @@ rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unkno
 Example:
 
 ```bash
-magik-gui/build-arm64-docker.sh --opts
-# → /private/tmp/mister-magik-arm64-target/armv7-unknown-linux-gnueabihf/release-opts/mister-magik-fb
+magik-gui/build-arm64-docker.sh
+# → /private/tmp/mister-magik-arm64-target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 ```
 
 This path is retained as a diagnostic fallback. The canonical Apple-Silicon path
