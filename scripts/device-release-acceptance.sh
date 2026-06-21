@@ -432,6 +432,7 @@ export MISTER_LAUNCHER_START_SCREEN=arcade
 export MISTER_LAUNCHER_LOCK_SCREEN=arcade
 export MISTER_LAUNCHER_BENCH_SCENARIO=idle
 export MISTER_PREVIEW_SCROLL_TRACE_SECS=5
+export MISTER_CATALOG_REFRESH=off
 EOF
 if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi
 printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
