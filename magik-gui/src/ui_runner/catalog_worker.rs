@@ -63,11 +63,13 @@ pub(super) fn start_library_catalog_worker(
             });
             match plan {
                 CatalogWorkerPlan::UseCacheOnly => {
-                    materialize_virtual_launch_cache(&tx);
+                    debug_assert!(!catalog_worker_plan_prewarm_required(plan));
+                    skip_virtual_launch_cache_prewarm(&tx, plan);
                     let _ = tx.send(CatalogWorkerMessage::Done);
                     return;
                 }
                 CatalogWorkerPlan::RefreshInProcess => {
+                    debug_assert!(catalog_worker_plan_prewarm_required(plan));
                     let (title, detail) = if cache_state.has_usable_catalog() {
                         (
                             "Validating library",
@@ -239,6 +241,10 @@ impl CatalogWorkerPlan {
     }
 }
 
+fn catalog_worker_plan_prewarm_required(plan: CatalogWorkerPlan) -> bool {
+    matches!(plan, CatalogWorkerPlan::RefreshInProcess)
+}
+
 fn catalog_worker_plan(
     cache_state: CatalogCacheState,
     refresh_requested: bool,
@@ -389,6 +395,16 @@ fn materialize_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
     });
 }
 
+fn skip_virtual_launch_cache_prewarm(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    plan: CatalogWorkerPlan,
+) {
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "virtual_launch_cache_prewarm_skipped".to_string(),
+        detail: format!("plan={} reason=catalog-cache-ready", plan.label()),
+    });
+}
+
 pub(super) fn lower_background_priority() {
     #[cfg(target_os = "linux")]
     unsafe {
@@ -409,10 +425,9 @@ mod tests {
 
     #[test]
     fn catalog_worker_uses_cached_database_without_refresh() {
-        assert_eq!(
-            catalog_worker_plan(CatalogCacheState::Ready, false),
-            CatalogWorkerPlan::UseCacheOnly
-        );
+        let plan = catalog_worker_plan(CatalogCacheState::Ready, false);
+        assert_eq!(plan, CatalogWorkerPlan::UseCacheOnly);
+        assert!(!catalog_worker_plan_prewarm_required(plan));
     }
 
     #[test]
@@ -453,6 +468,13 @@ mod tests {
         assert!(!staged_ram_catalog_enabled(CatalogCacheState::Ready));
         assert!(!staged_ram_catalog_enabled(
             CatalogCacheState::ReadyWithStalePreviewArchive
+        ));
+    }
+
+    #[test]
+    fn refresh_plan_keeps_virtual_launch_cache_prewarm() {
+        assert!(catalog_worker_plan_prewarm_required(
+            CatalogWorkerPlan::RefreshInProcess
         ));
     }
 
