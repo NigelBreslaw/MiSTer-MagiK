@@ -3890,7 +3890,7 @@ fn write_sqlite_scan(
     stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
     let preview_paths =
-        PreviewArchivePaths::from_paths(preview_worker::preview_archive_paths_from_env());
+        PreviewArchivePaths::from_paths(preview_worker::preview_archive_paths_for_catalog_projection());
     write_sqlite_scan_with_sources(
         path,
         scan,
