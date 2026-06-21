@@ -12,8 +12,6 @@ pub use crate::catalog_config::{
 };
 use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
 use crate::catalog_scan::{self, DiscoveryEvent};
-#[cfg(test)]
-use crate::catalog_scan::{profile_for_path, FoundFile};
 use crate::catalog_stamp;
 #[cfg(test)]
 use crate::catalog_store;
@@ -23,11 +21,6 @@ use crate::game_discovery::{
     launch_ref_for_discovery, preferred_playable_discoveries_by_key, unique_discovery_count,
     GameDiscovery,
 };
-#[cfg(test)]
-use crate::game_discovery::{
-    first_disc_number_from_haystack, is_playable_discovery, system_title_for_discovery,
-    variant_score_from_haystack, DiscoveryConfidence, DiscoverySourceKind,
-};
 use crate::launch_profiles::{
     self, CollectionListing, PayloadDisposition, PayloadRule, ProfilePathClass,
 };
@@ -35,12 +28,6 @@ pub(crate) use crate::library_cli::{
     canonical_variant_title, collapse_catalog_variants, CatalogRow,
 };
 use crate::media_metadata;
-#[cfg(test)]
-use crate::media_metadata::{
-    collection_discoveries_from_container, collection_discoveries_from_listing_text,
-    collection_listing_text_with_tool, infer_region_metadata, parse_saturn_boot_header,
-    read_mgl_metadata, read_mra_metadata, RegionInference,
-};
 #[cfg(test)]
 use crate::preview_worker;
 #[cfg(test)]
@@ -59,8 +46,6 @@ use crate::sqlite_catalog::{SqliteBuildTempPlan, SqliteBuildTempSource};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::time::Duration;
 use std::time::Instant;
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
@@ -996,277 +981,6 @@ mod tests {
     use crate::test_support::*;
 
     #[test]
-    fn raw_profile_payloads_generate_virtual_games() {
-        let discoveries = vec![
-            payload("/media/fat/games/NES/Super Mario Bros.nes"),
-            payload("/media/fat/games/Saturn/Guardian Heroes.cue"),
-        ];
-
-        assert_eq!(unique_discovery_count(&discoveries), 2);
-    }
-
-    #[test]
-    fn saturn_region_prefers_filename_markers() {
-        let discovery = saturn_payload("/media/fat/games/Saturn/Nights into Dreams (USA).chd");
-
-        assert_eq!(
-            infer_region_metadata(&discovery),
-            RegionInference {
-                region: Some("usa"),
-                confidence: "filename-high"
-            }
-        );
-    }
-
-    #[test]
-    fn saturn_region_uses_folder_when_filename_has_no_marker() {
-        let discovery = saturn_payload("/media/fat/games/Saturn/Japan/Princess Crown.chd");
-
-        assert_eq!(
-            infer_region_metadata(&discovery),
-            RegionInference {
-                region: Some("japan"),
-                confidence: "folder-medium"
-            }
-        );
-    }
-
-    #[test]
-    fn saturn_region_stays_unknown_without_evidence() {
-        let discovery = saturn_payload("/media/fat/games/Saturn/Clockwork Knight.chd");
-
-        assert_eq!(
-            infer_region_metadata(&discovery),
-            RegionInference {
-                region: None,
-                confidence: "unknown"
-            }
-        );
-    }
-
-    #[test]
-    fn saturn_boot_header_extracts_product_and_area() {
-        let mut header = [b' '; 256];
-        header[0..15].copy_from_slice(b"SEGA SEGASATURN");
-        header[0x20..0x2a].copy_from_slice(b"T-12345G  ");
-        header[0x40..0x50].copy_from_slice(b"JTUE            ");
-
-        let parsed = parse_saturn_boot_header(&header).expect("saturn header");
-
-        assert_eq!(parsed.product_id.as_deref(), Some("T-12345G"));
-        assert_eq!(parsed.region, Some("usa"));
-    }
-
-    #[test]
-    fn dos_mgl_games_still_count_as_games() {
-        let discoveries = vec![mgl(
-            "/media/fat/_DOS Games/Doom (Ultimate).mgl",
-            "/media/fat/_DOS Games/Doom (Ultimate).mgl",
-        )];
-
-        assert_eq!(unique_discovery_count(&discoveries), 1);
-    }
-
-    #[test]
-    fn dos_mgl_discovery_uses_dos_system_without_payload_inference() {
-        let root = unique_temp_dir("dos-mgl-profile");
-        let dos_dir = root.join("_DOS Games");
-        std::fs::create_dir_all(&dos_dir).expect("create dos dir");
-        let path = dos_dir.join("Doom (Ultimate).mgl");
-        std::fs::write(
-            &path,
-            r#"<mistergamelist><rbf>AO486</rbf><file delay="1" type="s"/></mistergamelist>"#,
-        )
-        .expect("write dos mgl fixture");
-        let meta = std::fs::metadata(&path).expect("stat dos mgl fixture");
-        let file = FoundFile {
-            path: path.clone(),
-            ext: "mgl".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
-        };
-
-        let profiles = launch_profiles::builtin_profiles();
-        let profile = profile_for_path(&profiles, &path).expect("dos profile");
-        let payload_rule = profile.payload_rules[0];
-        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
-
-        assert_eq!(profile.id, "dos");
-        assert_eq!(discovery.platform_id, "dos");
-        assert_eq!(catalog_system_id_for_discovery(&discovery), "dos");
-        assert_eq!(system_title_for_discovery(&discovery, "dos"), "DOS Games");
-    }
-
-    #[test]
-    fn mra_metadata_parser_tolerates_attributes_and_entities() {
-        let root = unique_temp_dir("mra-xml-metadata");
-        std::fs::create_dir_all(&root).expect("create temp root");
-        let path = root.join("fixture.mra");
-        std::fs::write(
-            &path,
-            r#"
-            <misterromdescription>
-                <name lang="en">Battle &amp; Chase</name>
-                <rbf version="1">JTCPS2</rbf>
-                <platform>Capcom Play System II</platform>
-                <manufacturer>Capcom &quot;Co&quot;</manufacturer>
-                <category>Driving</category>
-                <catver>Racing / Chase</catver>
-                <year>1997</year>
-                <setname>batcir</setname>
-                <parent>batcirj</parent>
-            </misterromdescription>
-            "#,
-        )
-        .expect("write mra fixture");
-
-        let metadata = read_mra_metadata(&path).expect("read mra metadata");
-
-        assert_eq!(metadata.name.as_deref(), Some("Battle & Chase"));
-        assert_eq!(metadata.rbf.as_deref(), Some("JTCPS2"));
-        assert_eq!(metadata.platform.as_deref(), Some("Capcom Play System II"));
-        assert_eq!(metadata.manufacturer.as_deref(), Some("Capcom \"Co\""));
-        assert_eq!(metadata.category.as_deref(), Some("Driving"));
-        assert_eq!(metadata.catver.as_deref(), Some("Racing / Chase"));
-        assert_eq!(metadata.year.as_deref(), Some("1997"));
-        assert_eq!(metadata.setname.as_deref(), Some("batcir"));
-        assert_eq!(metadata.parent.as_deref(), Some("batcirj"));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn mgl_metadata_parser_uses_file_path_not_unrelated_path_attribute() {
-        let root = unique_temp_dir("mgl-xml-file-path");
-        std::fs::create_dir_all(&root).expect("create temp root");
-        let path = root.join("Fixture.mgl");
-        std::fs::write(
-            &path,
-            r#"
-            <mistergamelist>
-                <metadata path="not/a/game.rom"/>
-                <rbf>NES</rbf>
-                <file delay="1" type="s" path='games/NES/Super Mario Bros.nes'/>
-            </mistergamelist>
-            "#,
-        )
-        .expect("write mgl fixture");
-
-        let metadata = read_mgl_metadata(&path).expect("read mgl metadata");
-
-        assert_eq!(metadata.rbf.as_deref(), Some("NES"));
-        assert_eq!(
-            metadata.file_path.as_deref(),
-            Some("games/NES/Super Mario Bros.nes")
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn mgl_discovery_preserves_script_as_launch_ref() {
-        let path =
-            std::env::temp_dir().join(format!("mister-magik-mgl-test-{}.mgl", std::process::id()));
-        std::fs::write(
-            &path,
-            r#"<mistergamelist><file delay="2" type="s" path="games/NES/Mario.nes"/></mistergamelist>"#,
-        )
-        .expect("write mgl fixture");
-        let meta = std::fs::metadata(&path).expect("stat mgl fixture");
-        let file = FoundFile {
-            path: path.clone(),
-            ext: "mgl".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
-        };
-
-        let profiles = launch_profiles::builtin_profiles();
-        let profile = profiles
-            .iter()
-            .find(|profile| profile.id == "mgl")
-            .expect("mgl profile");
-        let payload_rule = profile.payload_rules[0];
-        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
-
-        assert_eq!(discovery.source_path, path.display().to_string());
-        assert_eq!(discovery.launch_ref, path.display().to_string());
-        assert_eq!(discovery.platform_id, "nes");
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn neogeo_mgl_discovery_uses_payload_setname() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-neogeo-mgl-test-{}.mgl",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            r#"<mistergamelist><rbf>NeoGeo</rbf><file delay="2" type="s" path="/media/fat/games/NeoGeo/Neo Geo Mister FGPA Ultra Pack.zip/Neo Geo Mister FGPA Ultra Pack/ World A-Z/Metal Slug 3 (mslug3).neo"/></mistergamelist>"#,
-        )
-        .expect("write mgl fixture");
-        let meta = std::fs::metadata(&path).expect("stat mgl fixture");
-        let file = FoundFile {
-            path: path.clone(),
-            ext: "mgl".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
-        };
-
-        let profiles = launch_profiles::builtin_profiles();
-        let profile = profiles
-            .iter()
-            .find(|profile| profile.id == "mgl")
-            .expect("mgl profile");
-        let payload_rule = profile.payload_rules[0];
-        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
-
-        assert_eq!(discovery.platform_id, "neogeo");
-        assert_eq!(discovery.setname.as_deref(), Some("mslug3"));
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn mgl_covered_payload_does_not_get_virtual_duplicate() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-mgl-dedupe-test-{}.mgl",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            r#"<mistergamelist><file delay="1" type="f" path="games/NES/Mario.nes"/></mistergamelist>"#,
-        )
-        .expect("write mgl fixture");
-        let discoveries = vec![
-            mgl(&path.display().to_string(), &path.display().to_string()),
-            payload("/media/fat/games/NES/Mario.nes"),
-        ];
-
-        assert_eq!(unique_discovery_count(&discoveries), 1);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn mra_files_remain_playable_launchers() {
-        let discovery = GameDiscovery {
-            source_path: "/media/fat/_Arcade/BIOS.mra".to_string(),
-            launch_ref: "/media/fat/_Arcade/BIOS.mra".to_string(),
-            source_kind: DiscoverySourceKind::Mra,
-            title: "BIOS".to_string(),
-            category: "Arcade".to_string(),
-            platform_id: "arcade".to_string(),
-            core_id: "arcade".to_string(),
-            hardware_id: "arcade-unknown".to_string(),
-            manufacturer: None,
-            genre: None,
-            year: None,
-            setname: None,
-            parent: None,
-            confidence: DiscoveryConfidence::MraCore,
-        };
-
-        assert!(is_playable_discovery(&discovery));
-    }
-
-    #[test]
     fn catalog_variants_group_by_parent_and_prefer_us_release() {
         let rows = vec![
             catalog_row(
@@ -1305,22 +1019,6 @@ mod tests {
         let games = collapse_catalog_variants(rows);
 
         assert_eq!(games.len(), 2);
-    }
-
-    #[test]
-    fn disc_variant_scoring_does_not_treat_disc_ten_as_disc_one() {
-        assert_eq!(
-            first_disc_number_from_haystack("/media/fat/games/Saturn/Game Disc 1.chd"),
-            Some(1)
-        );
-        assert_eq!(
-            first_disc_number_from_haystack("/media/fat/games/Saturn/Game Disc 10.chd"),
-            Some(10)
-        );
-        assert!(
-            variant_score_from_haystack("/media/fat/games/Saturn/Game Disc 1.chd")
-                > variant_score_from_haystack("/media/fat/games/Saturn/Game Disc 10.chd")
-        );
     }
 
     #[test]
@@ -1421,40 +1119,6 @@ mod tests {
     #[cfg(unix)]
     #[cfg(unix)]
     #[cfg(unix)]
-    #[test]
-    fn collection_listing_helper_times_out() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = unique_temp_dir("collection-listing-timeout");
-        let helper = root.join("slow-7za.sh");
-        std::fs::write(&helper, "#!/bin/sh\nsleep 2\n").expect("write helper");
-        let mut permissions = std::fs::metadata(&helper)
-            .expect("stat helper")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&helper, permissions).expect("chmod helper");
-        let archive = root.join("AmigaVision.7z");
-        std::fs::write(&archive, "fixture").expect("write archive fixture");
-        let file = FoundFile {
-            path: archive,
-            ext: "7z".to_string(),
-            size: 7,
-            mtime_secs: 0,
-        };
-        let listing = CollectionListing {
-            entry_path: "listings/games.txt",
-            genre: "AmigaVision",
-        };
-        let start = Instant::now();
-
-        let text =
-            collection_listing_text_with_tool(&file, &listing, &helper, Duration::from_millis(75));
-
-        assert!(text.is_none());
-        assert!(start.elapsed() < Duration::from_secs(1));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[test]
     fn nes_software_identity_matches_title_and_preview_pack() {
         let root = unique_temp_dir("nes-software-identity");
@@ -2817,151 +2481,6 @@ mod tests {
         assert_eq!(preferred.4, "1941");
         assert_eq!(preferred.5, 1);
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn amigavision_listing_entries_generate_visible_collection_games() {
-        let root = unique_temp_dir("amigavision-listing");
-        let db = root.join("library.sqlite3");
-        let profiles = launch_profiles::builtin_profiles();
-        let profile = profiles
-            .iter()
-            .find(|profile| profile.id == "amiga")
-            .expect("amiga profile");
-        let listing = profile.collection_rules[0].listings[0];
-        let file = FoundFile {
-            path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
-            ext: "7z".to_string(),
-            size: 5_208_842_481,
-            mtime_secs: 1,
-        };
-        let discoveries = collection_discoveries_from_listing_text(
-            &file,
-            profile,
-            &listing,
-            "Agony\nAlien Breed\n",
-        );
-
-        assert_eq!(unique_discovery_count(&discoveries), 2);
-        assert!(discoveries.iter().all(|discovery| discovery
-            .launch_ref
-            .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
-        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries)).expect("save sqlite");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-
-        assert_eq!(loaded.rows, 2);
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .all(|game| game.system_id.as_ref() == "amiga"));
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "amiga" && system.count == 2));
-        assert!(loaded
-            .catalog
-            .games
-            .iter()
-            .all(|game| game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn amigavision_collection_adds_launcher_entry() {
-        let profiles = launch_profiles::builtin_profiles();
-        let profile = profiles
-            .iter()
-            .find(|profile| profile.id == "amiga")
-            .expect("amiga profile");
-        let file = FoundFile {
-            path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
-            ext: "7z".to_string(),
-            size: 5_208_842_481,
-            mtime_secs: 1,
-        };
-
-        let discoveries =
-            collection_discoveries_from_container(&file, profile, &profile.collection_rules[0]);
-
-        assert!(discoveries.iter().any(|discovery| {
-            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
-        }));
-    }
-
-    #[test]
-    fn installed_amigavision_hdf_uses_launcher_and_listings() {
-        let root = unique_temp_dir("amigavision-installed");
-        let amiga_dir = root.join("games/Amiga");
-        let listings_dir = amiga_dir.join("listings");
-        std::fs::create_dir_all(&listings_dir).expect("create listings dir");
-        std::fs::write(amiga_dir.join("AmigaVision.hdf"), "hdf").expect("write hdf");
-        std::fs::write(amiga_dir.join("AmigaVision-Saves.hdf"), "saves").expect("write saves");
-        std::fs::write(
-            listings_dir.join("games.txt"),
-            b"Agony (OCS)[en]\nAlien Breed (OCS)[en]\nInvalid \xff Title (OCS)[en]\n",
-        )
-        .expect("write games listing");
-        std::fs::write(
-            listings_dir.join("demos.txt"),
-            "State of the Art (OCS)[demo]\n",
-        )
-        .expect("write demos listing");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.normal_files.is_empty());
-        assert_eq!(scan.ignored_files, 2);
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
-        }));
-        assert_eq!(
-            scan.discoveries
-                .iter()
-                .filter(|discovery| discovery
-                    .launch_ref
-                    .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX))
-                .count(),
-            4
-        );
-        assert!(scan
-            .discoveries
-            .iter()
-            .all(|discovery| !discovery.launch_ref.ends_with("AmigaVision.hdf")));
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-
-        assert_eq!(loaded.rows, 5);
-        assert!(loaded.catalog.games.iter().all(|game| {
-            game.mra_path.as_ref() == AMIGAVISION_LAUNCHER_REF
-                || game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
-        }));
-        assert!(loaded
-            .catalog
-            .systems
-            .iter()
-            .any(|system| system.id == "amiga" && system.count == 5));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn amigavision_archive_itself_is_not_a_launch_ref() {
-        assert!(!is_launcher_launch_ref(
-            "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"
-        ));
-        assert!(is_launcher_launch_ref(AMIGAVISION_LAUNCHER_REF));
-        assert!(is_launcher_launch_ref(
-            &media_metadata::amigavision_game_launch_ref("4th & Inches (OCS)[en]")
-        ));
     }
 
     #[test]

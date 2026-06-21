@@ -488,3 +488,183 @@ pub(crate) fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> Stri
 pub(crate) fn system_title_for_discovery(_discovery: &GameDiscovery, system_id: &str) -> String {
     arcade_catalog::system_title(system_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog_scan::{profile_for_path, FoundFile};
+    use crate::launch_profiles;
+    use crate::library_db::mtime_secs;
+    use crate::test_support::*;
+
+    #[test]
+    fn raw_profile_payloads_generate_virtual_games() {
+        let discoveries = vec![
+            payload("/media/fat/games/NES/Super Mario Bros.nes"),
+            payload("/media/fat/games/Saturn/Guardian Heroes.cue"),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 2);
+    }
+
+    #[test]
+    fn dos_mgl_games_still_count_as_games() {
+        let discoveries = vec![mgl(
+            "/media/fat/_DOS Games/Doom (Ultimate).mgl",
+            "/media/fat/_DOS Games/Doom (Ultimate).mgl",
+        )];
+
+        assert_eq!(unique_discovery_count(&discoveries), 1);
+    }
+
+    #[test]
+    fn dos_mgl_discovery_uses_dos_system_without_payload_inference() {
+        let root = unique_temp_dir("dos-mgl-profile");
+        let dos_dir = root.join("_DOS Games");
+        std::fs::create_dir_all(&dos_dir).expect("create dos dir");
+        let path = dos_dir.join("Doom (Ultimate).mgl");
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><rbf>AO486</rbf><file delay="1" type="s"/></mistergamelist>"#,
+        )
+        .expect("write dos mgl fixture");
+        let meta = std::fs::metadata(&path).expect("stat dos mgl fixture");
+        let file = FoundFile {
+            path: path.clone(),
+            ext: "mgl".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profile_for_path(&profiles, &path).expect("dos profile");
+        let payload_rule = profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+
+        assert_eq!(profile.id, "dos");
+        assert_eq!(discovery.platform_id, "dos");
+        assert_eq!(catalog_system_id_for_discovery(&discovery), "dos");
+        assert_eq!(system_title_for_discovery(&discovery, "dos"), "DOS Games");
+    }
+
+    #[test]
+    fn mgl_discovery_preserves_script_as_launch_ref() {
+        let path =
+            std::env::temp_dir().join(format!("mister-magik-mgl-test-{}.mgl", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><file delay="2" type="s" path="games/NES/Mario.nes"/></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+        let meta = std::fs::metadata(&path).expect("stat mgl fixture");
+        let file = FoundFile {
+            path: path.clone(),
+            ext: "mgl".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "mgl")
+            .expect("mgl profile");
+        let payload_rule = profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+
+        assert_eq!(discovery.source_path, path.display().to_string());
+        assert_eq!(discovery.launch_ref, path.display().to_string());
+        assert_eq!(discovery.platform_id, "nes");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn neogeo_mgl_discovery_uses_payload_setname() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-neogeo-mgl-test-{}.mgl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><rbf>NeoGeo</rbf><file delay="2" type="s" path="/media/fat/games/NeoGeo/Neo Geo Mister FGPA Ultra Pack.zip/Neo Geo Mister FGPA Ultra Pack/ World A-Z/Metal Slug 3 (mslug3).neo"/></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+        let meta = std::fs::metadata(&path).expect("stat mgl fixture");
+        let file = FoundFile {
+            path: path.clone(),
+            ext: "mgl".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "mgl")
+            .expect("mgl profile");
+        let payload_rule = profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+
+        assert_eq!(discovery.platform_id, "neogeo");
+        assert_eq!(discovery.setname.as_deref(), Some("mslug3"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn mgl_covered_payload_does_not_get_virtual_duplicate() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-mgl-dedupe-test-{}.mgl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><file delay="1" type="f" path="games/NES/Mario.nes"/></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+        let discoveries = vec![
+            mgl(&path.display().to_string(), &path.display().to_string()),
+            payload("/media/fat/games/NES/Mario.nes"),
+        ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn mra_files_remain_playable_launchers() {
+        let discovery = GameDiscovery {
+            source_path: "/media/fat/_Arcade/BIOS.mra".to_string(),
+            launch_ref: "/media/fat/_Arcade/BIOS.mra".to_string(),
+            source_kind: DiscoverySourceKind::Mra,
+            title: "BIOS".to_string(),
+            category: "Arcade".to_string(),
+            platform_id: "arcade".to_string(),
+            core_id: "arcade".to_string(),
+            hardware_id: "arcade-unknown".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            confidence: DiscoveryConfidence::MraCore,
+        };
+
+        assert!(is_playable_discovery(&discovery));
+    }
+
+    #[test]
+    fn disc_variant_scoring_does_not_treat_disc_ten_as_disc_one() {
+        assert_eq!(
+            first_disc_number_from_haystack("/media/fat/games/Saturn/Game Disc 1.chd"),
+            Some(1)
+        );
+        assert_eq!(
+            first_disc_number_from_haystack("/media/fat/games/Saturn/Game Disc 10.chd"),
+            Some(10)
+        );
+        assert!(
+            variant_score_from_haystack("/media/fat/games/Saturn/Game Disc 1.chd")
+                > variant_score_from_haystack("/media/fat/games/Saturn/Game Disc 10.chd")
+        );
+    }
+}

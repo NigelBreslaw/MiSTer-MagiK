@@ -617,3 +617,310 @@ fn ascii_trim(bytes: &[u8]) -> Option<String> {
         .to_string();
     (!value.is_empty()).then_some(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog_scan::FoundFile;
+    use crate::game_discovery::{is_launcher_launch_ref, unique_discovery_count};
+    use crate::launch_profiles;
+    use crate::library_db::{scan_library, BenchConfig};
+    use crate::sqlite_catalog::{load_arcade_catalog_from_sqlite_at, save_sqlite_scan};
+    use crate::test_support::*;
+    use std::time::Duration;
+
+    #[test]
+    fn saturn_region_prefers_filename_markers() {
+        let discovery = saturn_payload("/media/fat/games/Saturn/Nights into Dreams (USA).chd");
+
+        assert_eq!(
+            infer_region_metadata(&discovery),
+            RegionInference {
+                region: Some("usa"),
+                confidence: "filename-high"
+            }
+        );
+    }
+
+    #[test]
+    fn saturn_region_uses_folder_when_filename_has_no_marker() {
+        let discovery = saturn_payload("/media/fat/games/Saturn/Japan/Princess Crown.chd");
+
+        assert_eq!(
+            infer_region_metadata(&discovery),
+            RegionInference {
+                region: Some("japan"),
+                confidence: "folder-medium"
+            }
+        );
+    }
+
+    #[test]
+    fn saturn_region_stays_unknown_without_evidence() {
+        let discovery = saturn_payload("/media/fat/games/Saturn/Clockwork Knight.chd");
+
+        assert_eq!(
+            infer_region_metadata(&discovery),
+            RegionInference {
+                region: None,
+                confidence: "unknown"
+            }
+        );
+    }
+
+    #[test]
+    fn saturn_boot_header_extracts_product_and_area() {
+        let mut header = [b' '; 256];
+        header[0..15].copy_from_slice(b"SEGA SEGASATURN");
+        header[0x20..0x2a].copy_from_slice(b"T-12345G  ");
+        header[0x40..0x50].copy_from_slice(b"JTUE            ");
+
+        let parsed = parse_saturn_boot_header(&header).expect("saturn header");
+
+        assert_eq!(parsed.product_id.as_deref(), Some("T-12345G"));
+        assert_eq!(parsed.region, Some("usa"));
+    }
+
+    #[test]
+    fn mra_metadata_parser_tolerates_attributes_and_entities() {
+        let root = unique_temp_dir("mra-xml-metadata");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("fixture.mra");
+        std::fs::write(
+            &path,
+            r#"
+            <misterromdescription>
+                <name lang="en">Battle &amp; Chase</name>
+                <rbf version="1">JTCPS2</rbf>
+                <platform>Capcom Play System II</platform>
+                <manufacturer>Capcom &quot;Co&quot;</manufacturer>
+                <category>Driving</category>
+                <catver>Racing / Chase</catver>
+                <year>1997</year>
+                <setname>batcir</setname>
+                <parent>batcirj</parent>
+            </misterromdescription>
+            "#,
+        )
+        .expect("write mra fixture");
+
+        let metadata = read_mra_metadata(&path).expect("read mra metadata");
+
+        assert_eq!(metadata.name.as_deref(), Some("Battle & Chase"));
+        assert_eq!(metadata.rbf.as_deref(), Some("JTCPS2"));
+        assert_eq!(metadata.platform.as_deref(), Some("Capcom Play System II"));
+        assert_eq!(metadata.manufacturer.as_deref(), Some("Capcom \"Co\""));
+        assert_eq!(metadata.category.as_deref(), Some("Driving"));
+        assert_eq!(metadata.catver.as_deref(), Some("Racing / Chase"));
+        assert_eq!(metadata.year.as_deref(), Some("1997"));
+        assert_eq!(metadata.setname.as_deref(), Some("batcir"));
+        assert_eq!(metadata.parent.as_deref(), Some("batcirj"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mgl_metadata_parser_uses_file_path_not_unrelated_path_attribute() {
+        let root = unique_temp_dir("mgl-xml-file-path");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Fixture.mgl");
+        std::fs::write(
+            &path,
+            r#"
+            <mistergamelist>
+                <metadata path="not/a/game.rom"/>
+                <rbf>NES</rbf>
+                <file delay="1" type="s" path='games/NES/Super Mario Bros.nes'/>
+            </mistergamelist>
+            "#,
+        )
+        .expect("write mgl fixture");
+
+        let metadata = read_mgl_metadata(&path).expect("read mgl metadata");
+
+        assert_eq!(metadata.rbf.as_deref(), Some("NES"));
+        assert_eq!(
+            metadata.file_path.as_deref(),
+            Some("games/NES/Super Mario Bros.nes")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn collection_listing_helper_times_out() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("collection-listing-timeout");
+        let helper = root.join("slow-7za.sh");
+        std::fs::write(&helper, "#!/bin/sh\nsleep 2\n").expect("write helper");
+        let mut permissions = std::fs::metadata(&helper)
+            .expect("stat helper")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).expect("chmod helper");
+        let archive = root.join("AmigaVision.7z");
+        std::fs::write(&archive, "fixture").expect("write archive fixture");
+        let file = FoundFile {
+            path: archive,
+            ext: "7z".to_string(),
+            size: 7,
+            mtime_secs: 0,
+        };
+        let listing = CollectionListing {
+            entry_path: "listings/games.txt",
+            genre: "AmigaVision",
+        };
+        let start = Instant::now();
+
+        let text =
+            collection_listing_text_with_tool(&file, &listing, &helper, Duration::from_millis(75));
+
+        assert!(text.is_none());
+        assert!(start.elapsed() < Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_listing_entries_generate_visible_collection_games() {
+        let root = unique_temp_dir("amigavision-listing");
+        let db = root.join("library.sqlite3");
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "amiga")
+            .expect("amiga profile");
+        let listing = profile.collection_rules[0].listings[0];
+        let file = FoundFile {
+            path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+            ext: "7z".to_string(),
+            size: 5_208_842_481,
+            mtime_secs: 1,
+        };
+        let discoveries = collection_discoveries_from_listing_text(
+            &file,
+            profile,
+            &listing,
+            "Agony\nAlien Breed\n",
+        );
+
+        assert_eq!(unique_discovery_count(&discoveries), 2);
+        assert!(discoveries.iter().all(|discovery| discovery
+            .launch_ref
+            .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries)).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(loaded.rows, 2);
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .all(|game| game.system_id.as_ref() == "amiga"));
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "amiga" && system.count == 2));
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .all(|game| game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_collection_adds_launcher_entry() {
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "amiga")
+            .expect("amiga profile");
+        let file = FoundFile {
+            path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
+            ext: "7z".to_string(),
+            size: 5_208_842_481,
+            mtime_secs: 1,
+        };
+
+        let discoveries =
+            collection_discoveries_from_container(&file, profile, &profile.collection_rules[0]);
+
+        assert!(discoveries.iter().any(|discovery| {
+            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
+        }));
+    }
+
+    #[test]
+    fn installed_amigavision_hdf_uses_launcher_and_listings() {
+        let root = unique_temp_dir("amigavision-installed");
+        let amiga_dir = root.join("games/Amiga");
+        let listings_dir = amiga_dir.join("listings");
+        std::fs::create_dir_all(&listings_dir).expect("create listings dir");
+        std::fs::write(amiga_dir.join("AmigaVision.hdf"), "hdf").expect("write hdf");
+        std::fs::write(amiga_dir.join("AmigaVision-Saves.hdf"), "saves").expect("write saves");
+        std::fs::write(
+            listings_dir.join("games.txt"),
+            b"Agony (OCS)[en]\nAlien Breed (OCS)[en]\nInvalid \xff Title (OCS)[en]\n",
+        )
+        .expect("write games listing");
+        std::fs::write(
+            listings_dir.join("demos.txt"),
+            "State of the Art (OCS)[demo]\n",
+        )
+        .expect("write demos listing");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert_eq!(scan.ignored_files, 2);
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
+        }));
+        assert_eq!(
+            scan.discoveries
+                .iter()
+                .filter(|discovery| discovery
+                    .launch_ref
+                    .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX))
+                .count(),
+            4
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.ends_with("AmigaVision.hdf")));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(loaded.rows, 5);
+        assert!(loaded.catalog.games.iter().all(|game| {
+            game.mra_path.as_ref() == AMIGAVISION_LAUNCHER_REF
+                || game.mra_path.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        }));
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "amiga" && system.count == 5));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_archive_itself_is_not_a_launch_ref() {
+        assert!(!is_launcher_launch_ref(
+            "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"
+        ));
+        assert!(is_launcher_launch_ref(AMIGAVISION_LAUNCHER_REF));
+        assert!(is_launcher_launch_ref(&amigavision_game_launch_ref(
+            "4th & Inches (OCS)[en]"
+        )));
+    }
+}
