@@ -641,8 +641,14 @@ run_crash_restart_smoke() {
     "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
   if status_json "$label-crashed"; then
     assert_status "$OUT/status-$label-crashed.json" "$label crash telemetry is recorded" "$crash_expr"
+    assert_status "$OUT/status-$label-crashed.json" "$label crash report path is recorded" "data['runtime']['main_status'].get('last_crash_report', '').startswith('/media/fat/mister-magik/crashes/report-main-')"
   else
     record_fail "$label crashed status JSON"
+  fi
+  if remote "test -s /media/fat/mister-magik/crashes/latest.json"; then
+    record_ok "$label persistent crash report exists"
+  else
+    record_fail "$label persistent crash report exists"
   fi
 
   if restart_launcher; then

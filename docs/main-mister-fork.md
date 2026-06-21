@@ -52,6 +52,12 @@ The fork then:
 5. Polls only launcher lifecycle and explicit handoff commands while Slint owns
    the launcher UI.
 
+When the supervised launcher child exits unexpectedly, the fork records a local
+crash report under `/media/fat/mister-magik/crashes/`, updates
+`/tmp/mister-magik/main-status.json` with the last report path, and keeps the
+existing `LauncherCrashed` recovery path available for
+`mister_magik_restart_launcher`.
+
 The generated launcher script invokes `mister-magik-fb library-refresh` only
 when the SQLite catalog is missing or empty. The Rust command intentionally
 defers that foreground refresh when `MISTER_MAGIK_PARENT` is set, so first boot

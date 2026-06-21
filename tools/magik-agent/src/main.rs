@@ -8,9 +8,9 @@ fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
     let mut mac = [0u8; 6];
     let mut parts = text.trim().split(':');
     for byte in &mut mac {
-        let part = parts.next().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "too few MAC bytes")
-        })?;
+        let part = parts
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "too few MAC bytes"))?;
         *byte = u8::from_str_radix(part, 16)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad MAC byte"))?;
     }
@@ -40,7 +40,7 @@ mod linux {
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::os::fd::RawFd;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -55,6 +55,8 @@ mod linux {
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
     const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
+    const CRASH_DIR: &str = "/media/fat/mister-magik/crashes";
+    const LATEST_CRASH_REPORT: &str = "/media/fat/mister-magik/crashes/latest.json";
     const ETH_P_ARP: u16 = 0x0806;
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
@@ -492,7 +494,8 @@ mod linux {
                 "agent_tmp_log_tail": tail_text_value(LOG, 160),
                 "agent_persistent_log_tail": tail_text_value(PLOG, 160),
                 "boot_analytics_tail": tail_text_value("/tmp/mister-magik-boot-analytics.tsv", 80),
-            }
+            },
+            "crashes": crash_reports_json(),
         })
     }
 
@@ -813,6 +816,59 @@ mod linux {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or(Value::Null)
+    }
+
+    fn crash_reports_json() -> Value {
+        let recent = recent_crash_report_paths(5)
+            .into_iter()
+            .map(|path| {
+                let path_text = path.to_string_lossy().to_string();
+                let report = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or(Value::Null);
+                json!({
+                    "path": path_text,
+                    "report": report,
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "dir": CRASH_DIR,
+            "latest_path": LATEST_CRASH_REPORT,
+            "latest": read_json_value(LATEST_CRASH_REPORT),
+            "recent": recent,
+        })
+    }
+
+    fn recent_crash_report_paths(limit: usize) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(CRASH_DIR) else {
+            return Vec::new();
+        };
+        let mut paths = Vec::new();
+        let latest_report_id = read_json_value(LATEST_CRASH_REPORT)
+            .get("report_id")
+            .and_then(Value::as_str)
+            .map(|report_id| format!("{report_id}.json"));
+        if let Some(name) = latest_report_id.as_deref() {
+            paths.push(Path::new(CRASH_DIR).join(name));
+        }
+        let mut other_paths = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("report-")
+                            && name.ends_with(".json")
+                            && Some(name) != latest_report_id.as_deref()
+                    })
+            })
+            .collect::<Vec<_>>();
+        other_paths.sort();
+        paths.extend(other_paths.into_iter().rev());
+        paths.into_iter().take(limit).collect::<Vec<_>>()
     }
 
     fn status_pid_matches(status: &Value, pids: &Value) -> bool {
@@ -1355,21 +1411,15 @@ mod tests {
     #[test]
     fn mac_text_parser_rejects_wrong_octet_count_and_bad_hex() {
         assert_eq!(
-            parse_mac_text("aa:bb:cc:dd:ee")
-                .unwrap_err()
-                .kind(),
+            parse_mac_text("aa:bb:cc:dd:ee").unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
         assert_eq!(
-            parse_mac_text("aa:bb:cc:dd:ee:ff:00")
-                .unwrap_err()
-                .kind(),
+            parse_mac_text("aa:bb:cc:dd:ee:ff:00").unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
         assert_eq!(
-            parse_mac_text("aa:bb:cc:dd:ee:zz")
-                .unwrap_err()
-                .kind(),
+            parse_mac_text("aa:bb:cc:dd:ee:zz").unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
     }
