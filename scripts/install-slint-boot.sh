@@ -28,37 +28,13 @@ cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
 if [ ! -f "$INI.bak" ]; then cp "$INI" "$INI.bak"; fi
 
-# Stock MiSTer starts first, then MiSTer.ini main= hands off to MiSTer_MagiK.
-mount -o remount,rw / 2>/dev/null || true
-tmp=/tmp/inittab.magik
-awk '"'"'
-BEGIN { wrote = 0 }
-/^::sysinit:\/media\/fat\/MiSTer[[:space:]]*&/ {
-  if (!wrote) {
-    print "::sysinit:/media/fat/MiSTer &"
-    wrote = 1
-  }
-  next
-}
-/^::sysinit:\/media\/fat\/MiSTer_MagiK/ { next }
-/^::sysinit:\/media\/fat\/mister-magik\/boot\.sh/ { next }
-{ print }
-END {
-  if (!wrote) print "::sysinit:/media/fat/MiSTer &"
-}
-'"'"' /etc/inittab > "$tmp"
-cp "$tmp" /etc/inittab
-echo "inittab ensured -> stock MiSTer"
-sync
-
-echo "=== post-install inittab ==="
-grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
 echo "=== post-install processes ==="
 ps | grep -E "[M]iSTer|[M]iSTer_MagiK|[m]ister-magik-fb" || true
 echo "=== post-install fb mode ==="
 cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 '
 
+scripts/mister inittab-ensure-stock
 scripts/mister ini-repair-boot
 scripts/mister ini-repair-arcade-video
 

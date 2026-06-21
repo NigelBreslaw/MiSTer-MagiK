@@ -22,32 +22,11 @@ cat /sys/module/MiSTer_fb/parameters/mode > "$SNAP/fb-mode.txt" 2>/dev/null || t
 cp /tmp/mister-magik-main.log "$SNAP/mister-magik-main.log" 2>/dev/null || true
 echo "snapshot: $SNAP"
 
-tmp=/tmp/inittab.stock
-awk '"'"'
-BEGIN { wrote = 0 }
-/^::sysinit:\/media\/fat\/MiSTer[[:space:]]*&/ {
-  if (!wrote) {
-    print "::sysinit:/media/fat/MiSTer &"
-    wrote = 1
-  }
-  next
-}
-/^::sysinit:\/media\/fat\/MiSTer_MagiK/ { next }
-/^::sysinit:\/media\/fat\/mister-magik\/boot\.sh/ { next }
-{ print }
-END {
-  if (!wrote) print "::sysinit:/media/fat/MiSTer &"
-}
-'"'"' /etc/inittab > "$tmp"
-cp "$tmp" /etc/inittab
-
 kill -9 $(pidof mister-magik-fb) 2>/dev/null || true
 sync
-
-echo "=== restored inittab ==="
-grep -n "sysinit" /etc/inittab | grep -E "MiSTer|MagiK|boot.sh" || true
 '
 
+scripts/mister inittab-ensure-stock
 scripts/mister ini-restore-stock
 scripts/mister reboot-wait
 echo "Stock MiSTer boot restored. MiSTer.ini backup left untouched at /media/fat/MiSTer.ini.bak if present."
