@@ -110,7 +110,6 @@ pub(super) fn start_library_catalog_worker(
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
                         });
-                        materialize_virtual_launch_cache(&tx);
                         match library_db::load_arcade_catalog_from_sqlite(&root) {
                             Ok(loaded) => {
                                 send_catalog_load_timing(
@@ -123,6 +122,7 @@ pub(super) fn start_library_catalog_worker(
                                     summary: Some(summary),
                                     load_us: loaded.us,
                                 });
+                                materialize_virtual_launch_cache(&tx);
                             }
                             Err(e) => {
                                 eprintln!("library catalog load failed after persistence: {e}");
@@ -145,9 +145,13 @@ pub(super) fn start_library_catalog_worker(
                         let _ = tx.send(CatalogWorkerMessage::Timing {
                             name: "catalog_stamp_check".to_string(),
                             detail: format!(
-                                "unchanged={} check_us={} stored={} current={} stored_lines={} current_lines={}",
+                                "unchanged={} check_us={} compute_us={} open_us={} read_us={} compare_us={} stored={} current={} stored_lines={} current_lines={}",
                                 check.unchanged,
                                 check.check_us,
+                                check.compute_us,
+                                check.open_us,
+                                check.read_us,
+                                check.compare_us,
                                 check.stored_fingerprint.as_deref().unwrap_or("missing"),
                                 check.current_fingerprint,
                                 check.stored_lines,
@@ -155,10 +159,10 @@ pub(super) fn start_library_catalog_worker(
                             ),
                         });
                         if check.unchanged {
-                            materialize_virtual_launch_cache(&tx);
                             match library_db::default_sqlite_cached_summary(check.check_us) {
                                 Ok(summary) => {
                                     let _ = tx.send(CatalogWorkerMessage::Unchanged { summary });
+                                    materialize_virtual_launch_cache(&tx);
                                     return;
                                 }
                                 Err(e) => {
@@ -200,8 +204,8 @@ pub(super) fn start_library_catalog_worker(
                     None
                 }
             };
-            if summary.is_some() {
-                materialize_virtual_launch_cache(&tx);
+            let rebuilt = summary.is_some();
+            if rebuilt {
                 let _ = tx.send(CatalogWorkerMessage::Progress {
                     title: "Loading library".to_string(),
                     detail: "Opening SQLite catalog...".to_string(),
@@ -216,6 +220,9 @@ pub(super) fn start_library_catalog_worker(
                         summary,
                         load_us: loaded.us,
                     });
+                    if rebuilt {
+                        materialize_virtual_launch_cache(&tx);
+                    }
                 }
                 Err(e) => {
                     eprintln!("library catalog load failed: {e}");
