@@ -51,9 +51,9 @@ for script in \
   bash -n "$script"
 done
 
-for script in "$ROOT"/scripts/experiments/*.sh; do
+while IFS= read -r script; do
   bash -n "$script"
-done
+done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
 
 if command -v sqlite3 >/dev/null 2>&1; then
   mkdir -p "$TMP/neogeo/originals"
