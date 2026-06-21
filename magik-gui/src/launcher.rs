@@ -36,6 +36,9 @@ const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
+const VIRTUAL_LAUNCH_CACHE_SLUG_BYTES: usize = 80;
+const FNV128_OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+const FNV128_PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 1;
 
@@ -1069,7 +1072,14 @@ fn materialize_virtual_launch_plan_at(
         .map(|existing| existing != content)
         .unwrap_or(true);
     if should_write {
-        fs::write(&path, content).map_err(|e| format!("write virtual launch mgl: {e}"))?;
+        fs::write(&path, content).map_err(|e| {
+            format!(
+                "write virtual launch mgl path={} launch_ref={} hash={:032x}: {e}",
+                path.display(),
+                plan.launch_ref,
+                stable_launch_ref_hash(&plan.launch_ref)
+            )
+        })?;
     }
     Ok((path, should_write))
 }
@@ -1080,7 +1090,7 @@ fn warm_virtual_launch_path_at(launch_ref: &str, dir: &Path) -> Option<PathBuf> 
 }
 
 fn virtual_launch_path_at(launch_ref: &str, dir: &Path) -> PathBuf {
-    dir.join(format!("{}.mgl", sanitize_launch_ref(launch_ref)))
+    dir.join(virtual_launch_cache_basename(launch_ref))
 }
 
 fn virtual_launch_cache_dir() -> PathBuf {
@@ -1217,13 +1227,53 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn sanitize_launch_ref(launch_ref: &str) -> String {
-    launch_ref
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
+fn virtual_launch_cache_basename(launch_ref: &str) -> String {
+    // The full launch ref may be a long path-derived identity. Keep cache
+    // filenames short for exFAT/FUSE while preserving identity in the hash.
+    let slug = launch_ref_slug(launch_ref);
+    let hash = stable_launch_ref_hash(launch_ref);
+    format!("virtual-{slug}-{hash:032x}.mgl")
+}
+
+fn launch_ref_slug(launch_ref: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in launch_ref.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+        if mapped == '-' {
+            if slug.is_empty() || last_dash {
+                continue;
+            }
+            last_dash = true;
+        } else {
+            last_dash = false;
+        }
+        slug.push(mapped);
+        if slug.len() >= VIRTUAL_LAUNCH_CACHE_SLUG_BYTES {
+            break;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "ref".to_string()
+    } else {
+        slug
+    }
+}
+
+fn stable_launch_ref_hash(launch_ref: &str) -> u128 {
+    let mut hash = FNV128_OFFSET;
+    for byte in launch_ref.as_bytes() {
+        hash ^= u128::from(*byte);
+        hash = hash.wrapping_mul(FNV128_PRIME);
+    }
+    hash
 }
 
 fn xml_escape(value: &str) -> String {
@@ -1541,8 +1591,7 @@ fn launch_prep_kind(launch_ref: &str) -> &'static str {
 
 fn prepare_cold_launch_prep_ref(launch_ref: &str) {
     if launch_ref.starts_with("magik-plan:") {
-        let path = Path::new(VIRTUAL_LAUNCH_CACHE_DIR)
-            .join(format!("{}.mgl", sanitize_launch_ref(launch_ref)));
+        let path = virtual_launch_path_at(launch_ref, Path::new(VIRTUAL_LAUNCH_CACHE_DIR));
         let _ = fs::remove_file(path);
     } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
         let _ = fs::remove_file(AMIGAVISION_AGS_BOOT);
@@ -2718,6 +2767,57 @@ mod tests {
         assert!(content.contains("type=\"s\" index=\"0\""));
         assert!(content.contains("path=\"/media/fat/games/Saturn/Nights.chd\""));
         assert!(content.contains("<name>NiGHTS &amp; Dreams</name>"));
+    }
+
+    #[test]
+    fn virtual_launch_path_is_bounded_for_long_path_derived_refs() {
+        let root = unique_temp_dir("virtual-launch-long-ref");
+        let launch_ref = concat!(
+            "magik-plan:payload:/media/fat/games/GBA/",
+            "Crash & Spyro Superpack - Spyro Orange - The Cortex Conspiracy + ",
+            "Crash Bandicoot Purple - Ripto's Rampage (USA)/",
+            "Crash & Spyro Superpack - Spyro Orange - The Cortex Conspiracy + ",
+            "Crash Bandicoot Purple - Ripto's Rampage (USA).gba"
+        );
+        let mut plan = virtual_plan(launch_ref);
+        plan.payload_path = "/media/fat/games/GBA/Crash Spyro.gba".to_string();
+
+        let (path, written) =
+            materialize_virtual_launch_plan_at(&plan, &root).expect("materialize long ref");
+
+        assert!(written);
+        let basename = path.file_name().unwrap().to_string_lossy();
+        assert!(basename.len() <= 255, "{basename}");
+        assert!(basename.starts_with("virtual-magik-plan-payload-media-fat-games-gba-crash-"));
+        assert!(basename.ends_with(".mgl"));
+        assert!(path.is_file());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read virtual mgl"),
+            virtual_mgl_content(&plan)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_launch_cache_basename_hash_distinguishes_matching_slugs() {
+        let prefix = format!("magik-plan:{}", "A".repeat(120));
+        let first = virtual_launch_cache_basename(&format!("{prefix}/one.gba"));
+        let second = virtual_launch_cache_basename(&format!("{prefix}/two.gba"));
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("virtual-magik-plan-"));
+        assert!(second.starts_with("virtual-magik-plan-"));
+        assert!(first.len() <= 255);
+        assert!(second.len() <= 255);
+    }
+
+    #[test]
+    fn virtual_launch_cache_basename_uses_ref_for_empty_slug() {
+        let basename = virtual_launch_cache_basename("::::");
+
+        assert!(basename.starts_with("virtual-ref-"));
+        assert!(basename.ends_with(".mgl"));
+        assert_eq!("virtual-ref-".len() + 32 + ".mgl".len(), basename.len());
     }
 
     #[test]
