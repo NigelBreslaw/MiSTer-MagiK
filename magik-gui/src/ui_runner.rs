@@ -53,18 +53,12 @@ use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
-#[cfg(mister_bench_scenes)]
-use std::fs::File;
-#[cfg(mister_bench_scenes)]
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
 
 #[cfg(mister_experiments)]
 mod camera_effects_loop;
 mod catalog_worker;
-#[cfg(mister_bench_scenes)]
-mod console_scroll_loop;
 mod controller_loop;
 #[cfg(mister_experiments)]
 mod effect_loop_support;
@@ -92,8 +86,6 @@ mod video_loop;
 #[cfg(mister_experiments)]
 use camera_effects_loop::run_camera_effects_loop;
 use catalog_worker::*;
-#[cfg(mister_bench_scenes)]
-use console_scroll_loop::*;
 use controller_loop::*;
 use launcher_bench::*;
 use launcher_bridge::*;
@@ -151,8 +143,6 @@ pub const UI_SCENES: &[&str] = &[
     "static_ui",
     #[cfg(mister_bench_scenes)]
     "local_motion",
-    #[cfg(mister_bench_scenes)]
-    "console_scroll",
     #[cfg(all(feature = "video", mister_bench_scenes))]
     "video_playback",
 ];
@@ -560,13 +550,6 @@ pub fn run_ui(f: &mut Fpga) {
                     &mut target,
                     &animation_clock,
                 );
-            });
-        }
-        #[cfg(mister_bench_scenes)]
-        "console_scroll" => {
-            with_scene_app!(console_scroll::ConsoleScroll, &ui, &window, app, {
-                app.show().expect("show");
-                run_console_scroll_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
             });
         }
         #[cfg(all(feature = "video", mister_bench_scenes))]

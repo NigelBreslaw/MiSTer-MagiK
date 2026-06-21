@@ -6,7 +6,6 @@
 #
 #   scripts/run-rust.sh                  # restart supervised launcher, forever
 #   scripts/run-rust.sh launcher 0       # restart supervised launcher, forever
-#   scripts/run-rust.sh console_scroll 15
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,7 +22,7 @@ case "$SCENE" in
     echo "The direct arcade scene was removed. Use scripts/profile-preview-scroll.sh for supervised real Arcade benchmarks." >&2
     exit 2
     ;;
-  demo|full_motion|static_ui|local_motion|console_scroll|controller_test|blend_velocity|video_playback|solid_fill|dirty_band) ;;
+  demo|full_motion|static_ui|local_motion|controller_test|blend_velocity|video_playback|solid_fill|dirty_band) ;;
   camera-effects|sprite-effects|text-effects|raster-effects|transition-effects)
     echo "'$SCENE' is an experimental effect scene, not a production UI scene." >&2
     echo "Use scripts/experiments/ and deploy with scripts/deploy-rust.sh --experiments." >&2
