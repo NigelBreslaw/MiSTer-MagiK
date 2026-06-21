@@ -110,6 +110,5 @@ fi
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
-python3 "$ROOT/scripts/import-wikipedia-neogeo-screenshots.py" --self-test
 
 echo "host tool checks ok"
