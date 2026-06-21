@@ -408,3 +408,61 @@ CATV2-FINAL-20260621	efa6cf4a	library_db_saved	58032	bytes=17768448 scan_us=3926
 CATV2-FINAL-20260621	efa6cf4a	library_ready	58365	games=7221 load_us=328624
 CATV2-FINAL-20260621	efa6cf4a	catalog_bridge_sync_update	58370	games=7221 elapsed_us=4885
 CATV2-FINAL-20260621	efa6cf4a	db_count	0	9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	first_frame	1455	catalog_ready=false
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	bootstrap_counter_climb	1481	target=50
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_first_candidate	2577	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_first_discovery	2713	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	full_scan_counter_climb	8198	target=50
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	15828	path=/media/fat/_Arcade dirs=486 files=2603 candidates=2599
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	1558	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	2703	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	16	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	82	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	3986	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	566	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	3570	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	2442	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	644	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	3445	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	708	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	122	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk_target	102	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_walk	38320	candidates=7757
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_profile_match	94	calls=7757
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_installed_collection	196	calls=7365
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_archive_toc	845	containers=154
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_collection_listings	0	collections=0
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_file_discovery	19053	files=7363
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	scan_stage_classify_total	38798	discoveries=9206 normal_files=7749 containers=154 entries=281
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	library_scan_complete	40915	scan_us=38798277 discover_us=38320465 classify_us=38798010 discoveries=9083 normal_files=7749 containers=154 entries=281
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_schema	28	tables=14
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_metadata_load	3023	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_begin_tx	0	-
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_profiles	0	rows=16
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_payloads	847	normal_files=7749 entries=281
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	402	from=0 to=1000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	375	from=1000 to=2000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	374	from=2000 to=3000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	377	from=3000 to=4000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	370	from=4000 to=5000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	384	from=5000 to=6000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	493	from=6000 to=7000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	547	from=7000 to=8000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	801	from=8000 to=9000 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_chunk	304	from=9000 to=9083 total=9083
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_games_total	4707	rows=9083 launcher_rows=6245
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_materialize_arcade_ui	797	-
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_launcher_arcade	24	-
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_launcher_console	420	rows=6185
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_meta	318	rows=11
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_catalog_stamp	0	rows=11
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_insert_software_hash_cache	0	rows=0
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_commit	10	-
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	import_stage_total	10207	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	library_db_saved	58065	bytes=17768448 scan_us=38798277 discover_us=38320465 classify_us=38798010 import_us=17055065 discoveries=9083 normal_files=7749 containers=154 entries=281
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	library_ready	58382	games=7221 load_us=323368
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	catalog_bridge_sync_update	58386	games=7221 elapsed_us=3775
+BOOTSTRAP-50-NOWALK-20260621	e79bc32f	db_count	0	unknown command 'library-sql' (use: early-black | ui | experiment-capabilities | library-refresh)
