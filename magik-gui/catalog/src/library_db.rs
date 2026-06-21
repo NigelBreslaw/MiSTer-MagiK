@@ -29,14 +29,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
-type FileFingerprint = BTreeMap<String, FileFingerprintEntry>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
-type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 type MachineMetadataRow = (String, String, Option<String>, Option<String>);
 type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
-const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 const ARCADE_PARENT_OVERRIDES: &[(&str, &str)] = &[
@@ -161,8 +157,6 @@ pub enum ArchiveScanStatus {
 struct LibraryScan {
     version: u32,
     scanned_at_unix: i64,
-    file_fingerprints: FileFingerprint,
-    directory_manifest: DirectoryManifest,
     normal_files: Vec<LibraryPayloadFile>,
     containers: Vec<LibraryContainer>,
     entries: Vec<LibraryContainerEntry>,
@@ -263,13 +257,6 @@ pub struct VirtualLaunchPlan {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct FileFingerprintEntry {
-    size: u64,
-    mtime_ns: i64,
-    content_hash: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct FileSignature {
     size: u64,
     mtime_secs: i64,
@@ -346,14 +333,6 @@ struct SoftwareIdentity {
     source: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectorySignature {
-    dir_size: u64,
-    dir_mtime_secs: i64,
-    child_count: u64,
-    hash: u64,
-}
-
 #[derive(Clone, Debug)]
 struct GameDiscovery {
     source_path: String,
@@ -376,6 +355,8 @@ struct GameDiscovery {
 struct LibraryIgnoredFile {
     path: String,
     profile_id: String,
+    size: u64,
+    mtime_secs: i64,
     reason: IgnoreReason,
     provenance: RuleProvenance,
 }
@@ -384,6 +365,8 @@ struct LibraryIgnoredFile {
 struct LibraryPayloadFile {
     path: String,
     profile_id: String,
+    size: u64,
+    mtime_secs: i64,
     rule: PayloadRule,
 }
 
@@ -642,6 +625,7 @@ pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunch
     let path = default_sqlite_path();
     let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    ensure_sqlite_schema_current(&conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT launch_plans.launch_ref,
@@ -708,6 +692,7 @@ pub fn load_virtual_launch_plans_for_system(
     let path = default_sqlite_path();
     let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    ensure_sqlite_schema_current(&conn)?;
     load_virtual_launch_plans_for_system_from_conn(&conn, system_id, limit)
 }
 
@@ -715,6 +700,7 @@ pub fn load_virtual_launch_plans() -> Result<Vec<VirtualLaunchPlan>, String> {
     let path = default_sqlite_path();
     let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    ensure_sqlite_schema_current(&conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT launch_plans.launch_ref,
@@ -783,6 +769,7 @@ pub fn load_amigavision_launch_refs(limit: usize) -> Result<Vec<String>, String>
     let path = default_sqlite_path();
     let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    ensure_sqlite_schema_current(&conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT launch_ref
@@ -828,6 +815,7 @@ fn load_arcade_catalog_from_sqlite_at(
     let open_t = Instant::now();
     let conn = open_sqlite_read_only(path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    ensure_sqlite_schema_current(&conn)?;
     let open_us = open_t.elapsed().as_micros() as u64;
     let query_t = Instant::now();
     let games = match load_materialized_ui_catalog(&conn) {
@@ -1517,8 +1505,8 @@ fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, u64) {
     while let Ok(event) = rx.recv() {
         match event {
             DiscoveryEvent::File(_) => candidates += 1,
-            DiscoveryEvent::Done { manifest, .. } => {
-                dirs = manifest.len();
+            DiscoveryEvent::Done { dirs: count, .. } => {
+                dirs = count;
                 break;
             }
         }
@@ -1534,8 +1522,6 @@ fn scan_library_with_progress(
     let rx = discover_files_pipelined(cfg.roots.clone());
     let profiles = launch_profiles::builtin_profiles();
     let mut discover_us = 0;
-    let mut file_fingerprints = FileFingerprint::new();
-    let mut directory_manifest = DirectoryManifest::new();
     if let Some(report) = progress.as_mut() {
         report(
             "Classifying library",
@@ -1554,18 +1540,12 @@ fn scan_library_with_progress(
         let f = match event {
             DiscoveryEvent::File(file) => file,
             DiscoveryEvent::Done {
-                manifest,
-                discover_us: us,
+                discover_us: us, ..
             } => {
                 discover_us = us;
-                directory_manifest = manifest;
                 break;
             }
         };
-        file_fingerprints.insert(
-            f.path.display().to_string(),
-            file_fingerprint_entry(&f.path, f.size, f.mtime_secs),
-        );
         if idx.is_multiple_of(250) {
             if let Some(report) = progress.as_mut() {
                 report(
@@ -1590,6 +1570,8 @@ fn scan_library_with_progress(
                     ignored_files.push(LibraryIgnoredFile {
                         path: f.path.display().to_string(),
                         profile_id: profile.id.to_string(),
+                        size: f.size,
+                        mtime_secs: f.mtime_secs,
                         reason: IgnoreReason::SaveMedia,
                         provenance: RuleProvenance::magik(
                             "AmigaVision-Saves.hdf is save/support media for the AmigaVision launcher environment",
@@ -1601,6 +1583,8 @@ fn scan_library_with_progress(
                     ignored_files.push(LibraryIgnoredFile {
                         path: f.path.display().to_string(),
                         profile_id: profile.id.to_string(),
+                        size: f.size,
+                        mtime_secs: f.mtime_secs,
                         reason: IgnoreReason::SupportArchive,
                         provenance: RuleProvenance::magik(
                             "AmigaVision.hdf is the launcher environment backing _Computer/Amiga.mgl, not a raw game payload",
@@ -1629,6 +1613,8 @@ fn scan_library_with_progress(
                 normal_files.push(LibraryPayloadFile {
                     path: f.path.display().to_string(),
                     profile_id: profile.id.to_string(),
+                    size: f.size,
+                    mtime_secs: f.mtime_secs,
                     rule: payload_rule,
                 });
                 discoveries.push(discovery_from_profile_file(
@@ -1651,11 +1637,15 @@ fn scan_library_with_progress(
                 normal_files.push(LibraryPayloadFile {
                     path: f.path.display().to_string(),
                     profile_id: profile.id.to_string(),
+                    size: f.size,
+                    mtime_secs: f.mtime_secs,
                     rule: payload_rule,
                 });
                 ignored_files.push(LibraryIgnoredFile {
                     path: f.path.display().to_string(),
                     profile_id: profile.id.to_string(),
+                    size: f.size,
+                    mtime_secs: f.mtime_secs,
                     reason: IgnoreReason::SupportArchive,
                     provenance: RuleProvenance::magik(
                     "Attached media is indexed as payload support until a launcher references it",
@@ -1672,19 +1662,13 @@ fn scan_library_with_progress(
                 ignored_files.push(LibraryIgnoredFile {
                     path: f.path.display().to_string(),
                     profile_id: profile.id.to_string(),
+                    size: f.size,
+                    mtime_secs: f.mtime_secs,
                     reason,
                     provenance,
                 });
             }
             Some((_, ProfilePathClass::NotMatched)) | None => {}
-        }
-    }
-    if let Ok(fingerprints) = preview_worker::preview_archive_fingerprints_from_env() {
-        for (path, size, mtime_secs) in fingerprints {
-            file_fingerprints.insert(
-                path.clone(),
-                file_fingerprint_entry(Path::new(&path), size, mtime_secs),
-            );
         }
     }
     if discover_us == 0 {
@@ -1693,8 +1677,6 @@ fn scan_library_with_progress(
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: unix_now_secs(),
-        file_fingerprints,
-        directory_manifest,
         normal_files,
         containers,
         entries,
@@ -1739,21 +1721,9 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
         .filter_map(|component| component.as_os_str().to_str())
 }
 
-fn is_preview_archive_fingerprint_path(path: &str) -> bool {
-    let name = Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    name.ends_with(".mmraw") || name.ends_with(".mmlz4b")
-}
-
 enum DiscoveryEvent {
     File(FoundFile),
-    Done {
-        manifest: DirectoryManifest,
-        discover_us: u64,
-    },
+    Done { dirs: usize, discover_us: u64 },
 }
 
 fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
@@ -1762,9 +1732,9 @@ fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent
         .name("library-walker".to_string())
         .spawn(move || {
             let t = Instant::now();
-            let manifest = discover_files_streaming(&roots, &tx);
+            let dirs = discover_files_streaming(&roots, &tx);
             let _ = tx.send(DiscoveryEvent::Done {
-                manifest,
+                dirs,
                 discover_us: t.elapsed().as_micros() as u64,
             });
         })
@@ -1772,101 +1742,17 @@ fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent
     rx
 }
 
-#[derive(Clone, Copy, Debug)]
-struct DirectorySignatureBuilder {
-    dir_size: u64,
-    dir_mtime_secs: i64,
-    child_count: u64,
-    hash: u64,
+fn discover_files_streaming(roots: &[String], tx: &mpsc::SyncSender<DiscoveryEvent>) -> usize {
+    walk_index_candidates(roots, Some(tx))
 }
 
-impl Default for DirectorySignatureBuilder {
-    fn default() -> Self {
-        Self {
-            dir_size: 0,
-            dir_mtime_secs: 0,
-            child_count: 0,
-            hash: MANIFEST_HASH_OFFSET,
-        }
-    }
-}
-
-impl DirectorySignatureBuilder {
-    fn set_dir_metadata(&mut self, meta: &std::fs::Metadata) {
-        self.dir_size = meta.len();
-        self.dir_mtime_secs = mtime_secs(meta);
-    }
-
-    fn add_dir_child(&mut self, name: &str) {
-        self.child_count += 1;
-        self.hash ^= manifest_child_hash(b"d", name.as_bytes(), 0, 0, 0);
-    }
-
-    fn add_file_child(&mut self, name: &str, size: u64, mtime_secs: i64, content_hash: u64) {
-        self.child_count += 1;
-        self.hash ^= manifest_child_hash(b"f", name.as_bytes(), size, mtime_secs, content_hash);
-    }
-
-    fn finish(self) -> DirectorySignature {
-        DirectorySignature {
-            dir_size: self.dir_size,
-            dir_mtime_secs: self.dir_mtime_secs,
-            child_count: self.child_count,
-            hash: self.hash,
-        }
-    }
-}
-
-fn manifest_child_hash(
-    kind: &[u8],
-    name: &[u8],
-    size: u64,
-    mtime_secs: i64,
-    content_hash: u64,
-) -> u64 {
-    let mut hash = MANIFEST_HASH_OFFSET;
-    for bytes in [
-        kind,
-        name,
-        &size.to_le_bytes(),
-        &mtime_secs.to_le_bytes(),
-        &content_hash.to_le_bytes(),
-    ] {
-        for b in bytes {
-            hash ^= *b as u64;
-            hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
-        }
-        hash ^= 0xff;
-        hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
-    }
-    hash
-}
-
-fn discover_files_streaming(
-    roots: &[String],
-    tx: &mpsc::SyncSender<DiscoveryEvent>,
-) -> DirectoryManifest {
-    build_directory_manifest(roots, Some(tx))
-}
-
-fn build_directory_manifest(
-    roots: &[String],
-    tx: Option<&mpsc::SyncSender<DiscoveryEvent>>,
-) -> DirectoryManifest {
-    let mut manifest_builders = BTreeMap::<String, DirectorySignatureBuilder>::new();
+fn walk_index_candidates(roots: &[String], tx: Option<&mpsc::SyncSender<DiscoveryEvent>>) -> usize {
     let profiles = launch_profiles::builtin_profiles();
+    let mut dirs = 0usize;
     for root in roots {
         let path = Path::new(root);
         if path.is_dir() {
-            let root_key = path.display().to_string();
-            if let Ok(meta) = path.metadata() {
-                manifest_builders
-                    .entry(root_key)
-                    .or_default()
-                    .set_dir_metadata(&meta);
-            } else {
-                manifest_builders.entry(root_key).or_default();
-            }
+            dirs += 1;
             for entry in walkdir::WalkDir::new(path)
                 .follow_links(false)
                 .into_iter()
@@ -1880,26 +1766,8 @@ fn build_directory_manifest(
                 if should_ignore_path(p) {
                     continue;
                 }
-                let parent = p.parent().unwrap_or(path).display().to_string();
-                let name = p
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
                 if entry.file_type().is_dir() {
-                    let dir_key = p.display().to_string();
-                    if let Ok(meta) = entry.metadata() {
-                        manifest_builders
-                            .entry(dir_key)
-                            .or_default()
-                            .set_dir_metadata(&meta);
-                    } else {
-                        manifest_builders.entry(dir_key).or_default();
-                    }
-                    manifest_builders
-                        .entry(parent)
-                        .or_default()
-                        .add_dir_child(&name);
+                    dirs += 1;
                     continue;
                 }
                 if !entry.file_type().is_file() {
@@ -1917,13 +1785,6 @@ fn build_directory_manifest(
                     continue;
                 };
                 let mtime_secs = mtime_secs(&meta);
-                let content_hash = fingerprint_content_hash(p, meta.len()).unwrap_or(0);
-                manifest_builders.entry(parent).or_default().add_file_child(
-                    &name,
-                    meta.len(),
-                    mtime_secs,
-                    content_hash,
-                );
                 let file = FoundFile {
                     path: p.to_path_buf(),
                     ext,
@@ -1932,16 +1793,13 @@ fn build_directory_manifest(
                 };
                 if let Some(tx) = tx {
                     if tx.send(DiscoveryEvent::File(file)).is_err() {
-                        break;
+                        return dirs;
                     }
                 }
             }
         }
     }
-    manifest_builders
-        .into_iter()
-        .map(|(dir, sig)| (dir, sig.finish()))
-        .collect()
+    dirs
 }
 
 fn scan_archive_toc(
@@ -2990,68 +2848,6 @@ fn file_signature(path: &Path) -> FileSignature {
         .unwrap_or_default()
 }
 
-fn file_fingerprint_entry(path: &Path, size: u64, mtime_ns: i64) -> FileFingerprintEntry {
-    FileFingerprintEntry {
-        size,
-        mtime_ns,
-        content_hash: fingerprint_content_hash(path, size).unwrap_or(0),
-    }
-}
-
-fn fingerprint_content_hash(path: &Path, size: u64) -> Option<u64> {
-    if is_preview_archive_fingerprint_path(&path.display().to_string()) {
-        return bounded_file_hash(path, size, 256 * 1024, 64 * 1024);
-    }
-    if should_hash_small_metadata_path(path, size) {
-        return bounded_file_hash(path, size, 256 * 1024, 0);
-    }
-    None
-}
-
-fn should_hash_small_metadata_path(path: &Path, size: u64) -> bool {
-    const MAX_HASHED_METADATA_BYTES: u64 = 256 * 1024;
-    if size > MAX_HASHED_METADATA_BYTES {
-        return false;
-    }
-    let ext = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    matches!(ext.as_str(), "mra" | "mgl") || is_amigavision_listing_path(path)
-}
-
-fn bounded_file_hash(path: &Path, size: u64, head_len: u64, tail_len: u64) -> Option<u64> {
-    let mut file = File::open(path).ok()?;
-    let mut hash = MANIFEST_HASH_OFFSET;
-    let head = head_len.min(size);
-    hash_file_chunk(&mut file, 0, head, &mut hash).ok()?;
-    if tail_len > 0 && size > head {
-        let tail = tail_len.min(size - head);
-        hash_file_chunk(&mut file, size - tail, tail, &mut hash).ok()?;
-    }
-    Some(hash)
-}
-
-fn hash_file_chunk(file: &mut File, offset: u64, len: u64, hash: &mut u64) -> std::io::Result<()> {
-    file.seek(SeekFrom::Start(offset))?;
-    let mut remaining = len;
-    let mut buf = [0u8; 8192];
-    while remaining > 0 {
-        let to_read = remaining.min(buf.len() as u64) as usize;
-        let n = file.read(&mut buf[..to_read])?;
-        if n == 0 {
-            break;
-        }
-        for byte in &buf[..n] {
-            *hash ^= u64::from(*byte);
-            *hash = hash.wrapping_mul(MANIFEST_HASH_PRIME);
-        }
-        remaining -= n as u64;
-    }
-    Ok(())
-}
-
 fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadata> {
     let Ok(conn) = open_sqlite_read_only(path) else {
         return HashMap::new();
@@ -3978,12 +3774,12 @@ fn console_preview_assets(
                 {
                     continue;
                 }
-                assets.entry(format!("{list_name}:{software_name}")).or_insert_with(|| {
-                    ConsolePreviewAsset {
+                assets
+                    .entry(format!("{list_name}:{software_name}"))
+                    .or_insert_with(|| ConsolePreviewAsset {
                         archive_path: index.path.clone(),
                         asset_key: entry.to_string(),
-                    }
-                });
+                    });
             }
         }
     }
@@ -4303,24 +4099,6 @@ fn write_sqlite_scan_with_sources(
             key TEXT PRIMARY KEY,
             value INTEGER NOT NULL
         ) WITHOUT ROWID;
-        CREATE TABLE file_fingerprints (
-            file_path TEXT PRIMARY KEY,
-            size INTEGER NOT NULL,
-            mtime_secs INTEGER NOT NULL,
-            content_hash INTEGER NOT NULL
-        ) WITHOUT ROWID;
-        CREATE TABLE container_fingerprints (
-            file_path TEXT PRIMARY KEY,
-            size INTEGER NOT NULL,
-            mtime_secs INTEGER NOT NULL
-        ) WITHOUT ROWID;
-        CREATE TABLE directory_manifest (
-            dir_path TEXT PRIMARY KEY,
-            dir_size INTEGER NOT NULL,
-            dir_mtime_secs INTEGER NOT NULL,
-            child_count INTEGER NOT NULL,
-            hash INTEGER NOT NULL
-        ) WITHOUT ROWID;
         CREATE TABLE software_hash_cache (
             list_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
@@ -4336,7 +4114,7 @@ fn write_sqlite_scan_with_sources(
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=23");
+    report_library_import_timing("schema", schema_t, "tables=20");
 
     let metadata_t = Instant::now();
     let mame_signature = file_signature(mame_sqlite_path);
@@ -4391,45 +4169,57 @@ fn write_sqlite_scan_with_sources(
     }
     {
         let stage_t = Instant::now();
-        let normal_paths = scan
-            .normal_files
-            .iter()
-            .map(|payload| payload.path.clone())
-            .collect::<HashSet<_>>();
-        let container_paths = scan
-            .containers
-            .iter()
-            .map(|container| container.file_path.clone())
-            .collect::<HashSet<_>>();
         let mut stmt = tx
             .prepare(
                 "INSERT INTO files(path,size,mtime_secs,extension,role,profile_id)
                  VALUES (?1,?2,?3,?4,?5,?6)",
             )
             .map_err(|e| format!("prepare file fact insert: {e}"))?;
-        for (path, fingerprint) in &scan.file_fingerprints {
-            let role = if container_paths.contains(path) {
-                "container"
-            } else if normal_paths.contains(path) {
-                "candidate"
-            } else {
-                "fact"
-            };
+        let mut seen = HashSet::<String>::new();
+        for container in &scan.containers {
+            if !seen.insert(container.file_path.clone()) {
+                continue;
+            }
             stmt.execute(params![
-                path.as_str(),
-                fingerprint.size as i64,
-                fingerprint.mtime_ns,
-                path_ext(path).unwrap_or_default(),
-                role,
+                container.file_path.as_str(),
+                container.size as i64,
+                container.mtime_secs,
+                path_ext(&container.file_path).unwrap_or_default(),
+                "container",
                 Option::<&str>::None
             ])
             .map_err(|e| format!("insert file fact: {e}"))?;
         }
-        report_library_import_timing(
-            "insert_files",
-            stage_t,
-            format!("rows={}", scan.file_fingerprints.len()),
-        );
+        for payload in &scan.normal_files {
+            if !seen.insert(payload.path.clone()) {
+                continue;
+            }
+            stmt.execute(params![
+                payload.path.as_str(),
+                payload.size as i64,
+                payload.mtime_secs,
+                path_ext(&payload.path).unwrap_or_default(),
+                "candidate",
+                payload.profile_id.as_str()
+            ])
+            .map_err(|e| format!("insert file fact: {e}"))?;
+        }
+        for ignored in &scan.ignored_files {
+            if !seen.insert(ignored.path.clone()) {
+                continue;
+            }
+            stmt.execute(params![
+                ignored.path.as_str(),
+                ignored.size as i64,
+                ignored.mtime_secs,
+                path_ext(&ignored.path).unwrap_or_default(),
+                "ignored",
+                ignored.profile_id.as_str()
+            ])
+            .map_err(|e| format!("insert file fact: {e}"))?;
+        }
+        let rows = seen.len();
+        report_library_import_timing("insert_files", stage_t, format!("rows={rows}"));
     }
     {
         let stage_t = Instant::now();
@@ -4441,11 +4231,6 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("prepare payload insert: {e}"))?;
         for payload in &scan.normal_files {
             let path = &payload.path;
-            let fingerprint = scan
-                .file_fingerprints
-                .get(path)
-                .copied()
-                .unwrap_or_default();
             stmt.execute(params![
                 format!("file:{path}"),
                 path.as_str(),
@@ -4457,8 +4242,8 @@ fn write_sqlite_scan_with_sources(
                 payload.rule.mount.index as i64,
                 payload.rule.mount.delay_secs as i64,
                 payload_disposition_str(payload.rule.disposition),
-                fingerprint.size as i64,
-                fingerprint.mtime_ns,
+                payload.size as i64,
+                payload.mtime_secs,
                 source_kind_name(payload.rule.provenance.kind),
                 payload.rule.provenance.detail
             ])
@@ -4905,71 +4690,6 @@ fn write_sqlite_scan_with_sources(
         let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
-                "INSERT INTO file_fingerprints(file_path,size,mtime_secs,content_hash)
-                 VALUES (?1,?2,?3,?4)",
-            )
-            .map_err(|e| format!("prepare file fingerprint insert: {e}"))?;
-        for (path, fingerprint) in &scan.file_fingerprints {
-            stmt.execute(params![
-                path.as_str(),
-                fingerprint.size as i64,
-                fingerprint.mtime_ns,
-                fingerprint.content_hash as i64
-            ])
-            .map_err(|e| format!("insert file fingerprint: {e}"))?;
-        }
-        report_library_import_timing(
-            "insert_file_fingerprints",
-            stage_t,
-            format!("rows={}", scan.file_fingerprints.len()),
-        );
-    }
-    {
-        let stage_t = Instant::now();
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO container_fingerprints(file_path,size,mtime_secs) VALUES (?1,?2,?3)",
-            )
-            .map_err(|e| format!("prepare container fingerprint insert: {e}"))?;
-        for container in &scan.containers {
-            stmt.execute(params![
-                container.file_path.as_str(),
-                container.size as i64,
-                container.mtime_secs
-            ])
-            .map_err(|e| format!("insert fingerprint: {e}"))?;
-        }
-        report_library_import_timing(
-            "insert_container_fingerprints",
-            stage_t,
-            format!("rows={}", scan.containers.len()),
-        );
-    }
-    {
-        let stage_t = Instant::now();
-        let mut stmt = tx
-            .prepare("INSERT INTO directory_manifest(dir_path,dir_size,dir_mtime_secs,child_count,hash) VALUES (?1,?2,?3,?4,?5)")
-            .map_err(|e| format!("prepare directory manifest insert: {e}"))?;
-        for (dir, sig) in &scan.directory_manifest {
-            stmt.execute(params![
-                dir.as_str(),
-                sig.dir_size as i64,
-                sig.dir_mtime_secs,
-                sig.child_count as i64,
-                sig.hash as i64
-            ])
-            .map_err(|e| format!("insert directory manifest: {e}"))?;
-        }
-        report_library_import_timing(
-            "insert_directory_manifest",
-            stage_t,
-            format!("rows={}", scan.directory_manifest.len()),
-        );
-    }
-    {
-        let stage_t = Instant::now();
-        let mut stmt = tx
-            .prepare(
                 "INSERT INTO software_hash_cache(list_name,file_path,size,mtime_secs,software_name)
                  VALUES (?1,?2,?3,?4,?5)",
             )
@@ -5028,9 +4748,7 @@ fn report_sqlite_import_finalizing(progress: &mut ProgressCallback<'_>) {
 
 fn sqlite_cached_summary(path: &Path, scan_us: u64) -> Result<LibraryRefreshSummary, String> {
     let conn = open_sqlite_read_only(path).map_err(|e| format!("open cached summary: {e}"))?;
-    if sqlite_meta_usize(&conn, "version") != Some(SCHEMA_VERSION as usize) {
-        return Err("cached summary schema mismatch".to_string());
-    }
+    ensure_sqlite_schema_current(&conn)?;
     let bytes = std::fs::metadata(path)
         .map(|m| m.len())
         .map_err(|e| format!("stat cached summary db: {e}"))?;
@@ -5046,6 +4764,18 @@ fn sqlite_cached_summary(path: &Path, scan_us: u64) -> Result<LibraryRefreshSumm
         entries: sqlite_meta_usize(&conn, "entries").unwrap_or(0),
         discoveries: sqlite_meta_usize(&conn, "discoveries").unwrap_or(0),
     })
+}
+
+fn ensure_sqlite_schema_current(conn: &Connection) -> Result<(), String> {
+    match sqlite_meta_usize(conn, "version") {
+        Some(version) if version == SCHEMA_VERSION as usize => Ok(()),
+        Some(version) => Err(format!(
+            "catalog schema mismatch: expected {SCHEMA_VERSION}, found {version}"
+        )),
+        None => Err(format!(
+            "catalog schema mismatch: expected {SCHEMA_VERSION}, found missing"
+        )),
+    }
 }
 
 fn sqlite_meta_usize(conn: &Connection, key: &str) -> Option<usize> {
@@ -6120,16 +5850,15 @@ mod tests {
 
         assert_eq!(scan.normal_files.len(), 1);
         assert_eq!(scan.discoveries.len(), 1);
+        assert_eq!(
+            scan.normal_files[0].path,
+            nes_dir.join("Mario.nes").display().to_string()
+        );
         assert!(scan
-            .file_fingerprints
-            .contains_key(&nes_dir.join("Mario.nes").display().to_string()));
-        assert!(!scan
-            .file_fingerprints
-            .contains_key(&nes_dir.join("gamelist.xml").display().to_string()));
-        assert!(!scan.directory_manifest.keys().any(|path| Path::new(path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "screenshot")));
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("gamelist.xml")
+                && !discovery.launch_ref.contains("Not A Game.nes")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6153,9 +5882,6 @@ mod tests {
 
         assert!(scan.normal_files.is_empty());
         assert!(scan.discoveries.is_empty());
-        assert!(!scan
-            .file_fingerprints
-            .contains_key(&outside.join("Mario.nes").display().to_string()));
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(outside);
     }
@@ -6221,15 +5947,14 @@ mod tests {
         assert_eq!(scan.normal_files.len(), 1);
         assert_eq!(scan.discoveries.len(), 1);
         assert_eq!(scan.discoveries[0].title, "Diamond Run");
+        assert_eq!(
+            scan.normal_files[0].path,
+            arcade_dir.join("Diamond Run.mra").display().to_string()
+        );
         assert!(scan
-            .file_fingerprints
-            .contains_key(&arcade_dir.join("Diamond Run.mra").display().to_string()));
-        assert!(!scan
-            .file_fingerprints
-            .contains_key(&organized_dir.join("Diamond Run.mra").display().to_string()));
-        assert!(!scan.directory_manifest.keys().any(|path| Path::new(path)
-            .components()
-            .any(|component| component.as_os_str() == "_Organized")));
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("_Organized")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7447,7 +7172,10 @@ mod tests {
         let mut world = mra_discovery(2, "1942 (World)");
         world.setname = Some("1942w".to_string());
         let pack = preview_worker::PreviewArchiveIndex {
-            path: root.join("320x320-screenshots.mmlz4b").display().to_string(),
+            path: root
+                .join("320x320-screenshots.mmlz4b")
+                .display()
+                .to_string(),
             codec: "lz4-block",
             entries: vec!["1942w".to_string()],
         };
@@ -7706,9 +7434,6 @@ mod tests {
 
         assert!(scan.normal_files.is_empty());
         assert_eq!(scan.ignored_files.len(), 2);
-        assert!(scan
-            .file_fingerprints
-            .contains_key(&listings_dir.join("games.txt").display().to_string()));
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
         }));
@@ -7829,7 +7554,10 @@ mod tests {
         let changed = sqlite_catalog_stamp_check(&cfg).expect("check changed stamp");
 
         assert!(!changed.unchanged);
-        assert_ne!(changed.stored_fingerprint, Some(changed.current_fingerprint));
+        assert_ne!(
+            changed.stored_fingerprint,
+            Some(changed.current_fingerprint)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -8104,6 +7832,40 @@ mod tests {
     }
 
     #[test]
+    fn old_schema_database_is_not_a_usable_cache() {
+        let root = unique_temp_dir("sqlite-old-schema");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Old Schema")]),
+        )
+        .expect("write catalog database");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute(
+            "UPDATE meta SET value=?1 WHERE key='version'",
+            [i64::from(SCHEMA_VERSION - 1)],
+        )
+        .expect("downgrade schema");
+        drop(conn);
+
+        let load_err = match load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db) {
+            Ok(_) => panic!("old schema should not load as cache"),
+            Err(err) => err,
+        };
+        assert!(
+            load_err.contains("catalog schema mismatch"),
+            "unexpected load error: {load_err}"
+        );
+        let summary_err =
+            sqlite_cached_summary(&db, 0).expect_err("old schema should not summarize as cache");
+        assert!(
+            summary_err.contains("catalog schema mismatch"),
+            "unexpected summary error: {summary_err}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sqlite_hot_journal_child_abort() {
         let Some(path) = std::env::var_os("MISTER_MAGIK_HOT_JOURNAL_DB").map(PathBuf::from) else {
             return;
@@ -8133,7 +7895,10 @@ mod tests {
         us.source_path = us.launch_ref.clone();
         us.setname = Some("mpatrol".to_string());
         let pack = preview_worker::PreviewArchiveIndex {
-            path: root.join("320x320-screenshots.mmlz4b").display().to_string(),
+            path: root
+                .join("320x320-screenshots.mmlz4b")
+                .display()
+                .to_string(),
             codec: "lz4-block",
             entries: vec!["mpatrol".to_string()],
         };
@@ -8144,7 +7909,7 @@ mod tests {
             &mame_db,
             &pack,
         )
-            .expect("write sqlite");
+        .expect("write sqlite");
         let conn = Connection::open(&db).expect("open sqlite");
         let materialized_rows: i64 = conn
             .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
@@ -8545,13 +8310,13 @@ mod tests {
         LibraryScan {
             version: SCHEMA_VERSION,
             scanned_at_unix: 1,
-            file_fingerprints: FileFingerprint::default(),
-            directory_manifest: DirectoryManifest::new(),
             normal_files: paths
                 .iter()
                 .map(|path| LibraryPayloadFile {
                     path: path.to_string(),
                     profile_id: "mgl".to_string(),
+                    size: 0,
+                    mtime_secs: 0,
                     rule: PayloadRule {
                         extensions: &["mgl"],
                         mount: launch_profiles::MountSpec::launcher(),
@@ -8573,8 +8338,6 @@ mod tests {
         LibraryScan {
             version: SCHEMA_VERSION,
             scanned_at_unix: 1,
-            file_fingerprints: FileFingerprint::default(),
-            directory_manifest: DirectoryManifest::new(),
             normal_files: Vec::new(),
             containers: Vec::new(),
             entries: Vec::new(),
@@ -8615,5 +8378,4 @@ mod tests {
         let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
         assert_eq!(rc, 0, "utimensat failed for {}", path.display());
     }
-
 }
