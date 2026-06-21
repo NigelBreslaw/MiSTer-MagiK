@@ -87,6 +87,9 @@ display without valid scan-out.
 The runtime catalog is SQLite-backed. The UI should load from the database and
 avoid scanning media during hot launcher paths.
 
+See `docs/catalog.md` for the current catalog lifecycle, worker request modes,
+root stamp semantics, SQLite publish model, and benchmark gates.
+
 Current rules:
 
 - Build/update the library cache outside the UI hot path with
