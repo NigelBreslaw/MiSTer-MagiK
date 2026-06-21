@@ -1755,3 +1755,565 @@ pub(crate) fn payload_disposition_str(disposition: PayloadDisposition) -> &'stat
         PayloadDisposition::AttachedMedia => "attached-media",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION};
+    use crate::library_db::{
+        save_scan_artifact_to_sqlite, scan_library_artifact, BenchConfig, ProgressCallback,
+    };
+    use crate::preview_worker;
+    use crate::test_support::*;
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+
+    #[test]
+    fn sqlite_save_keeps_previous_database_when_replacement_fails() {
+        let root = unique_temp_dir("sqlite-atomic-replace");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(&db, &sqlite_scan_with_normal_files(&["/old/game.mra"]))
+            .expect("write old database");
+        let old_summary = sqlite_cached_summary(&db, 0).expect("old database readable");
+        assert_eq!(old_summary.normal_files, 1);
+
+        let err = save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_normal_files(&["/new/game.mra", "/new/game.mra"]),
+        )
+        .expect_err("duplicate normal_files row should fail temp import");
+
+        assert!(
+            err.contains("insert payload file"),
+            "unexpected error: {err}"
+        );
+        let still_old = sqlite_cached_summary(&db, 0).expect("old database survived failed import");
+        assert_eq!(still_old.normal_files, 1);
+        assert!(
+            !sqlite_temp_path(&db).exists(),
+            "failed temp database should be cleaned up"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_stamp_check_detects_match_and_root_change() {
+        let root = unique_temp_dir("sqlite-catalog-stamp-check");
+        let db = root.join("library.sqlite3");
+        let games = root.join("games");
+        let system = games.join("NES");
+        std::fs::create_dir_all(&system).expect("create system dir");
+        set_file_mtime_for_test(&games, 10, 0);
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        let unchanged = sqlite_catalog_stamp_check(&cfg).expect("check unchanged stamp");
+        assert!(unchanged.unchanged);
+        let summary = sqlite_cached_summary(&db, unchanged.check_us).expect("cached summary");
+        assert!(summary.skipped);
+
+        set_file_mtime_for_test(&games, 20, 0);
+        let changed = sqlite_catalog_stamp_check(&cfg).expect("check changed stamp");
+
+        assert!(!changed.unchanged);
+        assert_ne!(
+            changed.stored_fingerprint,
+            Some(changed.current_fingerprint)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_build_temp_defaults_to_tmpfs_for_media_fat_database() {
+        let path = Path::new("/media/fat/mister-magik/library.sqlite3");
+        let plan = sqlite_build_temp_plan_for(path, None);
+
+        assert_eq!(plan.source, SqliteBuildTempSource::DefaultTmpfs);
+        assert!(plan
+            .build_tmp_path
+            .starts_with(Path::new(DEFAULT_SQLITE_BUILD_DIR)));
+        let expected_name = format!(".library.sqlite3.build.{}", std::process::id());
+        assert_eq!(
+            plan.build_tmp_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(expected_name.as_str())
+        );
+        assert_eq!(
+            plan.final_tmp_path,
+            PathBuf::from(format!(
+                "/media/fat/mister-magik/.library.sqlite3.tmp.{}",
+                std::process::id()
+            ))
+        );
+    }
+
+    #[test]
+    fn sqlite_build_temp_env_override_wins_for_media_fat_database() {
+        let override_dir = Path::new("/custom/sqlite-build");
+        let path = Path::new("/media/fat/mister-magik/library.sqlite3");
+        let plan = sqlite_build_temp_plan_for(path, Some(override_dir));
+
+        assert_eq!(plan.source, SqliteBuildTempSource::EnvOverride);
+        assert!(plan.build_tmp_path.starts_with(override_dir));
+        assert_ne!(plan.build_tmp_path, plan.final_tmp_path);
+    }
+
+    #[test]
+    fn sqlite_build_temp_stays_beside_non_media_fat_database() {
+        let root = unique_temp_dir("sqlite-build-host-path");
+        let db = root.join("library.sqlite3");
+        let plan = sqlite_build_temp_plan_for(&db, None);
+
+        assert_eq!(plan.source, SqliteBuildTempSource::BesideFinal);
+        assert_eq!(plan.build_tmp_path, sqlite_temp_path(&db));
+        assert_eq!(plan.build_tmp_path, plan.final_tmp_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_retries_beside_final_after_tmpfs_filesystem_error() {
+        let root = unique_temp_dir("sqlite-build-fallback");
+        let db = root.join("library.sqlite3");
+        let build_tmp = root
+            .join("tmpfs-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp.clone(),
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::DefaultTmpfs,
+        };
+        let mut attempts = Vec::<PathBuf>::new();
+        let mut writer = |path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            attempts.push(path.to_path_buf());
+            if path == build_tmp {
+                return Err("database or disk is full".to_string());
+            }
+            std::fs::write(path, b"fallback-db").map_err(|e| e.to_string())
+        };
+
+        let bytes = save_sqlite_scan_with_progress_using_writer(
+            &db,
+            &sqlite_scan_with_normal_files(&[]),
+            None,
+            initial_plan,
+            &mut writer,
+        )
+        .expect("fallback save");
+
+        assert_eq!(bytes, b"fallback-db".len() as u64);
+        assert_eq!(attempts, vec![build_tmp, sqlite_temp_path(&db)]);
+        assert_eq!(
+            std::fs::read(&db).expect("read fallback db"),
+            b"fallback-db"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_does_not_retry_logical_import_error() {
+        let root = unique_temp_dir("sqlite-build-no-logical-retry");
+        let db = root.join("library.sqlite3");
+        let build_tmp = root
+            .join("tmpfs-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp.clone(),
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::DefaultTmpfs,
+        };
+        let mut attempts = 0usize;
+        let mut writer = |_path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            attempts += 1;
+            Err("insert payload file: UNIQUE constraint failed".to_string())
+        };
+
+        let err = save_sqlite_scan_with_progress_using_writer(
+            &db,
+            &sqlite_scan_with_normal_files(&[]),
+            None,
+            initial_plan,
+            &mut writer,
+        )
+        .expect_err("logical import error should not retry");
+
+        assert!(
+            err.contains("insert payload file"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(attempts, 1);
+        assert!(!db.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_does_not_retry_explicit_build_dir_failure() {
+        let root = unique_temp_dir("sqlite-build-env-no-retry");
+        let db = root.join("library.sqlite3");
+        let build_tmp = root
+            .join("explicit-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp,
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::EnvOverride,
+        };
+        let mut attempts = 0usize;
+        let mut writer = |_path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            attempts += 1;
+            Err("database or disk is full".to_string())
+        };
+
+        let err = save_sqlite_scan_with_progress_using_writer(
+            &db,
+            &sqlite_scan_with_normal_files(&[]),
+            None,
+            initial_plan,
+            &mut writer,
+        )
+        .expect_err("explicit build dir failure should not retry");
+
+        assert!(
+            err.contains("database or disk is full"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(attempts, 1);
+        assert!(!db.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_arcade_load_returns_launchables_beyond_old_cap() {
+        const ROWS: usize = 20_005;
+        let root = unique_temp_dir("sqlite-arcade-no-cap");
+        let db = root.join("library.sqlite3");
+        let discoveries = (0..ROWS)
+            .map(|idx| mra_discovery(idx, &format!("Game {idx:05}")))
+            .collect::<Vec<_>>();
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(discoveries))
+            .expect("write large arcade database");
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load arcade catalog");
+
+        assert_eq!(loaded.rows, ROWS);
+        assert_eq!(loaded.catalog.games.len(), ROWS);
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .any(|game| game.title.as_ref() == "Game 20004"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_arcade_load_ignores_hot_rollback_journal() {
+        let root = unique_temp_dir("sqlite-hot-journal");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Hot Journal")]),
+        )
+        .expect("write catalog database");
+
+        let child = std::process::Command::new(std::env::current_exe().expect("current test exe"))
+            .arg("--exact")
+            .arg("sqlite_catalog::tests::sqlite_hot_journal_child_abort")
+            .env("MISTER_MAGIK_HOT_JOURNAL_DB", &db)
+            .output()
+            .expect("run hot journal child");
+        assert!(
+            !child.status.success(),
+            "hot journal child should abort, stdout={}, stderr={}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let journal = PathBuf::from(format!("{}-journal", db.display()));
+        assert!(
+            journal.exists(),
+            "child abort should leave rollback journal at {}",
+            journal.display()
+        );
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load cached catalog despite hot rollback journal");
+        assert_eq!(loaded.catalog.games.len(), 1);
+        assert_eq!(loaded.catalog.games[0].title.as_ref(), "Hot Journal");
+        assert!(
+            sqlite_cached_summary(&db, 0).is_ok(),
+            "cached summary reads should also ignore the stale rollback journal"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn old_schema_database_is_not_a_usable_cache() {
+        let root = unique_temp_dir("sqlite-old-schema");
+        let db = root.join("library.sqlite3");
+        save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Old Schema")]),
+        )
+        .expect("write catalog database");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute(
+            "UPDATE meta SET value=?1 WHERE key='version'",
+            [i64::from(SCHEMA_VERSION - 1)],
+        )
+        .expect("downgrade schema");
+        drop(conn);
+
+        let load_err = match load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db) {
+            Ok(_) => panic!("old schema should not load as cache"),
+            Err(err) => err,
+        };
+        assert!(
+            load_err.contains("catalog schema mismatch"),
+            "unexpected load error: {load_err}"
+        );
+        let summary_err =
+            sqlite_cached_summary(&db, 0).expect_err("old schema should not summarize as cache");
+        assert!(
+            summary_err.contains("catalog schema mismatch"),
+            "unexpected summary error: {summary_err}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_hot_journal_child_abort() {
+        let Some(path) = std::env::var_os("MISTER_MAGIK_HOT_JOURNAL_DB").map(PathBuf::from) else {
+            return;
+        };
+        let conn = Connection::open(&path).expect("open child sqlite");
+        conn.execute_batch(
+            "PRAGMA journal_mode=DELETE;
+             BEGIN IMMEDIATE;
+             UPDATE meta SET value = value + 1 WHERE key = 'normal_files';",
+        )
+        .expect("create hot rollback journal");
+        std::process::abort();
+    }
+
+    #[test]
+    fn sqlite_save_materializes_launcher_catalog_variants() {
+        let root = unique_temp_dir("sqlite-launcher-catalog");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(&mame_db, &[]);
+        let mut world = mra_discovery(1, "Moon Patrol (World)");
+        world.launch_ref = "/media/fat/_Arcade/Moon Patrol (World).mra".to_string();
+        world.source_path = world.launch_ref.clone();
+        world.setname = Some("mpatrol".to_string());
+        let mut us = mra_discovery(2, "Moon Patrol (US)");
+        us.launch_ref = "/media/fat/_Arcade/Moon Patrol (US).mra".to_string();
+        us.source_path = us.launch_ref.clone();
+        us.setname = Some("mpatrol".to_string());
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root
+                .join("320x320-screenshots.mmlz4b")
+                .display()
+                .to_string(),
+            codec: "lz4-block",
+            entries: vec!["mpatrol".to_string()],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![world, us]),
+            &mame_db,
+            &pack,
+        )
+        .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let materialized_rows: i64 = conn
+            .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
+                row.get(0)
+            })
+            .expect("count launcher catalog");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(materialized_rows, 1);
+        assert_eq!(loaded.rows, 1);
+        assert_eq!(loaded.catalog.games[0].title.as_ref(), "Moon Patrol (US)");
+        assert!(loaded.catalog.games[0].has_preview);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_launch_plan_query_returns_system_scoped_rows() {
+        let root = unique_temp_dir("sqlite-virtual-launch-plans");
+        let db = root.join("library.sqlite3");
+        let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
+        let mut snes = payload("/media/fat/games/SNES/F-Zero.sfc");
+        snes.platform_id = "snes".to_string();
+        snes.core_id = "SNES".to_string();
+        snes.hardware_id = "snes".to_string();
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn, snes]))
+            .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let plans = load_virtual_launch_plans_for_system_from_conn(&conn, "saturn", 8)
+            .expect("load virtual launch plans");
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].system_id, "saturn");
+        assert_eq!(plans[0].core_path, "_Console/Saturn");
+        assert_eq!(plans[0].payload_path, "/media/fat/games/Saturn/Nights.chd");
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn ui_arcade_preferred_collapses_family_and_keeps_variants() {
+        let root = unique_temp_dir("ui-arcade-preferred-parent");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                ("1942", None, "1942", Some("1984"), Some("Capcom")),
+                (
+                    "1942b",
+                    Some("1942"),
+                    "1942 (First Version)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let mut parent = mra_discovery(1, "1942");
+        parent.setname = Some("1942".to_string());
+        let mut clone = mra_discovery(2, "1942 (First Version)");
+        clone.setname = Some("1942b".to_string());
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![clone, parent]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let preferred = conn
+            .query_row(
+                "SELECT identity_id,family_id,preferred_reason,title,has_preview
+                 FROM ui_arcade_preferred",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .expect("query preferred row");
+        let variant_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_variants", [], |row| {
+                row.get(0)
+            })
+            .expect("query variant count");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+
+        assert_eq!(preferred.0.as_deref(), Some("1942"));
+        assert_eq!(preferred.1, "1942");
+        assert_eq!(preferred.2, "installed-parent");
+        assert_eq!(preferred.3, "1942");
+        assert_eq!(preferred.4, 0);
+        assert_eq!(variant_count, 2);
+        assert_eq!(loaded.catalog.games.len(), 1);
+        assert_eq!(loaded.catalog.games[0].title.as_ref(), "1942");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ui_arcade_preferred_uses_deterministic_child_when_parent_missing() {
+        let root = unique_temp_dir("ui-arcade-preferred-child");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                (
+                    "1942b",
+                    Some("1942"),
+                    "1942 (First Version)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+                (
+                    "1942w",
+                    Some("1942"),
+                    "1942 (World)",
+                    Some("1984"),
+                    Some("Capcom"),
+                ),
+            ],
+        );
+        let mut first = mra_discovery(1, "1942 (First Version)");
+        first.setname = Some("1942b".to_string());
+        let mut world = mra_discovery(2, "1942 (World)");
+        world.setname = Some("1942w".to_string());
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root
+                .join("320x320-screenshots.mmlz4b")
+                .display()
+                .to_string(),
+            codec: "lz4-block",
+            entries: vec!["1942w".to_string()],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![first, world]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save sqlite");
+
+        let conn = Connection::open(&db).expect("open library sqlite");
+        let preferred = conn
+            .query_row(
+                "SELECT identity_id,family_id,preferred_reason,has_preview
+                 FROM ui_arcade_preferred",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .expect("query preferred row");
+        let variant_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_variants", [], |row| {
+                row.get(0)
+            })
+            .expect("query variant count");
+
+        assert_eq!(preferred.0.as_deref(), Some("1942b"));
+        assert_eq!(preferred.1, "1942");
+        assert_eq!(preferred.2, "deterministic-child");
+        assert_eq!(preferred.3, 1);
+        assert_eq!(variant_count, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
