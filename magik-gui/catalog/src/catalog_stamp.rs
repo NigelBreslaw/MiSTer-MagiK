@@ -19,6 +19,10 @@ pub struct CatalogStamp {
 }
 
 impl CatalogStamp {
+    pub fn from_lines(lines: Vec<String>) -> Self {
+        Self { lines }
+    }
+
     pub fn lines(&self) -> &[String] {
         &self.lines
     }

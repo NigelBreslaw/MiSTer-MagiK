@@ -4,16 +4,16 @@
 //! decompress full game libraries just to make the launcher searchable.
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
-use crate::launch_profiles::{
-    self, CollectionListing, CollectionRule, IgnoreReason, LaunchProfile, MountKind,
-    PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
-};
 use crate::catalog_config;
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
-use crate::catalog_config::{
-    DEFAULT_SQLITE_BUILD_DIR, DEFAULT_SQLITE_PATH, SCHEMA_VERSION,
+use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
+use crate::catalog_stamp;
+use crate::catalog_store;
+use crate::launch_profiles::{
+    self, CollectionListing, CollectionRule, IgnoreReason, LaunchProfile, MountKind,
+    PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
 };
 use crate::preview_worker;
 use quick_xml::events::{BytesStart, Event};
@@ -196,6 +196,7 @@ pub struct LibraryScanStats {
 pub struct LibraryScanArtifact {
     scan: LibraryScan,
     stats: LibraryScanStats,
+    stamp: catalog_stamp::CatalogStamp,
 }
 
 impl LibraryScanArtifact {
@@ -1527,6 +1528,7 @@ fn scan_library_artifact(
     cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,
 ) -> LibraryScanArtifact {
+    let stamp = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
     let scan_t = Instant::now();
     let scan = match progress.as_mut() {
         Some(report) => scan_library_with_progress(cfg, Some(&mut **report)),
@@ -1541,7 +1543,7 @@ fn scan_library_artifact(
         entries: scan.entries.len(),
         discoveries: unique_discovery_count(&scan.discoveries),
     };
-    LibraryScanArtifact { scan, stats }
+    LibraryScanArtifact { scan, stats, stamp }
 }
 
 fn save_scan_artifact_to_sqlite(
@@ -1550,7 +1552,12 @@ fn save_scan_artifact_to_sqlite(
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let import_t = Instant::now();
-    let bytes = save_sqlite_scan_with_progress(&cfg.sqlite_path, &artifact.scan, progress)?;
+    let bytes = save_sqlite_scan_with_progress_and_stamp(
+        &cfg.sqlite_path,
+        &artifact.scan,
+        Some(&artifact.stamp),
+        progress,
+    )?;
     let import_us = import_t.elapsed().as_micros() as u64;
     Ok(LibraryRefreshSummary {
         skipped: false,
@@ -2973,6 +2980,15 @@ fn save_sqlite_scan_with_progress(
     scan: &LibraryScan,
     progress: ProgressCallback<'_>,
 ) -> Result<u64, String> {
+    save_sqlite_scan_with_progress_and_stamp(path, scan, None, progress)
+}
+
+fn save_sqlite_scan_with_progress_and_stamp(
+    path: &Path,
+    scan: &LibraryScan,
+    stamp: Option<&catalog_stamp::CatalogStamp>,
+    progress: ProgressCallback<'_>,
+) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
@@ -2985,6 +3001,7 @@ fn save_sqlite_scan_with_progress(
                 scan,
                 reborrow_progress(progress),
                 software_hash_cache,
+                stamp,
             )
         };
     save_sqlite_scan_with_progress_using_writer(
@@ -4226,6 +4243,7 @@ fn write_sqlite_scan(
     scan: &LibraryScan,
     progress: ProgressCallback<'_>,
     software_hash_cache: SoftwareHashCache,
+    stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
     let preview_asset_packs = preview_worker::preview_archive_indexes_from_env()
         .map_err(|e| format!("preview archive index: {e}"))?;
@@ -4237,6 +4255,7 @@ fn write_sqlite_scan(
         &preview_asset_packs,
         progress,
         software_hash_cache,
+        stamp,
     )
 }
 
@@ -4503,6 +4522,7 @@ fn write_sqlite_scan_with_mame(
         &[],
         None,
         SoftwareHashCache::load(path),
+        None,
     )
 }
 
@@ -4521,6 +4541,7 @@ fn write_sqlite_scan_with_mame_and_hbmame(
         &[],
         None,
         SoftwareHashCache::load(path),
+        None,
     )
 }
 
@@ -4539,6 +4560,7 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
         std::slice::from_ref(preview_asset_pack),
         None,
         SoftwareHashCache::load(path),
+        None,
     )
 }
 
@@ -4550,6 +4572,7 @@ fn write_sqlite_scan_with_sources(
     preview_asset_packs: &[preview_worker::PreviewArchiveIndex],
     mut progress: ProgressCallback<'_>,
     mut software_hash_cache: SoftwareHashCache,
+    stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
@@ -4774,10 +4797,14 @@ fn write_sqlite_scan_with_sources(
             software_name TEXT,
             PRIMARY KEY(list_name, file_path, size, mtime_secs)
         ) WITHOUT ROWID;
+        CREATE TABLE catalog_stamp (
+            ordinal INTEGER PRIMARY KEY,
+            line TEXT NOT NULL
+        );
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=22");
+    report_library_import_timing("schema", schema_t, "tables=23");
 
     let metadata_t = Instant::now();
     let mame_signature = file_signature(mame_sqlite_path);
@@ -5024,9 +5051,9 @@ fn write_sqlite_scan_with_sources(
                 &software_metadata,
                 &mut software_hash_cache,
             );
-            let preview_asset = software_identity
-                .as_ref()
-                .and_then(|identity| console_preview_asset(identity, &software_metadata, &console_assets));
+            let preview_asset = software_identity.as_ref().and_then(|identity| {
+                console_preview_asset(identity, &software_metadata, &console_assets)
+            });
             let game_has_preview = preview_asset.is_some();
             system_stmt
                 .execute(params![
@@ -5332,6 +5359,15 @@ fn write_sqlite_scan_with_sources(
         ])
         .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
         report_library_import_timing("insert_meta", stage_t, "rows=10");
+    }
+    if let Some(stamp) = stamp {
+        let stage_t = Instant::now();
+        catalog_store::write_catalog_stamp(&tx, stamp)?;
+        report_library_import_timing(
+            "insert_catalog_stamp",
+            stage_t,
+            format!("rows={}", stamp.lines().len()),
+        );
     }
     {
         let stage_t = Instant::now();
@@ -7024,7 +7060,10 @@ mod tests {
             )
             .expect("launcher row");
 
-        assert_eq!(row.0, "/media/fat/mister-magik/assets/snes-screenshots.mmlz4b");
+        assert_eq!(
+            row.0,
+            "/media/fat/mister-magik/assets/snes-screenshots.mmlz4b"
+        );
         assert_eq!(row.1, software_asset_key("snes", "parent"));
         assert_eq!(row.2, 1);
         assert_eq!(row.3, "snes");
@@ -8668,6 +8707,29 @@ mod tests {
             !sqlite_temp_path(&db).exists(),
             "failed temp database should be cleaned up"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_artifact_save_writes_catalog_stamp() {
+        let root = unique_temp_dir("sqlite-catalog-stamp");
+        let db = root.join("library.sqlite3");
+        let games = root.join("games");
+        std::fs::create_dir_all(&games).expect("create games dir");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        let expected_stamp = artifact.stamp.clone();
+
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        let conn = Connection::open(&db).expect("open sqlite");
+        let stored = catalog_store::read_catalog_stamp(&conn)
+            .expect("read catalog stamp")
+            .expect("catalog stamp");
+        assert_eq!(stored, expected_stamp);
         let _ = std::fs::remove_dir_all(root);
     }
 
