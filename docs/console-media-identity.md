@@ -130,18 +130,20 @@ the runtime still only sees canonical pack entries.
 
 ## Runtime Projection
 
-The launcher catalog marks `has_preview=1` and stores the resolved
-`preview_archive_path` plus `preview_asset_key` when it can resolve a current
-asset entry by:
+The launcher catalog stores a preview archive path and deterministic asset key
+when it has a software-list identity and an archive path for that system. The key
+uses the software family when MAME metadata names a parent, otherwise the exact
+software name:
 
-1. exact software item,
-2. parent software item,
-3. sibling in the same software family.
+```text
+mame-software__<list_name>__<family_or_software_name>
+```
 
-Preview asset changes are folded into the catalog stamp. When a pack is added
-or removed, the next validation treats the catalog as stale and runs the normal
-database builder, which recomputes console preview fields from the current asset
-packs.
+The database builder does not read screenshot archive indexes and does not prove
+that an image exists. Runtime preview loading tries the stored archive/key pair;
+if the entry is missing, the preview worker records the failed lookup and the UI
+shows the blank preview state. Preview pack changes are not catalog stamp inputs
+and do not trigger database rebuilds.
 
 ## Performance Notes
 
