@@ -8,6 +8,13 @@ use mister_magik_fb::framebuffer_ownership::{
 
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
+const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
+
+struct DeferredCatalogWorker {
+    root: String,
+    refresh_requested: bool,
+    start_after: Option<Instant>,
+}
 
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
@@ -232,7 +239,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
     let catalog_refresh = catalog_refresh_requested();
-    let catalog_rx;
+    let mut catalog_rx = None;
+    let mut deferred_catalog_worker = None;
     let mut catalog_refresh_done = false;
     let mut catalog_persisted_summary_seen = false;
     match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
@@ -251,11 +259,22 @@ pub(super) fn run_launcher_loop(
                 catalog_refresh,
                 !arcade_catalog_required_at_start,
             ) {
-                print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(
-                    arcade_root.clone(),
-                    catalog_refresh,
-                ));
+                let delay = catalog_background_validation_delay();
+                print_startup_event(
+                    start,
+                    "catalog_worker_deferred",
+                    format!(
+                        "root={} refresh_requested={} delay_ms={}",
+                        arcade_root,
+                        catalog_refresh,
+                        delay.as_millis()
+                    ),
+                );
+                deferred_catalog_worker = Some(DeferredCatalogWorker {
+                    root: arcade_root.clone(),
+                    refresh_requested: catalog_refresh,
+                    start_after: None,
+                });
             } else {
                 print_startup_event(
                     start,
@@ -430,6 +449,39 @@ pub(super) fn run_launcher_loop(
             last_clock_update = Instant::now();
         }
 
+        if !catalog_refresh_done && catalog_rx.is_none() {
+            let mut start_deferred_worker = false;
+            if let Some(deferred) = deferred_catalog_worker.as_mut() {
+                if frame_accounting.first_visible_copy_done() {
+                    let start_after = *deferred
+                        .start_after
+                        .get_or_insert_with(|| loop_start + catalog_background_validation_delay());
+                    start_deferred_worker = loop_start >= start_after;
+                }
+            }
+            if start_deferred_worker {
+                if let Some(deferred) = deferred_catalog_worker.take() {
+                    print_startup_event(start, "catalog_worker_start", &deferred.root);
+                    catalog_rx = Some(start_library_catalog_worker(
+                        deferred.root,
+                        deferred.refresh_requested,
+                    ));
+                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                    bridge.set_catalog_background_scan_visible(true);
+                    bridge.set_catalog_scan_title("Validating library".into());
+                    bridge.set_catalog_scan_detail(
+                        format!(
+                            "Using cached {} games while checking for changes",
+                            catalog.len()
+                        )
+                        .into(),
+                    );
+                    bridge.set_catalog_scan_percent(-1);
+                    full_bridge_dirty = true;
+                }
+            }
+        }
+
         if !catalog_refresh_done {
             while let Some(message) = catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 match message {
@@ -444,10 +496,16 @@ pub(super) fn run_launcher_loop(
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         let visible =
                             catalog_scan_progress_visible(catalog_ready, nav.screen, &title);
+                        let background_visible = catalog_background_scan_progress_visible(
+                            catalog_ready,
+                            visible,
+                            &title,
+                        );
                         let detail = games_found_counter
                             .progress_detail(&title, &detail, loop_start)
                             .unwrap_or(detail);
                         bridge.set_catalog_scan_visible(visible);
+                        bridge.set_catalog_background_scan_visible(background_visible);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_detail(detail.into());
                         bridge.set_catalog_scan_percent(percent);
@@ -497,6 +555,7 @@ pub(super) fn run_launcher_loop(
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_background_scan_visible(false);
                         bridge.set_catalog_scan_percent(-1);
                         games_found_counter.reset();
                         if cached_before_refresh {
@@ -548,6 +607,9 @@ pub(super) fn run_launcher_loop(
                     CatalogWorkerMessage::PersistenceFailed { error } => {
                         catalog_refresh_done = true;
                         print_startup_event(start, "library_db_save_failed", error);
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_catalog_background_scan_visible(false);
+                        full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Unchanged { summary } => {
                         catalog_refresh_done = true;
@@ -569,6 +631,7 @@ pub(super) fn run_launcher_loop(
                         );
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_background_scan_visible(false);
                         bridge.set_catalog_scan_title("".into());
                         bridge.set_catalog_scan_detail("".into());
                         bridge.set_catalog_scan_percent(-1);
@@ -580,6 +643,7 @@ pub(super) fn run_launcher_loop(
                         if catalog_ready {
                             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                             bridge.set_catalog_scan_visible(false);
+                            bridge.set_catalog_background_scan_visible(false);
                             bridge.set_catalog_scan_title("".into());
                             bridge.set_catalog_scan_detail("".into());
                             bridge.set_catalog_scan_percent(-1);
@@ -995,6 +1059,7 @@ pub(super) fn run_launcher_loop(
             || games_found_detail_changed
             || catalog_scan_redraw.should_request(
                 catalog_scan_visible,
+                catalog_background_scan_visible,
                 catalog_scan_percent,
                 loop_start,
             )
@@ -1249,11 +1314,17 @@ impl CatalogScanRedraw {
         }
     }
 
-    fn should_request(&mut self, visible: bool, percent: i32, now: Instant) -> bool {
-        if !visible {
+    fn should_request(
+        &mut self,
+        visible: bool,
+        background_visible: bool,
+        percent: i32,
+        now: Instant,
+    ) -> bool {
+        if !visible && !background_visible {
             return false;
         }
-        if percent >= 0 {
+        if visible && !background_visible && percent >= 0 {
             return false;
         }
         if now.duration_since(self.last_request) < self.period {
@@ -1345,6 +1416,14 @@ fn catalog_scan_redraw_period() -> Duration {
     Duration::from_millis((1000 / fps).max(1))
 }
 
+fn catalog_background_validation_delay() -> Duration {
+    std::env::var("MISTER_CATALOG_BACKGROUND_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY)
+}
+
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
     _arcade_catalog_required_at_start: bool,
@@ -1378,6 +1457,16 @@ fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &st
         title,
         "Library changed" | "Indexing library" | "Loading library"
     )
+}
+
+fn catalog_background_scan_progress_visible(
+    catalog_ready: bool,
+    full_scan_visible: bool,
+    title: &str,
+) -> bool {
+    catalog_ready
+        && !full_scan_visible
+        && !matches!(title, "Library scan failed" | "Library load failed")
 }
 
 fn ready_catalog_background_worker_needed(
@@ -1499,8 +1588,8 @@ mod tests {
             last_request: now,
             period: Duration::from_millis(66),
         };
-        assert!(!redraw.should_request(true, -1, now + Duration::from_millis(20)));
-        assert!(redraw.should_request(true, -1, now + Duration::from_millis(70)));
+        assert!(!redraw.should_request(true, false, -1, now + Duration::from_millis(20)));
+        assert!(redraw.should_request(true, false, -1, now + Duration::from_millis(70)));
     }
 
     #[test]
@@ -1510,8 +1599,18 @@ mod tests {
             last_request: now - Duration::from_secs(1),
             period: Duration::from_millis(66),
         };
-        assert!(!redraw.should_request(true, 90, now));
-        assert!(!redraw.should_request(false, -1, now));
+        assert!(!redraw.should_request(true, false, 90, now));
+        assert!(!redraw.should_request(false, false, -1, now));
+    }
+
+    #[test]
+    pub(super) fn catalog_scan_redraw_animates_background_badge() {
+        let now = Instant::now();
+        let mut redraw = CatalogScanRedraw {
+            last_request: now - Duration::from_secs(1),
+            period: Duration::from_millis(66),
+        };
+        assert!(redraw.should_request(false, true, -1, now));
     }
 
     #[test]
@@ -1579,6 +1678,16 @@ mod tests {
             Screen::Home,
             "Preview images changed"
         ));
+        assert!(catalog_background_scan_progress_visible(
+            true,
+            false,
+            "Validating library"
+        ));
+        assert!(catalog_background_scan_progress_visible(
+            true,
+            false,
+            "Checking library"
+        ));
     }
 
     #[test]
@@ -1598,6 +1707,11 @@ mod tests {
             Screen::Home,
             "Indexing library"
         ));
+        assert!(!catalog_background_scan_progress_visible(
+            true,
+            true,
+            "Indexing library"
+        ));
     }
 
     #[test]
@@ -1611,6 +1725,11 @@ mod tests {
             true,
             Screen::Arcade,
             "Library load failed"
+        ));
+        assert!(!catalog_background_scan_progress_visible(
+            true,
+            true,
+            "Library scan failed"
         ));
     }
 
