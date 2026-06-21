@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+pub const PROFILE_SET_VERSION: u32 = 1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuleSourceKind {
     MainSource,
