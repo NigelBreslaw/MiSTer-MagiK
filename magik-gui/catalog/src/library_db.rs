@@ -3892,15 +3892,19 @@ fn write_sqlite_scan(
     let preview_paths = PreviewArchivePaths::from_paths(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
+    let mame_sqlite_path = default_mame_sqlite_path();
+    let hbmame_sqlite_path = default_hbmame_sqlite_path();
     write_sqlite_scan_with_sources(
         path,
         scan,
-        &default_mame_sqlite_path(),
-        &default_hbmame_sqlite_path(),
-        &preview_paths,
+        SqliteScanSources {
+            mame_sqlite_path: &mame_sqlite_path,
+            hbmame_sqlite_path: &hbmame_sqlite_path,
+            preview_paths: &preview_paths,
+            software_hash_cache,
+            stamp,
+        },
         progress,
-        software_hash_cache,
-        stamp,
     )
 }
 
@@ -3913,11 +3917,13 @@ fn write_sqlite_scan_with_mame(
     write_sqlite_scan_with_sources(
         path,
         scan,
-        mame_sqlite_path,
-        &PathBuf::new(),
-        &PreviewArchivePaths::default(),
-        None,
-        SoftwareHashCache::load(path),
+        SqliteScanSources {
+            mame_sqlite_path,
+            hbmame_sqlite_path: &PathBuf::new(),
+            preview_paths: &PreviewArchivePaths::default(),
+            software_hash_cache: SoftwareHashCache::load(path),
+            stamp: None,
+        },
         None,
     )
 }
@@ -3932,11 +3938,13 @@ fn write_sqlite_scan_with_mame_and_hbmame(
     write_sqlite_scan_with_sources(
         path,
         scan,
-        mame_sqlite_path,
-        hbmame_sqlite_path,
-        &PreviewArchivePaths::default(),
-        None,
-        SoftwareHashCache::load(path),
+        SqliteScanSources {
+            mame_sqlite_path,
+            hbmame_sqlite_path,
+            preview_paths: &PreviewArchivePaths::default(),
+            software_hash_cache: SoftwareHashCache::load(path),
+            stamp: None,
+        },
         None,
     )
 }
@@ -3952,24 +3960,30 @@ fn write_sqlite_scan_with_mame_and_preview_pack(
     write_sqlite_scan_with_sources(
         path,
         scan,
-        mame_sqlite_path,
-        &PathBuf::new(),
-        &preview_paths,
-        None,
-        SoftwareHashCache::load(path),
+        SqliteScanSources {
+            mame_sqlite_path,
+            hbmame_sqlite_path: &PathBuf::new(),
+            preview_paths: &preview_paths,
+            software_hash_cache: SoftwareHashCache::load(path),
+            stamp: None,
+        },
         None,
     )
+}
+
+struct SqliteScanSources<'a> {
+    mame_sqlite_path: &'a Path,
+    hbmame_sqlite_path: &'a Path,
+    preview_paths: &'a PreviewArchivePaths,
+    software_hash_cache: SoftwareHashCache,
+    stamp: Option<&'a catalog_stamp::CatalogStamp>,
 }
 
 fn write_sqlite_scan_with_sources(
     path: &Path,
     scan: &LibraryScan,
-    mame_sqlite_path: &Path,
-    hbmame_sqlite_path: &Path,
-    preview_paths: &PreviewArchivePaths,
+    mut sources: SqliteScanSources<'_>,
     mut progress: ProgressCallback<'_>,
-    mut software_hash_cache: SoftwareHashCache,
-    stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
@@ -4135,10 +4149,11 @@ fn write_sqlite_scan_with_sources(
     report_library_import_timing("schema", schema_t, "tables=14");
 
     let metadata_t = Instant::now();
-    let mame_signature = file_signature(mame_sqlite_path);
-    let hbmame_signature = file_signature(hbmame_sqlite_path);
-    let software_metadata = load_mame_software_metadata(mame_sqlite_path);
-    let arcade_metadata = load_arcade_machine_metadata(mame_sqlite_path, hbmame_sqlite_path);
+    let mame_signature = file_signature(sources.mame_sqlite_path);
+    let hbmame_signature = file_signature(sources.hbmame_sqlite_path);
+    let software_metadata = load_mame_software_metadata(sources.mame_sqlite_path);
+    let arcade_metadata =
+        load_arcade_machine_metadata(sources.mame_sqlite_path, sources.hbmame_sqlite_path);
     report_library_import_timing(
         "metadata_load",
         metadata_t,
@@ -4147,7 +4162,7 @@ fn write_sqlite_scan_with_sources(
             arcade_metadata.mame.len(),
             arcade_metadata.hbmame.len(),
             software_metadata.items.len(),
-            preview_paths.len()
+            sources.preview_paths.len()
         ),
     );
     let tx_t = Instant::now();
@@ -4297,11 +4312,11 @@ fn write_sqlite_scan_with_sources(
             let software_identity = mame_software_identity_for_discovery(
                 discovery,
                 &software_metadata,
-                &mut software_hash_cache,
+                &mut sources.software_hash_cache,
             );
             let preview_asset = software_identity
                 .as_ref()
-                .and_then(|identity| console_preview_asset(identity, preview_paths));
+                .and_then(|identity| console_preview_asset(identity, sources.preview_paths));
             let game_has_preview = preview_asset.is_some();
             system_stmt
                 .execute(params![
@@ -4485,10 +4500,12 @@ fn write_sqlite_scan_with_sources(
         let projection_t = Instant::now();
         materialize_arcade_ui_projections(
             &tx,
-            preview_paths
+            sources
+                .preview_paths
                 .archive_for_platform("arcade")
                 .unwrap_or_default(),
-            preview_paths
+            sources
+                .preview_paths
                 .archive_for_platform("neogeo")
                 .unwrap_or_default(),
         )?;
@@ -4575,7 +4592,7 @@ fn write_sqlite_scan_with_sources(
         .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
         report_library_import_timing("insert_meta", stage_t, "rows=11");
     }
-    if let Some(stamp) = stamp {
+    if let Some(stamp) = sources.stamp {
         let stage_t = Instant::now();
         catalog_store::write_catalog_stamp(&tx, stamp)?;
         report_library_import_timing(
@@ -4592,7 +4609,7 @@ fn write_sqlite_scan_with_sources(
                  VALUES (?1,?2,?3,?4,?5)",
             )
             .map_err(|e| format!("prepare software hash cache insert: {e}"))?;
-        for (key, software_name) in &software_hash_cache.entries {
+        for (key, software_name) in &sources.software_hash_cache.entries {
             stmt.execute(params![
                 key.list_name.as_str(),
                 key.file_path.as_str(),
@@ -4605,7 +4622,7 @@ fn write_sqlite_scan_with_sources(
         report_library_import_timing(
             "insert_software_hash_cache",
             stage_t,
-            format!("rows={}", software_hash_cache.entries.len()),
+            format!("rows={}", sources.software_hash_cache.entries.len()),
         );
     }
     let commit_t = Instant::now();
