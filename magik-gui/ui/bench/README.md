@@ -113,10 +113,12 @@ Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device
 ```
 
-`history/toolchain-bench/results.tsv` keeps the historical schema. New display
-metadata is appended to the `notes` field per row: `physical_mode`, `fb_size`,
+`history/toolchain-bench/results.tsv` keeps the legacy `visual_ok` column as
+the combined pass bit and adds `timing_ok` plus `capture_ok` so good frame
+timing is not hidden by a framebuffer capture-route failure. Display metadata is
+appended to the `notes` field per row: `physical_mode`, `fb_size`,
 `render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, and `ini_mode`. PNG
-capture dimensions are parsed from the runtime log.
+capture dimensions, stride, and bpp are read from `/sys/class/graphics/fb0`.
 
 Include the video scene and upload the local 320×224 H.264 + PCM benchmark clip:
 

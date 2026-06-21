@@ -208,12 +208,7 @@ fn run_cli() -> Result<()> {
             profile_summary(Path::new(path))?;
         }
         "raw-to-png" => {
-            if args.len() < 4 {
-                return Err("raw-to-png needs <raw> <width> <height> <out.png>".into());
-            }
-            let width = args[1].parse::<usize>()?;
-            let height = args[2].parse::<usize>()?;
-            raw_to_png(Path::new(&args[0]), width, height, Path::new(&args[3]))?;
+            raw_to_png_cli(&args)?;
         }
         "preview-cache-build" => {
             preview_cache_build(&args)?;
@@ -4731,16 +4726,6 @@ fn profile_summary_text(path: &Path) -> Result<String> {
     Ok(out)
 }
 
-fn write_png_bgrx(raw: &[u8], w: usize, h: usize, path: &Path) -> Result<()> {
-    let geometry = FbGeometry {
-        width: w,
-        height: h,
-        stride: w.checked_mul(4).ok_or("raw dimensions overflow")?,
-        bpp: 32,
-    };
-    write_png_bgrx_stride(raw, &geometry, path)
-}
-
 fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Result<()> {
     let expected = geometry.bytes()?;
     if raw.len() < expected {
@@ -4810,12 +4795,70 @@ fn rgb_from_raw(raw: &[u8], geometry: &FbGeometry, x: usize, y: usize) -> Option
     }
 }
 
-fn raw_to_png(raw_path: &Path, w: usize, h: usize, out_path: &Path) -> Result<()> {
+fn raw_to_png_cli(args: &[String]) -> Result<()> {
+    if args.len() < 4 {
+        return Err(
+            "raw-to-png needs <raw> <width> <height> <out.png> [--stride N] [--bpp 16|32]".into(),
+        );
+    }
+    let raw_path = Path::new(&args[0]);
+    let width = args[1].parse::<usize>()?;
+    let height = args[2].parse::<usize>()?;
+    let out_path = Path::new(&args[3]);
+    let mut stride = None;
+    let mut bpp = 32usize;
+    let mut i = 4;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--stride" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or("raw-to-png --stride needs a byte count")?;
+                stride = Some(value.parse::<usize>()?);
+                i += 2;
+            }
+            "--bpp" => {
+                let value = args.get(i + 1).ok_or("raw-to-png --bpp needs 16 or 32")?;
+                bpp = value.parse::<usize>()?;
+                i += 2;
+            }
+            other => return Err(format!("unknown raw-to-png option: {other}").into()),
+        }
+    }
+
+    raw_to_png(raw_path, width, height, out_path, stride, bpp)
+}
+
+fn raw_to_png(
+    raw_path: &Path,
+    w: usize,
+    h: usize,
+    out_path: &Path,
+    stride: Option<usize>,
+    bpp: usize,
+) -> Result<()> {
     let raw = fs::read(raw_path)?;
-    let expected = w
-        .checked_mul(h)
-        .and_then(|px| px.checked_mul(4))
+    let bytes_per_pixel = match bpp {
+        16 => 2,
+        32 => 4,
+        _ => return Err(format!("unsupported raw framebuffer bpp: {bpp}").into()),
+    };
+    let packed_stride = w
+        .checked_mul(bytes_per_pixel)
         .ok_or("raw dimensions overflow")?;
+    let stride = stride.unwrap_or(packed_stride);
+    if stride < packed_stride {
+        return Err(
+            format!("raw stride {stride} is smaller than packed row {packed_stride}").into(),
+        );
+    }
+    let geometry = FbGeometry {
+        width: w,
+        height: h,
+        stride,
+        bpp,
+    };
+    let expected = geometry.bytes()?;
     if raw.len() < expected {
         return Err(format!(
             "{} has {} bytes, expected at least {expected}",
@@ -4824,7 +4867,7 @@ fn raw_to_png(raw_path: &Path, w: usize, h: usize, out_path: &Path) -> Result<()
         )
         .into());
     }
-    write_png_bgrx(&raw[..expected], w, h, out_path)
+    write_png_bgrx_stride(&raw[..expected], &geometry, out_path)
 }
 
 fn zlib_store(data: &[u8]) -> Vec<u8> {
@@ -5725,7 +5768,13 @@ H: Handlers=event3 js0"#
             0xff, 0x00, 0x00, 0x00, // blue
             0xff, 0xff, 0xff, 0x00, // white
         ];
-        write_png_bgrx(&raw, 2, 2, &path).unwrap();
+        let geometry = FbGeometry {
+            width: 2,
+            height: 2,
+            stride: 8,
+            bpp: 32,
+        };
+        write_png_bgrx_stride(&raw, &geometry, &path).unwrap();
         let png = fs::read(&path).unwrap();
         let _ = fs::remove_file(&path);
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
@@ -5750,12 +5799,52 @@ H: Handlers=event3 js0"#
             ],
         )
         .unwrap();
-        raw_to_png(&raw_path, 2, 2, &png_path).unwrap();
+        raw_to_png(&raw_path, 2, 2, &png_path, None, 32).unwrap();
         let png = fs::read(&png_path).unwrap();
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
-        let err = raw_to_png(&raw_path, 3, 3, &png_path).unwrap_err();
+        let err = raw_to_png(&raw_path, 3, 3, &png_path, None, 32).unwrap_err();
         assert!(err.to_string().contains("expected at least 36"));
+        let _ = fs::remove_file(&raw_path);
+        let _ = fs::remove_file(&png_path);
+    }
+
+    #[test]
+    fn raw_to_png_reads_strided_rgb565_file_and_rejects_short_input() {
+        let raw_path = temp_path("tiny-rgb565.raw");
+        let png_path = temp_path("tiny-rgb565.png");
+        fs::write(
+            &raw_path,
+            [
+                0x00, 0xf8, // red in RGB565 little-endian
+                0xe0, 0x07, // green
+                0xaa, 0xbb, // row padding
+                0x1f, 0x00, // blue
+                0xff, 0xff, // white
+                0xcc, 0xdd, // row padding
+            ],
+        )
+        .unwrap();
+        raw_to_png(&raw_path, 2, 2, &png_path, Some(6), 16).unwrap();
+        let png = fs::read(&png_path).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        let err = raw_to_png(&raw_path, 2, 3, &png_path, Some(6), 16).unwrap_err();
+        assert!(err.to_string().contains("expected at least 18"));
+        let _ = fs::remove_file(&raw_path);
+        let _ = fs::remove_file(&png_path);
+    }
+
+    #[test]
+    fn raw_to_png_rejects_invalid_framebuffer_geometry() {
+        let raw_path = temp_path("invalid-geometry.raw");
+        let png_path = temp_path("invalid-geometry.png");
+        fs::write(&raw_path, [0u8; 8]).unwrap();
+
+        let err = raw_to_png(&raw_path, 2, 2, &png_path, Some(3), 16).unwrap_err();
+        assert!(err.to_string().contains("smaller than packed row"));
+        let err = raw_to_png(&raw_path, 2, 2, &png_path, None, 24).unwrap_err();
+        assert!(err.to_string().contains("unsupported raw framebuffer bpp"));
         let _ = fs::remove_file(&raw_path);
         let _ = fs::remove_file(&png_path);
     }
