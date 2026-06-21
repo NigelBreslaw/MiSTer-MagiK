@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Experimental: run the full-screen classic camera effects scene on the MiSTer and summarize frame pacing.
+# Experimental: run the full-screen classic text effects scene on the MiSTer and summarize frame pacing.
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 HERE="$(experiment_repo_root)"
 MISTER="$HERE/scripts/mister"
-OUT_DIR="$HERE/build/camera-effect-profiles"
-RESULTS="$HERE/history/toolchain-bench/results-camera-effects.tsv"
+OUT_DIR="$HERE/build/text-effect-profiles"
+RESULTS="$HERE/history/toolchain-bench/results-text-effects.tsv"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
-EFFECT_COUNT=20
+EFFECT_COUNT=50
 
 usage() {
   cat <<'EOF'
-Usage: scripts/experiments/profile-camera-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
+Usage: scripts/experiments/effects/profile-text-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
 
 Runs the experimental scene:
-  mister-magik-fb ui camera-effects
-with MISTER_CAMERA_EFFECTS_TRACE, summarizes overall and by camera effect, and
+  mister-magik-fb ui text-effects
+with MISTER_TEXT_EFFECTS_TRACE, summarizes overall and by text effect, and
 uses the same process-owner cleanup hygiene as preview/screensaver benchmarks.
 EOF
 }
 
-label="camera-effects-$(date -u +%Y%m%dT%H%M%SZ)"
+label="text-effects-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 mode="mega"
 segment_secs="20"
@@ -76,7 +76,7 @@ case "$deploy" in
 esac
 require_experiment_binary "$MISTER" "$REMOTE" "effect scene experiments"
 
-HEADER="label	effect	frames	fps	avg_wall_us	p95_wall_us	p99_wall_us	slow_gt_16_7ms	slow_gt_20ms	avg_cpu_pct	p95_cpu_pct	max_trace_cpu_pct	max_sample_cpu_pct	avg_cpu_us	p95_cpu_us	avg_draw_us	p95_draw_us	avg_present_us	p95_present_us	avg_vsync_us	p95_vsync_us	avg_clear_us	p95_clear_us	avg_background_us	p95_background_us	avg_projection_us	p95_projection_us	avg_image_blit_us	p95_image_blit_us	avg_sprite_us	p95_sprite_us	avg_post_us	p95_post_us	avg_hud_us	p95_hud_us	rss_hwm_kb	visual_ok	date	notes"
+HEADER="label	effect	frames	fps	avg_wall_us	p95_wall_us	p99_wall_us	slow_gt_16_7ms	slow_gt_20ms	avg_cpu_pct	p95_cpu_pct	max_trace_cpu_pct	max_sample_cpu_pct	avg_cpu_us	p95_cpu_us	avg_draw_us	p95_draw_us	avg_present_us	p95_present_us	avg_vsync_us	p95_vsync_us	avg_clear_us	p95_clear_us	avg_background_us	p95_background_us	avg_projection_us	p95_projection_us	avg_image_blit_us	p95_image_blit_us	avg_sprite_us	p95_sprite_us	avg_post_us	p95_post_us	avg_hud_us	p95_hud_us	avg_glyph_count	p95_glyph_count	max_glyph_count	avg_glyph_pixels	p95_glyph_pixels	max_glyph_pixels	avg_tile_count	p95_tile_count	max_tile_count	avg_vector_segment_count	p95_vector_segment_count	max_vector_segment_count	avg_bob_count	p95_bob_count	max_bob_count	avg_palette_step_count	p95_palette_step_count	max_palette_step_count	avg_hidden_glyph_count	p95_hidden_glyph_count	max_hidden_glyph_count	avg_scroll_offset	p95_scroll_offset	max_scroll_offset	rss_hwm_kb	visual_ok	date	notes"
 if [[ ! -f "$RESULTS" ]] || ! head -1 "$RESULTS" | grep -q $'^label\teffect'; then
   echo "$HEADER" >"$RESULTS"
 fi
@@ -86,18 +86,18 @@ if [[ "$replace_label" == "1" ]]; then
   mv "$tmp_results" "$RESULTS"
 fi
 
-remote_tsv="/tmp/${label}-camera-effects.tsv"
-remote_log="/tmp/${label}-camera-effects.log"
-local_tsv="$OUT_DIR/${label}-camera-effects.tsv"
-local_log="$OUT_DIR/${label}-camera-effects.log"
+remote_tsv="/tmp/${label}-text-effects.tsv"
+remote_log="/tmp/${label}-text-effects.log"
+local_tsv="$OUT_DIR/${label}-text-effects.tsv"
+local_log="$OUT_DIR/${label}-text-effects.log"
 
-echo "==> camera-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
+echo "==> text-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_CAMERA_EFFECTS='$mode' MISTER_CAMERA_EFFECTS_AUTO=1 MISTER_CAMERA_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_CAMERA_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui camera-effects '$secs' >'$remote_log' 2>&1 &
+MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_TEXT_EFFECTS='$mode' MISTER_TEXT_EFFECTS_AUTO=1 MISTER_TEXT_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_TEXT_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui text-effects '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
 CPU_SUM=0
@@ -135,7 +135,7 @@ echo cpu_sample_max_pct=\$CPU_MAX >>'$remote_log'
 test -s '$remote_tsv'
 " || {
   "$MISTER" get "$remote_log" "$local_log" || true
-  echo "camera-effects failed; see $local_log" >&2
+  echo "text-effects failed; see $local_log" >&2
   exit 1
 }
 
@@ -154,7 +154,7 @@ if [[ "$visual_captures" != "0" ]]; then
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_CAMERA_EFFECTS='$mode' MISTER_CAMERA_EFFECTS_AUTO=1 MISTER_CAMERA_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_CAMERA_EFFECTS_HUD=1 '$REMOTE' ui camera-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
+MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_TEXT_EFFECTS='$mode' MISTER_TEXT_EFFECTS_AUTO=1 MISTER_TEXT_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_TEXT_EFFECTS_HUD=1 '$REMOTE' ui text-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
 echo \$! >/tmp/${label}-visual-${i}.pid
 " >/dev/null
     sleep $((8 + i * segment_secs))
@@ -172,7 +172,7 @@ summarize_by_effect() {
   awk -v label="$label" -v rss="$rss" -v sample_cpu_max="$sample_cpu_max" -v visual_ok="$visual_ok" -v notes="$notes" -v run_date="$run_date" '
     BEGIN {
       FS="\t"; OFS="\t";
-      metric_count = split("wall_us cpu_pct cpu_us draw_us present_us vsync_us clear_us background_us projection_us image_blit_us sprite_us post_us hud_us", metrics, " ");
+      metric_count = split("wall_us cpu_pct cpu_us draw_us present_us vsync_us clear_us background_us projection_us image_blit_us sprite_us post_us hud_us glyph_count glyph_pixels tile_count vector_segment_count bob_count palette_step_count hidden_glyph_count scroll_offset", metrics, " ");
     }
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     NF {
@@ -185,6 +185,7 @@ summarize_by_effect() {
         vals[effect, name, idx] = v
         sum[effect, name] += v
         if (name == "cpu_pct" && v > max_trace_cpu[effect]) max_trace_cpu[effect] = v
+        if ((name == "glyph_count" || name == "glyph_pixels" || name == "tile_count" || name == "vector_segment_count" || name == "bob_count" || name == "palette_step_count" || name == "hidden_glyph_count" || name == "scroll_offset") && v > max_counter[effect, name]) max_counter[effect, name] = v
       }
       wall = $(col["wall_us"]) + 0
       if (wall > 16667) slow16[effect]++
@@ -220,6 +221,14 @@ summarize_by_effect() {
           avg[effect, "sprite_us"], pct95[effect, "sprite_us"],
           avg[effect, "post_us"], pct95[effect, "post_us"],
           avg[effect, "hud_us"], pct95[effect, "hud_us"],
+          avg[effect, "glyph_count"], pct95[effect, "glyph_count"], max_counter[effect, "glyph_count"] + 0,
+          avg[effect, "glyph_pixels"], pct95[effect, "glyph_pixels"], max_counter[effect, "glyph_pixels"] + 0,
+          avg[effect, "tile_count"], pct95[effect, "tile_count"], max_counter[effect, "tile_count"] + 0,
+          avg[effect, "vector_segment_count"], pct95[effect, "vector_segment_count"], max_counter[effect, "vector_segment_count"] + 0,
+          avg[effect, "bob_count"], pct95[effect, "bob_count"], max_counter[effect, "bob_count"] + 0,
+          avg[effect, "palette_step_count"], pct95[effect, "palette_step_count"], max_counter[effect, "palette_step_count"] + 0,
+          avg[effect, "hidden_glyph_count"], pct95[effect, "hidden_glyph_count"], max_counter[effect, "hidden_glyph_count"] + 0,
+          avg[effect, "scroll_offset"], pct95[effect, "scroll_offset"], max_counter[effect, "scroll_offset"] + 0,
           rss, visual_ok, run_date, notes
       }
     }
