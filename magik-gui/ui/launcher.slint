@@ -276,6 +276,30 @@ component StartupSplash inherits Rectangle {
     }
 }
 
+component BackgroundScanBadge inherits Rectangle {
+    property <int> s: MisterUi.scale;
+    property <duration> tick: animation-tick();
+    property <float> phase-ms: Math.mod(tick / 1ms, 1000);
+
+    width: 132px * s;
+    height: 28px * s;
+    x: MisterUi.window-width * 1px - self.width - 18px * s;
+    y: MisterUi.window-height * 1px - self.height - 16px * s;
+    background: #101420;
+    border-width: 1px;
+    border-color: #52647d;
+
+    Text {
+        text: root.phase-ms < 250 ? "scanning" :
+            root.phase-ms < 500 ? "scanning." :
+            root.phase-ms < 750 ? "scanning.." : "scanning...";
+        color: #d7eef8;
+        font-size: 8px * root.s;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 component SettingsRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
@@ -411,6 +435,8 @@ export component Launcher inherits MisterWindow {
     if MisterBridge.screen-mode == 2 : ArcadeListScreen { }
 
     if MisterBridge.screen-mode == 3 : SettingsScreen { }
+
+    if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
 
     if MisterBridge.setup-visible : SetupOverlay {
         phase: MisterBridge.setup-phase;

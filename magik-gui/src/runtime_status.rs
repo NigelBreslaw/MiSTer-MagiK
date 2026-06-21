@@ -30,6 +30,7 @@ pub struct LauncherStatus<'a> {
     pub catalog_scan_title: &'a str,
     pub catalog_scan_detail: &'a str,
     pub catalog_scan_percent: i32,
+    pub catalog_background_scan_visible: bool,
     pub arcade_selected: usize,
     pub arcade_visual_index: f32,
     pub preview_cache_state: &'a str,
@@ -117,6 +118,10 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: libc
     insert!("catalog_scan_title", status.catalog_scan_title);
     insert!("catalog_scan_detail", status.catalog_scan_detail);
     insert!("catalog_scan_percent", status.catalog_scan_percent);
+    insert!(
+        "catalog_background_scan_visible",
+        status.catalog_background_scan_visible
+    );
     insert!("arcade_selected", status.arcade_selected);
     insert!(
         "arcade_visual_index",
@@ -265,6 +270,7 @@ mod tests {
                 catalog_scan_title: "",
                 catalog_scan_detail: "",
                 catalog_scan_percent: -1,
+                catalog_background_scan_visible: false,
                 arcade_selected: 3,
                 arcade_visual_index: 3.25,
                 preview_cache_state: "exact",
@@ -306,6 +312,7 @@ mod tests {
         assert_eq!(value["catalog_systems"], 13);
         assert_eq!(value["catalog_refresh_done"], false);
         assert_eq!(value["catalog_scan_visible"], false);
+        assert_eq!(value["catalog_background_scan_visible"], false);
         assert_eq!(value["arcade_selected"], 3);
         assert_eq!(value["arcade_visual_index"], 3.25);
         assert_eq!(value["preview_cache_state"], "exact");
@@ -367,6 +374,7 @@ mod tests {
             catalog_scan_title: "Indexing library",
             catalog_scan_detail: "Games found: 12",
             catalog_scan_percent: -1,
+            catalog_background_scan_visible: true,
             arcade_selected: 0,
             arcade_visual_index: 0.0,
             preview_cache_state: "placeholder",
@@ -399,6 +407,7 @@ mod tests {
         assert_eq!(value["catalog_refresh_done"], true);
         assert_eq!(value["catalog_scan_visible"], true);
         assert_eq!(value["catalog_scan_title"], "Indexing library");
+        assert_eq!(value["catalog_background_scan_visible"], true);
         assert_eq!(value["loading_title"], "1942");
         assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
     }

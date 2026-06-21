@@ -91,6 +91,8 @@ export global MisterBridge {
     in-out property <string> catalog-scan-detail;
     // -1 means indeterminate.
     in-out property <int> catalog-scan-percent: -1;
+    // Small global badge for background catalog validation while cached UI is usable.
+    in-out property <bool> catalog-background-scan-visible;
     // Non-empty while launching a game — full-screen loading overlay.
     in-out property <string> loading-message;
     in-out property <string> loading-detail;
