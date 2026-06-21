@@ -8,6 +8,13 @@ use crate::launch_profiles::{
     self, CollectionListing, CollectionRule, IgnoreReason, LaunchProfile, MountKind,
     PayloadDisposition, PayloadRule, ProfilePathClass, RuleProvenance, RuleSourceKind,
 };
+use crate::catalog_config;
+pub use crate::catalog_config::{
+    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
+};
+use crate::catalog_config::{
+    DEFAULT_SQLITE_BUILD_DIR, DEFAULT_SQLITE_PATH, SCHEMA_VERSION,
+};
 use crate::preview_worker;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
@@ -21,26 +28,6 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const DEFAULT_ROOTS: &[&str] = &[
-    "/media/fat/_Arcade",
-    "/media/fat/_Games",
-    "/media/fat/games",
-    "/media/fat/_DOS Games",
-    "/media/fat/_Console",
-    "/media/fat/_Computer",
-    "/media/fat/_YCArcade",
-    "/media/fat/_YCConsole",
-    "/media/fat/_YCComputer",
-    "/media/fat/_LLAPI",
-    "/media/fat/_Other",
-    "/media/fat/_Utility",
-];
-
-pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
-pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
-pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
-
-const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 const MRA_PREFIX_BYTES: usize = 160 * 1024;
 type FileFingerprint = BTreeMap<String, FileFingerprintEntry>;
 type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
@@ -48,7 +35,6 @@ type DirectoryManifest = BTreeMap<String, DirectorySignature>;
 type MachineMetadataRow = (String, String, Option<String>, Option<String>);
 type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
-const SCHEMA_VERSION: u32 = 28;
 const MANIFEST_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const MANIFEST_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -565,24 +551,6 @@ pub fn run_scan_bench() {
             }
         }
     }
-}
-
-pub fn default_sqlite_path() -> PathBuf {
-    std::env::var("MISTER_LIBRARY_SQLITE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH))
-}
-
-pub fn default_mame_sqlite_path() -> PathBuf {
-    std::env::var("MISTER_MAME_SQLITE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_MAME_SQLITE_PATH))
-}
-
-pub fn default_hbmame_sqlite_path() -> PathBuf {
-    std::env::var("MISTER_HBMAME_SQLITE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_HBMAME_SQLITE_PATH))
 }
 
 pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
@@ -1526,16 +1494,7 @@ struct BenchConfig {
 
 impl BenchConfig {
     fn from_env() -> Self {
-        let roots = std::env::var("MISTER_LIBRARY_ROOTS")
-            .ok()
-            .map(|s| {
-                s.split('|')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_else(|| DEFAULT_ROOTS.iter().map(|s| s.to_string()).collect());
+        let roots = catalog_config::library_roots_from_env();
         let sqlite_path = std::env::var("MISTER_LIBRARY_BENCH_SQLITE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH));
