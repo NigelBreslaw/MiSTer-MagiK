@@ -354,3 +354,57 @@ CATV2-VPREWARM-AFTER-20260621	673248af	library_db_saved	58615	bytes=17768448 sca
 CATV2-VPREWARM-AFTER-20260621	673248af	library_ready	58965	games=7221 load_us=343347
 CATV2-VPREWARM-AFTER-20260621	673248af	catalog_bridge_sync_update	58970	games=7221 elapsed_us=4783
 CATV2-VPREWARM-AFTER-20260621	673248af	db_count	0	9083
+CATV2-FINAL-20260621	efa6cf4a	first_frame	1181	catalog_ready=false
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	16601	path=/media/fat/_Arcade dirs=486 files=2603 candidates=2599
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	1470	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	2555	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	10	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	82	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	3996	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	559	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	3615	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	2449	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	632	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	3451	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	708	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	128	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk_target	104	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_walk	38807	candidates=7757
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_profile_match	96	calls=7757
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_installed_collection	214	calls=7365
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_archive_toc	896	containers=154
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_collection_listings	0	collections=0
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_file_discovery	19591	files=7363
+CATV2-FINAL-20260621	efa6cf4a	scan_stage_classify_total	39262	discoveries=9206 normal_files=7749 containers=154 entries=281
+CATV2-FINAL-20260621	efa6cf4a	library_scan_complete	40981	scan_us=39262402 discover_us=38807304 classify_us=39262132 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATV2-FINAL-20260621	efa6cf4a	import_stage_schema	43	tables=14
+CATV2-FINAL-20260621	efa6cf4a	import_stage_metadata_load	3013	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+CATV2-FINAL-20260621	efa6cf4a	import_stage_begin_tx	0	-
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_profiles	1	rows=16
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_payloads	853	normal_files=7749 entries=281
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	375	from=0 to=1000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	403	from=1000 to=2000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	388	from=2000 to=3000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	382	from=3000 to=4000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	365	from=4000 to=5000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	390	from=5000 to=6000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	490	from=6000 to=7000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	557	from=7000 to=8000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	812	from=8000 to=9000 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_chunk	312	from=9000 to=9083 total=9083
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_games_total	4748	rows=9083 launcher_rows=6245
+CATV2-FINAL-20260621	efa6cf4a	import_stage_materialize_arcade_ui	782	-
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_launcher_arcade	24	-
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_launcher_console	439	rows=6185
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_meta	307	rows=11
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_catalog_stamp	0	rows=11
+CATV2-FINAL-20260621	efa6cf4a	import_stage_insert_software_hash_cache	0	rows=0
+CATV2-FINAL-20260621	efa6cf4a	import_stage_commit	21	-
+CATV2-FINAL-20260621	efa6cf4a	import_stage_total	10263	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.622
+CATV2-FINAL-20260621	efa6cf4a	library_db_saved	58032	bytes=17768448 scan_us=39262402 discover_us=38807304 classify_us=39262132 import_us=16974948 discoveries=9083 normal_files=7749 containers=154 entries=281
+CATV2-FINAL-20260621	efa6cf4a	library_ready	58365	games=7221 load_us=328624
+CATV2-FINAL-20260621	efa6cf4a	catalog_bridge_sync_update	58370	games=7221 elapsed_us=4885
+CATV2-FINAL-20260621	efa6cf4a	db_count	0	9083
