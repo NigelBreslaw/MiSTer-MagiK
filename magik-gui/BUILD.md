@@ -129,10 +129,6 @@ magik-gui/build-arm.sh --all-scenes
 # Compile experimental effect scenes explicitly.
 magik-gui/build-arm.sh --experiments
 
-# Legacy native Apple-Silicon Docker path: linux/arm64 container,
-# linux/aarch64 Rust host toolchain, armv7 target.
-magik-gui/build-arm64-docker.sh
-
 # Explicit spelling for the same release-device build.
 magik-gui/build-arm.sh --device
 # → target/.../release-device/mister-magik-fb
@@ -252,8 +248,8 @@ project-local minimal build.
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
 - **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — override the Slint modules
   compiled into the ARM binary; by default, deployable builds use `all`.
-- **`magik-gui/.cargo/config.toml`** — disables any inherited compiler wrapper
-  such as sccache for direct Cargo invocations; no always-on `rustflags`.
+- **`magik-gui/.cargo/config.toml`** — keeps direct Cargo invocations on the
+  normal compiler path; no always-on `rustflags`.
 - **`build-arm.sh`** — sets Cortex-A9 `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
 
 Prerequisite for Cortex-A9 tuning: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
@@ -321,28 +317,7 @@ cargo install cross --version 0.2.5 --locked
 Do not use `cargo install cross --git ...` unless you deliberately also change
 the CI image/tooling assumptions.
 
-### Native ARM64 Docker Experiment
-
-`magik-gui/build-arm64-docker.sh` is an opt-in Apple-Silicon experiment for
-building inside a `linux/arm64` Docker image instead of running the normal
-amd64 `cross` image through emulation. It reuses `Dockerfile.cross-armv7`, mounts
-a Linux/aarch64 Rust toolchain, and builds the `armv7-unknown-linux-gnueabihf`
-target directly.
-
-One-time setup:
-
-```bash
-rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
-rustup target add armv7-unknown-linux-gnueabihf --toolchain stable-aarch64-unknown-linux-gnu
-```
-
-Example:
-
-```bash
-magik-gui/build-arm64-docker.sh
-# → /private/tmp/mister-magik-arm64-target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
-```
-
-This path is retained as a diagnostic fallback. The canonical Apple-Silicon path
-is now `build-arm.sh` → `build-arm64-apple-container.sh`, which avoids Docker's
-linux/amd64 emulation and mirrors artifacts to the standard target directory.
+Legacy Apple-Silicon Docker and sccache builder variants were retired. Use the
+Apple-container backend for local Apple Silicon builds, or set
+`MISTER_ARM_BUILD_BACKEND=cross` only when deliberately comparing with the
+Linux/CI cross-rs path.

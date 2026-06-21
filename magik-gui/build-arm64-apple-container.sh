@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Native Apple-container path for ARMv7 MiSTer builds on Apple Silicon.
 #
-# This is the GitHub macos-26 / local Apple Silicon counterpart to
-# build-arm64-docker.sh. It intentionally does not use cross-rs or Docker's
-# linux/amd64 compatibility path.
+# This is the GitHub macos-26 / local Apple Silicon build path. It intentionally
+# does not use cross-rs or Docker's linux/amd64 compatibility path.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -68,7 +67,6 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
   ./build-arm64-apple-container.sh --rebuild-image → rebuild the cross image
-  ./build-arm64-apple-container.sh --preview-archive-bench → build only the preview archive benchmark
 
 One-time host setup:
   rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
@@ -89,11 +87,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --profile)
       PROFILE=release-device-profile
       add_feature profile
-      ;;
-    --preview-archive-bench)
-      FEATURES=(preview-archive-bench)
-      BIN_TARGET=preview-archive-bench
-      BIN_NAME=preview-archive-bench
       ;;
     --video) add_feature video ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;

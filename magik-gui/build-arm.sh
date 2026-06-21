@@ -6,7 +6,6 @@
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
 #   ./build-arm.sh --experiments → release-device with experimental effect scenes
-#   ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark
 #
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
 # spot expensive crates and accidental target/feature creep.
@@ -78,11 +77,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
-    --preview-archive-bench)
-      FEATURES=(preview-archive-bench)
-      BIN_TARGET=preview-archive-bench
-      BIN_NAME=preview-archive-bench
-      ;;
     --clean) CLEAN=1 ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;

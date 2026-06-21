@@ -635,15 +635,8 @@ struct PreviewArchiveEntry {
 
 struct PreviewArchive {
     scratch: Mutex<PreviewArchiveScratch>,
-    codec: PreviewArchiveCodec,
     bytes: Arc<[u8]>,
     entries: HashMap<String, PreviewArchiveEntry>,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PreviewArchiveCodec {
-    Lz4Block,
-    Raw,
 }
 
 #[derive(Default)]
@@ -931,11 +924,9 @@ pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String>
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)
         .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-    let codec = match &magic {
-        PreviewArchive::LZ4_BLOCK_MAGIC => "lz4-block",
-        PreviewArchive::RAW_MAGIC => "raw",
-        _ => return Err(format!("{}: bad preview archive magic", path.display())),
-    };
+    if &magic != PreviewArchive::LZ4_BLOCK_MAGIC {
+        return Err(format!("{}: bad preview archive magic", path.display()));
+    }
     let count = read_u32(&mut file)? as usize;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
@@ -956,7 +947,7 @@ pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String>
     entries.dedup();
     Ok(PreviewArchiveIndex {
         path: path.display().to_string(),
-        codec,
+        codec: "lz4-block",
         entries,
     })
 }
@@ -1066,7 +1057,6 @@ fn default_console_archive_paths() -> Vec<String> {
 
 impl PreviewArchive {
     const LZ4_BLOCK_MAGIC: &'static [u8; 8] = b"MMLZ4B1\0";
-    const RAW_MAGIC: &'static [u8; 8] = b"MMRAWP1\0";
 
     fn open(path: &Path) -> Result<Self, String> {
         let mut file = File::open(path)
@@ -1074,11 +1064,9 @@ impl PreviewArchive {
         let mut magic = [0u8; 8];
         file.read_exact(&mut magic)
             .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-        let codec = match &magic {
-            Self::LZ4_BLOCK_MAGIC => PreviewArchiveCodec::Lz4Block,
-            Self::RAW_MAGIC => PreviewArchiveCodec::Raw,
-            _ => return Err(format!("{}: bad preview archive magic", path.display())),
-        };
+        if &magic != Self::LZ4_BLOCK_MAGIC {
+            return Err(format!("{}: bad preview archive magic", path.display()));
+        }
         let count = read_u32(&mut file)? as usize;
         let mut entries = HashMap::with_capacity(count);
         for _ in 0..count {
@@ -1104,7 +1092,6 @@ impl PreviewArchive {
         Ok(Self {
             bytes,
             scratch: Mutex::new(PreviewArchiveScratch::default()),
-            codec,
             entries,
         })
     }
@@ -1132,22 +1119,8 @@ impl PreviewArchive {
         let read_us = read_t.elapsed().as_micros() as u64;
 
         let decode_t = Instant::now();
-        let data = match self.codec {
-            PreviewArchiveCodec::Lz4Block => {
-                decode_lz4_block_entry_into(compressed_slice, entry.raw_len, raw)
-                    .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?
-            }
-            PreviewArchiveCodec::Raw => {
-                if compressed_slice.len() != entry.raw_len {
-                    return Err(format!(
-                        "preview archive raw length mismatch {name}: got={} expected={}",
-                        compressed_slice.len(),
-                        entry.raw_len
-                    ));
-                }
-                compressed_slice
-            }
-        };
+        let data = decode_lz4_block_entry_into(compressed_slice, entry.raw_len, raw)
+            .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
         let image = decode_raw565_preview_bytes(data)?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let total_us = total_t.elapsed().as_micros() as u64;
@@ -1543,21 +1516,21 @@ mod tests {
     #[test]
     fn preview_archive_entry_stems_reads_index_only() {
         let path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-index-{}.mmraw",
+            "mister-magik-preview-index-stems-{}.mmlz4b",
             std::process::id()
         ));
         let name = b"mpatrol.rgb565";
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::RAW_MAGIC);
+        bytes.extend_from_slice(PreviewArchive::LZ4_BLOCK_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&20u32.to_le_bytes());
         bytes.extend_from_slice(&20u32.to_le_bytes());
         bytes.extend_from_slice(&128u64.to_le_bytes());
         bytes.extend_from_slice(name);
-        std::fs::write(&path, bytes).expect("write rawpack fixture");
+        std::fs::write(&path, bytes).expect("write lz4 block fixture");
 
-        let stems = preview_archive_entry_stems(&path).expect("read rawpack index");
+        let stems = preview_archive_entry_stems(&path).expect("read lz4 block index");
 
         assert!(stems.contains("mpatrol"));
         let _ = std::fs::remove_file(path);
@@ -1590,13 +1563,13 @@ mod tests {
     #[test]
     fn archive_lookup_matches_mixed_case_cache_names() {
         let path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-case-{}.mmraw",
+            "mister-magik-preview-case-{}.mmlz4b",
             std::process::id()
         ));
         let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
-        write_raw_archive(&path, "sonic.rgb565", &payload);
+        write_lz4_block_archive(&path, "sonic.rgb565", &payload);
 
-        let archive = PreviewArchive::open(&path).expect("open raw archive");
+        let archive = PreviewArchive::open(&path).expect("open lz4 block archive");
         let loaded = archive
             .load_timed("Sonic.rgb565")
             .expect("load mixed-case cache name")
@@ -1736,10 +1709,10 @@ mod tests {
     #[test]
     fn load_preview_reads_requested_archive_asset_and_reports_dimensions() {
         let archive_path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-load-{}.mmraw",
+            "mister-magik-preview-load-{}.mmlz4b",
             std::process::id()
         ));
-        write_raw_archive(
+        write_lz4_block_archive(
             &archive_path,
             "tiny.rgb565",
             &raw565_fixture(3, 1, &[0xf800, 0x07e0, 0x001f]),
@@ -1777,10 +1750,10 @@ mod tests {
     #[test]
     fn preview_worker_decodes_selected_request_on_background_thread() {
         let archive_path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-worker-{}.mmraw",
+            "mister-magik-preview-worker-{}.mmlz4b",
             std::process::id()
         ));
-        write_raw_archive(
+        write_lz4_block_archive(
             &archive_path,
             "selected.rgb565",
             &raw565_fixture(2, 1, &[0xf800, 0x07e0]),
@@ -1818,15 +1791,15 @@ mod tests {
     #[test]
     fn preview_archive_cache_reopens_when_file_fingerprint_changes() {
         let path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-refresh-{}.mmraw",
+            "mister-magik-preview-refresh-{}.mmlz4b",
             std::process::id()
         ));
-        write_raw_archive(&path, "old.rgb565", &raw565_fixture(1, 1, &[0xf800]));
+        write_lz4_block_archive(&path, "old.rgb565", &raw565_fixture(1, 1, &[0xf800]));
         let first = preview_archives_for_paths(vec![path.display().to_string()])
             .expect("open first archive")
             .expect("first archive");
 
-        write_raw_archive(
+        write_lz4_block_archive(
             &path,
             "new-long.rgb565",
             &raw565_fixture(2, 1, &[0x07e0, 0x001f]),
@@ -1844,27 +1817,27 @@ mod tests {
     }
 
     #[test]
-    fn raw_archive_rejects_entry_length_mismatch() {
+    fn lz4_block_archive_rejects_entry_length_mismatch() {
         let path = std::env::temp_dir().join(format!(
-            "mister-magik-preview-bad-length-{}.mmraw",
+            "mister-magik-preview-bad-length-{}.mmlz4b",
             std::process::id()
         ));
         let payload = raw565_fixture(1, 1, &[0xf800]);
-        write_raw_archive_with_lengths(
+        write_lz4_block_archive_with_lengths(
             &path,
             "bad.rgb565",
             &payload,
             payload.len() + 1,
-            payload.len(),
+            payload.len() + 1,
         );
-        let archive = PreviewArchive::open(&path).expect("open corrupt raw archive fixture");
+        let archive = PreviewArchive::open(&path).expect("open corrupt lz4 block archive fixture");
 
         let err = archive
             .load_timed("bad.rgb565")
-            .expect_err("raw length mismatch should fail");
+            .expect_err("lz4 raw block length mismatch should fail");
 
         assert!(
-            err.contains("raw length mismatch"),
+            err.contains("raw lz4 block length mismatch"),
             "unexpected error: {err}"
         );
         let _ = std::fs::remove_file(path);
@@ -1928,11 +1901,11 @@ mod tests {
         bytes
     }
 
-    fn write_raw_archive(path: &Path, name: &str, payload: &[u8]) {
-        write_raw_archive_with_lengths(path, name, payload, payload.len(), payload.len());
+    fn write_lz4_block_archive(path: &Path, name: &str, payload: &[u8]) {
+        write_lz4_block_archive_with_lengths(path, name, payload, payload.len(), payload.len() + 1);
     }
 
-    fn write_raw_archive_with_lengths(
+    fn write_lz4_block_archive_with_lengths(
         path: &Path,
         name: &str,
         payload: &[u8],
@@ -1941,14 +1914,15 @@ mod tests {
     ) {
         let index_len = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::RAW_MAGIC);
+        bytes.extend_from_slice(PreviewArchive::LZ4_BLOCK_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&(raw_len as u32).to_le_bytes());
         bytes.extend_from_slice(&(compressed_len as u32).to_le_bytes());
         bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
         bytes.extend_from_slice(name.as_bytes());
+        bytes.push(1);
         bytes.extend_from_slice(payload);
-        std::fs::write(path, bytes).expect("write raw archive fixture");
+        std::fs::write(path, bytes).expect("write lz4 block archive fixture");
     }
 }
