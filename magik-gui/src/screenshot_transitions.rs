@@ -9,77 +9,77 @@ const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 160;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewTransitionEffect {
     Fade,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Wipe,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Slide,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Zoom,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Scanline,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Checker,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Dissolve,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     CrtBeamWipe,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     MosaicResolve,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     CopperBars,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     VenetianBlinds,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     BarnDoor,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Iris,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     ClockWipe,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     SpriteStrips,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     StarfieldWarp,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     VectorRedraw,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     PaletteCycle,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     RasterTear,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     TileLoader,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     VenetianCopper,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     AttributeFlash,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     TecTec,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     Linecrunch,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     RacingBeam,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     SpriteMultiplex,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     RowScrollParallax,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     SuperScalerPop,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     MaskBlit,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     PhosphorDecay,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     PlasmaMask,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     MoireRings,
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     KefrensCurtain,
 }
 
 impl PreviewTransitionEffect {
-    #[cfg(not(mister_bench_scenes))]
+    #[cfg(not(mister_experiments))]
     pub(crate) const PRODUCTION: [Self; 1] = [Self::Fade];
 
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     pub(crate) const MEGA: [Self; 33] = [
         Self::Fade,
         Self::Wipe,
@@ -117,11 +117,11 @@ impl PreviewTransitionEffect {
     ];
 
     pub(crate) fn all() -> &'static [Self] {
-        #[cfg(mister_bench_scenes)]
+        #[cfg(mister_experiments)]
         {
             &Self::MEGA
         }
-        #[cfg(not(mister_bench_scenes))]
+        #[cfg(not(mister_experiments))]
         {
             &Self::PRODUCTION
         }
@@ -130,69 +130,69 @@ impl PreviewTransitionEffect {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Fade => "fade",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Wipe => "wipe",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Slide => "slide",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Zoom => "zoom",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Scanline => "scanline",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Checker => "checker",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Dissolve => "dissolve",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::CrtBeamWipe => "crt-beam-wipe",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::MosaicResolve => "mosaic-resolve",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::CopperBars => "copper-bars",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::VenetianBlinds => "venetian-blinds",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::BarnDoor => "barn-door",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Iris => "iris",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::ClockWipe => "clock-wipe",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::SpriteStrips => "sprite-strips",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::StarfieldWarp => "starfield-warp",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::VectorRedraw => "vector-redraw",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::PaletteCycle => "palette-cycle",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::RasterTear => "raster-tear",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::TileLoader => "tile-loader",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::VenetianCopper => "venetian-copper",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::AttributeFlash => "attribute-flash",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::TecTec => "tec-tec",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::Linecrunch => "linecrunch",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::RacingBeam => "racing-beam",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::SpriteMultiplex => "sprite-multiplex",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::RowScrollParallax => "row-scroll-parallax",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::SuperScalerPop => "super-scaler-pop",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::MaskBlit => "mask-blit",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::PhosphorDecay => "phosphor-decay",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::PlasmaMask => "plasma-mask",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::MoireRings => "moire-rings",
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             Self::KefrensCurtain => "kefrens-curtain",
         }
     }
@@ -200,69 +200,69 @@ impl PreviewTransitionEffect {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().replace('_', "-").as_str() {
             "fade" | "crossfade" | "cross-fade" => Some(Self::Fade),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "wipe" | "wipe-left" => Some(Self::Wipe),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "slide" | "slide-left" => Some(Self::Slide),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "zoom" | "pop" => Some(Self::Zoom),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "scanline" | "scanlines" | "scan" => Some(Self::Scanline),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "checker" | "checkerboard" => Some(Self::Checker),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "dissolve" | "noise" => Some(Self::Dissolve),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "crt-beam" | "crt-beam-wipe" | "beam" | "beam-wipe" => Some(Self::CrtBeamWipe),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "mosaic" | "mosaic-resolve" | "chunky" | "chunky-resolve" => Some(Self::MosaicResolve),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "copper" | "copper-bars" => Some(Self::CopperBars),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "venetian" | "venetian-blinds" | "blinds" => Some(Self::VenetianBlinds),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "barn" | "barn-door" | "barn-doors" => Some(Self::BarnDoor),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "iris" | "circle" => Some(Self::Iris),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "clock" | "clock-wipe" | "radar" => Some(Self::ClockWipe),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "sprite-strips" | "strips" => Some(Self::SpriteStrips),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "starfield" | "starfield-warp" | "warp-stars" => Some(Self::StarfieldWarp),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "vector" | "vector-redraw" => Some(Self::VectorRedraw),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "palette" | "palette-cycle" | "cycle" => Some(Self::PaletteCycle),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "raster-tear" | "tear" => Some(Self::RasterTear),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "tile-loader" | "tile-load" | "loader" => Some(Self::TileLoader),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "venetian-copper" | "copper-blinds" => Some(Self::VenetianCopper),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "attribute" | "attribute-flash" | "color-clash" => Some(Self::AttributeFlash),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "tec-tec" | "tectec" => Some(Self::TecTec),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "linecrunch" | "line-crunch" => Some(Self::Linecrunch),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "racing-beam" | "race-beam" => Some(Self::RacingBeam),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "sprite-multiplex" | "multiplex" => Some(Self::SpriteMultiplex),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "row-scroll-parallax" | "parallax" => Some(Self::RowScrollParallax),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "super-scaler-pop" | "superscaler" | "scaler-pop" => Some(Self::SuperScalerPop),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "mask-blit" | "mask" => Some(Self::MaskBlit),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "phosphor" | "phosphor-decay" => Some(Self::PhosphorDecay),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "plasma" | "plasma-mask" => Some(Self::PlasmaMask),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "moire" | "moire-rings" => Some(Self::MoireRings),
-            #[cfg(mister_bench_scenes)]
+            #[cfg(mister_experiments)]
             "kefrens" | "kefrens-curtain" | "curtain" => Some(Self::KefrensCurtain),
             _ => None,
         }
@@ -319,7 +319,7 @@ impl PreviewTransitionDemo {
         let picker_enabled = transition_picker_enabled();
         let label_overlay = picker_enabled || !trimmed.is_empty();
         let use_all = picker_enabled && trimmed.is_empty();
-        #[cfg(mister_bench_scenes)]
+        #[cfg(mister_experiments)]
         let use_all = use_all
             || trimmed.eq_ignore_ascii_case("mega")
             || trimmed.eq_ignore_ascii_case("all")
@@ -503,6 +503,7 @@ fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
 mod tests {
     use super::*;
 
+    #[cfg(not(mister_experiments))]
     #[test]
     fn production_transitions_are_fade_only() {
         assert_eq!(PreviewTransitionEffect::labels(), "fade");
@@ -512,6 +513,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(mister_experiments))]
     #[test]
     fn production_parser_rejects_bench_only_effects() {
         assert_eq!(PreviewTransitionEffect::parse("cut"), None);
@@ -524,7 +526,7 @@ mod tests {
         assert_eq!(PreviewTransitionEffect::parse("mega"), None);
     }
 
-    #[cfg(mister_bench_scenes)]
+    #[cfg(mister_experiments)]
     #[test]
     fn bench_transitions_keep_experimental_effects() {
         assert!(PreviewTransitionEffect::all().contains(&PreviewTransitionEffect::Wipe));

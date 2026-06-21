@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Benchmark native retro framebuffer effects on the MiSTer.
+# Experimental: benchmark native retro framebuffer effects on the MiSTer.
 #
-#   scripts/bench-effects.sh EFFECTS-20260607 --device --replace-label
+#   scripts/experiments/bench-effects.sh EFFECTS-20260607 --device --replace-label
 #
 # Appends one row per effect/mode/size to history/toolchain-bench/results-effects.tsv.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+HERE="$(experiment_repo_root)"
 RUST_DIR="$HERE/magik-gui"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
@@ -15,7 +16,7 @@ MISTER="$HERE/scripts/mister"
 
 LABEL="EFFECTS"
 BUILD_PROFILE=release-device
-BUILD_FLAG=(--device --all-scenes)
+BUILD_FLAG=(--device --experiments)
 SKIP_BUILD=0
 SKIP_DEVICE=0
 REPLACE_LABEL=0
@@ -61,8 +62,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-mkdir -p "$BENCH_DIR"
-
 LOCK_DIR="${TMPDIR:-/tmp}/mister-magik-bench-effects.lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "ERROR: another bench-effects.sh run is already active (lock: $LOCK_DIR)" >&2
@@ -72,16 +71,6 @@ fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 
 HEADER="label	effect	mode	fill	internal	scale	date	rustc	compile_sec	bytes	frames	fps	effect_us	slint_us	scale_copy_us	vsync_us	wall_us	cpu_mean	cpu_max	rss_kb	visual_ok	notes"
-if [[ ! -f "$TSV" ]] || ! head -1 "$TSV" | grep -q $'^label\teffect'; then
-  echo "$HEADER" >"$TSV"
-fi
-
-if [[ "$REPLACE_LABEL" -eq 1 ]]; then
-  echo "==> Removing prior rows for label=$LABEL from $TSV"
-  tmp_tsv="$(mktemp)"
-  awk -v label="$LABEL" 'NR == 1 || ($0 != "" && substr($0, 1, length(label) + 1) != label "\t")' "$TSV" >"$tmp_tsv"
-  mv "$tmp_tsv" "$TSV"
-fi
 
 mister() {
   "$MISTER" "$@"
@@ -280,6 +269,19 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"
+  require_experiment_binary "$MISTER" "$REMOTE" "effect benchmark experiments"
+
+  mkdir -p "$BENCH_DIR"
+  if [[ ! -f "$TSV" ]] || ! head -1 "$TSV" | grep -q $'^label\teffect'; then
+    echo "$HEADER" >"$TSV"
+  fi
+
+  if [[ "$REPLACE_LABEL" -eq 1 ]]; then
+    echo "==> Removing prior rows for label=$LABEL from $TSV"
+    tmp_tsv="$(mktemp)"
+    awk -v label="$LABEL" 'NR == 1 || ($0 != "" && substr($0, 1, length(label) + 1) != label "\t")' "$TSV" >"$tmp_tsv"
+    mv "$tmp_tsv" "$TSV"
+  fi
 
   for size in $(sizes_for_run); do
     if [[ "$MATRIX" == "scale-sweep" ]]; then
@@ -296,6 +298,16 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
     done
   done
 else
+  mkdir -p "$BENCH_DIR"
+  if [[ ! -f "$TSV" ]] || ! head -1 "$TSV" | grep -q $'^label\teffect'; then
+    echo "$HEADER" >"$TSV"
+  fi
+  if [[ "$REPLACE_LABEL" -eq 1 ]]; then
+    echo "==> Removing prior rows for label=$LABEL from $TSV"
+    tmp_tsv="$(mktemp)"
+    awk -v label="$LABEL" 'NR == 1 || ($0 != "" && substr($0, 1, length(label) + 1) != label "\t")' "$TSV" >"$tmp_tsv"
+    mv "$tmp_tsv" "$TSV"
+  fi
   for size in $(sizes_for_run); do
     mapfile -t effects < <(effects_for_run)
     mapfile -t modes < <(modes_for_run)

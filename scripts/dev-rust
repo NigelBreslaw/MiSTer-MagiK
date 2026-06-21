@@ -20,7 +20,7 @@ Commands:
   check-arm-ui       Cross-check launcher/controller Slint UI for ARM
   check-ui           Alias for check-arm-ui
   check-arm-arcade-ui Cross-check launcher-backed arcade UI for ARM
-  check-arm-ui-full  Cross-check all Slint UI scenes for ARM
+  check-arm-ui-full  Cross-check all Slint UI scenes and experiments for ARM
   check-ui-full      Alias for check-arm-ui-full
   build-arm-debug       Cross-build launcher/controller ARM debug binary
   build-arm-arcade-debug Cross-build launcher-backed arcade ARM debug binary
@@ -108,7 +108,7 @@ case "$cmd" in
     cross_env
     MISTER_UI_BUILD_SCOPE=all cross check \
       --target armv7-unknown-linux-gnueabihf \
-      --features ui,bench-scenes \
+      --features ui,experiments \
       --timings \
       --locked
     ;;
@@ -135,7 +135,7 @@ case "$cmd" in
     cross_env
     MISTER_UI_BUILD_SCOPE=all cross build \
       --target armv7-unknown-linux-gnueabihf \
-      --features ui,bench-scenes \
+      --features ui,experiments \
       --timings \
       --locked
     ;;

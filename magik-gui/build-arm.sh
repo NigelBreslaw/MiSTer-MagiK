@@ -7,7 +7,8 @@
 #   ./build-arm.sh --opts       → release-opts (experiment: opt-level=s)
 #   ./build-arm.sh --incr       → release-incr (experiment: incremental release)
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
-#   ./build-arm.sh --all-scenes → release-device with every Slint bench scene
+#   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
+#   ./build-arm.sh --experiments → release-device with experimental effect scenes
 #   ./build-arm.sh --preview-archive-bench → build only the preview archive benchmark
 #
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
@@ -89,7 +90,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BIN_NAME=preview-archive-bench
       ;;
     --clean) CLEAN=1 ;;
-    --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
+    --all-scenes) UI_SCOPE=all; add_feature experiments ;;
+    --experiments) UI_SCOPE=all; add_feature experiments ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
     --ui-scope)
       i=$((i + 1))
@@ -100,8 +102,9 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       UI_SCOPE="${ARGS[$i]}"
       ;;
     -h|--help)
-      sed -n '4,11p' ./build-arm.sh | sed 's/^# \{0,1\}//'
+      sed -n '4,12p' ./build-arm.sh | sed 's/^# \{0,1\}//'
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
+      echo "  ./build-arm.sh --experiments → include experimental effect scenes"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
       exit 0

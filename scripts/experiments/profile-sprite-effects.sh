@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Run the full-screen classic sprite effects scene on the MiSTer and summarize frame pacing.
+# Experimental: run the full-screen classic sprite effects scene on the MiSTer and summarize frame pacing.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+HERE="$(experiment_repo_root)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/sprite-effect-profiles"
 RESULTS="$HERE/history/toolchain-bench/results-sprite-effects.tsv"
@@ -11,9 +12,9 @@ EFFECT_COUNT=20
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-sprite-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
+Usage: scripts/experiments/profile-sprite-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
 
-Runs:
+Runs the experimental scene:
   mister-magik-fb ui sprite-effects
 with MISTER_SPRITE_EFFECTS_TRACE, summarizes overall and by sprite effect, and
 uses the same process-owner cleanup hygiene as preview/screensaver benchmarks.
@@ -70,9 +71,10 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then echo "--secs must be a pos
 mkdir -p "$OUT_DIR" "$(dirname "$RESULTS")"
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope arcade ;;
+  device) "$HERE/scripts/deploy-rust.sh" --device --experiments ;;
   skip) : ;;
 esac
+require_experiment_binary "$MISTER" "$REMOTE" "effect scene experiments"
 
 HEADER="label	effect	frames	fps	avg_wall_us	p95_wall_us	p99_wall_us	slow_gt_16_7ms	slow_gt_20ms	avg_cpu_pct	p95_cpu_pct	max_trace_cpu_pct	max_sample_cpu_pct	avg_cpu_us	p95_cpu_us	avg_draw_us	p95_draw_us	avg_present_us	p95_present_us	avg_vsync_us	p95_vsync_us	avg_clear_us	p95_clear_us	avg_background_us	p95_background_us	avg_projection_us	p95_projection_us	avg_image_blit_us	p95_image_blit_us	avg_sprite_us	p95_sprite_us	avg_post_us	p95_post_us	avg_hud_us	p95_hud_us	avg_sprite_count	p95_sprite_count	max_sprite_count	avg_sprite_pixels	p95_sprite_pixels	max_sprite_pixels	avg_particle_count	p95_particle_count	max_particle_count	avg_flicker_skip_count	p95_flicker_skip_count	max_flicker_skip_count	rss_hwm_kb	visual_ok	date	notes"
 if [[ ! -f "$RESULTS" ]] || ! head -1 "$RESULTS" | grep -q $'^label\teffect'; then

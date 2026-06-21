@@ -9,6 +9,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --opts
 #   MISTER_IP=... scripts/deploy-rust.sh --incr
 #   MISTER_IP=... scripts/deploy-rust.sh --all-scenes
+#   MISTER_IP=... scripts/deploy-rust.sh --experiments
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_IP=... scripts/deploy-rust.sh --video
 #   MISTER_IP=... scripts/deploy-rust.sh --mame-metadata --asset-packs
@@ -61,6 +62,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --hbmame-metadata) DEPLOY_HBMAME_METADATA=1 ;;
     --asset-packs) DEPLOY_ASSET_PACKS=1 ;;
     --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
+    --experiments) BUILD_FLAG+=(--experiments) ;;
     --ui-scope=*) BUILD_FLAG+=("$arg") ;;
     --ui-scope)
       i=$((i + 1))
@@ -71,7 +73,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BUILD_FLAG+=(--ui-scope "${ARGS[$i]}")
       ;;
     -h|--help)
-      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)

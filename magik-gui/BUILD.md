@@ -95,7 +95,8 @@ time, and the largest `mister-magik-fb` timing units. `check-arm-ui` uses
 test, and their required shared Slint modules. `check-arm-arcade-ui` uses
 `MISTER_UI_BUILD_SCOPE=arcade` and keeps the launcher-backed arcade screen. `check-arm-ui-full`,
 `build-arm-debug-full`, and `build-arm.sh --all-scenes` enable the
-`bench-scenes` feature and compile every benchmark scene.
+`experiments` feature, which includes generated benchmark scenes and the
+experimental effect scenes.
 
 Slint code generation lives in the `mister-magik-ui` path crate under
 `ui-generated/`. The main binary still drives the runtime, but ordinary Rust
@@ -126,8 +127,11 @@ magik-gui/build-arm.sh
 # On Apple Silicon this uses Apple's container runtime by default.
 # Set MISTER_ARM_BUILD_BACKEND=cross to force the CI/Linux cross-rs backend.
 
-# Compile every Slint benchmark scene (adds feature `bench-scenes`).
+# Compile Slint benchmark scenes and experimental effect scenes.
 magik-gui/build-arm.sh --all-scenes
+
+# Compile experimental effect scenes explicitly.
+magik-gui/build-arm.sh --experiments
 
 # Local optimized profile with incremental reuse.
 magik-gui/build-arm.sh --incr
@@ -252,9 +256,11 @@ project-local minimal build.
 - **`Cargo.toml`** — `[profile.release]` vs `[profile.release-device]` (inherits release, overrides LTO/CGU).
 - **Cargo feature `ui`** — enables Slint and the `mister-magik-ui` generated UI
   crate; `build-arm.sh` passes it for every MiSTer binary build.
-- **Cargo feature `bench-scenes`** — enables generated Slint benchmark scenes
-  and effect-bench Slint overlays. Ordinary UI builds omit it; `--all-scenes`
-  and `scripts/bench-toolchain.sh` opt in.
+- **Cargo feature `bench-scenes`** — enables generated Slint benchmark scenes.
+- **Cargo feature `experiments`** — includes `bench-scenes` and enables
+  experimental effect pickers, expanded preview transitions, and `effect-bench`.
+  Ordinary UI builds omit it; `--all-scenes`, `--experiments`, and
+  `scripts/bench-toolchain.sh` opt in.
 - **`MISTER_ARM_BUILD_BACKEND`** — local Apple-Silicon builds default to
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
 - **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — local optimized profiles

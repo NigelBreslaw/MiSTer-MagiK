@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Run the real launcher Arcade screen through every raw screenshot transition effect.
+# Experimental: run the real launcher Arcade screen through every raw screenshot transition effect.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+HERE="$(experiment_repo_root)"
+MISTER="$HERE/scripts/mister"
+REMOTE="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-device] [--segment-secs N] [--transition-ms N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
+Usage: scripts/experiments/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-device] [--segment-secs N] [--transition-ms N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565]
 
-Runs the Main-supervised launcher Arcade screen with
+Runs an experiment-enabled Main-supervised launcher Arcade screen with
 `MISTER_PREVIEW_TRANSITION=mega`.
 Each effect gets --segment-secs seconds of held-scroll, then the trace is
 summarized overall and by transition effect.
@@ -45,9 +48,15 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
 if [[ ! "$transition_ms" =~ ^[0-9]+$ || "$transition_ms" -lt 1 ]]; then echo "--transition-ms must be a positive integer" >&2; exit 2; fi
 
-effect_count="$(rg -c 'Self::[A-Za-z0-9]+ => "[a-z0-9-]+",' "$HERE/magik-gui/src/screenshot_transitions.rs" || true)"
+if [[ "$deploy" == "--deploy-device" ]]; then
+  "$HERE/scripts/deploy-rust.sh" --device --experiments
+  deploy="--skip-build"
+fi
+
+require_preview_mega_transitions "$MISTER" "$REMOTE"
+effect_count="$("$MISTER" run "'$REMOTE' preview-transitions" | (grep -E '^[a-z0-9-]+$' || true) | wc -l | tr -d ' ')"
 if [[ ! "$effect_count" =~ ^[0-9]+$ || "$effect_count" -lt 1 ]]; then
-  echo "failed to count preview transition labels" >&2
+  echo "failed to count deployed preview transition labels" >&2
   exit 1
 fi
 secs=$((segment_secs * effect_count))

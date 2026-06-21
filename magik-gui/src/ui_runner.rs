@@ -48,6 +48,7 @@ use crate::screenshot_transitions::{
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
+#[cfg(mister_experiments)]
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
@@ -59,20 +60,26 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
 
+#[cfg(mister_experiments)]
 mod camera_effects_loop;
 mod catalog_worker;
 #[cfg(mister_bench_scenes)]
 mod console_scroll_loop;
 mod controller_loop;
+#[cfg(mister_experiments)]
 mod effect_loop_support;
 mod launcher_bench;
 mod launcher_bridge;
 mod launcher_frame_accounting;
 mod launcher_loop;
+#[cfg(mister_experiments)]
 mod raster_effects_loop;
 mod screensaver_loop;
+#[cfg(mister_experiments)]
 mod sprite_effects_loop;
+#[cfg(mister_experiments)]
 mod text_effects_loop;
+#[cfg(mister_experiments)]
 mod transition_effects_loop;
 pub(crate) mod ui_boot;
 #[cfg(mister_bench_scenes)]
@@ -82,6 +89,7 @@ pub(crate) mod ui_platform;
 #[cfg(all(feature = "video", mister_bench_scenes))]
 mod video_loop;
 
+#[cfg(mister_experiments)]
 use camera_effects_loop::run_camera_effects_loop;
 use catalog_worker::*;
 #[cfg(mister_bench_scenes)]
@@ -91,10 +99,14 @@ use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_frame_accounting::*;
 use launcher_loop::*;
+#[cfg(mister_experiments)]
 use raster_effects_loop::run_raster_effects_loop;
 use screensaver_loop::*;
+#[cfg(mister_experiments)]
 use sprite_effects_loop::run_sprite_effects_loop;
+#[cfg(mister_experiments)]
 use text_effects_loop::run_text_effects_loop;
+#[cfg(mister_experiments)]
 use transition_effects_loop::run_transition_effects_loop;
 use ui_boot::*;
 #[cfg(mister_bench_scenes)]
@@ -119,10 +131,15 @@ fn screen_label(screen: Screen) -> &'static str {
 pub const UI_SCENES: &[&str] = &[
     "launcher",
     "screensaver",
+    #[cfg(mister_experiments)]
     "camera-effects",
+    #[cfg(mister_experiments)]
     "sprite-effects",
+    #[cfg(mister_experiments)]
     "text-effects",
+    #[cfg(mister_experiments)]
     "raster-effects",
+    #[cfg(mister_experiments)]
     "transition-effects",
     "blend_velocity",
     #[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
@@ -169,6 +186,7 @@ pub fn print_scenes() {
     }
 }
 
+#[cfg(mister_experiments)]
 pub fn print_effects() {
     println!("Framebuffer effects:");
     for &kind in EffectKind::all() {
@@ -185,22 +203,27 @@ pub fn print_effects() {
     }
 }
 
+#[cfg(mister_experiments)]
 pub fn print_camera_effects() {
     camera_effects_loop::print_camera_effects();
 }
 
+#[cfg(mister_experiments)]
 pub fn print_sprite_effects() {
     sprite_effects_loop::print_sprite_effects();
 }
 
+#[cfg(mister_experiments)]
 pub fn print_text_effects() {
     text_effects_loop::print_text_effects();
 }
 
+#[cfg(mister_experiments)]
 pub fn print_raster_effects() {
     raster_effects_loop::print_raster_effects();
 }
 
+#[cfg(mister_experiments)]
 pub fn print_transition_effects() {
     transition_effects_loop::print_transition_effects();
 }
@@ -434,26 +457,31 @@ pub fn run_ui(f: &mut Fpga) {
         return;
     }
 
+    #[cfg(mister_experiments)]
     if scene == "camera-effects" {
         run_camera_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 
+    #[cfg(mister_experiments)]
     if scene == "sprite-effects" {
         run_sprite_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 
+    #[cfg(mister_experiments)]
     if scene == "text-effects" {
         run_text_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 
+    #[cfg(mister_experiments)]
     if scene == "raster-effects" {
         run_raster_effects_loop(secs, &ui, &mut disp, fb_format);
         return;
     }
 
+    #[cfg(mister_experiments)]
     if scene == "transition-effects" {
         run_transition_effects_loop(secs, &ui, &mut disp, fb_format);
         return;

@@ -1,5 +1,9 @@
 # Raster / Palette Effects Catalog
 
+Current policy: effect catalogs are experiments, not release benchmark evidence.
+Use `docs/experiments/effects.md` and `scripts/experiments/` for current
+commands.
+
 Added 2026-06-13 as the fourth experimental full-screen classic-effects catalog,
 beside `camera-effects`, `sprite-effects`, and `text-effects`.
 

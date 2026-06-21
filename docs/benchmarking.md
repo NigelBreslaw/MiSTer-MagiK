@@ -43,7 +43,6 @@ Use these entrypoints:
 ```bash
 scripts/profile-arcade-scroll.sh LABEL
 scripts/profile-preview-scroll.sh LABEL
-scripts/profile-preview-transition-mega.sh LABEL --deploy-device
 ```
 
 For the "perfect 60fps Arcade preview" work, each single-commit PR must record
@@ -53,7 +52,6 @@ the PR slice and BEFORE/AFTER state:
 ```bash
 scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --transition fade --visual-captures 0
 scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --transition fade --visual-captures 0
-scripts/profile-preview-transition-mega.sh LABEL-MEGA --skip-build --segment-secs 5 --transition-ms 320
 scripts/profile-blend-velocity.sh 30 LABEL-BLEND-BASE baseline --skip-build
 scripts/profile-blend-velocity.sh 30 LABEL-BLEND-COPY copy-only --skip-build
 scripts/profile-blend-velocity.sh 30 LABEL-BLEND-NOFADE no-fade --skip-build
@@ -67,8 +65,9 @@ window so the profiler can flush, and pulls
 
 Preview-scroll benchmarks synchronously warm the screenshot archive cache before
 the benchmark timing window and first launcher step. The removed `cut`
-screenshot transition is intentionally rejected by the benchmark script; use
-`fade` for production-like evidence or `mega` for effect stress runs.
+screenshot transition is intentionally rejected by the benchmark script. Use
+`fade` for production evidence; `mega` transition coverage is experimental only
+and is not release benchmark evidence.
 `turbo-hold` ping-pongs between the Arcade list edges so long traces keep
 exercising preview selection changes after reaching the bottom.
 
@@ -107,8 +106,8 @@ MISTER_PREVIEW_SCROLL_TRACE_SECS=N
 Preview transition policy:
 
 - Default real-app preview transition is `fade`.
-- Add new transition experiments as new `MISTER_PREVIEW_TRANSITION` names rather
-  than replacing existing effects.
+- Add new transition experiments as new `MISTER_PREVIEW_TRANSITION` names in
+  experiment builds rather than replacing the production `fade` effect.
 - For visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
 
 Historical evidence:
@@ -158,36 +157,12 @@ Relevant docs:
 - `history/2026-6-13/arcade-screenshot-cache-workflow.md`
 - `history/2026-6-14/library-scanner-preview-archive-pruning.md`
 
-## Effect Benchmarks
+## Experiments
 
-List effects on device:
-
-```bash
-mister-magik-fb camera-effects
-mister-magik-fb sprite-effects
-mister-magik-fb text-effects
-mister-magik-fb raster-effects
-mister-magik-fb transition-effects
-mister-magik-fb preview-transitions
-```
-
-Run effect benchmarks:
-
-```bash
-scripts/profile-camera-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-sprite-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-text-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-raster-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-transition-effects.sh LABEL --mode mega --segment-secs N
-```
-
-Catalog docs:
-
-- `history/2026-6-13/camera-effects-catalog.md`
-- `history/2026-6-13/sprite-effects-catalog.md`
-- `history/2026-6-13/text-effects-catalog.md`
-- `history/2026-6-13/raster-effects-catalog.md`
-- `history/2026-6-13/transition-effects-catalog.md`
+Effect-scene profiling and `mega` preview-transition runs are experiments, not
+release benchmark evidence. Their scripts live under `scripts/experiments/`,
+require an experiment-enabled binary, and are documented in
+`docs/experiments/effects.md`.
 
 ## Toolchain And Scene Benchmarks
 

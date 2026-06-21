@@ -1,5 +1,5 @@
 //! Native framebuffer effect benchmark scene.
-#![cfg_attr(not(mister_bench_scenes), allow(unused_imports, dead_code))]
+#![cfg_attr(not(mister_experiments), allow(unused_imports, dead_code))]
 
 use crate::display_config::DisplayConfig;
 use crate::fb::{Display, Pixel, VsyncPacer};
@@ -17,13 +17,13 @@ use std::time::Instant;
 use mister_magik_ui as slint_ui;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 enum EffectBenchMode {
     Raw,
     Overlay,
 }
 
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 impl EffectBenchMode {
     fn label(self) -> &'static str {
         match self {
@@ -34,7 +34,7 @@ impl EffectBenchMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 pub(crate) enum EffectFill {
     Full,
     Half,
@@ -43,7 +43,7 @@ pub(crate) enum EffectFill {
     FpgaHalf,
 }
 
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 impl EffectFill {
     fn label(self) -> &'static str {
         match self {
@@ -72,7 +72,7 @@ impl EffectFill {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 pub(crate) struct EffectTarget {
     pub(crate) physical_x: usize,
     pub(crate) physical_y: usize,
@@ -83,7 +83,7 @@ pub(crate) struct EffectTarget {
     pub(crate) scale: usize,
 }
 
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 impl EffectTarget {
     pub(crate) fn new(fill: EffectFill, size: EffectSize, ui: &UiDisplay) -> Option<Self> {
         let (physical_w, physical_h, scale) = match fill {
@@ -133,7 +133,7 @@ impl EffectTarget {
     }
 }
 
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 fn parse_effect_bench_args() -> (
     Vec<EffectKind>,
     u64,
@@ -189,7 +189,7 @@ fn parse_effect_bench_args() -> (
 }
 
 #[derive(Default)]
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 struct EffectBenchTotals {
     frames: u64,
     effect_us: u128,
@@ -200,7 +200,7 @@ struct EffectBenchTotals {
     slow_frames: u64,
 }
 
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 impl EffectBenchTotals {
     fn record(
         &mut self,
@@ -230,7 +230,7 @@ impl EffectBenchTotals {
     }
 }
 
-#[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
 fn scale_effect_to_pixels_fit(
     src: &[u32],
     src_w: usize,
@@ -254,7 +254,7 @@ fn scale_effect_to_pixels_fit(
     }
 }
 
-#[cfg(mister_bench_scenes)]
+#[cfg(mister_experiments)]
 pub fn run_effect_bench(f: &mut Fpga) {
     let (effects, secs, modes, size, fill) = parse_effect_bench_args();
     println!(
@@ -423,13 +423,13 @@ pub fn run_effect_bench(f: &mut Fpga) {
     }
 }
 
-#[cfg(not(mister_bench_scenes))]
+#[cfg(not(mister_experiments))]
 pub fn run_effect_bench(_f: &mut Fpga) {
     eprintln!("effect-bench is unavailable in launcher-only UI builds");
     std::process::exit(2);
 }
 
-#[cfg(mister_bench_scenes)]
+#[cfg(mister_experiments)]
 fn run_one_effect_bench(
     disp: &mut Display,
     overlay_ctx: &mut Option<(

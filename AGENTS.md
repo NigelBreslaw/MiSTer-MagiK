@@ -110,15 +110,16 @@ Benchmark entrypoints:
 ```bash
 scripts/profile-arcade-scroll.sh LABEL
 scripts/profile-preview-scroll.sh LABEL
-scripts/profile-preview-transition-mega.sh LABEL --deploy-device
-scripts/profile-camera-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-sprite-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-text-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-raster-effects.sh LABEL --mode mega --segment-secs N
-scripts/profile-transition-effects.sh LABEL --mode mega --segment-secs N
+scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
+scripts/profile-blend-velocity.sh 30 LABEL baseline --skip-build
+scripts/bench-toolchain.sh LABEL --replace-label
+scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
+scripts/profile-library-io.sh LABEL --replace-label
 ```
 
 See `docs/benchmarking.md` before drawing performance conclusions.
+Effect-scene and mega-transition work is experimental only; see
+`docs/experiments/effects.md`.
 
 ## Hard Rules
 

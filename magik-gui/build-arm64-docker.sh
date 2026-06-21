@@ -38,7 +38,8 @@ Native ARM64 Docker ARMv7 build:
   ./build-arm64-docker.sh --opts       → release-opts
   ./build-arm64-docker.sh --incr       → release-incr
   ./build-arm64-docker.sh --device     → release-device
-  ./build-arm64-docker.sh --all-scenes → compile every Slint bench scene
+  ./build-arm64-docker.sh --all-scenes → compile bench scenes + experiments
+  ./build-arm64-docker.sh --experiments → compile experimental effect scenes
   ./build-arm64-docker.sh --ui-scope S → launcher | arcade | all
 
 One-time host setup:
@@ -59,7 +60,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       PROFILE=release-device-profile
       add_feature profile
       ;;
-    --all-scenes) UI_SCOPE=all; add_feature bench-scenes ;;
+    --all-scenes) UI_SCOPE=all; add_feature experiments ;;
+    --experiments) UI_SCOPE=all; add_feature experiments ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
     --ui-scope)
       i=$((i + 1))
