@@ -96,13 +96,14 @@ Archive entries use filesystem-safe canonical keys:
 mame-software__megadriv__sonic.rgb565
 ```
 
-Build a pack from MagiK-owned source images:
+Build a pack from MagiK-owned source images in the sibling `../magik-cloud`
+repo:
 
 ```bash
+cd ../magik-cloud
 scripts/build-console-screenshot-pack.sh \
   --system megadrive \
-  --input build/source-screenshots/megadrive \
-  --deploy
+  --input data/sources/megadrive/canonical
 ```
 
 Input image stems must already be canonical, or they must be the MAME software
@@ -110,18 +111,21 @@ short name for the chosen system. For example, `sonic.png` under
 `--system megadrive` becomes `mame-software__megadriv__sonic`.
 
 The builder deliberately rejects scraper/title stems such as
-`Sonic The Hedgehog (USA).png`. If `build/mame.sqlite3` exists, it also verifies
-each software name against `mame_software_items`. Convert scraper output into a
-staging directory with canonical names before building the pack.
+`Sonic The Hedgehog (USA).png`. If `data/mame.sqlite3` exists in
+`magik-cloud`, it also verifies each software name against
+`mame_software_items`. Convert scraper output into a staging directory with
+canonical names before building the pack.
 
-Stage scraper/title screenshots offline with the Rust host tool:
+Stage scraper/title screenshots offline with the `magik-cloud` Rust tool:
 
 ```bash
-scripts/mister console-screenshot-stage \
+cd ../magik-cloud
+cargo run -- \
+  console-screenshot-stage \
   --system saturn \
-  --input build/source-screenshots/saturn-scraper \
-  --output build/source-screenshots/saturn-canonical \
-  --report build/source-screenshots/saturn-stage-report.tsv
+  --input data/sources/saturn/originals \
+  --output data/sources/saturn/canonical \
+  --report work/saturn-stage-report.tsv
 ```
 
 The report records `mapped`, `unmatched`, `ambiguous`, and `collision` rows.

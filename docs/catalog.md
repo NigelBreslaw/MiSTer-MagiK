@@ -192,9 +192,9 @@ Screenshot packs are fixed runtime artifacts, not catalog inputs. The runtime
 loads LZ4-block `.mmlz4b` packs from `/media/fat/mister-magik/assets`; the
 catalog stores only the pack path and asset key needed to request a preview.
 Raw preview archive formats and ad hoc on-device pack generation are retired.
-Build packs on the host with `scripts/build-console-screenshot-pack.sh`,
-`scripts/build-neogeo-screenshot-pack.sh`, or
-`scripts/mister preview-cache-build`, then install the resulting fixed artifact.
+Build and publish packs from the sibling `../magik-cloud` repo; this repo keeps
+only runtime preview loading, catalog projection, and device acceptance checks.
+See `../magik-cloud/docs/media-build.md` for the media-build workflow.
 
 MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
 offline with `scripts/mister mame-metadata-build`, include them in the release
