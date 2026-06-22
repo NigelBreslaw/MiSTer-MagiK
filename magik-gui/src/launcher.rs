@@ -121,6 +121,50 @@ pub struct LauncherEvent {
     pub path: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryChangedTestAction {
+    Continue,
+    Rebuild,
+}
+
+impl LibraryChangedTestAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Continue => "continue",
+            Self::Rebuild => "rebuild",
+        }
+    }
+}
+
+pub fn parse_library_changed_test_action(
+    value: &str,
+) -> Result<Option<LibraryChangedTestAction>, String> {
+    match value.trim() {
+        "" => Ok(None),
+        "continue" => Ok(Some(LibraryChangedTestAction::Continue)),
+        "rebuild" => Ok(Some(LibraryChangedTestAction::Rebuild)),
+        other => Err(format!(
+            "unknown MISTER_MAGIK_TEST_LIBRARY_CHANGED_ACTION={other:?}; use continue|rebuild"
+        )),
+    }
+}
+
+pub fn library_changed_test_action_event(
+    confirm_action: Option<ConfirmAction>,
+    action: LibraryChangedTestAction,
+) -> Option<LauncherEvent> {
+    if confirm_action != Some(ConfirmAction::LibraryChanged) {
+        return None;
+    }
+    Some(LauncherEvent {
+        action: match action {
+            LibraryChangedTestAction::Continue => LauncherAction::ContinueWithStaleLibrary,
+            LibraryChangedTestAction::Rebuild => LauncherAction::RebuildLibrary,
+        },
+        path: None,
+    })
+}
+
 pub struct ArcadeNav {
     pub selected: usize,
     pub scroll_y: i32,
@@ -2418,6 +2462,39 @@ mod tests {
         assert_eq!(event.path, None);
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn library_changed_test_action_parser_accepts_only_continue_or_rebuild() {
+        assert_eq!(
+            parse_library_changed_test_action("continue").expect("parse continue"),
+            Some(LibraryChangedTestAction::Continue)
+        );
+        assert_eq!(
+            parse_library_changed_test_action("rebuild").expect("parse rebuild"),
+            Some(LibraryChangedTestAction::Rebuild)
+        );
+        assert_eq!(
+            parse_library_changed_test_action("").expect("parse empty"),
+            None
+        );
+        assert!(parse_library_changed_test_action("reset").is_err());
+    }
+
+    #[test]
+    fn library_changed_test_action_only_fires_for_library_changed_dialog() {
+        assert!(library_changed_test_action_event(
+            Some(ConfirmAction::ResetDatabase),
+            LibraryChangedTestAction::Continue,
+        )
+        .is_none());
+        let event = library_changed_test_action_event(
+            Some(ConfirmAction::LibraryChanged),
+            LibraryChangedTestAction::Rebuild,
+        )
+        .expect("library changed hook should emit event");
+        assert_eq!(event.action, LauncherAction::RebuildLibrary);
+        assert_eq!(event.path, None);
     }
 
     #[test]

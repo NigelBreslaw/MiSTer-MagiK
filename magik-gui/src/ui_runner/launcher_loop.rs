@@ -9,6 +9,7 @@ use mister_magik_fb::framebuffer_ownership::{
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
+const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 
 struct DeferredCatalogWorker {
     root: String,
@@ -263,6 +264,9 @@ pub(super) fn run_launcher_loop(
     let mut deferred_catalog_worker = None;
     let mut catalog_refresh_done = false;
     let mut catalog_persisted_summary_seen = false;
+    let library_changed_test_action = library_changed_test_action_from_env(start);
+    let mut library_changed_test_action_armed = library_changed_test_action.is_some();
+    let mut library_changed_test_dialog_seen_at: Option<Instant> = None;
     match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
         Ok(loaded) if !loaded.catalog.games.is_empty() => {
             print_startup_event(
@@ -935,7 +939,23 @@ pub(super) fn run_launcher_loop(
                     }
                     transition_picker_prev_left = state.dpad_left;
                     transition_picker_prev_right = state.dpad_right;
-                    let event = if auto_launch_selected
+                    let test_library_changed_event = if library_changed_test_action_armed {
+                        library_changed_test_event(
+                            &nav,
+                            library_changed_test_action,
+                            &mut library_changed_test_dialog_seen_at,
+                            loop_start,
+                            start,
+                        )
+                        .inspect(|_| {
+                            library_changed_test_action_armed = false;
+                        })
+                    } else {
+                        None
+                    };
+                    let event = if test_library_changed_event.is_some() {
+                        test_library_changed_event
+                    } else if auto_launch_selected
                         && !auto_launch_selected_done
                         && catalog_ready
                         && nav.screen == Screen::Arcade
@@ -1248,6 +1268,12 @@ pub(super) fn run_launcher_loop(
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
         let catalog_background_scan_visible = bridge.get_catalog_background_scan_visible();
+        let catalog_scan_message = bridge.get_catalog_scan_message().to_string();
+        let confirm_visible = bridge.get_confirm_visible();
+        let confirm_title = bridge.get_confirm_title().to_string();
+        let confirm_selected = bridge.get_confirm_selected();
+        let confirm_left_label = bridge.get_confirm_left_label().to_string();
+        let confirm_right_label = bridge.get_confirm_right_label().to_string();
         let status_write_due = frame_accounting.status_write_due();
         let status_string_copy_start = (status_write_due
             && frame_accounting.preview_scroll_trace_enabled())
@@ -1464,6 +1490,12 @@ pub(super) fn run_launcher_loop(
                 .unwrap_or(""),
             catalog_scan_percent,
             catalog_background_scan_visible,
+            &catalog_scan_message,
+            confirm_visible,
+            &confirm_title,
+            confirm_selected,
+            &confirm_left_label,
+            &confirm_right_label,
             launcher_bench_scenario,
             start_screen,
             lock_screen,
@@ -1683,6 +1715,44 @@ fn catalog_background_validation_delay() -> Duration {
         .unwrap_or(DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY)
 }
 
+fn library_changed_test_action_from_env(
+    start: Instant,
+) -> Option<launcher::LibraryChangedTestAction> {
+    let value = std::env::var("MISTER_MAGIK_TEST_LIBRARY_CHANGED_ACTION").ok()?;
+    match launcher::parse_library_changed_test_action(&value) {
+        Ok(action) => action,
+        Err(e) => {
+            eprintln!("{e}");
+            print_startup_event(start, "library_changed_test_action_invalid", e);
+            None
+        }
+    }
+}
+
+fn library_changed_test_event(
+    nav: &LauncherNav,
+    action: Option<launcher::LibraryChangedTestAction>,
+    dialog_seen_at: &mut Option<Instant>,
+    now: Instant,
+    start: Instant,
+) -> Option<launcher::LauncherEvent> {
+    if nav.confirm_action != Some(launcher::ConfirmAction::LibraryChanged) {
+        *dialog_seen_at = None;
+        return None;
+    }
+    let action = action?;
+    let seen_at = *dialog_seen_at.get_or_insert(now);
+    if now.duration_since(seen_at) < LIBRARY_CHANGED_TEST_ACTION_SETTLE {
+        return None;
+    }
+    print_startup_event(
+        start,
+        "library_changed_test_action",
+        format!("action={}", action.label()),
+    );
+    launcher::library_changed_test_action_event(nav.confirm_action, action)
+}
+
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
     _arcade_catalog_required_at_start: bool,
@@ -1828,6 +1898,40 @@ mod tests {
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
         assert!(!initial_catalog_scan_visible(true, false, true, false));
         assert!(initial_catalog_scan_visible(true, false, true, true));
+    }
+
+    #[test]
+    pub(super) fn library_changed_test_hook_waits_for_dialog_settle() {
+        let start = Instant::now();
+        let mut nav = LauncherNav::new();
+        let mut seen_at = None;
+
+        assert!(library_changed_test_event(
+            &nav,
+            Some(launcher::LibraryChangedTestAction::Continue),
+            &mut seen_at,
+            start,
+            start,
+        )
+        .is_none());
+
+        nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
+        assert!(library_changed_test_event(
+            &nav,
+            Some(launcher::LibraryChangedTestAction::Continue),
+            &mut seen_at,
+            start,
+            start,
+        )
+        .is_none());
+        assert!(library_changed_test_event(
+            &nav,
+            Some(launcher::LibraryChangedTestAction::Continue),
+            &mut seen_at,
+            start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
+            start,
+        )
+        .is_some());
     }
 
     #[test]
