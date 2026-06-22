@@ -2336,10 +2336,7 @@ mod tests {
         us.source_path = us.launch_ref.clone();
         us.setname = Some("mpatrol".to_string());
         let pack = preview_worker::PreviewArchiveIndex {
-            path: root
-                .join("320x320-screenshots.mmlz4b")
-                .display()
-                .to_string(),
+            path: root.join("arcade-screenshots.mmlz4b").display().to_string(),
             codec: "lz4-block",
             entries: vec!["mpatrol".to_string()],
         };
@@ -2484,10 +2481,7 @@ mod tests {
         let mut world = mra_discovery(2, "1942 (World)");
         world.setname = Some("1942w".to_string());
         let pack = preview_worker::PreviewArchiveIndex {
-            path: root
-                .join("320x320-screenshots.mmlz4b")
-                .display()
-                .to_string(),
+            path: root.join("arcade-screenshots.mmlz4b").display().to_string(),
             codec: "lz4-block",
             entries: vec!["1942w".to_string()],
         };

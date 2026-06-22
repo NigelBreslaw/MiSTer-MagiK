@@ -818,7 +818,7 @@ run_tier_catalog() {
     record_ok "no console screenshot packs installed; runtime-only preview check skipped"
   fi
 
-  if remote "test -f '/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b'"; then
+  if remote "test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b'"; then
     count="$("$MISTER" db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='arcade';" | last_number || true)"
     assert_gt_zero "arcade has_preview count" "$count"
   fi

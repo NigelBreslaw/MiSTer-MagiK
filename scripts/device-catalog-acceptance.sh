@@ -86,7 +86,7 @@ preview_count_for_platform() {
 }
 
 arcade_pack_exists() {
-  remote "test -f '/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b' && echo yes || echo no" | awk 'NF { value=$NF } END { print value }'
+  remote "test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b' && echo yes || echo no" | awk 'NF { value=$NF } END { print value }'
 }
 
 echo "==> Waiting ${SETTLE_SECS}s for startup refreshes to settle"

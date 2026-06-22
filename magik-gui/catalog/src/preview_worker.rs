@@ -981,7 +981,7 @@ fn default_preview_archive_root() -> PathBuf {
     std::env::var("MISTER_PREVIEW_CACHE_DIR")
         .ok()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/media/fat/_Arcade/media/screenshot-magik"))
+        .unwrap_or_else(|| PathBuf::from("/media/fat/mister-magik/assets"))
 }
 
 fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> Option<String> {
@@ -989,10 +989,8 @@ fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> 
     Path::new(&archive).exists().then_some(archive)
 }
 
-fn default_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> String {
-    let max_w = if resize.max_w == 0 { 320 } else { resize.max_w };
-    let max_h = if resize.max_h == 0 { 320 } else { resize.max_h };
-    let archive = root.join(format!("{max_w}x{max_h}-screenshots.mmlz4b"));
+fn default_preview_archive_path_in_root(root: &Path, _resize: PreviewResizeSpec) -> String {
+    let archive = root.join("arcade-screenshots.mmlz4b");
     archive.display().to_string()
 }
 
@@ -1322,7 +1320,7 @@ mod tests {
         preview_request(
             generation,
             title,
-            "/tmp/320x320-screenshots.mmlz4b",
+            "/tmp/arcade-screenshots.mmlz4b",
             preview_asset_key,
             priority,
         )
@@ -1583,11 +1581,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_preview_archive_uses_size_named_screenshots_pack() {
+    fn auto_preview_archive_uses_assets_arcade_pack() {
         let root =
             std::env::temp_dir().join(format!("mister-magik-preview-auto-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create archive root");
-        let archive = root.join("320x320-screenshots.mmlz4b");
+        let archive = root.join("arcade-screenshots.mmlz4b");
         std::fs::write(&archive, b"lz4").expect("write archive marker");
         let resize = PreviewResizeSpec {
             filter: PreviewResizeFilter::Hybrid,
@@ -1606,6 +1604,9 @@ mod tests {
     fn catalog_projection_paths_include_default_console_packs_without_stat() {
         let paths = preview_archive_paths_for_catalog_projection();
 
+        assert!(paths
+            .iter()
+            .any(|path| path == "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"));
         assert!(paths
             .iter()
             .any(|path| path == "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"));

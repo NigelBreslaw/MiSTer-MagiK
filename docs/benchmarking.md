@@ -129,10 +129,10 @@ Original arcade screenshots live on the MiSTer under:
 /media/fat/_Arcade/media/screenshot
 ```
 
-Generated MagiK caches live under:
+Generated MagiK screenshot packs live under:
 
 ```text
-/media/fat/_Arcade/media/screenshot-magik
+/media/fat/mister-magik/assets
 ```
 
 Only generated cache directories should be deleted/recreated. Runtime preview

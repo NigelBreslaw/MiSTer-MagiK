@@ -11,6 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const DEFAULT_REMOTE_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
+const DEFAULT_ARCADE_ARCHIVE_PATH: &str =
+    "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b";
+const DEFAULT_MANIFEST_URL: &str = "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
 const REMOTE_STATE_PATH: &str = "/media/fat/mister-magik/assets/.screenshot-media-state.json";
 const BENCH_TSV: &str = "history/toolchain-bench/results-screenshot-download.tsv";
 const BENCH_HEADER: &str = "type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
@@ -201,7 +204,8 @@ impl RemoteBenchRow {
 
 fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
     let mut parsed = MediaArgs {
-        manifest_url: env::var("MISTER_MEDIA_MANIFEST_URL").unwrap_or_default(),
+        manifest_url: env::var("MISTER_MEDIA_MANIFEST_URL")
+            .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string()),
         system: "all".to_string(),
         variant: "identity".to_string(),
         variants: Vec::new(),
@@ -245,9 +249,6 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
         }
         idx += 1;
     }
-    if parsed.manifest_url.is_empty() {
-        return Err("set MISTER_MEDIA_MANIFEST_URL or pass --manifest-url".into());
-    }
     if !parsed
         .label
         .chars()
@@ -288,23 +289,26 @@ fn load_manifest(url: &str) -> Result<MediaManifest> {
         )
         .into());
     }
-    parse_manifest(&serde_json::from_slice(&out.stdout)?)
+    parse_manifest(&serde_json::from_slice(&out.stdout)?, url)
 }
 
-fn parse_manifest(value: &Value) -> Result<MediaManifest> {
+fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
     let schema_version = value
         .get("schema_version")
+        .or_else(|| value.get("schema"))
         .and_then(Value::as_u64)
-        .ok_or("manifest missing schema_version")?;
+        .ok_or("manifest missing schema_version/schema")?;
     let published_at = value
         .get("published_at")
+        .or_else(|| value.get("generated_at"))
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
     let base_url = value
         .get("base_url")
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .map(str::to_string)
+        .unwrap_or_else(|| manifest_object_base_url(manifest_url))
         .trim_end_matches('/')
         .to_string();
     let pack_values = value
@@ -313,12 +317,17 @@ fn parse_manifest(value: &Value) -> Result<MediaManifest> {
         .ok_or("manifest missing packs array")?;
     let mut packs = Vec::new();
     for pack in pack_values {
-        let system = required_str(pack, "system")?.to_string();
+        let system = pack
+            .get("system")
+            .or_else(|| pack.get("id"))
+            .and_then(Value::as_str)
+            .ok_or("manifest pack missing system/id")?
+            .to_string();
         let local_path = pack
             .get("local_path")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .unwrap_or_else(|| format!("{DEFAULT_REMOTE_ASSET_DIR}/{system}-screenshots.mmlz4b"));
+            .unwrap_or_else(|| default_local_path_for_pack(&system));
         let asset_count = pack.get("asset_count").and_then(Value::as_u64);
         let identity_value = pack
             .get("variants")
@@ -327,7 +336,9 @@ fn parse_manifest(value: &Value) -> Result<MediaManifest> {
         let identity = MediaVariant {
             remote_path: identity_value
                 .get("remote_path")
+                .or_else(|| identity_value.get("object"))
                 .or_else(|| pack.get("remote_path"))
+                .or_else(|| pack.get("object"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("pack {system} missing identity remote_path"))?
                 .to_string(),
@@ -350,6 +361,13 @@ fn parse_manifest(value: &Value) -> Result<MediaManifest> {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
+        let codec = pack
+            .get("codec")
+            .and_then(Value::as_str)
+            .unwrap_or("mmlz4b");
+        if codec != "mmlz4b" {
+            return Err(format!("pack {system} uses unsupported codec {codec}").into());
+        }
         packs.push(MediaPack {
             system,
             local_path,
@@ -365,11 +383,23 @@ fn parse_manifest(value: &Value) -> Result<MediaManifest> {
     })
 }
 
-fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("manifest missing {key}").into())
+fn manifest_object_base_url(manifest_url: &str) -> String {
+    let Some((scheme, rest)) = manifest_url.split_once("://") else {
+        return String::new();
+    };
+    let host = rest.split('/').next().unwrap_or("");
+    if host.is_empty() {
+        String::new()
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
+
+fn default_local_path_for_pack(system: &str) -> String {
+    match system {
+        "arcade" => DEFAULT_ARCADE_ARCHIVE_PATH.to_string(),
+        other => format!("{DEFAULT_REMOTE_ASSET_DIR}/{other}-screenshots.mmlz4b"),
+    }
 }
 
 fn selected_packs<'a>(manifest: &'a MediaManifest, system: &str) -> Result<Vec<&'a MediaPack>> {
@@ -897,7 +927,11 @@ mod tests {
             }]
         });
 
-        let manifest = parse_manifest(&value).unwrap();
+        let manifest = parse_manifest(
+            &value,
+            "https://media.example.test/screenshots/v1/manifest.json",
+        )
+        .unwrap();
 
         assert_eq!(manifest.schema_version, 1);
         assert_eq!(manifest.packs[0].system, "megadrive");
@@ -925,13 +959,45 @@ mod tests {
             }]
         });
 
-        let manifest = parse_manifest(&value).unwrap();
+        let manifest = parse_manifest(&value, "https://media.example.test/manifest.json").unwrap();
 
         assert_eq!(
             manifest.packs[0].local_path,
             "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"
         );
         assert_eq!(manifest.packs[0].identity.decoded_sha256, "abcdef");
+    }
+
+    #[test]
+    fn parses_magik_cloud_manifest_shape() {
+        let sha = "c5fa5b54d2f2955e87e4d245a8942ce641a9cc84d320ce245b4a259a095c7b42";
+        let value = json!({
+            "schema": 1,
+            "generated_at": "2026-06-22T16:52:03Z",
+            "packs": [{
+                "id": "arcade",
+                "version": "2026.06.22",
+                "object": format!("mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b"),
+                "bytes": 1234,
+                "sha256": sha,
+                "codec": "mmlz4b"
+            }]
+        });
+
+        let manifest = parse_manifest(
+            &value,
+            "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
+        )
+        .unwrap();
+
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(manifest.published_at, "2026-06-22T16:52:03Z");
+        assert_eq!(manifest.packs[0].system, "arcade");
+        assert_eq!(manifest.packs[0].local_path, DEFAULT_ARCADE_ARCHIVE_PATH);
+        assert_eq!(
+            manifest_url_for_pack(&manifest, &manifest.packs[0]),
+            format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b")
+        );
     }
 
     #[test]

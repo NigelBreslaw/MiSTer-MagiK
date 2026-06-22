@@ -1929,8 +1929,7 @@ mod tests {
                     title: "1942".into(),
                     mra_path: "/media/fat/_Arcade/1942.mra".into(),
                     preview_archive_path:
-                        "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b"
-                            .into(),
+                        "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b".into(),
                     preview_asset_key: "1942".into(),
                     has_preview: true,
                     system_id: "arcade".into(),

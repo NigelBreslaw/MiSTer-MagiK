@@ -12,8 +12,9 @@ BIN="$HERE/tools/mister/target/debug/mister"
 MANIFEST="$HERE/tools/mister/Cargo.toml"
 LOCK="$HERE/tools/mister/Cargo.lock"
 SRC="$HERE/tools/mister/src/main.rs"
+MEDIA_SRC="$HERE/tools/mister/src/media.rs"
 
-if [ ! -x "$BIN" ] || [ "$MANIFEST" -nt "$BIN" ] || [ "$LOCK" -nt "$BIN" ] || [ "$SRC" -nt "$BIN" ]; then
+if [ ! -x "$BIN" ] || [ "$MANIFEST" -nt "$BIN" ] || [ "$LOCK" -nt "$BIN" ] || [ "$SRC" -nt "$BIN" ] || [ "$MEDIA_SRC" -nt "$BIN" ]; then
   cargo build --quiet --manifest-path "$MANIFEST"
 fi
 
