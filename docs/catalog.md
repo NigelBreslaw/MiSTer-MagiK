@@ -227,6 +227,47 @@ Build and publish packs from the sibling `../magik-cloud` repo; this repo keeps
 only runtime preview loading, catalog projection, and device acceptance checks.
 See `../magik-cloud/docs/media-build.md` for the media-build workflow.
 
+Remote screenshot-pack updates are manifest-driven. `scripts/mister
+media-check` and `scripts/mister media-download` read a Cloudflare R2 manifest
+from `MISTER_MEDIA_MANIFEST_URL` or `--manifest-url`, compare the expected
+SHA-256 with the local pack, and publish verified packs atomically into
+`/media/fat/mister-magik/assets`. The state file
+`/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
+successful media update and preferred benchmark variant. It is not a catalog
+stamp input.
+
+The production baseline is the canonical `.mmlz4b` object served with
+`Accept-Encoding: identity`. Compression is tested through Cloudflare's normal
+HTTP content negotiation before adding separately stored `.gz` or `.br` objects:
+
+```bash
+scripts/mister media-cloudflare-check --manifest-url https://media.example/manifest.json --system megadrive
+scripts/profile-screenshot-download.sh LABEL --manifest-url https://media.example/manifest.json --system megadrive --variants identity,gzip,brotli
+```
+
+`media-cloudflare-check` probes response headers with `Accept-Encoding:
+identity`, `gzip`, and `br`. If `CLOUDFLARE_ZONE_ID` and
+`CLOUDFLARE_API_TOKEN` are set, it also performs read-only Cloudflare API checks
+for the zone Brotli setting and response-compression rules. Dashboard
+verification is under **Speed > Optimization** and **Rules > Compression
+Rules** for the R2 custom domain. Production should use an R2 custom domain, not
+the development `r2.dev` endpoint, so Cloudflare Cache and compression rules are
+available.
+
+Screenshot download benchmark rows must include network download,
+decompression, save/publish, checksum verification, and total time:
+
+```text
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+```
+
+For identity responses `decompress_ms` is the local copy/normalization step and
+may be near zero. For gzip and Brotli responses, the row must show whether the
+MiSTer could decode the response and whether the total time improved, not just
+whether fewer bytes crossed the network. Separately stored compressed objects
+should only be added if these Cloudflare-negotiated measurements are ineffective
+or unverifiable for `.mmlz4b` content.
+
 MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
 offline with `scripts/mister mame-metadata-build`, include them in the release
 package with `scripts/package-distribution.sh`, and let the catalog stamp track
