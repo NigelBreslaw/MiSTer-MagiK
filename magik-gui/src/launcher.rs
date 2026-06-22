@@ -26,6 +26,7 @@ const VIRTUAL_LAUNCH_CACHE_DIR: &str = "/media/fat/mister-magik/launch-cache";
 const VIRTUAL_LAUNCH_CACHE_STAMP_FILE: &str = ".virtual-launch-cache.json";
 const VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA: u32 = 1;
 const VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION: u32 = 1;
+pub const LIBRARY_REBUILD_ON_NEXT_BOOT_PATH: &str = "/media/fat/mister-magik/rebuild-on-next-boot";
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
@@ -101,6 +102,8 @@ pub enum ConfirmAction {
     ExitToMister,
     ResetDatabase,
     Restart,
+    LibraryChanged,
+    LibraryUpdateFailed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +112,8 @@ pub enum LauncherAction {
     ExitToMister,
     ResetDatabase,
     Restart,
+    ContinueWithStaleLibrary,
+    RebuildLibrary,
 }
 
 pub struct LauncherEvent {
@@ -593,6 +598,14 @@ impl LauncherNav {
 
     fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
         if rising(now.btn_b, self.prev.btn_b) || rising(now.btn_home, self.prev.btn_home) {
+            if self.confirm_action == Some(ConfirmAction::LibraryChanged) {
+                self.confirm_action = None;
+                self.confirm_selected = 0;
+                return Some(LauncherEvent {
+                    action: LauncherAction::ContinueWithStaleLibrary,
+                    path: None,
+                });
+            }
             self.confirm_action = None;
             self.confirm_selected = 0;
             return None;
@@ -605,9 +618,12 @@ impl LauncherNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             let action = self.confirm_action;
+            let selected = self.confirm_selected;
             let confirmed = match action {
-                Some(ConfirmAction::ExitToMister) => self.confirm_selected == 0,
-                _ => self.confirm_selected == 1,
+                Some(ConfirmAction::ExitToMister) => selected == 0,
+                Some(ConfirmAction::LibraryChanged) => true,
+                Some(ConfirmAction::LibraryUpdateFailed) => false,
+                _ => selected == 1,
             };
             self.confirm_action = None;
             self.confirm_selected = 0;
@@ -625,6 +641,15 @@ impl LauncherNav {
                         action: LauncherAction::Restart,
                         path: None,
                     }),
+                    Some(ConfirmAction::LibraryChanged) => Some(LauncherEvent {
+                        action: if selected == 0 {
+                            LauncherAction::ContinueWithStaleLibrary
+                        } else {
+                            LauncherAction::RebuildLibrary
+                        },
+                        path: None,
+                    }),
+                    Some(ConfirmAction::LibraryUpdateFailed) => None,
                     None => None,
                 };
             }
@@ -1465,6 +1490,33 @@ pub fn reset_launch() {
 pub fn reset_database_and_reboot() -> Result<(), String> {
     library_db::remove_default_sqlite_database()?;
     reboot_mister()
+}
+
+pub fn library_rebuild_on_next_boot_pending() -> bool {
+    Path::new(LIBRARY_REBUILD_ON_NEXT_BOOT_PATH).exists()
+}
+
+pub fn request_library_rebuild_on_next_boot() -> Result<(), String> {
+    request_library_rebuild_on_next_boot_at(Path::new(LIBRARY_REBUILD_ON_NEXT_BOOT_PATH))
+}
+
+pub fn consume_library_rebuild_on_next_boot() -> Result<bool, String> {
+    consume_library_rebuild_on_next_boot_at(Path::new(LIBRARY_REBUILD_ON_NEXT_BOOT_PATH))
+}
+
+fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create rebuild marker dir: {e}"))?;
+    }
+    fs::write(path, b"rebuild\n").map_err(|e| format!("write rebuild marker: {e}"))
+}
+
+fn consume_library_rebuild_on_next_boot_at(path: &Path) -> Result<bool, String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("remove rebuild marker: {e}")),
+    }
 }
 
 fn reboot_mister_with(io: &mut impl LaunchIo) -> Result<(), String> {
@@ -2313,6 +2365,85 @@ mod tests {
 
         assert!(nav
             .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn library_changed_confirmation_defaults_to_continue() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.confirm_action = Some(ConfirmAction::LibraryChanged);
+
+        let event = nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
+            .expect("library changed default should emit continue");
+        assert_eq!(event.action, LauncherAction::ContinueWithStaleLibrary);
+        assert_eq!(event.path, None);
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn library_changed_confirmation_right_button_rebuilds() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.confirm_action = Some(ConfirmAction::LibraryChanged);
+        nav.confirm_selected = 1;
+
+        let event = nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
+            .expect("library changed rebuild should emit event");
+        assert_eq!(event.action, LauncherAction::RebuildLibrary);
+        assert_eq!(event.path, None);
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn library_changed_back_defers_rebuild() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.confirm_action = Some(ConfirmAction::LibraryChanged);
+        nav.confirm_selected = 1;
+
+        let event = nav
+            .handle_input(&pad_with(|pad| pad.btn_b = true), t0, &catalog)
+            .expect("back should continue with stale library");
+        assert_eq!(event.action, LauncherAction::ContinueWithStaleLibrary);
+        assert_eq!(event.path, None);
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn library_rebuild_marker_is_one_shot() {
+        let root = unique_temp_dir("library-rebuild-marker");
+        let path = root.join("nested/rebuild-on-next-boot");
+
+        assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("missing marker"));
+        request_library_rebuild_on_next_boot_at(&path).expect("write marker");
+        assert!(path.exists());
+        assert!(consume_library_rebuild_on_next_boot_at(&path).expect("consume marker"));
+        assert!(!path.exists());
+        assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("consume absent marker"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn library_update_failed_confirmation_dismisses_without_action() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.confirm_action = Some(ConfirmAction::LibraryUpdateFailed);
+
+        assert!(nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
             .is_none());
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);

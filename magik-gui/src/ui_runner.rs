@@ -112,6 +112,9 @@ use video_loop::*;
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
+const FIRST_LIBRARY_SCAN_MESSAGE: &str =
+    "Scanning for games. This only happens the first time you start MiSTer MagiK";
+const UPDATING_LIBRARY_SCAN_MESSAGE: &str = "Updating Library";
 
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
