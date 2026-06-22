@@ -221,6 +221,7 @@ pub(super) fn start_library_catalog_worker(
                     }
                 }
             }
+            restore_catalog_worker_priority();
             let summary = match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
                 Ok(summary) => Some(summary),
                 Err(e) => {
@@ -511,6 +512,13 @@ pub(super) fn lower_background_priority() {
     #[cfg(target_os = "linux")]
     unsafe {
         let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+    }
+}
+
+fn restore_catalog_worker_priority() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 0);
     }
 }
 

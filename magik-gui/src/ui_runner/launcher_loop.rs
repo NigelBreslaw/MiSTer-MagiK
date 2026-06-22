@@ -1559,10 +1559,7 @@ fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &st
     if !catalog_ready {
         return screen == Screen::Home || screen == Screen::Arcade || title == "Indexing library";
     }
-    matches!(
-        title,
-        "Library changed" | "Indexing library" | "Loading library"
-    )
+    false
 }
 
 fn catalog_background_scan_progress_visible(
@@ -1689,6 +1686,19 @@ mod tests {
         assert!(initial_catalog_scan_visible(false, true, true));
         assert!(!initial_catalog_scan_visible(true, true, true));
         assert!(!initial_catalog_scan_visible(false, true, false));
+    }
+
+    #[test]
+    pub(super) fn ready_catalog_rebuild_progress_uses_background_badge() {
+        for title in ["Library changed", "Indexing library", "Loading library"] {
+            let full_visible = catalog_scan_progress_visible(true, Screen::Home, title);
+            assert!(!full_visible, "{title} should not cover a ready catalog");
+            assert!(catalog_background_scan_progress_visible(
+                true,
+                full_visible,
+                title
+            ));
+        }
     }
 
     #[test]
