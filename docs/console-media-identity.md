@@ -82,6 +82,8 @@ not a screenshot naming contract.
 Console screenshot packs live under:
 
 ```text
+/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b
+/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b
 /media/fat/mister-magik/assets/nes-screenshots.mmlz4b
 /media/fat/mister-magik/assets/snes-screenshots.mmlz4b
 /media/fat/mister-magik/assets/n64-screenshots.mmlz4b

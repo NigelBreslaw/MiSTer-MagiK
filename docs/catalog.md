@@ -228,10 +228,11 @@ only runtime preview loading, catalog projection, and device acceptance checks.
 See `../magik-cloud/docs/media-build.md` for the media-build workflow.
 
 Remote screenshot-pack updates are manifest-driven. `scripts/mister
-media-check` and `scripts/mister media-download` read a Cloudflare R2 manifest
-from `MISTER_MEDIA_MANIFEST_URL` or `--manifest-url`, compare the expected
-SHA-256 with the local pack, and publish verified packs atomically into
-`/media/fat/mister-magik/assets`. The state file
+media-check` and `scripts/mister media-download` read the Cloudflare R2 manifest
+from `MISTER_MEDIA_MANIFEST_URL`, `--manifest-url`, or the default
+`https://assets.mistermagik.com/mister-magik/v1/manifest.json`, compare the
+expected SHA-256 with the local pack, and publish verified packs atomically into
+the runtime archive path. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
 successful media update and preferred benchmark variant. It is not a catalog
 stamp input.
@@ -241,8 +242,8 @@ The production baseline is the canonical `.mmlz4b` object served with
 HTTP content negotiation before adding separately stored `.gz` or `.br` objects:
 
 ```bash
-scripts/mister media-cloudflare-check --manifest-url https://media.example/manifest.json --system megadrive
-scripts/profile-screenshot-download.sh LABEL --manifest-url https://media.example/manifest.json --system megadrive --variants identity,gzip,brotli
+scripts/mister media-cloudflare-check --system megadrive
+scripts/profile-screenshot-download.sh LABEL --system megadrive --variants identity,gzip,brotli
 ```
 
 `media-cloudflare-check` probes response headers with `Accept-Encoding:

@@ -284,14 +284,14 @@ mod tests {
             title: title.into(),
             mra_path: mra_path.into(),
             preview_archive_path: if has_preview {
-                "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into()
+                "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b".into()
             } else {
                 "".into()
             },
             preview_asset_key: preview_asset_key.into(),
             has_preview,
             system_id: system_id.into(),
-        is_new: false,
+            is_new: false,
         }
     }
 
@@ -307,22 +307,22 @@ mod tests {
             ArcadeGameEntry {
                 title: "1941: Counter Attack (Japan)".into(),
                 mra_path: "/media/fat/_Arcade/1941 Japan.mra".into(),
-                preview_archive_path:
-                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path: "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"
+                    .into(),
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "1941: Counter Attack (World)".into(),
                 mra_path: "/media/fat/_Arcade/1941 World.mra".into(),
-                preview_archive_path:
-                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path: "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"
+                    .into(),
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "1942".into(),
@@ -331,27 +331,27 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "1943".into(),
                 mra_path: "/media/fat/_Arcade/1943.mra".into(),
-                preview_archive_path:
-                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path: "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"
+                    .into(),
                 preview_asset_key: "1943".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "Astra SuperStars".into(),
                 mra_path: "/media/fat/_Arcade/Astra SuperStars.mra".into(),
-                preview_archive_path:
-                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path: "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"
+                    .into(),
                 preview_asset_key: "astrass".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             },
         ];
         let catalog = ArcadeCatalog::new(root, games, systems);
@@ -385,7 +385,7 @@ mod tests {
             preview_asset_key: "".into(),
             has_preview: false,
             system_id: "amiga".into(),
-        is_new: false,
+            is_new: false,
         }];
         let catalog = ArcadeCatalog::new(root, games, systems);
 
@@ -401,12 +401,12 @@ mod tests {
             vec![ArcadeGameEntry {
                 title: "1942".into(),
                 mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                preview_archive_path:
-                    "/media/fat/_Arcade/media/screenshot-magik/320x320-screenshots.mmlz4b".into(),
+                preview_archive_path: "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b"
+                    .into(),
                 preview_asset_key: "1942".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             }],
             vec![GameSystemEntry {
                 id: "arcade".into(),
@@ -479,7 +479,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "unknown".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "Sonic".into(),
@@ -488,7 +488,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "megadrive".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "1942".into(),
@@ -497,7 +497,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
-        is_new: false,
+                is_new: false,
             },
             ArcadeGameEntry {
                 title: "Another Sonic".into(),
@@ -506,7 +506,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "megadrive".into(),
-        is_new: false,
+                is_new: false,
             },
         ];
 
