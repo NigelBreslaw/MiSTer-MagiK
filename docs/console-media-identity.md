@@ -158,3 +158,11 @@ console ROM payloads on MiSTer's exFAT/FUSE storage.
 Avoid doing screenshot-pack construction on the MiSTer hot path. Runtime deploy
 does not build or copy screenshot packs or MAME/HBMAME metadata databases; treat
 those as fixed release artifacts produced by the host-side catalog/media tools.
+
+Screenshot-pack updates from Cloudflare R2 are handled by the manifest downloader
+in `scripts/mister media-check`, `scripts/mister media-download`, and
+`scripts/profile-screenshot-download.sh`. Compression comparisons should first
+use Cloudflare negotiated `Accept-Encoding` responses for the canonical
+`.mmlz4b` object. Store separate `.gz` or `.br` files only if the measured
+Cloudflare path is unavailable, ineffective, or impossible to verify on the
+MiSTer.
