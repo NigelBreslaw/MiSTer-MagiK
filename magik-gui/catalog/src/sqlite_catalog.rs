@@ -26,9 +26,12 @@ use crate::software_identity::{
     PreviewArchivePaths, SoftwareHashCache,
 };
 use rusqlite::{params, Connection, OpenFlags};
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SqliteBuildTempSource {
@@ -42,6 +45,50 @@ pub(crate) struct SqliteBuildTempPlan {
     pub(crate) build_tmp_path: PathBuf,
     pub(crate) final_tmp_path: PathBuf,
     pub(crate) source: SqliteBuildTempSource,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DiscoveryHistory {
+    by_game_id: HashMap<String, Option<i64>>,
+}
+
+impl DiscoveryHistory {
+    fn load(path: &Path) -> Option<Self> {
+        let conn = open_sqlite_read_only(path).ok()?;
+        if !sqlite_table_exists(&conn, "games").ok()? {
+            return None;
+        }
+        let has_discovered_at = sqlite_column_exists(&conn, "games", "discovered_at_unix").ok()?;
+        let mut by_game_id = HashMap::new();
+        if has_discovered_at {
+            let mut stmt = conn
+                .prepare("SELECT game_id, discovered_at_unix FROM games")
+                .ok()?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+                })
+                .ok()?;
+            for row in rows {
+                let (game_id, discovered_at_unix) = row.ok()?;
+                by_game_id.insert(game_id, discovered_at_unix);
+            }
+        } else {
+            let mut stmt = conn.prepare("SELECT game_id FROM games").ok()?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0)).ok()?;
+            for row in rows {
+                by_game_id.insert(row.ok()?, None);
+            }
+        }
+        Some(Self { by_game_id })
+    }
+
+    fn discovered_at_for(&self, game_id: &str, scan: &LibraryScan) -> Option<i64> {
+        self.by_game_id
+            .get(game_id)
+            .copied()
+            .unwrap_or(Some(scan.scanned_at_unix))
+    }
 }
 
 pub(crate) fn remove_default_sqlite_database() -> Result<(), String> {
@@ -296,7 +343,8 @@ pub(crate) fn load_materialized_ui_catalog(
                 preview_archive_path,
                 preview_asset_key,
                 has_preview,
-                system_id
+                system_id,
+                discovered_at_unix
          FROM ui_arcade_preferred
          ORDER BY ordinal",
         "ui arcade preferred",
@@ -309,7 +357,8 @@ pub(crate) fn load_materialized_ui_catalog(
                     preview_archive_path,
                     preview_asset_key,
                     has_preview,
-                    system_id
+                    system_id,
+                    discovered_at_unix
              FROM launcher_catalog
              WHERE system_id NOT IN ('arcade','neogeo')
              ORDER BY ordinal",
@@ -332,7 +381,8 @@ pub(crate) fn load_materialized_launcher_catalog(
                 preview_archive_path,
                 preview_asset_key,
                 has_preview,
-                system_id
+                system_id,
+                discovered_at_unix
          FROM launcher_catalog
          ORDER BY ordinal",
         "launcher catalog",
@@ -344,11 +394,13 @@ pub(crate) fn query_game_entries(
     sql: &str,
     label: &str,
 ) -> Result<Vec<ArcadeGameEntry>, String> {
+    let now = library_db::unix_now_secs();
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| format!("prepare {label} query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
+            let discovered_at_unix = row.get::<_, Option<i64>>(6)?;
             Ok(ArcadeGameEntry {
                 title: row.get::<_, String>(0)?.into(),
                 mra_path: row.get::<_, String>(1)?.into(),
@@ -356,6 +408,7 @@ pub(crate) fn query_game_entries(
                 preview_asset_key: row.get::<_, String>(3)?.into(),
                 has_preview: row.get::<_, i64>(4)? != 0,
                 system_id: row.get::<_, String>(5)?.into(),
+                is_new: is_new_discovery(discovered_at_unix, now),
             })
         })
         .map_err(|e| format!("query {label}: {e}"))?;
@@ -374,6 +427,31 @@ pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool
     )
     .map(|exists| exists != 0)
     .map_err(|e| format!("check sqlite table {table}: {e}"))
+}
+
+pub(crate) fn sqlite_column_exists(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("prepare sqlite column check {table}.{column}: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("query sqlite column check {table}.{column}: {e}"))?;
+    for row in rows {
+        if row.map_err(|e| format!("read sqlite column check {table}.{column}: {e}"))? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn is_new_discovery(discovered_at_unix: Option<i64>, now_unix: i64) -> bool {
+    discovered_at_unix.is_some_and(|discovered_at_unix| {
+        discovered_at_unix <= now_unix && now_unix - discovered_at_unix <= NEW_GAME_BADGE_SECS
+    })
 }
 
 pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection> {
@@ -401,6 +479,7 @@ pub(crate) fn sqlite_uri_path(path: &Path) -> String {
 pub(crate) fn load_joined_launcher_catalog(
     conn: &Connection,
 ) -> Result<Vec<ArcadeGameEntry>, String> {
+    let now = library_db::unix_now_secs();
     let mut stmt = conn
         .prepare(
             "SELECT games.title,
@@ -409,6 +488,7 @@ pub(crate) fn load_joined_launcher_catalog(
                     '',
                     0,
                     COALESCE(games.system_id,'unknown'),
+                    games.discovered_at_unix,
                     launch_plans.launch_kind,
                     COALESCE(launch_plans.setname,''),
                     COALESCE(launch_plans.parent,'')
@@ -435,10 +515,12 @@ pub(crate) fn load_joined_launcher_catalog(
                     preview_asset_key: row.get::<_, String>(3)?.into(),
                     has_preview: row.get::<_, i64>(4)? != 0,
                     system_id: row.get::<_, String>(5)?.into(),
+                    is_new: is_new_discovery(row.get::<_, Option<i64>>(6)?, now),
                 },
-                source_kind: row.get::<_, String>(6)?,
-                setname: row.get::<_, String>(7)?,
-                parent: row.get::<_, String>(8)?,
+                discovered_at_unix: row.get::<_, Option<i64>>(6)?,
+                source_kind: row.get::<_, String>(7)?,
+                setname: row.get::<_, String>(8)?,
+                parent: row.get::<_, String>(9)?,
                 family_key: None,
             })
         })
@@ -516,6 +598,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp(
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
 
+    let discovery_history = DiscoveryHistory::load(path);
     let mut writer =
         |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
             let software_hash_cache = SoftwareHashCache::load(path);
@@ -524,6 +607,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp(
                 scan,
                 reborrow_progress(progress),
                 software_hash_cache,
+                discovery_history.clone(),
                 stamp,
             )
         };
@@ -750,6 +834,7 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_asset_key,
             has_preview,
             system_id,
+            discovered_at_unix,
             identity_id,
             parent_setname,
             asset_pack_id,
@@ -766,6 +851,7 @@ pub(crate) fn materialize_arcade_ui_projections(
                 lower(l.title) AS sort_title,
                 l.launch_ref AS launch_ref,
                 l.system_id AS system_id,
+                g.discovered_at_unix AS discovered_at_unix,
                 l.setname AS setname,
                 i.identity_id AS identity_id,
                 CASE
@@ -836,6 +922,7 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_key,
             preview_available,
             system_id,
+            discovered_at_unix,
             identity_id,
             parent_setname,
             NULL,
@@ -865,6 +952,7 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_asset_key,
             has_preview,
             system_id,
+            discovered_at_unix,
             identity_id,
             family_id,
             parent_setname,
@@ -883,6 +971,7 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_asset_key,
             has_preview,
             system_id,
+            discovered_at_unix,
             identity_id,
             family_id,
             parent_setname,
@@ -905,6 +994,7 @@ pub(crate) fn write_sqlite_scan(
     scan: &LibraryScan,
     progress: ProgressCallback<'_>,
     software_hash_cache: SoftwareHashCache,
+    discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
     let preview_paths = PreviewArchivePaths::from_paths(
@@ -920,6 +1010,7 @@ pub(crate) fn write_sqlite_scan(
             hbmame_sqlite_path: &hbmame_sqlite_path,
             preview_paths: &preview_paths,
             software_hash_cache,
+            discovery_history,
             stamp,
         },
         progress,
@@ -940,6 +1031,7 @@ pub(crate) fn write_sqlite_scan_with_mame(
             hbmame_sqlite_path: &PathBuf::new(),
             preview_paths: &PreviewArchivePaths::default(),
             software_hash_cache: SoftwareHashCache::load(path),
+            discovery_history: DiscoveryHistory::load(path),
             stamp: None,
         },
         None,
@@ -961,6 +1053,7 @@ pub(crate) fn write_sqlite_scan_with_mame_and_hbmame(
             hbmame_sqlite_path,
             preview_paths: &PreviewArchivePaths::default(),
             software_hash_cache: SoftwareHashCache::load(path),
+            discovery_history: DiscoveryHistory::load(path),
             stamp: None,
         },
         None,
@@ -983,6 +1076,7 @@ pub(crate) fn write_sqlite_scan_with_mame_and_preview_pack(
             hbmame_sqlite_path: &PathBuf::new(),
             preview_paths: &preview_paths,
             software_hash_cache: SoftwareHashCache::load(path),
+            discovery_history: DiscoveryHistory::load(path),
             stamp: None,
         },
         None,
@@ -994,6 +1088,7 @@ struct SqliteScanSources<'a> {
     hbmame_sqlite_path: &'a Path,
     preview_paths: &'a PreviewArchivePaths,
     software_hash_cache: SoftwareHashCache,
+    discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&'a catalog_stamp::CatalogStamp>,
 }
 
@@ -1050,7 +1145,8 @@ fn write_sqlite_scan_with_sources(
             system_id TEXT NOT NULL,
             manufacturer TEXT,
             genre TEXT,
-            year INTEGER
+            year INTEGER,
+            discovered_at_unix INTEGER
         ) WITHOUT ROWID;
         CREATE TABLE launch_plans (
             plan_id TEXT PRIMARY KEY,
@@ -1101,6 +1197,7 @@ fn write_sqlite_scan_with_sources(
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
+            discovered_at_unix INTEGER,
             identity_id TEXT,
             family_id TEXT NOT NULL,
             parent_setname TEXT,
@@ -1120,6 +1217,7 @@ fn write_sqlite_scan_with_sources(
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
+            discovered_at_unix INTEGER,
             identity_id TEXT,
             parent_setname TEXT,
             asset_pack_id TEXT,
@@ -1137,7 +1235,8 @@ fn write_sqlite_scan_with_sources(
             preview_archive_path TEXT NOT NULL,
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
-            system_id TEXT NOT NULL
+            system_id TEXT NOT NULL,
+            discovered_at_unix INTEGER
         );
         CREATE TABLE region_metadata (
             game_id TEXT PRIMARY KEY,
@@ -1287,8 +1386,8 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
-                "INSERT INTO games(game_id,title,sort_title,system_id,manufacturer,genre,year)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO games(game_id,title,sort_title,system_id,manufacturer,genre,year,discovered_at_unix)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut plan_stmt = tx
@@ -1327,6 +1426,10 @@ fn write_sqlite_scan_with_sources(
                 report_sqlite_import_progress(&mut progress, idx, discovery_total);
             }
             let system_id = catalog_system_id_for_discovery(discovery);
+            let discovered_at_unix = sources
+                .discovery_history
+                .as_ref()
+                .and_then(|history| history.discovered_at_for(&key, scan));
             let software_identity = mame_software_identity_for_discovery(
                 discovery,
                 &software_metadata,
@@ -1351,7 +1454,8 @@ fn write_sqlite_scan_with_sources(
                     system_id.as_str(),
                     discovery.manufacturer.as_deref(),
                     discovery.genre.as_deref(),
-                    discovery.year.map(|n| n as i64)
+                    discovery.year.map(|n| n as i64),
+                    discovered_at_unix
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
             let launcher_path = match discovery.source_kind {
@@ -1391,7 +1495,9 @@ fn write_sqlite_scan_with_sources(
                             .into(),
                         has_preview: game_has_preview,
                         system_id: system_id.clone().into(),
+                        is_new: false,
                     },
+                    discovered_at_unix,
                     source_kind: launch_kind_for_discovery(discovery).to_string(),
                     setname: discovery.setname.clone().unwrap_or_default(),
                     parent: discovery.parent.clone().unwrap_or_default(),
@@ -1534,8 +1640,8 @@ fn write_sqlite_scan_with_sources(
         report_library_import_timing("materialize_arcade_ui", projection_t, "");
         let launcher_arcade_t = Instant::now();
         tx.execute(
-            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id)
-             SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id
+            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix)
+             SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix
              FROM ui_arcade_preferred
              ORDER BY ordinal",
             [],
@@ -1549,14 +1655,15 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("query launcher catalog offset: {e}"))?;
         let launcher_console_t = Instant::now();
         launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
-        let launcher_games = library_db::collapse_catalog_variants(launcher_rows);
+        let launcher_games = library_db::collapse_catalog_variant_rows(launcher_rows);
         let mut launcher_stmt = tx
             .prepare(
-                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             )
             .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
-        for (idx, game) in launcher_games.iter().enumerate() {
+        for (idx, row) in launcher_games.iter().enumerate() {
+            let game = &row.game;
             launcher_stmt
                 .execute(params![
                     ordinal_offset + idx as i64,
@@ -1566,7 +1673,8 @@ fn write_sqlite_scan_with_sources(
                     game.preview_archive_path.as_ref(),
                     game.preview_asset_key.as_ref(),
                     if game.has_preview { 1 } else { 0 },
-                    game.system_id.as_ref()
+                    game.system_id.as_ref(),
+                    row.discovered_at_unix
                 ])
                 .map_err(|e| format!("insert launcher catalog: {e}"))?;
         }
@@ -1768,6 +1876,49 @@ mod tests {
     use rusqlite::Connection;
     use std::path::PathBuf;
 
+    fn discovered_at_for_title(db: &Path, title: &str) -> Option<i64> {
+        let conn = Connection::open(db).expect("open discovery db");
+        let mut stmt = conn
+            .prepare("SELECT discovered_at_unix FROM games WHERE title=?1")
+            .expect("prepare discovery query");
+        let mut rows = stmt.query([title]).expect("query discovery time");
+        let row = rows
+            .next()
+            .expect("read discovery row")
+            .expect("discovery row");
+        row.get::<_, Option<i64>>(0).expect("read discovered_at")
+    }
+
+    fn write_schema31_games_fixture(db: &Path, game_ids: &[&str]) {
+        let conn = Connection::open(db).expect("open schema31 fixture");
+        conn.execute_batch("CREATE TABLE games(game_id TEXT PRIMARY KEY) WITHOUT ROWID;")
+            .expect("create schema31 games");
+        let mut stmt = conn
+            .prepare("INSERT INTO games(game_id) VALUES (?1)")
+            .expect("prepare schema31 games");
+        for game_id in game_ids {
+            stmt.execute([*game_id]).expect("insert schema31 game");
+        }
+    }
+
+    fn write_schema32_games_fixture(db: &Path, games: &[(&str, Option<i64>)]) {
+        let conn = Connection::open(db).expect("open schema32 fixture");
+        conn.execute_batch(
+            "CREATE TABLE games(
+                game_id TEXT PRIMARY KEY,
+                discovered_at_unix INTEGER
+            ) WITHOUT ROWID;",
+        )
+        .expect("create schema32 games");
+        let mut stmt = conn
+            .prepare("INSERT INTO games(game_id,discovered_at_unix) VALUES (?1,?2)")
+            .expect("prepare schema32 games");
+        for (game_id, discovered_at_unix) in games {
+            stmt.execute(params![*game_id, discovered_at_unix])
+                .expect("insert schema32 game");
+        }
+    }
+
     #[test]
     fn sqlite_save_keeps_previous_database_when_replacement_fails() {
         let root = unique_temp_dir("sqlite-atomic-replace");
@@ -1794,6 +1945,68 @@ mod tests {
             "failed temp database should be cleaned up"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_previous_database_baselines_discoveries_without_new_badges() {
+        let root = unique_temp_dir("sqlite-discovery-first-scan");
+        let db = root.join("library.sqlite3");
+
+        save_sqlite_scan(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Baseline")]),
+        )
+        .expect("write first catalog");
+
+        assert_eq!(discovered_at_for_title(&db, "Baseline"), None);
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        assert_eq!(loaded.catalog.games.len(), 1);
+        assert!(!loaded.catalog.games[0].is_new);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn schema31_previous_database_seeds_baseline_and_marks_new_games() {
+        let root = unique_temp_dir("sqlite-discovery-schema31");
+        let db = root.join("library.sqlite3");
+        write_schema31_games_fixture(&db, &["mra:set:game00001"]);
+        let mut scan =
+            sqlite_scan_with_discoveries(vec![mra_discovery(1, "Known"), mra_discovery(2, "New")]);
+        scan.scanned_at_unix = 12_345;
+
+        save_sqlite_scan(&db, &scan).expect("write catalog from schema31 history");
+
+        assert_eq!(discovered_at_for_title(&db, "Known"), None);
+        assert_eq!(discovered_at_for_title(&db, "New"), Some(12_345));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn schema32_previous_database_preserves_timestamps_and_marks_new_games() {
+        let root = unique_temp_dir("sqlite-discovery-schema32");
+        let db = root.join("library.sqlite3");
+        write_schema32_games_fixture(&db, &[("mra:set:game00001", Some(111))]);
+        let mut scan =
+            sqlite_scan_with_discoveries(vec![mra_discovery(1, "Known"), mra_discovery(2, "New")]);
+        scan.scanned_at_unix = 222;
+
+        save_sqlite_scan(&db, &scan).expect("write catalog from schema32 history");
+
+        assert_eq!(discovered_at_for_title(&db, "Known"), Some(111));
+        assert_eq!(discovered_at_for_title(&db, "New"), Some(222));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn is_new_discovery_uses_fourteen_day_cutoff() {
+        let now = 1_000_000;
+
+        assert!(is_new_discovery(Some(now), now));
+        assert!(is_new_discovery(Some(now - NEW_GAME_BADGE_SECS), now));
+        assert!(!is_new_discovery(Some(now - NEW_GAME_BADGE_SECS - 1), now));
+        assert!(!is_new_discovery(Some(now + 1), now));
+        assert!(!is_new_discovery(None, now));
     }
 
     #[test]

@@ -1911,6 +1911,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "amiga".into(),
+                is_new: false,
             }],
             vec![GameSystemEntry {
                 id: "amiga".into(),
@@ -1933,6 +1934,7 @@ mod tests {
                     preview_asset_key: "1942".into(),
                     has_preview: true,
                     system_id: "arcade".into(),
+                    is_new: false,
                 },
                 ArcadeGameEntry {
                     title: "Agony".into(),
@@ -1941,6 +1943,7 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "amiga".into(),
+                    is_new: false,
                 },
             ],
             vec![
@@ -1968,6 +1971,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+                is_new: false,
             });
         }
         for i in 0..3 {
@@ -1978,6 +1982,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "amiga".into(),
+                is_new: false,
             });
         }
         ArcadeCatalog::new(
@@ -2009,6 +2014,7 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "arcade".into(),
+                    is_new: false,
                 },
                 ArcadeGameEntry {
                     title: "Arcade 2".into(),
@@ -2017,6 +2023,7 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "arcade".into(),
+                    is_new: false,
                 },
                 ArcadeGameEntry {
                     title: "Arcade 0".into(),
@@ -2025,6 +2032,7 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "arcade".into(),
+                    is_new: false,
                 },
             ],
             vec![GameSystemEntry {

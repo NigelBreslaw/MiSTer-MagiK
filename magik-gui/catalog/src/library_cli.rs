@@ -227,6 +227,7 @@ fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> Result<String, 
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogRow {
     pub(crate) game: ArcadeGameEntry,
+    pub(crate) discovered_at_unix: Option<i64>,
     pub(crate) source_kind: String,
     pub(crate) setname: String,
     pub(crate) parent: String,
@@ -234,6 +235,13 @@ pub(crate) struct CatalogRow {
 }
 
 pub(crate) fn collapse_catalog_variants(rows: Vec<CatalogRow>) -> Vec<ArcadeGameEntry> {
+    collapse_catalog_variant_rows(rows)
+        .into_iter()
+        .map(|row| row.game)
+        .collect()
+}
+
+pub(crate) fn collapse_catalog_variant_rows(rows: Vec<CatalogRow>) -> Vec<CatalogRow> {
     let mut best_idx: HashMap<String, usize> = HashMap::new();
     let mut out: Vec<CatalogRow> = Vec::with_capacity(rows.len());
 
@@ -249,7 +257,7 @@ pub(crate) fn collapse_catalog_variants(rows: Vec<CatalogRow>) -> Vec<ArcadeGame
         }
     }
 
-    out.into_iter().map(|row| row.game).collect()
+    out
 }
 
 fn catalog_variant_group_key(row: &CatalogRow) -> String {

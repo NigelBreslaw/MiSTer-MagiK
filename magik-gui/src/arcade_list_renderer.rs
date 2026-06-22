@@ -22,6 +22,8 @@ const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
 const ARCADE_LIST_LAYER_COPY_BANDS: [(usize, usize); 1] = [(0, ARCADE_LIST_H)];
 const ARCADE_SELECTION_FRAME_THICKNESS: usize = 3;
 const ARCADE_SELECTION_FRAME_COLOR: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
+const ARCADE_NEW_BADGE_FILL: Pixel = Pixel(0x0006d6a0);
+const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
 
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
@@ -38,6 +40,7 @@ pub(crate) struct ArcadeListRenderer {
 
 pub(crate) struct CachedArcadeRow {
     pub(crate) title: String,
+    pub(crate) is_new: bool,
     pub(crate) pixels: Vec<Rgb565Pixel>,
     pub(crate) last_used: u64,
 }
@@ -216,7 +219,7 @@ impl ArcadeListRenderer {
             if clip_y1 <= clip_y0 {
                 continue;
             }
-            self.blit_cached_row_to_surface(band_h, band_y, &games[idx].title, idx, y);
+            self.blit_cached_row_to_surface(band_h, band_y, &games[idx], idx, y);
         }
     }
 
@@ -224,24 +227,24 @@ impl ArcadeListRenderer {
         &mut self,
         band_h: usize,
         band_y: usize,
-        title: &str,
+        game: &ArcadeGameEntry,
         idx: usize,
         y: isize,
     ) {
-        let needs_render = self
-            .row_cache
-            .get(&idx)
-            .is_none_or(|cached| cached.title != title);
+        let needs_render = self.row_cache.get(&idx).is_none_or(|cached| {
+            cached.title != game.title.as_ref() || cached.is_new != game.is_new
+        });
         if needs_render {
             if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
                 prune_arcade_row_cache(&mut self.row_cache);
             }
-            let row = self.render_row(title, idx);
+            let row = self.render_row(game.title.as_ref(), game.is_new, idx);
             let last_used = self.next_row_cache_epoch();
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
-                    title: title.to_string(),
+                    title: game.title.to_string(),
+                    is_new: game.is_new,
                     pixels: row,
                     last_used,
                 },
@@ -449,10 +452,10 @@ impl ArcadeListRenderer {
         );
     }
 
-    fn render_row(&mut self, title: &str, idx: usize) -> Vec<Rgb565Pixel> {
+    fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {
         let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, idx);
-        let title = clipped_title(title, 30);
+        let title = clipped_title(title, if is_new { 24 } else { 30 });
         self.title_font.draw_text_clipped_gradient(
             &mut row,
             ARCADE_LIST_W,
@@ -464,8 +467,38 @@ impl ArcadeListRenderer {
             &title,
             ARCADE_TITLE_GRADIENT,
         );
+        if is_new {
+            draw_new_badge(&mut row, &mut self.meta_font);
+        }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
+}
+
+fn draw_new_badge(row: &mut [Pixel], font: &mut ConsoleFont) {
+    let x = ARCADE_LIST_W.saturating_sub(58);
+    let y = 14usize;
+    let w = 42usize;
+    let h = 18usize;
+    for dy in 0..h {
+        let row_y = y + dy;
+        if row_y >= ARCADE_ROW_HEIGHT as usize {
+            break;
+        }
+        let start = row_y * ARCADE_LIST_W + x;
+        let end = (start + w).min((row_y + 1) * ARCADE_LIST_W);
+        row[start..end].fill(ARCADE_NEW_BADGE_FILL);
+    }
+    font.draw_text_clipped(
+        row,
+        ARCADE_LIST_W,
+        ARCADE_LIST_W,
+        0,
+        ARCADE_ROW_HEIGHT as usize,
+        x as isize + 9,
+        y as isize + 12,
+        "NEW",
+        ARCADE_NEW_BADGE_TEXT,
+    );
 }
 
 pub(crate) fn for_each_arcade_list_copy_segment(
@@ -581,6 +614,7 @@ fn arcade_hash_game(hash: &mut u64, game: &ArcadeGameEntry) {
     arcade_hash_bytes(hash, game.preview_archive_path.as_bytes());
     arcade_hash_bytes(hash, game.preview_asset_key.as_bytes());
     arcade_hash_bytes(hash, game.title.as_bytes());
+    arcade_hash_bytes(hash, &[game.is_new as u8]);
 }
 
 fn arcade_hash_usize(hash: &mut u64, value: usize) {
@@ -727,7 +761,7 @@ mod tests {
     #[test]
     fn arcade_row_title_uses_gradient_pixels() {
         let mut renderer = ArcadeListRenderer::new();
-        let row = renderer.render_row("MAGIK", 0);
+        let row = renderer.render_row("MAGIK", false, 0);
         let bg = pixel_to_rgb565(Pixel(0x001a1424));
         let border = pixel_to_rgb565(Pixel(0x00251c34));
         let title_pixels = row
@@ -799,6 +833,7 @@ mod tests {
                 idx,
                 CachedArcadeRow {
                     title: format!("Game {idx}"),
+                    is_new: false,
                     pixels: Vec::new(),
                     last_used: idx as u64,
                 },
@@ -812,6 +847,33 @@ mod tests {
         assert!(cache.contains_key(&(ARCADE_ROW_CACHE_MAX - 1)));
     }
 
+    #[test]
+    fn redraws_when_visible_row_new_badge_changes() {
+        let mut renderer = ArcadeListRenderer::new();
+        let mut games = (0..20)
+            .map(|idx| {
+                game(
+                    "arcade",
+                    &format!("/media/fat/_Arcade/{idx}.mra"),
+                    &format!("Game {idx}"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            renderer.draw(&games, 7.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        assert!(renderer.draw(&games, 7.0, false).is_none());
+
+        games[3].is_new = true;
+
+        assert!(matches!(
+            renderer.draw(&games, 7.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+    }
+
     fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
         ArcadeGameEntry {
             title: title.into(),
@@ -820,6 +882,7 @@ mod tests {
             preview_asset_key: "".into(),
             has_preview: false,
             system_id: system_id.into(),
+            is_new: false,
         }
     }
 
