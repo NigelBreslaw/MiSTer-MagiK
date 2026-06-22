@@ -247,6 +247,7 @@ pub(super) fn slint_arcade_games(
             preview_asset_key: g.preview_asset_key.as_ref().into(),
             has_preview: g.has_preview,
             system_id: g.system_id.as_ref().into(),
+            is_new: g.is_new,
         })
         .collect();
     ModelRc::new(VecModel::from(rows))

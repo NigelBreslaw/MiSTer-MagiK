@@ -21,7 +21,7 @@ use crate::launch_profiles::{
     self, CollectionListing, PayloadDisposition, PayloadRule, ProfilePathClass,
 };
 pub(crate) use crate::library_cli::{
-    canonical_variant_title, collapse_catalog_variants, CatalogRow,
+    canonical_variant_title, collapse_catalog_variant_rows, collapse_catalog_variants, CatalogRow,
 };
 use crate::media_metadata;
 use crate::software_identity::{
@@ -566,7 +566,9 @@ fn build_arcade_catalog_from_scan_with_metadata(
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: system_id.into(),
+                is_new: false,
             },
+            discovered_at_unix: None,
             source_kind: launch_kind_for_discovery(discovery).to_string(),
             setname,
             parent,

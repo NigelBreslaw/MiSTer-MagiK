@@ -18,7 +18,7 @@ REPLACE_LABEL=0
 TIMEOUT_SECS=90
 KEEP_TEMP=0
 TEMP_MRA=""
-SOURCE_MRA=""
+TEMP_TITLE=""
 ENV_BACKUP=""
 HAD_ENV=0
 
@@ -26,9 +26,9 @@ usage() {
   cat <<'EOF'
 usage: scripts/device-library-change-flow.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--keep-temp]
 
-Copies one existing _Arcade .mra to a temporary unique .mra, verifies the
-Library changed Continue and Rebuild paths, records rebuild timings, then
-removes the temporary file and rebuilds the production catalog.
+Writes one temporary unique _Arcade .mra, verifies the Library changed Continue
+and Rebuild paths, records rebuild timings, then removes the temporary file and
+rebuilds the production catalog.
 EOF
 }
 
@@ -199,9 +199,18 @@ assert_temp_mra_count() {
     "SELECT count(*) FROM payloads WHERE file_path=$(sql_string "$TEMP_MRA");"
 }
 
-copy_temp_mra() {
-  remote "cp $(sq "$SOURCE_MRA") $(sq "$TEMP_MRA"); sync"
+write_temp_mra() {
+  remote "printf '%s\n' '<mra>' '<name>$TEMP_TITLE</name>' '</mra>' > $(sq "$TEMP_MRA"); sync"
   assert_remote "temporary MRA exists" "test -f $(sq "$TEMP_MRA")"
+}
+
+assert_temp_new_discovery_projection() {
+  assert_db_count "temp MRA game discovery timestamp" "1" \
+    "SELECT count(*) FROM games JOIN launch_plans ON launch_plans.game_id=games.game_id WHERE launch_plans.launch_ref=$(sql_string "$TEMP_MRA") AND games.discovered_at_unix IS NOT NULL;"
+  assert_db_count "temp MRA launcher catalog discovery timestamp" "1" \
+    "SELECT count(*) FROM launcher_catalog WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
+  assert_db_count "temp MRA arcade list discovery timestamp" "1" \
+    "SELECT count(*) FROM ui_arcade_preferred WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
 }
 
 remove_temp_mra() {
@@ -284,19 +293,16 @@ if [ "$(remote "if [ -f $(sq "$REMOTE_ENV") ]; then cp $(sq "$REMOTE_ENV") $(sq 
   HAD_ENV=1
 fi
 
-SOURCE_MRA="$(db "SELECT launch_ref FROM launcher_catalog WHERE launch_ref LIKE '/media/fat/_Arcade/%.mra' AND launch_ref NOT LIKE '%_mister-magik-it-%' ORDER BY launch_ref LIMIT 1;" | last_line)"
-if [ -z "$SOURCE_MRA" ] || [[ "$SOURCE_MRA" != /media/fat/_Arcade/*.mra ]]; then
-  fail "could not find source _Arcade MRA in launcher_catalog"
-fi
 TEMP_MRA="/media/fat/_Arcade/_mister-magik-it-${LABEL}.mra"
+TEMP_TITLE="MiSTer MagiK IT ${LABEL}"
 
-echo "== device library-change flow label=$LABEL source=$SOURCE_MRA temp=$TEMP_MRA"
+echo "== device library-change flow label=$LABEL temp=$TEMP_MRA"
 assert_db_count "launcher_catalog table exists" "1" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';"
 assert_remote "single launcher process before test" "test \"\$(ps w | grep '[m]ister-magik-fb ui launcher' | wc -l)\" = 1"
 
 echo "== Continue path"
 remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$TEMP_MRA")"
-copy_temp_mra
+write_temp_mra
 assert_temp_mra_count 0
 restart_launcher "continue"
 wait_remote "library changed detected" "$TIMEOUT_SECS" "grep -q 'library_changed_detected' $(sq "$REMOTE_LOG")"
@@ -313,13 +319,14 @@ wait_remote "updating library status" "$TIMEOUT_SECS" "grep -q '\"catalog_scan_m
 wait_remote "marker removed" "$TIMEOUT_SECS" "test ! -e $(sq "$REMOTE_MARKER")"
 wait_remote "deferred rebuild ready" "$TIMEOUT_SECS" "grep -q 'library_ready' $(sq "$REMOTE_LOG")"
 assert_temp_mra_count 1
+assert_temp_new_discovery_projection
 record_bench "deferred-marker" "library_rebuild_marker_consumed"
 
 echo "== Immediate Rebuild path"
 remove_temp_mra
 force_refresh "/tmp/mister-magik-library-change-baseline.log"
 assert_temp_mra_count 0
-copy_temp_mra
+write_temp_mra
 assert_temp_mra_count 0
 restart_launcher "rebuild"
 wait_remote "library changed detected for rebuild" "$TIMEOUT_SECS" "grep -q 'library_changed_detected' $(sq "$REMOTE_LOG")"
@@ -330,6 +337,7 @@ wait_remote "immediate rebuild updating status" "$TIMEOUT_SECS" "grep -q '\"cata
 wait_remote "immediate rebuild ready" "$TIMEOUT_SECS" "grep -q 'library_ready' $(sq "$REMOTE_LOG")"
 assert_remote "immediate rebuild wrote no marker" "test ! -e $(sq "$REMOTE_MARKER")"
 assert_temp_mra_count 1
+assert_temp_new_discovery_projection
 record_bench "immediate-rebuild" "library_rebuild_requested"
 
 echo "device library-change flow: ok"

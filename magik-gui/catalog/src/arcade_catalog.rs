@@ -25,6 +25,7 @@ pub struct ArcadeGameEntry {
     pub preview_asset_key: Arc<str>,
     pub has_preview: bool,
     pub system_id: Arc<str>,
+    pub is_new: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,6 +291,7 @@ mod tests {
             preview_asset_key: preview_asset_key.into(),
             has_preview,
             system_id: system_id.into(),
+        is_new: false,
         }
     }
 
@@ -310,6 +312,7 @@ mod tests {
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "1941: Counter Attack (World)".into(),
@@ -319,6 +322,7 @@ mod tests {
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "1942".into(),
@@ -327,6 +331,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "1943".into(),
@@ -336,6 +341,7 @@ mod tests {
                 preview_asset_key: "1943".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "Astra SuperStars".into(),
@@ -345,6 +351,7 @@ mod tests {
                 preview_asset_key: "astrass".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+        is_new: false,
             },
         ];
         let catalog = ArcadeCatalog::new(root, games, systems);
@@ -378,6 +385,7 @@ mod tests {
             preview_asset_key: "".into(),
             has_preview: false,
             system_id: "amiga".into(),
+        is_new: false,
         }];
         let catalog = ArcadeCatalog::new(root, games, systems);
 
@@ -398,6 +406,7 @@ mod tests {
                 preview_asset_key: "1942".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+        is_new: false,
             }],
             vec![GameSystemEntry {
                 id: "arcade".into(),
@@ -470,6 +479,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "unknown".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "Sonic".into(),
@@ -478,6 +488,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "megadrive".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "1942".into(),
@@ -486,6 +497,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+        is_new: false,
             },
             ArcadeGameEntry {
                 title: "Another Sonic".into(),
@@ -494,6 +506,7 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "megadrive".into(),
+        is_new: false,
             },
         ];
 

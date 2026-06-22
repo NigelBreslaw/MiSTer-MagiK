@@ -68,6 +68,23 @@ Explicit refresh and chosen rebuild:
 3. There is no incremental rescan, preview-only repair, directory manifest
    validation, or file fingerprint validation path.
 
+## Discovery Dates
+
+The SQLite catalog stores nullable per-game `discovered_at_unix` metadata.
+Because production rebuilds create a fresh database and publish it atomically,
+the builder reads the previous database before writing the replacement:
+
+- a matching `game_id` keeps its previous discovery timestamp, including `NULL`
+  baseline values from catalogs that predate discovery tracking,
+- a game absent from the previous database receives the current scan timestamp,
+- a missing or unreadable previous database is treated as the first baseline and
+  writes `NULL` discovery timestamps for all rows.
+
+The launcher derives the `New` list badge at load time from
+`discovered_at_unix`; rows first seen within the last 14 days are new. The badge
+state is not persisted separately. Materialized list tables carry
+`discovered_at_unix` only so every list projection can derive the same state.
+
 ## Worker Requests
 
 `CatalogWorkerRequest` has exactly three modes:
