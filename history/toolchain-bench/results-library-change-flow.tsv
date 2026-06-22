@@ -1,0 +1,13 @@
+label	commit	mode	event	ms	notes
+LIBCHANGE-20260622	3e48d62d	deferred-marker	library_changed_detected		-
+LIBCHANGE-20260622	3e48d62d	deferred-marker	library_rebuild_marker_consumed	7	-
+LIBCHANGE-20260622	3e48d62d	deferred-marker	library_scan_complete		-
+LIBCHANGE-20260622	3e48d62d	deferred-marker	library_db_saved	25151	-
+LIBCHANGE-20260622	3e48d62d	deferred-marker	library_ready	25150	-
+LIBCHANGE-20260622	3e48d62d	deferred-marker	rebuild_duration	25143	threshold_ms=60000
+LIBCHANGE-20260622	3e48d62d	immediate-rebuild	library_changed_detected	489	-
+LIBCHANGE-20260622	3e48d62d	immediate-rebuild	library_rebuild_requested	1689	-
+LIBCHANGE-20260622	3e48d62d	immediate-rebuild	library_scan_complete		-
+LIBCHANGE-20260622	3e48d62d	immediate-rebuild	library_db_saved	26040	-
+LIBCHANGE-20260622	3e48d62d	immediate-rebuild	library_ready	26033	-
+LIBCHANGE-20260622	3e48d62d	immediate-rebuild	rebuild_duration	24344	threshold_ms=60000
