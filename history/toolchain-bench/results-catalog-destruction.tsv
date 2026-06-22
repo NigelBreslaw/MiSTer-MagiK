@@ -1,0 +1,24 @@
+label	commit	scenario	event	ms	notes
+DESTROY-20260622	c7a12728	missing-db	catalog_cache_load_failed	8	-
+DESTROY-20260622	c7a12728	missing-db	catalog_cache_empty		-
+DESTROY-20260622	c7a12728	missing-db	library_db_saved	24756	-
+DESTROY-20260622	c7a12728	missing-db	library_ready	25107	-
+DESTROY-20260622	c7a12728	missing-db	rebuild_duration	25099	threshold_ms=60000
+DESTROY-20260622	c7a12728	zero-byte-db	catalog_cache_load_failed	8	-
+DESTROY-20260622	c7a12728	zero-byte-db	catalog_cache_empty		-
+DESTROY-20260622	c7a12728	zero-byte-db	library_db_saved	24053	-
+DESTROY-20260622	c7a12728	zero-byte-db	library_ready	24354	-
+DESTROY-20260622	c7a12728	zero-byte-db	rebuild_duration	24346	threshold_ms=60000
+DESTROY-20260622	c7a12728	corrupt-db	catalog_cache_load_failed	4	-
+DESTROY-20260622	c7a12728	corrupt-db	catalog_cache_empty		-
+DESTROY-20260622	c7a12728	corrupt-db	library_db_saved	23997	-
+DESTROY-20260622	c7a12728	corrupt-db	library_ready	24297	-
+DESTROY-20260622	c7a12728	corrupt-db	rebuild_duration	24293	threshold_ms=60000
+DESTROY-20260622	c7a12728	bad-marker-bad-db	catalog_cache_load_failed	20	-
+DESTROY-20260622	c7a12728	bad-marker-bad-db	catalog_cache_empty		-
+DESTROY-20260622	c7a12728	bad-marker-bad-db	library_rebuild_marker_consumed	8	-
+DESTROY-20260622	c7a12728	bad-marker-bad-db	library_db_saved	23963	-
+DESTROY-20260622	c7a12728	bad-marker-bad-db	library_ready	24280	-
+DESTROY-20260622	c7a12728	bad-marker-bad-db	rebuild_duration	24272	threshold_ms=60000
+DESTROY-20260622	c7a12728	file-change-continue	library_changed_detected	494	-
+DESTROY-20260622	c7a12728	file-change-continue	library_changed_test_action	1694	-
