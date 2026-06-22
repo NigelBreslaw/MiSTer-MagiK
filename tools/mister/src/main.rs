@@ -1,6 +1,6 @@
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 use ssh2::{ExtendedData, Session};
 use std::env;
@@ -20,6 +20,7 @@ const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -2639,7 +2640,31 @@ fn opt_ms(value: Option<u128>) -> String {
 }
 
 fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
-    let query_args = if args.is_empty() {
+    let query_args = library_db_query_args(args);
+    let quoted_args = query_args
+        .iter()
+        .map(|arg| sh(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = format!("/media/fat/mister-magik/mister-magik-fb library-sql {quoted_args}");
+    let out = exec(sess, &command, true)?;
+    if out.rc != 0 && library_sql_command_unavailable(&out.stdout, &out.stderr) {
+        let output = run_library_db_query_via_sftp(sess, &query_args)?;
+        print!("{output}");
+        if !output.ends_with('\n') {
+            println!();
+        }
+        return Ok(());
+    }
+    print!("{}", out.stdout);
+    if !out.stderr.trim().is_empty() {
+        eprint!("[stderr] {}", out.stderr);
+    }
+    std::process::exit(out.rc);
+}
+
+fn library_db_query_args(args: &[String]) -> Vec<String> {
+    if args.is_empty() {
         vec![
             "SELECT".to_string(),
             "type,name,tbl_name".to_string(),
@@ -2655,19 +2680,106 @@ fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
         ]
     } else {
         args.to_vec()
-    };
-    let quoted_args = query_args
-        .iter()
-        .map(|arg| sh(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let command = format!("/media/fat/mister-magik/mister-magik-fb library-sql {quoted_args}");
-    let out = exec(sess, &command, true)?;
-    print!("{}", out.stdout);
-    if !out.stderr.trim().is_empty() {
-        eprint!("[stderr] {}", out.stderr);
     }
-    std::process::exit(out.rc);
+}
+
+fn library_sql_command_unavailable(stdout: &str, stderr: &str) -> bool {
+    let text = format!("{stdout}\n{stderr}");
+    text.contains("unknown command 'library-sql'")
+}
+
+fn run_library_db_query_via_sftp(sess: &Session, args: &[String]) -> Result<String> {
+    let (remote_path, query) = parse_library_db_query(args)?;
+    let local_path = temporary_library_db_path();
+    get(sess, &remote_path, &local_path)?;
+    let result = run_local_read_only_sqlite_query(&local_path, &query);
+    let _ = fs::remove_file(&local_path);
+    result
+}
+
+fn parse_library_db_query(args: &[String]) -> Result<(String, String)> {
+    let mut remote_path = DEFAULT_REMOTE_LIBRARY_DB.to_string();
+    let mut query_parts = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--path" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("db: --path needs a value".into());
+                };
+                remote_path = value.to_string();
+                i += 2;
+            }
+            other => {
+                query_parts.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    if query_parts.is_empty() {
+        return Err("usage: scripts/mister db [--path PATH] SELECT ...".into());
+    }
+    let query = query_parts.join(" ");
+    let trimmed = query.trim_start().to_ascii_lowercase();
+    if !trimmed.starts_with("select") && !trimmed.starts_with("with") {
+        return Err("scripts/mister db only allows read-only SELECT/WITH queries".into());
+    }
+    Ok((remote_path, query))
+}
+
+fn temporary_library_db_path() -> PathBuf {
+    let mut path = env::temp_dir();
+    path.push(format!(
+        "mister-library-db-{}-{}.sqlite3",
+        unix_ms_now(),
+        std::process::id()
+    ));
+    path
+}
+
+fn run_local_read_only_sqlite_query(path: &Path, query: &str) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a file", path.display()).into());
+    }
+    if metadata.len() == 0 {
+        return Err(format!("{} is empty", path.display()).into());
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let mut stmt = conn.prepare(query)?;
+    let column_count = stmt.column_count();
+    let mut out = String::new();
+    if column_count > 0 {
+        out.push_str(&stmt.column_names().join("\t"));
+        out.push('\n');
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        for col in 0..column_count {
+            if col > 0 {
+                out.push('\t');
+            }
+            out.push_str(&sqlite_cell_to_string(row, col)?);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> Result<String> {
+    use rusqlite::types::ValueRef;
+
+    match row.get_ref(col)? {
+        ValueRef::Null => Ok(String::new()),
+        ValueRef::Integer(value) => Ok(value.to_string()),
+        ValueRef::Real(value) => Ok(value.to_string()),
+        ValueRef::Text(value) => Ok(String::from_utf8_lossy(value).into_owned()),
+        ValueRef::Blob(value) => Ok(format!("<blob:{}>", value.len())),
+    }
 }
 
 fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {

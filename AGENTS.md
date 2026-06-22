@@ -59,6 +59,13 @@ default. Override with `MISTER_MAIN_DIR`.
   packs with the catalog/media tools, not deploy flags. Use
   `MISTER_DEPLOY_TRANSPORT=ssh` only as an explicit fallback test or recovery
   path.
+- For catalog database inspection, use the direct query helpers first:
+  `scripts/mister db "SELECT ..."` or `scripts/mister library-db "SELECT ..."`.
+  Do not assume the MiSTer has `sqlite3`, and do not pull
+  `/media/fat/mister-magik/library.sqlite3` just to inspect rows unless the
+  direct query path is unavailable. If `scripts/mister db` reports an unknown
+  `library-sql` command, treat it as a host-tool/deployed-binary mismatch to
+  fix, not as proof that direct DB querying is unsupported.
 - Local ARM builds on Apple Silicon use Apple's `container` runtime by default.
   Do not route local builds through Docker/OrbStack unless
   `MISTER_ARM_BUILD_BACKEND=cross` is explicitly requested for a comparison.
