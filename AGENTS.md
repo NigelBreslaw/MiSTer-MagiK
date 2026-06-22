@@ -139,8 +139,9 @@ Effect-scene and mega-transition work is experimental only; see
 - Use RGB565 for production launcher/arcade performance conclusions.
   RGB888/XRGB8888 app env overrides are retired; use explicit diagnostic
   commands or feature-gated diagnostics for color-route A/B work.
-- Do not rebuild or write preview caches on the MiSTer hot path. Build raw565
-  caches from the Mac with `scripts/mister preview-cache-build`.
+- Do not rebuild or write preview caches on the MiSTer hot path. Build source
+  screenshots, raw565 caches, and snapshot packs from the sibling
+  `../magik-cloud` repo.
 - The library scanner must not walk screenshot/cache media directories, read
   `gamelist.xml`, or classify helper payloads as games.
 

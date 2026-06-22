@@ -136,16 +136,19 @@ Generated MagiK caches live under:
 ```
 
 Only generated cache directories should be deleted/recreated. Runtime preview
-loading is raw565-oriented; build and deploy caches from the Mac with:
+loading is raw565-oriented; build caches and publish-ready packs from the Mac in
+the sibling `../magik-cloud` repo with:
 
 ```bash
-scripts/mister preview-cache-build
+scripts/build-arcade-screenshot-pack.sh
+scripts/build-neogeo-screenshot-pack.sh
+scripts/build-console-screenshot-pack.sh --system saturn --input data/sources/saturn/canonical
 ```
 
-`preview-cache-build` writes resized PNGs, `.rgb565` files, and the sibling
-compressed LZ4 block archive named `320x320-screenshots.mmlz4b` for the default
-size. Runtime preview loading uses the archive path and asset key projected by
-the catalog; it must not derive cache paths from PNG/JPG screenshot locations.
+`magik-cloud` writes resized PNGs, `.rgb565` files, and compressed LZ4 block
+archives into ignored local artifact roots. Runtime preview loading uses the
+archive path and asset key projected by the catalog; it must not derive cache
+paths from PNG/JPG screenshot locations.
 
 The preview loader reads each configured archive into memory when it opens the
 archive. There is no runtime fallback to PNG/JPG sources, individual `.rgb565`

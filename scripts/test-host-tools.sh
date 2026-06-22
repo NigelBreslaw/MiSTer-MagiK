@@ -36,7 +36,6 @@ for script in \
   "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
-  "$ROOT/scripts/build-neogeo-screenshot-pack.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
   "$ROOT/scripts/device-catalog-acceptance.sh" \
   "$ROOT/scripts/device-release-acceptance.sh" \
@@ -54,40 +53,6 @@ done
 while IFS= read -r script; do
   bash -n "$script"
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
-
-if command -v sqlite3 >/dev/null 2>&1; then
-  mkdir -p "$TMP/neogeo/originals"
-  sqlite3 "$TMP/neogeo-mame.sqlite3" "
-    CREATE TABLE mame_machines (
-      setname TEXT PRIMARY KEY,
-      parent_setname TEXT,
-      title TEXT NOT NULL
-    );
-    INSERT INTO mame_machines(setname,parent_setname,title) VALUES
-      ('kof2002',NULL,'The King of Fighters 2002'),
-      ('kf2k2mp','kof2002','The King of Fighters 2002 Magic Plus'),
-      ('kf10thep','kof2002','The King of Fighters 10th Anniversary Extra Plus'),
-      ('mslug3',NULL,'Metal Slug 3'),
-      ('mslug3h','mslug3','Metal Slug 3');
-  "
-  printf parent >"$TMP/neogeo/originals/kof2002.png"
-  printf clone >"$TMP/neogeo/originals/kf2k2mp.png"
-  printf clone >"$TMP/neogeo/originals/kf10thep.jpg"
-  printf clone >"$TMP/neogeo/originals/mslug3h.png"
-  printf orphan >"$TMP/neogeo/originals/orphan.png"
-  printf sidecar >"$TMP/neogeo/originals/._orphan.png"
-  "$ROOT/scripts/build-neogeo-screenshot-pack.sh" \
-    --skip-fetch \
-    --stage-only \
-    --work-dir "$TMP/neogeo" \
-    --mame-sqlite "$TMP/neogeo-mame.sqlite3" >/dev/null
-  test -f "$TMP/neogeo/family/kof2002.png"
-  test -f "$TMP/neogeo/family/mslug3.png"
-  test -f "$TMP/neogeo/family/orphan.png"
-  test ! -e "$TMP/neogeo/family/kf2k2mp.png"
-  test ! -e "$TMP/neogeo/family/kf10thep.jpg"
-  test ! -e "$TMP/neogeo/family/._orphan.png"
-fi
 
 if grep -R -E 'scripts/(bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh|scripts/experiments/(profile-preview-transition-mega|bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh' \
   "$ROOT/AGENTS.md" "$ROOT/docs/benchmarking.md" "$ROOT/magik-gui/BUILD.md" "$ROOT/magik-gui/ui/bench/README.md" >/dev/null; then

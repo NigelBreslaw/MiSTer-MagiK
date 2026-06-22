@@ -6,7 +6,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
 DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
-DEFAULT_ASSET_PACK="$ROOT/build/neogeo-screenshots/cache/320x320-screenshots.mmlz4b"
 DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
 
 BIN="$DEFAULT_BIN"
@@ -34,9 +33,7 @@ Options:
                        Default if --hbmame-sqlite-default: $DEFAULT_HBMAME
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
-  --asset-pack PATH    Optional preview asset pack.
-                       Default if --asset-pack-default: $DEFAULT_ASSET_PACK
-  --asset-pack-default Include the default Neo Geo screenshot asset pack if present.
+  --asset-pack PATH    Optional preview asset pack. Build/publish packs from ../magik-cloud.
   --hbmame-sqlite-default
                        Include the default HBMame metadata DB if present.
   --main-bin PATH      Optional MiSTer_MagiK Main fork binary.
@@ -75,10 +72,6 @@ while [[ $# -gt 0 ]]; do
     --asset-pack)
       ASSET_PACK="${2:?--asset-pack requires a path}"
       shift 2
-      ;;
-    --asset-pack-default)
-      ASSET_PACK="$DEFAULT_ASSET_PACK"
-      shift
       ;;
     --hbmame-sqlite-default)
       HBMAME_SQLITE="$DEFAULT_HBMAME"

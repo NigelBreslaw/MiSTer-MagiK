@@ -128,10 +128,9 @@ Current rules:
 - MAME XML and MAME software-list XML are host-side metadata inputs only. Convert
   them to `mame.sqlite3` with `scripts/mister mame-metadata-build`; the runtime
   scanner consumes the SQLite rows, not those XML files.
-- Runtime preview loading is raw565-oriented. Build cache assets and fixed
-  LZ4-block `.mmlz4b` preview packs from the Mac with
-  `scripts/mister preview-cache-build` or the host screenshot-pack scripts.
-  Runtime deploy does not build catalog/media artifacts.
+- Runtime preview loading is raw565-oriented. Build source screenshots, raw565
+  caches, and fixed LZ4-block `.mmlz4b` preview packs from the sibling
+  `../magik-cloud` repo. Runtime deploy does not build catalog/media artifacts.
 
 Relevant docs:
 
