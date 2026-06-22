@@ -37,6 +37,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_preview_display_width(0);
     bridge.set_arcade_preview_display_height(0);
     bridge.set_catalog_scan_visible(false);
+    bridge.set_catalog_scan_message(FIRST_LIBRARY_SCAN_MESSAGE.into());
     bridge.set_catalog_scan_title("".into());
     bridge.set_catalog_scan_detail("".into());
     bridge.set_catalog_scan_percent(-1);
@@ -84,6 +85,22 @@ pub(super) fn sync_confirm_bridge(
             bridge.set_confirm_message("Reboot the MiSTer now?".into());
             bridge.set_confirm_left_label("Cancel".into());
             bridge.set_confirm_right_label("Confirm".into());
+        }
+        Some(launcher::ConfirmAction::LibraryChanged) => {
+            bridge.set_confirm_title("Library changed".into());
+            bridge.set_confirm_message(
+                "New games detected. Continue with the current library or rebuild now.".into(),
+            );
+            bridge.set_confirm_left_label("Continue".into());
+            bridge.set_confirm_right_label("Rebuild".into());
+        }
+        Some(launcher::ConfirmAction::LibraryUpdateFailed) => {
+            bridge.set_confirm_title("Library update failed".into());
+            bridge.set_confirm_message(
+                "Continuing with the current library. Try rebuilding again later.".into(),
+            );
+            bridge.set_confirm_left_label("Continue".into());
+            bridge.set_confirm_right_label("OK".into());
         }
         None => {
             bridge.set_confirm_title("".into());

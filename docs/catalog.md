@@ -26,8 +26,8 @@ APIs, progress states, and benchmark expectations.
   catalog modules continue to split out.
 - `magik-gui/src/ui_runner/catalog_worker.rs` owns launcher worker scheduling
   and progress messages.
-- `magik-gui/src/launcher.rs` owns virtual launch cache stamping and
-  materialization.
+- `magik-gui/src/launcher.rs` owns the library rebuild-on-next-boot marker plus
+  virtual launch cache stamping and materialization.
 
 ## Lifecycle
 
@@ -51,12 +51,19 @@ Warm boot with a usable cache:
 2. After the UI delay, worker runs `CheckStamp`.
 3. If the stored stamp matches the current root stamp, the worker reports
    `Unchanged` and does not rebuild.
-4. If the stamp is missing, stale, or cannot be checked, the worker emits real
-   progress and runs the same full builder used for cold builds.
+4. If the stamp is missing, stale, or cannot be checked, the worker reports
+   `Changed` and exits. It must not run the full builder automatically.
+5. The launcher shows a `Library changed` confirmation dialog. `Continue` keeps
+   the current catalog for this session and writes
+   `/media/fat/mister-magik/rebuild-on-next-boot`. `Rebuild` immediately starts
+   a foreground `ForceBuild`.
+6. On the next MagiK boot, the launcher consumes the rebuild marker as a
+   one-shot request and starts the foreground `Updating Library` flow instead of
+   delayed ready-cache validation.
 
-Explicit refresh:
+Explicit refresh and chosen rebuild:
 
-1. UI or CLI requests `ForceBuild`.
+1. UI, marker boot, or CLI requests `ForceBuild`.
 2. The full builder always runs.
 3. There is no incremental rescan, preview-only repair, directory manifest
    validation, or file fingerprint validation path.
@@ -83,8 +90,9 @@ restart.
 
 ## UI Progress Semantics
 
-The full-screen scan UI is for foreground first-scan or forced build states where
-the user has no current usable catalog.
+The full-screen scan UI is for foreground first-scan or chosen forced-build
+states. Cold first scans keep the first-run `Scanning for games...` copy.
+User-triggered and marker-triggered rebuilds use the `Updating Library` copy.
 
 When a cold or reset database uses the staged RAM catalog path, the worker first
 runs a cheap direct launcher bootstrap over top-level `_Arcade` `.mra` and
@@ -105,7 +113,13 @@ scan failure, or load failure.
 
 `CheckStamp` itself should normally be silent. A matching stamp produces timing
 and `Unchanged`, not a visible progress badge. A stale or failed stamp check
-emits `Library changed` progress before the rebuild, which turns the badge on.
+emits `Changed`, which opens the `Library changed` dialog; it does not show the
+first-run scan screen and does not turn the background badge into a rebuild.
+
+If a foreground rebuild fails but the old SQLite catalog is still readable, the
+launcher clears the update screen, shows a dismissible `Library update failed`
+dialog, and continues with the old catalog. The failure remains in logs so the
+user is not trapped away from the launcher.
 
 ## Root Stamp
 

@@ -241,6 +241,24 @@ pub(super) fn run_launcher_loop(
     let catalog_refresh_policy = catalog_refresh_policy();
     let catalog_refresh = catalog_refresh_policy.force_requested();
     let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
+    let deferred_library_rebuild = if catalog_worker_enabled {
+        match launcher::consume_library_rebuild_on_next_boot() {
+            Ok(pending) => {
+                if pending {
+                    print_startup_event(start, "library_rebuild_marker_consumed", "pending=1");
+                }
+                pending
+            }
+            Err(e) => {
+                eprintln!("failed to consume library rebuild marker: {e}");
+                print_startup_event(start, "library_rebuild_marker_consume_failed", e);
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let mut catalog_foreground_update = deferred_library_rebuild;
     let mut catalog_rx = None;
     let mut deferred_catalog_worker = None;
     let mut catalog_refresh_done = false;
@@ -258,7 +276,14 @@ pub(super) fn run_launcher_loop(
             apply_forced_arcade_selected(&mut nav, &catalog);
             apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
             let request = ready_catalog_worker_request(catalog_refresh_policy);
-            if request != CatalogWorkerRequest::LoadOnly {
+            if deferred_library_rebuild {
+                print_startup_event(start, "catalog_worker_start", &arcade_root);
+                catalog_rx = Some(start_library_catalog_worker(
+                    arcade_root.clone(),
+                    CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerInitialCache::AlreadyLoadedReady,
+                ));
+            } else if request != CatalogWorkerRequest::LoadOnly {
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
                     start,
@@ -353,9 +378,13 @@ pub(super) fn run_launcher_loop(
         catalog_ready,
         arcade_catalog_required_at_start,
         catalog_worker_enabled,
+        catalog_foreground_update,
     ));
+    bridge.set_catalog_scan_message(catalog_scan_message(catalog_foreground_update).into());
     bridge.set_catalog_scan_title(if catalog_ready {
-        if catalog_refresh {
+        if catalog_foreground_update {
+            "Indexing library".into()
+        } else if catalog_refresh {
             "Validating library".into()
         } else {
             "".into()
@@ -366,7 +395,11 @@ pub(super) fn run_launcher_loop(
         "Indexing library".into()
     });
     bridge.set_catalog_scan_detail(if catalog_ready {
-        format!("Using cached {} games", catalog.len()).into()
+        if catalog_foreground_update {
+            "Rebuilding catalog with latest games...".into()
+        } else {
+            format!("Using cached {} games", catalog.len()).into()
+        }
     } else if !catalog_worker_enabled {
         "Catalog worker disabled for benchmark restart".into()
     } else {
@@ -413,6 +446,7 @@ pub(super) fn run_launcher_loop(
     let mut bootstrap_counter_climb_logged = false;
     let mut bootstrap_counter_sustained_climb_logged = false;
     let mut full_scan_counter_climb_logged = false;
+    let mut catalog_refresh_failed = false;
     let mut route_reassert_count = 0u64;
     let mut last_route_reassert_frame = 0u64;
     let mut last_route_reassert_ok = false;
@@ -519,9 +553,19 @@ pub(super) fn run_launcher_loop(
                         detail,
                         percent,
                     } => {
+                        if matches!(
+                            title.as_str(),
+                            "Library scan failed" | "Library load failed"
+                        ) {
+                            catalog_refresh_failed = true;
+                        }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        let visible =
-                            catalog_scan_progress_visible(catalog_ready, nav.screen, &title);
+                        let visible = catalog_scan_progress_visible(
+                            catalog_ready,
+                            nav.screen,
+                            &title,
+                            catalog_foreground_update,
+                        );
                         let background_visible = catalog_background_scan_progress_visible(
                             catalog_ready,
                             visible,
@@ -569,6 +613,9 @@ pub(super) fn run_launcher_loop(
                             .progress_detail(&title, &detail, loop_start)
                             .unwrap_or(detail);
                         bridge.set_catalog_scan_visible(visible);
+                        bridge.set_catalog_scan_message(
+                            catalog_scan_message(catalog_foreground_update).into(),
+                        );
                         bridge.set_catalog_background_scan_visible(background_visible);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_detail(detail.into());
@@ -601,6 +648,8 @@ pub(super) fn run_launcher_loop(
                             );
                         }
                         if let Some(summary) = summary {
+                            catalog_foreground_update = false;
+                            catalog_refresh_failed = false;
                             let event = if summary.skipped {
                                 "library_db_unchanged"
                             } else {
@@ -615,6 +664,26 @@ pub(super) fn run_launcher_loop(
                             }
                         }
                         if duplicate_cached_catalog {
+                            if catalog_refresh_failed || catalog_foreground_update {
+                                catalog_refresh_done = true;
+                                catalog_foreground_update = false;
+                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                                bridge.set_catalog_scan_visible(false);
+                                bridge.set_catalog_background_scan_visible(false);
+                                bridge.set_catalog_scan_title("".into());
+                                bridge.set_catalog_scan_detail("".into());
+                                bridge.set_catalog_scan_percent(-1);
+                                games_found_counter.reset();
+                                nav.confirm_action =
+                                    Some(launcher::ConfirmAction::LibraryUpdateFailed);
+                                nav.confirm_selected = 0;
+                                print_startup_event(
+                                    start,
+                                    "library_rebuild_fallback_catalog_ready",
+                                    format!("games={} load_us={load_us}", catalog.len()),
+                                );
+                                full_bridge_dirty = true;
+                            }
                             continue;
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -670,6 +739,8 @@ pub(super) fn run_launcher_loop(
                     }
                     CatalogWorkerMessage::PersistenceFailed { error } => {
                         catalog_refresh_done = true;
+                        catalog_foreground_update = false;
+                        catalog_refresh_failed = true;
                         print_startup_event(start, "library_db_save_failed", error);
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_background_scan_visible(false);
@@ -677,6 +748,8 @@ pub(super) fn run_launcher_loop(
                     }
                     CatalogWorkerMessage::Unchanged { summary } => {
                         catalog_refresh_done = true;
+                        catalog_foreground_update = false;
+                        catalog_refresh_failed = false;
                         print_startup_event(
                             start,
                             "library_db_unchanged",
@@ -702,8 +775,26 @@ pub(super) fn run_launcher_loop(
                         games_found_counter.reset();
                         full_bridge_dirty = true;
                     }
+                    CatalogWorkerMessage::Changed { detail } => {
+                        catalog_refresh_done = true;
+                        catalog_foreground_update = false;
+                        catalog_refresh_failed = false;
+                        print_startup_event(start, "library_changed_detected", &detail);
+                        nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
+                        nav.confirm_selected = 0;
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_background_scan_visible(false);
+                        bridge.set_catalog_scan_title("".into());
+                        bridge.set_catalog_scan_detail("".into());
+                        bridge.set_catalog_scan_percent(-1);
+                        games_found_counter.reset();
+                        full_bridge_dirty = true;
+                    }
                     CatalogWorkerMessage::Done => {
                         catalog_refresh_done = true;
+                        catalog_foreground_update = false;
+                        catalog_refresh_failed = false;
                         if catalog_ready {
                             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                             bridge.set_catalog_scan_visible(false);
@@ -957,6 +1048,69 @@ pub(super) fn run_launcher_loop(
                                         loading_title.clear();
                                     }
                                 }
+                            }
+                            LauncherAction::ContinueWithStaleLibrary => {
+                                match launcher::request_library_rebuild_on_next_boot() {
+                                    Ok(()) => print_startup_event(
+                                        start,
+                                        "library_rebuild_deferred",
+                                        "marker=written",
+                                    ),
+                                    Err(e) => {
+                                        eprintln!("failed to defer library rebuild: {e}");
+                                        print_startup_event(
+                                            start,
+                                            "library_rebuild_defer_failed",
+                                            e,
+                                        );
+                                    }
+                                }
+                                catalog_refresh_done = true;
+                                catalog_foreground_update = false;
+                                deferred_catalog_worker = None;
+                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                                bridge.set_catalog_scan_visible(false);
+                                bridge.set_catalog_background_scan_visible(false);
+                                bridge.set_catalog_scan_title("".into());
+                                bridge.set_catalog_scan_detail("".into());
+                                bridge.set_catalog_scan_percent(-1);
+                                games_found_counter.reset();
+                                catalog_refresh_failed = false;
+                                window.request_redraw();
+                                continue;
+                            }
+                            LauncherAction::RebuildLibrary => {
+                                print_startup_event(
+                                    start,
+                                    "library_rebuild_requested",
+                                    "source=dialog",
+                                );
+                                catalog_refresh_done = false;
+                                catalog_foreground_update = true;
+                                deferred_catalog_worker = None;
+                                games_found_counter.reset();
+                                catalog_refresh_failed = false;
+                                bootstrap_counter_climb_logged = false;
+                                bootstrap_counter_sustained_climb_logged = false;
+                                full_scan_counter_climb_logged = false;
+                                catalog_rx = Some(start_library_catalog_worker(
+                                    arcade_root.clone(),
+                                    CatalogWorkerRequest::ForceBuild,
+                                    CatalogWorkerInitialCache::AlreadyLoadedReady,
+                                ));
+                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                                bridge.set_catalog_scan_visible(true);
+                                bridge.set_catalog_scan_message(
+                                    catalog_scan_message(catalog_foreground_update).into(),
+                                );
+                                bridge.set_catalog_background_scan_visible(false);
+                                bridge.set_catalog_scan_title("Indexing library".into());
+                                bridge.set_catalog_scan_detail(
+                                    "Rebuilding catalog with latest games...".into(),
+                                );
+                                bridge.set_catalog_scan_percent(-1);
+                                window.request_redraw();
+                                continue;
                             }
                             LauncherAction::LaunchGame => {}
                         }
@@ -1533,8 +1687,17 @@ fn initial_catalog_scan_visible(
     catalog_ready: bool,
     _arcade_catalog_required_at_start: bool,
     catalog_worker_enabled: bool,
+    foreground_update: bool,
 ) -> bool {
-    catalog_worker_enabled && !catalog_ready
+    catalog_worker_enabled && (foreground_update || !catalog_ready)
+}
+
+fn catalog_scan_message(foreground_update: bool) -> &'static str {
+    if foreground_update {
+        UPDATING_LIBRARY_SCAN_MESSAGE
+    } else {
+        FIRST_LIBRARY_SCAN_MESSAGE
+    }
 }
 
 fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -> String {
@@ -1552,8 +1715,16 @@ fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -
     )
 }
 
-fn catalog_scan_progress_visible(catalog_ready: bool, screen: Screen, title: &str) -> bool {
+fn catalog_scan_progress_visible(
+    catalog_ready: bool,
+    screen: Screen,
+    title: &str,
+    foreground_update: bool,
+) -> bool {
     if matches!(title, "Library scan failed" | "Library load failed") {
+        return true;
+    }
+    if foreground_update {
         return true;
     }
     if !catalog_ready {
@@ -1655,7 +1826,8 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(true, false, true));
+        assert!(!initial_catalog_scan_visible(true, false, true, false));
+        assert!(initial_catalog_scan_visible(true, false, true, true));
     }
 
     #[test]
@@ -1682,16 +1854,16 @@ mod tests {
 
     #[test]
     pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
-        assert!(initial_catalog_scan_visible(false, false, true));
-        assert!(initial_catalog_scan_visible(false, true, true));
-        assert!(!initial_catalog_scan_visible(true, true, true));
-        assert!(!initial_catalog_scan_visible(false, true, false));
+        assert!(initial_catalog_scan_visible(false, false, true, false));
+        assert!(initial_catalog_scan_visible(false, true, true, false));
+        assert!(!initial_catalog_scan_visible(true, true, true, false));
+        assert!(!initial_catalog_scan_visible(false, true, false, false));
     }
 
     #[test]
     pub(super) fn ready_catalog_rebuild_progress_uses_background_badge() {
-        for title in ["Library changed", "Indexing library", "Loading library"] {
-            let full_visible = catalog_scan_progress_visible(true, Screen::Home, title);
+        for title in ["Indexing library", "Loading library"] {
+            let full_visible = catalog_scan_progress_visible(true, Screen::Home, title, false);
             assert!(!full_visible, "{title} should not cover a ready catalog");
             assert!(catalog_background_scan_progress_visible(
                 true,
@@ -1878,12 +2050,14 @@ mod tests {
         assert!(!catalog_scan_progress_visible(
             true,
             Screen::Home,
-            "Validating library"
+            "Validating library",
+            false
         ));
         assert!(!catalog_scan_progress_visible(
             true,
             Screen::Home,
-            "Preview images changed"
+            "Preview images changed",
+            false
         ));
         assert!(catalog_background_scan_progress_visible(
             true,
@@ -1902,17 +2076,20 @@ mod tests {
         assert!(catalog_scan_progress_visible(
             false,
             Screen::Home,
-            "Indexing library"
+            "Indexing library",
+            false
         ));
         assert!(catalog_scan_progress_visible(
             true,
             Screen::Home,
-            "Library changed"
+            "Indexing library",
+            true
         ));
-        assert!(catalog_scan_progress_visible(
+        assert!(!catalog_scan_progress_visible(
             true,
             Screen::Home,
-            "Indexing library"
+            "Library changed",
+            false
         ));
         assert!(!catalog_background_scan_progress_visible(
             true,
@@ -1926,12 +2103,14 @@ mod tests {
         assert!(catalog_scan_progress_visible(
             true,
             Screen::Home,
-            "Library scan failed"
+            "Library scan failed",
+            false
         ));
         assert!(catalog_scan_progress_visible(
             true,
             Screen::Arcade,
-            "Library load failed"
+            "Library load failed",
+            false
         ));
         assert!(!catalog_background_scan_progress_visible(
             true,

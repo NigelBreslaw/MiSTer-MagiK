@@ -99,10 +99,12 @@ Current rules:
   `mister-magik-fb library-refresh` or `scripts/mister` helpers.
 - Launcher boot loads the cached SQLite catalog before the first frame when a
   usable database exists, then performs a delayed catalog stamp check in the
-  background. If the stamp is stale, the launcher runs the same full database
-  builder used by explicit refresh. Use `startup_timing` log lines to separate
-  SQLite load, catalog construction, Slint bridge sync, stamp check, and build
-  costs.
+  background. If the stamp is stale, the launcher shows a `Library changed`
+  dialog instead of rebuilding automatically. `Rebuild` runs the same full
+  database builder used by explicit refresh; `Continue` writes a one-shot marker
+  so the next MagiK boot goes directly to the `Updating Library` rebuild screen.
+  Use `startup_timing` log lines to separate SQLite load, catalog construction,
+  Slint bridge sync, stamp check, user choice, and build costs.
 - Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
   `library-refresh` only for the missing/empty DB first-boot deferral path and
   must not schedule delayed background refreshes when a database already exists.

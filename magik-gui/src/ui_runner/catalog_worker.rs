@@ -199,25 +199,32 @@ pub(super) fn start_library_catalog_worker(
                                         name: "catalog_cached_summary_failed".to_string(),
                                         detail: e,
                                     });
+                                    restore_catalog_worker_priority();
+                                    let _ = tx.send(CatalogWorkerMessage::Changed {
+                                        detail:
+                                            "Catalog summary unavailable; rebuild required."
+                                                .to_string(),
+                                    });
+                                    return;
                                 }
                             }
                         }
-                        let _ = tx.send(CatalogWorkerMessage::Progress {
-                            title: "Library changed".to_string(),
-                            detail: "Catalog stamp changed; rebuilding database...".to_string(),
-                            percent: -1,
+                        restore_catalog_worker_priority();
+                        let _ = tx.send(CatalogWorkerMessage::Changed {
+                            detail: "Catalog stamp changed; rebuild required.".to_string(),
                         });
+                        return;
                     }
                     Err(e) => {
                         let _ = tx.send(CatalogWorkerMessage::Timing {
                             name: "catalog_stamp_check_failed".to_string(),
                             detail: e,
                         });
-                        let _ = tx.send(CatalogWorkerMessage::Progress {
-                            title: "Library changed".to_string(),
-                            detail: "Catalog stamp check failed; rebuilding database...".to_string(),
-                            percent: -1,
+                        restore_catalog_worker_priority();
+                        let _ = tx.send(CatalogWorkerMessage::Changed {
+                            detail: "Catalog stamp check failed; rebuild required.".to_string(),
                         });
+                        return;
                     }
                 }
             }
@@ -380,6 +387,9 @@ pub(super) enum CatalogWorkerMessage {
     },
     Unchanged {
         summary: library_db::LibraryRefreshSummary,
+    },
+    Changed {
+        detail: String,
     },
     Done,
 }
