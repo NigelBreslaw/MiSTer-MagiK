@@ -12,6 +12,8 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod media;
+
 const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
@@ -95,6 +97,33 @@ fn run_cli() -> Result<()> {
         }
         "connection-profile" => {
             connection_profile(&args)?;
+        }
+        "media-check" => {
+            if media::media_help_requested(&args) {
+                media::media_usage();
+                return Ok(());
+            }
+            let sess = connect(10)?;
+            media::media_check(&sess, &args)?;
+        }
+        "media-download" => {
+            if media::media_help_requested(&args) {
+                media::media_usage();
+                return Ok(());
+            }
+            let sess = connect(10)?;
+            media::media_download(&sess, &args)?;
+        }
+        "media-bench-download" => {
+            if media::media_help_requested(&args) {
+                media::media_usage();
+                return Ok(());
+            }
+            let sess = connect(10)?;
+            media::media_bench_download(&sess, &args)?;
+        }
+        "media-cloudflare-check" => {
+            media::media_cloudflare_check(&args)?;
         }
         "boot-net-profile" => {
             boot_net_profile(&args)?;
@@ -238,7 +267,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
     );
 }
 
