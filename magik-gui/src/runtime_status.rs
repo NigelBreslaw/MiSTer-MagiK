@@ -27,10 +27,16 @@ pub struct LauncherStatus<'a> {
     pub catalog_systems: usize,
     pub catalog_refresh_done: bool,
     pub catalog_scan_visible: bool,
+    pub catalog_scan_message: &'a str,
     pub catalog_scan_title: &'a str,
     pub catalog_scan_detail: &'a str,
     pub catalog_scan_percent: i32,
     pub catalog_background_scan_visible: bool,
+    pub confirm_visible: bool,
+    pub confirm_title: &'a str,
+    pub confirm_selected: i32,
+    pub confirm_left_label: &'a str,
+    pub confirm_right_label: &'a str,
     pub arcade_selected: usize,
     pub arcade_visual_index: f32,
     pub preview_cache_state: &'a str,
@@ -115,6 +121,7 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: libc
     insert!("catalog_systems", status.catalog_systems);
     insert!("catalog_refresh_done", status.catalog_refresh_done);
     insert!("catalog_scan_visible", status.catalog_scan_visible);
+    insert!("catalog_scan_message", status.catalog_scan_message);
     insert!("catalog_scan_title", status.catalog_scan_title);
     insert!("catalog_scan_detail", status.catalog_scan_detail);
     insert!("catalog_scan_percent", status.catalog_scan_percent);
@@ -122,6 +129,11 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: libc
         "catalog_background_scan_visible",
         status.catalog_background_scan_visible
     );
+    insert!("confirm_visible", status.confirm_visible);
+    insert!("confirm_title", status.confirm_title);
+    insert!("confirm_selected", status.confirm_selected);
+    insert!("confirm_left_label", status.confirm_left_label);
+    insert!("confirm_right_label", status.confirm_right_label);
     insert!("arcade_selected", status.arcade_selected);
     insert!(
         "arcade_visual_index",
@@ -267,10 +279,16 @@ mod tests {
                 catalog_systems: 13,
                 catalog_refresh_done: false,
                 catalog_scan_visible: false,
+                catalog_scan_message: "Scanning for games",
                 catalog_scan_title: "",
                 catalog_scan_detail: "",
                 catalog_scan_percent: -1,
                 catalog_background_scan_visible: false,
+                confirm_visible: true,
+                confirm_title: "Library changed",
+                confirm_selected: 0,
+                confirm_left_label: "Continue",
+                confirm_right_label: "Rebuild",
                 arcade_selected: 3,
                 arcade_visual_index: 3.25,
                 preview_cache_state: "exact",
@@ -312,7 +330,13 @@ mod tests {
         assert_eq!(value["catalog_systems"], 13);
         assert_eq!(value["catalog_refresh_done"], false);
         assert_eq!(value["catalog_scan_visible"], false);
+        assert_eq!(value["catalog_scan_message"], "Scanning for games");
         assert_eq!(value["catalog_background_scan_visible"], false);
+        assert_eq!(value["confirm_visible"], true);
+        assert_eq!(value["confirm_title"], "Library changed");
+        assert_eq!(value["confirm_selected"], 0);
+        assert_eq!(value["confirm_left_label"], "Continue");
+        assert_eq!(value["confirm_right_label"], "Rebuild");
         assert_eq!(value["arcade_selected"], 3);
         assert_eq!(value["arcade_visual_index"], 3.25);
         assert_eq!(value["preview_cache_state"], "exact");
@@ -371,10 +395,16 @@ mod tests {
             catalog_systems: 2,
             catalog_refresh_done: true,
             catalog_scan_visible: true,
+            catalog_scan_message: "Updating Library",
             catalog_scan_title: "Indexing library",
             catalog_scan_detail: "Games found: 12",
             catalog_scan_percent: -1,
             catalog_background_scan_visible: true,
+            confirm_visible: false,
+            confirm_title: "",
+            confirm_selected: 0,
+            confirm_left_label: "",
+            confirm_right_label: "",
             arcade_selected: 0,
             arcade_visual_index: 0.0,
             preview_cache_state: "placeholder",
@@ -406,8 +436,10 @@ mod tests {
         assert_eq!(value["catalog_ready"], false);
         assert_eq!(value["catalog_refresh_done"], true);
         assert_eq!(value["catalog_scan_visible"], true);
+        assert_eq!(value["catalog_scan_message"], "Updating Library");
         assert_eq!(value["catalog_scan_title"], "Indexing library");
         assert_eq!(value["catalog_background_scan_visible"], true);
+        assert_eq!(value["confirm_visible"], false);
         assert_eq!(value["loading_title"], "1942");
         assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
     }
