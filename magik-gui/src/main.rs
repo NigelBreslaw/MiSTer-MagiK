@@ -62,6 +62,7 @@ mod input;
 mod launcher;
 mod media_bench_download;
 mod media_bench_save;
+mod media_pack_save;
 mod mr_audio;
 mod preview_state;
 mod runtime_status;

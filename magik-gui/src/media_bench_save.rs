@@ -1,30 +1,17 @@
+use crate::media_pack_save::{
+    publish_pack_file_for_bench, temp_path_for, PackSaveMetrics, PackSaveMode,
+    PROGRESS_COPY_CHUNK_BYTES,
+};
 use mister_magik_fb::media_update::{
     size_qualified_pack_path, valid_image_size, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE,
 };
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const HEADER: &str = "screenshot_save_bench_tsv\tlabel\tsystem\tmode\titeration\tbytes\tcopy_ms\tsync_ms\trename_ms\tparent_sync_ms\ttotal_ms\tprogress_events\tresult";
 const DEFAULT_SIZE_BYTES: u64 = 24 * 1024 * 1024;
-const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SaveMode {
-    Old,
-    Progress,
-}
-
-impl SaveMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Old => "old",
-            Self::Progress => "progress",
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BenchConfig {
@@ -34,27 +21,16 @@ struct BenchConfig {
     asset_dir: PathBuf,
     size_bytes: u64,
     iterations: usize,
-    modes: Vec<SaveMode>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct SaveMetrics {
-    bytes: u64,
-    copy_ms: u64,
-    sync_ms: u64,
-    rename_ms: u64,
-    parent_sync_ms: u64,
-    total_ms: u64,
-    progress_events: u64,
+    modes: Vec<PackSaveMode>,
 }
 
 #[derive(Clone, Debug)]
 struct SaveRow {
     label: String,
     system: String,
-    mode: SaveMode,
+    mode: PackSaveMode,
     iteration: usize,
-    metrics: SaveMetrics,
+    metrics: PackSaveMetrics,
     result: String,
 }
 
@@ -104,7 +80,7 @@ where
         ),
         size_bytes: DEFAULT_SIZE_BYTES,
         iterations: 1,
-        modes: vec![SaveMode::Old, SaveMode::Progress],
+        modes: vec![PackSaveMode::Legacy, PackSaveMode::Progress],
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -170,12 +146,12 @@ fn print_usage() {
     );
 }
 
-fn parse_modes(value: &str) -> Result<Vec<SaveMode>, String> {
+fn parse_modes(value: &str) -> Result<Vec<PackSaveMode>, String> {
     let modes: Result<Vec<_>, _> = value
         .split(',')
         .map(|part| match part.trim() {
-            "old" | "legacy" => Ok(SaveMode::Old),
-            "progress" | "chunked" => Ok(SaveMode::Progress),
+            "old" | "legacy" => Ok(PackSaveMode::Legacy),
+            "progress" | "chunked" => Ok(PackSaveMode::Progress),
             "" => Err("empty save benchmark mode".to_string()),
             other => Err(format!("unsupported save benchmark mode: {other}")),
         })
@@ -228,17 +204,17 @@ fn write_deterministic_source(path: &Path, size_bytes: u64) -> Result<(), String
     Ok(())
 }
 
-fn run_one(config: &BenchConfig, source: &Path, mode: SaveMode, iteration: usize) -> SaveRow {
+fn run_one(config: &BenchConfig, source: &Path, mode: PackSaveMode, iteration: usize) -> SaveRow {
     let mut row = SaveRow {
         label: config.label.clone(),
         system: config.system.clone(),
         mode,
         iteration,
-        metrics: SaveMetrics::default(),
+        metrics: PackSaveMetrics::default(),
         result: "bench-ok".to_string(),
     };
     let final_path = bench_final_path(config, mode, iteration);
-    let result = publish_save_bench(source, &final_path, mode);
+    let result = publish_pack_file_for_bench(source, &final_path, mode, |_| {});
     match result {
         Ok(metrics) => row.metrics = metrics,
         Err(error) => row.result = error,
@@ -248,79 +224,7 @@ fn run_one(config: &BenchConfig, source: &Path, mode: SaveMode, iteration: usize
     row
 }
 
-fn publish_save_bench(
-    source: &Path,
-    final_path: &Path,
-    mode: SaveMode,
-) -> Result<SaveMetrics, String> {
-    let parent = final_path
-        .parent()
-        .ok_or_else(|| format!("bench destination has no parent: {}", final_path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("create bench destination parent {}: {e}", parent.display()))?;
-    let tmp = temp_path_for(final_path);
-    let _ = fs::remove_file(&tmp);
-    let _ = fs::remove_file(final_path);
-    let started = Instant::now();
-    let mut metrics = SaveMetrics {
-        bytes: file_len(source)?,
-        ..Default::default()
-    };
-    let mut input = File::open(source).map_err(|e| format!("open {}: {e}", source.display()))?;
-    let mut output = File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
-
-    let copy_started = Instant::now();
-    metrics.progress_events = match mode {
-        SaveMode::Old => copy_old(&mut input, &mut output)?,
-        SaveMode::Progress => copy_with_progress(&mut input, &mut output)?,
-    };
-    metrics.copy_ms = elapsed_ms(copy_started.elapsed());
-
-    let sync_started = Instant::now();
-    output
-        .sync_all()
-        .map_err(|e| format!("sync {}: {e}", tmp.display()))?;
-    metrics.sync_ms = elapsed_ms(sync_started.elapsed());
-    drop(output);
-
-    let rename_started = Instant::now();
-    fs::rename(&tmp, final_path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("rename {} -> {}: {e}", tmp.display(), final_path.display())
-    })?;
-    metrics.rename_ms = elapsed_ms(rename_started.elapsed());
-
-    let parent_sync_started = Instant::now();
-    sync_path(parent);
-    metrics.parent_sync_ms = elapsed_ms(parent_sync_started.elapsed());
-    metrics.total_ms = elapsed_ms(started.elapsed());
-    Ok(metrics)
-}
-
-fn copy_old(input: &mut File, output: &mut File) -> Result<u64, String> {
-    std::io::copy(input, output).map_err(|e| format!("legacy copy failed: {e}"))?;
-    Ok(0)
-}
-
-fn copy_with_progress(input: &mut File, output: &mut File) -> Result<u64, String> {
-    let mut progress_events = 0u64;
-    let mut buffer = vec![0u8; PROGRESS_COPY_CHUNK_BYTES];
-    loop {
-        let read = input
-            .read(&mut buffer)
-            .map_err(|e| format!("progress copy read failed: {e}"))?;
-        if read == 0 {
-            break;
-        }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|e| format!("progress copy write failed: {e}"))?;
-        progress_events += 1;
-    }
-    Ok(progress_events)
-}
-
-fn bench_final_path(config: &BenchConfig, mode: SaveMode, iteration: usize) -> PathBuf {
+fn bench_final_path(config: &BenchConfig, mode: PackSaveMode, iteration: usize) -> PathBuf {
     config.asset_dir.join(format!(
         ".{}-{}-save-bench-{}-{}-{}.mmlz4b",
         config.system,
@@ -329,35 +233,6 @@ fn bench_final_path(config: &BenchConfig, mode: SaveMode, iteration: usize) -> P
         iteration,
         unix_ms_now()
     ))
-}
-
-fn temp_path_for(final_path: &Path) -> PathBuf {
-    final_path.with_file_name(format!(
-        "{}.tmp",
-        final_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("save-bench")
-    ))
-}
-
-fn file_len(path: &Path) -> Result<u64, String> {
-    path.metadata()
-        .map(|meta| meta.len())
-        .map_err(|e| format!("stat {}: {e}", path.display()))
-}
-
-fn sync_path(path: &Path) {
-    match Command::new("sync").arg(path).status() {
-        Ok(status) if status.success() => {}
-        _ => {
-            let _ = Command::new("sync").status();
-        }
-    };
-}
-
-fn elapsed_ms(duration: Duration) -> u64 {
-    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn default_label() -> String {
@@ -402,13 +277,6 @@ fn tsv(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn parses_save_benchmark_args() {
         let config = parse_args([
@@ -428,7 +296,7 @@ mod tests {
         assert_eq!(config.label, "SAVE-20260623");
         assert_eq!(config.system, "neogeo");
         assert_eq!(config.iterations, 10);
-        assert_eq!(config.modes, [SaveMode::Old, SaveMode::Progress]);
+        assert_eq!(config.modes, [PackSaveMode::Legacy, PackSaveMode::Progress]);
         assert_eq!(config.size_bytes, 1234);
     }
 
@@ -437,26 +305,5 @@ mod tests {
         let error = parse_args(["--modes".to_string(), "old,fast".to_string()]).unwrap_err();
 
         assert!(error.contains("unsupported save benchmark mode"));
-    }
-
-    #[test]
-    fn old_and_progress_modes_write_identical_bytes() {
-        let dir = temp_dir("mister-magik-save-bench");
-        let source = dir.join("source.bin");
-        fs::write(&source, b"abcdef0123456789").unwrap();
-
-        for mode in [SaveMode::Old, SaveMode::Progress] {
-            let final_path = dir.join(format!("out-{}.bin", mode.label()));
-            let metrics = publish_save_bench(&source, &final_path, mode).unwrap();
-            assert_eq!(fs::read(&final_path).unwrap(), b"abcdef0123456789");
-            assert_eq!(metrics.bytes, 16);
-            if mode == SaveMode::Progress {
-                assert!(metrics.progress_events > 0);
-            } else {
-                assert_eq!(metrics.progress_events, 0);
-            }
-        }
-
-        let _ = fs::remove_dir_all(dir);
     }
 }
