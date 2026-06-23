@@ -36,6 +36,7 @@ pub const COMMANDS: &[&str] = &[
     "input",
     "library-refresh",
     "media-bench-download",
+    "media-bench-save",
     #[cfg(feature = "diagnostics")]
     "library-sql",
     #[cfg(feature = "diagnostics")]
@@ -101,6 +102,7 @@ mod tests {
     fn recognizes_explicit_commands() {
         assert!(COMMANDS.contains(&"library-refresh"));
         assert!(COMMANDS.contains(&"media-bench-download"));
+        assert!(COMMANDS.contains(&"media-bench-save"));
         assert!(COMMANDS.contains(&"experiment-capabilities"));
         for command in COMMANDS {
             assert_eq!(

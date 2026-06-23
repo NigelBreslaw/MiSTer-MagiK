@@ -18,6 +18,7 @@
 //!                        build supplemental HBMAME metadata from parsed MRA parents
 //!     media-bench-download
 //!                        benchmark screenshot pack downloads and variant decoding
+//!     media-bench-save   benchmark screenshot pack save/publish paths
 //!     input              gamepad log / sniff / calibrate
 //!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
 //!   Benchmarks:
@@ -60,6 +61,7 @@ mod frame_profile;
 mod input;
 mod launcher;
 mod media_bench_download;
+mod media_bench_save;
 mod mr_audio;
 mod preview_state;
 mod runtime_status;
@@ -127,6 +129,11 @@ fn main() {
 
     if cmd == "media-bench-download" {
         media_bench_download::run();
+        return;
+    }
+
+    if cmd == "media-bench-save" {
+        media_bench_save::run();
         return;
     }
 
