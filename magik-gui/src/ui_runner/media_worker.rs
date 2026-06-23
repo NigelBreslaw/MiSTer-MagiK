@@ -582,7 +582,7 @@ fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata)
     ))
 }
 
-fn read_media_state(asset_dir: &PathBuf) -> Option<Value> {
+fn read_media_state(asset_dir: &Path) -> Option<Value> {
     let text = fs::read_to_string(state_path(&asset_dir.display().to_string())).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -800,11 +800,12 @@ impl MediaProgressEvent {
     }
 
     fn percent(&self) -> i32 {
-        if self.bytes_total == 0 {
-            -1
-        } else {
-            ((self.bytes_done.min(self.bytes_total) * 100) / self.bytes_total) as i32
-        }
+        self.bytes_done
+            .min(self.bytes_total)
+            .saturating_mul(100)
+            .checked_div(self.bytes_total)
+            .map(|value| value as i32)
+            .unwrap_or(-1)
     }
 
     pub(super) fn log_detail(&self) -> String {
