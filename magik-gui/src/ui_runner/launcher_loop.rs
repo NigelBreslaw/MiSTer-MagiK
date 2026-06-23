@@ -5,6 +5,7 @@ use crate::preview_worker;
 use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
@@ -265,6 +266,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_refresh_done = false;
     let mut media_handle = None;
     let mut media_worker_unavailable = false;
+    let mut media_progress_display = MediaProgressDisplay::default();
     let mut catalog_persisted_summary_seen = false;
     let library_changed_test_action = library_changed_test_action_from_env(start);
     let mut library_changed_test_action_armed = library_changed_test_action.is_some();
@@ -865,6 +867,12 @@ pub(super) fn run_launcher_loop(
                 }
                 MediaWorkerMessage::Progress(event) => {
                     print_startup_event(start, "screenshot_media_progress", event.log_detail());
+                    if media_progress_display.apply(&event) {
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        bridge.set_media_pack_progresses(media_progress_display.model());
+                        bridge.set_media_pack_summary(media_progress_display.summary().into());
+                        full_bridge_dirty = true;
+                    }
                 }
                 MediaWorkerMessage::CacheMetadata { scope, metadata } => {
                     print_startup_event(
@@ -888,11 +896,21 @@ pub(super) fn run_launcher_loop(
                 MediaWorkerMessage::Failed { detail } => {
                     print_startup_event(start, "screenshot_media_update_failed", detail);
                     media_worker_unavailable = true;
+                    media_progress_display.clear();
+                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                    bridge.set_media_pack_progresses(media_progress_display.model());
+                    bridge.set_media_pack_summary("".into());
+                    full_bridge_dirty = true;
                     media_handle = None;
                     break;
                 }
                 MediaWorkerMessage::Done { detail } => {
                     print_startup_event(start, "screenshot_media_update_done", detail);
+                    media_progress_display.clear();
+                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                    bridge.set_media_pack_progresses(media_progress_display.model());
+                    bridge.set_media_pack_summary("".into());
+                    full_bridge_dirty = true;
                     media_handle = None;
                     break;
                 }
@@ -1635,6 +1653,144 @@ fn apply_pending_launch_return_state(
     launcher::apply_launch_return_state(nav, catalog, state)
 }
 
+#[derive(Default)]
+struct MediaProgressDisplay {
+    active: BTreeMap<String, MediaProgressDisplayRow>,
+    done: BTreeSet<String>,
+    failed: BTreeSet<String>,
+    requested_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MediaProgressDisplayRow {
+    system: String,
+    image_size: String,
+    phase: String,
+    percent: i32,
+    bytes_label: String,
+    pack_position: String,
+}
+
+impl MediaProgressDisplay {
+    fn apply(&mut self, event: &MediaProgressEvent) -> bool {
+        if event.system == "all" {
+            return false;
+        }
+        if event.pack_count > 0 {
+            self.requested_count = self.requested_count.max(event.pack_count);
+        }
+        if event.phase == "failed" {
+            self.failed.insert(event.system.clone());
+            self.active.remove(&event.system);
+            return true;
+        }
+        if media_progress_terminal_phase(&event.phase) {
+            self.done.insert(event.system.clone());
+            self.active.remove(&event.system);
+            return true;
+        }
+        self.active.insert(
+            event.system.clone(),
+            MediaProgressDisplayRow {
+                system: event.system.clone(),
+                image_size: event.image_size.clone(),
+                phase: media_progress_phase_label(&event.phase),
+                percent: media_progress_percent(event.bytes_done, event.bytes_total),
+                bytes_label: media_progress_bytes_label(event.bytes_done, event.bytes_total),
+                pack_position: if event.pack_index > 0 && event.pack_count > 0 {
+                    format!("{}/{}", event.pack_index, event.pack_count)
+                } else {
+                    String::new()
+                },
+            },
+        );
+        true
+    }
+
+    fn clear(&mut self) {
+        self.active.clear();
+        self.done.clear();
+        self.failed.clear();
+        self.requested_count = 0;
+    }
+
+    fn model(&self) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
+        let rows = self
+            .active
+            .values()
+            .take(3)
+            .map(|row| slint_ui::launcher::ScreenshotPackProgress {
+                system: row.system.clone().into(),
+                image_size: row.image_size.clone().into(),
+                phase: row.phase.clone().into(),
+                percent: row.percent,
+                bytes_label: row.bytes_label.clone().into(),
+                pack_position: row.pack_position.clone().into(),
+            })
+            .collect::<Vec<_>>();
+        ModelRc::new(VecModel::from(rows))
+    }
+
+    fn summary(&self) -> String {
+        let active = self.active.len();
+        let done = self.done.len();
+        let failed = self.failed.len();
+        let total = self.requested_count.max(active + done + failed);
+        if total == 0 {
+            return String::new();
+        }
+        if failed > 0 {
+            format!("screenshots {active} active · {done}/{total} done · {failed} failed")
+        } else {
+            format!("screenshots {active} active · {done}/{total} done")
+        }
+    }
+}
+
+fn media_progress_terminal_phase(phase: &str) -> bool {
+    matches!(phase, "done" | "skipped-current" | "check-only")
+}
+
+fn media_progress_percent(done: u64, total: u64) -> i32 {
+    done.min(total)
+        .saturating_mul(100)
+        .checked_div(total)
+        .map(|value| value as i32)
+        .unwrap_or(-1)
+}
+
+fn media_progress_phase_label(phase: &str) -> String {
+    match phase {
+        "download_start" | "download" | "download_done" => "download".to_string(),
+        "skipped-current" => "current".to_string(),
+        "check-only" => "checked".to_string(),
+        other => other.replace('_', " "),
+    }
+}
+
+fn media_progress_bytes_label(done: u64, total: u64) -> String {
+    if total == 0 {
+        return String::new();
+    }
+    format!(
+        "{} / {}",
+        media_progress_byte_label(done),
+        media_progress_byte_label(total)
+    )
+}
+
+fn media_progress_byte_label(bytes: u64) -> String {
+    const KB: f64 = 1000.0;
+    const MB: f64 = 1000.0 * 1000.0;
+    if bytes >= 10_000_000 {
+        format!("{:.1} MB", bytes as f64 / MB)
+    } else if bytes >= 1000 {
+        format!("{:.0} KB", bytes as f64 / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[derive(Debug)]
 struct CatalogScanRedraw {
     last_request: Instant,
@@ -1976,6 +2132,60 @@ mod tests {
                 x1: 40,
                 y1: 60
             })
+        );
+    }
+
+    fn media_progress_event(
+        system: &str,
+        phase: &str,
+        bytes_done: u64,
+        bytes_total: u64,
+        pack_index: usize,
+        pack_count: usize,
+    ) -> MediaProgressEvent {
+        MediaProgressEvent {
+            system: system.to_string(),
+            image_size: "320x320".to_string(),
+            variant: "identity".to_string(),
+            phase: phase.to_string(),
+            bytes_done,
+            bytes_total,
+            pack_index,
+            pack_count,
+            download_mbps: None,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    pub(super) fn media_progress_display_tracks_active_rows_and_summary() {
+        let mut display = MediaProgressDisplay::default();
+
+        assert!(display.apply(&media_progress_event("arcade", "download", 512, 1024, 1, 2)));
+        assert!(display.apply(&media_progress_event("neogeo", "save", 128, 1024, 2, 2)));
+
+        assert_eq!(display.active.len(), 2);
+        assert_eq!(display.active["arcade"].percent, 50);
+        assert_eq!(display.active["arcade"].phase, "download");
+        assert_eq!(display.active["arcade"].bytes_label, "512 B / 1 KB");
+        assert_eq!(display.summary(), "screenshots 2 active · 0/2 done");
+    }
+
+    #[test]
+    pub(super) fn media_progress_display_removes_terminal_rows() {
+        let mut display = MediaProgressDisplay::default();
+        display.apply(&media_progress_event("arcade", "download", 128, 1024, 1, 2));
+        display.apply(&media_progress_event("neogeo", "download", 128, 1024, 2, 2));
+
+        assert!(display.apply(&media_progress_event("arcade", "done", 1024, 1024, 1, 2)));
+        assert!(display.apply(&media_progress_event("neogeo", "failed", 128, 1024, 2, 2)));
+
+        assert!(display.active.is_empty());
+        assert!(display.done.contains("arcade"));
+        assert!(display.failed.contains("neogeo"));
+        assert_eq!(
+            display.summary(),
+            "screenshots 0 active · 1/2 done · 1 failed"
         );
     }
 

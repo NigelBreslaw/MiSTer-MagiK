@@ -41,6 +41,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_catalog_scan_title("".into());
     bridge.set_catalog_scan_detail("".into());
     bridge.set_catalog_scan_percent(-1);
+    bridge.set_media_pack_progresses(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::ScreenshotPackProgress,
+    >::new())));
+    bridge.set_media_pack_summary("".into());
     bridge.set_catalog_background_scan_visible(false);
     bridge.set_setup_visible(false);
     bridge.set_setup_phase(0);
