@@ -628,6 +628,13 @@ pub(super) fn run_launcher_loop(
                         bridge.set_catalog_scan_percent(percent);
                         full_bridge_dirty = true;
                     }
+                    CatalogWorkerMessage::SystemDiscovered { system_id } => {
+                        print_startup_event(
+                            start,
+                            "catalog_system_discovered",
+                            format!("system={system_id}"),
+                        );
+                    }
                     CatalogWorkerMessage::Ready {
                         catalog: ready_catalog,
                         summary,

@@ -21,6 +21,14 @@ pub(super) fn start_library_catalog_worker(
                     percent: catalog_scan_percent(title, detail),
                 });
             };
+            let scan_event_tx = tx.clone();
+            let mut scan_events = move |event: library_db::LibraryScanEvent| match event {
+                library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
+                    let _ = scan_event_tx.send(CatalogWorkerMessage::SystemDiscovered {
+                        system_id,
+                    });
+                }
+            };
             let mut cache_state = CatalogCacheState::Missing;
             match initial_cache {
                 CatalogWorkerInitialCache::ProbeSqlite => {
@@ -103,7 +111,10 @@ pub(super) fn start_library_catalog_worker(
                         detail,
                     });
                 }
-                let artifact = match library_db::scan_default_library(Some(&mut progress)) {
+                let artifact = match library_db::scan_default_library_with_events(
+                    Some(&mut progress),
+                    Some(&mut scan_events),
+                ) {
                     Ok(artifact) => artifact,
                     Err(e) => {
                         eprintln!("library scan failed: {e}");
@@ -229,7 +240,10 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             restore_catalog_worker_priority();
-            let summary = match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
+            let summary = match library_db::rebuild_default_sqlite_database_with_events(
+                Some(&mut progress),
+                Some(&mut scan_events),
+            ) {
                 Ok(summary) => Some(summary),
                 Err(e) => {
                     eprintln!("library refresh failed: {e}");
@@ -373,6 +387,9 @@ pub(super) enum CatalogWorkerMessage {
         title: String,
         detail: String,
         percent: i32,
+    },
+    SystemDiscovered {
+        system_id: String,
     },
     Ready {
         catalog: ArcadeCatalog,
