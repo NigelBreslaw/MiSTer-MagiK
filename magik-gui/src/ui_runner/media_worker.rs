@@ -101,6 +101,7 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
                 continue;
             }
         };
+        cleanup_pack_publish_temps(&local_path);
         send_progress(
             &tx,
             MediaProgressEvent::for_pack(pack, "identity", "check", pack_index, pack_count),
@@ -392,7 +393,10 @@ fn publish_pack_file(encoded_path: &Path, local_path: &Path) -> Result<(), Strin
             .unwrap_or("screenshot-pack"),
         unix_ms_now()
     ));
-    copy_file_durable(encoded_path, &final_tmp)?;
+    if let Err(error) = copy_file_durable(encoded_path, &final_tmp) {
+        let _ = fs::remove_file(&final_tmp);
+        return Err(error);
+    }
     fs::rename(&final_tmp, local_path).map_err(|e| {
         let _ = fs::remove_file(&final_tmp);
         format!(
@@ -403,6 +407,28 @@ fn publish_pack_file(encoded_path: &Path, local_path: &Path) -> Result<(), Strin
     })?;
     sync_path(parent);
     Ok(())
+}
+
+fn cleanup_pack_publish_temps(local_path: &Path) {
+    let Some(parent) = local_path.parent() else {
+        return;
+    };
+    let Some(file_name) = local_path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let prefix = format!("{file_name}.tmp-");
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&prefix) {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn copy_file_durable(src: &Path, dst: &Path) -> Result<(), String> {
@@ -963,6 +989,25 @@ mod tests {
 
         assert_eq!(fs::read(&final_path).unwrap(), b"new");
         assert!(!dir.join("arcade-screenshots-320x320.mmlz4b.tmp").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cleanup_pack_publish_temps_removes_only_matching_pack_temps() {
+        let dir = temp_dir("mister-magik-clean-publish-temp");
+        let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
+        let matching = dir.join("arcade-screenshots-320x320.mmlz4b.tmp-1");
+        let other_pack = dir.join("neogeo-screenshots-320x320.mmlz4b.tmp-1");
+        let final_file = dir.join("arcade-screenshots-320x320.mmlz4b");
+        fs::write(&matching, b"partial").unwrap();
+        fs::write(&other_pack, b"partial").unwrap();
+        fs::write(&final_file, b"current").unwrap();
+
+        cleanup_pack_publish_temps(&final_path);
+
+        assert!(!matching.exists());
+        assert!(other_pack.exists());
+        assert_eq!(fs::read(&final_file).unwrap(), b"current");
         let _ = fs::remove_dir_all(dir);
     }
 
