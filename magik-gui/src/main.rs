@@ -79,7 +79,7 @@ mod vt;
 pub use mister_magik_fb::fb_format;
 pub use mister_magik_fb::{
     arcade_catalog, command_args, controller_db, input_repeat, input_state, library_db,
-    preview_worker,
+    media_update, preview_worker,
 };
 
 use display_config::detect_runtime_display_geometry;

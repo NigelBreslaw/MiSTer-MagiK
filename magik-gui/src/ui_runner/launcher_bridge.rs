@@ -80,7 +80,9 @@ pub(super) fn sync_confirm_bridge(
         }
         Some(launcher::ConfirmAction::ResetDatabase) => {
             bridge.set_confirm_title("Reset Database?".into());
-            bridge.set_confirm_message("Delete the library database and reboot the MiSTer?".into());
+            bridge.set_confirm_message(
+                "Delete the library database, screenshot packs, and reboot the MiSTer?".into(),
+            );
             bridge.set_confirm_left_label("Cancel".into());
             bridge.set_confirm_right_label("Confirm".into());
         }
