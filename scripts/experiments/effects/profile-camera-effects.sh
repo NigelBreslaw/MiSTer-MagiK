@@ -2,12 +2,8 @@
 # Experimental: run the full-screen classic camera effects scene on the MiSTer and summarize frame pacing.
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-HERE="$(experiment_repo_root)"
-MISTER="$HERE/scripts/mister"
-OUT_DIR="$HERE/build/camera-effect-profiles"
-RESULTS="$HERE/history/toolchain-bench/results-camera-effects.tsv"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+effect_profile_setup "camera-effect-profiles" "results-camera-effects.tsv"
 EFFECT_COUNT=20
 
 usage() {
@@ -21,7 +17,7 @@ uses the same process-owner cleanup hygiene as preview/screensaver benchmarks.
 EOF
 }
 
-label="camera-effects-$(date -u +%Y%m%dT%H%M%SZ)"
+label="$(effect_default_label "camera-effects")"
 deploy="skip"
 mode="mega"
 segment_secs="20"
@@ -51,45 +47,25 @@ done
 
 if [[ "${#positionals[@]}" -ge 1 ]]; then label="${positionals[0]}"; fi
 if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
-if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
-if [[ ! "$mode" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--mode must be a comma-separated effect label list or mega" >&2; exit 2; fi
-if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
-case "$fb_format" in 565) ;; *) echo "--fb-format must be 565; RGB888 UI support was removed" >&2; exit 2 ;; esac
-case "$preview_format" in png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be png, derived-png, raw-rgb, or raw-rgb565" >&2; exit 2 ;; esac
-if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
+effect_validate_label "$label"
+effect_validate_mode "$mode" "effect"
+effect_validate_positive_int "$segment_secs" "--segment-secs"
+effect_validate_fb_format "$fb_format"
+effect_validate_preview_format "$preview_format"
+effect_validate_nonnegative_int "$visual_captures" "--visual-captures"
+secs="$(effect_resolve_secs "$secs" "$mode" "$segment_secs" "$EFFECT_COUNT")"
+effect_validate_positive_int "$secs" "--secs"
 
-if [[ -z "$secs" ]]; then
-  if [[ "$mode" == "mega" || "$mode" == "all" || "$mode" == "demo" ]]; then
-    secs=$((segment_secs * EFFECT_COUNT))
-  else
-    IFS=',' read -r -a selected_modes <<<"$mode"
-    secs=$((segment_secs * ${#selected_modes[@]}))
-  fi
-fi
-if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then echo "--secs must be a positive integer" >&2; exit 2; fi
-
-mkdir -p "$OUT_DIR" "$(dirname "$RESULTS")"
-
-case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --experiments ;;
-  skip) : ;;
-esac
-require_experiment_binary "$MISTER" "$REMOTE" "effect scene experiments"
+effect_prepare_output_dirs
+effect_deploy_and_preflight "$deploy" "effect scene experiments"
 
 HEADER="label	effect	frames	fps	avg_wall_us	p95_wall_us	p99_wall_us	slow_gt_16_7ms	slow_gt_20ms	avg_cpu_pct	p95_cpu_pct	max_trace_cpu_pct	max_sample_cpu_pct	avg_cpu_us	p95_cpu_us	avg_draw_us	p95_draw_us	avg_present_us	p95_present_us	avg_vsync_us	p95_vsync_us	avg_clear_us	p95_clear_us	avg_background_us	p95_background_us	avg_projection_us	p95_projection_us	avg_image_blit_us	p95_image_blit_us	avg_sprite_us	p95_sprite_us	avg_post_us	p95_post_us	avg_hud_us	p95_hud_us	rss_hwm_kb	visual_ok	date	notes"
-if [[ ! -f "$RESULTS" ]] || ! head -1 "$RESULTS" | grep -q $'^label\teffect'; then
-  echo "$HEADER" >"$RESULTS"
-fi
+effect_prepare_results_file "$RESULTS" "$HEADER"
 if [[ "$replace_label" == "1" ]]; then
-  tmp_results="$(mktemp)"
-  awk -v label="$label" 'NR == 1 || ($0 != "" && substr($0, 1, length(label) + 1) != label "\t")' "$RESULTS" >"$tmp_results"
-  mv "$tmp_results" "$RESULTS"
+  effect_replace_results_label "$RESULTS" "$label"
 fi
 
-remote_tsv="/tmp/${label}-camera-effects.tsv"
-remote_log="/tmp/${label}-camera-effects.log"
-local_tsv="$OUT_DIR/${label}-camera-effects.tsv"
-local_log="$OUT_DIR/${label}-camera-effects.log"
+effect_profile_paths "$label" "camera-effects"
 
 echo "==> camera-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
 "$MISTER" run "
@@ -234,13 +210,13 @@ if [[ "$visual_captures" == "0" ]]; then
   visual_ok="not-run"
 fi
 
-summary_tmp="$(mktemp)"
+effect_temp_file summary_tmp
+trap effect_cleanup_temp_files EXIT
 summarize_by_effect "$local_tsv" "$label" "${rss:-0}" "${cpu_sample_max:-0}" "$visual_ok" "$notes" >"$summary_tmp"
 cat "$summary_tmp" >>"$RESULTS"
 
 echo
 echo "$HEADER"
 cat "$summary_tmp"
-rm -f "$summary_tmp"
 echo
 echo "appended $RESULTS"
