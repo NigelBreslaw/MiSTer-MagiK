@@ -82,15 +82,22 @@ not a screenshot naming contract.
 Console screenshot packs live under:
 
 ```text
-/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b
-/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b
-/media/fat/mister-magik/assets/nes-screenshots.mmlz4b
-/media/fat/mister-magik/assets/snes-screenshots.mmlz4b
-/media/fat/mister-magik/assets/n64-screenshots.mmlz4b
-/media/fat/mister-magik/assets/sms-screenshots.mmlz4b
-/media/fat/mister-magik/assets/megadrive-screenshots.mmlz4b
-/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b
+/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/nes-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/snes-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/n64-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/sms-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/megadrive-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b
 ```
+
+The current public pack size is `320x320`. Legacy fixed-name packs such as
+`saturn-screenshots.mmlz4b` are still readable as fallback, but new runtime
+downloads preserve the image size in the filename. The preview worker resolves
+legacy catalog paths through
+`/media/fat/mister-magik/assets/.screenshot-media-state.json` before falling
+back to fixed-name files.
 
 Archive entries use filesystem-safe canonical keys:
 
@@ -161,10 +168,11 @@ Avoid doing screenshot-pack construction on the MiSTer hot path. Runtime deploy
 does not build or copy screenshot packs or MAME/HBMAME metadata databases; treat
 those as fixed release artifacts produced by the host-side catalog/media tools.
 
-Screenshot-pack updates from Cloudflare R2 are handled by the manifest downloader
-in `scripts/mister media-check`, `scripts/mister media-download`, and
-`scripts/profile-screenshot-download.sh`. Compression comparisons should first
-use Cloudflare negotiated `Accept-Encoding` responses for the canonical
-`.mmlz4b` object. Store separate `.gz` or `.br` files only if the measured
-Cloudflare path is unavailable, ineffective, or impossible to verify on the
-MiSTer.
+Screenshot-pack updates from Cloudflare R2 are handled by the MagiK runtime,
+`scripts/mister media-check`, `scripts/mister media-download`, and
+`scripts/profile-screenshot-download.sh`. Runtime v1 uses raw manifest
+`compression: "none"` with `Accept-Encoding: identity`. Compression comparisons
+should first use Cloudflare negotiated responses and recorded header/cache
+evidence for the canonical `.mmlz4b` object. Store or select `.gz` or `.br`
+files only if total time improves after including download, decompression,
+saving, verification, and cache behavior.

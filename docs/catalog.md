@@ -227,19 +227,47 @@ Build and publish packs from the sibling `../magik-cloud` repo; this repo keeps
 only runtime preview loading, catalog projection, and device acceptance checks.
 See `../magik-cloud/docs/media-build.md` for the media-build workflow.
 
-Remote screenshot-pack updates are manifest-driven. `scripts/mister
-media-check` and `scripts/mister media-download` read the Cloudflare R2 manifest
-from `MISTER_MEDIA_MANIFEST_URL`, `--manifest-url`, or the default
-`https://assets.mistermagik.com/mister-magik/v1/manifest.json`, compare the
-expected SHA-256 with the local pack, and publish verified packs atomically into
-the runtime archive path. The state file
+Remote screenshot-pack updates are manifest-driven. On-device MagiK and the
+host commands `scripts/mister media-check` and `scripts/mister media-download`
+read the Cloudflare R2 manifest from `MISTER_MEDIA_MANIFEST_URL`,
+`--manifest-url`, or the default
+`https://assets.mistermagik.com/mister-magik/v1/manifest.json`.
+
+Runtime downloads save new packs with the image size in the filename:
+
+```text
+/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b
+```
+
+Legacy catalog paths such as `arcade-screenshots.mmlz4b` remain valid lookup
+keys. The preview worker resolves those legacy paths through the media state to
+the preferred size-qualified pack and falls back to legacy fixed-name files when
+needed. Current public packs are `320x320`; future smaller packs must preserve
+their size in the local filename.
+
+The downloader compares the expected SHA-256 with the selected manifest object
+and publishes verified packs atomically. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
-successful media update and preferred benchmark variant. It is not a catalog
+successful media update, preferred size, preferred benchmark variant, and the
+latest HTTP/cache headers observed for each downloaded pack. It is not a catalog
 stamp input.
 
+The launcher starts the runtime media worker after the first usable catalog and
+first visible frame. `MISTER_MEDIA_UPDATE=off` disables it,
+`MISTER_MEDIA_UPDATE=check` reports status without downloading, and
+`MISTER_MEDIA_UPDATE=download` is the default. `MISTER_MEDIA_SIZE` defaults to
+`320x320`. Progress is emitted as structured `screenshot_media_progress` startup
+events with system, size, phase, byte counts, pack index/count, and optional
+download Mbps so a future UI can render progress bars without changing the
+downloader contract.
+
 The production baseline is the canonical `.mmlz4b` object served with
-`Accept-Encoding: identity`. Compression is tested through Cloudflare's normal
-HTTP content negotiation before adding separately stored `.gz` or `.br` objects:
+`Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"` and
+does not automatically choose gzip or Brotli. Compression is tested through
+Cloudflare's normal HTTP content negotiation before enabling separately stored
+`.gz` or `.br` objects:
 
 ```bash
 scripts/mister media-cloudflare-check --system megadrive
@@ -254,6 +282,11 @@ verification is under **Speed > Optimization** and **Rules > Compression
 Rules** for the R2 custom domain. Production should use an R2 custom domain, not
 the development `r2.dev` endpoint, so Cloudflare Cache and compression rules are
 available.
+
+Runtime and benchmark logs record cache evidence from response headers:
+`ETag`, `Last-Modified`, `Cache-Control`, `Age`, `CF-Cache-Status`, `CF-Ray`,
+`Content-Length`, `Content-Encoding`, and effective URL. A missing or uncached
+Cloudflare header is evidence for setup/debugging, not a download failure.
 
 Screenshot download benchmark rows must include network download,
 decompression, save/publish, checksum verification, and total time:
