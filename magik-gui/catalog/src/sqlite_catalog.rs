@@ -689,10 +689,9 @@ pub(crate) fn save_sqlite_scan_attempt_with_writer(
         let _ = std::fs::remove_file(&plan.build_tmp_path);
         return Err(e);
     }
-    let metrics = publish_sqlite_temp(path, plan, progress).map_err(|e| {
+    let metrics = publish_sqlite_temp(path, plan, progress).inspect_err(|_| {
         let _ = std::fs::remove_file(&plan.final_tmp_path);
         let _ = std::fs::remove_file(&plan.build_tmp_path);
-        e
     })?;
     report_sqlite_publish_metrics(&metrics, "bench-ok");
     std::fs::metadata(path)
@@ -785,8 +784,7 @@ fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
     let iteration =
         std::env::var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION").unwrap_or_else(|_| "0".to_string());
     println!(
-        "library_sqlite_publish_tsv\t{label}\t{iteration}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        "progress",
+        "library_sqlite_publish_tsv\t{label}\t{iteration}\tprogress\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         metrics.bytes,
         metrics.build_sync_ms,
         metrics.copy_ms,
