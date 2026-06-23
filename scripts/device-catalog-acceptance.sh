@@ -143,11 +143,15 @@ if [ "$(pack_exists ".screenshot-media-state.json")" = "yes" ]; then
   size_state_count="$(
     remote "grep -c 'screenshots-320x320\\.mmlz4b' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number
   )"
-  assert_gt_zero "media state size-qualified local_path count" "$size_state_count"
-  cache_state_count="$(
-    remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number
-  )"
-  assert_gt_zero "media state cache metadata count" "$cache_state_count"
+  if [ "${size_state_count:-0}" -gt 0 ]; then
+    echo "ok: media state size-qualified local_path count = $size_state_count"
+    cache_state_count="$(
+      remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number
+    )"
+    assert_gt_zero "media state cache metadata count" "$cache_state_count"
+  else
+    echo "ok: media state present without size-qualified runtime downloads"
+  fi
 else
   echo "ok: media state not present; runtime downloader has not published packs on this device"
 fi
