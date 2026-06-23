@@ -6,9 +6,9 @@ use mister_magik_fb::media_update::{
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(super) fn start_screenshot_media_worker() -> Option<mpsc::Receiver<MediaWorkerMessage>> {
     let config = match MediaWorkerConfig::from_env() {
@@ -40,6 +40,10 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             config.asset_dir.display()
         ),
     });
+    send_progress(
+        &tx,
+        MediaProgressEvent::new("all", &config.image_size, "identity", "manifest_fetch"),
+    );
     let manifest_text = match fetch_manifest_text(&config.manifest_url) {
         Ok(text) => text,
         Err(error) => {
@@ -60,11 +64,14 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
     };
     let state = read_media_state(&config.asset_dir);
     let mut counts = MediaCheckCounts::default();
-    for pack in manifest
+    let selected_packs: Vec<_> = manifest
         .packs
         .iter()
         .filter(|pack| pack.image_size == config.image_size)
-    {
+        .collect();
+    let pack_count = selected_packs.len();
+    for (idx, pack) in selected_packs.into_iter().enumerate() {
+        let pack_index = idx + 1;
         let local_path = match size_qualified_pack_path(
             &config.asset_dir.display().to_string(),
             &pack.id,
@@ -74,6 +81,13 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             Err(error) => {
                 counts.checked += 1;
                 counts.failed += 1;
+                send_progress(
+                    &tx,
+                    MediaProgressEvent::for_pack(
+                        pack, "identity", "failed", pack_index, pack_count,
+                    )
+                    .with_detail(&error),
+                );
                 let _ = tx.send(MediaWorkerMessage::PackStatus {
                     system: pack.id.clone(),
                     image_size: pack.image_size.clone(),
@@ -83,6 +97,10 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
                 continue;
             }
         };
+        send_progress(
+            &tx,
+            MediaProgressEvent::for_pack(pack, "identity", "check", pack_index, pack_count),
+        );
         let status = pack_status_from_state(pack, &local_path, state.as_ref());
         counts.checked += 1;
         match status.label() {
@@ -103,12 +121,32 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             status: status.label().to_string(),
             detail,
         });
+        if matches!(status, LocalPackStatus::Current) {
+            send_progress(
+                &tx,
+                MediaProgressEvent::for_pack(
+                    pack,
+                    "identity",
+                    "skipped-current",
+                    pack_index,
+                    pack_count,
+                )
+                .with_done_bytes(pack.raw.bytes),
+            );
+        }
         if config.policy == MediaUpdatePolicy::Download
             && !matches!(status, LocalPackStatus::Current)
         {
-            match download_raw_pack(&config, pack, &local_path) {
+            match download_raw_pack(&config, pack, &local_path, pack_index, pack_count, &tx) {
                 Ok(()) => {
                     counts.downloaded += 1;
+                    send_progress(
+                        &tx,
+                        MediaProgressEvent::for_pack(
+                            pack, "identity", "done", pack_index, pack_count,
+                        )
+                        .with_done_bytes(pack.raw.bytes),
+                    );
                     let _ = tx.send(MediaWorkerMessage::PackStatus {
                         system: pack.id.clone(),
                         image_size: pack.image_size.clone(),
@@ -118,6 +156,13 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
                 }
                 Err(error) => {
                     counts.failed += 1;
+                    send_progress(
+                        &tx,
+                        MediaProgressEvent::for_pack(
+                            pack, "identity", "failed", pack_index, pack_count,
+                        )
+                        .with_detail(&error),
+                    );
                     let _ = tx.send(MediaWorkerMessage::PackStatus {
                         system: pack.id.clone(),
                         image_size: pack.image_size.clone(),
@@ -145,6 +190,9 @@ fn download_raw_pack(
     config: &MediaWorkerConfig,
     pack: &MediaPack,
     local_path: &Path,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
 ) -> Result<(), String> {
     let variant = pack
         .variant_for_compression("none")
@@ -160,28 +208,95 @@ fn download_raw_pack(
         pack.image_size,
         unix_ms_now()
     ));
-    let result = download_variant_to_path(variant, &encoded_tmp)
-        .and_then(|()| verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256))
-        .and_then(|()| publish_pack_file(&encoded_tmp, local_path))
+    let result = download_variant_to_path(variant, pack, &encoded_tmp, pack_index, pack_count, tx)
+        .and_then(|()| {
+            send_progress(
+                tx,
+                MediaProgressEvent::for_pack(pack, "identity", "verify", pack_index, pack_count)
+                    .with_done_bytes(variant.bytes),
+            );
+            verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256)
+        })
+        .and_then(|()| {
+            send_progress(
+                tx,
+                MediaProgressEvent::for_pack(pack, "identity", "save", pack_index, pack_count)
+                    .with_done_bytes(variant.bytes),
+            );
+            publish_pack_file(&encoded_tmp, local_path)
+        })
         .and_then(|()| write_download_state(&config.asset_dir, pack, local_path, variant));
     let _ = fs::remove_file(encoded_tmp);
     result
 }
 
-fn download_variant_to_path(variant: &MediaVariant, output_path: &Path) -> Result<(), String> {
-    let status = Command::new("wget")
+fn download_variant_to_path(
+    variant: &MediaVariant,
+    pack: &MediaPack,
+    output_path: &Path,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(), String> {
+    send_progress(
+        tx,
+        MediaProgressEvent::for_pack(pack, "identity", "download_start", pack_index, pack_count),
+    );
+    let started = Instant::now();
+    let mut child = Command::new("wget")
         .arg("-q")
         .arg("--header")
         .arg("Accept-Encoding: identity")
         .arg("-O")
         .arg(output_path)
         .arg(&variant.url)
-        .status()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|e| format!("spawn wget: {e}"))?;
-    if status.success() {
-        Ok(())
+    let mut last_bytes = 0;
+    let mut last_emit = Instant::now() - Duration::from_secs(1);
+    loop {
+        let bytes = output_path.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if bytes != last_bytes || last_emit.elapsed() >= Duration::from_millis(500) {
+            last_bytes = bytes;
+            last_emit = Instant::now();
+            send_progress(
+                tx,
+                MediaProgressEvent::for_pack(pack, "identity", "download", pack_index, pack_count)
+                    .with_bytes(bytes, variant.bytes)
+                    .with_download_mbps(mbps(bytes, started.elapsed())),
+            );
+        }
+        match child.try_wait().map_err(|e| format!("wait wget: {e}"))? {
+            Some(status) if status.success() => {
+                let bytes = output_path.metadata().map(|meta| meta.len()).unwrap_or(0);
+                send_progress(
+                    tx,
+                    MediaProgressEvent::for_pack(
+                        pack,
+                        "identity",
+                        "download_done",
+                        pack_index,
+                        pack_count,
+                    )
+                    .with_bytes(bytes, variant.bytes)
+                    .with_download_mbps(mbps(bytes, started.elapsed())),
+                );
+                return Ok(());
+            }
+            Some(status) => return Err(format!("wget exited with {status}")),
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    }
+}
+
+fn mbps(bytes: u64, elapsed: Duration) -> f64 {
+    let ms = elapsed.as_millis() as f64;
+    if ms <= 0.0 {
+        0.0
     } else {
-        Err(format!("wget exited with {status}"))
+        (bytes as f64 * 8.0) / (ms * 1000.0)
     }
 }
 
@@ -458,6 +573,7 @@ pub(super) enum MediaWorkerMessage {
         name: String,
         detail: String,
     },
+    Progress(MediaProgressEvent),
     PackStatus {
         system: String,
         image_size: String,
@@ -470,6 +586,110 @@ pub(super) enum MediaWorkerMessage {
     Done {
         detail: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct MediaProgressEvent {
+    pub system: String,
+    pub image_size: String,
+    pub variant: String,
+    pub phase: String,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub pack_index: usize,
+    pub pack_count: usize,
+    pub download_mbps: Option<f64>,
+    pub detail: String,
+}
+
+impl MediaProgressEvent {
+    fn new(system: &str, image_size: &str, variant: &str, phase: &str) -> Self {
+        Self {
+            system: system.to_string(),
+            image_size: image_size.to_string(),
+            variant: variant.to_string(),
+            phase: phase.to_string(),
+            bytes_done: 0,
+            bytes_total: 0,
+            pack_index: 0,
+            pack_count: 0,
+            download_mbps: None,
+            detail: String::new(),
+        }
+    }
+
+    fn for_pack(
+        pack: &MediaPack,
+        variant: &str,
+        phase: &str,
+        pack_index: usize,
+        pack_count: usize,
+    ) -> Self {
+        Self::new(&pack.id, &pack.image_size, variant, phase)
+            .with_bytes(0, pack.raw.bytes)
+            .with_pack_position(pack_index, pack_count)
+    }
+
+    fn with_bytes(mut self, done: u64, total: u64) -> Self {
+        self.bytes_done = done;
+        self.bytes_total = total;
+        self
+    }
+
+    fn with_pack_position(mut self, pack_index: usize, pack_count: usize) -> Self {
+        self.pack_index = pack_index;
+        self.pack_count = pack_count;
+        self
+    }
+
+    fn with_done_bytes(mut self, total: u64) -> Self {
+        self.bytes_done = total;
+        self.bytes_total = total;
+        self
+    }
+
+    fn with_download_mbps(mut self, mbps: f64) -> Self {
+        self.download_mbps = Some(mbps);
+        self
+    }
+
+    fn with_detail(mut self, detail: &str) -> Self {
+        self.detail = detail.to_string();
+        self
+    }
+
+    fn percent(&self) -> i32 {
+        if self.bytes_total == 0 {
+            -1
+        } else {
+            ((self.bytes_done.min(self.bytes_total) * 100) / self.bytes_total) as i32
+        }
+    }
+
+    pub(super) fn log_detail(&self) -> String {
+        let mbps = self
+            .download_mbps
+            .map(|value| format!("{value:.2}"))
+            .unwrap_or_default();
+        format!(
+            "system={} image_size={} variant={} phase={} bytes_done={} bytes_total={} percent={} pack_index={} pack_count={} download_mbps={} detail={}",
+            self.system,
+            self.image_size,
+            self.variant,
+            self.phase,
+            self.bytes_done,
+            self.bytes_total,
+            self.percent(),
+            self.pack_index,
+            self.pack_count,
+            mbps,
+            self.detail
+        )
+    }
+}
+
+fn send_progress(tx: &mpsc::Sender<MediaWorkerMessage>, event: MediaProgressEvent) {
+    let _ = tx.send(MediaWorkerMessage::Progress(event));
 }
 
 #[cfg(test)]
@@ -524,6 +744,34 @@ mod tests {
             MediaUpdatePolicy::Off
         );
         assert!(MediaUpdatePolicy::parse(Some("maybe")).is_err());
+    }
+
+    #[test]
+    fn progress_event_calculates_percent_and_log_detail() {
+        let event = MediaProgressEvent::new("arcade", "320x320", "identity", "download")
+            .with_bytes(25, 100)
+            .with_pack_position(1, 3)
+            .with_download_mbps(12.345)
+            .with_detail("sample");
+
+        assert_eq!(event.percent(), 25);
+        let detail = event.log_detail();
+        assert!(detail.contains("system=arcade"));
+        assert!(detail.contains("percent=25"));
+        assert!(detail.contains("download_mbps=12.35"));
+        assert!(detail.contains("detail=sample"));
+    }
+
+    #[test]
+    fn progress_event_reports_indeterminate_without_total() {
+        let event = MediaProgressEvent::new("all", "320x320", "identity", "manifest");
+
+        assert_eq!(event.percent(), -1);
+    }
+
+    #[test]
+    fn mbps_uses_wire_megabits_per_second() {
+        assert_eq!(mbps(1_000_000, Duration::from_millis(1000)), 8.0);
     }
 
     #[test]
