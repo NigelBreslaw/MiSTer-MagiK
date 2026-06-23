@@ -246,6 +246,48 @@ pub(crate) struct PreviewRawFrame<'a> {
     pub(crate) display_h: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreviewRawFrameStatus {
+    Empty,
+    Ready,
+    Invalid,
+}
+
+impl<'a> PreviewRawFrame<'a> {
+    pub(crate) fn status(&self) -> PreviewRawFrameStatus {
+        if matches!(self.pixels, PreviewRawPixels::Empty) {
+            return PreviewRawFrameStatus::Empty;
+        }
+        if self.source_w == 0 || self.source_h == 0 || self.display_w == 0 || self.display_h == 0 {
+            return PreviewRawFrameStatus::Invalid;
+        }
+        let source_w = self.source_w as usize;
+        let source_h = self.source_h as usize;
+        match self.pixels {
+            PreviewRawPixels::Empty => PreviewRawFrameStatus::Empty,
+            PreviewRawPixels::Rgb8(rgb) => {
+                if raw_frame_len_is_valid(rgb.len(), source_w, source_h, 3) {
+                    PreviewRawFrameStatus::Ready
+                } else {
+                    PreviewRawFrameStatus::Invalid
+                }
+            }
+            PreviewRawPixels::Rgb565 {
+                pixels,
+                stride_pixels,
+            } => {
+                if stride_pixels >= source_w
+                    && raw_frame_stride_len_is_valid(pixels.len(), stride_pixels, source_h)
+                {
+                    PreviewRawFrameStatus::Ready
+                } else {
+                    PreviewRawFrameStatus::Invalid
+                }
+            }
+        }
+    }
+}
+
 pub(crate) struct PreviewRawTransitionFrame<'a> {
     pub(crate) previous: Option<PreviewRawFrame<'a>>,
     pub(crate) current: PreviewRawFrame<'a>,
@@ -261,6 +303,24 @@ pub(crate) enum PreviewRawPixels<'a> {
         pixels: &'a [Rgb565Pixel],
         stride_pixels: usize,
     },
+}
+
+fn raw_frame_len_is_valid(
+    len: usize,
+    source_w: usize,
+    source_h: usize,
+    bytes_per_pixel: usize,
+) -> bool {
+    source_w
+        .checked_mul(source_h)
+        .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+        .is_some_and(|needed| len >= needed)
+}
+
+fn raw_frame_stride_len_is_valid(len: usize, stride_pixels: usize, source_h: usize) -> bool {
+    stride_pixels
+        .checked_mul(source_h)
+        .is_some_and(|needed| len >= needed)
 }
 
 impl PreviewState {
@@ -1103,6 +1163,87 @@ mod tests {
         ) = (&first_hit.pixels, &second_hit.pixels);
         assert!(Arc::ptr_eq(first_words, second_words));
         assert!(Arc::ptr_eq(&words, first_words));
+    }
+
+    #[test]
+    fn raw_frame_status_treats_empty_as_empty_without_dimensions() {
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Empty,
+            source_w: 0,
+            source_h: 0,
+            display_w: 0,
+            display_h: 0,
+        };
+
+        assert_eq!(frame.status(), PreviewRawFrameStatus::Empty);
+    }
+
+    #[test]
+    fn raw_frame_status_rejects_zero_sized_rgb565_frame() {
+        let pixels = [Rgb565Pixel(0xffff)];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 1,
+            },
+            source_w: 0,
+            source_h: 1,
+            display_w: 1,
+            display_h: 1,
+        };
+
+        assert_eq!(frame.status(), PreviewRawFrameStatus::Invalid);
+    }
+
+    #[test]
+    fn raw_frame_status_rejects_short_rgb565_payload() {
+        let pixels = [Rgb565Pixel(0xffff); 3];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+
+        assert_eq!(frame.status(), PreviewRawFrameStatus::Invalid);
+    }
+
+    #[test]
+    fn raw_frame_status_rejects_rgb565_stride_smaller_than_width() {
+        let pixels = [Rgb565Pixel(0xffff); 4];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 1,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+
+        assert_eq!(frame.status(), PreviewRawFrameStatus::Invalid);
+    }
+
+    #[test]
+    fn raw_frame_status_accepts_padded_rgb565_stride() {
+        let pixels = [Rgb565Pixel(0xffff); 8];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 4,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+
+        assert_eq!(frame.status(), PreviewRawFrameStatus::Ready);
     }
 
     #[test]
