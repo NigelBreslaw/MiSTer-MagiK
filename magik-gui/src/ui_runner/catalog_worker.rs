@@ -12,13 +12,15 @@ pub(super) fn start_library_catalog_worker(
             let progress_tx = tx.clone();
             let mut progress_coalescer = CatalogProgressCoalescer::default();
             let mut progress = move |title: &str, detail: &str| {
-                if !progress_coalescer.should_send(title, detail) {
+                let phase = library_db::CatalogProgressPhase::from_display_title(title);
+                let percent = library_db::catalog_progress_percent_from_display(title, detail);
+                if !progress_coalescer.should_send(phase, title, percent) {
                     return;
                 }
                 let _ = progress_tx.send(CatalogWorkerMessage::Progress {
                     title: title.to_string(),
                     detail: detail.to_string(),
-                    percent: catalog_scan_percent(title, detail),
+                    percent,
                 });
             };
             let scan_event_tx = tx.clone();
@@ -85,12 +87,10 @@ pub(super) fn start_library_catalog_worker(
                 }
                 CatalogWorkerPlan::CheckStamp => {}
                 CatalogWorkerPlan::ForceBuild => {
-                    let (title, detail) = ("Indexing library", "Building catalog...");
-                    let _ = tx.send(CatalogWorkerMessage::Progress {
-                        title: title.to_string(),
-                        detail: detail.to_string(),
-                        percent: catalog_scan_percent(title, detail),
-                    });
+                    send_catalog_progress(
+                        &tx,
+                        library_db::CatalogProgress::indexing_building_catalog(),
+                    );
                 }
             }
             if staged_ram_catalog_enabled(cache_state) {
@@ -103,13 +103,10 @@ pub(super) fn start_library_catalog_worker(
                     ),
                 });
                 if bootstrap.launchers > 50 {
-                    let title = "Finding games";
-                    let detail = format!("Games found: {}", bootstrap.launchers);
-                    let _ = tx.send(CatalogWorkerMessage::Progress {
-                        title: title.to_string(),
-                        percent: catalog_scan_percent(title, &detail),
-                        detail,
-                    });
+                    send_catalog_progress(
+                        &tx,
+                        library_db::CatalogProgress::finding_games_found(bootstrap.launchers),
+                    );
                 }
                 let artifact = match library_db::scan_default_library_with_events(
                     Some(&mut progress),
@@ -118,11 +115,10 @@ pub(super) fn start_library_catalog_worker(
                     Ok(artifact) => artifact,
                     Err(e) => {
                         eprintln!("library scan failed: {e}");
-                        let _ = tx.send(CatalogWorkerMessage::Progress {
-                            title: "Library scan failed".to_string(),
-                            detail: e,
-                            percent: -1,
-                        });
+                        send_catalog_progress(
+                            &tx,
+                            library_db::CatalogProgress::library_scan_failed(e),
+                        );
                         return;
                     }
                 };
@@ -140,11 +136,10 @@ pub(super) fn start_library_catalog_worker(
                         stats.entries
                     ),
                 });
-                let _ = tx.send(CatalogWorkerMessage::Progress {
-                    title: "Saving library".to_string(),
-                    detail: "Writing catalog database before opening launcher...".to_string(),
-                    percent: 90,
-                });
+                send_catalog_progress(
+                    &tx,
+                    library_db::CatalogProgress::saving_before_opening_launcher(),
+                );
                 match artifact.save_default_sqlite_with_progress(Some(&mut progress)) {
                     Ok(summary) => {
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
@@ -247,21 +242,13 @@ pub(super) fn start_library_catalog_worker(
                 Ok(summary) => Some(summary),
                 Err(e) => {
                     eprintln!("library refresh failed: {e}");
-                    let _ = tx.send(CatalogWorkerMessage::Progress {
-                        title: "Library scan failed".to_string(),
-                        detail: e,
-                        percent: -1,
-                    });
+                    send_catalog_progress(&tx, library_db::CatalogProgress::library_scan_failed(e));
                     None
                 }
             };
             let rebuilt = summary.is_some();
             if rebuilt {
-                let _ = tx.send(CatalogWorkerMessage::Progress {
-                    title: "Loading library".to_string(),
-                    detail: "Opening SQLite catalog...".to_string(),
-                    percent: 100,
-                });
+                send_catalog_progress(&tx, library_db::CatalogProgress::loading_sqlite_catalog());
             }
             match library_db::load_arcade_catalog_from_sqlite(&root) {
                 Ok(loaded) => {
@@ -277,11 +264,7 @@ pub(super) fn start_library_catalog_worker(
                 }
                 Err(e) => {
                     eprintln!("library catalog load failed: {e}");
-                    let _ = tx.send(CatalogWorkerMessage::Progress {
-                        title: "Library load failed".to_string(),
-                        detail: e,
-                        percent: -1,
-                    });
+                    send_catalog_progress(&tx, library_db::CatalogProgress::library_load_failed(e));
                 }
             }
         })
@@ -411,72 +394,24 @@ pub(super) enum CatalogWorkerMessage {
     Done,
 }
 
-fn catalog_scan_percent(title: &str, detail: &str) -> i32 {
-    if title == "Loading library" {
-        return 100;
-    }
-    if title == "Saving library" {
-        if let Some(percent) = sqlite_save_percent(detail) {
-            return percent;
-        }
-        if let Some(percent) = sqlite_import_percent(detail) {
-            return percent;
-        }
-        if detail.starts_with("Finalizing ") {
-            return 99;
-        }
-        return 90;
-    }
-    if matches!(title, "Saving library" | "Indexing library") && detail.starts_with("Writing ") {
-        return 90;
-    }
-    -1
-}
-
-fn sqlite_import_percent(detail: &str) -> Option<i32> {
-    let rest = detail.strip_prefix("Writing ")?;
-    let mut parts = rest.split_whitespace();
-    let written = parts.next()?.parse::<usize>().ok()?;
-    if parts.next()? != "of" {
-        return None;
-    }
-    let total = parts.next()?.parse::<usize>().ok()?;
-    if total == 0 {
-        return Some(90);
-    }
-    let percent = 90 + (written.min(total) * 9 / total) as i32;
-    Some(percent.clamp(90, 99))
-}
-
-fn sqlite_save_percent(detail: &str) -> Option<i32> {
-    let rest = detail.strip_prefix("Saving ")?;
-    let mut parts = rest.split_whitespace();
-    let written = parts.next()?.parse::<u64>().ok()?;
-    if parts.next()? != "of" {
-        return None;
-    }
-    let total = parts.next()?.parse::<u64>().ok()?;
-    if parts.next()? != "bytes" {
-        return None;
-    }
-    if total == 0 {
-        return Some(100);
-    }
-    Some(((written.min(total) * 100) / total) as i32)
-}
-
 #[derive(Default)]
 struct CatalogProgressCoalescer {
     last_sent: Option<Instant>,
+    last_phase: Option<library_db::CatalogProgressPhase>,
     last_title: String,
     last_percent: i32,
 }
 
 impl CatalogProgressCoalescer {
-    fn should_send(&mut self, title: &str, detail: &str) -> bool {
+    fn should_send(
+        &mut self,
+        phase: library_db::CatalogProgressPhase,
+        title: &str,
+        percent: i32,
+    ) -> bool {
         let now = Instant::now();
-        let percent = catalog_scan_percent(title, detail);
         let phase_changed = self.last_sent.is_none()
+            || self.last_phase != Some(phase)
             || self.last_title != title
             || self.last_percent != percent
             || percent >= 0;
@@ -488,11 +423,25 @@ impl CatalogProgressCoalescer {
             return false;
         }
         self.last_sent = Some(now);
+        self.last_phase = Some(phase);
         self.last_title.clear();
         self.last_title.push_str(title);
         self.last_percent = percent;
         true
     }
+}
+
+fn send_catalog_progress(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    progress: library_db::CatalogProgress,
+) {
+    let display = progress.display();
+    debug_assert_eq!(display.phase(), progress.phase());
+    let _ = tx.send(CatalogWorkerMessage::Progress {
+        title: display.title().to_string(),
+        detail: display.detail().to_string(),
+        percent: display.percent(),
+    });
 }
 
 pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad) -> String {
@@ -649,36 +598,69 @@ mod tests {
     #[test]
     fn catalog_progress_coalescer_throttles_repeated_scan_counts() {
         let mut coalescer = CatalogProgressCoalescer::default();
-        assert!(coalescer.should_send("Classifying library", "Games found: 0"));
-        assert!(!coalescer.should_send("Classifying library", "Games found: 250"));
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::ClassifyingLibrary,
+            "Classifying library",
+            -1
+        ));
+        assert!(!coalescer.should_send(
+            library_db::CatalogProgressPhase::ClassifyingLibrary,
+            "Classifying library",
+            -1
+        ));
         coalescer.last_sent = Some(Instant::now() - Duration::from_millis(300));
-        assert!(coalescer.should_send("Classifying library", "Games found: 500"));
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::ClassifyingLibrary,
+            "Classifying library",
+            -1
+        ));
     }
 
     #[test]
     fn catalog_progress_coalescer_sends_phase_and_percent_changes() {
         let mut coalescer = CatalogProgressCoalescer::default();
-        assert!(coalescer.should_send("Classifying library", "Games found: 0"));
-        assert!(coalescer.should_send("Indexing library", "Writing 10 games, 2 archives..."));
-        assert!(coalescer.should_send("Loading library", "Opening SQLite catalog..."));
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::ClassifyingLibrary,
+            "Classifying library",
+            -1
+        ));
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::IndexingLibrary,
+            "Indexing library",
+            90
+        ));
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::LoadingLibrary,
+            "Loading library",
+            100
+        ));
     }
 
     #[test]
     fn catalog_scan_percent_tracks_sqlite_import_progress() {
         assert_eq!(
-            catalog_scan_percent("Saving library", "Writing 0 of 100 games into SQLite..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Writing 0 of 100 games into SQLite..."
+            ),
             90
         );
         assert_eq!(
-            catalog_scan_percent("Saving library", "Writing 50 of 100 games into SQLite..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Writing 50 of 100 games into SQLite..."
+            ),
             94
         );
         assert_eq!(
-            catalog_scan_percent("Saving library", "Writing 100 of 100 games into SQLite..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Writing 100 of 100 games into SQLite..."
+            ),
             99
         );
         assert_eq!(
-            catalog_scan_percent(
+            library_db::catalog_progress_percent_from_display(
                 "Saving library",
                 "Finalizing catalog views and search indexes..."
             ),
@@ -689,19 +671,31 @@ mod tests {
     #[test]
     fn catalog_scan_percent_tracks_sqlite_save_progress() {
         assert_eq!(
-            catalog_scan_percent("Saving library", "Saving 0 of 1000 bytes to disk..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Saving 0 of 1000 bytes to disk..."
+            ),
             0
         );
         assert_eq!(
-            catalog_scan_percent("Saving library", "Saving 500 of 1000 bytes to disk..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Saving 500 of 1000 bytes to disk..."
+            ),
             50
         );
         assert_eq!(
-            catalog_scan_percent("Saving library", "Saving 1000 of 1000 bytes to disk..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Saving 1000 of 1000 bytes to disk..."
+            ),
             100
         );
         assert_eq!(
-            catalog_scan_percent("Saving library", "Saving 1200 of 1000 bytes to disk..."),
+            library_db::catalog_progress_percent_from_display(
+                "Saving library",
+                "Saving 1200 of 1000 bytes to disk..."
+            ),
             100
         );
     }

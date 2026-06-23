@@ -5,6 +5,7 @@ use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
 };
+use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::game_discovery::{
@@ -775,12 +776,7 @@ fn copy_sqlite_temp_with_progress(
 }
 
 fn emit_sqlite_save_progress(progress: &mut ProgressCallback<'_>, done: u64, total: u64) {
-    if let Some(report) = progress.as_mut() {
-        report(
-            "Saving library",
-            &format!("Saving {done} of {total} bytes to disk..."),
-        );
-    }
+    report_catalog_progress(progress, CatalogProgress::saving_sqlite_publish(done, total));
 }
 
 fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
@@ -1893,21 +1889,14 @@ fn report_sqlite_import_progress(
     written: usize,
     total: usize,
 ) {
-    if let Some(report) = progress.as_mut() {
-        report(
-            "Saving library",
-            &format!("Writing {written} of {total} games into SQLite..."),
-        );
-    }
+    report_catalog_progress(
+        progress,
+        CatalogProgress::saving_sqlite_import(written, total),
+    );
 }
 
 fn report_sqlite_import_finalizing(progress: &mut ProgressCallback<'_>) {
-    if let Some(report) = progress.as_mut() {
-        report(
-            "Saving library",
-            "Finalizing catalog views and search indexes...",
-        );
-    }
+    report_catalog_progress(progress, CatalogProgress::saving_finalizing());
 }
 
 pub(crate) fn sqlite_cached_summary(
