@@ -1,6 +1,5 @@
 use crate::media_pack_save::{
-    publish_pack_file_for_bench, temp_path_for, PackSaveMetrics, PackSaveMode,
-    PROGRESS_COPY_CHUNK_BYTES,
+    publish_pack_file_for_bench, temp_path_for, PackSaveMetrics, PROGRESS_COPY_CHUNK_BYTES,
 };
 use mister_magik_fb::media_update::{
     size_qualified_pack_path, valid_image_size, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE,
@@ -21,14 +20,12 @@ struct BenchConfig {
     asset_dir: PathBuf,
     size_bytes: u64,
     iterations: usize,
-    modes: Vec<PackSaveMode>,
 }
 
 #[derive(Clone, Debug)]
 struct SaveRow {
     label: String,
     system: String,
-    mode: PackSaveMode,
     iteration: usize,
     metrics: PackSaveMetrics,
     result: String,
@@ -53,13 +50,11 @@ where
         .map_err(|e| format!("create asset dir {}: {e}", config.asset_dir.display()))?;
     let source = resolve_source_path(&config)?;
     println!("{HEADER}");
-    for mode in &config.modes {
-        for iteration in 1..=config.iterations {
-            let row = run_one(&config, &source, *mode, iteration);
-            println!("{}", row.to_tsv());
-            if row.result != "bench-ok" {
-                return Err(row.to_tsv());
-            }
+    for iteration in 1..=config.iterations {
+        let row = run_one(&config, &source, iteration);
+        println!("{}", row.to_tsv());
+        if row.result != "bench-ok" {
+            return Err(row.to_tsv());
         }
     }
     Ok(())
@@ -80,7 +75,6 @@ where
         ),
         size_bytes: DEFAULT_SIZE_BYTES,
         iterations: 1,
-        modes: vec![PackSaveMode::Legacy, PackSaveMode::Progress],
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -112,7 +106,9 @@ where
                     .map_err(|e| format!("invalid --iterations: {e}"))?;
             }
             "--modes" => {
-                config.modes = parse_modes(&args.next().ok_or("--modes requires a list")?)?;
+                return Err(
+                    "--modes was removed; media save has one progress-capable path".to_string(),
+                )
             }
             "-h" | "--help" => {
                 print_usage();
@@ -141,27 +137,7 @@ where
 }
 
 fn print_usage() {
-    println!(
-        "usage: mister-magik-fb media-bench-save --label LABEL --system ID --iterations N --modes old,progress"
-    );
-}
-
-fn parse_modes(value: &str) -> Result<Vec<PackSaveMode>, String> {
-    let modes: Result<Vec<_>, _> = value
-        .split(',')
-        .map(|part| match part.trim() {
-            "old" | "legacy" => Ok(PackSaveMode::Legacy),
-            "progress" | "chunked" => Ok(PackSaveMode::Progress),
-            "" => Err("empty save benchmark mode".to_string()),
-            other => Err(format!("unsupported save benchmark mode: {other}")),
-        })
-        .collect();
-    let modes = modes?;
-    if modes.is_empty() {
-        Err("--modes must include at least one mode".to_string())
-    } else {
-        Ok(modes)
-    }
+    println!("usage: mister-magik-fb media-bench-save --label LABEL --system ID --iterations N");
 }
 
 fn resolve_source_path(config: &BenchConfig) -> Result<PathBuf, String> {
@@ -204,17 +180,16 @@ fn write_deterministic_source(path: &Path, size_bytes: u64) -> Result<(), String
     Ok(())
 }
 
-fn run_one(config: &BenchConfig, source: &Path, mode: PackSaveMode, iteration: usize) -> SaveRow {
+fn run_one(config: &BenchConfig, source: &Path, iteration: usize) -> SaveRow {
     let mut row = SaveRow {
         label: config.label.clone(),
         system: config.system.clone(),
-        mode,
         iteration,
         metrics: PackSaveMetrics::default(),
         result: "bench-ok".to_string(),
     };
-    let final_path = bench_final_path(config, mode, iteration);
-    let result = publish_pack_file_for_bench(source, &final_path, mode, |_| {});
+    let final_path = bench_final_path(config, iteration);
+    let result = publish_pack_file_for_bench(source, &final_path, |_| {});
     match result {
         Ok(metrics) => row.metrics = metrics,
         Err(error) => row.result = error,
@@ -224,12 +199,11 @@ fn run_one(config: &BenchConfig, source: &Path, mode: PackSaveMode, iteration: u
     row
 }
 
-fn bench_final_path(config: &BenchConfig, mode: PackSaveMode, iteration: usize) -> PathBuf {
+fn bench_final_path(config: &BenchConfig, iteration: usize) -> PathBuf {
     config.asset_dir.join(format!(
-        ".{}-{}-save-bench-{}-{}-{}.mmlz4b",
+        ".{}-{}-save-bench-progress-{}-{}.mmlz4b",
         config.system,
         config.image_size,
-        mode.label(),
         iteration,
         unix_ms_now()
     ))
@@ -252,7 +226,7 @@ impl SaveRow {
             "screenshot_save_bench_tsv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.label,
             self.system,
-            self.mode.label(),
+            "progress",
             self.iteration,
             self.metrics.bytes,
             self.metrics.copy_ms,
@@ -286,8 +260,6 @@ mod tests {
             "neogeo".to_string(),
             "--iterations".to_string(),
             "10".to_string(),
-            "--modes".to_string(),
-            "old,progress".to_string(),
             "--size-bytes".to_string(),
             "1234".to_string(),
         ])
@@ -296,14 +268,13 @@ mod tests {
         assert_eq!(config.label, "SAVE-20260623");
         assert_eq!(config.system, "neogeo");
         assert_eq!(config.iterations, 10);
-        assert_eq!(config.modes, [PackSaveMode::Legacy, PackSaveMode::Progress]);
         assert_eq!(config.size_bytes, 1234);
     }
 
     #[test]
-    fn rejects_unknown_save_benchmark_mode() {
-        let error = parse_args(["--modes".to_string(), "old,fast".to_string()]).unwrap_err();
+    fn rejects_removed_save_benchmark_mode_option() {
+        let error = parse_args(["--modes".to_string(), "unsupported".to_string()]).unwrap_err();
 
-        assert!(error.contains("unsupported save benchmark mode"));
+        assert!(error.contains("--modes was removed"));
     }
 }

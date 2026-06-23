@@ -524,3 +524,123 @@ BOOTSTRAP-SLOW-55-20260621	611e839f	library_db_saved	58648	bytes=17768448 scan_u
 BOOTSTRAP-SLOW-55-20260621	611e839f	library_ready	58965	games=7221 load_us=307869
 BOOTSTRAP-SLOW-55-20260621	611e839f	catalog_bridge_sync_update	58969	games=7221 elapsed_us=3983
 BOOTSTRAP-SLOW-55-20260621	611e839f	db_count	0	unknown command 'library-sql' (use: early-black | ui | experiment-capabilities | library-refresh)
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	first_frame	329	catalog_ready=false
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	bootstrap_counter_climb	330	target=50
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	bootstrap_counter_sustained_climb	696	target=900
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_first_candidate	2876	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_first_discovery	3095	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	full_scan_counter_climb	13877	target=850
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	19766	path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	1863	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	1794	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	3	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	80	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	4071	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	516	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	3628	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	2457	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	613	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	2	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	3427	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	750	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	120	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk_target	114	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_walk	42045	candidates=7905
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_profile_match	99	calls=7905
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_installed_collection	223	calls=7513
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_archive_toc	928	containers=154
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_collection_listings	0	collections=0
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_file_discovery	23252	files=7511
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	scan_stage_classify_total	42554	discoveries=9354 normal_files=7897 containers=154 entries=281
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	library_scan_complete	43551	scan_us=42554122 discover_us=42045332 classify_us=42553848 discoveries=9229 normal_files=7897 containers=154 entries=281
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_schema	32	tables=14
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_metadata_load	3026	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_begin_tx	0	-
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_profiles	1	rows=16
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_payloads	858	normal_files=7897 entries=281
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	401	from=0 to=1000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	357	from=1000 to=2000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	393	from=2000 to=3000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	389	from=3000 to=4000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	378	from=4000 to=5000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	425	from=5000 to=6000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	483	from=6000 to=7000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	541	from=7000 to=8000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	521	from=8000 to=9000 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	669	from=9000 to=9229 total=9229
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_games_total	4846	rows=9229 launcher_rows=6245
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_materialize_arcade_ui	857	-
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_launcher_arcade	21	-
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_launcher_console	422	rows=6185
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_meta	310	rows=11
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_catalog_stamp	0	rows=11
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_insert_software_hash_cache	0	rows=0
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_commit	13	-
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	import_stage_total	10426	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	sqlite_publish_old	6215	bytes=18026496 copy_ms=6201 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=0 result=bench-ok
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	library_db_saved	61059	bytes=18026496 scan_us=42554122 discover_us=42045332 classify_us=42553848 import_us=17423862 discoveries=9229 normal_files=7897 containers=154 entries=281
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	library_ready	61393	games=7256 load_us=325169
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	catalog_bridge_sync_update	61397	games=7256 elapsed_us=3979
+FIRSTSCAN-OLD-SAVE-20260623	d4fe3644	db_count	0	9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	first_frame	101	catalog_ready=false
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	bootstrap_counter_climb	343	target=50
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	bootstrap_counter_sustained_climb	810	target=900
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_first_candidate	2860	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_first_discovery	3038	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	full_scan_counter_climb	13876	target=900
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	19839	path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	1782	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	2068	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	4	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	92	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	4043	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	561	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	3584	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	2489	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	646	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	3391	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	707	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	120	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk_target	136	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_walk	42282	candidates=7905
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_profile_match	100	calls=7905
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_installed_collection	206	calls=7513
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_archive_toc	893	containers=154
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_collection_listings	0	collections=0
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_file_discovery	23190	files=7511
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	scan_stage_classify_total	42821	discoveries=9354 normal_files=7897 containers=154 entries=281
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	library_scan_complete	43940	scan_us=42821083 discover_us=42282094 classify_us=42820737 discoveries=9229 normal_files=7897 containers=154 entries=281
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_schema	38	tables=14
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_metadata_load	3043	mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_begin_tx	0	-
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_profiles	0	rows=16
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_payloads	861	normal_files=7897 entries=281
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	389	from=0 to=1000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	362	from=1000 to=2000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	388	from=2000 to=3000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	396	from=3000 to=4000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	396	from=4000 to=5000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	419	from=5000 to=6000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	474	from=6000 to=7000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	544	from=7000 to=8000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	523	from=8000 to=9000 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_chunk	673	from=9000 to=9229 total=9229
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_games_total	4849	rows=9229 launcher_rows=6245
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_materialize_arcade_ui	830	-
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_launcher_arcade	28	-
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_launcher_console	419	rows=6185
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_meta	304	rows=11
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_catalog_stamp	7	rows=11
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_insert_software_hash_cache	0	rows=0
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_commit	14	-
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	import_stage_total	10430	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	sqlite_publish_progress	1426	bytes=18026496 copy_ms=1406 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	library_db_saved	56627	bytes=18026496 scan_us=42821083 discover_us=42282094 classify_us=42820737 import_us=12634853 discoveries=9229 normal_files=7897 containers=154 entries=281
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	library_ready	56994	games=7256 load_us=374681
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	catalog_bridge_sync_update	56998	games=7256 elapsed_us=3936
+FIRSTSCAN-PROGRESS-SAVE-20260623	d4fe3644	db_count	0	9229

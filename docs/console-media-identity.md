@@ -180,5 +180,5 @@ total time improves after including download, decompression, saving,
 verification, and cache behavior.
 
 Use `scripts/profile-screenshot-save.sh` when changing the save/publish path.
-It compares the old save mode with the progress-emitting mode and reports copy,
-file sync, rename, parent sync, total time, and progress event count.
+It reports copy, file sync, rename, parent sync, total time, and progress event
+count for the supported progress-capable save path.
