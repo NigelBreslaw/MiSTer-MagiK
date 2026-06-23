@@ -253,14 +253,23 @@ publishes verified packs atomically. The state file
 successful media update, preferred size, and the latest HTTP/cache headers
 observed for each downloaded pack. It is not a catalog stamp input.
 
-The launcher starts the runtime media worker after the first usable catalog and
-first visible frame. `MISTER_MEDIA_UPDATE=off` disables it,
+During catalog scans, the scanner emits the first discovery of each supported
+screenshot-pack system: `arcade`, `neogeo`, `nes`, `snes`, `n64`, `sms`,
+`megadrive`, and `saturn`. The launcher starts the runtime media worker on the
+first discovered supported system and queues only those discovered systems.
+Unrequested packs are not checked or downloaded. The worker fetches the
+manifest once, de-duplicates system requests, and runs at most three pack
+downloads concurrently.
+
+`MISTER_MEDIA_UPDATE=off` disables the media worker,
 `MISTER_MEDIA_UPDATE=check` reports status without downloading, and
 `MISTER_MEDIA_UPDATE=download` is the default. `MISTER_MEDIA_SIZE` defaults to
 `320x320`. Progress is emitted as structured `screenshot_media_progress` startup
 events with system, size, phase, byte counts, pack index/count, and optional
-download Mbps so a future UI can render progress bars without changing the
-downloader contract.
+download Mbps. The catalog-build screen renders up to three compact active pack
+rows from the same events. Download and save phases show byte progress; verify,
+sync, rename, and parent sync are phase-only unless future evidence shows that
+more granularity is needed.
 
 The production path is the canonical `.mmlz4b` object served with
 `Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"`.
@@ -298,6 +307,24 @@ For identity responses `decompress_ms` is always zero. Any future compressed
 artifact experiment should happen outside the MagiK runtime first and only move
 back on device if there is clear total-time evidence and a deliberate runtime
 decision to carry decoder code.
+
+Screenshot save benchmark rows isolate publish-to-disk cost from download and
+checksum work:
+
+```text
+screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+```
+
+Run the benchmark before changing save behavior:
+
+```bash
+scripts/profile-screenshot-save.sh SAVE-PROGRESS-YYYYMMDD --system neogeo --iterations 10 --modes old,progress
+```
+
+Compare average and p95 `total_ms` and `copy_ms`. The progress save path is
+acceptable only when the overhead is small enough that UI observability is worth
+the cost on `/media/fat`; record the evidence in
+`history/toolchain-bench/results-screenshot-save.tsv`.
 
 MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
 offline with `scripts/mister mame-metadata-build`, include them in the release

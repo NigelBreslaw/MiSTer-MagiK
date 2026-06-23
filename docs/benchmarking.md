@@ -159,6 +159,29 @@ and about 0.24s once the filesystem cache is warm.
 The library scanner must not walk screenshot/cache media directories, read
 `gamelist.xml`, or probe normal PNG/JPG screenshots for metadata.
 
+Runtime screenshot-pack downloads are selective: the catalog scan announces the
+first discovered supported system, and the media worker checks/downloads only
+those packs. Download concurrency is fixed at three. The catalog-build screen
+may show up to three active screenshot-pack rows, sourced from the structured
+download/save progress events rather than parsed log text.
+
+Use `scripts/profile-screenshot-save.sh` to measure save-progress overhead
+separately from network and checksum cost:
+
+```bash
+scripts/profile-screenshot-save.sh SAVE-PROGRESS-YYYYMMDD --system neogeo --iterations 10 --modes old,progress
+```
+
+The TSV output is:
+
+```text
+screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+```
+
+Compare average and p95 `total_ms` plus `copy_ms` before changing production
+save behavior. Benchmark claims for screenshot media must state whether they
+cover download, decompression, save/publish, verification, and total wall time.
+
 Relevant docs:
 
 - `history/2026-6-13/arcade-screenshot-cache-workflow.md`
