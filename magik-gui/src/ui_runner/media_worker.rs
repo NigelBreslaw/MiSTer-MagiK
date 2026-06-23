@@ -13,6 +13,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 3;
+const MANIFEST_FETCH_ATTEMPTS: usize = 6;
+const MANIFEST_FETCH_INITIAL_RETRY: Duration = Duration::from_secs(2);
+const MANIFEST_FETCH_MAX_RETRY: Duration = Duration::from_secs(10);
 
 pub(super) struct MediaWorkerHandle {
     command_tx: mpsc::Sender<MediaWorkerCommand>,
@@ -83,7 +86,13 @@ fn run_screenshot_media_worker(
         &tx,
         MediaProgressEvent::new("all", &config.image_size, "identity", "manifest_fetch"),
     );
-    let (manifest_text, manifest_metadata) = match fetch_manifest_text(&config.manifest_url) {
+    let (manifest_text, manifest_metadata) = match fetch_manifest_text_with_retry(
+        &config.manifest_url,
+        MANIFEST_FETCH_ATTEMPTS,
+        MANIFEST_FETCH_INITIAL_RETRY,
+        &tx,
+        fetch_manifest_text,
+    ) {
         Ok(fetched) => fetched,
         Err(error) => {
             let _ = tx.send(MediaWorkerMessage::Failed {
@@ -838,6 +847,44 @@ fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata)
     ))
 }
 
+fn fetch_manifest_text_with_retry<F>(
+    manifest_url: &str,
+    attempts: usize,
+    initial_retry: Duration,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+    mut fetch: F,
+) -> Result<(String, HttpCacheMetadata), String>
+where
+    F: FnMut(&str) -> Result<(String, HttpCacheMetadata), String>,
+{
+    let attempts = attempts.max(1);
+    let mut retry = initial_retry;
+    let mut last_error = String::new();
+    for attempt in 1..=attempts {
+        match fetch(manifest_url) {
+            Ok(fetched) => return Ok(fetched),
+            Err(error) => {
+                last_error = error;
+                if attempt == attempts {
+                    break;
+                }
+                let _ = tx.send(MediaWorkerMessage::Timing {
+                    name: "screenshot_media_manifest_retry".to_string(),
+                    detail: format!(
+                        "attempt={attempt} attempts={attempts} retry_ms={} error={last_error}",
+                        retry.as_millis()
+                    ),
+                });
+                if !retry.is_zero() {
+                    std::thread::sleep(retry);
+                }
+                retry = (retry.saturating_mul(2)).min(MANIFEST_FETCH_MAX_RETRY);
+            }
+        }
+    }
+    Err(last_error)
+}
+
 fn read_media_state(asset_dir: &Path) -> Option<Value> {
     let text = fs::read_to_string(state_path(&asset_dir.display().to_string())).ok()?;
     serde_json::from_str(&text).ok()
@@ -1250,6 +1297,47 @@ mod tests {
         assert_eq!(metadata.age, "42");
         assert_eq!(metadata.etag, "\"abc\"");
         assert_eq!(metadata.content_length, "123");
+    }
+
+    #[test]
+    fn manifest_fetch_retry_recovers_after_transient_failures() {
+        let (tx, rx) = mpsc::channel();
+        let mut calls = 0usize;
+
+        let (body, metadata) =
+            fetch_manifest_text_with_retry(DEFAULT_MANIFEST_URL, 3, Duration::ZERO, &tx, |_| {
+                calls += 1;
+                if calls < 3 {
+                    Err(format!("network-not-ready-{calls}"))
+                } else {
+                    Ok((
+                        "{\"schema\":1,\"generated_at\":\"now\",\"packs\":[]}".to_string(),
+                        HttpCacheMetadata {
+                            status: Some(200),
+                            ..Default::default()
+                        },
+                    ))
+                }
+            })
+            .expect("third attempt should succeed");
+
+        assert_eq!(calls, 3);
+        assert!(body.contains("\"schema\""));
+        assert_eq!(metadata.status, Some(200));
+        let retries: Vec<_> = rx
+            .try_iter()
+            .filter_map(|message| match message {
+                MediaWorkerMessage::Timing { name, detail }
+                    if name == "screenshot_media_manifest_retry" =>
+                {
+                    Some(detail)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(retries.len(), 2);
+        assert!(retries[0].contains("attempt=1"));
+        assert!(retries[1].contains("attempt=2"));
     }
 
     #[test]

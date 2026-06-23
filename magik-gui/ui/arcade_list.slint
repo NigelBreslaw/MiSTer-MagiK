@@ -3,7 +3,7 @@ import { MisterBridge } from "mister_bridge.slint";
 
 export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
-    property <int> count: MisterBridge.arcade-games.length;
+    property <int> count: MisterBridge.active-system-count;
     property <length> cabinet-width: 336px * s;
     property <length> cabinet-height: 520px * s;
     property <length> cabinet-screen-x: 8px * s;

@@ -25,6 +25,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     >::new())));
     bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
+    bridge.set_active_system_count(0);
+    bridge.set_arcade_games(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::ArcadeGame,
+    >::new())));
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
     sync_launcher_arcade_geometry_bridge(&bridge);
@@ -156,7 +160,7 @@ pub(super) fn sync_bridge_launcher(
             .unwrap_or_else(|| "Games".to_string());
         bridge.set_game_systems(models.game_systems(catalog, catalog_version));
         bridge.set_active_system_title(title.into());
-        bridge.set_arcade_games(models.arcade_games(catalog, nav, catalog_version));
+        bridge.set_active_system_count(games.len() as i32);
         active_games_for_preview = Some(games);
     }
     bridge.set_confirm_visible(nav.confirm_action.is_some());
@@ -239,24 +243,6 @@ pub(super) fn launcher_clock_text() -> String {
         }
         format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
     }
-}
-
-pub(super) fn slint_arcade_games(
-    games: &[ArcadeGameEntry],
-) -> ModelRc<slint_ui::launcher::ArcadeGame> {
-    let rows: Vec<slint_ui::launcher::ArcadeGame> = games
-        .iter()
-        .map(|g| slint_ui::launcher::ArcadeGame {
-            title: g.title.as_ref().into(),
-            mra_path: g.mra_path.as_ref().into(),
-            preview_archive_path: g.preview_archive_path.as_ref().into(),
-            preview_asset_key: g.preview_asset_key.as_ref().into(),
-            has_preview: g.has_preview,
-            system_id: g.system_id.as_ref().into(),
-            is_new: g.is_new,
-        })
-        .collect();
-    ModelRc::new(VecModel::from(rows))
 }
 
 pub(super) fn slint_game_systems(
@@ -356,8 +342,6 @@ impl LauncherBridgeKey {
 pub(super) struct LauncherBridgeModels {
     game_systems_key: Option<usize>,
     game_systems: Option<ModelRc<slint_ui::launcher::GameSystem>>,
-    arcade_games_key: Option<(usize, usize)>,
-    arcade_games: Option<ModelRc<slint_ui::launcher::ArcadeGame>>,
 }
 
 impl LauncherBridgeModels {
@@ -373,23 +357,6 @@ impl LauncherBridgeModels {
         self.game_systems
             .as_ref()
             .expect("game system model should be initialized")
-            .clone()
-    }
-
-    pub(super) fn arcade_games(
-        &mut self,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-        catalog_version: usize,
-    ) -> ModelRc<slint_ui::launcher::ArcadeGame> {
-        let key = (catalog_version, nav.selected);
-        if self.arcade_games_key != Some(key) {
-            self.arcade_games = Some(slint_arcade_games(active_system_game_slice(catalog, nav)));
-            self.arcade_games_key = Some(key);
-        }
-        self.arcade_games
-            .as_ref()
-            .expect("arcade game model should be initialized")
             .clone()
     }
 }
