@@ -4,13 +4,37 @@ use mister_magik_fb::media_update::{
     DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
 };
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub(super) fn start_screenshot_media_worker() -> Option<mpsc::Receiver<MediaWorkerMessage>> {
+const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 3;
+
+pub(super) struct MediaWorkerHandle {
+    command_tx: mpsc::Sender<MediaWorkerCommand>,
+    message_rx: mpsc::Receiver<MediaWorkerMessage>,
+}
+
+impl MediaWorkerHandle {
+    pub(super) fn ensure_system(&self, system_id: &str) {
+        let _ = self.command_tx.send(MediaWorkerCommand::EnsureSystem {
+            system_id: system_id.to_string(),
+        });
+    }
+
+    pub(super) fn finish(&self) {
+        let _ = self.command_tx.send(MediaWorkerCommand::Finish);
+    }
+
+    pub(super) fn try_recv(&self) -> Option<MediaWorkerMessage> {
+        self.message_rx.try_recv().ok()
+    }
+}
+
+pub(super) fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
     let config = match MediaWorkerConfig::from_env() {
         Ok(config) => config,
         Err(error) => {
@@ -21,15 +45,29 @@ pub(super) fn start_screenshot_media_worker() -> Option<mpsc::Receiver<MediaWork
     if config.policy == MediaUpdatePolicy::Off {
         return None;
     }
-    let (tx, rx) = mpsc::channel();
+    let (message_tx, message_rx) = mpsc::channel();
+    let (command_tx, command_rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("screenshot-media".to_string())
-        .spawn(move || run_screenshot_media_worker(config, tx))
+        .spawn(move || run_screenshot_media_worker(config, command_rx, message_tx))
         .ok()?;
-    Some(rx)
+    Some(MediaWorkerHandle {
+        command_tx,
+        message_rx,
+    })
 }
 
-fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<MediaWorkerMessage>) {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MediaWorkerCommand {
+    EnsureSystem { system_id: String },
+    Finish,
+}
+
+fn run_screenshot_media_worker(
+    config: MediaWorkerConfig,
+    command_rx: mpsc::Receiver<MediaWorkerCommand>,
+    tx: mpsc::Sender<MediaWorkerMessage>,
+) {
     let _ = tx.send(MediaWorkerMessage::Timing {
         name: "screenshot_media_update_start".to_string(),
         detail: format!(
@@ -67,15 +105,157 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
         }
     };
     let state = read_media_state(&config.asset_dir);
+    let packs_by_system = packs_by_system_for_size(&manifest.packs, &config.image_size);
     let mut counts = MediaCheckCounts::default();
-    let selected_packs: Vec<_> = manifest
-        .packs
+    let mut queue = MediaRequestQueue::default();
+    let mut active = Vec::<ActiveDownload>::new();
+    let mut finish_requested = false;
+    loop {
+        start_ready_downloads(
+            &config,
+            &packs_by_system,
+            state.as_ref(),
+            &mut queue,
+            &mut active,
+            &mut counts,
+            &tx,
+        );
+        poll_active_downloads(&mut active, &mut counts, &tx);
+        if finish_requested && active.is_empty() && queue.pending.is_empty() {
+            break;
+        }
+        match command_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(MediaWorkerCommand::EnsureSystem { system_id }) => {
+                match queue.enqueue(&system_id, &packs_by_system) {
+                    MediaEnqueueResult::Queued { pack_index } => {
+                        let _ = tx.send(MediaWorkerMessage::Timing {
+                            name: "screenshot_media_system_queued".to_string(),
+                            detail: format!(
+                                "system={system_id} pack_index={pack_index} requested={}",
+                                queue.requested_count
+                            ),
+                        });
+                    }
+                    MediaEnqueueResult::Duplicate => {
+                        let _ = tx.send(MediaWorkerMessage::Timing {
+                            name: "screenshot_media_system_duplicate".to_string(),
+                            detail: format!("system={system_id}"),
+                        });
+                    }
+                    MediaEnqueueResult::Unsupported => {
+                        let _ = tx.send(MediaWorkerMessage::Timing {
+                            name: "screenshot_media_system_ignored".to_string(),
+                            detail: format!("system={system_id} reason=no-pack"),
+                        });
+                    }
+                }
+            }
+            Ok(MediaWorkerCommand::Finish) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                finish_requested = true;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+    let _ = tx.send(MediaWorkerMessage::Done {
+        detail: format!(
+            "packs={} current={} missing={} stale={} downloaded={} failed={}",
+            counts.total(),
+            counts.current,
+            counts.missing,
+            counts.stale,
+            counts.downloaded,
+            counts.failed
+        ),
+    });
+}
+
+fn packs_by_system_for_size(packs: &[MediaPack], image_size: &str) -> BTreeMap<String, MediaPack> {
+    packs
         .iter()
-        .filter(|pack| pack.image_size == config.image_size)
-        .collect();
-    let pack_count = selected_packs.len();
-    for (idx, pack) in selected_packs.into_iter().enumerate() {
-        let pack_index = idx + 1;
+        .filter(|pack| pack.image_size == image_size)
+        .map(|pack| (pack.id.clone(), pack.clone()))
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuedPackRequest {
+    system_id: String,
+    pack_index: usize,
+}
+
+#[derive(Default)]
+struct MediaRequestQueue {
+    seen: BTreeSet<String>,
+    pending: VecDeque<QueuedPackRequest>,
+    requested_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MediaEnqueueResult {
+    Queued { pack_index: usize },
+    Duplicate,
+    Unsupported,
+}
+
+impl MediaRequestQueue {
+    fn enqueue(
+        &mut self,
+        system_id: &str,
+        packs_by_system: &BTreeMap<String, MediaPack>,
+    ) -> MediaEnqueueResult {
+        if !packs_by_system.contains_key(system_id) {
+            return MediaEnqueueResult::Unsupported;
+        }
+        if !self.seen.insert(system_id.to_string()) {
+            return MediaEnqueueResult::Duplicate;
+        }
+        self.requested_count += 1;
+        let pack_index = self.requested_count;
+        self.pending.push_back(QueuedPackRequest {
+            system_id: system_id.to_string(),
+            pack_index,
+        });
+        MediaEnqueueResult::Queued { pack_index }
+    }
+}
+
+fn dequeue_startable_requests(
+    pending: &mut VecDeque<QueuedPackRequest>,
+    active_count: usize,
+) -> Vec<QueuedPackRequest> {
+    let slots = MAX_CONCURRENT_MEDIA_DOWNLOADS.saturating_sub(active_count);
+    let mut startable = Vec::new();
+    for _ in 0..slots {
+        let Some(request) = pending.pop_front() else {
+            break;
+        };
+        startable.push(request);
+    }
+    startable
+}
+
+struct ActiveDownload {
+    pack: MediaPack,
+    local_path: PathBuf,
+    pack_index: usize,
+    pack_count: usize,
+    rx: mpsc::Receiver<Result<(), String>>,
+}
+
+fn start_ready_downloads(
+    config: &MediaWorkerConfig,
+    packs_by_system: &BTreeMap<String, MediaPack>,
+    state: Option<&Value>,
+    queue: &mut MediaRequestQueue,
+    active: &mut Vec<ActiveDownload>,
+    counts: &mut MediaCheckCounts,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) {
+    for request in dequeue_startable_requests(&mut queue.pending, active.len()) {
+        let Some(pack) = packs_by_system.get(&request.system_id).cloned() else {
+            continue;
+        };
+        let pack_count = queue.requested_count;
         let local_path = match size_qualified_pack_path(
             &config.asset_dir.display().to_string(),
             &pack.id,
@@ -86,9 +266,13 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
                 counts.checked += 1;
                 counts.failed += 1;
                 send_progress(
-                    &tx,
+                    tx,
                     MediaProgressEvent::for_pack(
-                        pack, "identity", "failed", pack_index, pack_count,
+                        &pack,
+                        "identity",
+                        "failed",
+                        request.pack_index,
+                        pack_count,
                     )
                     .with_detail(&error),
                 );
@@ -103,10 +287,16 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
         };
         cleanup_pack_publish_temps(&local_path);
         send_progress(
-            &tx,
-            MediaProgressEvent::for_pack(pack, "identity", "check", pack_index, pack_count),
+            tx,
+            MediaProgressEvent::for_pack(
+                &pack,
+                "identity",
+                "check",
+                request.pack_index,
+                pack_count,
+            ),
         );
-        let status = pack_status_from_state(pack, &local_path, state.as_ref());
+        let status = pack_status_from_state(&pack, &local_path, state);
         counts.checked += 1;
         match status.label() {
             "current" => counts.current += 1,
@@ -115,7 +305,7 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             _ => counts.failed += 1,
         }
         let detail = match &status {
-            mister_magik_fb::media_update::LocalPackStatus::Stale { reason } => {
+            LocalPackStatus::Stale { reason } => {
                 format!("local_path={} reason={reason}", local_path.display())
             }
             _ => format!("local_path={}", local_path.display()),
@@ -128,67 +318,138 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
         });
         if matches!(status, LocalPackStatus::Current) {
             send_progress(
-                &tx,
+                tx,
                 MediaProgressEvent::for_pack(
-                    pack,
+                    &pack,
                     "identity",
                     "skipped-current",
-                    pack_index,
+                    request.pack_index,
                     pack_count,
                 )
                 .with_done_bytes(pack.raw.bytes),
             );
+            continue;
         }
-        if config.policy == MediaUpdatePolicy::Download
-            && !matches!(status, LocalPackStatus::Current)
-        {
-            match download_raw_pack(&config, pack, &local_path, pack_index, pack_count, &tx) {
-                Ok(()) => {
-                    counts.downloaded += 1;
-                    send_progress(
-                        &tx,
-                        MediaProgressEvent::for_pack(
-                            pack, "identity", "done", pack_index, pack_count,
-                        )
-                        .with_done_bytes(pack.raw.bytes),
-                    );
-                    let _ = tx.send(MediaWorkerMessage::PackStatus {
-                        system: pack.id.clone(),
-                        image_size: pack.image_size.clone(),
-                        status: "downloaded".to_string(),
-                        detail: format!("local_path={}", local_path.display()),
-                    });
-                }
-                Err(error) => {
-                    counts.failed += 1;
-                    send_progress(
-                        &tx,
-                        MediaProgressEvent::for_pack(
-                            pack, "identity", "failed", pack_index, pack_count,
-                        )
-                        .with_detail(&error),
-                    );
-                    let _ = tx.send(MediaWorkerMessage::PackStatus {
-                        system: pack.id.clone(),
-                        image_size: pack.image_size.clone(),
-                        status: "failed".to_string(),
-                        detail: error,
-                    });
-                }
+        if config.policy != MediaUpdatePolicy::Download {
+            send_progress(
+                tx,
+                MediaProgressEvent::for_pack(
+                    &pack,
+                    "identity",
+                    "check-only",
+                    request.pack_index,
+                    pack_count,
+                )
+                .with_done_bytes(pack.raw.bytes),
+            );
+            continue;
+        }
+        let (result_tx, result_rx) = mpsc::channel();
+        let download_config = config.clone();
+        let download_pack = pack.clone();
+        let download_local_path = local_path.clone();
+        let download_tx = tx.clone();
+        std::thread::Builder::new()
+            .name(format!("screenshot-media-{}", pack.id))
+            .spawn(move || {
+                let result = download_raw_pack(
+                    &download_config,
+                    &download_pack,
+                    &download_local_path,
+                    request.pack_index,
+                    pack_count,
+                    &download_tx,
+                );
+                let _ = result_tx.send(result);
+            })
+            .ok();
+        active.push(ActiveDownload {
+            pack,
+            local_path,
+            pack_index: request.pack_index,
+            pack_count,
+            rx: result_rx,
+        });
+    }
+}
+
+fn poll_active_downloads(
+    active: &mut Vec<ActiveDownload>,
+    counts: &mut MediaCheckCounts,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) {
+    let mut idx = 0;
+    while idx < active.len() {
+        match active[idx].rx.try_recv() {
+            Ok(Ok(())) => {
+                let done = active.remove(idx);
+                counts.downloaded += 1;
+                send_progress(
+                    tx,
+                    MediaProgressEvent::for_pack(
+                        &done.pack,
+                        "identity",
+                        "done",
+                        done.pack_index,
+                        done.pack_count,
+                    )
+                    .with_done_bytes(done.pack.raw.bytes),
+                );
+                let _ = tx.send(MediaWorkerMessage::PackStatus {
+                    system: done.pack.id,
+                    image_size: done.pack.image_size,
+                    status: "downloaded".to_string(),
+                    detail: format!("local_path={}", done.local_path.display()),
+                });
+            }
+            Ok(Err(error)) => {
+                let failed = active.remove(idx);
+                counts.failed += 1;
+                send_progress(
+                    tx,
+                    MediaProgressEvent::for_pack(
+                        &failed.pack,
+                        "identity",
+                        "failed",
+                        failed.pack_index,
+                        failed.pack_count,
+                    )
+                    .with_detail(&error),
+                );
+                let _ = tx.send(MediaWorkerMessage::PackStatus {
+                    system: failed.pack.id,
+                    image_size: failed.pack.image_size,
+                    status: "failed".to_string(),
+                    detail: error,
+                });
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let failed = active.remove(idx);
+                counts.failed += 1;
+                let detail = "download worker disconnected".to_string();
+                send_progress(
+                    tx,
+                    MediaProgressEvent::for_pack(
+                        &failed.pack,
+                        "identity",
+                        "failed",
+                        failed.pack_index,
+                        failed.pack_count,
+                    )
+                    .with_detail(&detail),
+                );
+                let _ = tx.send(MediaWorkerMessage::PackStatus {
+                    system: failed.pack.id,
+                    image_size: failed.pack.image_size,
+                    status: "failed".to_string(),
+                    detail,
+                });
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                idx += 1;
             }
         }
     }
-    let _ = tx.send(MediaWorkerMessage::Done {
-        detail: format!(
-            "packs={} current={} missing={} stale={} downloaded={} failed={}",
-            counts.total(),
-            counts.current,
-            counts.missing,
-            counts.stale,
-            counts.downloaded,
-            counts.failed
-        ),
-    });
 }
 
 fn download_raw_pack(
@@ -897,6 +1158,12 @@ mod tests {
             .remove(0)
     }
 
+    fn pack_with_id(id: &str) -> MediaPack {
+        let mut pack = pack_fixture();
+        pack.id = id.to_string();
+        pack
+    }
+
     #[test]
     fn media_worker_policy_defaults_to_download() {
         assert_eq!(
@@ -935,6 +1202,57 @@ mod tests {
         let event = MediaProgressEvent::new("all", "320x320", "identity", "manifest");
 
         assert_eq!(event.percent(), -1);
+    }
+
+    #[test]
+    fn media_request_queue_dedupes_and_ignores_unsupported_systems() {
+        let mut packs = BTreeMap::new();
+        packs.insert("arcade".to_string(), pack_with_id("arcade"));
+        packs.insert("neogeo".to_string(), pack_with_id("neogeo"));
+        let mut queue = MediaRequestQueue::default();
+
+        assert_eq!(
+            queue.enqueue("arcade", &packs),
+            MediaEnqueueResult::Queued { pack_index: 1 }
+        );
+        assert_eq!(
+            queue.enqueue("neogeo", &packs),
+            MediaEnqueueResult::Queued { pack_index: 2 }
+        );
+        assert_eq!(
+            queue.enqueue("arcade", &packs),
+            MediaEnqueueResult::Duplicate
+        );
+        assert_eq!(
+            queue.enqueue("pcengine", &packs),
+            MediaEnqueueResult::Unsupported
+        );
+
+        assert_eq!(queue.pending.len(), 2);
+        assert_eq!(queue.requested_count, 2);
+    }
+
+    #[test]
+    fn media_request_queue_starts_at_most_three_downloads() {
+        let mut pending = VecDeque::new();
+        for index in 1..=5 {
+            pending.push_back(QueuedPackRequest {
+                system_id: format!("system-{index}"),
+                pack_index: index,
+            });
+        }
+
+        let first_batch = dequeue_startable_requests(&mut pending, 0);
+        assert_eq!(first_batch.len(), MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        assert_eq!(pending.len(), 2);
+
+        let no_slots = dequeue_startable_requests(&mut pending, MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        assert!(no_slots.is_empty());
+        assert_eq!(pending.len(), 2);
+
+        let one_slot = dequeue_startable_requests(&mut pending, MAX_CONCURRENT_MEDIA_DOWNLOADS - 1);
+        assert_eq!(one_slot.len(), 1);
+        assert_eq!(pending.len(), 1);
     }
 
     #[test]

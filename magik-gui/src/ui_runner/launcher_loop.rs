@@ -263,8 +263,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog_rx = None;
     let mut deferred_catalog_worker = None;
     let mut catalog_refresh_done = false;
-    let mut media_worker_started = false;
-    let mut media_rx = None;
+    let mut media_handle = None;
+    let mut media_worker_unavailable = false;
     let mut catalog_persisted_summary_seen = false;
     let library_changed_test_action = library_changed_test_action_from_env(start);
     let mut library_changed_test_action_armed = library_changed_test_action.is_some();
@@ -634,6 +634,26 @@ pub(super) fn run_launcher_loop(
                             "catalog_system_discovered",
                             format!("system={system_id}"),
                         );
+                        if media_handle.is_none() && !media_worker_unavailable {
+                            media_handle = start_screenshot_media_worker();
+                            if media_handle.is_some() {
+                                print_startup_event(
+                                    start,
+                                    "screenshot_media_worker_start",
+                                    "mode=discovered-system",
+                                );
+                            } else {
+                                media_worker_unavailable = true;
+                                print_startup_event(
+                                    start,
+                                    "screenshot_media_worker_skip",
+                                    "mode=discovered-system",
+                                );
+                            }
+                        }
+                        if let Some(handle) = media_handle.as_ref() {
+                            handle.ensure_system(&system_id);
+                        }
                     }
                     CatalogWorkerMessage::Ready {
                         catalog: ready_catalog,
@@ -661,6 +681,9 @@ pub(super) fn run_launcher_loop(
                             );
                         }
                         if let Some(summary) = summary {
+                            if let Some(handle) = media_handle.as_ref() {
+                                handle.finish();
+                            }
                             catalog_foreground_update = false;
                             catalog_refresh_failed = false;
                             let event = if summary.skipped {
@@ -754,6 +777,9 @@ pub(super) fn run_launcher_loop(
                         catalog_refresh_done = true;
                         catalog_foreground_update = false;
                         catalog_refresh_failed = true;
+                        if let Some(handle) = media_handle.as_ref() {
+                            handle.finish();
+                        }
                         print_startup_event(start, "library_db_save_failed", error);
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                         bridge.set_catalog_background_scan_visible(false);
@@ -763,6 +789,9 @@ pub(super) fn run_launcher_loop(
                         catalog_refresh_done = true;
                         catalog_foreground_update = false;
                         catalog_refresh_failed = false;
+                        if let Some(handle) = media_handle.as_ref() {
+                            handle.finish();
+                        }
                         print_startup_event(
                             start,
                             "library_db_unchanged",
@@ -792,6 +821,9 @@ pub(super) fn run_launcher_loop(
                         catalog_refresh_done = true;
                         catalog_foreground_update = false;
                         catalog_refresh_failed = false;
+                        if let Some(handle) = media_handle.as_ref() {
+                            handle.finish();
+                        }
                         print_startup_event(start, "library_changed_detected", &detail);
                         nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
                         nav.confirm_selected = 0;
@@ -808,6 +840,9 @@ pub(super) fn run_launcher_loop(
                         catalog_refresh_done = true;
                         catalog_foreground_update = false;
                         catalog_refresh_failed = false;
+                        if let Some(handle) = media_handle.as_ref() {
+                            handle.finish();
+                        }
                         if catalog_ready {
                             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                             bridge.set_catalog_scan_visible(false);
@@ -823,17 +858,7 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        if !media_worker_started && catalog_ready && frame_accounting.first_visible_copy_done() {
-            media_worker_started = true;
-            media_rx = start_screenshot_media_worker();
-            if media_rx.is_some() {
-                print_startup_event(start, "screenshot_media_worker_start", "queued=1");
-            } else {
-                print_startup_event(start, "screenshot_media_worker_skip", "queued=0");
-            }
-        }
-
-        while let Some(message) = media_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        while let Some(message) = media_handle.as_ref().and_then(|handle| handle.try_recv()) {
             match message {
                 MediaWorkerMessage::Timing { name, detail } => {
                     print_startup_event(start, &name, detail);
@@ -862,12 +887,13 @@ pub(super) fn run_launcher_loop(
                 }
                 MediaWorkerMessage::Failed { detail } => {
                     print_startup_event(start, "screenshot_media_update_failed", detail);
-                    media_rx = None;
+                    media_worker_unavailable = true;
+                    media_handle = None;
                     break;
                 }
                 MediaWorkerMessage::Done { detail } => {
                     print_startup_event(start, "screenshot_media_update_done", detail);
-                    media_rx = None;
+                    media_handle = None;
                     break;
                 }
             }
