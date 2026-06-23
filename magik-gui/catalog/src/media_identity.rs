@@ -1,0 +1,328 @@
+//! Screenshot media identity and path helpers.
+
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+pub const DEFAULT_SCREENSHOT_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
+pub const DEFAULT_SCREENSHOT_IMAGE_SIZE: &str = "320x320";
+pub const SCREENSHOT_MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
+
+const SUPPORTED_SCREENSHOT_PACK_IDS: &[ScreenshotPackId] = &[
+    ScreenshotPackId::Arcade,
+    ScreenshotPackId::NeoGeo,
+    ScreenshotPackId::Nes,
+    ScreenshotPackId::Snes,
+    ScreenshotPackId::N64,
+    ScreenshotPackId::Sms,
+    ScreenshotPackId::MegaDrive,
+    ScreenshotPackId::Saturn,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScreenshotPackId {
+    Arcade,
+    NeoGeo,
+    Nes,
+    Snes,
+    N64,
+    Sms,
+    MegaDrive,
+    Saturn,
+}
+
+impl ScreenshotPackId {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "arcade" => Some(Self::Arcade),
+            "neogeo" => Some(Self::NeoGeo),
+            "nes" => Some(Self::Nes),
+            "snes" => Some(Self::Snes),
+            "n64" => Some(Self::N64),
+            "sms" => Some(Self::Sms),
+            "megadrive" => Some(Self::MegaDrive),
+            "saturn" => Some(Self::Saturn),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Arcade => "arcade",
+            Self::NeoGeo => "neogeo",
+            Self::Nes => "nes",
+            Self::Snes => "snes",
+            Self::N64 => "n64",
+            Self::Sms => "sms",
+            Self::MegaDrive => "megadrive",
+            Self::Saturn => "saturn",
+        }
+    }
+
+    pub fn supported() -> &'static [Self] {
+        SUPPORTED_SCREENSHOT_PACK_IDS
+    }
+
+    pub fn legacy_filename(self) -> String {
+        format!("{}-screenshots.mmlz4b", self.as_str())
+    }
+
+    pub fn size_qualified_filename(self, image_size: &ScreenshotImageSize) -> String {
+        format!("{}-screenshots-{}.mmlz4b", self.as_str(), image_size.as_str())
+    }
+
+    pub fn legacy_path_in(self, root: &Path) -> PathBuf {
+        root.join(self.legacy_filename())
+    }
+
+    pub fn size_qualified_path_in(self, root: &Path, image_size: &ScreenshotImageSize) -> PathBuf {
+        root.join(self.size_qualified_filename(image_size))
+    }
+}
+
+impl fmt::Display for ScreenshotPackId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScreenshotImageSize(String);
+
+impl ScreenshotImageSize {
+    pub fn parse(value: &str) -> Option<Self> {
+        valid_screenshot_image_size(value).then(|| Self(value.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for ScreenshotImageSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScreenshotAssetId(String);
+
+impl ScreenshotAssetId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn from_mame_software(list_name: &str, software_name: &str) -> Self {
+        Self(format!("mame-software__{list_name}__{software_name}"))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for ScreenshotAssetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub fn is_supported_screenshot_pack_id(id: &str) -> bool {
+    ScreenshotPackId::parse(id).is_some()
+}
+
+pub fn supported_screenshot_pack_ids() -> impl Iterator<Item = &'static str> {
+    ScreenshotPackId::supported().iter().map(|id| id.as_str())
+}
+
+pub fn valid_screenshot_image_size(size: &str) -> bool {
+    let Some((w, h)) = size.split_once('x') else {
+        return false;
+    };
+    !w.is_empty()
+        && !h.is_empty()
+        && w.chars().all(|ch| ch.is_ascii_digit())
+        && h.chars().all(|ch| ch.is_ascii_digit())
+        && w.parse::<u32>().is_ok_and(|value| value > 0)
+        && h.parse::<u32>().is_ok_and(|value| value > 0)
+}
+
+pub fn size_qualified_screenshot_pack_filename(
+    system: &str,
+    image_size: &str,
+) -> Result<String, String> {
+    let system = ScreenshotPackId::parse(system)
+        .ok_or_else(|| format!("unsupported screenshot pack id: {system}"))?;
+    let image_size = ScreenshotImageSize::parse(image_size)
+        .ok_or_else(|| format!("invalid screenshot image size: {image_size}"))?;
+    Ok(system.size_qualified_filename(&image_size))
+}
+
+pub fn legacy_screenshot_pack_path(root: &Path, system: &str) -> Result<PathBuf, String> {
+    let system = ScreenshotPackId::parse(system)
+        .ok_or_else(|| format!("unsupported screenshot pack id: {system}"))?;
+    Ok(system.legacy_path_in(root))
+}
+
+pub fn size_qualified_screenshot_pack_path_in_root(
+    root: &Path,
+    system: &str,
+    image_size: &str,
+) -> Result<PathBuf, String> {
+    let system = ScreenshotPackId::parse(system)
+        .ok_or_else(|| format!("unsupported screenshot pack id: {system}"))?;
+    let image_size = ScreenshotImageSize::parse(image_size)
+        .ok_or_else(|| format!("invalid screenshot image size: {image_size}"))?;
+    Ok(system.size_qualified_path_in(root, &image_size))
+}
+
+pub fn size_qualified_screenshot_pack_path(
+    asset_dir: &str,
+    system: &str,
+    image_size: &str,
+) -> Result<String, String> {
+    let filename = size_qualified_screenshot_pack_filename(system, image_size)?;
+    Ok(format!("{}/{}", asset_dir.trim_end_matches('/'), filename))
+}
+
+pub fn screenshot_media_state_path(asset_dir: &str) -> String {
+    format!(
+        "{}/{}",
+        asset_dir.trim_end_matches('/'),
+        SCREENSHOT_MEDIA_STATE_FILENAME
+    )
+}
+
+pub fn screenshot_media_state_path_in_root(root: &Path) -> PathBuf {
+    root.join(SCREENSHOT_MEDIA_STATE_FILENAME)
+}
+
+pub fn screenshot_pack_id_from_legacy_filename(name: &str) -> Option<ScreenshotPackId> {
+    ScreenshotPackId::supported()
+        .iter()
+        .copied()
+        .find(|system| name == system.legacy_filename())
+}
+
+pub fn screenshot_reset_deletes_filename(name: &str) -> bool {
+    if name == SCREENSHOT_MEDIA_STATE_FILENAME
+        || name.starts_with(&format!("{SCREENSHOT_MEDIA_STATE_FILENAME}.tmp-"))
+    {
+        return true;
+    }
+    let Some((system, rest)) = name.split_once("-screenshots") else {
+        return false;
+    };
+    if ScreenshotPackId::parse(system).is_none() {
+        return false;
+    }
+    if matches!(
+        rest,
+        ".mmlz4b" | ".mmlz4b.tmp" | ".mmlz4b.gz" | ".mmlz4b.br"
+    ) || rest.starts_with(".mmlz4b.tmp-")
+    {
+        return true;
+    }
+    let Some(rest) = rest.strip_prefix('-') else {
+        return false;
+    };
+    let Some((image_size, suffix)) = rest.split_once(".mmlz4b") else {
+        return false;
+    };
+    valid_screenshot_image_size(image_size)
+        && (matches!(suffix, "" | ".tmp" | ".gz" | ".br") || suffix.starts_with(".tmp-"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_screenshot_image_sizes() {
+        assert!(valid_screenshot_image_size("320x320"));
+        assert!(valid_screenshot_image_size("160x144"));
+        assert!(!valid_screenshot_image_size("320"));
+        assert!(!valid_screenshot_image_size("0x320"));
+        assert!(!valid_screenshot_image_size("320x"));
+        assert!(!valid_screenshot_image_size("320xabc"));
+    }
+
+    #[test]
+    fn builds_pack_paths_and_state_paths() {
+        assert_eq!(
+            size_qualified_screenshot_pack_filename("arcade", "320x320").unwrap(),
+            "arcade-screenshots-320x320.mmlz4b"
+        );
+        assert_eq!(
+            size_qualified_screenshot_pack_path(
+                DEFAULT_SCREENSHOT_ASSET_DIR,
+                "saturn",
+                "240x240"
+            )
+            .unwrap(),
+            "/media/fat/mister-magik/assets/saturn-screenshots-240x240.mmlz4b"
+        );
+        assert_eq!(
+            screenshot_media_state_path(DEFAULT_SCREENSHOT_ASSET_DIR),
+            "/media/fat/mister-magik/assets/.screenshot-media-state.json"
+        );
+        assert!(size_qualified_screenshot_pack_filename("psx", "320x320").is_err());
+        assert!(size_qualified_screenshot_pack_filename("arcade", "large").is_err());
+    }
+
+    #[test]
+    fn recognizes_legacy_pack_filenames() {
+        assert_eq!(
+            screenshot_pack_id_from_legacy_filename("neogeo-screenshots.mmlz4b"),
+            Some(ScreenshotPackId::NeoGeo)
+        );
+        assert_eq!(
+            screenshot_pack_id_from_legacy_filename("neogeo-screenshots-320x320.mmlz4b"),
+            None
+        );
+    }
+
+    #[test]
+    fn reset_cleanup_matches_pack_and_state_artifacts_only() {
+        assert!(screenshot_reset_deletes_filename(
+            "arcade-screenshots-320x320.mmlz4b"
+        ));
+        assert!(screenshot_reset_deletes_filename(
+            "neogeo-screenshots-240x240.mmlz4b.tmp-123"
+        ));
+        assert!(screenshot_reset_deletes_filename(
+            "nes-screenshots.mmlz4b"
+        ));
+        assert!(screenshot_reset_deletes_filename(
+            SCREENSHOT_MEDIA_STATE_FILENAME
+        ));
+        assert!(screenshot_reset_deletes_filename(
+            ".screenshot-media-state.json.tmp-123"
+        ));
+        assert!(!screenshot_reset_deletes_filename(
+            "pcengine-screenshots.mmlz4b"
+        ));
+        assert!(!screenshot_reset_deletes_filename(
+            "arcade-screenshots-large.mmlz4b"
+        ));
+        assert!(!screenshot_reset_deletes_filename(
+            "arcade-preview-cache.raw565"
+        ));
+    }
+
+    #[test]
+    fn builds_console_screenshot_asset_ids() {
+        assert_eq!(
+            ScreenshotAssetId::from_mame_software("nes", "smb").as_str(),
+            "mame-software__nes__smb"
+        );
+    }
+}

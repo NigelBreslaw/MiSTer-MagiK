@@ -12,6 +12,7 @@ pub mod launch_profiles;
 pub mod library_bench;
 mod library_cli;
 pub mod library_db;
+pub mod media_identity;
 mod media_metadata;
 pub mod preview_worker;
 mod software_identity;

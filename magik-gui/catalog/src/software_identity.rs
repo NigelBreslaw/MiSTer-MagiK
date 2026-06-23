@@ -2,6 +2,7 @@
 
 use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};
 use crate::library_db;
+use crate::media_identity::ScreenshotAssetId;
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -733,14 +734,15 @@ pub(crate) fn preview_asset_pack_platform(path: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn software_asset_key(list_name: &str, software_name: &str) -> String {
-    format!("mame-software__{list_name}__{software_name}")
+    ScreenshotAssetId::from_mame_software(list_name, software_name).into_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ConsolePreviewAsset {
     pub(crate) archive_path: String,
-    pub(crate) asset_key: String,
+    pub(crate) asset_key: ScreenshotAssetId,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -782,7 +784,7 @@ pub(crate) fn console_preview_asset(
         .unwrap_or(identity.software_name.as_str());
     Some(ConsolePreviewAsset {
         archive_path: archive_path.to_string(),
-        asset_key: software_asset_key(&identity.list_name, software_name),
+        asset_key: ScreenshotAssetId::from_mame_software(&identity.list_name, software_name),
     })
 }
 

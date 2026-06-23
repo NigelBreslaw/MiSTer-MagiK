@@ -6,8 +6,8 @@ use crate::arcade_catalog::{
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
-use crate::media_update::{
-    is_supported_pack_id, valid_image_size, DEFAULT_ASSET_DIR, STATE_FILENAME,
+use mister_magik_catalog::media_identity::{
+    screenshot_reset_deletes_filename, DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,6 +30,8 @@ const VIRTUAL_LAUNCH_CACHE_STAMP_FILE: &str = ".virtual-launch-cache.json";
 const VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA: u32 = 1;
 const VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION: u32 = 1;
 pub const LIBRARY_REBUILD_ON_NEXT_BOOT_PATH: &str = "/media/fat/mister-magik/rebuild-on-next-boot";
+#[cfg(test)]
+const STATE_FILENAME: &str = mister_magik_catalog::media_identity::SCREENSHOT_MEDIA_STATE_FILENAME;
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
@@ -1579,30 +1581,7 @@ fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
 }
 
 fn screenshot_reset_deletes_file(name: &str) -> bool {
-    if name == STATE_FILENAME || name.starts_with(&format!("{STATE_FILENAME}.tmp-")) {
-        return true;
-    }
-    let Some((system, rest)) = name.split_once("-screenshots") else {
-        return false;
-    };
-    if !is_supported_pack_id(system) {
-        return false;
-    }
-    if matches!(
-        rest,
-        ".mmlz4b" | ".mmlz4b.tmp" | ".mmlz4b.gz" | ".mmlz4b.br"
-    ) || rest.starts_with(".mmlz4b.tmp-")
-    {
-        return true;
-    }
-    let Some(rest) = rest.strip_prefix('-') else {
-        return false;
-    };
-    let Some((image_size, suffix)) = rest.split_once(".mmlz4b") else {
-        return false;
-    };
-    valid_image_size(image_size)
-        && (matches!(suffix, "" | ".tmp" | ".gz" | ".br") || suffix.starts_with(".tmp-"))
+    screenshot_reset_deletes_filename(name)
 }
 
 pub fn library_rebuild_on_next_boot_pending() -> bool {
