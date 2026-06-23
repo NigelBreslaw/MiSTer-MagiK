@@ -1,22 +1,20 @@
 use serde_json::Value;
 use std::path::Path;
 
+pub use mister_magik_catalog::media_identity::{
+    DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
+    DEFAULT_SCREENSHOT_IMAGE_SIZE as DEFAULT_IMAGE_SIZE,
+    SCREENSHOT_MEDIA_STATE_FILENAME as STATE_FILENAME,
+};
+
+use mister_magik_catalog::media_identity::{
+    is_supported_screenshot_pack_id, screenshot_media_state_path,
+    size_qualified_screenshot_pack_filename, size_qualified_screenshot_pack_path,
+    valid_screenshot_image_size,
+};
+
 pub const DEFAULT_MANIFEST_URL: &str =
     "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
-pub const DEFAULT_IMAGE_SIZE: &str = "320x320";
-pub const DEFAULT_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
-pub const STATE_FILENAME: &str = ".screenshot-media-state.json";
-
-const SUPPORTED_PACK_IDS: &[&str] = &[
-    "arcade",
-    "neogeo",
-    "nes",
-    "snes",
-    "n64",
-    "sms",
-    "megadrive",
-    "saturn",
-];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaManifest {
@@ -164,7 +162,7 @@ pub fn manifest_origin(manifest_url: &str) -> Result<String, String> {
 }
 
 pub fn is_supported_pack_id(id: &str) -> bool {
-    SUPPORTED_PACK_IDS.contains(&id)
+    is_supported_screenshot_pack_id(id)
 }
 
 fn parse_pack(origin: &str, value: &Value) -> Result<MediaPack, String> {
@@ -276,25 +274,11 @@ fn image_size_from_pack(value: &Value) -> Option<String> {
 }
 
 pub fn valid_image_size(size: &str) -> bool {
-    let Some((w, h)) = size.split_once('x') else {
-        return false;
-    };
-    !w.is_empty()
-        && !h.is_empty()
-        && w.chars().all(|ch| ch.is_ascii_digit())
-        && h.chars().all(|ch| ch.is_ascii_digit())
-        && w.parse::<u32>().is_ok_and(|value| value > 0)
-        && h.parse::<u32>().is_ok_and(|value| value > 0)
+    valid_screenshot_image_size(size)
 }
 
 pub fn size_qualified_pack_filename(system: &str, image_size: &str) -> Result<String, String> {
-    if !is_supported_pack_id(system) {
-        return Err(format!("unsupported screenshot pack id: {system}"));
-    }
-    if !valid_image_size(image_size) {
-        return Err(format!("invalid screenshot image size: {image_size}"));
-    }
-    Ok(format!("{system}-screenshots-{image_size}.mmlz4b"))
+    size_qualified_screenshot_pack_filename(system, image_size)
 }
 
 pub fn size_qualified_pack_path(
@@ -302,12 +286,11 @@ pub fn size_qualified_pack_path(
     system: &str,
     image_size: &str,
 ) -> Result<String, String> {
-    let filename = size_qualified_pack_filename(system, image_size)?;
-    Ok(format!("{}/{}", asset_dir.trim_end_matches('/'), filename))
+    size_qualified_screenshot_pack_path(asset_dir, system, image_size)
 }
 
 pub fn state_path(asset_dir: &str) -> String {
-    format!("{}/{}", asset_dir.trim_end_matches('/'), STATE_FILENAME)
+    screenshot_media_state_path(asset_dir)
 }
 
 pub fn pack_status_from_state(

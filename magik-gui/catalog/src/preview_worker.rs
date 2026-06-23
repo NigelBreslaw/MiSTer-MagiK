@@ -10,21 +10,17 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+use crate::media_identity::{
+    legacy_screenshot_pack_path, screenshot_media_state_path_in_root,
+    screenshot_pack_id_from_legacy_filename, size_qualified_screenshot_pack_path_in_root,
+    supported_screenshot_pack_ids, valid_screenshot_image_size, DEFAULT_SCREENSHOT_ASSET_DIR,
+    DEFAULT_SCREENSHOT_IMAGE_SIZE,
+};
+
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
-const DEFAULT_MEDIA_SIZE: &str = "320x320";
-const MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
-const SCREENSHOT_PACK_IDS: &[&str] = &[
-    "arcade",
-    "neogeo",
-    "nes",
-    "snes",
-    "n64",
-    "sms",
-    "megadrive",
-    "saturn",
-];
+const DEFAULT_MEDIA_SIZE: &str = DEFAULT_SCREENSHOT_IMAGE_SIZE;
 
 #[derive(Clone, Debug)]
 pub struct PreviewRequest {
@@ -994,7 +990,7 @@ fn default_preview_archive_root() -> PathBuf {
     std::env::var("MISTER_PREVIEW_CACHE_DIR")
         .ok()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/media/fat/mister-magik/assets"))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SCREENSHOT_ASSET_DIR))
 }
 
 fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> Option<String> {
@@ -1020,7 +1016,7 @@ fn auto_neogeo_archive_path() -> Option<String> {
 }
 
 fn default_neogeo_archive_path() -> String {
-    "/media/fat/mister-magik/assets/neogeo-screenshots.mmlz4b".to_string()
+    legacy_archive_path_for_system(Path::new(DEFAULT_SCREENSHOT_ASSET_DIR), "neogeo")
 }
 
 fn console_preview_archive_paths_from_env() -> Vec<String> {
@@ -1041,29 +1037,17 @@ fn console_preview_archive_paths_from_env() -> Vec<String> {
 }
 
 fn auto_console_archive_paths() -> Vec<String> {
-    ["nes", "snes", "n64", "sms", "megadrive", "saturn"]
-        .into_iter()
+    supported_screenshot_pack_ids()
+        .filter(|system| !matches!(*system, "arcade" | "neogeo"))
         .filter_map(|system| auto_archive_path_for_system(&default_preview_archive_root(), system))
         .collect()
 }
 
 fn default_console_archive_paths() -> Vec<String> {
-    [
-        "nes-screenshots.mmlz4b",
-        "snes-screenshots.mmlz4b",
-        "n64-screenshots.mmlz4b",
-        "sms-screenshots.mmlz4b",
-        "megadrive-screenshots.mmlz4b",
-        "saturn-screenshots.mmlz4b",
-    ]
-    .into_iter()
-    .map(|name| {
-        PathBuf::from("/media/fat/mister-magik/assets")
-            .join(name)
-            .display()
-            .to_string()
-    })
-    .collect()
+    supported_screenshot_pack_ids()
+        .filter(|system| !matches!(*system, "arcade" | "neogeo"))
+        .map(|system| legacy_archive_path_for_system(Path::new(DEFAULT_SCREENSHOT_ASSET_DIR), system))
+        .collect()
 }
 
 fn resolve_preview_archive_path(preview_archive_path: &str) -> String {
@@ -1074,7 +1058,7 @@ fn resolve_preview_archive_path(preview_archive_path: &str) -> String {
     let root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("/media/fat/mister-magik/assets"));
+        .unwrap_or_else(|| Path::new(DEFAULT_SCREENSHOT_ASSET_DIR));
     preferred_archive_path_for_system(root, system).unwrap_or_else(|| preview_archive_path.to_string())
 }
 
@@ -1105,12 +1089,12 @@ fn preferred_archive_path_for_system(root: &Path, system: &str) -> Option<String
 fn preferred_media_size() -> String {
     std::env::var("MISTER_MEDIA_SIZE")
         .ok()
-        .filter(|size| valid_media_size(size))
+        .filter(|size| valid_screenshot_image_size(size))
         .unwrap_or_else(|| DEFAULT_MEDIA_SIZE.to_string())
 }
 
 fn state_archive_path_for_system(root: &Path, system: &str, preferred_size: &str) -> Option<String> {
-    let state_path = root.join(MEDIA_STATE_FILENAME);
+    let state_path = screenshot_media_state_path_in_root(root);
     let text = std::fs::read_to_string(state_path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     let system_state = value
@@ -1121,7 +1105,7 @@ fn state_archive_path_for_system(root: &Path, system: &str, preferred_size: &str
         let size = system_state
             .get("preferred_size")
             .and_then(serde_json::Value::as_str)
-            .filter(|size| valid_media_size(size))
+            .filter(|size| valid_screenshot_image_size(size))
             .unwrap_or(preferred_size);
         system_state
             .get("packs")
@@ -1140,14 +1124,12 @@ fn direct_state_local_path(value: &serde_json::Value) -> Option<String> {
 
 fn system_from_legacy_archive_path(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_str()?;
-    SCREENSHOT_PACK_IDS
-        .iter()
-        .copied()
-        .find(|system| name == format!("{system}-screenshots.mmlz4b"))
+    screenshot_pack_id_from_legacy_filename(name).map(|system| system.as_str())
 }
 
 fn legacy_archive_path_for_system(root: &Path, system: &str) -> String {
-    root.join(format!("{system}-screenshots.mmlz4b"))
+    legacy_screenshot_pack_path(root, system)
+        .unwrap_or_else(|_| root.join(format!("{system}-screenshots.mmlz4b")))
         .display()
         .to_string()
 }
@@ -1157,26 +1139,9 @@ fn size_qualified_archive_path_for_system(
     system: &str,
     image_size: &str,
 ) -> Option<String> {
-    if !SCREENSHOT_PACK_IDS.contains(&system) || !valid_media_size(image_size) {
-        return None;
-    }
-    Some(
-        root.join(format!("{system}-screenshots-{image_size}.mmlz4b"))
-            .display()
-            .to_string(),
-    )
-}
-
-fn valid_media_size(size: &str) -> bool {
-    let Some((w, h)) = size.split_once('x') else {
-        return false;
-    };
-    !w.is_empty()
-        && !h.is_empty()
-        && w.chars().all(|ch| ch.is_ascii_digit())
-        && h.chars().all(|ch| ch.is_ascii_digit())
-        && w.parse::<u32>().is_ok_and(|value| value > 0)
-        && h.parse::<u32>().is_ok_and(|value| value > 0)
+    size_qualified_screenshot_pack_path_in_root(root, system, image_size)
+        .ok()
+        .map(|path| path.display().to_string())
 }
 
 impl PreviewArchive {
@@ -1772,14 +1737,15 @@ mod tests {
 }}"#,
             archive.display()
         );
-        std::fs::write(root.join(MEDIA_STATE_FILENAME), state).expect("write media state");
+        let state_path = crate::media_identity::screenshot_media_state_path_in_root(&root);
+        std::fs::write(&state_path, state).expect("write media state");
         let legacy = root.join("neogeo-screenshots.mmlz4b");
 
         let resolved = resolve_preview_archive_path(&legacy.display().to_string());
 
         assert_eq!(resolved, archive.display().to_string());
         let _ = std::fs::remove_file(archive);
-        let _ = std::fs::remove_file(root.join(MEDIA_STATE_FILENAME));
+        let _ = std::fs::remove_file(state_path);
         let _ = std::fs::remove_dir(root);
     }
 
