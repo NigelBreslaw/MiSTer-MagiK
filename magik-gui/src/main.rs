@@ -16,6 +16,8 @@
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
+//!     media-bench-download
+//!                        benchmark screenshot pack downloads and variant decoding
 //!     input              gamepad log / sniff / calibrate
 //!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
 //!   Benchmarks:
@@ -57,6 +59,7 @@ mod fpga;
 mod frame_profile;
 mod input;
 mod launcher;
+mod media_bench_download;
 mod mr_audio;
 mod preview_state;
 mod runtime_status;
@@ -119,6 +122,11 @@ fn main() {
 
     if cmd == "library-refresh" {
         run_library_refresh();
+        return;
+    }
+
+    if cmd == "media-bench-download" {
+        media_bench_download::run();
         return;
     }
 
