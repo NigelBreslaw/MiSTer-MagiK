@@ -444,27 +444,10 @@ pub(super) fn raw_preview_scaled_rect(
     ui: &UiDisplay,
     frame: &PreviewRawFrame<'_>,
 ) -> Option<DirtyRect> {
-    if matches!(frame.pixels, PreviewRawPixels::Empty) {
-        return Some(preview_screen_rect(ui));
-    }
-    if frame.source_w == 0 || frame.source_h == 0 || frame.display_w == 0 || frame.display_h == 0 {
-        return None;
-    }
-    match frame.pixels {
-        PreviewRawPixels::Rgb8(rgb)
-            if rgb.len() < frame.source_w as usize * frame.source_h as usize * 3 =>
-        {
-            return None;
-        }
-        PreviewRawPixels::Rgb565 {
-            pixels,
-            stride_pixels,
-        } if stride_pixels < frame.source_w as usize
-            || pixels.len() < stride_pixels * frame.source_h as usize =>
-        {
-            return None;
-        }
-        _ => {}
+    match frame.status() {
+        PreviewRawFrameStatus::Empty => return Some(preview_screen_rect(ui)),
+        PreviewRawFrameStatus::Invalid => return None,
+        PreviewRawFrameStatus::Ready => {}
     }
 
     let screen = preview_screen_rect(ui);
@@ -621,6 +604,9 @@ pub(super) fn raw565_view<'a>(
     screen: DirtyRect,
     offset_x: isize,
 ) -> Option<Raw565View<'a>> {
+    if frame.status() != PreviewRawFrameStatus::Ready {
+        return None;
+    }
     if frame.display_w != frame.source_w || frame.display_h != frame.source_h {
         return None;
     }
@@ -633,9 +619,6 @@ pub(super) fn raw565_view<'a>(
     };
     let w = frame.source_w as usize;
     let h = frame.source_h as usize;
-    if w == 0 || h == 0 || stride_pixels < w || pixels.len() < stride_pixels * h {
-        return None;
-    }
     Some(Raw565View {
         pixels,
         stride_pixels,
