@@ -9,7 +9,7 @@ TSV="$BENCH_DIR/results-screenshot-download.tsv"
 
 LABEL=""
 SYSTEM="all"
-VARIANTS="identity"
+VARIANT="identity"
 MANIFEST_URL="${MISTER_MEDIA_MANIFEST_URL:-https://assets.mistermagik.com/mister-magik/v1/manifest.json}"
 ITERATIONS=1
 PRIME_CACHE=0
@@ -19,12 +19,12 @@ REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variants identity,gzip,brotli] [--iterations N] [--prime-cache] [--manifest-url URL] [--replace-label]
+Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variant identity] [--iterations N] [--prime-cache] [--manifest-url URL] [--replace-label]
 
 Benchmarks screenshot pack download paths inside the deployed MagiK binary on
 the MiSTer. The timing rows include network download, decompression,
-save-to-disk, checksum verification, and total time. gzip and brotli variants
-use the stored .mmlz4b.gz and .mmlz4b.br objects from the R2 manifest.
+save-to-disk, checksum verification, and total time. MagiK benchmarks the raw
+identity .mmlz4b object only; compressed objects are not decoded in the runtime.
 
 Default manifest:
   https://assets.mistermagik.com/mister-magik/v1/manifest.json
@@ -34,8 +34,8 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --system) SYSTEM="${2:?}"; shift 2 ;;
-    --variant) VARIANTS="${2:?}"; shift 2 ;;
-    --variants) VARIANTS="${2:?}"; shift 2 ;;
+    --variant) VARIANT="${2:?}"; shift 2 ;;
+    --variants) VARIANT="${2:?}"; shift 2 ;;
     --iterations) ITERATIONS="${2:?}"; shift 2 ;;
     --prime-cache) PRIME_CACHE=1; shift ;;
     --manifest-url) MANIFEST_URL="${2:?}"; shift 2 ;;
@@ -66,6 +66,10 @@ if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
   echo "iterations must be a positive integer" >&2
   exit 2
 fi
+case "$VARIANT" in
+  identity|none|plain) ;;
+  *) echo "MagiK only benchmarks the raw identity screenshot variant" >&2; exit 2 ;;
+esac
 mkdir -p "$BENCH_DIR"
 if [[ "$REPLACE_LABEL" -eq 1 && -f "$TSV" ]]; then
   tmp="$(mktemp)"
@@ -80,7 +84,7 @@ shell_quote() {
 remote_cmd="$(shell_quote "$REMOTE_BIN") media-bench-download"
 remote_cmd+=" --label $(shell_quote "$LABEL")"
 remote_cmd+=" --system $(shell_quote "$SYSTEM")"
-remote_cmd+=" --variants $(shell_quote "$VARIANTS")"
+remote_cmd+=" --variant $(shell_quote "$VARIANT")"
 remote_cmd+=" --iterations $(shell_quote "$ITERATIONS")"
 remote_cmd+=" --manifest-url $(shell_quote "$MANIFEST_URL")"
 if [[ "$PRIME_CACHE" -eq 1 ]]; then

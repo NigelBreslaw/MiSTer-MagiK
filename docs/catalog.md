@@ -247,12 +247,11 @@ the preferred size-qualified pack and falls back to legacy fixed-name files when
 needed. Current public packs are `320x320`; future smaller packs must preserve
 their size in the local filename.
 
-The downloader compares the expected SHA-256 with the selected manifest object
-and publishes verified packs atomically. The state file
+The downloader compares the expected SHA-256 with the raw manifest object and
+publishes verified packs atomically. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
-successful media update, preferred size, preferred benchmark variant, and the
-latest HTTP/cache headers observed for each downloaded pack. It is not a catalog
-stamp input.
+successful media update, preferred size, and the latest HTTP/cache headers
+observed for each downloaded pack. It is not a catalog stamp input.
 
 The launcher starts the runtime media worker after the first usable catalog and
 first visible frame. `MISTER_MEDIA_UPDATE=off` disables it,
@@ -263,15 +262,15 @@ events with system, size, phase, byte counts, pack index/count, and optional
 download Mbps so a future UI can render progress bars without changing the
 downloader contract.
 
-The production baseline is the canonical `.mmlz4b` object served with
-`Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"` and
-does not automatically choose gzip or Brotli. Compression is tested through
-Cloudflare's normal HTTP content negotiation before enabling separately stored
-`.gz` or `.br` objects:
+The production path is the canonical `.mmlz4b` object served with
+`Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"`.
+MagiK does not decode or benchmark gzip/Brotli screenshot objects on device.
+Cloudflare compression behavior can still be inspected separately through
+header probes:
 
 ```bash
 scripts/mister media-cloudflare-check --system megadrive
-scripts/profile-screenshot-download.sh LABEL --system megadrive --variants identity,gzip,brotli
+scripts/profile-screenshot-download.sh LABEL --system megadrive --variant identity
 ```
 
 `media-cloudflare-check` probes response headers with `Accept-Encoding:
@@ -288,19 +287,17 @@ Runtime and benchmark logs record cache evidence from response headers:
 `Content-Length`, `Content-Encoding`, and effective URL. A missing or uncached
 Cloudflare header is evidence for setup/debugging, not a download failure.
 
-Screenshot download benchmark rows must include network download,
-decompression, save/publish, checksum verification, and total time:
+Screenshot download benchmark rows must include network download, the
+decompression column, save/publish, checksum verification, and total time:
 
 ```text
 screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
 ```
 
-For identity responses `decompress_ms` is the local copy/normalization step and
-may be near zero. For gzip and Brotli responses, the row must show whether the
-MiSTer could decode the response and whether the total time improved, not just
-whether fewer bytes crossed the network. Separately stored compressed objects
-should only be added if these Cloudflare-negotiated measurements are ineffective
-or unverifiable for `.mmlz4b` content.
+For identity responses `decompress_ms` is always zero. Any future compressed
+artifact experiment should happen outside the MagiK runtime first and only move
+back on device if there is clear total-time evidence and a deliberate runtime
+decision to carry decoder code.
 
 MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
 offline with `scripts/mister mame-metadata-build`, include them in the release

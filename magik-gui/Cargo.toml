@@ -31,8 +31,6 @@ pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itim
 mister-magik-catalog = { path = "catalog" }
 mister-magik-ui = { path = "ui-generated", optional = true }
 ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-scaling", "static"] }
-flate2 = "1.1.9"
-brotli = "8.0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 slint = { version = "1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
