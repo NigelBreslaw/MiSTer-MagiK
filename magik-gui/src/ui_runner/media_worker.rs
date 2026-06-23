@@ -44,8 +44,8 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
         &tx,
         MediaProgressEvent::new("all", &config.image_size, "identity", "manifest_fetch"),
     );
-    let manifest_text = match fetch_manifest_text(&config.manifest_url) {
-        Ok(text) => text,
+    let (manifest_text, manifest_metadata) = match fetch_manifest_text(&config.manifest_url) {
+        Ok(fetched) => fetched,
         Err(error) => {
             let _ = tx.send(MediaWorkerMessage::Failed {
                 detail: format!("manifest fetch failed: {error}"),
@@ -53,6 +53,10 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             return;
         }
     };
+    let _ = tx.send(MediaWorkerMessage::CacheMetadata {
+        scope: "manifest".to_string(),
+        metadata: manifest_metadata,
+    });
     let manifest = match parse_manifest_json(&config.manifest_url, &manifest_text) {
         Ok(manifest) => manifest,
         Err(error) => {
@@ -208,25 +212,52 @@ fn download_raw_pack(
         pack.image_size,
         unix_ms_now()
     ));
-    let result = download_variant_to_path(variant, pack, &encoded_tmp, pack_index, pack_count, tx)
-        .and_then(|()| {
-            send_progress(
-                tx,
-                MediaProgressEvent::for_pack(pack, "identity", "verify", pack_index, pack_count)
-                    .with_done_bytes(variant.bytes),
-            );
-            verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256)
-        })
-        .and_then(|()| {
-            send_progress(
-                tx,
-                MediaProgressEvent::for_pack(pack, "identity", "save", pack_index, pack_count)
-                    .with_done_bytes(variant.bytes),
-            );
-            publish_pack_file(&encoded_tmp, local_path)
-        })
-        .and_then(|()| write_download_state(&config.asset_dir, pack, local_path, variant));
+    let headers_tmp = work_dir.join(format!(
+        "{}-{}-{}.headers",
+        pack.id,
+        pack.image_size,
+        unix_ms_now()
+    ));
+    let result = download_variant_to_path(
+        variant,
+        pack,
+        &encoded_tmp,
+        &headers_tmp,
+        pack_index,
+        pack_count,
+        tx,
+    )
+    .and_then(|metadata| {
+        let _ = tx.send(MediaWorkerMessage::CacheMetadata {
+            scope: format!("pack:{}", pack.id),
+            metadata: metadata.clone(),
+        });
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(pack, "identity", "verify", pack_index, pack_count)
+                .with_done_bytes(variant.bytes),
+        );
+        verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256).map(|()| metadata)
+    })
+    .and_then(|metadata| {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(pack, "identity", "save", pack_index, pack_count)
+                .with_done_bytes(variant.bytes),
+        );
+        publish_pack_file(&encoded_tmp, local_path).map(|()| metadata)
+    })
+    .and_then(|metadata| {
+        write_download_state(
+            &config.asset_dir,
+            pack,
+            local_path,
+            variant,
+            Some(&metadata),
+        )
+    });
     let _ = fs::remove_file(encoded_tmp);
+    let _ = fs::remove_file(headers_tmp);
     result
 }
 
@@ -234,24 +265,27 @@ fn download_variant_to_path(
     variant: &MediaVariant,
     pack: &MediaPack,
     output_path: &Path,
+    headers_path: &Path,
     pack_index: usize,
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
-) -> Result<(), String> {
+) -> Result<HttpCacheMetadata, String> {
     send_progress(
         tx,
         MediaProgressEvent::for_pack(pack, "identity", "download_start", pack_index, pack_count),
     );
+    let headers = File::create(headers_path)
+        .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
     let started = Instant::now();
     let mut child = Command::new("wget")
-        .arg("-q")
+        .arg("-S")
         .arg("--header")
         .arg("Accept-Encoding: identity")
         .arg("-O")
         .arg(output_path)
         .arg(&variant.url)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(headers))
         .spawn()
         .map_err(|e| format!("spawn wget: {e}"))?;
     let mut last_bytes = 0;
@@ -271,6 +305,7 @@ fn download_variant_to_path(
         match child.try_wait().map_err(|e| format!("wait wget: {e}"))? {
             Some(status) if status.success() => {
                 let bytes = output_path.metadata().map(|meta| meta.len()).unwrap_or(0);
+                let header_text = fs::read_to_string(headers_path).unwrap_or_default();
                 send_progress(
                     tx,
                     MediaProgressEvent::for_pack(
@@ -283,7 +318,7 @@ fn download_variant_to_path(
                     .with_bytes(bytes, variant.bytes)
                     .with_download_mbps(mbps(bytes, started.elapsed())),
                 );
-                return Ok(());
+                return Ok(parse_wget_headers(&header_text, &variant.url, "response"));
             }
             Some(status) => return Err(format!("wget exited with {status}")),
             None => std::thread::sleep(Duration::from_millis(200)),
@@ -386,6 +421,7 @@ fn write_download_state(
     pack: &MediaPack,
     local_path: &Path,
     variant: &MediaVariant,
+    metadata: Option<&HttpCacheMetadata>,
 ) -> Result<(), String> {
     let path = PathBuf::from(state_path(&asset_dir.display().to_string()));
     let mut root = fs::read_to_string(&path)
@@ -419,23 +455,40 @@ fn write_download_state(
     let packs = packs
         .as_object_mut()
         .ok_or("media state packs must be an object")?;
-    packs.insert(
-        pack.image_size.clone(),
-        serde_json::json!({
-            "version": pack.version,
-            "image_size": pack.image_size,
-            "sha256": pack.raw.sha256,
-            "bytes": pack.raw.bytes,
-            "variant": "identity",
-            "compression": variant.compression,
-            "local_path": local_path.display().to_string(),
-            "object": variant.object,
-            "updated_at_unix": unix_secs_now(),
-        }),
-    );
+    let mut pack_state = serde_json::json!({
+        "version": pack.version,
+        "image_size": pack.image_size,
+        "sha256": pack.raw.sha256,
+        "bytes": pack.raw.bytes,
+        "variant": "identity",
+        "compression": variant.compression,
+        "local_path": local_path.display().to_string(),
+        "object": variant.object,
+        "updated_at_unix": unix_secs_now(),
+    });
+    if let Some(metadata) = metadata {
+        pack_state["cache"] = cache_metadata_json(metadata);
+    }
+    packs.insert(pack.image_size.clone(), pack_state);
     root.insert("schema".to_string(), Value::from(1));
     root.insert("updated_at_unix".to_string(), Value::from(unix_secs_now()));
     write_json_atomic(&path, &Value::Object(root))
+}
+
+fn cache_metadata_json(metadata: &HttpCacheMetadata) -> Value {
+    serde_json::json!({
+        "status": metadata.status,
+        "etag": metadata.etag,
+        "last_modified": metadata.last_modified,
+        "cache_control": metadata.cache_control,
+        "age": metadata.age,
+        "cf_cache_status": metadata.cf_cache_status,
+        "cf_ray": metadata.cf_ray,
+        "content_length": metadata.content_length,
+        "content_encoding": metadata.content_encoding,
+        "effective_url": metadata.effective_url,
+        "source": metadata.source,
+    })
 }
 
 fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
@@ -500,20 +553,33 @@ fn unix_secs_now() -> u64 {
         .unwrap_or(0)
 }
 
-fn fetch_manifest_text(manifest_url: &str) -> Result<String, String> {
+fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata), String> {
+    let headers_path = PathBuf::from(format!(
+        "/tmp/mister-magik-media-manifest-{}.headers",
+        unix_ms_now()
+    ));
+    let headers = File::create(&headers_path)
+        .map_err(|e| format!("create manifest headers {}: {e}", headers_path.display()))?;
     let output = Command::new("wget")
-        .arg("-q")
+        .arg("-S")
         .arg("--header")
         .arg("Accept-Encoding: identity")
         .arg("-O")
         .arg("-")
         .arg(manifest_url)
+        .stderr(Stdio::from(headers))
         .output()
         .map_err(|e| format!("spawn wget: {e}"))?;
+    let header_text = fs::read_to_string(&headers_path).unwrap_or_default();
+    let _ = fs::remove_file(headers_path);
     if !output.status.success() {
         return Err(format!("wget exited with {}", output.status));
     }
-    String::from_utf8(output.stdout).map_err(|e| format!("manifest utf8: {e}"))
+    let body = String::from_utf8(output.stdout).map_err(|e| format!("manifest utf8: {e}"))?;
+    Ok((
+        body,
+        parse_wget_headers(&header_text, manifest_url, "response"),
+    ))
 }
 
 fn read_media_state(asset_dir: &PathBuf) -> Option<Value> {
@@ -574,6 +640,10 @@ pub(super) enum MediaWorkerMessage {
         detail: String,
     },
     Progress(MediaProgressEvent),
+    CacheMetadata {
+        scope: String,
+        metadata: HttpCacheMetadata,
+    },
     PackStatus {
         system: String,
         image_size: String,
@@ -600,6 +670,77 @@ pub(super) struct MediaProgressEvent {
     pub pack_count: usize,
     pub download_mbps: Option<f64>,
     pub detail: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct HttpCacheMetadata {
+    pub status: Option<u16>,
+    pub etag: String,
+    pub last_modified: String,
+    pub cache_control: String,
+    pub age: String,
+    pub cf_cache_status: String,
+    pub cf_ray: String,
+    pub content_length: String,
+    pub content_encoding: String,
+    pub effective_url: String,
+    pub source: String,
+}
+
+impl HttpCacheMetadata {
+    pub(super) fn log_detail(&self, scope: &str) -> String {
+        format!(
+            "scope={} source={} status={} etag={} last_modified={} cache_control={} age={} cf_cache_status={} cf_ray={} content_length={} content_encoding={} effective_url={}",
+            scope,
+            self.source,
+            self.status.map(|value| value.to_string()).unwrap_or_default(),
+            self.etag,
+            self.last_modified,
+            self.cache_control,
+            self.age,
+            self.cf_cache_status,
+            self.cf_ray,
+            self.content_length,
+            self.content_encoding,
+            self.effective_url
+        )
+    }
+}
+
+fn parse_wget_headers(text: &str, effective_url: &str, source: &str) -> HttpCacheMetadata {
+    let mut metadata = HttpCacheMetadata {
+        effective_url: effective_url.to_string(),
+        source: source.to_string(),
+        ..Default::default()
+    };
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if let Some(rest) = line.strip_prefix("HTTP/") {
+            metadata.status = rest
+                .split_whitespace()
+                .nth(1)
+                .or_else(|| rest.split_whitespace().next())
+                .and_then(|value| value.parse::<u16>().ok());
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_end_matches('\r').to_string();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "etag" => metadata.etag = value,
+            "last-modified" => metadata.last_modified = value,
+            "cache-control" => metadata.cache_control = value,
+            "age" => metadata.age = value,
+            "cf-cache-status" => metadata.cf_cache_status = value,
+            "cf-ray" => metadata.cf_ray = value,
+            "content-length" => metadata.content_length = value,
+            "content-encoding" => metadata.content_encoding = value,
+            "location" => metadata.effective_url = value,
+            _ => {}
+        }
+    }
+    metadata
 }
 
 impl MediaProgressEvent {
@@ -775,6 +916,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_cloudflare_cache_headers_from_wget_output() {
+        let headers = "\
+  HTTP/1.1 200 OK\r
+  Cache-Control: public, max-age=31536000, immutable\r
+  ETag: \"abc\"\r
+  Last-Modified: Tue, 23 Jun 2026 08:00:00 GMT\r
+  Age: 42\r
+  CF-Cache-Status: HIT\r
+  CF-Ray: test-ray\r
+  Content-Length: 123\r
+  Content-Encoding: identity\r
+";
+
+        let metadata = parse_wget_headers(headers, "https://assets.example/pack", "response");
+
+        assert_eq!(metadata.status, Some(200));
+        assert_eq!(metadata.cf_cache_status, "HIT");
+        assert_eq!(metadata.age, "42");
+        assert_eq!(metadata.etag, "\"abc\"");
+        assert_eq!(metadata.content_length, "123");
+    }
+
+    #[test]
     fn verify_downloaded_file_rejects_bad_checksum() {
         let dir = temp_dir("mister-magik-verify-bad-sha");
         let path = dir.join("pack.mmlz4b");
@@ -821,8 +985,16 @@ mod tests {
         let pack = pack_fixture();
         let local_path = dir.join("arcade-screenshots-320x320.mmlz4b");
         let variant = pack.variant_for_compression("none").unwrap();
+        let metadata = HttpCacheMetadata {
+            status: Some(200),
+            cf_cache_status: "MISS".to_string(),
+            content_length: "4".to_string(),
+            effective_url: variant.url.clone(),
+            source: "response".to_string(),
+            ..Default::default()
+        };
 
-        write_download_state(&dir, &pack, &local_path, variant).unwrap();
+        write_download_state(&dir, &pack, &local_path, variant, Some(&metadata)).unwrap();
 
         let state: Value = serde_json::from_str(
             &fs::read_to_string(dir.join(".screenshot-media-state.json")).unwrap(),
@@ -835,6 +1007,14 @@ mod tests {
         assert_eq!(
             state["systems"]["arcade"]["packs"]["320x320"]["variant"],
             "identity"
+        );
+        assert_eq!(
+            state["systems"]["arcade"]["packs"]["320x320"]["cache"]["cf_cache_status"],
+            "MISS"
+        );
+        assert_eq!(
+            state["systems"]["arcade"]["packs"]["320x320"]["cache"]["content_length"],
+            "4"
         );
         let _ = fs::remove_dir_all(dir);
     }

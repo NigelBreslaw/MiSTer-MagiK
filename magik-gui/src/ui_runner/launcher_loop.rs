@@ -834,6 +834,13 @@ pub(super) fn run_launcher_loop(
                 MediaWorkerMessage::Progress(event) => {
                     print_startup_event(start, "screenshot_media_progress", event.log_detail());
                 }
+                MediaWorkerMessage::CacheMetadata { scope, metadata } => {
+                    print_startup_event(
+                        start,
+                        "screenshot_media_cache_metadata",
+                        metadata.log_detail(&scope),
+                    );
+                }
                 MediaWorkerMessage::PackStatus {
                     system,
                     image_size,
