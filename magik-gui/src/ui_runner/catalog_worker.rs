@@ -521,7 +521,7 @@ fn send_catalog_load_timing(
 
 fn materialize_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
     let start = Instant::now();
-    let summary = launcher::materialize_virtual_launch_cache_from_default_db();
+    let summary = crate::launch_preparation::materialize_virtual_launch_cache_from_default_db();
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "virtual_launch_cache_materialized".to_string(),
         detail: format!(
