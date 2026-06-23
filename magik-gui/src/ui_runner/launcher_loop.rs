@@ -1,11 +1,21 @@
 use super::launcher_frame_accounting::{LauncherFrameAccounting, LauncherPresentedFrame};
+use super::launcher_worker_intents::{
+    apply_launcher_worker_ui_intent, cached_catalog_validation_intent,
+    catalog_rebuild_started_intent, catalog_scan_message, parse_games_found_detail,
+    sync_launcher_worker_ui_intent, CatalogCounterPhase, CatalogProgressUiIntent,
+    CatalogWorkerUiContext, LauncherWorkerUiIntent, MediaProgressDisplay,
+};
+#[cfg(test)]
+use super::launcher_worker_intents::{
+    catalog_background_scan_progress_visible, catalog_scan_progress_visible,
+};
 use super::*;
 use crate::fb::VsyncWaitStatus;
 use crate::preview_worker;
 use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
@@ -577,29 +587,28 @@ pub(super) fn run_launcher_loop(
                         detail,
                         percent,
                     } => {
-                        if matches!(
-                            title.as_str(),
-                            "Library scan failed" | "Library load failed"
-                        ) {
+                        let intent = CatalogProgressUiIntent::from_worker_progress(
+                            CatalogWorkerUiContext {
+                                catalog_ready,
+                                screen: nav.screen,
+                                foreground_update: catalog_foreground_update,
+                            },
+                            title,
+                            detail,
+                            percent,
+                        );
+                        if intent.failed {
                             catalog_refresh_failed = true;
                         }
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        let visible = catalog_scan_progress_visible(
-                            catalog_ready,
-                            nav.screen,
-                            &title,
-                            catalog_foreground_update,
-                        );
-                        let background_visible = catalog_background_scan_progress_visible(
-                            catalog_ready,
-                            visible,
-                            &title,
-                        );
-                        let games_found_target = parse_games_found_detail(&detail);
-                        if games_found_target.is_some_and(counter_climb_target_is_meaningful) {
-                            let target = games_found_target.unwrap_or_default();
+                        if let Some(counter_target) = intent
+                            .counter_target
+                            .filter(|target| counter_climb_target_is_meaningful(target.target))
+                        {
+                            let target = counter_target.target;
                             let visible_counter_before = games_found_counter.displayed;
-                            if title == "Finding games" && !bootstrap_counter_climb_logged {
+                            if counter_target.phase == CatalogCounterPhase::Bootstrap
+                                && !bootstrap_counter_climb_logged
+                            {
                                 bootstrap_counter_climb_logged = true;
                                 print_startup_event(
                                     start,
@@ -607,7 +616,7 @@ pub(super) fn run_launcher_loop(
                                     format!("target={target}"),
                                 );
                             }
-                            if title == "Finding games"
+                            if counter_target.phase == CatalogCounterPhase::Bootstrap
                                 && !bootstrap_counter_sustained_climb_logged
                                 && counter_climb_target_is_sustained(target)
                             {
@@ -618,7 +627,7 @@ pub(super) fn run_launcher_loop(
                                     format!("target={target}"),
                                 );
                             }
-                            if title == "Classifying library"
+                            if counter_target.phase == CatalogCounterPhase::FullScan
                                 && !full_scan_counter_climb_logged
                                 && counter_climb_target_overtakes_visible(
                                     target,
@@ -633,20 +642,16 @@ pub(super) fn run_launcher_loop(
                                 );
                             }
                         }
-                        let detail = games_found_counter
-                            .progress_detail(&title, &detail, loop_start)
-                            .unwrap_or(detail);
-                        LauncherStatusPresenter::new(&bridge).sync_catalog_scan(
-                            CatalogScanBridgeStatus::new(
-                                visible,
-                                background_visible,
-                                catalog_scan_message(catalog_foreground_update),
-                                title,
-                                detail,
-                                percent,
-                            ),
+                        let detail = games_found_counter.progress_detail(
+                            &intent.title,
+                            &intent.detail,
+                            loop_start,
                         );
-                        full_bridge_dirty = true;
+                        apply_launcher_worker_ui_intent(
+                            &app,
+                            intent.ui_with_detail(detail),
+                            &mut full_bridge_dirty,
+                        );
                     }
                     CatalogWorkerMessage::SystemDiscovered { system_id } => {
                         print_startup_event(
@@ -733,8 +738,11 @@ pub(super) fn run_launcher_loop(
                             if catalog_refresh_failed || catalog_foreground_update {
                                 catalog_refresh_done = true;
                                 catalog_foreground_update = false;
-                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
+                                apply_launcher_worker_ui_intent(
+                                    &app,
+                                    LauncherWorkerUiIntent::ClearCatalogScan,
+                                    &mut full_bridge_dirty,
+                                );
                                 games_found_counter.reset();
                                 nav.confirm_action =
                                     Some(launcher::ConfirmAction::LibraryUpdateFailed);
@@ -748,23 +756,22 @@ pub(super) fn run_launcher_loop(
                             }
                             continue;
                         }
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        let status_presenter = LauncherStatusPresenter::new(&bridge);
                         games_found_counter.reset();
                         if cached_before_refresh {
-                            status_presenter.sync_catalog_scan(CatalogScanBridgeStatus::new(
-                                false,
-                                false,
-                                catalog_scan_message(catalog_foreground_update),
-                                "Validating library",
-                                format!(
-                                    "Using cached {} games while checking for changes",
-                                    catalog.len()
+                            apply_launcher_worker_ui_intent(
+                                &app,
+                                cached_catalog_validation_intent(
+                                    catalog_foreground_update,
+                                    catalog.len(),
                                 ),
-                                -1,
-                            ));
+                                &mut full_bridge_dirty,
+                            );
                         } else {
-                            status_presenter.clear_catalog_scan();
+                            apply_launcher_worker_ui_intent(
+                                &app,
+                                LauncherWorkerUiIntent::ClearCatalogScan,
+                                &mut full_bridge_dirty,
+                            );
                         }
                         let bridge_sync_t = Instant::now();
                         sync_bridge_launcher(
@@ -789,7 +796,6 @@ pub(super) fn run_launcher_loop(
                                 bridge_sync_t.elapsed().as_micros()
                             ),
                         );
-                        full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Persisted { summary } => {
                         catalog_persisted_summary_seen = true;
@@ -807,10 +813,11 @@ pub(super) fn run_launcher_loop(
                             handle.finish();
                         }
                         print_startup_event(start, "library_db_save_failed", error);
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        LauncherStatusPresenter::new(&bridge)
-                            .sync_catalog_background_scan_visible(false);
-                        full_bridge_dirty = true;
+                        apply_launcher_worker_ui_intent(
+                            &app,
+                            LauncherWorkerUiIntent::HideCatalogBackgroundScan,
+                            &mut full_bridge_dirty,
+                        );
                     }
                     CatalogWorkerMessage::Unchanged { summary } => {
                         catalog_refresh_done = true;
@@ -835,10 +842,12 @@ pub(super) fn run_launcher_loop(
                                 summary.entries
                             ),
                         );
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
+                        apply_launcher_worker_ui_intent(
+                            &app,
+                            LauncherWorkerUiIntent::ClearCatalogScan,
+                            &mut full_bridge_dirty,
+                        );
                         games_found_counter.reset();
-                        full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Changed { detail } => {
                         catalog_refresh_done = true;
@@ -850,10 +859,12 @@ pub(super) fn run_launcher_loop(
                         print_startup_event(start, "library_changed_detected", &detail);
                         nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
                         nav.confirm_selected = 0;
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
+                        apply_launcher_worker_ui_intent(
+                            &app,
+                            LauncherWorkerUiIntent::ClearCatalogScan,
+                            &mut full_bridge_dirty,
+                        );
                         games_found_counter.reset();
-                        full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Done => {
                         catalog_refresh_done = true;
@@ -863,10 +874,12 @@ pub(super) fn run_launcher_loop(
                             handle.finish();
                         }
                         if catalog_ready {
-                            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                            LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
+                            apply_launcher_worker_ui_intent(
+                                &app,
+                                LauncherWorkerUiIntent::ClearCatalogScan,
+                                &mut full_bridge_dirty,
+                            );
                             games_found_counter.reset();
-                            full_bridge_dirty = true;
                         }
                     }
                 }
@@ -880,14 +893,11 @@ pub(super) fn run_launcher_loop(
                 }
                 MediaWorkerMessage::Progress(event) => {
                     print_startup_event(start, "screenshot_media_progress", event.log_detail());
-                    if media_progress_display.apply(&event) {
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        LauncherStatusPresenter::new(&bridge).sync_media_progresses(
-                            media_progress_display.model(),
-                            media_progress_display.summary(),
-                        );
-                        full_bridge_dirty = true;
-                    }
+                    apply_launcher_worker_ui_intent(
+                        &app,
+                        media_progress_display.progress_intent(&event),
+                        &mut full_bridge_dirty,
+                    );
                 }
                 MediaWorkerMessage::CacheMetadata { scope, metadata } => {
                     print_startup_event(
@@ -911,21 +921,21 @@ pub(super) fn run_launcher_loop(
                 MediaWorkerMessage::Failed { detail } => {
                     print_startup_event(start, "screenshot_media_update_failed", detail);
                     media_worker_unavailable = true;
-                    media_progress_display.clear();
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    LauncherStatusPresenter::new(&bridge)
-                        .sync_media_progresses(media_progress_display.model(), "");
-                    full_bridge_dirty = true;
+                    apply_launcher_worker_ui_intent(
+                        &app,
+                        media_progress_display.clear_intent(),
+                        &mut full_bridge_dirty,
+                    );
                     media_handle = None;
                     break;
                 }
                 MediaWorkerMessage::Done { detail } => {
                     print_startup_event(start, "screenshot_media_update_done", detail);
-                    media_progress_display.clear();
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    LauncherStatusPresenter::new(&bridge)
-                        .sync_media_progresses(media_progress_display.model(), "");
-                    full_bridge_dirty = true;
+                    apply_launcher_worker_ui_intent(
+                        &app,
+                        media_progress_display.clear_intent(),
+                        &mut full_bridge_dirty,
+                    );
                     media_handle = None;
                     break;
                 }
@@ -1130,10 +1140,10 @@ pub(super) fn run_launcher_loop(
                                 }
                                 media_worker_unavailable = true;
                                 media_handle = None;
-                                media_progress_display.clear();
-                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                LauncherStatusPresenter::new(&bridge)
-                                    .sync_media_progresses(media_progress_display.model(), "");
+                                sync_launcher_worker_ui_intent(
+                                    &app,
+                                    media_progress_display.clear_intent(),
+                                );
                                 sync_bridge_launcher(
                                     &app,
                                     &pad,
@@ -1215,8 +1225,11 @@ pub(super) fn run_launcher_loop(
                                 catalog_refresh_done = true;
                                 catalog_foreground_update = false;
                                 deferred_catalog_worker = None;
-                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
+                                apply_launcher_worker_ui_intent(
+                                    &app,
+                                    LauncherWorkerUiIntent::ClearCatalogScan,
+                                    &mut full_bridge_dirty,
+                                );
                                 games_found_counter.reset();
                                 catalog_refresh_failed = false;
                                 window.request_redraw();
@@ -1241,16 +1254,10 @@ pub(super) fn run_launcher_loop(
                                     CatalogWorkerRequest::ForceBuild,
                                     CatalogWorkerInitialCache::AlreadyLoadedReady,
                                 ));
-                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                LauncherStatusPresenter::new(&bridge).sync_catalog_scan(
-                                    CatalogScanBridgeStatus::new(
-                                        true,
-                                        false,
-                                        catalog_scan_message(catalog_foreground_update),
-                                        "Indexing library",
-                                        "Rebuilding catalog with latest games...",
-                                        -1,
-                                    ),
+                                apply_launcher_worker_ui_intent(
+                                    &app,
+                                    catalog_rebuild_started_intent(catalog_foreground_update),
+                                    &mut full_bridge_dirty,
                                 );
                                 window.request_redraw();
                                 continue;
@@ -1728,144 +1735,6 @@ fn catalog_media_system_ids(catalog: &ArcadeCatalog) -> Vec<String> {
         .collect()
 }
 
-#[derive(Default)]
-struct MediaProgressDisplay {
-    active: BTreeMap<String, MediaProgressDisplayRow>,
-    done: BTreeSet<String>,
-    failed: BTreeSet<String>,
-    requested_count: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct MediaProgressDisplayRow {
-    system: String,
-    image_size: String,
-    phase: String,
-    percent: i32,
-    bytes_label: String,
-    pack_position: String,
-}
-
-impl MediaProgressDisplay {
-    fn apply(&mut self, event: &MediaProgressEvent) -> bool {
-        if event.system == "all" {
-            return false;
-        }
-        if event.pack_count > 0 {
-            self.requested_count = self.requested_count.max(event.pack_count);
-        }
-        if event.phase == "failed" {
-            self.failed.insert(event.system.clone());
-            self.active.remove(&event.system);
-            return true;
-        }
-        if media_progress_terminal_phase(&event.phase) {
-            self.done.insert(event.system.clone());
-            self.active.remove(&event.system);
-            return true;
-        }
-        self.active.insert(
-            event.system.clone(),
-            MediaProgressDisplayRow {
-                system: event.system.clone(),
-                image_size: event.image_size.clone(),
-                phase: media_progress_phase_label(&event.phase),
-                percent: media_progress_percent(event.bytes_done, event.bytes_total),
-                bytes_label: media_progress_bytes_label(event.bytes_done, event.bytes_total),
-                pack_position: if event.pack_index > 0 && event.pack_count > 0 {
-                    format!("{}/{}", event.pack_index, event.pack_count)
-                } else {
-                    String::new()
-                },
-            },
-        );
-        true
-    }
-
-    fn clear(&mut self) {
-        self.active.clear();
-        self.done.clear();
-        self.failed.clear();
-        self.requested_count = 0;
-    }
-
-    fn model(&self) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
-        let rows = self
-            .active
-            .values()
-            .take(3)
-            .map(|row| slint_ui::launcher::ScreenshotPackProgress {
-                system: row.system.clone().into(),
-                image_size: row.image_size.clone().into(),
-                phase: row.phase.clone().into(),
-                percent: row.percent,
-                bytes_label: row.bytes_label.clone().into(),
-                pack_position: row.pack_position.clone().into(),
-            })
-            .collect::<Vec<_>>();
-        ModelRc::new(VecModel::from(rows))
-    }
-
-    fn summary(&self) -> String {
-        let active = self.active.len();
-        let done = self.done.len();
-        let failed = self.failed.len();
-        let total = self.requested_count.max(active + done + failed);
-        if total == 0 {
-            return String::new();
-        }
-        if failed > 0 {
-            format!("screenshots {active} active · {done}/{total} done · {failed} failed")
-        } else {
-            format!("screenshots {active} active · {done}/{total} done")
-        }
-    }
-}
-
-fn media_progress_terminal_phase(phase: &str) -> bool {
-    matches!(phase, "done" | "skipped-current" | "check-only")
-}
-
-fn media_progress_percent(done: u64, total: u64) -> i32 {
-    done.min(total)
-        .saturating_mul(100)
-        .checked_div(total)
-        .map(|value| value as i32)
-        .unwrap_or(-1)
-}
-
-fn media_progress_phase_label(phase: &str) -> String {
-    match phase {
-        "download_start" | "download" | "download_done" => "download".to_string(),
-        "skipped-current" => "current".to_string(),
-        "check-only" => "checked".to_string(),
-        other => other.replace('_', " "),
-    }
-}
-
-fn media_progress_bytes_label(done: u64, total: u64) -> String {
-    if total == 0 {
-        return String::new();
-    }
-    format!(
-        "{} / {}",
-        media_progress_byte_label(done),
-        media_progress_byte_label(total)
-    )
-}
-
-fn media_progress_byte_label(bytes: u64) -> String {
-    const KB: f64 = 1000.0;
-    const MB: f64 = 1000.0 * 1000.0;
-    if bytes >= 10_000_000 {
-        format!("{:.1} MB", bytes as f64 / MB)
-    } else if bytes >= 1000 {
-        format!("{:.0} KB", bytes as f64 / KB)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 #[derive(Debug)]
 struct CatalogScanRedraw {
     last_request: Instant,
@@ -1907,24 +1776,12 @@ struct GamesFoundCounter {
     target: usize,
     active: bool,
     last_tick: Option<Instant>,
-    phase: GamesFoundCounterPhase,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum GamesFoundCounterPhase {
-    #[default]
-    None,
-    Bootstrap,
-    FullScan,
+    phase: Option<CatalogCounterPhase>,
 }
 
 impl GamesFoundCounter {
     fn progress_detail(&mut self, title: &str, detail: &str, now: Instant) -> Option<String> {
-        let phase = match title {
-            "Finding games" => Some(GamesFoundCounterPhase::Bootstrap),
-            "Classifying library" => Some(GamesFoundCounterPhase::FullScan),
-            _ => None,
-        };
+        let phase = CatalogCounterPhase::for_title(title);
         let target = phase.and_then(|_| parse_games_found_detail(detail));
         let Some(target) = target else {
             self.reset();
@@ -1932,10 +1789,10 @@ impl GamesFoundCounter {
         };
         let phase = phase.expect("phase exists when target parses");
         let target = match phase {
-            GamesFoundCounterPhase::Bootstrap if target >= 500 => target.max(1000),
+            CatalogCounterPhase::Bootstrap if target >= 500 => target.max(1000),
             _ => target,
         };
-        if phase == GamesFoundCounterPhase::FullScan && target <= self.displayed {
+        if phase == CatalogCounterPhase::FullScan && target <= self.displayed {
             return Some(format_games_found(self.displayed));
         }
         if !self.active || target < self.displayed {
@@ -1944,7 +1801,7 @@ impl GamesFoundCounter {
         }
         self.target = target;
         self.active = true;
-        self.phase = phase;
+        self.phase = Some(phase);
         Some(format_games_found(self.displayed))
     }
 
@@ -1957,7 +1814,12 @@ impl GamesFoundCounter {
             .last_tick
             .map(|last| now.duration_since(last))
             .unwrap_or(Duration::from_millis(66));
-        let step = games_found_count_step(self.displayed, self.target, elapsed, self.phase);
+        let step = games_found_count_step(
+            self.displayed,
+            self.target,
+            elapsed,
+            self.phase.unwrap_or(CatalogCounterPhase::FullScan),
+        );
         if step == 0 {
             return None;
         }
@@ -1971,12 +1833,8 @@ impl GamesFoundCounter {
         self.target = 0;
         self.active = false;
         self.last_tick = None;
-        self.phase = GamesFoundCounterPhase::None;
+        self.phase = None;
     }
-}
-
-fn parse_games_found_detail(detail: &str) -> Option<usize> {
-    detail.strip_prefix("Games found: ")?.trim().parse().ok()
 }
 
 fn format_games_found(count: usize) -> String {
@@ -1999,14 +1857,14 @@ fn games_found_count_step(
     displayed: usize,
     target: usize,
     elapsed: Duration,
-    phase: GamesFoundCounterPhase,
+    phase: CatalogCounterPhase,
 ) -> usize {
     if target <= displayed {
         return 0;
     }
     let lag = target - displayed;
     let elapsed_ms = elapsed.as_millis().max(1) as usize;
-    if phase == GamesFoundCounterPhase::Bootstrap {
+    if phase == CatalogCounterPhase::Bootstrap {
         let bootstrap_games_per_second = 55usize;
         return ((bootstrap_games_per_second * elapsed_ms).div_ceil(1000)).clamp(1, lag);
     }
@@ -2078,14 +1936,6 @@ fn initial_catalog_scan_visible(
     catalog_worker_enabled && (foreground_update || !catalog_ready)
 }
 
-fn catalog_scan_message(foreground_update: bool) -> &'static str {
-    if foreground_update {
-        UPDATING_LIBRARY_SCAN_MESSAGE
-    } else {
-        FIRST_LIBRARY_SCAN_MESSAGE
-    }
-}
-
 fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -> String {
     format!(
         "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
@@ -2099,34 +1949,6 @@ fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -
         summary.containers,
         summary.entries
     )
-}
-
-fn catalog_scan_progress_visible(
-    catalog_ready: bool,
-    screen: Screen,
-    title: &str,
-    foreground_update: bool,
-) -> bool {
-    if matches!(title, "Library scan failed" | "Library load failed") {
-        return true;
-    }
-    if foreground_update {
-        return true;
-    }
-    if !catalog_ready {
-        return screen == Screen::Home || screen == Screen::Arcade || title == "Indexing library";
-    }
-    false
-}
-
-fn catalog_background_scan_progress_visible(
-    catalog_ready: bool,
-    full_scan_visible: bool,
-    title: &str,
-) -> bool {
-    catalog_ready
-        && !full_scan_visible
-        && !matches!(title, "Library scan failed" | "Library load failed")
 }
 
 fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> CatalogWorkerRequest {
@@ -2211,28 +2033,6 @@ mod tests {
         );
     }
 
-    fn media_progress_event(
-        system: &str,
-        phase: &str,
-        bytes_done: u64,
-        bytes_total: u64,
-        pack_index: usize,
-        pack_count: usize,
-    ) -> MediaProgressEvent {
-        MediaProgressEvent {
-            system: system.to_string(),
-            image_size: "320x320".to_string(),
-            variant: "identity".to_string(),
-            phase: phase.to_string(),
-            bytes_done,
-            bytes_total,
-            pack_index,
-            pack_count,
-            download_mbps: None,
-            detail: String::new(),
-        }
-    }
-
     fn catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
         let mut games = Vec::new();
         let mut systems = Vec::new();
@@ -2264,38 +2064,6 @@ mod tests {
         assert_eq!(
             catalog_media_system_ids(&catalog),
             vec!["arcade".to_string(), "neogeo".to_string()]
-        );
-    }
-
-    #[test]
-    pub(super) fn media_progress_display_tracks_active_rows_and_summary() {
-        let mut display = MediaProgressDisplay::default();
-
-        assert!(display.apply(&media_progress_event("arcade", "download", 512, 1024, 1, 2)));
-        assert!(display.apply(&media_progress_event("neogeo", "save", 128, 1024, 2, 2)));
-
-        assert_eq!(display.active.len(), 2);
-        assert_eq!(display.active["arcade"].percent, 50);
-        assert_eq!(display.active["arcade"].phase, "download");
-        assert_eq!(display.active["arcade"].bytes_label, "512 B / 1 KB");
-        assert_eq!(display.summary(), "screenshots 2 active · 0/2 done");
-    }
-
-    #[test]
-    pub(super) fn media_progress_display_removes_terminal_rows() {
-        let mut display = MediaProgressDisplay::default();
-        display.apply(&media_progress_event("arcade", "download", 128, 1024, 1, 2));
-        display.apply(&media_progress_event("neogeo", "download", 128, 1024, 2, 2));
-
-        assert!(display.apply(&media_progress_event("arcade", "done", 1024, 1024, 1, 2)));
-        assert!(display.apply(&media_progress_event("neogeo", "failed", 128, 1024, 2, 2)));
-
-        assert!(display.active.is_empty());
-        assert!(display.done.contains("arcade"));
-        assert!(display.failed.contains("neogeo"));
-        assert_eq!(
-            display.summary(),
-            "screenshots 0 active · 1/2 done · 1 failed"
         );
     }
 
@@ -2513,7 +2281,7 @@ mod tests {
             Some("Games found: 650".to_string())
         );
         assert_eq!(counter.target, 700);
-        assert_eq!(counter.phase, GamesFoundCounterPhase::FullScan);
+        assert_eq!(counter.phase, Some(CatalogCounterPhase::FullScan));
     }
 
     #[test]

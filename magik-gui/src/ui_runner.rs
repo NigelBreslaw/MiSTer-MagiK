@@ -66,6 +66,7 @@ mod launcher_bench;
 mod launcher_bridge;
 mod launcher_frame_accounting;
 mod launcher_loop;
+mod launcher_worker_intents;
 mod media_worker;
 #[cfg(mister_experiments)]
 mod raster_effects_loop;
