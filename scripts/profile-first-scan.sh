@@ -32,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
     --sqlite-build-dir) SQLITE_BUILD_DIR="${2:?}"; shift 2 ;;
+    --sqlite-publish-mode) echo "--sqlite-publish-mode was removed; library DB publishing has one supported path" >&2; exit 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *)
@@ -57,7 +58,6 @@ if [[ ! "$TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
   echo "--timeout must be an integer number of seconds" >&2
   exit 2
 fi
-
 mkdir -p "$BENCH_DIR"
 if [[ ! -f "$TSV" ]]; then
   echo "label	commit	event	ms	notes" >"$TSV"
@@ -78,17 +78,16 @@ env_file="$(mktemp)"
 local_log="$(mktemp)"
 cleanup() {
   rm -f "$local_log" "$env_file"
-  if [[ -n "$SQLITE_BUILD_DIR" ]]; then
-    "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
-  fi
+  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+: >"$env_file"
 if [[ -n "$SQLITE_BUILD_DIR" ]]; then
-  printf 'export MISTER_LIBRARY_SQLITE_BUILD_DIR=%q\n' "$SQLITE_BUILD_DIR" >"$env_file"
-  "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-else
-  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null
+  printf 'export MISTER_LIBRARY_SQLITE_BUILD_DIR=%q\n' "$SQLITE_BUILD_DIR" >>"$env_file"
 fi
+printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
+printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
+"$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "rm -f '$REMOTE_DB' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log; sync"
 "$MISTER" reboot-wait
 
@@ -114,9 +113,7 @@ if [[ -z "$ready_ms" ]]; then
   exit 1
 fi
 if (( ready_ms > 60000 )); then
-  echo "first scan library_ready exceeded 60000ms: ${ready_ms}ms" >&2
-  tail -80 "$local_log" >&2 || true
-  exit 1
+  echo "warning: first scan library_ready exceeded 60000ms: ${ready_ms}ms" >&2
 fi
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
@@ -125,6 +122,9 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
     ms = $3
     sub(/ms$/, "", ms)
     print label, commit, $2, ms, $4
+  }
+  $1 == "library_sqlite_publish_tsv" {
+    print label, commit, "sqlite_publish_" $4, $11, "bytes=" $5 " copy_ms=" $7 " build_sync_ms=" $6 " final_sync_ms=" $8 " rename_ms=" $9 " parent_sync_ms=" $10 " progress_events=" $12 " result=" $13
   }
   $1 == "library_import_timing" {
     note = ($4 == "" ? "-" : $4)

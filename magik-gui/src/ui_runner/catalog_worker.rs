@@ -416,6 +416,9 @@ fn catalog_scan_percent(title: &str, detail: &str) -> i32 {
         return 100;
     }
     if title == "Saving library" {
+        if let Some(percent) = sqlite_save_percent(detail) {
+            return percent;
+        }
         if let Some(percent) = sqlite_import_percent(detail) {
             return percent;
         }
@@ -443,6 +446,23 @@ fn sqlite_import_percent(detail: &str) -> Option<i32> {
     }
     let percent = 90 + (written.min(total) * 9 / total) as i32;
     Some(percent.clamp(90, 99))
+}
+
+fn sqlite_save_percent(detail: &str) -> Option<i32> {
+    let rest = detail.strip_prefix("Saving ")?;
+    let mut parts = rest.split_whitespace();
+    let written = parts.next()?.parse::<u64>().ok()?;
+    if parts.next()? != "of" {
+        return None;
+    }
+    let total = parts.next()?.parse::<u64>().ok()?;
+    if parts.next()? != "bytes" {
+        return None;
+    }
+    if total == 0 {
+        return Some(100);
+    }
+    Some(((written.min(total) * 100) / total) as i32)
 }
 
 #[derive(Default)]
@@ -663,6 +683,26 @@ mod tests {
                 "Finalizing catalog views and search indexes..."
             ),
             99
+        );
+    }
+
+    #[test]
+    fn catalog_scan_percent_tracks_sqlite_save_progress() {
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Saving 0 of 1000 bytes to disk..."),
+            0
+        );
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Saving 500 of 1000 bytes to disk..."),
+            50
+        );
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Saving 1000 of 1000 bytes to disk..."),
+            100
+        );
+        assert_eq!(
+            catalog_scan_percent("Saving library", "Saving 1200 of 1000 bytes to disk..."),
+            100
         );
     }
 }

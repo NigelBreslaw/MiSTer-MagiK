@@ -28,10 +28,12 @@ use crate::software_identity::{
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
+const SQLITE_PUBLISH_COPY_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SqliteBuildTempSource {
@@ -45,6 +47,18 @@ pub(crate) struct SqliteBuildTempPlan {
     pub(crate) build_tmp_path: PathBuf,
     pub(crate) final_tmp_path: PathBuf,
     pub(crate) source: SqliteBuildTempSource,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SqlitePublishMetrics {
+    pub(crate) bytes: u64,
+    pub(crate) build_sync_ms: u64,
+    pub(crate) copy_ms: u64,
+    pub(crate) final_sync_ms: u64,
+    pub(crate) rename_ms: u64,
+    pub(crate) parent_sync_ms: u64,
+    pub(crate) total_ms: u64,
+    pub(crate) progress_events: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -674,22 +688,123 @@ pub(crate) fn save_sqlite_scan_attempt_with_writer(
         let _ = std::fs::remove_file(&plan.build_tmp_path);
         return Err(e);
     }
-    sync_file_best_effort(&plan.build_tmp_path, "sqlite build temp")?;
-    if plan.build_tmp_path != plan.final_tmp_path {
-        std::fs::copy(&plan.build_tmp_path, &plan.final_tmp_path)
-            .map_err(|e| format!("copy sqlite temp into final dir: {e}"))?;
-        let _ = std::fs::remove_file(&plan.build_tmp_path);
-    }
-    sync_file_best_effort(&plan.final_tmp_path, "sqlite temp")?;
-    std::fs::rename(&plan.final_tmp_path, path).map_err(|e| {
+    let metrics = publish_sqlite_temp(path, plan, progress).map_err(|e| {
         let _ = std::fs::remove_file(&plan.final_tmp_path);
         let _ = std::fs::remove_file(&plan.build_tmp_path);
-        format!("replace sqlite: {e}")
+        e
     })?;
-    sync_parent_dir(path);
+    report_sqlite_publish_metrics(&metrics, "bench-ok");
     std::fs::metadata(path)
         .map(|m| m.len())
         .map_err(|e| format!("stat sqlite: {e}"))
+}
+
+fn publish_sqlite_temp(
+    final_path: &Path,
+    plan: &SqliteBuildTempPlan,
+    progress: &mut ProgressCallback<'_>,
+) -> Result<SqlitePublishMetrics, String> {
+    let started = Instant::now();
+    let mut metrics = SqlitePublishMetrics {
+        bytes: std::fs::metadata(&plan.build_tmp_path)
+            .map(|m| m.len())
+            .map_err(|e| format!("stat sqlite build temp: {e}"))?,
+        ..Default::default()
+    };
+
+    let build_sync_t = Instant::now();
+    sync_file_best_effort(&plan.build_tmp_path, "sqlite build temp")?;
+    metrics.build_sync_ms = elapsed_ms(build_sync_t.elapsed());
+
+    if plan.build_tmp_path != plan.final_tmp_path {
+        let copy_t = Instant::now();
+        metrics.progress_events =
+            copy_sqlite_temp_with_progress(&plan.build_tmp_path, &plan.final_tmp_path, progress)?;
+        metrics.copy_ms = elapsed_ms(copy_t.elapsed());
+        let _ = std::fs::remove_file(&plan.build_tmp_path);
+    } else {
+        emit_sqlite_save_progress(progress, metrics.bytes, metrics.bytes);
+        metrics.progress_events = metrics.progress_events.saturating_add(1);
+    }
+
+    let final_sync_t = Instant::now();
+    sync_file_best_effort(&plan.final_tmp_path, "sqlite temp")?;
+    metrics.final_sync_ms = elapsed_ms(final_sync_t.elapsed());
+
+    let rename_t = Instant::now();
+    std::fs::rename(&plan.final_tmp_path, final_path).map_err(|e| format!("replace sqlite: {e}"))?;
+    metrics.rename_ms = elapsed_ms(rename_t.elapsed());
+
+    let parent_sync_t = Instant::now();
+    sync_parent_dir(final_path);
+    metrics.parent_sync_ms = elapsed_ms(parent_sync_t.elapsed());
+    metrics.total_ms = elapsed_ms(started.elapsed());
+    Ok(metrics)
+}
+
+fn copy_sqlite_temp_with_progress(
+    source: &Path,
+    destination: &Path,
+    progress: &mut ProgressCallback<'_>,
+) -> Result<u64, String> {
+    let total = std::fs::metadata(source)
+        .map(|m| m.len())
+        .map_err(|e| format!("stat sqlite source: {e}"))?;
+    let mut input = File::open(source).map_err(|e| format!("open sqlite source: {e}"))?;
+    let mut output = File::create(destination).map_err(|e| format!("create sqlite temp: {e}"))?;
+    let mut progress_events = 0u64;
+    let mut bytes_done = 0u64;
+    let mut buffer = vec![0u8; SQLITE_PUBLISH_COPY_CHUNK_BYTES];
+    emit_sqlite_save_progress(progress, 0, total);
+    progress_events += 1;
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|e| format!("read sqlite source: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..read])
+            .map_err(|e| format!("write sqlite temp: {e}"))?;
+        bytes_done += read as u64;
+        emit_sqlite_save_progress(progress, bytes_done, total);
+        progress_events += 1;
+    }
+    Ok(progress_events)
+}
+
+fn emit_sqlite_save_progress(progress: &mut ProgressCallback<'_>, done: u64, total: u64) {
+    if let Some(report) = progress.as_mut() {
+        report(
+            "Saving library",
+            &format!("Saving {done} of {total} bytes to disk..."),
+        );
+    }
+}
+
+fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
+    let label =
+        std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
+    let iteration =
+        std::env::var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION").unwrap_or_else(|_| "0".to_string());
+    println!(
+        "library_sqlite_publish_tsv\t{label}\t{iteration}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "progress",
+        metrics.bytes,
+        metrics.build_sync_ms,
+        metrics.copy_ms,
+        metrics.final_sync_ms,
+        metrics.rename_ms,
+        metrics.parent_sync_ms,
+        metrics.total_ms,
+        metrics.progress_events,
+        result
+    );
+}
+
+fn elapsed_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn reborrow_progress<'a>(progress: &'a mut ProgressCallback<'_>) -> ProgressCallback<'a> {

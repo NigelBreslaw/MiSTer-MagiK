@@ -47,9 +47,11 @@ pub(crate) fn run_scan_bench() {
         let build_us = build_t.elapsed().as_micros() as u64;
 
         let import_t = Instant::now();
+        std::env::set_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION", iteration.to_string());
         let summary = match library_db::save_scan_artifact_to_sqlite(&cfg, artifact, None) {
             Ok(summary) => summary,
             Err(e) => {
+                std::env::remove_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION");
                 println!(
                     "library_scan_bench_tsv\t{label}\t{iteration}\timport_error\t{}\t{e}",
                     import_t.elapsed().as_micros()
@@ -57,6 +59,7 @@ pub(crate) fn run_scan_bench() {
                 continue;
             }
         };
+        std::env::remove_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION");
         let import_us = import_t.elapsed().as_micros() as u64;
         let bytes = summary.bytes;
 

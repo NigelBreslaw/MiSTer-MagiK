@@ -9,7 +9,6 @@ TSV="$BENCH_DIR/results-screenshot-save.tsv"
 
 LABEL=""
 SYSTEM="neogeo"
-MODES="old,progress"
 ITERATIONS=1
 SIZE_BYTES=""
 REPLACE_LABEL=0
@@ -17,11 +16,11 @@ REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screenshot-save.sh LABEL --system ID [--iterations N] [--modes old,progress] [--size-bytes BYTES] [--replace-label]
+Usage: scripts/profile-screenshot-save.sh LABEL --system ID [--iterations N] [--size-bytes BYTES] [--replace-label]
 
 Benchmarks screenshot pack save/publish paths inside the deployed MagiK binary
 on the MiSTer. This excludes network download, decompression, and checksum work
-so old and progress-capable save paths can be compared directly.
+so the progress-capable save path can be measured directly.
 EOF
 }
 
@@ -29,7 +28,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --system) SYSTEM="${2:?}"; shift 2 ;;
     --iterations) ITERATIONS="${2:?}"; shift 2 ;;
-    --modes) MODES="${2:?}"; shift 2 ;;
+    --modes) echo "--modes was removed; screenshot saving has one progress-capable path" >&2; exit 2 ;;
     --size-bytes) SIZE_BYTES="${2:?}"; shift 2 ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -76,7 +75,6 @@ remote_cmd="$(shell_quote "$REMOTE_BIN") media-bench-save"
 remote_cmd+=" --label $(shell_quote "$LABEL")"
 remote_cmd+=" --system $(shell_quote "$SYSTEM")"
 remote_cmd+=" --iterations $(shell_quote "$ITERATIONS")"
-remote_cmd+=" --modes $(shell_quote "$MODES")"
 if [[ -n "$SIZE_BYTES" ]]; then
   remote_cmd+=" --size-bytes $(shell_quote "$SIZE_BYTES")"
 fi

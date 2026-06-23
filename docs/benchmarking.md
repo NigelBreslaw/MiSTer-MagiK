@@ -169,7 +169,7 @@ Use `scripts/profile-screenshot-save.sh` to measure save-progress overhead
 separately from network and checksum cost:
 
 ```bash
-scripts/profile-screenshot-save.sh SAVE-PROGRESS-YYYYMMDD --system neogeo --iterations 10 --modes old,progress
+scripts/profile-screenshot-save.sh SAVE-PROGRESS-YYYYMMDD --system neogeo --iterations 10
 ```
 
 The TSV output is:
@@ -178,9 +178,9 @@ The TSV output is:
 screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
 ```
 
-Compare average and p95 `total_ms` plus `copy_ms` before changing production
-save behavior. Benchmark claims for screenshot media must state whether they
-cover download, decompression, save/publish, verification, and total wall time.
+Compare average and p95 `total_ms` plus `copy_ms` when changing production save
+behavior. Benchmark claims for screenshot media must state whether they cover
+download, decompression, save/publish, verification, and total wall time.
 
 Relevant docs:
 
@@ -219,6 +219,7 @@ database back to the host:
 
 ```bash
 scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
+scripts/profile-library-save.sh LABEL --iterations 5 --replace-label
 scripts/profile-library-io.sh LABEL --replace-label
 scripts/bench-library.sh
 scripts/mister db
@@ -246,6 +247,13 @@ out of sync.
 process CPU ticks, process I/O bytes, system CPU/iowait, and SD-card diskstats
 once per second. Use it before claiming that a scanner/import change is CPU- or
 I/O-bound.
+
+`profile-library-save.sh` runs fresh `library-refresh` passes against disposable
+database paths and captures only the final `library_sqlite_publish_tsv` rows.
+Use it when changing file publish behavior so save timing is separated from
+catalog discovery and SQLite import work. `profile-first-scan.sh` also records
+the publish row during full cold-start measurements so the final `library_ready`
+time can be read alongside the save phase.
 
 Set `MISTER_LIBRARY_BENCH_FORCE_REBUILD=1` only on disposable roots when
 measuring explicit full-build refresh behavior; it creates a synthetic

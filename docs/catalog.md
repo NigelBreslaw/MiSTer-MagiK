@@ -325,12 +325,11 @@ screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rena
 Run the benchmark before changing save behavior:
 
 ```bash
-scripts/profile-screenshot-save.sh SAVE-PROGRESS-YYYYMMDD --system neogeo --iterations 10 --modes old,progress
+scripts/profile-screenshot-save.sh SAVE-PROGRESS-YYYYMMDD --system neogeo --iterations 10
 ```
 
-Compare average and p95 `total_ms` and `copy_ms`. The progress save path is
-acceptable only when the overhead is small enough that UI observability is worth
-the cost on `/media/fat`; record the evidence in
+Compare average and p95 `total_ms` and `copy_ms`. The progress save path is the
+only supported screenshot-pack publish path; record performance evidence in
 `history/toolchain-bench/results-screenshot-save.tsv`.
 
 MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
@@ -351,7 +350,24 @@ Production `/media/fat/mister-magik/library.sqlite3` builds use tmpfs by default
 4. If tmpfs build fails for filesystem-style reasons, the writer falls back to a
    beside-final temp DB. Logical import errors are not retried.
 
-The old DB remains in place until the replacement is complete.
+The old DB remains in place until the replacement is complete. The final
+publish step uses the same progress-capable chunked save policy as screenshot
+packs: copy bytes to the final temp file, sync, rename, and parent-dir sync. The
+catalog worker reports this as `Saving library` with byte progress so the build
+screen can show a determinate 0-100% saving phase.
+
+Use `scripts/profile-library-save.sh` to isolate the final SQLite publish cost
+from discovery and import work:
+
+```bash
+scripts/profile-library-save.sh LIBSAVE-YYYYMMDD --iterations 5 --replace-label
+```
+
+Rows are appended to `history/toolchain-bench/results-library-save.tsv`:
+
+```text
+library_sqlite_publish_tsv	label	iteration	mode	bytes	build_sync_ms	copy_ms	final_sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+```
 
 ## Public Read APIs
 

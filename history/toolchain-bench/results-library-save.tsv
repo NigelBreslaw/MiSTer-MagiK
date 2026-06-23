@@ -1,0 +1,11 @@
+type	label	iteration	mode	bytes	build_sync_ms	copy_ms	final_sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+library_sqlite_publish_tsv	LIBSAVE-20260623	1	old	18026496	0	5805	0	0	0	5817	0	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	2	old	18026496	0	6001	0	0	0	6013	0	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	3	old	18026496	0	6252	0	0	0	6264	0	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	4	old	18026496	0	6173	0	1	0	6190	0	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	5	old	18026496	0	6094	0	0	0	6108	0	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	1	progress	18026496	0	1370	0	0	0	1382	70	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	2	progress	18026496	0	1414	0	0	0	1426	70	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	3	progress	18026496	0	1478	0	0	0	1490	70	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	4	progress	18026496	0	1409	0	0	0	1421	70	bench-ok
+library_sqlite_publish_tsv	LIBSAVE-20260623	5	progress	18026496	0	1418	0	0	0	1430	70	bench-ok

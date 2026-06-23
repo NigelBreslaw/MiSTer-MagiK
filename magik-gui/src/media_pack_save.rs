@@ -7,21 +7,6 @@ use std::time::{Duration, Instant};
 pub(crate) const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PackSaveMode {
-    Legacy,
-    Progress,
-}
-
-impl PackSaveMode {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Legacy => "old",
-            Self::Progress => "progress",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PackSavePhase {
     Copy,
     Sync,
@@ -61,10 +46,9 @@ pub(crate) struct PackSaveMetrics {
 pub(crate) fn publish_pack_file_for_bench(
     source: &Path,
     final_path: &Path,
-    mode: PackSaveMode,
     mut progress: impl FnMut(PackSaveProgress),
 ) -> Result<PackSaveMetrics, String> {
-    let result = publish_pack_file_impl(source, final_path, mode, &mut progress);
+    let result = publish_pack_file_impl(source, final_path, &mut progress);
     if result.is_err() {
         let _ = fs::remove_file(temp_path_for(final_path));
     }
@@ -76,13 +60,12 @@ pub(crate) fn publish_pack_file_with_progress(
     final_path: &Path,
     progress: impl FnMut(PackSaveProgress),
 ) -> Result<PackSaveMetrics, String> {
-    publish_pack_file_for_bench(source, final_path, PackSaveMode::Progress, progress)
+    publish_pack_file_for_bench(source, final_path, progress)
 }
 
 fn publish_pack_file_impl(
     source: &Path,
     final_path: &Path,
-    mode: PackSaveMode,
     progress: &mut dyn FnMut(PackSaveProgress),
 ) -> Result<PackSaveMetrics, String> {
     let parent = final_path
@@ -101,23 +84,11 @@ fn publish_pack_file_impl(
     let mut output = File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
 
     let copy_started = Instant::now();
-    metrics.progress_events = match mode {
-        PackSaveMode::Legacy => copy_legacy(&mut input, &mut output)?,
-        PackSaveMode::Progress => {
-            copy_with_progress(&mut input, &mut output, metrics.bytes, progress)?
-        }
-    };
+    metrics.progress_events = copy_with_progress(&mut input, &mut output, metrics.bytes, progress)?;
     metrics.copy_ms = elapsed_ms(copy_started.elapsed());
 
     let bytes = metrics.bytes;
-    emit_progress(
-        mode,
-        &mut metrics,
-        progress,
-        PackSavePhase::Sync,
-        bytes,
-        bytes,
-    );
+    emit_progress(&mut metrics, progress, PackSavePhase::Sync, bytes, bytes);
     let sync_started = Instant::now();
     output
         .sync_all()
@@ -126,14 +97,7 @@ fn publish_pack_file_impl(
     drop(output);
 
     let bytes = metrics.bytes;
-    emit_progress(
-        mode,
-        &mut metrics,
-        progress,
-        PackSavePhase::Rename,
-        bytes,
-        bytes,
-    );
+    emit_progress(&mut metrics, progress, PackSavePhase::Rename, bytes, bytes);
     let rename_started = Instant::now();
     fs::rename(&tmp, final_path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
@@ -143,7 +107,6 @@ fn publish_pack_file_impl(
 
     let bytes = metrics.bytes;
     emit_progress(
-        mode,
         &mut metrics,
         progress,
         PackSavePhase::ParentSync,
@@ -158,16 +121,12 @@ fn publish_pack_file_impl(
 }
 
 fn emit_progress(
-    mode: PackSaveMode,
     metrics: &mut PackSaveMetrics,
     progress: &mut dyn FnMut(PackSaveProgress),
     phase: PackSavePhase,
     bytes_done: u64,
     bytes_total: u64,
 ) {
-    if mode != PackSaveMode::Progress {
-        return;
-    }
     metrics.progress_events += 1;
     progress(PackSaveProgress {
         phase,
@@ -184,11 +143,6 @@ pub(crate) fn temp_path_for(final_path: &Path) -> PathBuf {
             .and_then(|name| name.to_str())
             .unwrap_or("screenshot-pack")
     ))
-}
-
-fn copy_legacy(input: &mut File, output: &mut File) -> Result<u64, String> {
-    std::io::copy(input, output).map_err(|e| format!("legacy copy failed: {e}"))?;
-    Ok(0)
 }
 
 fn copy_with_progress(
@@ -252,22 +206,16 @@ mod tests {
     }
 
     #[test]
-    fn legacy_and_progress_modes_write_identical_bytes() {
+    fn progress_save_writes_identical_bytes() {
         let dir = temp_dir("mister-magik-pack-save");
         let source = dir.join("source.bin");
         fs::write(&source, b"abcdef0123456789").unwrap();
 
-        for mode in [PackSaveMode::Legacy, PackSaveMode::Progress] {
-            let final_path = dir.join(format!("out-{}.bin", mode.label()));
-            let metrics = publish_pack_file_for_bench(&source, &final_path, mode, |_| {}).unwrap();
-            assert_eq!(fs::read(&final_path).unwrap(), b"abcdef0123456789");
-            assert_eq!(metrics.bytes, 16);
-            if mode == PackSaveMode::Progress {
-                assert!(metrics.progress_events > 0);
-            } else {
-                assert_eq!(metrics.progress_events, 0);
-            }
-        }
+        let final_path = dir.join("out.bin");
+        let metrics = publish_pack_file_for_bench(&source, &final_path, |_| {}).unwrap();
+        assert_eq!(fs::read(&final_path).unwrap(), b"abcdef0123456789");
+        assert_eq!(metrics.bytes, 16);
+        assert!(metrics.progress_events > 0);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -280,13 +228,12 @@ mod tests {
         let final_path = dir.join("out.bin");
         let mut copy_events = Vec::new();
 
-        let metrics =
-            publish_pack_file_for_bench(&source, &final_path, PackSaveMode::Progress, |event| {
-                if event.phase == PackSavePhase::Copy {
-                    copy_events.push(event);
-                }
-            })
-            .unwrap();
+        let metrics = publish_pack_file_for_bench(&source, &final_path, |event| {
+            if event.phase == PackSavePhase::Copy {
+                copy_events.push(event);
+            }
+        })
+        .unwrap();
 
         assert_eq!(metrics.bytes, PROGRESS_COPY_CHUNK_BYTES as u64 + 17);
         assert!(copy_events.len() >= 2);
@@ -305,13 +252,7 @@ mod tests {
         let final_path = dir.join("existing.bin");
         fs::write(&final_path, b"old-pack").unwrap();
 
-        let error = publish_pack_file_for_bench(
-            &missing_source,
-            &final_path,
-            PackSaveMode::Progress,
-            |_| {},
-        )
-        .unwrap_err();
+        let error = publish_pack_file_for_bench(&missing_source, &final_path, |_| {}).unwrap_err();
 
         assert!(error.contains("stat"));
         assert_eq!(fs::read(&final_path).unwrap(), b"old-pack");
