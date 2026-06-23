@@ -9,6 +9,11 @@ pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
 use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
+pub use crate::catalog_progress::{
+    catalog_progress_percent_from_display, CatalogProgress, CatalogProgressPhase,
+};
+pub(crate) use crate::catalog_progress::ProgressCallback;
+use crate::catalog_progress::report_catalog_progress;
 use crate::catalog_scan::{self, DiscoveryEvent};
 use crate::catalog_stamp;
 use crate::game_discovery::{
@@ -35,7 +40,6 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
-pub(crate) type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 pub type ScanEventCallback<'a> = Option<&'a mut dyn FnMut(LibraryScanEvent)>;
 const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
@@ -468,9 +472,7 @@ pub(crate) fn rebuild_sqlite_database_with_events(
     mut scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let scan_t = Instant::now();
-    if let Some(report) = progress.as_mut() {
-        report("Indexing library", "Full catalog build...");
-    }
+    report_catalog_progress(&mut progress, CatalogProgress::indexing_full_build());
     let artifact = match (progress.as_mut(), scan_events.as_mut()) {
         (Some(report), Some(events)) => {
             scan_library_artifact_with_events(cfg, Some(&mut **report), Some(&mut **events))
@@ -480,15 +482,13 @@ pub(crate) fn rebuild_sqlite_database_with_events(
         (None, None) => scan_library_artifact_with_events(cfg, None, None),
     };
     let scan_us = scan_t.elapsed().as_micros() as u64;
-    if let Some(report) = progress.as_mut() {
-        report(
-            "Indexing library",
-            &format!(
-                "Writing {} games, {} archives...",
-                artifact.stats.discoveries, artifact.stats.containers
-            ),
-        );
-    }
+    report_catalog_progress(
+        &mut progress,
+        CatalogProgress::indexing_write_summary(
+            artifact.stats.discoveries,
+            artifact.stats.containers,
+        ),
+    );
     let mut summary = save_scan_artifact_to_sqlite(cfg, artifact, progress)?;
     summary.scan_us = scan_us;
     Ok(summary)
@@ -832,12 +832,10 @@ fn scan_library_with_progress_and_events(
             );
         }
         if idx.is_multiple_of(SCAN_PROGRESS_CANDIDATE_BATCH) {
-            if let Some(report) = progress.as_mut() {
-                report(
-                    "Classifying library",
-                    &format!("Games found: {}", discoveries.len()),
-                );
-            }
+            report_catalog_progress(
+                &mut progress,
+                CatalogProgress::classifying_games_found(discoveries.len()),
+            );
         }
     }
     if discover_us == 0 {
@@ -963,9 +961,7 @@ fn scan_bootstrap_launcher_target(
         }
         *launchers += 1;
         if launchers.is_multiple_of(BOOTSTRAP_PROGRESS_BATCH) {
-            if let Some(report) = progress.as_mut() {
-                report("Finding games", &format!("Games found: {launchers}"));
-            }
+            report_catalog_progress(progress, CatalogProgress::finding_games_found(*launchers));
         }
     }
 }
