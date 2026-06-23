@@ -584,6 +584,12 @@ mod tests {
             pack_status_from_state(pack, &local_path, Some(&state)),
             LocalPackStatus::Current
         );
+        std::fs::remove_file(&local_path).unwrap();
+        assert_eq!(
+            pack_status_from_state(pack, &local_path, Some(&state)),
+            LocalPackStatus::Missing
+        );
+        std::fs::write(&local_path, b"pack").unwrap();
 
         let stale = serde_json::json!({
             "systems": {

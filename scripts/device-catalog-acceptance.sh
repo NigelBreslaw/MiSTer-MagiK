@@ -157,12 +157,21 @@ else
 fi
 
 progress_log_count="$(
-  remote "grep -h 'screenshot_media_progress' /tmp/mister-magik-launcher.log /media/fat/mister-magik/*.log 2>/dev/null | wc -l" | last_number
+  remote "grep -h 'screenshot_media_progress' /tmp/mister-magik-slint.log /tmp/mister-magik-launcher.log /media/fat/mister-magik/*.log 2>/dev/null | wc -l" | last_number
 )"
 if [ "${progress_log_count:-0}" -gt 0 ]; then
   echo "ok: screenshot media progress log rows = $progress_log_count"
 else
   echo "ok: screenshot media progress log not captured in known log files"
+fi
+
+catalog_seed_count="$(
+  remote "grep -h 'screenshot_media_catalog_ensure' /tmp/mister-magik-slint.log /tmp/mister-magik-launcher.log /media/fat/mister-magik/*.log 2>/dev/null | wc -l" | last_number
+)"
+if [ "${catalog_seed_count:-0}" -gt 0 ]; then
+  echo "ok: cached catalog screenshot media ensure rows = $catalog_seed_count"
+else
+  echo "ok: cached catalog screenshot media ensure rows not captured in known log files"
 fi
 
 if [ "$RACE_REFRESH" -eq 1 ]; then

@@ -161,9 +161,12 @@ The library scanner must not walk screenshot/cache media directories, read
 
 Runtime screenshot-pack downloads are selective: the catalog scan announces the
 first discovered supported system, and the media worker checks/downloads only
-those packs. Download concurrency is fixed at three. The catalog-build screen
-may show up to three active screenshot-pack rows, sourced from the structured
-download/save progress events rather than parsed log text.
+those packs. Cached-catalog boots seed the same selective requests from the
+ready catalog's installed systems after the first rendered frame, so deleting
+packs without changing the catalog still re-checks needed packs. Download
+concurrency is fixed at three. The catalog-build screen may show up to three
+active screenshot-pack rows, sourced from the structured download/save progress
+events rather than parsed log text.
 
 Use `scripts/profile-screenshot-save.sh` to measure save-progress overhead
 separately from network and checksum cost:
