@@ -831,6 +831,9 @@ pub(super) fn run_launcher_loop(
                 MediaWorkerMessage::Timing { name, detail } => {
                     print_startup_event(start, &name, detail);
                 }
+                MediaWorkerMessage::Progress(event) => {
+                    print_startup_event(start, "screenshot_media_progress", event.log_detail());
+                }
                 MediaWorkerMessage::PackStatus {
                     system,
                     image_size,
