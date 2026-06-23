@@ -171,8 +171,14 @@ those as fixed release artifacts produced by the host-side catalog/media tools.
 Screenshot-pack updates from Cloudflare R2 are handled by the MagiK runtime,
 `scripts/mister media-check`, `scripts/mister media-download`, and
 `scripts/profile-screenshot-download.sh`. Runtime v1 uses raw manifest
-`compression: "none"` with `Accept-Encoding: identity`. Compression comparisons
-should first use Cloudflare negotiated responses and recorded header/cache
-evidence for the canonical `.mmlz4b` object. Store or select `.gz` or `.br`
-files only if total time improves after including download, decompression,
-saving, verification, and cache behavior.
+`compression: "none"` with `Accept-Encoding: identity`. The launcher runtime
+queues downloads only for systems discovered by the active catalog scan and
+runs at most three pack downloads concurrently. Compression comparisons should
+first use Cloudflare negotiated responses and recorded header/cache evidence for
+the canonical `.mmlz4b` object. Store or select `.gz` or `.br` files only if
+total time improves after including download, decompression, saving,
+verification, and cache behavior.
+
+Use `scripts/profile-screenshot-save.sh` when changing the save/publish path.
+It compares the old save mode with the progress-emitting mode and reports copy,
+file sync, rename, parent sync, total time, and progress event count.
