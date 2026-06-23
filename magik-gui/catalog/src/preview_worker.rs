@@ -13,6 +13,18 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
+const DEFAULT_MEDIA_SIZE: &str = "320x320";
+const MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
+const SCREENSHOT_PACK_IDS: &[&str] = &[
+    "arcade",
+    "neogeo",
+    "nes",
+    "snes",
+    "n64",
+    "sms",
+    "megadrive",
+    "saturn",
+];
 
 #[derive(Clone, Debug)]
 pub struct PreviewRequest {
@@ -486,13 +498,14 @@ fn preview_cache_key(
 fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) -> PreviewResult {
     let resize = PreviewResizeSpec::from_env();
     let storage = PreviewStorageFormat::from_env();
-    let cache_key = preview_cache_key(&req.preview_archive_path, &req.preview_asset_key, resize);
+    let resolved_archive_path = resolve_preview_archive_path(&req.preview_archive_path);
+    let cache_key = preview_cache_key(&resolved_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
     let loaded_result = if let Some(loaded) = decoded_cache.get(&cache_key) {
         cache_hit = true;
         Ok(loaded)
     } else {
-        load_preview_pixels(&req.preview_archive_path, &req.preview_asset_key, resize).inspect(
+        load_preview_pixels(&resolved_archive_path, &req.preview_asset_key, resize).inspect(
             |loaded| {
                 decoded_cache.insert(cache_key, loaded);
             },
@@ -519,7 +532,7 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
                     loaded.timing.resize_us,
                     loaded.timing.encoded_bytes,
                     loaded.image.decoded_bytes(),
-                    req.preview_archive_path,
+                    resolved_archive_path,
                     req.preview_asset_key
                 );
             }
@@ -551,7 +564,7 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
                     "preview_trace decode_failed generation={} age_us={} archive_path={} asset_key={} error={}",
                     req.generation,
                     req.requested_at.elapsed().as_micros(),
-                    req.preview_archive_path,
+                    resolved_archive_path,
                     req.preview_asset_key,
                     e
                 );
@@ -985,13 +998,13 @@ fn default_preview_archive_root() -> PathBuf {
 }
 
 fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> Option<String> {
-    let archive = default_preview_archive_path_in_root(root, resize);
+    let archive = auto_archive_path_for_system(root, "arcade")
+        .unwrap_or_else(|| default_preview_archive_path_in_root(root, resize));
     Path::new(&archive).exists().then_some(archive)
 }
 
 fn default_preview_archive_path_in_root(root: &Path, _resize: PreviewResizeSpec) -> String {
-    let archive = root.join("arcade-screenshots.mmlz4b");
-    archive.display().to_string()
+    legacy_archive_path_for_system(root, "arcade")
 }
 
 fn neogeo_preview_archive_path_from_env() -> Option<String> {
@@ -1002,8 +1015,8 @@ fn neogeo_preview_archive_path_from_env() -> Option<String> {
 }
 
 fn auto_neogeo_archive_path() -> Option<String> {
-    let path = PathBuf::from(default_neogeo_archive_path());
-    path.exists().then(|| path.display().to_string())
+    let root = default_preview_archive_root();
+    auto_archive_path_for_system(&root, "neogeo")
 }
 
 fn default_neogeo_archive_path() -> String {
@@ -1028,9 +1041,9 @@ fn console_preview_archive_paths_from_env() -> Vec<String> {
 }
 
 fn auto_console_archive_paths() -> Vec<String> {
-    default_console_archive_paths()
+    ["nes", "snes", "n64", "sms", "megadrive", "saturn"]
         .into_iter()
-        .filter(|path| Path::new(path.as_str()).exists())
+        .filter_map(|system| auto_archive_path_for_system(&default_preview_archive_root(), system))
         .collect()
 }
 
@@ -1051,6 +1064,119 @@ fn default_console_archive_paths() -> Vec<String> {
             .to_string()
     })
     .collect()
+}
+
+fn resolve_preview_archive_path(preview_archive_path: &str) -> String {
+    let path = Path::new(preview_archive_path.trim());
+    let Some(system) = system_from_legacy_archive_path(path) else {
+        return preview_archive_path.to_string();
+    };
+    let root = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("/media/fat/mister-magik/assets"));
+    preferred_archive_path_for_system(root, system).unwrap_or_else(|| preview_archive_path.to_string())
+}
+
+fn auto_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
+    preferred_archive_path_for_system(root, system).or_else(|| {
+        let legacy = legacy_archive_path_for_system(root, system);
+        Path::new(&legacy).exists().then_some(legacy)
+    })
+}
+
+fn preferred_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
+    let preferred_size = preferred_media_size();
+    state_archive_path_for_system(root, system, &preferred_size)
+        .filter(|path| Path::new(path).exists())
+        .or_else(|| {
+            let sized = size_qualified_archive_path_for_system(root, system, &preferred_size)?;
+            Path::new(&sized).exists().then_some(sized)
+        })
+        .or_else(|| {
+            if preferred_size == DEFAULT_MEDIA_SIZE {
+                return None;
+            }
+            let sized = size_qualified_archive_path_for_system(root, system, DEFAULT_MEDIA_SIZE)?;
+            Path::new(&sized).exists().then_some(sized)
+        })
+}
+
+fn preferred_media_size() -> String {
+    std::env::var("MISTER_MEDIA_SIZE")
+        .ok()
+        .filter(|size| valid_media_size(size))
+        .unwrap_or_else(|| DEFAULT_MEDIA_SIZE.to_string())
+}
+
+fn state_archive_path_for_system(root: &Path, system: &str, preferred_size: &str) -> Option<String> {
+    let state_path = root.join(MEDIA_STATE_FILENAME);
+    let text = std::fs::read_to_string(state_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let system_state = value
+        .get("systems")
+        .and_then(|systems| systems.get(system))
+        .or_else(|| value.get("packs").and_then(|packs| packs.get(system)))?;
+    direct_state_local_path(system_state).or_else(|| {
+        let size = system_state
+            .get("preferred_size")
+            .and_then(serde_json::Value::as_str)
+            .filter(|size| valid_media_size(size))
+            .unwrap_or(preferred_size);
+        system_state
+            .get("packs")
+            .and_then(|packs| packs.get(size))
+            .and_then(direct_state_local_path)
+    })
+}
+
+fn direct_state_local_path(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("local_path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+}
+
+fn system_from_legacy_archive_path(path: &Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_str()?;
+    SCREENSHOT_PACK_IDS
+        .iter()
+        .copied()
+        .find(|system| name == format!("{system}-screenshots.mmlz4b"))
+}
+
+fn legacy_archive_path_for_system(root: &Path, system: &str) -> String {
+    root.join(format!("{system}-screenshots.mmlz4b"))
+        .display()
+        .to_string()
+}
+
+fn size_qualified_archive_path_for_system(
+    root: &Path,
+    system: &str,
+    image_size: &str,
+) -> Option<String> {
+    if !SCREENSHOT_PACK_IDS.contains(&system) || !valid_media_size(image_size) {
+        return None;
+    }
+    Some(
+        root.join(format!("{system}-screenshots-{image_size}.mmlz4b"))
+            .display()
+            .to_string(),
+    )
+}
+
+fn valid_media_size(size: &str) -> bool {
+    let Some((w, h)) = size.split_once('x') else {
+        return false;
+    };
+    !w.is_empty()
+        && !h.is_empty()
+        && w.chars().all(|ch| ch.is_ascii_digit())
+        && h.chars().all(|ch| ch.is_ascii_digit())
+        && w.parse::<u32>().is_ok_and(|value| value > 0)
+        && h.parse::<u32>().is_ok_and(|value| value > 0)
 }
 
 impl PreviewArchive {
@@ -1585,6 +1711,28 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("mister-magik-preview-auto-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create archive root");
+        let archive = root.join("arcade-screenshots-320x320.mmlz4b");
+        std::fs::write(&archive, b"lz4").expect("write archive marker");
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Hybrid,
+            max_w: 320,
+            max_h: 320,
+        };
+
+        let selected = auto_preview_archive_path_in_root(&root, resize).expect("archive path");
+
+        assert_eq!(selected, archive.display().to_string());
+        let _ = std::fs::remove_file(archive);
+        let _ = std::fs::remove_dir(root);
+    }
+
+    #[test]
+    fn auto_preview_archive_falls_back_to_legacy_pack() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-legacy-auto-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive root");
         let archive = root.join("arcade-screenshots.mmlz4b");
         std::fs::write(&archive, b"lz4").expect("write archive marker");
         let resize = PreviewResizeSpec {
@@ -1596,6 +1744,70 @@ mod tests {
         let selected = auto_preview_archive_path_in_root(&root, resize).expect("archive path");
 
         assert_eq!(selected, archive.display().to_string());
+        let _ = std::fs::remove_file(archive);
+        let _ = std::fs::remove_dir(root);
+    }
+
+    #[test]
+    fn state_resolution_maps_legacy_path_to_size_qualified_pack() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-state-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let archive = root.join("neogeo-screenshots-320x320.mmlz4b");
+        std::fs::write(&archive, b"lz4").expect("write archive marker");
+        let state = format!(
+            r#"{{
+  "systems": {{
+    "neogeo": {{
+      "preferred_size": "320x320",
+      "packs": {{
+        "320x320": {{
+          "local_path": "{}"
+        }}
+      }}
+    }}
+  }}
+}}"#,
+            archive.display()
+        );
+        std::fs::write(root.join(MEDIA_STATE_FILENAME), state).expect("write media state");
+        let legacy = root.join("neogeo-screenshots.mmlz4b");
+
+        let resolved = resolve_preview_archive_path(&legacy.display().to_string());
+
+        assert_eq!(resolved, archive.display().to_string());
+        let _ = std::fs::remove_file(archive);
+        let _ = std::fs::remove_file(root.join(MEDIA_STATE_FILENAME));
+        let _ = std::fs::remove_dir(root);
+    }
+
+    #[test]
+    fn preview_load_resolves_sized_pack_but_keeps_catalog_path_key() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-load-sized-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let archive = root.join("arcade-screenshots-320x320.mmlz4b");
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_lz4_block_archive(&archive, "pacman.rgb565", &payload);
+        let legacy = root.join("arcade-screenshots.mmlz4b");
+        let request = PreviewRequest {
+            generation: 7,
+            title: "Pac-Man".to_string(),
+            preview_archive_path: legacy.display().to_string(),
+            preview_asset_key: "pacman".to_string(),
+            requested_at: Instant::now(),
+            priority: PreviewPriority::Selected,
+        };
+        let mut cache = PreviewDecodedCache::new(DEFAULT_PREVIEW_CACHE_CAP);
+
+        let result = load_preview(request, &mut cache);
+
+        assert!(result.image.is_some());
+        assert_eq!(result.preview_archive_path, legacy.display().to_string());
         let _ = std::fs::remove_file(archive);
         let _ = std::fs::remove_dir(root);
     }

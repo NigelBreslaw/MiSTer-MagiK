@@ -2607,6 +2607,7 @@ dependencies = [
  "lz4_flex",
  "quick-xml 0.40.1",
  "rusqlite",
+ "serde_json",
  "walkdir",
 ]
 

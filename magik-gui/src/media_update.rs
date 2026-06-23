@@ -238,6 +238,25 @@ pub fn valid_image_size(size: &str) -> bool {
         && h.parse::<u32>().is_ok_and(|value| value > 0)
 }
 
+pub fn size_qualified_pack_filename(system: &str, image_size: &str) -> Result<String, String> {
+    if !is_supported_pack_id(system) {
+        return Err(format!("unsupported screenshot pack id: {system}"));
+    }
+    if !valid_image_size(image_size) {
+        return Err(format!("invalid screenshot image size: {image_size}"));
+    }
+    Ok(format!("{system}-screenshots-{image_size}.mmlz4b"))
+}
+
+pub fn size_qualified_pack_path(
+    asset_dir: &str,
+    system: &str,
+    image_size: &str,
+) -> Result<String, String> {
+    let filename = size_qualified_pack_filename(system, image_size)?;
+    Ok(format!("{}/{}", asset_dir.trim_end_matches('/'), filename))
+}
+
 fn validate_object_path(object: &str) -> Result<(), String> {
     if object.contains("..") || object.starts_with('/') {
         return Err(format!("unsafe media object path: {object}"));
@@ -391,6 +410,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(manifest.packs[0].image_size, "160x144");
+    }
+
+    #[test]
+    fn builds_size_qualified_pack_paths() {
+        assert_eq!(
+            size_qualified_pack_filename("arcade", "320x320").unwrap(),
+            "arcade-screenshots-320x320.mmlz4b"
+        );
+        assert_eq!(
+            size_qualified_pack_path(DEFAULT_ASSET_DIR, "saturn", "240x240").unwrap(),
+            "/media/fat/mister-magik/assets/saturn-screenshots-240x240.mmlz4b"
+        );
+        assert!(size_qualified_pack_filename("psx", "320x320").is_err());
+        assert!(size_qualified_pack_filename("arcade", "320").is_err());
     }
 
     #[test]
