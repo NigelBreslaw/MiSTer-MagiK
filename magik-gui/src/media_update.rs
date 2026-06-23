@@ -360,7 +360,7 @@ fn validate_object_path(object: &str) -> Result<(), String> {
         return Err(format!("unsafe media object path: {object}"));
     }
     let parts: Vec<_> = object.split('/').collect();
-    if parts.len() != 6
+    if parts.len() < 6
         || parts[0] != "mister-magik"
         || parts[1] != "v1"
         || parts[2] != "packs"
@@ -368,7 +368,20 @@ fn validate_object_path(object: &str) -> Result<(), String> {
     {
         return Err(format!("unexpected media object path: {object}"));
     }
-    let file = parts[5];
+    match parts.as_slice() {
+        // Compatibility path used by early manifests:
+        // mister-magik/v1/packs/<system>/<version>/<sha>.mmlz4b
+        ["mister-magik", "v1", "packs", system, version, _file]
+            if is_supported_pack_id(system) && valid_version_component(version) => {}
+        // Current magik-cloud path:
+        // mister-magik/v1/packs/<system>/screenshots/<size>/<version>/<sha>.mmlz4b
+        ["mister-magik", "v1", "packs", system, "screenshots", size, version, _file]
+            if is_supported_pack_id(system)
+                && valid_image_size(size)
+                && valid_version_component(version) => {}
+        _ => return Err(format!("unexpected media object path: {object}")),
+    }
+    let file = parts.last().copied().unwrap_or("");
     let valid_ext =
         file.ends_with(".mmlz4b") || file.ends_with(".mmlz4b.gz") || file.ends_with(".mmlz4b.br");
     if !valid_ext {
@@ -384,6 +397,13 @@ fn validate_sha256(value: &str) -> Result<(), String> {
     } else {
         Err(format!("invalid sha256: {value}"))
     }
+}
+
+fn valid_version_component(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
 }
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -417,7 +437,7 @@ mod tests {
       "id": "arcade",
       "version": "2026.06.22",
       {extra}
-      "object": "mister-magik/v1/packs/arcade/2026.06.22/{SHA}.mmlz4b",
+      "object": "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b",
       "bytes": 123,
       "sha256": "{SHA}",
       "codec": "mmlz4b"
@@ -434,7 +454,7 @@ mod tests {
 
         assert_eq!(pack.id, "arcade");
         assert_eq!(pack.image_size, "320x320");
-        assert_eq!(pack.raw.url, format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{SHA}.mmlz4b"));
+        assert_eq!(pack.raw.url, format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"));
         assert_eq!(
             pack.identity(),
             PackIdentity {
@@ -459,7 +479,7 @@ mod tests {
       "id": "neogeo",
       "version": "2026.06.22",
       "image_size": "240x240",
-      "object": "mister-magik/v1/packs/neogeo/2026.06.22/{SHA}.mmlz4b",
+      "object": "mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{SHA}.mmlz4b",
       "bytes": 123,
       "sha256": "{SHA}",
       "codec": "mmlz4b",
@@ -467,14 +487,14 @@ mod tests {
         {{
           "compression": "none",
           "codec": "mmlz4b",
-          "object": "mister-magik/v1/packs/neogeo/2026.06.22/{SHA}.mmlz4b",
+          "object": "mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{SHA}.mmlz4b",
           "bytes": 123,
           "sha256": "{SHA}"
         }},
         {{
           "compression": "gzip",
           "codec": "mmlz4b+gzip",
-          "object": "mister-magik/v1/packs/neogeo/2026.06.22/{GZ_SHA}.mmlz4b.gz",
+          "object": "mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz",
           "bytes": 90,
           "sha256": "{GZ_SHA}"
         }}
@@ -495,7 +515,7 @@ mod tests {
         );
         assert_eq!(
             pack.variant_for_compression("gzip").unwrap().url,
-            format!("https://assets.mistermagik.com/mister-magik/v1/packs/neogeo/2026.06.22/{GZ_SHA}.mmlz4b.gz")
+            format!("https://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz")
         );
     }
 
@@ -598,12 +618,40 @@ mod tests {
     #[test]
     fn rejects_unsafe_object_path() {
         let text = raw_manifest("").replace(
-            "mister-magik/v1/packs/arcade/2026.06.22/",
-            "../packs/arcade/2026.06.22/",
+            "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/",
+            "../packs/arcade/screenshots/320x320/2026.06.22/",
         );
 
         assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
             .unwrap_err()
             .contains("unsafe"));
+    }
+
+    #[test]
+    fn parses_compatibility_manifest_object_paths() {
+        let text = raw_manifest("").replace(
+            "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/",
+            "mister-magik/v1/packs/arcade/2026.06.22/",
+        );
+        let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &text).unwrap();
+
+        assert_eq!(
+            manifest.packs[0].raw.url,
+            format!(
+                "https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{SHA}.mmlz4b"
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_unexpected_artifact_object_path() {
+        let text = raw_manifest("").replace(
+            "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/",
+            "mister-magik/v1/packs/arcade/covers/320x320/2026.06.22/",
+        );
+
+        assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+            .unwrap_err()
+            .contains("unexpected"));
     }
 }
