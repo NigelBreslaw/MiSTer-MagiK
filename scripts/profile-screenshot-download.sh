@@ -11,17 +11,20 @@ LABEL=""
 SYSTEM="all"
 VARIANTS="identity"
 MANIFEST_URL="${MISTER_MEDIA_MANIFEST_URL:-https://assets.mistermagik.com/mister-magik/v1/manifest.json}"
+ITERATIONS=1
+PRIME_CACHE=0
 SAVE_PREFERENCE=0
 REPLACE_LABEL=0
+REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variants identity,gzip,brotli] [--manifest-url URL] [--save-preference] [--replace-label]
+Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variants identity,gzip,brotli] [--iterations N] [--prime-cache] [--manifest-url URL] [--replace-label]
 
-Benchmarks screenshot pack download paths on the MiSTer. The timing rows include
-network download, decompression, save/publish, checksum verification, and total
-time. gzip and brotli variants use Cloudflare negotiated compression for the
-same R2 object, not separate .gz/.br files.
+Benchmarks screenshot pack download paths inside the deployed MagiK binary on
+the MiSTer. The timing rows include network download, decompression,
+save-to-disk, checksum verification, and total time. gzip and brotli variants
+use the stored .mmlz4b.gz and .mmlz4b.br objects from the R2 manifest.
 
 Default manifest:
   https://assets.mistermagik.com/mister-magik/v1/manifest.json
@@ -33,6 +36,8 @@ while [[ $# -gt 0 ]]; do
     --system) SYSTEM="${2:?}"; shift 2 ;;
     --variant) VARIANTS="${2:?}"; shift 2 ;;
     --variants) VARIANTS="${2:?}"; shift 2 ;;
+    --iterations) ITERATIONS="${2:?}"; shift 2 ;;
+    --prime-cache) PRIME_CACHE=1; shift ;;
     --manifest-url) MANIFEST_URL="${2:?}"; shift 2 ;;
     --save-preference) SAVE_PREFERENCE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
@@ -57,6 +62,10 @@ if [[ ! "$LABEL" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "label must contain only letters, numbers, _, ., or -" >&2
   exit 2
 fi
+if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
+  echo "iterations must be a positive integer" >&2
+  exit 2
+fi
 mkdir -p "$BENCH_DIR"
 if [[ "$REPLACE_LABEL" -eq 1 && -f "$TSV" ]]; then
   tmp="$(mktemp)"
@@ -64,16 +73,27 @@ if [[ "$REPLACE_LABEL" -eq 1 && -f "$TSV" ]]; then
   mv "$tmp" "$TSV"
 fi
 
-args=(
-  media-bench-download
-  --label "$LABEL"
-  --system "$SYSTEM"
-  --variants "$VARIANTS"
-  --manifest-url "$MANIFEST_URL"
-)
-if [[ "$SAVE_PREFERENCE" -eq 1 ]]; then
-  args+=(--save-preference)
+shell_quote() {
+  printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+remote_cmd="$(shell_quote "$REMOTE_BIN") media-bench-download"
+remote_cmd+=" --label $(shell_quote "$LABEL")"
+remote_cmd+=" --system $(shell_quote "$SYSTEM")"
+remote_cmd+=" --variants $(shell_quote "$VARIANTS")"
+remote_cmd+=" --iterations $(shell_quote "$ITERATIONS")"
+remote_cmd+=" --manifest-url $(shell_quote "$MANIFEST_URL")"
+if [[ "$PRIME_CACHE" -eq 1 ]]; then
+  remote_cmd+=" --prime-cache"
 fi
 
-"$MISTER" "${args[@]}"
+out="$("$MISTER" run "$remote_cmd")"
+printf '%s\n' "$out"
+if [[ ! -f "$TSV" ]]; then
+  printf 'type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult\n' >"$TSV"
+fi
+printf '%s\n' "$out" | grep '^screenshot_download_bench_tsv	' >>"$TSV" || true
+if [[ "$SAVE_PREFERENCE" -eq 1 ]]; then
+  echo "warning: --save-preference is ignored by the MagiK benchmark wrapper" >&2
+fi
 echo "appended to $TSV"
