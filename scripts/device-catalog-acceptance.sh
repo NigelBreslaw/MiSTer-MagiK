@@ -80,13 +80,18 @@ pack_exists() {
   remote "test -f '$REMOTE_ASSETS/$1' && echo yes || echo no" | awk 'NF { value=$NF } END { print value }'
 }
 
+pack_exists_for_platform() {
+  local platform="$1"
+  remote "if test -f '$REMOTE_ASSETS/${platform}-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'; then echo yes; else echo no; fi" | awk 'NF { value=$NF } END { print value }'
+}
+
 preview_count_for_platform() {
   local platform="$1"
   db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';" | last_number
 }
 
 arcade_pack_exists() {
-  remote "test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b' && echo yes || echo no" | awk 'NF { value=$NF } END { print value }'
+  pack_exists_for_platform arcade
 }
 
 echo "==> Waiting ${SETTLE_SECS}s for startup refreshes to settle"
@@ -113,21 +118,47 @@ assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
 if [ "$(arcade_pack_exists)" = "yes" ]; then
   assert_gt_zero "arcade has_preview count" "$(preview_count_for_platform arcade)"
 fi
-if [ "$(pack_exists "neogeo-screenshots.mmlz4b")" = "yes" ]; then
+if [ "$(pack_exists_for_platform neogeo)" = "yes" ]; then
   assert_gt_zero "neogeo has_preview count" "$(preview_count_for_platform neogeo)"
 fi
-if [ "$(pack_exists "saturn-screenshots.mmlz4b")" = "yes" ]; then
+if [ "$(pack_exists_for_platform saturn)" = "yes" ]; then
   assert_gt_zero "saturn has_preview count" "$(preview_count_for_platform saturn)"
 fi
 
 console_pack_count="$(
-  remote "ls '$REMOTE_ASSETS'/nes-screenshots.mmlz4b '$REMOTE_ASSETS'/snes-screenshots.mmlz4b '$REMOTE_ASSETS'/n64-screenshots.mmlz4b '$REMOTE_ASSETS'/sms-screenshots.mmlz4b '$REMOTE_ASSETS'/megadrive-screenshots.mmlz4b '$REMOTE_ASSETS'/saturn-screenshots.mmlz4b 2>/dev/null | wc -l" | last_number
+  remote "find '$REMOTE_ASSETS' -maxdepth 1 -type f \\( -name '*-screenshots.mmlz4b' -o -name '*-screenshots-320x320.mmlz4b' \\) 2>/dev/null | wc -l" | last_number
 )"
 if [ "$console_pack_count" -gt 0 ]; then
   asset_entry_tables="$(
     db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" | last_number
   )"
   assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
+fi
+
+if [ "$(pack_exists "arcade-screenshots-320x320.mmlz4b")" = "yes" ]; then
+  echo "ok: size-qualified arcade screenshot pack installed"
+fi
+
+if [ "$(pack_exists ".screenshot-media-state.json")" = "yes" ]; then
+  size_state_count="$(
+    remote "grep -c 'screenshots-320x320\\.mmlz4b' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number
+  )"
+  assert_gt_zero "media state size-qualified local_path count" "$size_state_count"
+  cache_state_count="$(
+    remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number
+  )"
+  assert_gt_zero "media state cache metadata count" "$cache_state_count"
+else
+  echo "ok: media state not present; runtime downloader has not published packs on this device"
+fi
+
+progress_log_count="$(
+  remote "grep -h 'screenshot_media_progress' /tmp/mister-magik-launcher.log /media/fat/mister-magik/*.log 2>/dev/null | wc -l" | last_number
+)"
+if [ "${progress_log_count:-0}" -gt 0 ]; then
+  echo "ok: screenshot media progress log rows = $progress_log_count"
+else
+  echo "ok: screenshot media progress log not captured in known log files"
 fi
 
 if [ "$RACE_REFRESH" -eq 1 ]; then

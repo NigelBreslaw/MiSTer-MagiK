@@ -810,7 +810,7 @@ run_tier_catalog() {
   launcher_catalog_tables="$("$MISTER" db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';" | last_number || true)"
   assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
 
-  console_pack_count="$(remote "ls '$REMOTE_ASSETS'/nes-screenshots.mmlz4b '$REMOTE_ASSETS'/snes-screenshots.mmlz4b '$REMOTE_ASSETS'/n64-screenshots.mmlz4b '$REMOTE_ASSETS'/sms-screenshots.mmlz4b '$REMOTE_ASSETS'/megadrive-screenshots.mmlz4b '$REMOTE_ASSETS'/saturn-screenshots.mmlz4b 2>/dev/null | wc -l" | last_number || true)"
+  console_pack_count="$(remote "find '$REMOTE_ASSETS' -maxdepth 1 -type f \\( -name '*-screenshots.mmlz4b' -o -name '*-screenshots-320x320.mmlz4b' \\) 2>/dev/null | wc -l" | last_number || true)"
   if [ "${console_pack_count:-0}" -gt 0 ]; then
     asset_entry_tables="$("$MISTER" db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" | last_number || true)"
     assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
@@ -818,16 +818,25 @@ run_tier_catalog() {
     record_ok "no console screenshot packs installed; runtime-only preview check skipped"
   fi
 
-  if remote "test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b'"; then
+  if remote "test -f '$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b'"; then
     count="$("$MISTER" db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='arcade';" | last_number || true)"
     assert_gt_zero "arcade has_preview count" "$count"
   fi
   for platform in neogeo saturn; do
-    if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
+    if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
       count="$("$MISTER" db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';" | last_number || true)"
       assert_gt_zero "$platform has_preview count" "$count"
     fi
   done
+
+  if remote "test -f '$REMOTE_ASSETS/.screenshot-media-state.json'"; then
+    size_state_count="$(remote "grep -c 'screenshots-320x320\\.mmlz4b' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
+    assert_gt_zero "media state size-qualified local_path count" "$size_state_count"
+    cache_state_count="$(remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
+    assert_gt_zero "media state cache metadata count" "$cache_state_count"
+  else
+    record_ok "media state not present; runtime downloader has not published packs on this device"
+  fi
 
   if [ "$FAST" -eq 0 ]; then
     run_catalog_mutation_acceptance || true
