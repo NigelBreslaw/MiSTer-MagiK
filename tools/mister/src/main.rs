@@ -1062,7 +1062,7 @@ fn put_bytes(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
 
 fn put_bytes_with_sftp(sftp: &ssh2::Sftp, remote: &str, bytes: &[u8]) -> Result<()> {
     let mut dst = sftp.create(Path::new(remote))?;
-    dst.write_all(&bytes)?;
+    dst.write_all(bytes)?;
     Ok(())
 }
 
@@ -1079,90 +1079,236 @@ fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
 
 fn deploy_magik_bin(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let total_t = Instant::now();
-    let local_bytes = fs::metadata(local)?.len();
-    let remote_dir = remote
-        .rsplit_once('/')
-        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
-        .ok_or("remote path must be absolute and include a directory")?;
-    let upload = format!("{remote}.upload");
-    let lock = format!("{remote_dir}/deploy.lock");
+    let validate_t = Instant::now();
+    let transaction = MagikDeployTransaction::validate(local, remote)?;
+    let validate_ms = validate_t.elapsed().as_millis();
+    let report = transaction.run_ssh(sess, validate_ms, total_t)?;
+    report.print();
+    Ok(())
+}
 
-    let prepare_t = Instant::now();
-    exec(
-        sess,
-        &format!("mkdir -p {}; : > {}", sh(remote_dir), sh(&lock)),
-        true,
-    )?;
-    let prepare_ms = prepare_t.elapsed().as_millis();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MagikDeployTransaction {
+    local: PathBuf,
+    remote: String,
+    remote_dir: String,
+    upload: String,
+    lock: String,
+    local_bytes: u64,
+}
 
-    let mut finished = false;
-    let result = (|| -> Result<(u128, u128, u128, u128, u64)> {
-        let suspend_t = Instant::now();
-        magik_fifo_command(sess, "mister_magik_suspend")?;
-        let suspend_ms = suspend_t.elapsed().as_millis();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MagikDeployReport {
+    local: PathBuf,
+    remote: String,
+    local_bytes: u64,
+    remote_bytes: u64,
+    total_ms: u128,
+    validate_ms: u128,
+    prepare_ms: u128,
+    suspend_ms: u128,
+    upload_ms: u128,
+    swap_ms: u128,
+    chmod_size_ms: u128,
+    resume_ms: u128,
+    cleanup_ms: u128,
+}
 
-        let put_t = Instant::now();
-        put(sess, local, &upload)?;
-        let put_ms = put_t.elapsed().as_millis();
-
-        let finish_t = Instant::now();
-        exec(
-            sess,
-            &format!(
-                "mv {} {}; chmod +x {}; rm -f {}",
-                sh(&upload),
-                sh(remote),
-                sh(remote),
-                sh(&lock)
-            ),
-            true,
-        )?;
-        let finish_ms = finish_t.elapsed().as_millis();
-
-        let resume_t = Instant::now();
-        magik_fifo_command(sess, "mister_magik_resume")?;
-        let resume_ms = resume_t.elapsed().as_millis();
-        finished = true;
-
-        let size_t = Instant::now();
-        let out = exec(sess, &format!("wc -c {}", sh(remote)), true)?;
-        let size_ms = size_t.elapsed().as_millis();
-        let remote_bytes = out
-            .stdout
-            .split_whitespace()
-            .next()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        Ok((
-            suspend_ms,
-            put_ms,
-            finish_ms,
-            resume_ms + size_ms,
-            remote_bytes,
-        ))
-    })();
-
-    if !finished {
-        let _ = exec(sess, &format!("rm -f {} {}", sh(&upload), sh(&lock)), true);
-        let _ = magik_fifo_command(sess, "mister_magik_resume");
+impl MagikDeployTransaction {
+    fn validate(local: &Path, remote: &str) -> Result<Self> {
+        if !remote.starts_with('/') || remote.ends_with('/') || remote.contains('\0') {
+            return Err(format!("unsupported deploy remote: {remote}").into());
+        }
+        let remote_dir = remote_parent_dir(remote)?.to_string();
+        let local_bytes = fs::metadata(local)?.len();
+        Ok(Self {
+            local: local.to_path_buf(),
+            remote: remote.to_string(),
+            upload: format!("{remote}.upload"),
+            lock: format!("{remote_dir}/deploy.lock"),
+            remote_dir,
+            local_bytes,
+        })
     }
 
-    let (suspend_ms, put_ms, finish_ms, resume_and_size_ms, remote_bytes) = result?;
-    let total_ms = total_t.elapsed().as_millis();
-    println!(
-        "deploy_magik_bin local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={}",
-        local.display(),
-        remote,
-        local_bytes,
-        remote_bytes,
-        total_ms,
-        prepare_ms,
-        suspend_ms,
-        put_ms,
-        finish_ms,
-        resume_and_size_ms
-    );
-    Ok(())
+    fn run_ssh(
+        &self,
+        sess: &Session,
+        validate_ms: u128,
+        total_t: Instant,
+    ) -> Result<MagikDeployReport> {
+        let prepare_ms = self.prepare(sess)?;
+        let mut suspended = false;
+        let mut cleaned = false;
+        let result = (|| -> Result<MagikDeployReport> {
+            let suspend_t = Instant::now();
+            magik_fifo_command(sess, "mister_magik_suspend")?;
+            let suspend_ms = suspend_t.elapsed().as_millis();
+            suspended = true;
+
+            let upload_t = Instant::now();
+            put(sess, &self.local, &self.upload)?;
+            let upload_ms = upload_t.elapsed().as_millis();
+
+            let swap_ms = self.swap_upload(sess)?;
+            let (chmod_size_ms, remote_bytes) = self.chmod_and_verify_size(sess)?;
+
+            let resume_t = Instant::now();
+            magik_fifo_command(sess, "mister_magik_resume")?;
+            let resume_ms = resume_t.elapsed().as_millis();
+            suspended = false;
+
+            let cleanup_ms = self.cleanup(sess)?;
+            cleaned = true;
+
+            Ok(MagikDeployReport {
+                local: self.local.clone(),
+                remote: self.remote.clone(),
+                local_bytes: self.local_bytes,
+                remote_bytes,
+                total_ms: total_t.elapsed().as_millis(),
+                validate_ms,
+                prepare_ms,
+                suspend_ms,
+                upload_ms,
+                swap_ms,
+                chmod_size_ms,
+                resume_ms,
+                cleanup_ms,
+            })
+        })();
+
+        if result.is_err() {
+            if !cleaned {
+                let _ = self.cleanup(sess);
+            }
+            if suspended {
+                let _ = magik_fifo_command(sess, "mister_magik_resume");
+            }
+        }
+        result
+    }
+
+    fn prepare(&self, sess: &Session) -> Result<u128> {
+        let start = Instant::now();
+        self.exec_phase(
+            sess,
+            "prepare",
+            &format!("mkdir -p {}; : > {}", sh(&self.remote_dir), sh(&self.lock)),
+        )?;
+        Ok(start.elapsed().as_millis())
+    }
+
+    fn swap_upload(&self, sess: &Session) -> Result<u128> {
+        let start = Instant::now();
+        self.exec_phase(
+            sess,
+            "swap",
+            &format!("mv {} {}", sh(&self.upload), sh(&self.remote)),
+        )?;
+        Ok(start.elapsed().as_millis())
+    }
+
+    fn chmod_and_verify_size(&self, sess: &Session) -> Result<(u128, u64)> {
+        let start = Instant::now();
+        let out = self.exec_phase(
+            sess,
+            "chmod-size-verify",
+            &self.chmod_size_verify_command(),
+        )?;
+        let remote_bytes = parse_wc_byte_count(&out.stdout)
+            .ok_or_else(|| format!("unable to parse deployed size from: {}", out.stdout.trim()))?;
+        if remote_bytes != self.local_bytes {
+            return Err(format!(
+                "deployed size mismatch local={} remote={}",
+                self.local_bytes, remote_bytes
+            )
+            .into());
+        }
+        Ok((start.elapsed().as_millis(), remote_bytes))
+    }
+
+    fn chmod_size_verify_command(&self) -> String {
+        format!("chmod +x {} && wc -c {}", sh(&self.remote), sh(&self.remote))
+    }
+
+    fn cleanup(&self, sess: &Session) -> Result<u128> {
+        let start = Instant::now();
+        self.exec_phase(
+            sess,
+            "cleanup",
+            &format!("rm -f {} {}", sh(&self.upload), sh(&self.lock)),
+        )?;
+        Ok(start.elapsed().as_millis())
+    }
+
+    fn exec_phase(&self, sess: &Session, phase: &str, command: &str) -> Result<ExecOutput> {
+        let out = exec(sess, command, true)?;
+        if out.rc != 0 {
+            return Err(format!(
+                "deploy {phase} phase failed rc={} output={}",
+                out.rc,
+                out.stdout.trim()
+            )
+            .into());
+        }
+        Ok(out)
+    }
+}
+
+impl MagikDeployReport {
+    fn print(&self) {
+        let finish_ms = self.swap_ms + self.chmod_size_ms;
+        let resume_size_ms = self.resume_ms + self.chmod_size_ms;
+        println!(
+            "deploy_magik_bin local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={}",
+            self.local.display(),
+            self.remote,
+            self.local_bytes,
+            self.remote_bytes,
+            self.total_ms,
+            self.prepare_ms,
+            self.suspend_ms,
+            self.upload_ms,
+            finish_ms,
+            resume_size_ms,
+            self.validate_ms,
+            self.upload_ms,
+            self.swap_ms,
+            self.chmod_size_ms,
+            self.resume_ms,
+            self.cleanup_ms
+        );
+    }
+}
+
+fn parse_wc_byte_count(text: &str) -> Option<u64> {
+    text.split_whitespace().next()?.parse::<u64>().ok()
+}
+
+fn verify_agent_deploy_result(
+    result: &Value,
+    expected_bytes: u64,
+    expected_remote: &str,
+) -> Result<u64> {
+    let remote = result.get("remote").and_then(Value::as_str).unwrap_or("");
+    if remote != expected_remote {
+        return Err(format!(
+            "agent deploy remote mismatch expected={expected_remote} actual={remote}"
+        )
+        .into());
+    }
+    let remote_bytes = result
+        .get("remote_bytes")
+        .and_then(Value::as_u64)
+        .ok_or("agent deploy response missing remote_bytes")?;
+    if remote_bytes != expected_bytes {
+        return Err(format!(
+            "agent deployed size mismatch expected={expected_bytes} remote={remote_bytes}"
+        )
+        .into());
+    }
+    Ok(remote_bytes)
 }
 
 fn magik_fifo_command(sess: &Session, command: &str) -> Result<()> {
@@ -1518,13 +1664,15 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         Duration::from_secs(120),
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
+    let remote_bytes = verify_agent_deploy_result(result, bytes.len() as u64, remote)?;
     println!(
-        "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
+        "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} remote_bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
         local,
         remote,
         encoding,
         compression_decision,
         bytes.len(),
+        remote_bytes,
         payload.len(),
         checksum,
         total_t.elapsed().as_millis(),
@@ -1704,7 +1852,8 @@ fn launcher_restart(sess: &Session, options: &LauncherRestartOptions) -> Result<
 }
 
 fn launcher_restart_help_requested(args: &[String]) -> bool {
-    args.iter().any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
 }
 
 fn launcher_restart_usage() {
@@ -1808,7 +1957,11 @@ fn prepare_launcher_env(sess: &Session, options: &LauncherRestartOptions) -> Res
     if out.rc != 0 {
         return Err(format!("create launcher env parent failed: {}", out.stdout.trim()).into());
     }
-    put_bytes(sess, &options.remote_env, launcher_env_text(&options.env_vars).as_bytes())?;
+    put_bytes(
+        sess,
+        &options.remote_env,
+        launcher_env_text(&options.env_vars).as_bytes(),
+    )?;
     Ok(format!("written:{}", options.env_vars.len()))
 }
 
@@ -1821,7 +1974,9 @@ fn remote_parent_dir(remote: &str) -> Result<&str> {
     remote
         .rsplit_once('/')
         .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
-        .ok_or_else(|| format!("remote path must be absolute and include a directory: {remote}").into())
+        .ok_or_else(|| {
+            format!("remote path must be absolute and include a directory: {remote}").into()
+        })
 }
 
 fn issue_launcher_restart(sess: &Session) -> Result<()> {
@@ -1895,10 +2050,7 @@ fn launcher_ready_status(
             .get("launcher_pid")
             .and_then(Value::as_i64)
             .unwrap_or_default(),
-        slint_pid: slint
-            .get("pid")
-            .and_then(Value::as_i64)
-            .unwrap_or_default(),
+        slint_pid: slint.get("pid").and_then(Value::as_i64).unwrap_or_default(),
         frames,
         screen: slint
             .get("screen")
@@ -4799,11 +4951,10 @@ video_mode=14
 
     #[test]
     fn launcher_restart_args_reject_bad_env_and_clear_conflict() {
-        assert!(parse_launcher_restart_args(&[
-            "--env".to_string(),
-            "BAD-NAME=value".to_string()
-        ])
-        .is_err());
+        assert!(
+            parse_launcher_restart_args(&["--env".to_string(), "BAD-NAME=value".to_string()])
+                .is_err()
+        );
         assert!(parse_launcher_restart_args(&[
             "--clear-env".to_string(),
             "--env".to_string(),
@@ -5166,6 +5317,65 @@ H: Handlers=event3 js0"#
     fn shell_quote_handles_single_quotes() {
         assert_eq!(sh("/tmp/simple"), "'/tmp/simple'");
         assert_eq!(sh("a'b"), "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn deploy_transaction_derives_remote_paths_and_local_size() {
+        let local = temp_path("deploy-bin");
+        fs::write(&local, b"abc").unwrap();
+
+        let tx =
+            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
+                .unwrap();
+        let _ = fs::remove_file(&local);
+
+        assert_eq!(tx.remote_dir, "/media/fat/mister-magik");
+        assert_eq!(tx.upload, "/media/fat/mister-magik/mister-magik-fb.upload");
+        assert_eq!(tx.lock, "/media/fat/mister-magik/deploy.lock");
+        assert_eq!(tx.local_bytes, 3);
+        assert_eq!(
+            tx.chmod_size_verify_command(),
+            "chmod +x '/media/fat/mister-magik/mister-magik-fb' && wc -c '/media/fat/mister-magik/mister-magik-fb'"
+        );
+    }
+
+    #[test]
+    fn deploy_transaction_rejects_invalid_remote_paths() {
+        let local = temp_path("deploy-invalid-bin");
+        fs::write(&local, b"abc").unwrap();
+
+        assert!(MagikDeployTransaction::validate(&local, "relative/path").is_err());
+        assert!(MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/").is_err());
+
+        let _ = fs::remove_file(&local);
+    }
+
+    #[test]
+    fn deploy_size_parsing_reads_busybox_wc_prefix() {
+        assert_eq!(
+            parse_wc_byte_count("12345 /media/fat/mister-magik/mister-magik-fb\n"),
+            Some(12345)
+        );
+        assert_eq!(parse_wc_byte_count("not-a-size path\n"), None);
+    }
+
+    #[test]
+    fn agent_deploy_result_verifies_remote_and_size() {
+        let result = json!({
+            "remote": "/media/fat/mister-magik/mister-magik-fb",
+            "remote_bytes": 42
+        });
+
+        assert_eq!(
+            verify_agent_deploy_result(&result, 42, "/media/fat/mister-magik/mister-magik-fb")
+                .unwrap(),
+            42
+        );
+        assert!(
+            verify_agent_deploy_result(&result, 43, "/media/fat/mister-magik/mister-magik-fb")
+                .is_err()
+        );
+        assert!(verify_agent_deploy_result(&result, 42, "/tmp/other").is_err());
     }
 
     #[test]

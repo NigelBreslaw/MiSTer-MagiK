@@ -74,42 +74,33 @@ LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
-remote_run() {
-  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-  MISTER_PASS="${MISTER_PASS:-1}" \
-    "$HERE/scripts/mister" run "$1"
-}
-
-magik_command() {
-  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
-}
-
+DEPLOY_OUTPUT=""
 case "$DEPLOY_TRANSPORT" in
   agent)
-    MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-    MISTER_PASS="${MISTER_PASS:-1}" \
-      "$HERE/scripts/mister" agent deploy-magik-bin "$BIN" "$REMOTE"
+    DEPLOY_OUTPUT="$(
+      MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+      MISTER_PASS="${MISTER_PASS:-1}" \
+        "$HERE/scripts/mister" agent deploy-magik-bin "$BIN" "$REMOTE"
+    )"
     ;;
   ssh)
     echo "==> Using explicit SSH/SFTP deploy fallback" >&2
-    MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-    MISTER_PASS="${MISTER_PASS:-1}" \
-      "$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE"
+    DEPLOY_OUTPUT="$(
+      MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+      MISTER_PASS="${MISTER_PASS:-1}" \
+        "$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE"
+    )"
     ;;
   *)
     echo "ERROR: unsupported MISTER_DEPLOY_TRANSPORT=$DEPLOY_TRANSPORT (expected agent or ssh)" >&2
     exit 2
     ;;
 esac
-MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-MISTER_PASS="${MISTER_PASS:-1}" \
-  "$HERE/scripts/mister" run "chmod +x $REMOTE"
-
+printf '%s\n' "$DEPLOY_OUTPUT"
 REMOTE_BYTES="$(
-  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
-  MISTER_PASS="${MISTER_PASS:-1}" \
-    "$HERE/scripts/mister" run "wc -c $REMOTE" \
-    | awk '{print $1}' | tail -1
+  printf '%s\n' "$DEPLOY_OUTPUT" \
+    | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^remote_bytes=/) { sub(/^remote_bytes=/, "", $i); print $i } }' \
+    | tail -1
 )"
 if [ -n "$REMOTE_BYTES" ]; then
   echo "==> Deployed binary size: $REMOTE_BYTES bytes ($(human_bytes "$REMOTE_BYTES"))"
