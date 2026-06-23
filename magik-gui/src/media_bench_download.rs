@@ -1,4 +1,3 @@
-use flate2::read::GzDecoder;
 use mister_magik_fb::media_update::{
     parse_manifest_json, size_qualified_pack_path, valid_image_size, MediaPack, MediaVariant,
     DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
@@ -15,7 +14,7 @@ const HEADER: &str = "screenshot_download_bench_tsv\tlabel\tsystem\tvariant\tenc
 struct BenchConfig {
     manifest_url: String,
     system: String,
-    variants: Vec<String>,
+    variant: String,
     iterations: usize,
     label: String,
     image_size: String,
@@ -88,22 +87,20 @@ where
             &pack.id,
             &pack.image_size,
         )?);
-        for variant_name in &config.variants {
-            let variant = pack
-                .variant_for_compression(variant_name)
-                .ok_or_else(|| format!("pack {} has no {variant_name} variant", pack.id))?;
-            if config.prime_cache {
-                let row = run_one(&config, pack, variant, &local_path, "prime-cache")?;
-                eprintln!(
-                    "media_bench_prime\tsystem={}\tvariant={}\tcf_cache_status={}\ttotal_ms={}",
-                    pack.id, variant_name, row.cf_cache_status, row.total_ms
-                );
-            }
-            for iteration in 1..=config.iterations {
-                let label = format!("{}-{:02}", config.label, iteration);
-                let row = run_one(&config, pack, variant, &local_path, &label)?;
-                println!("{}", row.to_tsv());
-            }
+        let variant = pack
+            .variant_for_compression("none")
+            .ok_or_else(|| format!("pack {} has no raw identity variant", pack.id))?;
+        if config.prime_cache {
+            let row = run_one(&config, pack, variant, &local_path, "prime-cache")?;
+            eprintln!(
+                "media_bench_prime\tsystem={}\tvariant={}\tcf_cache_status={}\ttotal_ms={}",
+                pack.id, config.variant, row.cf_cache_status, row.total_ms
+            );
+        }
+        for iteration in 1..=config.iterations {
+            let label = format!("{}-{:02}", config.label, iteration);
+            let row = run_one(&config, pack, variant, &local_path, &label)?;
+            println!("{}", row.to_tsv());
         }
     }
     Ok(())
@@ -117,7 +114,7 @@ where
         manifest_url: std::env::var("MISTER_MEDIA_MANIFEST_URL")
             .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string()),
         system: "arcade".to_string(),
-        variants: vec!["identity".to_string()],
+        variant: "identity".to_string(),
         iterations: 1,
         label: default_label(),
         image_size: std::env::var("MISTER_MEDIA_SIZE")
@@ -138,13 +135,12 @@ where
                 config.system = args.next().ok_or("--system requires id|all")?;
             }
             "--variants" => {
-                config.variants =
-                    parse_variants(&args.next().ok_or("--variants requires a list")?)?;
+                config.variant =
+                    parse_identity_variant(&args.next().ok_or("--variants requires a list")?)?;
             }
             "--variant" => {
-                config.variants = vec![normalize_variant(
-                    &args.next().ok_or("--variant requires a value")?,
-                )?];
+                config.variant =
+                    parse_identity_variant(&args.next().ok_or("--variant requires a value")?)?;
             }
             "--iterations" => {
                 config.iterations = args
@@ -188,23 +184,27 @@ where
 
 fn print_usage() {
     println!(
-        "usage: mister-magik-fb media-bench-download --system ID --variants identity,gzip,brotli --iterations N [--prime-cache]"
+        "usage: mister-magik-fb media-bench-download --system ID [--variant identity] --iterations N [--prime-cache]"
     );
 }
 
-fn parse_variants(value: &str) -> Result<Vec<String>, String> {
-    value
-        .split(',')
-        .map(|part| normalize_variant(part.trim()))
-        .collect()
-}
-
-fn normalize_variant(value: &str) -> Result<String, String> {
+fn parse_identity_variant(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.contains(',') {
+        let mut parsed = value.split(',');
+        let first = parsed.next().unwrap_or_default().trim();
+        if parsed.all(|part| part.trim().is_empty()) {
+            return parse_identity_variant(first);
+        }
+        return Err(
+            "MagiK only supports the raw identity screenshot benchmark variant".to_string(),
+        );
+    }
     match value {
         "identity" | "none" | "plain" => Ok("identity".to_string()),
-        "gzip" | "gz" => Ok("gzip".to_string()),
-        "brotli" | "br" => Ok("brotli".to_string()),
-        other => Err(format!("unknown variant: {other}")),
+        other => Err(format!(
+            "unsupported variant {other}: MagiK only benchmarks raw identity downloads"
+        )),
     }
 }
 
@@ -236,20 +236,13 @@ fn run_one(
     fs::create_dir_all(&work_dir)
         .map_err(|e| format!("create work dir {}: {e}", work_dir.display()))?;
     let stamp = format!("{}-{}", std::process::id(), unix_ms_now());
-    let encoded = work_dir.join(format!(
-        "{}.{}.{}.encoded",
-        pack.id, variant.compression, stamp
-    ));
-    let decoded = work_dir.join(format!(
-        "{}.{}.{}.decoded",
-        pack.id, variant.compression, stamp
-    ));
+    let encoded = work_dir.join(format!("{}.identity.{stamp}.encoded", pack.id));
     let final_tmp = final_temp_path(local_path, &stamp);
     let started = Instant::now();
     let mut row = BenchRow {
         label: label.to_string(),
         system: pack.id.clone(),
-        variant: variant_label(&variant.compression).to_string(),
+        variant: "identity".to_string(),
         encoded_bytes: 0,
         decoded_bytes: 0,
         download_ms: 0,
@@ -277,17 +270,15 @@ fn run_one(
         verify_file(&encoded, variant.bytes, &variant.sha256)?;
         row.verify_ms += elapsed_ms(verify_started.elapsed());
 
-        let decompress_started = Instant::now();
-        let decoded_path = decode_variant(variant, &encoded, &decoded)?;
-        row.decompress_ms = elapsed_ms(decompress_started.elapsed());
-        row.decoded_bytes = file_len(decoded_path)?;
+        row.decompress_ms = 0;
+        row.decoded_bytes = file_len(&encoded)?;
 
         let verify_started = Instant::now();
-        verify_file(decoded_path, pack.raw.bytes, &pack.raw.sha256)?;
+        verify_file(&encoded, pack.raw.bytes, &pack.raw.sha256)?;
         row.verify_ms += elapsed_ms(verify_started.elapsed());
 
         let save_started = Instant::now();
-        copy_file_durable(decoded_path, &final_tmp)?;
+        copy_file_durable(&encoded, &final_tmp)?;
         fs::remove_file(&final_tmp)
             .map_err(|e| format!("remove bench temp {}: {e}", final_tmp.display()))?;
         sync_path(
@@ -305,7 +296,6 @@ fn run_one(
     row.wire_mbps = mbps(row.encoded_bytes, row.download_ms);
     row.decoded_mbps = mbps(row.decoded_bytes, row.total_ms);
     let _ = fs::remove_file(&encoded);
-    let _ = fs::remove_file(&decoded);
     let _ = fs::remove_file(&final_tmp);
     if row.result != "bench-ok" {
         return Err(row.to_tsv());
@@ -348,33 +338,6 @@ fn parse_wget_headers(text: &str) -> HttpMetadata {
             .cloned()
             .unwrap_or_else(|| "identity".to_string()),
         cf_cache_status: headers.get("cf-cache-status").cloned().unwrap_or_default(),
-    }
-}
-
-fn decode_variant<'a>(
-    variant: &MediaVariant,
-    encoded: &'a Path,
-    decoded: &'a Path,
-) -> Result<&'a Path, String> {
-    match variant.compression.as_str() {
-        "none" => Ok(encoded),
-        "gzip" => {
-            let input = File::open(encoded).map_err(|e| format!("open gzip input: {e}"))?;
-            let mut decoder = GzDecoder::new(input);
-            let mut output = File::create(decoded).map_err(|e| format!("create decoded: {e}"))?;
-            std::io::copy(&mut decoder, &mut output)
-                .map_err(|e| format!("gzip decode failed: {e}"))?;
-            Ok(decoded)
-        }
-        "brotli" => {
-            let input = File::open(encoded).map_err(|e| format!("open brotli input: {e}"))?;
-            let mut decoder = brotli::Decompressor::new(input, 64 * 1024);
-            let mut output = File::create(decoded).map_err(|e| format!("create decoded: {e}"))?;
-            std::io::copy(&mut decoder, &mut output)
-                .map_err(|e| format!("brotli decode failed: {e}"))?;
-            Ok(decoded)
-        }
-        other => Err(format!("unsupported-compression-{other}")),
     }
 }
 
@@ -441,13 +404,6 @@ fn file_len(path: &Path) -> Result<u64, String> {
         .map_err(|e| format!("stat {}: {e}", path.display()))
 }
 
-fn variant_label(compression: &str) -> &str {
-    match compression {
-        "none" => "identity",
-        other => other,
-    }
-}
-
 fn elapsed_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
@@ -512,7 +468,7 @@ mod tests {
             "--system".to_string(),
             "arcade".to_string(),
             "--variants".to_string(),
-            "identity,gzip,brotli".to_string(),
+            "identity".to_string(),
             "--iterations".to_string(),
             "10".to_string(),
             "--label".to_string(),
@@ -522,9 +478,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.system, "arcade");
-        assert_eq!(config.variants, ["identity", "gzip", "brotli"]);
+        assert_eq!(config.variant, "identity");
         assert_eq!(config.iterations, 10);
         assert!(config.prime_cache);
+    }
+
+    #[test]
+    fn rejects_compressed_benchmark_variants() {
+        let error = parse_args([
+            "--system".to_string(),
+            "arcade".to_string(),
+            "--variants".to_string(),
+            "identity,gzip,brotli".to_string(),
+        ])
+        .unwrap_err();
+
+        assert!(error.contains("only supports the raw identity"));
     }
 
     #[test]
