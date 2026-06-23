@@ -1,3 +1,7 @@
+use crate::artifact_publish::{
+    hidden_bench_temp_path_for, prepare_artifact_publish, sync_path_best_effort,
+    ArtifactPublishLabels,
+};
 use mister_magik_fb::media_update::{
     parse_manifest_json, size_qualified_pack_path, valid_image_size, MediaPack, MediaVariant,
     DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
@@ -281,7 +285,7 @@ fn run_one(
         copy_file_durable(&encoded, &final_tmp)?;
         fs::remove_file(&final_tmp)
             .map_err(|e| format!("remove bench temp {}: {e}", final_tmp.display()))?;
-        sync_path(
+        sync_path_best_effort(
             local_path
                 .parent()
                 .unwrap_or_else(|| Path::new(DEFAULT_ASSET_DIR)),
@@ -374,28 +378,32 @@ fn sha256_hex(path: &Path) -> Result<String, String> {
 }
 
 fn copy_file_durable(src: &Path, dst: &Path) -> Result<(), String> {
+    let publish = prepare_artifact_publish(
+        dst,
+        dst.to_path_buf(),
+        ArtifactPublishLabels {
+            destination: "bench temp",
+            parent: "bench temp parent",
+        },
+    )?;
     let mut input = File::open(src).map_err(|e| format!("open {}: {e}", src.display()))?;
-    let mut output = File::create(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
-    std::io::copy(&mut input, &mut output)
-        .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
+    let mut output = File::create(publish.temp_path())
+        .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
+    std::io::copy(&mut input, &mut output).map_err(|e| {
+        format!(
+            "copy {} -> {}: {e}",
+            src.display(),
+            publish.temp_path().display()
+        )
+    })?;
     output
         .sync_all()
-        .map_err(|e| format!("sync {}: {e}", dst.display()))?;
+        .map_err(|e| format!("sync {}: {e}", publish.temp_path().display()))?;
     Ok(())
 }
 
-fn sync_path(path: &Path) {
-    let _ = Command::new("sync").arg(path).status();
-}
-
 fn final_temp_path(local_path: &Path, stamp: &str) -> PathBuf {
-    local_path.with_file_name(format!(
-        ".{}.bench-{stamp}.tmp",
-        local_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("screenshot-pack")
-    ))
+    hidden_bench_temp_path_for(local_path, "screenshot-pack", stamp)
 }
 
 fn file_len(path: &Path) -> Result<u64, String> {

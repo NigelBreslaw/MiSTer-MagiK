@@ -1,4 +1,8 @@
-use crate::media_pack_save::{publish_pack_file_with_progress, temp_path_for};
+use crate::artifact_publish::{
+    prepare_artifact_publish, sync_path_with_fallback, timestamped_temp_path_for,
+    ArtifactPublishLabels,
+};
+use crate::media_pack_save::publish_pack_file_with_progress;
 use mister_magik_fb::media_update::{
     pack_status_from_state, parse_manifest_json, size_qualified_pack_path, state_path,
     valid_image_size, LocalPackStatus, MediaPack, MediaUpdatePolicy, MediaVariant,
@@ -659,26 +663,7 @@ fn sha256_hex(path: &Path) -> Result<String, String> {
 }
 
 fn cleanup_pack_publish_temps(local_path: &Path) {
-    let _ = fs::remove_file(temp_path_for(local_path));
-    let Some(parent) = local_path.parent() else {
-        return;
-    };
-    let Some(file_name) = local_path.file_name().and_then(|name| name.to_str()) else {
-        return;
-    };
-    let prefix = format!("{file_name}.tmp-");
-    let Ok(entries) = fs::read_dir(parent) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with(&prefix) {
-            let _ = fs::remove_file(path);
-        }
-    }
+    crate::media_pack_save::cleanup_pack_publish_temps(local_path);
 }
 
 fn write_download_state(
@@ -757,51 +742,31 @@ fn cache_metadata_json(metadata: &HttpCacheMetadata) -> Value {
 }
 
 fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("state path has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("create state parent {}: {e}", parent.display()))?;
-    let tmp = path.with_file_name(format!(
-        "{}.tmp-{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("media-state"),
-        unix_ms_now()
-    ));
+    let publish = prepare_artifact_publish(
+        path,
+        timestamped_temp_path_for(path, "media-state", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "state path",
+            parent: "state parent",
+        },
+    )?;
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(&tmp)
-        .map_err(|e| format!("create state tmp {}: {e}", tmp.display()))?;
+        .open(publish.temp_path())
+        .map_err(|e| format!("create state tmp {}: {e}", publish.temp_path().display()))?;
     let text =
         serde_json::to_string_pretty(value).map_err(|e| format!("serialize media state: {e}"))?;
     use std::io::Write;
     file.write_all(text.as_bytes())
         .and_then(|()| file.write_all(b"\n"))
-        .map_err(|e| format!("write media state {}: {e}", tmp.display()))?;
+        .map_err(|e| format!("write media state {}: {e}", publish.temp_path().display()))?;
     file.sync_all()
-        .map_err(|e| format!("sync media state {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!(
-            "rename media state {} -> {}: {e}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
-    sync_path(parent);
+        .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
+    publish.install_temp(Some("media state"))?;
+    sync_path_with_fallback(publish.parent());
     Ok(())
-}
-
-fn sync_path(path: &Path) {
-    match Command::new("sync").arg(path).status() {
-        Ok(status) if status.success() => {}
-        _ => {
-            let _ = Command::new("sync").status();
-        }
-    };
 }
 
 fn unix_ms_now() -> u128 {

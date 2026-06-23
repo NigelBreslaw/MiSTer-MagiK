@@ -1,7 +1,10 @@
+use crate::artifact_publish::{
+    cleanup_static_and_timestamped_temps, prepare_artifact_publish, static_temp_path_for,
+    sync_path_with_fallback, ArtifactPublishLabels,
+};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 pub(crate) const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
@@ -68,20 +71,22 @@ fn publish_pack_file_impl(
     final_path: &Path,
     progress: &mut dyn FnMut(PackSaveProgress),
 ) -> Result<PackSaveMetrics, String> {
-    let parent = final_path
-        .parent()
-        .ok_or_else(|| format!("pack destination has no parent: {}", final_path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("create pack destination parent {}: {e}", parent.display()))?;
-    let tmp = temp_path_for(final_path);
-    let _ = fs::remove_file(&tmp);
+    let publish = prepare_artifact_publish(
+        final_path,
+        temp_path_for(final_path),
+        ArtifactPublishLabels {
+            destination: "pack destination",
+            parent: "pack destination parent",
+        },
+    )?;
     let started = Instant::now();
     let mut metrics = PackSaveMetrics {
         bytes: file_len(source)?,
         ..Default::default()
     };
     let mut input = File::open(source).map_err(|e| format!("open {}: {e}", source.display()))?;
-    let mut output = File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+    let mut output = File::create(publish.temp_path())
+        .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
 
     let copy_started = Instant::now();
     metrics.progress_events = copy_with_progress(&mut input, &mut output, metrics.bytes, progress)?;
@@ -92,17 +97,14 @@ fn publish_pack_file_impl(
     let sync_started = Instant::now();
     output
         .sync_all()
-        .map_err(|e| format!("sync {}: {e}", tmp.display()))?;
+        .map_err(|e| format!("sync {}: {e}", publish.temp_path().display()))?;
     metrics.sync_ms = elapsed_ms(sync_started.elapsed());
     drop(output);
 
     let bytes = metrics.bytes;
     emit_progress(&mut metrics, progress, PackSavePhase::Rename, bytes, bytes);
     let rename_started = Instant::now();
-    fs::rename(&tmp, final_path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("rename {} -> {}: {e}", tmp.display(), final_path.display())
-    })?;
+    publish.install_temp(None)?;
     metrics.rename_ms = elapsed_ms(rename_started.elapsed());
 
     let bytes = metrics.bytes;
@@ -114,7 +116,7 @@ fn publish_pack_file_impl(
         bytes,
     );
     let parent_sync_started = Instant::now();
-    sync_path(parent);
+    sync_path_with_fallback(publish.parent());
     metrics.parent_sync_ms = elapsed_ms(parent_sync_started.elapsed());
     metrics.total_ms = elapsed_ms(started.elapsed());
     Ok(metrics)
@@ -136,13 +138,7 @@ fn emit_progress(
 }
 
 pub(crate) fn temp_path_for(final_path: &Path) -> PathBuf {
-    final_path.with_file_name(format!(
-        "{}.tmp",
-        final_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("screenshot-pack")
-    ))
+    static_temp_path_for(final_path, "screenshot-pack")
 }
 
 fn copy_with_progress(
@@ -181,13 +177,8 @@ fn file_len(path: &Path) -> Result<u64, String> {
         .map_err(|e| format!("stat {}: {e}", path.display()))
 }
 
-fn sync_path(path: &Path) {
-    match Command::new("sync").arg(path).status() {
-        Ok(status) if status.success() => {}
-        _ => {
-            let _ = Command::new("sync").status();
-        }
-    };
+pub(crate) fn cleanup_pack_publish_temps(final_path: &Path) {
+    cleanup_static_and_timestamped_temps(final_path, "screenshot-pack");
 }
 
 fn elapsed_ms(duration: Duration) -> u64 {
