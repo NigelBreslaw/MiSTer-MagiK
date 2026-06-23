@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::path::Path;
 
 pub const DEFAULT_MANIFEST_URL: &str =
     "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
@@ -68,6 +69,54 @@ pub struct PackIdentity {
     pub image_size: String,
     pub version: String,
     pub sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaUpdatePolicy {
+    Off,
+    Check,
+    Download,
+}
+
+impl MediaUpdatePolicy {
+    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value
+            .unwrap_or("download")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "" | "1" | "on" | "true" | "yes" | "download" => Ok(Self::Download),
+            "0" | "off" | "false" | "no" => Ok(Self::Off),
+            "check" | "check-only" | "dry-run" => Ok(Self::Check),
+            other => Err(format!("unsupported MISTER_MEDIA_UPDATE value: {other}")),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Check => "check",
+            Self::Download => "download",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalPackStatus {
+    Current,
+    Missing,
+    Stale { reason: String },
+}
+
+impl LocalPackStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Missing => "missing",
+            Self::Stale { .. } => "stale",
+        }
+    }
 }
 
 pub fn parse_manifest_json(manifest_url: &str, text: &str) -> Result<MediaManifest, String> {
@@ -257,6 +306,55 @@ pub fn size_qualified_pack_path(
     Ok(format!("{}/{}", asset_dir.trim_end_matches('/'), filename))
 }
 
+pub fn state_path(asset_dir: &str) -> String {
+    format!("{}/{}", asset_dir.trim_end_matches('/'), STATE_FILENAME)
+}
+
+pub fn pack_status_from_state(
+    pack: &MediaPack,
+    local_path: &Path,
+    state: Option<&Value>,
+) -> LocalPackStatus {
+    if !local_path.exists() {
+        return LocalPackStatus::Missing;
+    }
+    let Some(entry) = state_entry_for_pack(state, pack) else {
+        return LocalPackStatus::Stale {
+            reason: "state-missing".to_string(),
+        };
+    };
+    for (key, expected) in [
+        ("version", pack.version.as_str()),
+        ("sha256", pack.raw.sha256.as_str()),
+        ("image_size", pack.image_size.as_str()),
+    ] {
+        match entry.get(key).and_then(Value::as_str) {
+            Some(got) if got == expected => {}
+            Some(got) => {
+                return LocalPackStatus::Stale {
+                    reason: format!("{key}-mismatch:{got}"),
+                };
+            }
+            None if key == "image_size" => {}
+            None => {
+                return LocalPackStatus::Stale {
+                    reason: format!("{key}-missing"),
+                };
+            }
+        }
+    }
+    LocalPackStatus::Current
+}
+
+fn state_entry_for_pack<'a>(state: Option<&'a Value>, pack: &MediaPack) -> Option<&'a Value> {
+    let state = state?;
+    let system = state.get("systems")?.get(&pack.id)?;
+    system
+        .get("packs")
+        .and_then(|packs| packs.get(&pack.image_size))
+        .or(Some(system))
+}
+
 fn validate_object_path(object: &str) -> Result<(), String> {
     if object.contains("..") || object.starts_with('/') {
         return Err(format!("unsafe media object path: {object}"));
@@ -424,6 +522,68 @@ mod tests {
         );
         assert!(size_qualified_pack_filename("psx", "320x320").is_err());
         assert!(size_qualified_pack_filename("arcade", "320").is_err());
+    }
+
+    #[test]
+    fn classifies_pack_status_from_state_and_file() {
+        let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &raw_manifest("")).unwrap();
+        let pack = &manifest.packs[0];
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-media-state-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let local_path = root.join("arcade-screenshots-320x320.mmlz4b");
+
+        assert_eq!(
+            pack_status_from_state(pack, &local_path, None),
+            LocalPackStatus::Missing
+        );
+
+        std::fs::write(&local_path, b"pack").unwrap();
+        assert_eq!(
+            pack_status_from_state(pack, &local_path, None),
+            LocalPackStatus::Stale {
+                reason: "state-missing".to_string()
+            }
+        );
+
+        let state = serde_json::json!({
+            "systems": {
+                "arcade": {
+                    "preferred_size": "320x320",
+                    "packs": {
+                        "320x320": {
+                            "version": "2026.06.22",
+                            "image_size": "320x320",
+                            "sha256": SHA
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            pack_status_from_state(pack, &local_path, Some(&state)),
+            LocalPackStatus::Current
+        );
+
+        let stale = serde_json::json!({
+            "systems": {
+                "arcade": {
+                    "packs": {
+                        "320x320": {
+                            "version": "2026.06.21",
+                            "image_size": "320x320",
+                            "sha256": SHA
+                        }
+                    }
+                }
+            }
+        });
+        assert!(matches!(
+            pack_status_from_state(pack, &local_path, Some(&stale)),
+            LocalPackStatus::Stale { .. }
+        ));
+        let _ = std::fs::remove_file(local_path);
+        let _ = std::fs::remove_dir(root);
     }
 
     #[test]

@@ -263,6 +263,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog_rx = None;
     let mut deferred_catalog_worker = None;
     let mut catalog_refresh_done = false;
+    let mut media_worker_started = false;
+    let mut media_rx = None;
     let mut catalog_persisted_summary_seen = false;
     let library_changed_test_action = library_changed_test_action_from_env(start);
     let mut library_changed_test_action_armed = library_changed_test_action.is_some();
@@ -810,6 +812,46 @@ pub(super) fn run_launcher_loop(
                             full_bridge_dirty = true;
                         }
                     }
+                }
+            }
+        }
+
+        if !media_worker_started && catalog_ready && frame_accounting.first_visible_copy_done() {
+            media_worker_started = true;
+            media_rx = start_screenshot_media_worker();
+            if media_rx.is_some() {
+                print_startup_event(start, "screenshot_media_worker_start", "queued=1");
+            } else {
+                print_startup_event(start, "screenshot_media_worker_skip", "queued=0");
+            }
+        }
+
+        while let Some(message) = media_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            match message {
+                MediaWorkerMessage::Timing { name, detail } => {
+                    print_startup_event(start, &name, detail);
+                }
+                MediaWorkerMessage::PackStatus {
+                    system,
+                    image_size,
+                    status,
+                    detail,
+                } => {
+                    print_startup_event(
+                        start,
+                        "screenshot_media_pack_status",
+                        format!("system={system} image_size={image_size} status={status} {detail}"),
+                    );
+                }
+                MediaWorkerMessage::Failed { detail } => {
+                    print_startup_event(start, "screenshot_media_update_failed", detail);
+                    media_rx = None;
+                    break;
+                }
+                MediaWorkerMessage::Done { detail } => {
+                    print_startup_event(start, "screenshot_media_update_done", detail);
+                    media_rx = None;
+                    break;
                 }
             }
         }
