@@ -30,14 +30,30 @@ use crate::software_identity::{
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
 pub(crate) type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
+pub type ScanEventCallback<'a> = Option<&'a mut dyn FnMut(LibraryScanEvent)>;
 const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
+const SCREENSHOT_PACK_SYSTEM_IDS: &[&str] = &[
+    "arcade",
+    "neogeo",
+    "nes",
+    "snes",
+    "n64",
+    "sms",
+    "megadrive",
+    "saturn",
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryScanEvent {
+    SystemDiscovered { system_id: String },
+}
 
 pub(crate) const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 pub(crate) const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
@@ -338,13 +354,27 @@ fn write_sqlite_scan_with_mame(
 pub fn rebuild_default_sqlite_database(
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
+    rebuild_default_sqlite_database_with_events(progress, None)
+}
+
+pub fn rebuild_default_sqlite_database_with_events(
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
     let cfg = BenchConfig::production();
-    rebuild_sqlite_database(&cfg, progress)
+    rebuild_sqlite_database_with_events(&cfg, progress, scan_events)
 }
 
 pub fn scan_default_library(progress: ProgressCallback<'_>) -> Result<LibraryScanArtifact, String> {
+    scan_default_library_with_events(progress, None)
+}
+
+pub fn scan_default_library_with_events(
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryScanArtifact, String> {
     let cfg = BenchConfig::production();
-    Ok(scan_library_artifact(&cfg, progress))
+    Ok(scan_library_artifact_with_events(&cfg, progress, scan_events))
 }
 
 pub fn bootstrap_default_library_progress(
@@ -427,15 +457,27 @@ pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSumma
 
 pub(crate) fn rebuild_sqlite_database(
     cfg: &BenchConfig,
+    progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
+    rebuild_sqlite_database_with_events(cfg, progress, None)
+}
+
+pub(crate) fn rebuild_sqlite_database_with_events(
+    cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,
+    mut scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let scan_t = Instant::now();
     if let Some(report) = progress.as_mut() {
         report("Indexing library", "Full catalog build...");
     }
-    let artifact = match progress.as_mut() {
-        Some(report) => scan_library_artifact(cfg, Some(&mut **report)),
-        None => scan_library_artifact(cfg, None),
+    let artifact = match (progress.as_mut(), scan_events.as_mut()) {
+        (Some(report), Some(events)) => {
+            scan_library_artifact_with_events(cfg, Some(&mut **report), Some(&mut **events))
+        }
+        (Some(report), None) => scan_library_artifact_with_events(cfg, Some(&mut **report), None),
+        (None, Some(events)) => scan_library_artifact_with_events(cfg, None, Some(&mut **events)),
+        (None, None) => scan_library_artifact_with_events(cfg, None, None),
     };
     let scan_us = scan_t.elapsed().as_micros() as u64;
     if let Some(report) = progress.as_mut() {
@@ -485,18 +527,26 @@ pub(crate) fn env_bool(name: &str) -> bool {
 }
 
 pub(crate) fn scan_library(cfg: &BenchConfig) -> LibraryScan {
-    scan_library_with_progress(cfg, None)
+    scan_library_with_progress_and_events(cfg, None, None)
 }
 
 pub(crate) fn scan_library_artifact(
     cfg: &BenchConfig,
-    mut progress: ProgressCallback<'_>,
+    progress: ProgressCallback<'_>,
+) -> LibraryScanArtifact {
+    scan_library_artifact_with_events(cfg, progress, None)
+}
+
+pub(crate) fn scan_library_artifact_with_events(
+    cfg: &BenchConfig,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
 ) -> LibraryScanArtifact {
     let stamp = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
     let scan_t = Instant::now();
-    let scan = match progress.as_mut() {
-        Some(report) => scan_library_with_progress(cfg, Some(&mut **report)),
-        None => scan_library(cfg),
+    let scan = match (progress, scan_events) {
+        (None, None) => scan_library(cfg),
+        (progress, scan_events) => scan_library_with_progress_and_events(cfg, progress, scan_events),
     };
     let stats = LibraryScanStats {
         scan_us: scan_t.elapsed().as_micros() as u64,
@@ -615,9 +665,18 @@ struct ScanTimingStats {
     collection_listing_count: usize,
 }
 
+#[cfg(test)]
 fn scan_library_with_progress(
     cfg: &BenchConfig,
+    progress: ProgressCallback<'_>,
+) -> LibraryScan {
+    scan_library_with_progress_and_events(cfg, progress, None)
+}
+
+fn scan_library_with_progress_and_events(
+    cfg: &BenchConfig,
     mut progress: ProgressCallback<'_>,
+    mut scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
     let rx = catalog_scan::discover_files_pipelined(cfg.roots.clone());
@@ -633,6 +692,7 @@ fn scan_library_with_progress(
     let mut timing = ScanTimingStats::default();
     let mut idx = 0usize;
     let mut first_discovery_reported = false;
+    let mut discovered_systems = BTreeSet::new();
     while let Ok(event) = rx.recv() {
         let f = match event {
             DiscoveryEvent::File(file) => file,
@@ -753,6 +813,11 @@ fn scan_library_with_progress(
             }
             Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
+        report_new_discovered_systems(
+            &discoveries[discoveries_before..],
+            &mut discovered_systems,
+            &mut scan_events,
+        );
         if discoveries.len() > discoveries_before && !first_discovery_reported {
             first_discovery_reported = true;
             report_library_scan_timing(
@@ -826,6 +891,29 @@ fn scan_library_with_progress(
         discover_us,
         classify_us: classify_t.elapsed().as_micros() as u64,
     }
+}
+
+fn report_new_discovered_systems(
+    discoveries: &[GameDiscovery],
+    discovered_systems: &mut BTreeSet<String>,
+    scan_events: &mut ScanEventCallback<'_>,
+) {
+    let Some(report) = scan_events.as_mut() else {
+        return;
+    };
+    for discovery in discoveries {
+        let system_id = catalog_system_id_for_discovery(discovery);
+        if !screenshot_pack_system_supported(&system_id) {
+            continue;
+        }
+        if discovered_systems.insert(system_id.clone()) {
+            report(LibraryScanEvent::SystemDiscovered { system_id });
+        }
+    }
+}
+
+fn screenshot_pack_system_supported(system_id: &str) -> bool {
+    SCREENSHOT_PACK_SYSTEM_IDS.contains(&system_id)
 }
 
 fn bootstrap_library_progress(
@@ -1129,6 +1217,60 @@ mod tests {
             .iter()
             .any(|(title, detail)| title == "Classifying library"
                 && detail.starts_with("Games found: ")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_events_report_supported_system_once() {
+        let root = unique_temp_dir("scan-events-supported-systems");
+        let games = root.join("games");
+        let nes = games.join("NES");
+        let snes = games.join("SNES");
+        std::fs::create_dir_all(&nes).expect("create NES dir");
+        std::fs::create_dir_all(&snes).expect("create SNES dir");
+        std::fs::write(nes.join("Super Mario Bros.nes"), b"nes").expect("write NES game");
+        std::fs::write(nes.join("Legend of Zelda.nes"), b"nes").expect("write second NES game");
+        std::fs::write(snes.join("ActRaiser.sfc"), b"snes").expect("write SNES game");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+        let mut systems = Vec::new();
+        let mut scan_events = |event: LibraryScanEvent| match event {
+            LibraryScanEvent::SystemDiscovered { system_id } => systems.push(system_id),
+        };
+
+        let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));
+
+        assert_eq!(unique_discovery_count(&scan.discoveries), 3);
+        systems.sort();
+        assert_eq!(systems, ["nes", "snes"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_events_ignore_systems_without_screenshot_packs() {
+        let root = unique_temp_dir("scan-events-unsupported-systems");
+        let games = root.join("games");
+        let gba = games.join("GBA");
+        let nes = games.join("NES");
+        std::fs::create_dir_all(&gba).expect("create GBA dir");
+        std::fs::create_dir_all(&nes).expect("create NES dir");
+        std::fs::write(gba.join("Advance Wars.gba"), b"gba").expect("write GBA game");
+        std::fs::write(nes.join("Metroid.nes"), b"nes").expect("write NES game");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+        let mut systems = Vec::new();
+        let mut scan_events = |event: LibraryScanEvent| match event {
+            LibraryScanEvent::SystemDiscovered { system_id } => systems.push(system_id),
+        };
+
+        let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));
+
+        assert_eq!(unique_discovery_count(&scan.discoveries), 2);
+        assert_eq!(systems, ["nes"]);
         let _ = std::fs::remove_dir_all(root);
     }
 
