@@ -6,6 +6,9 @@ use crate::arcade_catalog::{
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
+use crate::media_update::{
+    is_supported_pack_id, valid_image_size, DEFAULT_ASSET_DIR, STATE_FILENAME,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -1533,7 +1536,73 @@ pub fn reset_launch() {
 
 pub fn reset_database_and_reboot() -> Result<(), String> {
     library_db::remove_default_sqlite_database()?;
+    delete_screenshot_packs()?;
     reboot_mister()
+}
+
+pub fn delete_screenshot_packs() -> Result<usize, String> {
+    delete_screenshot_packs_at(Path::new(DEFAULT_ASSET_DIR))
+}
+
+fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
+    let entries = match fs::read_dir(asset_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => {
+            return Err(format!(
+                "read screenshot asset dir {}: {e}",
+                asset_dir.display()
+            ))
+        }
+    };
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("read screenshot asset entry: {e}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("stat screenshot asset {}: {e}", path.display()))?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if screenshot_reset_deletes_file(name) {
+            fs::remove_file(&path)
+                .map_err(|e| format!("delete screenshot asset {}: {e}", path.display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+fn screenshot_reset_deletes_file(name: &str) -> bool {
+    if name == STATE_FILENAME || name.starts_with(&format!("{STATE_FILENAME}.tmp-")) {
+        return true;
+    }
+    let Some((system, rest)) = name.split_once("-screenshots") else {
+        return false;
+    };
+    if !is_supported_pack_id(system) {
+        return false;
+    }
+    if matches!(
+        rest,
+        ".mmlz4b" | ".mmlz4b.tmp" | ".mmlz4b.gz" | ".mmlz4b.br"
+    ) || rest.starts_with(".mmlz4b.tmp-")
+    {
+        return true;
+    }
+    let Some(rest) = rest.strip_prefix('-') else {
+        return false;
+    };
+    let Some((image_size, suffix)) = rest.split_once(".mmlz4b") else {
+        return false;
+    };
+    valid_image_size(image_size)
+        && (matches!(suffix, "" | ".tmp" | ".gz" | ".br") || suffix.starts_with(".tmp-"))
 }
 
 pub fn library_rebuild_on_next_boot_pending() -> bool {
@@ -2515,6 +2584,68 @@ mod tests {
         assert!(consume_library_rebuild_on_next_boot_at(&path).expect("consume marker"));
         assert!(!path.exists());
         assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("consume absent marker"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reset_screenshot_pack_matcher_is_limited_to_supported_pack_files() {
+        assert!(screenshot_reset_deletes_file(
+            "arcade-screenshots-320x320.mmlz4b"
+        ));
+        assert!(screenshot_reset_deletes_file(
+            "neogeo-screenshots-240x240.mmlz4b.tmp-123"
+        ));
+        assert!(screenshot_reset_deletes_file("nes-screenshots.mmlz4b"));
+        assert!(screenshot_reset_deletes_file(STATE_FILENAME));
+        assert!(screenshot_reset_deletes_file(
+            ".screenshot-media-state.json.tmp-123"
+        ));
+
+        assert!(!screenshot_reset_deletes_file(
+            "pcengine-screenshots.mmlz4b"
+        ));
+        assert!(!screenshot_reset_deletes_file(
+            "arcade-screenshots-large.mmlz4b"
+        ));
+        assert!(!screenshot_reset_deletes_file(
+            "arcade-preview-cache.raw565"
+        ));
+        assert!(!screenshot_reset_deletes_file("manual.pdf"));
+    }
+
+    #[test]
+    fn reset_screenshot_pack_cleanup_removes_packs_and_state_only() {
+        let root = unique_temp_dir("screenshot-pack-reset");
+        for name in [
+            "arcade-screenshots-320x320.mmlz4b",
+            "neogeo-screenshots.mmlz4b",
+            "saturn-screenshots-240x240.mmlz4b.tmp",
+            STATE_FILENAME,
+        ] {
+            std::fs::write(root.join(name), b"pack").expect("write removable asset");
+        }
+        for name in [
+            "pcengine-screenshots.mmlz4b",
+            "arcade-screenshots-large.mmlz4b",
+            "manual.pdf",
+        ] {
+            std::fs::write(root.join(name), b"keep").expect("write retained asset");
+        }
+        std::fs::create_dir(root.join("arcade-screenshots-320x320.mmlz4b.dir"))
+            .expect("write retained directory");
+
+        let removed = delete_screenshot_packs_at(&root).expect("delete screenshot packs");
+
+        assert_eq!(removed, 4);
+        assert!(!root.join("arcade-screenshots-320x320.mmlz4b").exists());
+        assert!(!root.join("neogeo-screenshots.mmlz4b").exists());
+        assert!(!root.join("saturn-screenshots-240x240.mmlz4b.tmp").exists());
+        assert!(!root.join(STATE_FILENAME).exists());
+        assert!(root.join("pcengine-screenshots.mmlz4b").exists());
+        assert!(root.join("arcade-screenshots-large.mmlz4b").exists());
+        assert!(root.join("manual.pdf").exists());
+        assert!(root.join("arcade-screenshots-320x320.mmlz4b.dir").exists());
 
         let _ = std::fs::remove_dir_all(root);
     }

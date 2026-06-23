@@ -1110,6 +1110,15 @@ pub(super) fn run_launcher_loop(
                             }
                             LauncherAction::ResetDatabase => {
                                 loading_title = "Shutting down…".to_string();
+                                if let Some(handle) = media_handle.as_ref() {
+                                    handle.finish();
+                                }
+                                media_worker_unavailable = true;
+                                media_handle = None;
+                                media_progress_display.clear();
+                                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                                bridge.set_media_pack_progresses(media_progress_display.model());
+                                bridge.set_media_pack_summary("".into());
                                 sync_bridge_launcher(
                                     &app,
                                     &pad,
