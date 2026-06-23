@@ -60,6 +60,7 @@ mod fpga;
 #[cfg(mister_bench_scenes)]
 mod frame_profile;
 mod input;
+mod launch_preparation;
 mod launcher;
 mod media_bench_download;
 mod media_bench_save;
@@ -153,7 +154,7 @@ fn main() {
 
     #[cfg(feature = "diagnostics")]
     if cmd == "launch-prep-bench" {
-        launcher::run_launch_prep_bench();
+        launch_preparation::run_launch_prep_bench();
         return;
     }
 
@@ -298,7 +299,8 @@ fn run_library_refresh() {
     };
     match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
-            let launch_cache = launcher::materialize_virtual_launch_cache_from_default_db();
+            let launch_cache =
+                launch_preparation::materialize_virtual_launch_cache_from_default_db();
             drop(lock);
             println!(
                 "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={} virtual_launch_total={} virtual_launch_written={} virtual_launch_unchanged={} virtual_launch_errors={}",

@@ -15,6 +15,7 @@ pub mod framebuffer_ownership;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
+pub mod launch_preparation;
 pub mod launcher;
 pub mod media_update;
 pub mod raster_effects;
