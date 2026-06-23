@@ -1,13 +1,14 @@
 use mister_magik_fb::media_update::{
     pack_status_from_state, parse_manifest_json, size_qualified_pack_path, state_path,
-    valid_image_size, MediaUpdatePolicy, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE,
-    DEFAULT_MANIFEST_URL,
+    valid_image_size, LocalPackStatus, MediaPack, MediaUpdatePolicy, MediaVariant,
+    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
 };
 use serde_json::Value;
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn start_screenshot_media_worker() -> Option<mpsc::Receiver<MediaWorkerMessage>> {
     let config = match MediaWorkerConfig::from_env() {
@@ -71,6 +72,7 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
         ) {
             Ok(path) => PathBuf::from(path),
             Err(error) => {
+                counts.checked += 1;
                 counts.failed += 1;
                 let _ = tx.send(MediaWorkerMessage::PackStatus {
                     system: pack.id.clone(),
@@ -82,6 +84,7 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             }
         };
         let status = pack_status_from_state(pack, &local_path, state.as_ref());
+        counts.checked += 1;
         match status.label() {
             "current" => counts.current += 1,
             "missing" => counts.missing += 1,
@@ -100,17 +103,286 @@ fn run_screenshot_media_worker(config: MediaWorkerConfig, tx: mpsc::Sender<Media
             status: status.label().to_string(),
             detail,
         });
+        if config.policy == MediaUpdatePolicy::Download
+            && !matches!(status, LocalPackStatus::Current)
+        {
+            match download_raw_pack(&config, pack, &local_path) {
+                Ok(()) => {
+                    counts.downloaded += 1;
+                    let _ = tx.send(MediaWorkerMessage::PackStatus {
+                        system: pack.id.clone(),
+                        image_size: pack.image_size.clone(),
+                        status: "downloaded".to_string(),
+                        detail: format!("local_path={}", local_path.display()),
+                    });
+                }
+                Err(error) => {
+                    counts.failed += 1;
+                    let _ = tx.send(MediaWorkerMessage::PackStatus {
+                        system: pack.id.clone(),
+                        image_size: pack.image_size.clone(),
+                        status: "failed".to_string(),
+                        detail: error,
+                    });
+                }
+            }
+        }
     }
     let _ = tx.send(MediaWorkerMessage::Done {
         detail: format!(
-            "packs={} current={} missing={} stale={} failed={}",
+            "packs={} current={} missing={} stale={} downloaded={} failed={}",
             counts.total(),
             counts.current,
             counts.missing,
             counts.stale,
+            counts.downloaded,
             counts.failed
         ),
     });
+}
+
+fn download_raw_pack(
+    config: &MediaWorkerConfig,
+    pack: &MediaPack,
+    local_path: &Path,
+) -> Result<(), String> {
+    let variant = pack
+        .variant_for_compression("none")
+        .ok_or_else(|| format!("pack {} has no compression=none variant", pack.id))?;
+    fs::create_dir_all(&config.asset_dir)
+        .map_err(|e| format!("create asset dir {}: {e}", config.asset_dir.display()))?;
+    let work_dir = PathBuf::from("/tmp/mister-magik-media-download");
+    fs::create_dir_all(&work_dir)
+        .map_err(|e| format!("create media work dir {}: {e}", work_dir.display()))?;
+    let encoded_tmp = work_dir.join(format!(
+        "{}-{}-{}.mmlz4b.download",
+        pack.id,
+        pack.image_size,
+        unix_ms_now()
+    ));
+    let result = download_variant_to_path(variant, &encoded_tmp)
+        .and_then(|()| verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256))
+        .and_then(|()| publish_pack_file(&encoded_tmp, local_path))
+        .and_then(|()| write_download_state(&config.asset_dir, pack, local_path, variant));
+    let _ = fs::remove_file(encoded_tmp);
+    result
+}
+
+fn download_variant_to_path(variant: &MediaVariant, output_path: &Path) -> Result<(), String> {
+    let status = Command::new("wget")
+        .arg("-q")
+        .arg("--header")
+        .arg("Accept-Encoding: identity")
+        .arg("-O")
+        .arg(output_path)
+        .arg(&variant.url)
+        .status()
+        .map_err(|e| format!("spawn wget: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("wget exited with {status}"))
+    }
+}
+
+fn verify_downloaded_file(
+    path: &Path,
+    expected_bytes: u64,
+    expected_sha: &str,
+) -> Result<(), String> {
+    let bytes = path
+        .metadata()
+        .map_err(|e| format!("stat downloaded file {}: {e}", path.display()))?
+        .len();
+    if bytes != expected_bytes {
+        return Err(format!(
+            "size mismatch expected={expected_bytes} actual={bytes}"
+        ));
+    }
+    let sha = sha256_hex(path)?;
+    if sha != expected_sha {
+        return Err(format!(
+            "sha256 mismatch expected={expected_sha} actual={sha}"
+        ));
+    }
+    Ok(())
+}
+
+fn sha256_hex(path: &Path) -> Result<String, String> {
+    let output = Command::new("sha256sum").arg(path).output().or_else(|_| {
+        Command::new("shasum")
+            .arg("-a")
+            .arg("256")
+            .arg(path)
+            .output()
+    });
+    let output = output.map_err(|e| format!("spawn sha256 command: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("sha256 command exited with {}", output.status));
+    }
+    let text = String::from_utf8(output.stdout).map_err(|e| format!("sha256 output utf8: {e}"))?;
+    text.split_whitespace()
+        .next()
+        .filter(|sha| sha.len() == 64)
+        .map(str::to_string)
+        .ok_or_else(|| format!("could not parse sha256 output: {text}"))
+}
+
+fn publish_pack_file(encoded_path: &Path, local_path: &Path) -> Result<(), String> {
+    let parent = local_path
+        .parent()
+        .ok_or_else(|| format!("pack path has no parent: {}", local_path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("create pack parent {}: {e}", parent.display()))?;
+    let final_tmp = local_path.with_file_name(format!(
+        "{}.tmp-{}",
+        local_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("screenshot-pack"),
+        unix_ms_now()
+    ));
+    copy_file_durable(encoded_path, &final_tmp)?;
+    fs::rename(&final_tmp, local_path).map_err(|e| {
+        let _ = fs::remove_file(&final_tmp);
+        format!(
+            "rename pack {} -> {}: {e}",
+            final_tmp.display(),
+            local_path.display()
+        )
+    })?;
+    sync_path(parent);
+    Ok(())
+}
+
+fn copy_file_durable(src: &Path, dst: &Path) -> Result<(), String> {
+    let mut input = File::open(src).map_err(|e| format!("open {}: {e}", src.display()))?;
+    let mut output = File::create(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
+    std::io::copy(&mut input, &mut output)
+        .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
+    output
+        .sync_all()
+        .map_err(|e| format!("sync {}: {e}", dst.display()))?;
+    Ok(())
+}
+
+fn write_download_state(
+    asset_dir: &Path,
+    pack: &MediaPack,
+    local_path: &Path,
+    variant: &MediaVariant,
+) -> Result<(), String> {
+    let path = PathBuf::from(state_path(&asset_dir.display().to_string()));
+    let mut root = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let systems = root
+        .entry("systems".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let systems = systems
+        .as_object_mut()
+        .ok_or("media state systems must be an object")?;
+    let system = systems
+        .entry(pack.id.clone())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let system = system
+        .as_object_mut()
+        .ok_or("media state system entry must be an object")?;
+    system.insert(
+        "preferred_size".to_string(),
+        Value::String(pack.image_size.clone()),
+    );
+    system.insert(
+        "preferred_variant".to_string(),
+        Value::String("identity".to_string()),
+    );
+    let packs = system
+        .entry("packs".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let packs = packs
+        .as_object_mut()
+        .ok_or("media state packs must be an object")?;
+    packs.insert(
+        pack.image_size.clone(),
+        serde_json::json!({
+            "version": pack.version,
+            "image_size": pack.image_size,
+            "sha256": pack.raw.sha256,
+            "bytes": pack.raw.bytes,
+            "variant": "identity",
+            "compression": variant.compression,
+            "local_path": local_path.display().to_string(),
+            "object": variant.object,
+            "updated_at_unix": unix_secs_now(),
+        }),
+    );
+    root.insert("schema".to_string(), Value::from(1));
+    root.insert("updated_at_unix".to_string(), Value::from(unix_secs_now()));
+    write_json_atomic(&path, &Value::Object(root))
+}
+
+fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("state path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("create state parent {}: {e}", parent.display()))?;
+    let tmp = path.with_file_name(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("media-state"),
+        unix_ms_now()
+    ));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&tmp)
+        .map_err(|e| format!("create state tmp {}: {e}", tmp.display()))?;
+    let text =
+        serde_json::to_string_pretty(value).map_err(|e| format!("serialize media state: {e}"))?;
+    use std::io::Write;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|e| format!("write media state {}: {e}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|e| format!("sync media state {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!(
+            "rename media state {} -> {}: {e}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    sync_path(parent);
+    Ok(())
+}
+
+fn sync_path(path: &Path) {
+    match Command::new("sync").arg(path).status() {
+        Ok(status) if status.success() => {}
+        _ => {
+            let _ = Command::new("sync").status();
+        }
+    };
+}
+
+fn unix_ms_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn unix_secs_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn fetch_manifest_text(manifest_url: &str) -> Result<String, String> {
@@ -166,15 +438,17 @@ impl MediaWorkerConfig {
 
 #[derive(Default)]
 struct MediaCheckCounts {
+    checked: usize,
     current: usize,
     missing: usize,
     stale: usize,
+    downloaded: usize,
     failed: usize,
 }
 
 impl MediaCheckCounts {
     fn total(&self) -> usize {
-        self.current + self.missing + self.stale + self.failed
+        self.checked
     }
 }
 
@@ -201,6 +475,39 @@ pub(super) enum MediaWorkerMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mister_magik_fb::media_update::parse_manifest_json;
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn pack_fixture() -> MediaPack {
+        let text = format!(
+            r#"{{
+  "schema": 1,
+  "generated_at": "2026-06-22T16:58:28Z",
+  "packs": [
+    {{
+      "id": "arcade",
+      "version": "2026.06.22",
+      "object": "mister-magik/v1/packs/arcade/2026.06.22/{SHA}.mmlz4b",
+      "bytes": 4,
+      "sha256": "{SHA}",
+      "codec": "mmlz4b"
+    }}
+  ]
+}}"#
+        );
+        parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+            .unwrap()
+            .packs
+            .remove(0)
+    }
 
     #[test]
     fn media_worker_policy_defaults_to_download() {
@@ -217,5 +524,70 @@ mod tests {
             MediaUpdatePolicy::Off
         );
         assert!(MediaUpdatePolicy::parse(Some("maybe")).is_err());
+    }
+
+    #[test]
+    fn verify_downloaded_file_rejects_bad_checksum() {
+        let dir = temp_dir("mister-magik-verify-bad-sha");
+        let path = dir.join("pack.mmlz4b");
+        fs::write(&path, b"pack").unwrap();
+
+        let err = verify_downloaded_file(&path, 4, SHA).unwrap_err();
+
+        assert!(err.contains("sha256 mismatch"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn publish_pack_file_replaces_only_after_validated_copy() {
+        let dir = temp_dir("mister-magik-publish-pack");
+        let encoded = dir.join("downloaded.mmlz4b");
+        let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
+        fs::write(&encoded, b"new").unwrap();
+        fs::write(&final_path, b"old").unwrap();
+
+        publish_pack_file(&encoded, &final_path).unwrap();
+
+        assert_eq!(fs::read(&final_path).unwrap(), b"new");
+        assert!(!dir.join("arcade-screenshots-320x320.mmlz4b.tmp").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_verification_leaves_existing_pack_untouched() {
+        let dir = temp_dir("mister-magik-bad-download");
+        let encoded = dir.join("downloaded.mmlz4b");
+        let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
+        fs::write(&encoded, b"bad").unwrap();
+        fs::write(&final_path, b"old").unwrap();
+
+        assert!(verify_downloaded_file(&encoded, 3, SHA).is_err());
+
+        assert_eq!(fs::read(&final_path).unwrap(), b"old");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn write_download_state_records_size_qualified_pack() {
+        let dir = temp_dir("mister-magik-write-state");
+        let pack = pack_fixture();
+        let local_path = dir.join("arcade-screenshots-320x320.mmlz4b");
+        let variant = pack.variant_for_compression("none").unwrap();
+
+        write_download_state(&dir, &pack, &local_path, variant).unwrap();
+
+        let state: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(".screenshot-media-state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state["systems"]["arcade"]["packs"]["320x320"]["local_path"],
+            local_path.display().to_string()
+        );
+        assert_eq!(
+            state["systems"]["arcade"]["packs"]["320x320"]["variant"],
+            "identity"
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 }
