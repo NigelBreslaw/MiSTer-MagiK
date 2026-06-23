@@ -71,6 +71,14 @@ pub(crate) fn publish_pack_file_for_bench(
     result
 }
 
+pub(crate) fn publish_pack_file_with_progress(
+    source: &Path,
+    final_path: &Path,
+    progress: impl FnMut(PackSaveProgress),
+) -> Result<PackSaveMetrics, String> {
+    publish_pack_file_for_bench(source, final_path, PackSaveMode::Progress, progress)
+}
+
 fn publish_pack_file_impl(
     source: &Path,
     final_path: &Path,

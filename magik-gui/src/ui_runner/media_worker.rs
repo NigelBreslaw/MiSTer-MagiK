@@ -1,3 +1,4 @@
+use crate::media_pack_save::{publish_pack_file_with_progress, temp_path_for};
 use mister_magik_fb::media_update::{
     pack_status_from_state, parse_manifest_json, size_qualified_pack_path, state_path,
     valid_image_size, LocalPackStatus, MediaPack, MediaUpdatePolicy, MediaVariant,
@@ -502,12 +503,20 @@ fn download_raw_pack(
         verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256).map(|()| metadata)
     })
     .and_then(|metadata| {
-        send_progress(
-            tx,
-            MediaProgressEvent::for_pack(pack, "identity", "save", pack_index, pack_count)
-                .with_done_bytes(variant.bytes),
-        );
-        publish_pack_file(&encoded_tmp, local_path).map(|()| metadata)
+        publish_pack_file_with_progress(&encoded_tmp, local_path, |progress| {
+            send_progress(
+                tx,
+                MediaProgressEvent::for_pack(
+                    pack,
+                    "identity",
+                    progress.phase.label(),
+                    pack_index,
+                    pack_count,
+                )
+                .with_bytes(progress.bytes_done, progress.bytes_total),
+            );
+        })
+        .map(|_| metadata)
     })
     .and_then(|metadata| {
         write_download_state(
@@ -640,37 +649,8 @@ fn sha256_hex(path: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("could not parse sha256 output: {text}"))
 }
 
-fn publish_pack_file(encoded_path: &Path, local_path: &Path) -> Result<(), String> {
-    let parent = local_path
-        .parent()
-        .ok_or_else(|| format!("pack path has no parent: {}", local_path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("create pack parent {}: {e}", parent.display()))?;
-    let final_tmp = local_path.with_file_name(format!(
-        "{}.tmp-{}",
-        local_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("screenshot-pack"),
-        unix_ms_now()
-    ));
-    if let Err(error) = copy_file_durable(encoded_path, &final_tmp) {
-        let _ = fs::remove_file(&final_tmp);
-        return Err(error);
-    }
-    fs::rename(&final_tmp, local_path).map_err(|e| {
-        let _ = fs::remove_file(&final_tmp);
-        format!(
-            "rename pack {} -> {}: {e}",
-            final_tmp.display(),
-            local_path.display()
-        )
-    })?;
-    sync_path(parent);
-    Ok(())
-}
-
 fn cleanup_pack_publish_temps(local_path: &Path) {
+    let _ = fs::remove_file(temp_path_for(local_path));
     let Some(parent) = local_path.parent() else {
         return;
     };
@@ -690,17 +670,6 @@ fn cleanup_pack_publish_temps(local_path: &Path) {
             let _ = fs::remove_file(path);
         }
     }
-}
-
-fn copy_file_durable(src: &Path, dst: &Path) -> Result<(), String> {
-    let mut input = File::open(src).map_err(|e| format!("open {}: {e}", src.display()))?;
-    let mut output = File::create(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
-    std::io::copy(&mut input, &mut output)
-        .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
-    output
-        .sync_all()
-        .map_err(|e| format!("sync {}: {e}", dst.display()))?;
-    Ok(())
 }
 
 fn write_download_state(
@@ -1296,17 +1265,24 @@ mod tests {
     }
 
     #[test]
-    fn publish_pack_file_replaces_only_after_validated_copy() {
+    fn progress_publish_replaces_only_after_validated_copy() {
         let dir = temp_dir("mister-magik-publish-pack");
         let encoded = dir.join("downloaded.mmlz4b");
         let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
         fs::write(&encoded, b"new").unwrap();
         fs::write(&final_path, b"old").unwrap();
+        let mut save_events = Vec::new();
 
-        publish_pack_file(&encoded, &final_path).unwrap();
+        publish_pack_file_with_progress(&encoded, &final_path, |event| {
+            save_events.push(event);
+        })
+        .unwrap();
 
         assert_eq!(fs::read(&final_path).unwrap(), b"new");
         assert!(!dir.join("arcade-screenshots-320x320.mmlz4b.tmp").exists());
+        assert!(save_events
+            .iter()
+            .any(|event| event.phase.label() == "save"));
         let _ = fs::remove_dir_all(dir);
     }
 
