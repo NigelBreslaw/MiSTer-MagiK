@@ -40,18 +40,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_preview_source_height(0);
     bridge.set_arcade_preview_display_width(0);
     bridge.set_arcade_preview_display_height(0);
-    bridge.set_catalog_scan_visible(false);
-    bridge.set_catalog_scan_message(FIRST_LIBRARY_SCAN_MESSAGE.into());
-    bridge.set_catalog_scan_title("".into());
-    bridge.set_catalog_scan_detail("".into());
-    bridge.set_catalog_scan_percent(-1);
-    bridge.set_media_pack_progresses(ModelRc::new(VecModel::from(Vec::<
-        slint_ui::launcher::ScreenshotPackProgress,
-    >::new())));
-    bridge.set_media_pack_summary("".into());
-    bridge.set_catalog_background_scan_visible(false);
-    bridge.set_setup_visible(false);
-    bridge.set_setup_phase(0);
+    LauncherStatusPresenter::new(&bridge).init();
     sync_bridge_pad_launcher(&bridge, pad);
 }
 
@@ -65,6 +54,114 @@ pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::
     bridge.set_arcade_preview_box_y(ARCADE_PREVIEW_BOX_Y as i32);
     bridge.set_arcade_preview_box_width(ARCADE_PREVIEW_BOX_W as i32);
     bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
+}
+
+pub(super) struct CatalogScanBridgeStatus {
+    visible: bool,
+    background_visible: bool,
+    message: SharedString,
+    title: SharedString,
+    detail: SharedString,
+    percent: i32,
+}
+
+impl CatalogScanBridgeStatus {
+    pub(super) fn new(
+        visible: bool,
+        background_visible: bool,
+        message: impl Into<SharedString>,
+        title: impl Into<SharedString>,
+        detail: impl Into<SharedString>,
+        percent: i32,
+    ) -> Self {
+        Self {
+            visible,
+            background_visible,
+            message: message.into(),
+            title: title.into(),
+            detail: detail.into(),
+            percent,
+        }
+    }
+}
+
+pub(super) struct LauncherStatusPresenter<'a, 'b> {
+    bridge: &'a slint_ui::launcher::MisterBridge<'b>,
+}
+
+impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
+    pub(super) fn new(bridge: &'a slint_ui::launcher::MisterBridge<'b>) -> Self {
+        Self { bridge }
+    }
+
+    pub(super) fn init(&self) {
+        self.sync_loading("", "");
+        self.sync_catalog_scan(CatalogScanBridgeStatus::new(
+            false,
+            false,
+            FIRST_LIBRARY_SCAN_MESSAGE,
+            "",
+            "",
+            -1,
+        ));
+        self.sync_media_progresses(empty_media_pack_progress_model(), "");
+        self.sync_setup_visible(false);
+        self.bridge.set_setup_phase(0);
+    }
+
+    pub(super) fn sync_loading(
+        &self,
+        message: impl Into<SharedString>,
+        detail: impl Into<SharedString>,
+    ) {
+        self.bridge.set_loading_message(message.into());
+        self.bridge.set_loading_detail(detail.into());
+    }
+
+    pub(super) fn sync_catalog_scan(&self, status: CatalogScanBridgeStatus) {
+        self.bridge.set_catalog_scan_visible(status.visible);
+        self.bridge
+            .set_catalog_background_scan_visible(status.background_visible);
+        self.bridge.set_catalog_scan_message(status.message);
+        self.bridge.set_catalog_scan_title(status.title);
+        self.bridge.set_catalog_scan_detail(status.detail);
+        self.bridge.set_catalog_scan_percent(status.percent);
+    }
+
+    pub(super) fn clear_catalog_scan(&self) {
+        self.bridge.set_catalog_scan_visible(false);
+        self.bridge.set_catalog_background_scan_visible(false);
+        self.bridge.set_catalog_scan_title("".into());
+        self.bridge.set_catalog_scan_detail("".into());
+        self.bridge.set_catalog_scan_percent(-1);
+    }
+
+    pub(super) fn sync_catalog_background_scan_visible(&self, visible: bool) {
+        self.bridge.set_catalog_background_scan_visible(visible);
+    }
+
+    pub(super) fn sync_catalog_scan_detail(&self, detail: impl Into<SharedString>) {
+        self.bridge.set_catalog_scan_detail(detail.into());
+    }
+
+    pub(super) fn sync_media_progresses(
+        &self,
+        progresses: ModelRc<slint_ui::launcher::ScreenshotPackProgress>,
+        summary: impl Into<SharedString>,
+    ) {
+        self.bridge.set_media_pack_progresses(progresses);
+        self.bridge.set_media_pack_summary(summary.into());
+    }
+
+    pub(super) fn sync_setup_visible(&self, visible: bool) {
+        self.bridge.set_setup_visible(visible);
+    }
+}
+
+fn empty_media_pack_progress_model() -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
+    ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::ScreenshotPackProgress,
+    >::new()))
 }
 
 pub(super) fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
@@ -166,8 +263,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
-    bridge.set_loading_message(loading_message.into());
-    bridge.set_loading_detail(loading_detail.into());
+    LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade {
         let games = active_games_for_preview
             .or_else(|| catalog.map(|catalog| active_system_game_slice(catalog, nav)))
@@ -214,8 +310,8 @@ pub(super) fn sync_bridge_launcher_light(
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
-    bridge.set_loading_message(loading_message.into());
-    bridge.set_loading_detail(loading_detail.into());
+    let status_presenter = LauncherStatusPresenter::new(&bridge);
+    status_presenter.sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade {
         let games = active_arcade_games.unwrap_or_else(|| active_system_game_slice(catalog, nav));
         schedule_arcade_preview_window(
@@ -228,7 +324,7 @@ pub(super) fn sync_bridge_launcher_light(
     } else {
         preview.clear(&bridge);
     }
-    bridge.set_setup_visible(setup.is_active());
+    status_presenter.sync_setup_visible(setup.is_active());
 }
 
 pub(super) fn launcher_clock_text() -> String {

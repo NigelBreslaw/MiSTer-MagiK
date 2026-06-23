@@ -384,38 +384,43 @@ pub(super) fn run_launcher_loop(
             bridge_systems_t.elapsed().as_micros()
         ),
     );
-    bridge.set_catalog_scan_visible(initial_catalog_scan_visible(
-        catalog_ready,
-        arcade_catalog_required_at_start,
-        catalog_worker_enabled,
-        catalog_foreground_update,
-    ));
-    bridge.set_catalog_scan_message(catalog_scan_message(catalog_foreground_update).into());
-    bridge.set_catalog_scan_title(if catalog_ready {
+    let catalog_scan_title = if catalog_ready {
         if catalog_foreground_update {
-            "Indexing library".into()
+            "Indexing library".to_string()
         } else if catalog_refresh {
-            "Validating library".into()
+            "Validating library".to_string()
         } else {
-            "".into()
+            String::new()
         }
     } else if !catalog_worker_enabled {
-        "".into()
+        String::new()
     } else {
-        "Indexing library".into()
-    });
-    bridge.set_catalog_scan_detail(if catalog_ready {
+        "Indexing library".to_string()
+    };
+    let catalog_scan_detail = if catalog_ready {
         if catalog_foreground_update {
-            "Rebuilding catalog with latest games...".into()
+            "Rebuilding catalog with latest games...".to_string()
         } else {
-            format!("Using cached {} games", catalog.len()).into()
+            format!("Using cached {} games", catalog.len())
         }
     } else if !catalog_worker_enabled {
-        "Catalog worker disabled for benchmark restart".into()
+        "Catalog worker disabled for benchmark restart".to_string()
     } else {
-        "No cached catalog; scanning library...".into()
-    });
-    bridge.set_catalog_scan_percent(-1);
+        "No cached catalog; scanning library...".to_string()
+    };
+    LauncherStatusPresenter::new(&bridge).sync_catalog_scan(CatalogScanBridgeStatus::new(
+        initial_catalog_scan_visible(
+            catalog_ready,
+            arcade_catalog_required_at_start,
+            catalog_worker_enabled,
+            catalog_foreground_update,
+        ),
+        false,
+        catalog_scan_message(catalog_foreground_update),
+        catalog_scan_title,
+        catalog_scan_detail,
+        -1,
+    ));
     let bridge_sync_t = Instant::now();
     sync_bridge_launcher(
         &app,
@@ -631,14 +636,16 @@ pub(super) fn run_launcher_loop(
                         let detail = games_found_counter
                             .progress_detail(&title, &detail, loop_start)
                             .unwrap_or(detail);
-                        bridge.set_catalog_scan_visible(visible);
-                        bridge.set_catalog_scan_message(
-                            catalog_scan_message(catalog_foreground_update).into(),
+                        LauncherStatusPresenter::new(&bridge).sync_catalog_scan(
+                            CatalogScanBridgeStatus::new(
+                                visible,
+                                background_visible,
+                                catalog_scan_message(catalog_foreground_update),
+                                title,
+                                detail,
+                                percent,
+                            ),
                         );
-                        bridge.set_catalog_background_scan_visible(background_visible);
-                        bridge.set_catalog_scan_title(title.into());
-                        bridge.set_catalog_scan_detail(detail.into());
-                        bridge.set_catalog_scan_percent(percent);
                         full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::SystemDiscovered { system_id } => {
@@ -727,11 +734,7 @@ pub(super) fn run_launcher_loop(
                                 catalog_refresh_done = true;
                                 catalog_foreground_update = false;
                                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                bridge.set_catalog_scan_visible(false);
-                                bridge.set_catalog_background_scan_visible(false);
-                                bridge.set_catalog_scan_title("".into());
-                                bridge.set_catalog_scan_detail("".into());
-                                bridge.set_catalog_scan_percent(-1);
+                                LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                                 games_found_counter.reset();
                                 nav.confirm_action =
                                     Some(launcher::ConfirmAction::LibraryUpdateFailed);
@@ -746,22 +749,22 @@ pub(super) fn run_launcher_loop(
                             continue;
                         }
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_catalog_scan_visible(false);
-                        bridge.set_catalog_background_scan_visible(false);
-                        bridge.set_catalog_scan_percent(-1);
+                        let status_presenter = LauncherStatusPresenter::new(&bridge);
                         games_found_counter.reset();
                         if cached_before_refresh {
-                            bridge.set_catalog_scan_title("Validating library".into());
-                            bridge.set_catalog_scan_detail(
+                            status_presenter.sync_catalog_scan(CatalogScanBridgeStatus::new(
+                                false,
+                                false,
+                                catalog_scan_message(catalog_foreground_update),
+                                "Validating library",
                                 format!(
                                     "Using cached {} games while checking for changes",
                                     catalog.len()
-                                )
-                                .into(),
-                            );
+                                ),
+                                -1,
+                            ));
                         } else {
-                            bridge.set_catalog_scan_title("".into());
-                            bridge.set_catalog_scan_detail("".into());
+                            status_presenter.clear_catalog_scan();
                         }
                         let bridge_sync_t = Instant::now();
                         sync_bridge_launcher(
@@ -805,7 +808,8 @@ pub(super) fn run_launcher_loop(
                         }
                         print_startup_event(start, "library_db_save_failed", error);
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_catalog_background_scan_visible(false);
+                        LauncherStatusPresenter::new(&bridge)
+                            .sync_catalog_background_scan_visible(false);
                         full_bridge_dirty = true;
                     }
                     CatalogWorkerMessage::Unchanged { summary } => {
@@ -832,11 +836,7 @@ pub(super) fn run_launcher_loop(
                             ),
                         );
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_catalog_scan_visible(false);
-                        bridge.set_catalog_background_scan_visible(false);
-                        bridge.set_catalog_scan_title("".into());
-                        bridge.set_catalog_scan_detail("".into());
-                        bridge.set_catalog_scan_percent(-1);
+                        LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                         games_found_counter.reset();
                         full_bridge_dirty = true;
                     }
@@ -851,11 +851,7 @@ pub(super) fn run_launcher_loop(
                         nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
                         nav.confirm_selected = 0;
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_catalog_scan_visible(false);
-                        bridge.set_catalog_background_scan_visible(false);
-                        bridge.set_catalog_scan_title("".into());
-                        bridge.set_catalog_scan_detail("".into());
-                        bridge.set_catalog_scan_percent(-1);
+                        LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                         games_found_counter.reset();
                         full_bridge_dirty = true;
                     }
@@ -868,11 +864,7 @@ pub(super) fn run_launcher_loop(
                         }
                         if catalog_ready {
                             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                            bridge.set_catalog_scan_visible(false);
-                            bridge.set_catalog_background_scan_visible(false);
-                            bridge.set_catalog_scan_title("".into());
-                            bridge.set_catalog_scan_detail("".into());
-                            bridge.set_catalog_scan_percent(-1);
+                            LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                             games_found_counter.reset();
                             full_bridge_dirty = true;
                         }
@@ -890,8 +882,10 @@ pub(super) fn run_launcher_loop(
                     print_startup_event(start, "screenshot_media_progress", event.log_detail());
                     if media_progress_display.apply(&event) {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        bridge.set_media_pack_progresses(media_progress_display.model());
-                        bridge.set_media_pack_summary(media_progress_display.summary().into());
+                        LauncherStatusPresenter::new(&bridge).sync_media_progresses(
+                            media_progress_display.model(),
+                            media_progress_display.summary(),
+                        );
                         full_bridge_dirty = true;
                     }
                 }
@@ -919,8 +913,8 @@ pub(super) fn run_launcher_loop(
                     media_worker_unavailable = true;
                     media_progress_display.clear();
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    bridge.set_media_pack_progresses(media_progress_display.model());
-                    bridge.set_media_pack_summary("".into());
+                    LauncherStatusPresenter::new(&bridge)
+                        .sync_media_progresses(media_progress_display.model(), "");
                     full_bridge_dirty = true;
                     media_handle = None;
                     break;
@@ -929,8 +923,8 @@ pub(super) fn run_launcher_loop(
                     print_startup_event(start, "screenshot_media_update_done", detail);
                     media_progress_display.clear();
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    bridge.set_media_pack_progresses(media_progress_display.model());
-                    bridge.set_media_pack_summary("".into());
+                    LauncherStatusPresenter::new(&bridge)
+                        .sync_media_progresses(media_progress_display.model(), "");
                     full_bridge_dirty = true;
                     media_handle = None;
                     break;
@@ -1138,8 +1132,8 @@ pub(super) fn run_launcher_loop(
                                 media_handle = None;
                                 media_progress_display.clear();
                                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                bridge.set_media_pack_progresses(media_progress_display.model());
-                                bridge.set_media_pack_summary("".into());
+                                LauncherStatusPresenter::new(&bridge)
+                                    .sync_media_progresses(media_progress_display.model(), "");
                                 sync_bridge_launcher(
                                     &app,
                                     &pad,
@@ -1222,11 +1216,7 @@ pub(super) fn run_launcher_loop(
                                 catalog_foreground_update = false;
                                 deferred_catalog_worker = None;
                                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                bridge.set_catalog_scan_visible(false);
-                                bridge.set_catalog_background_scan_visible(false);
-                                bridge.set_catalog_scan_title("".into());
-                                bridge.set_catalog_scan_detail("".into());
-                                bridge.set_catalog_scan_percent(-1);
+                                LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                                 games_found_counter.reset();
                                 catalog_refresh_failed = false;
                                 window.request_redraw();
@@ -1252,16 +1242,16 @@ pub(super) fn run_launcher_loop(
                                     CatalogWorkerInitialCache::AlreadyLoadedReady,
                                 ));
                                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                                bridge.set_catalog_scan_visible(true);
-                                bridge.set_catalog_scan_message(
-                                    catalog_scan_message(catalog_foreground_update).into(),
+                                LauncherStatusPresenter::new(&bridge).sync_catalog_scan(
+                                    CatalogScanBridgeStatus::new(
+                                        true,
+                                        false,
+                                        catalog_scan_message(catalog_foreground_update),
+                                        "Indexing library",
+                                        "Rebuilding catalog with latest games...",
+                                        -1,
+                                    ),
                                 );
-                                bridge.set_catalog_background_scan_visible(false);
-                                bridge.set_catalog_scan_title("Indexing library".into());
-                                bridge.set_catalog_scan_detail(
-                                    "Rebuilding catalog with latest games...".into(),
-                                );
-                                bridge.set_catalog_scan_percent(-1);
                                 window.request_redraw();
                                 continue;
                             }
@@ -1426,7 +1416,7 @@ pub(super) fn run_launcher_loop(
             .unwrap_or(0);
         let games_found_detail_changed = if catalog_scan_visible && catalog_scan_percent < 0 {
             games_found_counter.tick(loop_start).is_some_and(|detail| {
-                bridge.set_catalog_scan_detail(detail.into());
+                LauncherStatusPresenter::new(&bridge).sync_catalog_scan_detail(detail);
                 true
             })
         } else {
