@@ -48,6 +48,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 mod arcade_list_renderer;
+mod artifact_publish;
 mod bitmap_text;
 mod boot_analytics;
 mod cpu_profile;
