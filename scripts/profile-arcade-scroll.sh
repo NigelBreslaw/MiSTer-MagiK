@@ -5,7 +5,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/arcade-scroll-profiles"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 
 usage() {
   cat <<'EOF'
@@ -52,11 +51,9 @@ remote_tsv="/tmp/${label}-arcade-scroll.tsv"
 remote_log="/tmp/mister-magik-slint.log"
 local_tsv="$OUT_DIR/${label}-arcade-scroll.tsv"
 local_log="$OUT_DIR/${label}-arcade-scroll.log"
-env_file="$(mktemp)"
 
 cleanup() {
-  rm -f "$env_file"
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" launcher-restart --clear-env --timeout 20 >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -65,19 +62,17 @@ case "$deploy" in
   skip) : ;;
 esac
 
-{
-  printf 'export MISTER_CATALOG_REFRESH=off\n'
-  printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
-  printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
-  printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll\n'
-  printf 'export MISTER_PREVIEW_TRACE=1\n'
-  printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
-  printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
-} >"$env_file"
-
 echo "==> Capture supervised launcher Arcade held-scroll secs=$secs label=$label deploy=$deploy"
-"$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+"$MISTER" run "rm -f '$remote_tsv' '$remote_log'" >/dev/null
+"$MISTER" launcher-restart \
+  --env MISTER_CATALOG_REFRESH=off \
+  --env MISTER_LAUNCHER_START_SCREEN=arcade \
+  --env MISTER_LAUNCHER_LOCK_SCREEN=arcade \
+  --env MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll \
+  --env MISTER_PREVIEW_TRACE=1 \
+  --env "MISTER_PREVIEW_SCROLL_TRACE_SECS=$secs" \
+  --env "MISTER_PREVIEW_SCROLL_TRACE=$remote_tsv" \
+  --timeout 30 >/dev/null
 sleep $((secs + 7))
 
 if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then

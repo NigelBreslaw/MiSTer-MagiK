@@ -23,6 +23,9 @@ const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
+const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
+const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
+const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -124,6 +127,15 @@ fn run_cli() -> Result<()> {
         }
         "media-cloudflare-check" => {
             media::media_cloudflare_check(&args)?;
+        }
+        "launcher-restart" => {
+            if launcher_restart_help_requested(&args) {
+                launcher_restart_usage();
+                return Ok(());
+            }
+            let options = parse_launcher_restart_args(&args)?;
+            let sess = connect(10)?;
+            launcher_restart(&sess, &options)?;
         }
         "boot-net-profile" => {
             boot_net_profile(&args)?;
@@ -267,7 +279,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
     );
 }
 
@@ -1040,6 +1052,15 @@ fn stream_command(sess: &Session, command: &str) -> Result<()> {
 fn put(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let sftp = sess.sftp()?;
     let bytes = fs::read(local)?;
+    put_bytes_with_sftp(&sftp, remote, &bytes)
+}
+
+fn put_bytes(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
+    let sftp = sess.sftp()?;
+    put_bytes_with_sftp(&sftp, remote, bytes)
+}
+
+fn put_bytes_with_sftp(sftp: &ssh2::Sftp, remote: &str, bytes: &[u8]) -> Result<()> {
     let mut dst = sftp.create(Path::new(remote))?;
     dst.write_all(&bytes)?;
     Ok(())
@@ -1623,6 +1644,268 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
         last_note
     )
     .into())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherRestartOptions {
+    env_vars: Vec<(String, String)>,
+    clear_env: bool,
+    timeout_secs: u64,
+    remote_env: String,
+}
+
+impl Default for LauncherRestartOptions {
+    fn default() -> Self {
+        Self {
+            env_vars: Vec::new(),
+            clear_env: false,
+            timeout_secs: 20,
+            remote_env: DEFAULT_LAUNCHER_ENV_REMOTE.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherReadyStatus {
+    main_ms: u128,
+    slint_ms: u128,
+    launcher_pid: i64,
+    slint_pid: i64,
+    frames: u64,
+    screen: String,
+}
+
+fn launcher_restart(sess: &Session, options: &LauncherRestartOptions) -> Result<()> {
+    let started = Instant::now();
+    let env_t = Instant::now();
+    let env_mode = prepare_launcher_env(sess, options)?;
+    let env_ms = env_t.elapsed().as_millis();
+
+    let issue_t = Instant::now();
+    issue_launcher_restart(sess)?;
+    let issue_ms = issue_t.elapsed().as_millis();
+
+    let ready = wait_launcher_ready(sess, started, Duration::from_secs(options.timeout_secs))?;
+    println!(
+        "launcher restart ok host={} env={} env_ms={} issue_ms={} ready_ms={} main_status_ms={} slint_status_ms={} launcher_pid={} slint_pid={} frames={} screen={}",
+        host(),
+        env_mode,
+        env_ms,
+        issue_ms,
+        started.elapsed().as_millis(),
+        ready.main_ms,
+        ready.slint_ms,
+        ready.launcher_pid,
+        ready.slint_pid,
+        ready.frames,
+        ready.screen
+    );
+    Ok(())
+}
+
+fn launcher_restart_help_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+}
+
+fn launcher_restart_usage() {
+    println!(
+        "usage: scripts/mister launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS] [--remote-env PATH]"
+    );
+}
+
+fn parse_launcher_restart_args(args: &[String]) -> Result<LauncherRestartOptions> {
+    let mut options = LauncherRestartOptions::default();
+    let mut idx = 0usize;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--env" => {
+                idx += 1;
+                let item = args
+                    .get(idx)
+                    .ok_or("launcher-restart --env needs KEY=VALUE")?;
+                let (key, value) = parse_launcher_env_pair(item)?;
+                options.env_vars.push((key, value));
+            }
+            "--clear-env" => {
+                options.clear_env = true;
+            }
+            "--timeout" => {
+                idx += 1;
+                let value = args
+                    .get(idx)
+                    .ok_or("launcher-restart --timeout needs seconds")?;
+                options.timeout_secs = value.parse::<u64>().map_err(|_| {
+                    format!("launcher-restart --timeout must be an integer: {value}")
+                })?;
+                if options.timeout_secs == 0 {
+                    return Err("launcher-restart --timeout must be positive".into());
+                }
+            }
+            "--remote-env" => {
+                idx += 1;
+                options.remote_env = args
+                    .get(idx)
+                    .ok_or("launcher-restart --remote-env needs a path")?
+                    .clone();
+            }
+            "-h" | "--help" => launcher_restart_usage(),
+            other => return Err(format!("unknown launcher-restart option: {other}").into()),
+        }
+        idx += 1;
+    }
+    if options.clear_env && !options.env_vars.is_empty() {
+        return Err("launcher-restart cannot combine --clear-env with --env".into());
+    }
+    let _ = remote_parent_dir(&options.remote_env)?;
+    Ok(options)
+}
+
+fn parse_launcher_env_pair(item: &str) -> Result<(String, String)> {
+    let (key, value) = item
+        .split_once('=')
+        .ok_or_else(|| format!("launcher env must be KEY=VALUE: {item}"))?;
+    if !is_launcher_env_key(key) {
+        return Err(format!("invalid launcher env key: {key}").into());
+    }
+    Ok((key.to_string(), value.to_string()))
+}
+
+fn is_launcher_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(ch) if ch == '_' || ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn launcher_env_text(vars: &[(String, String)]) -> String {
+    let mut text = String::new();
+    for (key, value) in vars {
+        text.push_str("export ");
+        text.push_str(key);
+        text.push('=');
+        text.push_str(&shell_export_quote(value));
+        text.push('\n');
+    }
+    text
+}
+
+fn shell_export_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn prepare_launcher_env(sess: &Session, options: &LauncherRestartOptions) -> Result<String> {
+    if options.clear_env {
+        let out = exec(sess, &format!("rm -f {}", sh(&options.remote_env)), true)?;
+        if out.rc != 0 {
+            return Err(format!("clear launcher env failed: {}", out.stdout.trim()).into());
+        }
+        return Ok("cleared".to_string());
+    }
+    if options.env_vars.is_empty() {
+        return Ok("unchanged".to_string());
+    }
+    let parent = remote_parent_dir(&options.remote_env)?;
+    let out = exec(sess, &format!("mkdir -p {}", sh(parent)), true)?;
+    if out.rc != 0 {
+        return Err(format!("create launcher env parent failed: {}", out.stdout.trim()).into());
+    }
+    put_bytes(sess, &options.remote_env, launcher_env_text(&options.env_vars).as_bytes())?;
+    Ok(format!("written:{}", options.env_vars.len()))
+}
+
+fn remote_parent_dir(remote: &str) -> Result<&str> {
+    if !remote.starts_with('/') {
+        return Err(
+            format!("remote path must be absolute and include a directory: {remote}").into(),
+        );
+    }
+    remote
+        .rsplit_once('/')
+        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
+        .ok_or_else(|| format!("remote path must be absolute and include a directory: {remote}").into())
+}
+
+fn issue_launcher_restart(sess: &Session) -> Result<()> {
+    let out = exec(
+        sess,
+        &format!(
+            "rm -f {} {}; if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd; echo restarted; else echo 'launcher restart unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi",
+            sh(MAIN_STATUS_REMOTE),
+            sh(SLINT_STATUS_REMOTE)
+        ),
+        true,
+    )?;
+    if out.rc == 0 {
+        Ok(())
+    } else {
+        Err(format!("launcher restart command failed: {}", out.stdout.trim()).into())
+    }
+}
+
+fn wait_launcher_ready(
+    sess: &Session,
+    started: Instant,
+    timeout: Duration,
+) -> Result<LauncherReadyStatus> {
+    let mut last_state = String::new();
+    while started.elapsed() < timeout {
+        let elapsed_ms = started.elapsed().as_millis();
+        let main = remote_read(sess, MAIN_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let slint = remote_read(sess, SLINT_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let state = main
+            .as_ref()
+            .and_then(|value| value.get("launcher_state"))
+            .and_then(Value::as_str)
+            .unwrap_or("missing");
+        last_state = state.to_string();
+        if let Some(ready) = launcher_ready_status(elapsed_ms, main.as_ref(), slint.as_ref()) {
+            return Ok(ready);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err(format!(
+        "launcher restart timed out after {}ms; last launcher_state={last_state}",
+        timeout.as_millis()
+    )
+    .into())
+}
+
+fn launcher_ready_status(
+    elapsed_ms: u128,
+    main: Option<&Value>,
+    slint: Option<&Value>,
+) -> Option<LauncherReadyStatus> {
+    let main = main?;
+    let slint = slint?;
+    if main.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive") {
+        return None;
+    }
+    if slint.get("scene").and_then(Value::as_str) != Some("launcher") {
+        return None;
+    }
+    let frames = slint.get("frames").and_then(Value::as_u64).unwrap_or(0);
+    if frames == 0 {
+        return None;
+    }
+    Some(LauncherReadyStatus {
+        main_ms: elapsed_ms,
+        slint_ms: elapsed_ms,
+        launcher_pid: main
+            .get("launcher_pid")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        slint_pid: slint
+            .get("pid")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        frames,
+        screen: slint
+            .get("screen")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    })
 }
 
 fn agent_diagnostics(args: &[String]) -> Result<()> {
@@ -4482,6 +4765,106 @@ video_mode=14
             "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn launcher_restart_args_collect_env_and_timeout() {
+        let args = vec![
+            "--env".to_string(),
+            "MISTER_LAUNCHER_START_SCREEN=arcade".to_string(),
+            "--env".to_string(),
+            "MISTER_PREVIEW_SCROLL_TRACE=/tmp/trace.tsv".to_string(),
+            "--timeout".to_string(),
+            "30".to_string(),
+        ];
+
+        let options = parse_launcher_restart_args(&args).unwrap();
+
+        assert_eq!(options.timeout_secs, 30);
+        assert_eq!(options.remote_env, DEFAULT_LAUNCHER_ENV_REMOTE);
+        assert_eq!(
+            options.env_vars,
+            vec![
+                (
+                    "MISTER_LAUNCHER_START_SCREEN".to_string(),
+                    "arcade".to_string()
+                ),
+                (
+                    "MISTER_PREVIEW_SCROLL_TRACE".to_string(),
+                    "/tmp/trace.tsv".to_string()
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn launcher_restart_args_reject_bad_env_and_clear_conflict() {
+        assert!(parse_launcher_restart_args(&[
+            "--env".to_string(),
+            "BAD-NAME=value".to_string()
+        ])
+        .is_err());
+        assert!(parse_launcher_restart_args(&[
+            "--clear-env".to_string(),
+            "--env".to_string(),
+            "MISTER_CATALOG_REFRESH=off".to_string()
+        ])
+        .is_err());
+        assert!(parse_launcher_restart_args(&[
+            "--clear-env".to_string(),
+            "--remote-env".to_string(),
+            "relative/launcher.env".to_string()
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn launcher_env_text_shell_quotes_values() {
+        let text = launcher_env_text(&[
+            ("MISTER_CATALOG_REFRESH".to_string(), "off".to_string()),
+            ("MISTER_LABEL".to_string(), "kid's test".to_string()),
+        ]);
+
+        assert!(text.contains("export MISTER_CATALOG_REFRESH='off'\n"));
+        assert!(text.contains("export MISTER_LABEL='kid'\"'\"'s test'\n"));
+    }
+
+    #[test]
+    fn launcher_remote_env_parent_requires_absolute_path() {
+        assert_eq!(
+            remote_parent_dir("/media/fat/mister-magik/launcher.env").unwrap(),
+            "/media/fat/mister-magik"
+        );
+        assert_eq!(remote_parent_dir("/launcher.env").unwrap(), "/");
+        assert!(remote_parent_dir("relative/launcher.env").is_err());
+    }
+
+    #[test]
+    fn launcher_ready_requires_main_and_new_slint_status() {
+        let main = json!({
+            "launcher_state": "LauncherActive",
+            "launcher_pid": 42
+        });
+        let slint = json!({
+            "scene": "launcher",
+            "pid": 43,
+            "frames": 2,
+            "screen": "arcade"
+        });
+
+        let ready = launcher_ready_status(125, Some(&main), Some(&slint)).unwrap();
+
+        assert_eq!(ready.launcher_pid, 42);
+        assert_eq!(ready.slint_pid, 43);
+        assert_eq!(ready.frames, 2);
+        assert_eq!(ready.screen, "arcade");
+        assert!(launcher_ready_status(125, Some(&main), None).is_none());
+        assert!(launcher_ready_status(
+            125,
+            Some(&main),
+            Some(&json!({"scene": "launcher", "frames": 0}))
+        )
+        .is_none());
     }
 
     #[test]
