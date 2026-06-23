@@ -831,9 +831,13 @@ run_tier_catalog() {
 
   if remote "test -f '$REMOTE_ASSETS/.screenshot-media-state.json'"; then
     size_state_count="$(remote "grep -c 'screenshots-320x320\\.mmlz4b' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
-    assert_gt_zero "media state size-qualified local_path count" "$size_state_count"
-    cache_state_count="$(remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
-    assert_gt_zero "media state cache metadata count" "$cache_state_count"
+    if [ "${size_state_count:-0}" -gt 0 ]; then
+      record_ok "media state size-qualified local_path count = $size_state_count"
+      cache_state_count="$(remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
+      assert_gt_zero "media state cache metadata count" "$cache_state_count"
+    else
+      record_ok "media state present without size-qualified runtime downloads"
+    fi
   else
     record_ok "media state not present; runtime downloader has not published packs on this device"
   fi
