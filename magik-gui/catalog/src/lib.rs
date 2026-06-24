@@ -8,6 +8,7 @@ mod catalog_progress;
 mod catalog_scan;
 pub mod catalog_stamp;
 pub mod catalog_store;
+pub mod catalog_summary;
 mod game_discovery;
 pub mod launch_profiles;
 pub mod library_bench;
