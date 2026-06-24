@@ -236,6 +236,14 @@ pub(crate) struct PreviewState {
     raw_dirty: bool,
     last_prefetch_selected: Option<usize>,
     prefetch_direction: i8,
+    last_prefetch_window: Option<PreviewPrefetchWindow>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreviewPrefetchWindow {
+    selected: usize,
+    len: usize,
+    direction: i8,
 }
 
 pub(crate) struct PreviewRawFrame<'a> {
@@ -341,6 +349,7 @@ impl PreviewState {
             raw_dirty: false,
             last_prefetch_selected: None,
             prefetch_direction: 0,
+            last_prefetch_window: None,
         }
     }
 
@@ -362,6 +371,7 @@ impl PreviewState {
             self.raw_dirty = false;
             self.last_prefetch_selected = None;
             self.prefetch_direction = 0;
+            self.last_prefetch_window = None;
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
@@ -575,6 +585,7 @@ pub(crate) fn request_arcade_preview_window(
         preview.pending_prefetch_keys.clear();
         preview.last_prefetch_selected = None;
         preview.prefetch_direction = 0;
+        preview.last_prefetch_window = None;
         bridge.set_arcade_preview_placeholder_visible(true);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
@@ -694,6 +705,17 @@ fn request_preview_prefetches(
         }
     }
     preview.last_prefetch_selected = Some(selected);
+    let window = PreviewPrefetchWindow {
+        selected,
+        len: games.len(),
+        direction: preview.prefetch_direction,
+    };
+    if preview.last_prefetch_window == Some(window)
+        && prefetch_window_is_covered(games, selected, preview)
+    {
+        return;
+    }
+    preview.last_prefetch_window = Some(window);
 
     for (rank, idx) in direction_aware_prefetch_indices(
         games.len(),
@@ -736,6 +758,27 @@ fn request_preview_prefetches(
             );
         }
     }
+}
+
+fn prefetch_window_is_covered(
+    games: &[ArcadeGameEntry],
+    selected: usize,
+    preview: &mut PreviewState,
+) -> bool {
+    direction_aware_prefetch_indices(
+        games.len(),
+        selected,
+        DEFAULT_PREVIEW_RADIUS,
+        preview.prefetch_direction,
+    )
+    .into_iter()
+    .filter_map(|idx| games.get(idx))
+    .filter_map(game_preview_key)
+    .all(|preview_key| {
+        preview.cache.contains(&preview_key)
+            || preview.cache.contains_failed(&preview_key)
+            || preview.pending_prefetch_keys.contains(&preview_key)
+    })
 }
 
 fn direction_aware_prefetch_indices(
