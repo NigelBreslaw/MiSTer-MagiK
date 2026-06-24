@@ -14,6 +14,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::fb::VsyncWaitStatus;
 use crate::preview_worker;
+use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
@@ -42,6 +43,22 @@ struct PendingLaunch {
     loading_frames: u64,
     max_frame_gap_us: u64,
     last_loop_start: Option<Instant>,
+}
+
+fn catalog_from_summary(
+    root: &str,
+    summary: &catalog_summary::CatalogSummaryProjection,
+) -> ArcadeCatalog {
+    let systems = summary
+        .systems
+        .iter()
+        .map(|system| arcade_catalog::GameSystemEntry {
+            id: system.id.clone(),
+            title: system.title.clone(),
+            count: system.count,
+        })
+        .collect();
+    ArcadeCatalog::new(PathBuf::from(root), Vec::new(), systems)
 }
 
 struct LaunchWorkerResult {
@@ -386,105 +403,196 @@ pub(super) fn run_launcher_loop(
     let mut media_catalog_seed_pending = false;
     let mut media_progress_display = MediaProgressDisplay::default();
     let mut catalog_persisted_summary_seen = false;
+    let mut catalog_summary_only = false;
     let library_changed_test_action = library_changed_test_action_from_env(start);
     let mut library_changed_test_action_armed = library_changed_test_action.is_some();
     let mut library_changed_test_dialog_seen_at: Option<Instant> = None;
-    match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
-        Ok(loaded) if !loaded.catalog.games.is_empty() => {
+    let summary_path = catalog_summary::summary_path_for_sqlite(&library_db::default_sqlite_path());
+    let summary_t = Instant::now();
+    let summary_seed = match catalog_summary::read_catalog_summary(&summary_path) {
+        Ok(Some(summary)) if !summary.systems.is_empty() => {
             print_startup_event(
                 start,
-                "catalog_cache_load_sync",
-                catalog_load_timing_detail(&loaded),
+                "catalog_summary_load",
+                format!(
+                    "status=ready systems={} games={} elapsed_us={} path={}",
+                    summary.systems.len(),
+                    summary.total_game_count,
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display()
+                ),
             );
-            catalog = loaded.catalog;
-            catalog_ready = true;
-            media_catalog_seed_pending = true;
-            catalog_version = catalog_version.wrapping_add(1);
-            apply_forced_arcade_selected(&mut nav, &catalog);
-            apply_pending_launch_return_state(&mut nav, &catalog, &mut pending_launch_return_state);
-            let request = ready_catalog_worker_request(catalog_refresh_policy);
-            if deferred_library_rebuild {
-                print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(
-                    arcade_root.clone(),
-                    CatalogWorkerRequest::ForceBuild,
-                    CatalogWorkerInitialCache::AlreadyLoadedReady,
-                ));
-            } else if request != CatalogWorkerRequest::LoadOnly {
-                let delay = catalog_background_validation_delay();
-                print_startup_event(
-                    start,
-                    "catalog_worker_deferred",
-                    format!(
-                        "root={} request={} delay_ms={}",
-                        arcade_root,
-                        request.label(),
-                        delay.as_millis()
-                    ),
-                );
-                deferred_catalog_worker = Some(DeferredCatalogWorker {
-                    root: arcade_root.clone(),
-                    request,
-                    start_after: None,
-                });
-            } else {
-                print_startup_event(
-                    start,
-                    "catalog_refresh_decision",
-                    format!(
-                        "cache_state=ready refresh_policy={} background_validation=false plan=load_only",
-                        catalog_refresh_policy.label()
-                    ),
-                );
-                catalog_rx = None;
-                catalog_refresh_done = true;
-            }
+            Some(summary)
         }
-        Ok(loaded) => {
+        Ok(Some(_)) => {
             print_startup_event(
                 start,
-                "catalog_cache_empty",
-                catalog_load_timing_detail(&loaded),
+                "catalog_summary_load",
+                format!(
+                    "status=empty elapsed_us={} path={}",
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display()
+                ),
             );
-            if catalog_worker_enabled {
-                print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(
-                    arcade_root.clone(),
-                    CatalogWorkerRequest::ForceBuild,
-                    CatalogWorkerInitialCache::ProbeSqlite,
-                ));
-            } else {
-                print_startup_event(
-                    start,
-                    "catalog_refresh_decision",
-                    format!(
-                        "cache_state=empty refresh_policy={} background_validation=false plan=load_only",
-                        catalog_refresh_policy.label()
-                    ),
-                );
-                catalog_refresh_done = true;
-            }
+            None
+        }
+        Ok(None) => {
+            print_startup_event(
+                start,
+                "catalog_summary_load",
+                format!(
+                    "status=missing_or_stale elapsed_us={} path={}",
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display()
+                ),
+            );
+            None
         }
         Err(e) => {
-            eprintln!("arcade catalog cache load failed: {e}");
-            print_startup_event(start, "catalog_cache_load_failed", e);
-            if catalog_worker_enabled {
-                print_startup_event(start, "catalog_worker_start", &arcade_root);
-                catalog_rx = Some(start_library_catalog_worker(
-                    arcade_root.clone(),
-                    CatalogWorkerRequest::ForceBuild,
-                    CatalogWorkerInitialCache::ProbeSqlite,
-                ));
-            } else {
+            print_startup_event(
+                start,
+                "catalog_summary_load_failed",
+                format!(
+                    "elapsed_us={} path={} error={}",
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display(),
+                    e
+                ),
+            );
+            None
+        }
+    };
+    if let Some(summary) = summary_seed {
+        catalog = catalog_from_summary(&arcade_root, &summary);
+        catalog_ready = true;
+        catalog_summary_only = true;
+        media_catalog_seed_pending = true;
+        catalog_version = catalog_version.wrapping_add(1);
+        let request = if deferred_library_rebuild {
+            CatalogWorkerRequest::ForceBuild
+        } else {
+            ready_catalog_worker_request(catalog_refresh_policy)
+        };
+        if catalog_worker_enabled {
+            print_startup_event(start, "catalog_worker_start", &arcade_root);
+            catalog_rx = Some(start_library_catalog_worker(
+                arcade_root.clone(),
+                request,
+                CatalogWorkerInitialCache::ProbeSqlite,
+            ));
+        } else {
+            print_startup_event(
+                start,
+                "catalog_refresh_decision",
+                format!(
+                    "cache_state=summary refresh_policy={} background_validation=false plan=load_only",
+                    catalog_refresh_policy.label()
+                ),
+            );
+            catalog_refresh_done = true;
+        }
+    } else {
+        match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
+            Ok(loaded) if !loaded.catalog.games.is_empty() => {
                 print_startup_event(
                     start,
-                    "catalog_refresh_decision",
-                    format!(
-                        "cache_state=missing refresh_policy={} background_validation=false plan=load_only",
-                        catalog_refresh_policy.label()
-                    ),
+                    "catalog_cache_load_sync",
+                    catalog_load_timing_detail(&loaded),
                 );
-                catalog_refresh_done = true;
+                catalog = loaded.catalog;
+                catalog_ready = true;
+                media_catalog_seed_pending = true;
+                catalog_version = catalog_version.wrapping_add(1);
+                apply_forced_arcade_selected(&mut nav, &catalog);
+                apply_pending_launch_return_state(
+                    &mut nav,
+                    &catalog,
+                    &mut pending_launch_return_state,
+                );
+                let request = ready_catalog_worker_request(catalog_refresh_policy);
+                if deferred_library_rebuild {
+                    print_startup_event(start, "catalog_worker_start", &arcade_root);
+                    catalog_rx = Some(start_library_catalog_worker(
+                        arcade_root.clone(),
+                        CatalogWorkerRequest::ForceBuild,
+                        CatalogWorkerInitialCache::AlreadyLoadedReady,
+                    ));
+                } else if request != CatalogWorkerRequest::LoadOnly {
+                    let delay = catalog_background_validation_delay();
+                    print_startup_event(
+                        start,
+                        "catalog_worker_deferred",
+                        format!(
+                            "root={} request={} delay_ms={}",
+                            arcade_root,
+                            request.label(),
+                            delay.as_millis()
+                        ),
+                    );
+                    deferred_catalog_worker = Some(DeferredCatalogWorker {
+                        root: arcade_root.clone(),
+                        request,
+                        start_after: None,
+                    });
+                } else {
+                    print_startup_event(
+                        start,
+                        "catalog_refresh_decision",
+                        format!(
+                            "cache_state=ready refresh_policy={} background_validation=false plan=load_only",
+                            catalog_refresh_policy.label()
+                        ),
+                    );
+                    catalog_rx = None;
+                    catalog_refresh_done = true;
+                }
+            }
+            Ok(loaded) => {
+                print_startup_event(
+                    start,
+                    "catalog_cache_empty",
+                    catalog_load_timing_detail(&loaded),
+                );
+                if catalog_worker_enabled {
+                    print_startup_event(start, "catalog_worker_start", &arcade_root);
+                    catalog_rx = Some(start_library_catalog_worker(
+                        arcade_root.clone(),
+                        CatalogWorkerRequest::ForceBuild,
+                        CatalogWorkerInitialCache::ProbeSqlite,
+                    ));
+                } else {
+                    print_startup_event(
+                        start,
+                        "catalog_refresh_decision",
+                        format!(
+                            "cache_state=empty refresh_policy={} background_validation=false plan=load_only",
+                            catalog_refresh_policy.label()
+                        ),
+                    );
+                    catalog_refresh_done = true;
+                }
+            }
+            Err(e) => {
+                eprintln!("arcade catalog cache load failed: {e}");
+                print_startup_event(start, "catalog_cache_load_failed", e);
+                if catalog_worker_enabled {
+                    print_startup_event(start, "catalog_worker_start", &arcade_root);
+                    catalog_rx = Some(start_library_catalog_worker(
+                        arcade_root.clone(),
+                        CatalogWorkerRequest::ForceBuild,
+                        CatalogWorkerInitialCache::ProbeSqlite,
+                    ));
+                } else {
+                    print_startup_event(
+                        start,
+                        "catalog_refresh_decision",
+                        format!(
+                            "cache_state=missing refresh_policy={} background_validation=false plan=load_only",
+                            catalog_refresh_policy.label()
+                        ),
+                    );
+                    catalog_refresh_done = true;
+                }
             }
         }
     }
@@ -796,13 +904,14 @@ pub(super) fn run_launcher_loop(
                         load_us,
                     } => {
                         let cached_before_refresh = summary.is_none();
-                        let duplicate_cached_catalog =
-                            duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
+                        let duplicate_cached_catalog = !catalog_summary_only
+                            && duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
                         catalog_refresh_done = !cached_before_refresh;
                         if !duplicate_cached_catalog {
                             catalog = ready_catalog;
                             catalog_version = catalog_version.wrapping_add(1);
                             catalog_ready = true;
+                            catalog_summary_only = false;
                             media_catalog_seed_pending = true;
                             apply_forced_arcade_selected(&mut nav, &catalog);
                             apply_pending_launch_return_state(
