@@ -26,6 +26,20 @@ PHASES = [
     ("overlay_present_us", "overlay-present", "#ef4444"),
 ]
 
+DETAIL_PHASES = [
+    ("prepare_us", "prepare", "#6b7280"),
+    ("anim_us", "anim", "#22c55e"),
+    ("slint_render_us", "slint-render", "#2563eb"),
+    ("arcade_list_update_us", "list-update", "#16a34a"),
+    ("preview_blit_us", "preview-blit", "#9333ea"),
+    ("effect_label_us", "effect-label", "#db2777"),
+    ("custom_draw_other_us", "custom-other", "#c084fc"),
+    ("vsync_us", "vsync-wait", "#f59e0b"),
+    ("cached_present_us", "cached-present", "#06b6d4"),
+    ("overlay_present_us", "overlay-present", "#ef4444"),
+    ("fb_present_other_us", "present-other", "#94a3b8"),
+]
+
 
 def int_field(row: dict[str, str], key: str) -> int:
     value = row.get(key, "")
@@ -43,6 +57,27 @@ def read_rows(path: Path, max_frames: int) -> list[dict[str, str]]:
     return rows[:max_frames]
 
 
+def has_detail_phases(rows: list[dict[str, str]]) -> bool:
+    if not rows:
+        return False
+    keys = rows[0].keys()
+    return {"arcade_list_update_us", "preview_blit_us", "effect_label_us"}.issubset(keys)
+
+
+def phase_value(row: dict[str, str], key: str) -> int:
+    if key == "custom_draw_other_us":
+        known = (
+            int_field(row, "arcade_list_update_us")
+            + int_field(row, "preview_blit_us")
+            + int_field(row, "effect_label_us")
+        )
+        return max(0, int_field(row, "custom_draw_us") - known)
+    if key == "fb_present_other_us":
+        known = int_field(row, "cached_present_us") + int_field(row, "overlay_present_us")
+        return max(0, int_field(row, "fb_present_us") - known)
+    return int_field(row, key)
+
+
 def svg_text(x: float, y: float, text: str, size: int = 12, anchor: str = "start") -> str:
     return (
         f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" '
@@ -52,6 +87,7 @@ def svg_text(x: float, y: float, text: str, size: int = 12, anchor: str = "start
 
 
 def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) -> str:
+    phases = DETAIL_PHASES if has_detail_phases(rows) else PHASES
     margin_l = 62
     margin_r = 24
     margin_t = 54
@@ -97,8 +133,8 @@ def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) 
         x = margin_l + idx * (bar_w + bar_gap)
         y = y0
         tooltip_bits = [f"frame {row.get('frame', idx)}"]
-        for key, label, color in PHASES:
-            value = int_field(row, key)
+        for key, label, color in phases:
+            value = phase_value(row, key)
             if value <= 0:
                 continue
             h = max(0.5, value * scale)
@@ -113,7 +149,7 @@ def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) 
 
     legend_x = margin_l
     legend_y = height - 44
-    for key, label, color in PHASES:
+    for key, label, color in phases:
         parts.append(f'<rect x="{legend_x}" y="{legend_y}" width="10" height="10" fill="{color}"/>')
         parts.append(svg_text(legend_x + 14, legend_y + 10, label, 10))
         legend_x += 112
