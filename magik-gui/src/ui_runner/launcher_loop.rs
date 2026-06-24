@@ -30,6 +30,7 @@ const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
+const MEDIA_PROGRESS_DONE_HOLD: Duration = Duration::from_secs(8);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 struct DeferredCatalogWorker {
@@ -592,6 +593,7 @@ pub(super) fn run_launcher_loop(
         reason: "startup",
     };
     let mut media_progress_display = MediaProgressDisplay::default();
+    let mut media_progress_clear_at: Option<Instant> = None;
     let mut catalog_persisted_summary_seen = false;
     let mut catalog_summary_only = false;
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
@@ -838,6 +840,14 @@ pub(super) fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
+        if media_progress_clear_at.is_some_and(|deadline| loop_start >= deadline) {
+            apply_launcher_worker_ui_intent(
+                &app,
+                media_progress_display.clear_intent(),
+                &mut full_bridge_dirty,
+            );
+            media_progress_clear_at = None;
+        }
         let mut route_action = FramebufferRouteAction {
             reassert_route: false,
             force_full_present: false,
@@ -1244,6 +1254,7 @@ pub(super) fn run_launcher_loop(
                     print_startup_event(start, &name, detail);
                 }
                 MediaWorkerMessage::Progress(event) => {
+                    media_progress_clear_at = None;
                     print_startup_event(start, "screenshot_media_progress", event.log_detail());
                     apply_launcher_worker_ui_intent(
                         &app,
@@ -1273,6 +1284,7 @@ pub(super) fn run_launcher_loop(
                 MediaWorkerMessage::Failed { detail } => {
                     print_startup_event(start, "screenshot_media_update_failed", detail);
                     media_worker_unavailable = true;
+                    media_progress_clear_at = None;
                     apply_launcher_worker_ui_intent(
                         &app,
                         media_progress_display.clear_intent(),
@@ -1283,11 +1295,7 @@ pub(super) fn run_launcher_loop(
                 }
                 MediaWorkerMessage::Done { detail } => {
                     print_startup_event(start, "screenshot_media_update_done", detail);
-                    apply_launcher_worker_ui_intent(
-                        &app,
-                        media_progress_display.clear_intent(),
-                        &mut full_bridge_dirty,
-                    );
+                    media_progress_clear_at = Some(loop_start + MEDIA_PROGRESS_DONE_HOLD);
                     media_handle = None;
                     break;
                 }
