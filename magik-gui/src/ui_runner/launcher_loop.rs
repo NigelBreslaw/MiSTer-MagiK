@@ -401,6 +401,12 @@ pub(super) fn run_launcher_loop(
     let mut media_handle = None;
     let mut media_worker_unavailable = false;
     let mut media_catalog_seed_pending = false;
+    let mut media_catalog_seed_defer_reason: Option<&'static str> = None;
+    let mut media_interaction_block_until: Option<Instant> = None;
+    let mut media_last_gate = MediaInteractionGate {
+        active: true,
+        reason: "startup",
+    };
     let mut media_progress_display = MediaProgressDisplay::default();
     let mut catalog_persisted_summary_seen = false;
     let mut catalog_summary_only = false;
@@ -707,15 +713,6 @@ pub(super) fn run_launcher_loop(
             force_full_present: false,
         };
         let defer_selected_preview = false;
-        if first_render_logged && media_catalog_seed_pending {
-            media_catalog_seed_pending = false;
-            ensure_media_for_catalog_systems(
-                &catalog,
-                &mut media_handle,
-                &mut media_worker_unavailable,
-                start,
-            );
-        }
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
@@ -877,25 +874,37 @@ pub(super) fn run_launcher_loop(
                             "catalog_system_discovered",
                             format!("system={system_id}"),
                         );
-                        if media_handle.is_none() && !media_worker_unavailable {
-                            media_handle = start_screenshot_media_worker();
-                            if media_handle.is_some() {
-                                print_startup_event(
-                                    start,
-                                    "screenshot_media_worker_start",
-                                    "mode=discovered-system",
-                                );
-                            } else {
-                                media_worker_unavailable = true;
-                                print_startup_event(
-                                    start,
-                                    "screenshot_media_worker_skip",
-                                    "mode=discovered-system",
-                                );
-                            }
+                        let media_gate = current_media_interaction_gate(
+                            frame_accounting.first_visible_copy_done(),
+                            pending_launch.is_some() || launching,
+                            media_interaction_block_until,
+                            loop_start,
+                        );
+                        sync_media_interaction_gate(
+                            media_handle.as_ref(),
+                            &mut media_last_gate,
+                            media_gate,
+                            start,
+                        );
+                        if media_gate.active {
+                            media_catalog_seed_pending = true;
+                            print_startup_event(
+                                start,
+                                "screenshot_media_catalog_defer",
+                                format!("system={system_id} reason={}", media_gate.reason),
+                            );
+                        } else {
+                            ensure_media_worker_started(
+                                &mut media_handle,
+                                &mut media_worker_unavailable,
+                                start,
+                                "discovered-system",
+                            );
                         }
-                        if let Some(handle) = media_handle.as_ref() {
-                            handle.ensure_system(&system_id);
+                        if !media_gate.active {
+                            if let Some(handle) = media_handle.as_ref() {
+                                handle.ensure_system(&system_id);
+                            }
                         }
                     }
                     CatalogWorkerMessage::Ready {
@@ -926,17 +935,10 @@ pub(super) fn run_launcher_loop(
                             );
                         }
                         if let Some(summary) = summary {
-                            if media_catalog_seed_pending {
-                                media_catalog_seed_pending = false;
-                                ensure_media_for_catalog_systems(
-                                    &catalog,
-                                    &mut media_handle,
-                                    &mut media_worker_unavailable,
-                                    start,
-                                );
-                            }
-                            if let Some(handle) = media_handle.as_ref() {
-                                handle.finish();
+                            if !media_catalog_seed_pending {
+                                if let Some(handle) = media_handle.as_ref() {
+                                    handle.finish();
+                                }
                             }
                             catalog_foreground_update = false;
                             catalog_refresh_failed = false;
@@ -1249,6 +1251,12 @@ pub(super) fn run_launcher_loop(
                 ) {
                     let after = LauncherBridgeKey::from_nav(&nav);
                     if before != after {
+                        mark_media_interaction_for_nav_change(
+                            &before,
+                            &after,
+                            &mut media_interaction_block_until,
+                            Instant::now(),
+                        );
                         if !dirty_opt || before.screen != after.screen {
                             full_bridge_dirty = true;
                         } else {
@@ -1638,6 +1646,14 @@ pub(super) fn run_launcher_loop(
                         window.request_redraw();
                     }
                     let nav_after = LauncherBridgeKey::from_nav(&nav);
+                    if nav_before != nav_after {
+                        mark_media_interaction_for_nav_change(
+                            &nav_before,
+                            &nav_after,
+                            &mut media_interaction_block_until,
+                            Instant::now(),
+                        );
+                    }
                     if pad_changed && nav.screen == Screen::Controller {
                         full_bridge_dirty = true;
                     } else if pad_changed && !dirty_opt {
@@ -1705,6 +1721,44 @@ pub(super) fn run_launcher_loop(
                 recover_launcher_ui(f, ui, &mut launch_spawned_mister);
                 std::process::exit(1);
             }
+        }
+
+        let media_gate = current_media_interaction_gate(
+            frame_accounting.first_visible_copy_done(),
+            pending_launch.is_some() || launching,
+            media_interaction_block_until,
+            loop_start,
+        );
+        sync_media_interaction_gate(
+            media_handle.as_ref(),
+            &mut media_last_gate,
+            media_gate,
+            start,
+        );
+        if media_catalog_seed_pending && !media_gate.active {
+            media_catalog_seed_pending = false;
+            media_catalog_seed_defer_reason = None;
+            ensure_media_for_catalog_systems(
+                &catalog,
+                &mut media_handle,
+                &mut media_worker_unavailable,
+                start,
+            );
+            sync_media_interaction_gate(
+                media_handle.as_ref(),
+                &mut media_last_gate,
+                media_gate,
+                start,
+            );
+        } else if media_catalog_seed_pending
+            && media_catalog_seed_defer_reason != Some(media_gate.reason)
+        {
+            media_catalog_seed_defer_reason = Some(media_gate.reason);
+            print_startup_event(
+                start,
+                "screenshot_media_catalog_defer",
+                format!("reason={}", media_gate.reason),
+            );
         }
 
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -2005,6 +2059,105 @@ fn apply_pending_launch_return_state(
     launcher::apply_launch_return_state(nav, catalog, state)
 }
 
+const MEDIA_INTERACTION_SETTLE: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MediaInteractionGate {
+    active: bool,
+    reason: &'static str,
+}
+
+fn current_media_interaction_gate(
+    first_visible_copy_done: bool,
+    launch_handoff_active: bool,
+    interaction_block_until: Option<Instant>,
+    now: Instant,
+) -> MediaInteractionGate {
+    if !first_visible_copy_done {
+        return MediaInteractionGate {
+            active: true,
+            reason: "startup",
+        };
+    }
+    if launch_handoff_active {
+        return MediaInteractionGate {
+            active: true,
+            reason: "launch-handoff",
+        };
+    }
+    if interaction_block_until.is_some_and(|until| now < until) {
+        return MediaInteractionGate {
+            active: true,
+            reason: "arcade-scroll",
+        };
+    }
+    MediaInteractionGate {
+        active: false,
+        reason: "idle",
+    }
+}
+
+fn mark_media_interaction_for_nav_change(
+    before: &LauncherBridgeKey,
+    after: &LauncherBridgeKey,
+    interaction_block_until: &mut Option<Instant>,
+    now: Instant,
+) {
+    if before.screen == Screen::Arcade || after.screen == Screen::Arcade {
+        *interaction_block_until = Some(now + MEDIA_INTERACTION_SETTLE);
+    }
+}
+
+fn sync_media_interaction_gate(
+    media_handle: Option<&MediaWorkerHandle>,
+    last_gate: &mut MediaInteractionGate,
+    gate: MediaInteractionGate,
+    start: Instant,
+) {
+    if *last_gate == gate {
+        return;
+    }
+    *last_gate = gate;
+    print_startup_event(
+        start,
+        "screenshot_media_interaction_gate",
+        format!(
+            "active={} reason={}",
+            if gate.active { 1 } else { 0 },
+            gate.reason
+        ),
+    );
+    if let Some(handle) = media_handle {
+        handle.set_interaction_active(gate.active, gate.reason);
+    }
+}
+
+fn ensure_media_worker_started(
+    media_handle: &mut Option<MediaWorkerHandle>,
+    media_worker_unavailable: &mut bool,
+    start: Instant,
+    mode: &str,
+) {
+    if media_handle.is_some() || *media_worker_unavailable {
+        return;
+    }
+    *media_handle = start_screenshot_media_worker();
+    if media_handle.is_some() {
+        print_startup_event(
+            start,
+            "screenshot_media_worker_start",
+            format!("mode={mode}"),
+        );
+    } else {
+        *media_worker_unavailable = true;
+        print_startup_event(
+            start,
+            "screenshot_media_worker_skip",
+            format!("mode={mode}"),
+        );
+    }
+}
+
 fn ensure_media_for_catalog_systems(
     catalog: &ArcadeCatalog,
     media_handle: &mut Option<MediaWorkerHandle>,
@@ -2015,23 +2168,12 @@ fn ensure_media_for_catalog_systems(
     if systems.is_empty() {
         return;
     }
-    if media_handle.is_none() && !*media_worker_unavailable {
-        *media_handle = start_screenshot_media_worker();
-        if media_handle.is_some() {
-            print_startup_event(
-                start,
-                "screenshot_media_worker_start",
-                format!("mode=catalog-systems systems={}", systems.len()),
-            );
-        } else {
-            *media_worker_unavailable = true;
-            print_startup_event(
-                start,
-                "screenshot_media_worker_skip",
-                "mode=catalog-systems",
-            );
-        }
-    }
+    ensure_media_worker_started(
+        media_handle,
+        media_worker_unavailable,
+        start,
+        "catalog-systems",
+    );
     let Some(handle) = media_handle.as_ref() else {
         return;
     };
