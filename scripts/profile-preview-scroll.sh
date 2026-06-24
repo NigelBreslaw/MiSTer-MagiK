@@ -223,6 +223,8 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
   local local_status="$OUT_DIR/${label}-${name}.status.txt"
+  local local_chart="$OUT_DIR/${label}-${name}-chart.svg"
+  local local_report="$OUT_DIR/${label}-${name}-report.html"
   local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
   cpu_profile_remote_svg="/tmp/${label}-${name}-cpu.svg"
 
@@ -250,6 +252,10 @@ run_case() {
   emit_artifact_row "${name}-trace" "$local_tsv" "$remote_tsv"
   emit_artifact_row "${name}-log" "$local_log" "$REMOTE_LOG"
   emit_artifact_row "${name}-status" "$local_status" "scripts/mister status"
+  "$HERE/scripts/frame-profile-chart.py" "$local_tsv" "$local_chart" --title "$label $name $scenario"
+  "$HERE/scripts/frame-profile-report.py" "$local_tsv" "$local_report" --title "$label $name $scenario"
+  emit_artifact_row "${name}-chart" "$local_chart" ""
+  emit_artifact_row "${name}-report" "$local_report" ""
   if [[ "$cpu_profile" == "1" ]]; then
     if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
       "$MISTER" status >"$local_status" 2>&1 || true
