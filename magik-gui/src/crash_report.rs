@@ -191,4 +191,47 @@ mod tests {
         );
         let _ = fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn crash_report_read_helpers_fall_back_to_null_for_missing_or_bad_files() {
+        let dir = unique_temp_dir("mister-magik-crash-read-helpers");
+        let json_path = dir.join("status.json");
+        let text_path = dir.join("log.txt");
+        fs::write(&json_path, "{not json").expect("write malformed json");
+        fs::write(&text_path, "line one\nline two\n").expect("write text");
+
+        assert_eq!(
+            read_json_value(json_path.to_str().expect("utf8")),
+            Value::Null
+        );
+        assert_eq!(
+            read_json_value(dir.join("missing.json").to_str().expect("utf8")),
+            Value::Null
+        );
+        assert_eq!(
+            read_text_value(text_path.to_str().expect("utf8")),
+            Value::String("line one\nline two\n".to_string())
+        );
+        assert_eq!(
+            tail_text_value(dir.join("missing.log").to_str().expect("utf8"), 10),
+            Value::Null
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn crash_report_write_reports_directory_setup_failure() {
+        let root = unique_temp_dir("mister-magik-crash-bad-dir");
+        let dir = root.join("not-a-dir");
+        fs::write(&dir, b"file blocks directory creation").expect("write file");
+        let report = json!({
+            "schema": "mister-magik-crash-report-v1",
+        });
+
+        let err =
+            write_report_value(&dir, "bad-report", &report).expect_err("directory setup failure");
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        let _ = fs::remove_dir_all(root);
+    }
 }

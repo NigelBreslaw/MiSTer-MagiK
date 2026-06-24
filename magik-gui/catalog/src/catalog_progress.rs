@@ -314,6 +314,104 @@ mod tests {
     }
 
     #[test]
+    fn catalog_progress_display_covers_all_structured_phases() {
+        let cases = [
+            (
+                CatalogProgress::classifying_games_found(7),
+                CatalogProgressPhase::ClassifyingLibrary,
+                "Classifying library",
+                "Games found: 7",
+                -1,
+            ),
+            (
+                CatalogProgress::indexing_building_catalog(),
+                CatalogProgressPhase::IndexingLibrary,
+                "Indexing library",
+                "Building catalog...",
+                -1,
+            ),
+            (
+                CatalogProgress::indexing_full_build(),
+                CatalogProgressPhase::IndexingLibrary,
+                "Indexing library",
+                "Full catalog build...",
+                -1,
+            ),
+            (
+                CatalogProgress::saving_before_opening_launcher(),
+                CatalogProgressPhase::SavingLibrary,
+                "Saving library",
+                "Writing catalog database before opening launcher...",
+                90,
+            ),
+            (
+                CatalogProgress::saving_finalizing(),
+                CatalogProgressPhase::SavingLibrary,
+                "Saving library",
+                "Finalizing catalog views and search indexes...",
+                99,
+            ),
+            (
+                CatalogProgress::loading_sqlite_catalog(),
+                CatalogProgressPhase::LoadingLibrary,
+                "Loading library",
+                "Opening SQLite catalog...",
+                100,
+            ),
+            (
+                CatalogProgress::library_scan_failed("scan failed"),
+                CatalogProgressPhase::LibraryScanFailed,
+                "Library scan failed",
+                "scan failed",
+                -1,
+            ),
+            (
+                CatalogProgress::library_load_failed("load failed"),
+                CatalogProgressPhase::LibraryLoadFailed,
+                "Library load failed",
+                "load failed",
+                -1,
+            ),
+        ];
+
+        for (progress, phase, title, detail, percent) in cases {
+            let display = progress.display();
+            assert_eq!(display.phase(), phase);
+            assert_eq!(display.title(), title);
+            assert_eq!(display.detail(), detail);
+            assert_eq!(display.percent(), percent);
+        }
+    }
+
+    #[test]
+    fn catalog_progress_percent_rejects_malformed_legacy_details() {
+        assert_eq!(
+            catalog_progress_percent_from_display("Saving library", "Writing nope of 10 games"),
+            90
+        );
+        assert_eq!(
+            catalog_progress_percent_from_display("Saving library", "Writing 5 from 10 games"),
+            90
+        );
+        assert_eq!(
+            catalog_progress_percent_from_display("Saving library", "Writing 5 of 0 games"),
+            90
+        );
+        assert_eq!(
+            catalog_progress_percent_from_display("Saving library", "Saving 5 from 10 bytes"),
+            90
+        );
+        assert_eq!(
+            catalog_progress_percent_from_display("Saving library", "Saving 5 of 0 bytes"),
+            100
+        );
+        assert_eq!(
+            catalog_progress_percent_from_display("Mystery phase", "Saving 5 of 10 bytes"),
+            -1
+        );
+    }
+
+    #[test]
     fn legacy_callback_adapter_emits_display_text() {
         let mut messages = Vec::<(String, String)>::new();
         let mut callback = |title: &str, detail: &str| {
