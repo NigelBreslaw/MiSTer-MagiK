@@ -1380,14 +1380,15 @@ pub(super) fn run_launcher_loop(
                 && launcher_bench_next_step.elapsed() >= scenario.period()
             {
                 let before = LauncherBridgeKey::from_nav(&nav);
-                if launcher_bench_step(
+                let bench_step_ran = launcher_bench_step(
                     scenario,
                     &mut nav,
                     &catalog,
                     None,
                     launcher_bench_step_idx,
                     Instant::now(),
-                ) {
+                );
+                if bench_step_ran {
                     let after = LauncherBridgeKey::from_nav(&nav);
                     if before != after {
                         mark_media_interaction_for_nav_change(
@@ -1403,7 +1404,8 @@ pub(super) fn run_launcher_loop(
                         }
                     }
                 }
-                launcher_bench_step_idx = launcher_bench_step_idx.wrapping_add(1);
+                launcher_bench_step_idx =
+                    launcher_bench_next_step_index(launcher_bench_step_idx, bench_step_ran);
                 launcher_bench_next_step = Instant::now();
             }
         }

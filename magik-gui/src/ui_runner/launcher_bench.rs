@@ -241,6 +241,14 @@ pub(super) fn launcher_bench_step(
     }
 }
 
+pub(super) fn launcher_bench_next_step_index(current: usize, step_ran: bool) -> usize {
+    if step_ran {
+        current.wrapping_add(1)
+    } else {
+        current
+    }
+}
+
 pub(super) fn launcher_bench_active_game_count(
     catalog: &ArcadeCatalog,
     nav: &LauncherNav,
@@ -473,4 +481,51 @@ pub(super) fn sync_device_info_launcher(
         )
         .into(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_catalog() -> ArcadeCatalog {
+        ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn held_scroll_keeps_initial_press_when_summary_has_no_rows() {
+        let catalog = empty_catalog();
+        let mut nav = LauncherNav::new();
+        let mut step = 0usize;
+        let t0 = Instant::now();
+
+        let ran_without_rows = launcher_bench_step(
+            LauncherBenchScenario::HeldScroll,
+            &mut nav,
+            &catalog,
+            Some(0),
+            step,
+            t0,
+        );
+        step = launcher_bench_next_step_index(step, ran_without_rows);
+
+        assert!(!ran_without_rows);
+        assert_eq!(step, 0);
+        assert_eq!(nav.arcade.selected, 0);
+        assert!(!nav.arcade.is_scroll_active());
+
+        let ran_with_rows = launcher_bench_step(
+            LauncherBenchScenario::HeldScroll,
+            &mut nav,
+            &catalog,
+            Some(10),
+            step,
+            t0 + Duration::from_millis(16),
+        );
+        step = launcher_bench_next_step_index(step, ran_with_rows);
+
+        assert!(ran_with_rows);
+        assert_eq!(step, 1);
+        assert_eq!(nav.arcade.selected, 1);
+        assert!(nav.arcade.is_scroll_active());
+    }
 }

@@ -574,19 +574,47 @@ summarize_trace_by_effect() {
 }
 
 check_velocity_motion() {
-  local name="$1" tsv="$2"
-  awk -v name="$name" '
+  local name="$1" tsv="$2" scenario_name="${3:-}"
+  awk -v name="$name" -v scenario="$scenario_name" '
     BEGIN { FS="\t" }
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     NF {
       n++
       vi = $(col["visual_index"]) + 0
+      selected = ("selected" in col) ? ($(col["selected"]) + 0) : 0
+      if (n == 1) {
+        min_vi = vi
+        max_vi = vi
+        min_selected = selected
+        max_selected = selected
+      }
+      if (vi < min_vi) min_vi = vi
+      if (vi > max_vi) max_vi = vi
+      if (selected < min_selected) min_selected = selected
+      if (selected > max_selected) max_selected = selected
       frac = vi - int(vi); if (frac < 0) frac = -frac
       if (frac > 0.001 && frac < 0.999) fractional++
       if (seen) { delta = vi - last; if (delta < 0) delta = -delta; if (delta > 0.001) moving++ }
       last = vi; seen = 1
     }
-    END { printf "%s\t%d\t%d\t%d\n", name, n, fractional, moving; if (moving > 0 && fractional == 0) exit 3 }
+    END {
+      printf "%s\t%d\t%d\t%d\n", name, n, fractional, moving
+      requires_motion = (scenario == "held-scroll" || scenario == "velocity-scroll" || scenario == "turbo-hold")
+      if (requires_motion && n == 0) {
+        printf "%s motion gate failed: scenario=%s reason=no_frames\n", name, scenario > "/dev/stderr"
+        exit 8
+      }
+      if (requires_motion && moving == 0) {
+        printf "%s motion gate failed: scenario=%s reason=no_motion frames=%d visual_min=%.3f visual_max=%.3f selected_min=%d selected_max=%d\n",
+          name, scenario, n, min_vi, max_vi, min_selected, max_selected > "/dev/stderr"
+        exit 8
+      }
+      if (moving > 0 && fractional == 0) {
+        printf "%s motion gate failed: scenario=%s reason=no_fractional_motion frames=%d moving=%d\n",
+          name, scenario, n, moving > "/dev/stderr"
+        exit 3
+      }
+    }
   ' "$tsv"
 }
 
@@ -645,6 +673,19 @@ EOF
   fi
   check_preview_hotpath_io_gate selftest "$archive_mem_ok" >/dev/null
 
+  local no_motion="$tmp/no-motion.tsv"
+  cat >"$no_motion" <<'EOF'
+frame	selected	visual_index
+0	0	0
+1	0	0
+2	0	0
+EOF
+  if check_velocity_motion selftest "$no_motion" held-scroll >/dev/null 2>&1; then
+    echo "preview motion self-test expected held-scroll zero-motion failure" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+
   rm -rf "$tmp"
   echo "profile-preview-scroll self-test ok"
 }
@@ -670,7 +711,7 @@ summarize_trace_by_effect "$arcade_tsv"
 
 echo
 echo $'motion_check\tframes\tfractional_visual_index_frames\tmoving_frames'
-check_velocity_motion arcade "$arcade_tsv"
+check_velocity_motion arcade "$arcade_tsv" "$remote_scenario"
 
 echo
 echo "preview trace counts:"
