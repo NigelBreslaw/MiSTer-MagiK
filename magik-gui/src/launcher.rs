@@ -1095,6 +1095,76 @@ pub fn execute_game_launch(launch_ref: &str) -> Result<bool, LaunchError> {
     execute_game_launch_with(launch_ref, &mut io)
 }
 
+#[derive(Debug)]
+pub struct LaunchHandoffBenchResult {
+    pub result: Result<bool, LaunchError>,
+    pub prepare_us: u64,
+    pub handoff_us: u64,
+}
+
+pub fn execute_game_launch_handoff_bench(
+    launch_ref: &str,
+    fifo_delay: Duration,
+) -> LaunchHandoffBenchResult {
+    struct BenchLaunchIo {
+        fifo_delay: Duration,
+        prepare_us: u64,
+        handoff_us: u64,
+    }
+
+    impl LaunchIo for BenchLaunchIo {
+        fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
+            let start = Instant::now();
+            let result = launch_preparation::prepare_launch_ref(launch_ref);
+            self.prepare_us = start.elapsed().as_micros() as u64;
+            result
+        }
+
+        fn target_exists(&mut self, path: &str) -> bool {
+            Path::new(path).exists()
+        }
+
+        fn mister_running(&mut self) -> bool {
+            true
+        }
+
+        fn magik_running(&mut self) -> bool {
+            true
+        }
+
+        fn start_mister(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn wait_for_started_mister(&mut self) -> bool {
+            true
+        }
+
+        fn wait_for_command_fifo(&mut self) -> bool {
+            let start = Instant::now();
+            thread::sleep(self.fifo_delay);
+            self.handoff_us = self.handoff_us.saturating_add(start.elapsed().as_micros() as u64);
+            false
+        }
+
+        fn write_mister_command(&mut self, _cmd: &str) -> Result<(), String> {
+            Err("benchmark handoff does not write the real MiSTer FIFO".to_string())
+        }
+    }
+
+    let mut io = BenchLaunchIo {
+        fifo_delay,
+        prepare_us: 0,
+        handoff_us: 0,
+    };
+    let result = execute_game_launch_with(launch_ref, &mut io);
+    LaunchHandoffBenchResult {
+        result,
+        prepare_us: io.prepare_us,
+        handoff_us: io.handoff_us,
+    }
+}
+
 fn execute_game_launch_with(launch_ref: &str, io: &mut impl LaunchIo) -> Result<bool, LaunchError> {
     let launch_target = io
         .prepare_launch_ref(launch_ref)

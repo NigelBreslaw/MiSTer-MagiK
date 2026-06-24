@@ -18,11 +18,13 @@ use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 use std::collections::BTreeSet;
+use std::io::Write;
 
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
+const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
 
 struct DeferredCatalogWorker {
     root: String,
@@ -116,6 +118,69 @@ fn launcher_return_reveal_enabled() -> bool {
     )
 }
 
+fn launch_handoff_bench_label() -> String {
+    std::env::var("MISTER_LAUNCH_HANDOFF_LABEL").unwrap_or_else(|_| "launch-handoff".to_string())
+}
+
+fn launch_handoff_bench_trace_path() -> Option<String> {
+    std::env::var("MISTER_LAUNCH_HANDOFF_TRACE")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+}
+
+fn launch_handoff_bench_delay() -> Duration {
+    std::env::var("MISTER_LAUNCH_HANDOFF_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY)
+}
+
+fn launch_handoff_bench_iterations() -> usize {
+    std::env::var("MISTER_LAUNCH_HANDOFF_ITERATIONS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1)
+        .max(1)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_launch_handoff_bench_sample(
+    trace_path: Option<&str>,
+    label: &str,
+    iteration: usize,
+    action_start: Instant,
+    loading_presented: Instant,
+    handoff_result: Instant,
+    recovery_presented: Instant,
+    launch_prep_us: u64,
+    handoff_wait_us: u64,
+    result: &str,
+) {
+    let launch_action_to_loading_us = loading_presented
+        .saturating_duration_since(action_start)
+        .as_micros() as u64;
+    let max_frame_gap_us = handoff_result
+        .saturating_duration_since(loading_presented)
+        .as_micros() as u64;
+    let failure_recovery_us = recovery_presented
+        .saturating_duration_since(handoff_result)
+        .as_micros() as u64;
+    let line = format!(
+        "launch_handoff_sample\t{label}\t{iteration}\tlaunch_action_to_loading_us={launch_action_to_loading_us}\tmax_frame_gap_us={max_frame_gap_us}\tloading_frames_before_result=1\tfailure_recovery_us={failure_recovery_us}\tlaunch_prep_us={launch_prep_us}\thandoff_wait_us={handoff_wait_us}\tresult={result}"
+    );
+    println!("{line}");
+    if let Some(path) = trace_path {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
 fn launcher_reveal_settle_frames() -> u32 {
     std::env::var("MISTER_LAUNCHER_REVEAL_SETTLE_FRAMES")
         .ok()
@@ -138,6 +203,13 @@ pub(super) fn run_launcher_loop(
     let start = Instant::now();
     let mut frames = 0u64;
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let launcher_bench_launch_handoff =
+        launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
+    let launch_handoff_bench_label = launch_handoff_bench_label();
+    let launch_handoff_bench_trace = launch_handoff_bench_trace_path();
+    let launch_handoff_bench_delay = launch_handoff_bench_delay();
+    let launch_handoff_bench_iterations = launch_handoff_bench_iterations();
+    let mut launch_handoff_bench_iteration = 0usize;
     let bench_starts_on_arcade =
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let env_start_screen = launcher_start_screen_from_env();
@@ -1040,7 +1112,7 @@ pub(super) fn run_launcher_loop(
                 }
                 let setup_after = SetupBridgeKey::from_setup(&setup);
                 full_bridge_dirty |= pad_changed || setup_before != setup_after;
-            } else if launcher_bench_scenario.is_none() {
+            } else if launcher_bench_scenario.is_none() || launcher_bench_launch_handoff {
                 if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
                     let setup_before = SetupBridgeKey::from_setup(&setup);
                     setup.maybe_open(info, active_idx, pad.db(), true);
@@ -1083,7 +1155,24 @@ pub(super) fn run_launcher_loop(
                     } else {
                         None
                     };
-                    let event = if test_library_changed_event.is_some() {
+                    let event = if launcher_bench_launch_handoff
+                        && launch_handoff_bench_iteration < launch_handoff_bench_iterations
+                        && catalog_ready
+                        && nav.screen == Screen::Arcade
+                    {
+                        let event = active_system(&catalog, &nav)
+                            .and_then(|system| {
+                                catalog.system_game_at(&system.id, nav.arcade.selected)
+                            })
+                            .map(|game| launcher::LauncherEvent {
+                                action: LauncherAction::LaunchGame,
+                                path: Some(game.mra_path.to_string()),
+                            });
+                        if event.is_some() {
+                            launch_handoff_bench_iteration += 1;
+                        }
+                        event
+                    } else if test_library_changed_event.is_some() {
                         test_library_changed_event
                     } else if auto_launch_selected
                         && !auto_launch_selected_done
@@ -1099,6 +1188,8 @@ pub(super) fn run_launcher_loop(
                                 action: LauncherAction::LaunchGame,
                                 path: Some(game.mra_path.to_string()),
                             })
+                    } else if launcher_bench_launch_handoff {
+                        None
                     } else {
                         nav.handle_input(&state, frame_now, &catalog)
                     };
@@ -1269,6 +1360,7 @@ pub(super) fn run_launcher_loop(
                         let Some(mra) = event.path else {
                             continue;
                         };
+                        let launch_action_start = Instant::now();
                         loading_title =
                             format!("Loading {}…", launcher::game_title(&catalog, &mra));
                         sync_bridge_launcher(
@@ -1292,20 +1384,41 @@ pub(super) fn run_launcher_loop(
                         });
                         let _pace = pacer.wait();
                         target.present_rows(f, disp, ui, 0, ui.render_h());
-                        if let Some(state) =
+                        let loading_presented = Instant::now();
+                        if !launcher_bench_launch_handoff {
+                            if let Some(state) =
                             launcher::capture_launch_return_state(&nav, &catalog, &mra)
-                        {
-                            if let Err(e) = launcher::save_launch_return_state(&state) {
-                                eprintln!("failed to save launch return state: {e}");
+                            {
+                                if let Err(e) = launcher::save_launch_return_state(&state) {
+                                    eprintln!("failed to save launch return state: {e}");
+                                }
                             }
                         }
-                        match launcher::execute_game_launch(&mra) {
+                        let launch_result = if launcher_bench_launch_handoff {
+                            let bench = launcher::execute_game_launch_handoff_bench(
+                                &mra,
+                                launch_handoff_bench_delay,
+                            );
+                            let handoff_result = Instant::now();
+                            let result_label = if bench.result.is_ok() { "ok" } else { "error" };
+                            Some((bench, handoff_result, result_label))
+                        } else {
+                            None
+                        };
+                        let execute_result = if let Some((bench, _, _)) = launch_result.as_ref() {
+                            bench.result.clone()
+                        } else {
+                            launcher::execute_game_launch(&mra)
+                        };
+                        match execute_result {
                             Ok(spawned) => {
                                 launch_started = Instant::now();
                                 launch_spawned_mister = spawned;
                             }
                             Err(e) => {
-                                launcher::remove_launch_return_state();
+                                if !launcher_bench_launch_handoff {
+                                    launcher::remove_launch_return_state();
+                                }
                                 eprintln!("game launch failed: {e}");
                                 launch_spawned_mister |= e.spawned_mister();
                                 loading_title.clear();
@@ -1324,6 +1437,30 @@ pub(super) fn run_launcher_loop(
                                     false,
                                 );
                                 recover_launcher_ui(f, ui, &mut launch_spawned_mister);
+                                if let Some((bench, handoff_result, result_label)) =
+                                    launch_result.as_ref()
+                                {
+                                    update_slint_animations(animation_clock);
+                                    window.draw_if_needed(|renderer| {
+                                        let region = target.render(renderer, ui);
+                                        let _ = region;
+                                    });
+                                    let _pace = pacer.wait();
+                                    target.present_rows(f, disp, ui, 0, ui.render_h());
+                                    let recovery_presented = Instant::now();
+                                    write_launch_handoff_bench_sample(
+                                        launch_handoff_bench_trace.as_deref(),
+                                        &launch_handoff_bench_label,
+                                        launch_handoff_bench_iteration,
+                                        launch_action_start,
+                                        loading_presented,
+                                        *handoff_result,
+                                        recovery_presented,
+                                        bench.prepare_us,
+                                        bench.handoff_us,
+                                        result_label,
+                                    );
+                                }
                             }
                         }
                         window.request_redraw();
