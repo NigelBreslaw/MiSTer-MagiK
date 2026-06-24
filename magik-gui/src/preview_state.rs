@@ -86,7 +86,7 @@ struct PreviewImageCache {
 
 impl PreviewImageCache {
     const FAILED_CAP: usize = 128;
-    const FAILED_TTL: Duration = Duration::from_secs(5);
+    const FAILED_TTL: Duration = Duration::from_secs(5 * 60);
 
     fn get(&mut self, path: &str) -> Option<Arc<PreviewImage>> {
         let idx = self.entries.iter().position(|(p, _)| p == path)?;
@@ -892,26 +892,13 @@ pub(crate) fn apply_ready_preview(
             continue;
         }
         if let Some(image) = result.image {
-            if preview_trace_enabled() {
+            if preview_trace_enabled() && is_selected_result {
                 eprintln!(
-                    "preview_trace apply generation={} priority={:?} selected={} age_us={} load_source={} format={} filter={:?} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
+                    "preview_trace apply generation={} priority={:?} selected={} age_us={} archive_path={} asset_key={}",
                     result.generation,
                     result.priority,
                     is_selected_result,
                     result.request_age_us,
-                    result.load_source.label(),
-                    result.storage_format.label(),
-                    result.resize_filter,
-                    result.source_width,
-                    result.source_height,
-                    image.width(),
-                    image.height(),
-                    result.total_us,
-                    result.read_us,
-                    result.decode_us,
-                    result.resize_us,
-                    result.encoded_bytes,
-                    result.decoded_bytes,
                     result.preview_archive_path,
                     result.preview_asset_key
                 );
@@ -934,7 +921,7 @@ pub(crate) fn apply_ready_preview(
                     stride_pixels: stride_bytes as usize / 2,
                 },
             };
-            if preview_trace_enabled() {
+            if preview_trace_enabled() && is_selected_result {
                 eprintln!(
                     "preview_trace raw_image generation={} output={}x{} archive_path={} asset_key={}",
                     result.generation,
