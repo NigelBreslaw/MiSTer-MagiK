@@ -250,14 +250,10 @@ pub struct PreviewArchiveIndex {
 }
 
 pub struct PreviewWorker {
-    tx: mpsc::Sender<PreviewCommand>,
+    selected_tx: mpsc::Sender<PreviewRequest>,
+    prefetch_tx: mpsc::Sender<PreviewRequest>,
     rx: mpsc::Receiver<PreviewResult>,
     next_generation: u64,
-}
-
-#[derive(Clone, Debug)]
-enum PreviewCommand {
-    Request(PreviewRequest),
 }
 
 impl Default for PreviewWorker {
@@ -268,14 +264,25 @@ impl Default for PreviewWorker {
 
 impl PreviewWorker {
     pub fn new() -> Self {
-        let (req_tx, req_rx) = mpsc::channel::<PreviewCommand>();
+        let (selected_tx, selected_rx) = mpsc::channel::<PreviewRequest>();
+        let (prefetch_tx, prefetch_rx) = mpsc::channel::<PreviewRequest>();
         let (res_tx, res_rx) = mpsc::channel::<PreviewResult>();
+        let decoded_cache = Arc::new(Mutex::new(PreviewDecodedCache::new(
+            preview_decoded_cache_cap(),
+        )));
+        let selected_cache = Arc::clone(&decoded_cache);
+        let selected_res_tx = res_tx.clone();
         std::thread::Builder::new()
-            .name("preview-loader".to_string())
-            .spawn(move || preview_thread(req_rx, res_tx))
-            .expect("spawn preview-loader");
+            .name("preview-selected-loader".to_string())
+            .spawn(move || preview_selected_thread(selected_rx, selected_res_tx, selected_cache))
+            .expect("spawn preview-selected-loader");
+        std::thread::Builder::new()
+            .name("preview-prefetch-loader".to_string())
+            .spawn(move || preview_prefetch_thread(prefetch_rx, res_tx, decoded_cache))
+            .expect("spawn preview-prefetch-loader");
         Self {
-            tx: req_tx,
+            selected_tx,
+            prefetch_tx,
             rx: res_rx,
             next_generation: 1,
         }
@@ -289,14 +296,14 @@ impl PreviewWorker {
     ) -> u64 {
         let generation = self.next_generation;
         self.next_generation += 1;
-        let _ = self.tx.send(PreviewCommand::Request(PreviewRequest {
+        let _ = self.selected_tx.send(PreviewRequest {
             generation,
             title,
             preview_archive_path,
             preview_asset_key,
             requested_at: Instant::now(),
             priority: PreviewPriority::Selected,
-        }));
+        });
         generation
     }
 
@@ -309,14 +316,14 @@ impl PreviewWorker {
     ) {
         let generation = self.next_generation;
         self.next_generation += 1;
-        let _ = self.tx.send(PreviewCommand::Request(PreviewRequest {
+        let _ = self.prefetch_tx.send(PreviewRequest {
             generation,
             title,
             preview_archive_path,
             preview_asset_key,
             requested_at: Instant::now(),
             priority: PreviewPriority::Prefetch { distance },
-        }));
+        });
     }
 
     pub fn drain(&self) -> Vec<PreviewResult> {
@@ -361,23 +368,48 @@ where
     out
 }
 
-fn preview_thread(rx: mpsc::Receiver<PreviewCommand>, tx: mpsc::Sender<PreviewResult>) {
+type SharedPreviewDecodedCache = Arc<Mutex<PreviewDecodedCache>>;
+
+fn preview_selected_thread(
+    rx: mpsc::Receiver<PreviewRequest>,
+    tx: mpsc::Sender<PreviewResult>,
+    decoded_cache: SharedPreviewDecodedCache,
+) {
+    lower_thread_priority();
+    let _ = preview_archives();
+    let mut scratch = PreviewArchiveScratch::default();
+    while let Ok(mut req) = rx.recv() {
+        while let Ok(next) = rx.try_recv() {
+            req = next;
+        }
+        let result = load_preview(req, &decoded_cache, &mut scratch);
+        if tx.send(result).is_err() {
+            break;
+        }
+    }
+}
+
+fn preview_prefetch_thread(
+    rx: mpsc::Receiver<PreviewRequest>,
+    tx: mpsc::Sender<PreviewResult>,
+    decoded_cache: SharedPreviewDecodedCache,
+) {
     lower_thread_priority();
     let _ = preview_archives();
     let mut queue: Vec<PreviewRequest> = Vec::new();
-    let mut decoded_cache = PreviewDecodedCache::new(preview_decoded_cache_cap());
+    let mut scratch = PreviewArchiveScratch::default();
     loop {
         if queue.is_empty() {
             match rx.recv() {
-                Ok(command) => enqueue_command(&mut queue, command),
+                Ok(req) => enqueue_preview_request(&mut queue, req),
                 Err(_) => break,
             }
         }
-        while let Ok(command) = rx.try_recv() {
-            enqueue_command(&mut queue, command);
+        while let Ok(req) = rx.try_recv() {
+            enqueue_preview_request(&mut queue, req);
         }
         if let Some(req) = pop_next_preview_request(&mut queue) {
-            let result = load_preview(req, &mut decoded_cache);
+            let result = load_preview(req, &decoded_cache, &mut scratch);
             if tx.send(result).is_err() {
                 break;
             }
@@ -453,28 +485,24 @@ fn pop_next_preview_request(queue: &mut Vec<PreviewRequest>) -> Option<PreviewRe
     }
 }
 
-fn enqueue_command(queue: &mut Vec<PreviewRequest>, command: PreviewCommand) {
-    match command {
-        PreviewCommand::Request(req) => {
-            if matches!(req.priority, PreviewPriority::Selected) {
-                queue.retain(|queued| !matches!(queued.priority, PreviewPriority::Selected));
-            }
-            if let Some(existing) = queue
-                .iter_mut()
-                .find(|existing| existing.preview_key() == req.preview_key())
-            {
-                if req.priority.rank() <= existing.priority.rank() {
-                    *existing = req;
-                }
-            } else {
-                queue.push(req);
-            }
-            queue.retain(|req| {
-                matches!(req.priority, PreviewPriority::Selected)
-                    || req.priority.rank() <= DEFAULT_PREVIEW_CACHE_CAP
-            });
-        }
+fn enqueue_preview_request(queue: &mut Vec<PreviewRequest>, req: PreviewRequest) {
+    if matches!(req.priority, PreviewPriority::Selected) {
+        queue.retain(|queued| !matches!(queued.priority, PreviewPriority::Selected));
     }
+    if let Some(existing) = queue
+        .iter_mut()
+        .find(|existing| existing.preview_key() == req.preview_key())
+    {
+        if req.priority.rank() <= existing.priority.rank() {
+            *existing = req;
+        }
+    } else {
+        queue.push(req);
+    }
+    queue.retain(|req| {
+        matches!(req.priority, PreviewPriority::Selected)
+            || req.priority.rank() <= DEFAULT_PREVIEW_CACHE_CAP
+    });
 }
 
 fn preview_cache_key(
@@ -491,22 +519,30 @@ fn preview_cache_key(
     )
 }
 
-fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) -> PreviewResult {
+fn load_preview(
+    req: PreviewRequest,
+    decoded_cache: &SharedPreviewDecodedCache,
+    scratch: &mut PreviewArchiveScratch,
+) -> PreviewResult {
     let resize = PreviewResizeSpec::from_env();
     let storage = PreviewStorageFormat::from_env();
     let resolved_archive_path = resolve_preview_archive_path(&req.preview_archive_path);
     let cache_key = preview_cache_key(&resolved_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
     let queue_age_us = req.requested_at.elapsed().as_micros() as u64;
-    let loaded_result = if let Some(loaded) = decoded_cache.get(&cache_key) {
+    let loaded_result = if let Some(loaded) = decoded_cache_get(decoded_cache, &cache_key) {
         cache_hit = true;
         Ok(loaded)
     } else {
-        load_preview_pixels(&resolved_archive_path, &req.preview_asset_key, resize).inspect(
-            |loaded| {
-                decoded_cache.insert(cache_key, loaded);
-            },
+        load_preview_pixels(
+            &resolved_archive_path,
+            &req.preview_asset_key,
+            scratch,
+            resize,
         )
+        .inspect(|loaded| {
+            decoded_cache_insert(decoded_cache, cache_key, loaded);
+        })
     };
     match loaded_result {
         Ok(loaded) => {
@@ -592,6 +628,23 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
     }
 }
 
+fn decoded_cache_get(
+    decoded_cache: &SharedPreviewDecodedCache,
+    key: &str,
+) -> Option<LoadedPreviewPixels> {
+    decoded_cache.lock().ok()?.get(key)
+}
+
+fn decoded_cache_insert(
+    decoded_cache: &SharedPreviewDecodedCache,
+    key: String,
+    loaded: &LoadedPreviewPixels,
+) {
+    if let Ok(mut decoded_cache) = decoded_cache.lock() {
+        decoded_cache.insert(key, loaded);
+    }
+}
+
 #[derive(Clone, Debug)]
 struct LoadedPreviewPixels {
     timing: ImageLoadTiming,
@@ -601,23 +654,26 @@ struct LoadedPreviewPixels {
 fn load_preview_pixels(
     preview_archive_path: &str,
     preview_asset_key: &str,
+    scratch: &mut PreviewArchiveScratch,
     resize: PreviewResizeSpec,
 ) -> Result<LoadedPreviewPixels, String> {
     let _ = resize;
-    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key)
+    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key, scratch)
 }
 
 pub fn load_preview_asset_pixels(
     preview_archive_path: &str,
     preview_asset_key: &str,
 ) -> Result<PreviewPixels, String> {
-    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key)
+    let mut scratch = PreviewArchiveScratch::default();
+    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key, &mut scratch)
         .map(|loaded| loaded.image)
 }
 
 fn load_raw565_preview_asset_timed(
     preview_archive_path: &str,
     preview_asset_key: &str,
+    scratch: &mut PreviewArchiveScratch,
 ) -> Result<LoadedPreviewPixels, String> {
     let archive_path = preview_archive_path.trim();
     let asset_key = preview_asset_key.trim();
@@ -629,7 +685,7 @@ fn load_raw565_preview_asset_timed(
         return Err(format!("preview archive not configured {archive_path}"));
     };
     for archive in archives.iter() {
-        if let Some(loaded) = archive.load_timed(&entry_name)? {
+        if let Some(loaded) = archive.load_timed(&entry_name, scratch)? {
             return Ok(loaded);
         }
     }
@@ -646,7 +702,6 @@ struct PreviewArchiveEntry {
 }
 
 struct PreviewArchive {
-    scratch: Mutex<PreviewArchiveScratch>,
     bytes: Arc<[u8]>,
     entries: HashMap<String, PreviewArchiveEntry>,
 }
@@ -1181,25 +1236,21 @@ impl PreviewArchive {
             );
         }
         let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
-        Ok(Self {
-            bytes,
-            scratch: Mutex::new(PreviewArchiveScratch::default()),
-            entries,
-        })
+        Ok(Self { bytes, entries })
     }
 
-    fn load_timed(&self, name: &str) -> Result<Option<LoadedPreviewPixels>, String> {
+    fn load_timed(
+        &self,
+        name: &str,
+        scratch: &mut PreviewArchiveScratch,
+    ) -> Result<Option<LoadedPreviewPixels>, String> {
         let key = name.to_ascii_lowercase();
         let Some(entry) = self.entries.get(&key).copied() else {
             return Ok(None);
         };
         let total_t = Instant::now();
         let read_t = Instant::now();
-        let mut scratch = self
-            .scratch
-            .lock()
-            .map_err(|_| "preview archive scratch lock poisoned".to_string())?;
-        let PreviewArchiveScratch { raw } = &mut *scratch;
+        let PreviewArchiveScratch { raw } = scratch;
         let start = entry.offset as usize;
         let end = start
             .checked_add(entry.compressed_len)
@@ -1438,34 +1489,29 @@ mod tests {
     #[test]
     fn enqueue_replaces_lower_priority_duplicate_and_drops_far_prefetch() {
         let mut queue = Vec::new();
-        enqueue_command(
+        enqueue_preview_request(
             &mut queue,
-            PreviewCommand::Request(queued_request(
+            queued_request(
                 1,
                 "prefetch",
                 "same",
                 PreviewPriority::Prefetch { distance: 3 },
-            )),
+            ),
         );
-        enqueue_command(
+        enqueue_preview_request(
             &mut queue,
-            PreviewCommand::Request(queued_request(
-                2,
-                "selected",
-                "same",
-                PreviewPriority::Selected,
-            )),
+            queued_request(2, "selected", "same", PreviewPriority::Selected),
         );
-        enqueue_command(
+        enqueue_preview_request(
             &mut queue,
-            PreviewCommand::Request(queued_request(
+            queued_request(
                 3,
                 "too far",
                 "far",
                 PreviewPriority::Prefetch {
                     distance: DEFAULT_PREVIEW_CACHE_CAP + 1,
                 },
-            )),
+            ),
         );
 
         assert_eq!(queue.len(), 1);
@@ -1476,32 +1522,17 @@ mod tests {
     #[test]
     fn enqueue_selected_supersedes_older_selected_work() {
         let mut queue = Vec::new();
-        enqueue_command(
+        enqueue_preview_request(
             &mut queue,
-            PreviewCommand::Request(queued_request(
-                1,
-                "old selected",
-                "old",
-                PreviewPriority::Selected,
-            )),
+            queued_request(1, "old selected", "old", PreviewPriority::Selected),
         );
-        enqueue_command(
+        enqueue_preview_request(
             &mut queue,
-            PreviewCommand::Request(queued_request(
-                2,
-                "near",
-                "near",
-                PreviewPriority::Prefetch { distance: 1 },
-            )),
+            queued_request(2, "near", "near", PreviewPriority::Prefetch { distance: 1 }),
         );
-        enqueue_command(
+        enqueue_preview_request(
             &mut queue,
-            PreviewCommand::Request(queued_request(
-                3,
-                "new selected",
-                "new",
-                PreviewPriority::Selected,
-            )),
+            queued_request(3, "new selected", "new", PreviewPriority::Selected),
         );
 
         assert_eq!(queue.len(), 2);
@@ -1577,9 +1608,10 @@ mod tests {
             "missing",
             PreviewPriority::Selected,
         );
-        let mut cache = PreviewDecodedCache::new(2);
+        let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(2)));
+        let mut scratch = PreviewArchiveScratch::default();
 
-        let result = load_preview(req, &mut cache);
+        let result = load_preview(req, &cache, &mut scratch);
 
         assert_eq!(result.generation, 77);
         assert_eq!(result.title, "Missing");
@@ -1662,8 +1694,9 @@ mod tests {
         write_lz4_block_archive(&path, "sonic.rgb565", &payload);
 
         let archive = PreviewArchive::open(&path).expect("open lz4 block archive");
+        let mut scratch = PreviewArchiveScratch::default();
         let loaded = archive
-            .load_timed("Sonic.rgb565")
+            .load_timed("Sonic.rgb565", &mut scratch)
             .expect("load mixed-case cache name")
             .expect("archive entry");
 
@@ -1771,9 +1804,12 @@ mod tests {
             requested_at: Instant::now(),
             priority: PreviewPriority::Selected,
         };
-        let mut cache = PreviewDecodedCache::new(DEFAULT_PREVIEW_CACHE_CAP);
+        let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(
+            DEFAULT_PREVIEW_CACHE_CAP,
+        )));
+        let mut scratch = PreviewArchiveScratch::default();
 
-        let result = load_preview(request, &mut cache);
+        let result = load_preview(request, &cache, &mut scratch);
 
         assert!(result.image.is_some());
         assert_eq!(result.preview_archive_path, legacy.display().to_string());
@@ -1847,9 +1883,11 @@ mod tests {
 
     #[test]
     fn missing_archive_asset_fails_without_original_decode_fallback() {
+        let mut scratch = PreviewArchiveScratch::default();
         let err = load_preview_pixels(
             "/tmp/missing/320x320-screenshots.mmlz4b",
             "tiny",
+            &mut scratch,
             PreviewResizeSpec {
                 filter: PreviewResizeFilter::Hybrid,
                 max_w: 320,
@@ -1872,11 +1910,12 @@ mod tests {
             max_w: 320,
             max_h: 320,
         };
+        let mut scratch = PreviewArchiveScratch::default();
 
-        let first = load_preview_pixels(&archive_path, "first", resize)
+        let first = load_preview_pixels(&archive_path, "first", &mut scratch, resize)
             .expect_err("first missing archive request should fail");
         let calls_after_first = preview_archive_metadata_calls(&archive_path);
-        let second = load_preview_pixels(&archive_path, "second", resize)
+        let second = load_preview_pixels(&archive_path, "second", &mut scratch, resize)
             .expect_err("second missing archive request should fail from archive cache");
 
         assert!(first.contains(&archive_path));
@@ -1907,8 +1946,9 @@ mod tests {
             "tiny",
             PreviewPriority::Selected,
         );
-        let mut cache = PreviewDecodedCache::new(2);
-        let result = load_preview(req, &mut cache);
+        let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(2)));
+        let mut scratch = PreviewArchiveScratch::default();
+        let result = load_preview(req, &cache, &mut scratch);
 
         assert_eq!(result.generation, 88);
         assert_eq!(result.title, "Tiny");
@@ -1991,8 +2031,9 @@ mod tests {
             .expect("changed archive");
 
         assert!(!Arc::ptr_eq(&first, &second));
+        let mut scratch = PreviewArchiveScratch::default();
         assert!(second[0]
-            .load_timed("new-long.rgb565")
+            .load_timed("new-long.rgb565", &mut scratch)
             .expect("load from changed archive")
             .is_some());
         let _ = std::fs::remove_file(path);
@@ -2013,9 +2054,10 @@ mod tests {
             payload.len() + 1,
         );
         let archive = PreviewArchive::open(&path).expect("open corrupt lz4 block archive fixture");
+        let mut scratch = PreviewArchiveScratch::default();
 
         let err = archive
-            .load_timed("bad.rgb565")
+            .load_timed("bad.rgb565", &mut scratch)
             .expect_err("lz4 raw block length mismatch should fail");
 
         assert!(
