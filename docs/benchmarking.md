@@ -97,15 +97,17 @@ MISTER_LAUNCHER_START_SCREEN=arcade
 MISTER_LAUNCHER_LOCK_SCREEN=arcade
 MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll|turbo-hold|preview-step-hold|idle
 MISTER_PREVIEW_SCROLL_TRACE_SECS=N
-MISTER_CATALOG_REFRESH=off
+MISTER_CATALOG_REFRESH=default
 ```
 
-`MISTER_CATALOG_REFRESH=off` is the benchmark load-only policy. It lets the
-launcher synchronously use an existing catalog cache, but it does not start
-background stamp validation, explicit rebuilds, missing-cache first scans, or
-virtual launch cache prewarming. Leave the variable unset for normal launcher
-behavior, where a ready cache still gets a delayed warm stamp check; set it to
-`on` or `force` only when intentionally benchmarking a catalog rebuild.
+Arcade benchmark scripts use `MISTER_CATALOG_REFRESH=default`, not `off`.
+Warm catalog startup may first populate Home/system counts from
+`library.summary.json`; the default policy then hydrates the full SQLite catalog
+without forcing a rebuild when the stamp matches. `off` leaves the launcher in
+summary-only mode after a warm summary load and is invalid for Arcade row,
+preview, and launch-handoff benchmarks because there may be no hydrated game
+rows to scroll or launch. Set `on` or `force` only when intentionally
+benchmarking a catalog rebuild.
 
 Preview transition policy:
 
@@ -162,11 +164,26 @@ The library scanner must not walk screenshot/cache media directories, read
 Runtime screenshot-pack downloads are selective: the catalog scan announces the
 first discovered supported system, and the media worker checks/downloads only
 those packs. Cached-catalog boots seed the same selective requests from the
-ready catalog's installed systems after the first rendered frame, so deleting
-packs without changing the catalog still re-checks needed packs. Download
-concurrency is fixed at three. The catalog-build screen may show up to three
-active screenshot-pack rows, sourced from the structured download/save progress
-events rather than parsed log text.
+ready catalog's installed systems after the first visible frame and after active
+Arcade/launch interaction settles, so deleting packs without changing the
+catalog still re-checks needed packs. Production download concurrency defaults
+to one to avoid stealing SD-card headroom from interaction; diagnostic runs may
+override `MISTER_MEDIA_CONCURRENCY`, clamped to the supported range. The
+catalog-build screen is sourced from structured download/save progress events
+rather than parsed log text.
+
+Use `scripts/profile-screenshot-download.sh` to measure network download,
+verify, save/publish, and total wall time:
+
+```bash
+scripts/profile-screenshot-download.sh MEDIA-DL-YYYYMMDD --system neogeo --iterations 1 --replace-label
+```
+
+The TSV output is:
+
+```text
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+```
 
 Use `scripts/profile-screenshot-save.sh` to measure save-progress overhead
 separately from network and checksum cost:
@@ -184,6 +201,12 @@ screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rena
 Compare average and p95 `total_ms` plus `copy_ms` when changing production save
 behavior. Benchmark claims for screenshot media must state whether they cover
 download, decompression, save/publish, verification, and total wall time.
+
+When evaluating media work during Arcade interaction, also run a preview scroll
+trace while media requests are pending. Use `frame_pacing` p95/p99 work,
+`work_gt_16_7ms`, `preview_latency selected_*_age_us`, and RSS HWM from the log
+or status rows. Do not use "still 60fps" as proof; the app can remain vsync
+paced while losing CPU or SD-card headroom.
 
 Relevant docs:
 
@@ -265,3 +288,43 @@ candidate file.
 Use `scripts/bench-library.sh LABEL --precount` only to measure the cost of a
 pre-scan candidate count for determinate discovery progress. Use
 `--sqlite-build-dir /tmp` only to benchmark the opt-in tmpfs SQLite build path.
+
+## Warm Catalog Startup
+
+Use the warm catalog startup script to measure summary-projection startup and
+full SQLite hydration separately:
+
+```bash
+scripts/profile-warm-catalog-start.sh LABEL --replace-label --iterations 5
+```
+
+Rows are appended to `history/toolchain-bench/results-warm-catalog.tsv` with:
+
+```text
+label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	result
+```
+
+For warm-start claims, report first interactive Home/system-list time,
+`catalog_summary_load_us`, whether `catalog_cache_load_sync` stayed off the
+pre-loop path, first-frame time, and full catalog ready time.
+
+## Launch Handoff
+
+Use launch-handoff benchmarks when changing launch preparation, FIFO/Main
+handoff, or launch failure recovery:
+
+```bash
+scripts/profile-launch-handoff.sh LABEL --replace-label --iterations 5
+scripts/profile-launch-prep.sh LABEL --replace-label --iterations 10
+```
+
+`profile-launch-handoff.sh` writes
+`history/toolchain-bench/results-launch-handoff.tsv` rows with:
+
+```text
+label	iteration	launch_action_to_loading_us	max_frame_gap_us	loading_frames_before_result	failure_recovery_us	prepare_us	handoff_us	result
+```
+
+The target metric is launcher responsiveness during the blocking handoff path:
+`max_frame_gap_us` and `failure_recovery_us` should improve or remain within the
+existing frame budget while `profile-launch-prep.sh` p95 does not regress.
