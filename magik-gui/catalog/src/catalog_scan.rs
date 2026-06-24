@@ -6,12 +6,15 @@ use crate::library_db::{
 };
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
 const DISCOVERY_EVENT_BUFFER: usize = 8192;
+const ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES: usize = 64 * 1024;
+const ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+const ZIP_SKIP_BUFFER_BYTES: usize = 4 * 1024;
 
 pub(crate) struct FoundFile {
     pub(crate) path: PathBuf,
@@ -501,19 +504,51 @@ pub(crate) fn scan_zip_central_directory(
         cd_size = zip64.size;
         cd_offset = zip64.offset;
     }
-    if cd_offset + cd_size > len {
-        return Err("zip central directory outside file".to_string());
+    match cd_offset.checked_add(cd_size) {
+        Some(end) if end <= len => {}
+        _ => return Err("zip central directory outside file".to_string()),
     }
+    let file_path = file.path.display().to_string();
     f.seek(SeekFrom::Start(cd_offset))
         .map_err(|e| format!("seek zip central directory: {e}"))?;
+    if cd_size <= ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES {
+        let mut central_directory = vec![0u8; cd_size as usize];
+        f.read_exact(&mut central_directory)
+            .map_err(|e| format!("read zip central directory: {e}"))?;
+        return scan_zip_central_directory_entries(
+            &mut central_directory.as_slice(),
+            cd_size,
+            cd_entries,
+            &file_path,
+            profile,
+        );
+    }
+    let mut central_directory =
+        BufReader::with_capacity(ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES, f.take(cd_size));
+    scan_zip_central_directory_entries(
+        &mut central_directory,
+        cd_size,
+        cd_entries,
+        &file_path,
+        profile,
+    )
+}
 
+fn scan_zip_central_directory_entries(
+    mut central_directory: &mut impl Read,
+    cd_size: u64,
+    cd_entries: usize,
+    file_path: &str,
+    profile: &LaunchProfile,
+) -> Result<Vec<LibraryContainerEntry>, String> {
     let mut entries = Vec::new();
     let mut remaining = cd_size;
     let mut scanned = 0usize;
     while remaining >= 46 && scanned < cd_entries {
         let entry_offset = cd_size - remaining;
         let mut header = [0u8; 46];
-        f.read_exact(&mut header)
+        central_directory
+            .read_exact(&mut header)
             .map_err(|e| format!("read zip central directory header: {e}"))?;
         remaining -= 46;
         if library_db::le_u32(&header[0..4]) != 0x0201_4b50 {
@@ -531,11 +566,12 @@ pub(crate) fn scan_zip_central_directory(
             return Err("zip entry name outside central directory".to_string());
         }
         let mut name_buf = vec![0u8; name_len as usize];
-        f.read_exact(&mut name_buf)
+        central_directory
+            .read_exact(&mut name_buf)
             .map_err(|e| format!("read zip entry name: {e}"))?;
         remaining -= name_len;
         if trailing_len > 0 {
-            f.seek(SeekFrom::Current(trailing_len as i64))
+            discard_zip_bytes(&mut central_directory, trailing_len)
                 .map_err(|e| format!("skip zip entry metadata: {e}"))?;
             remaining -= trailing_len;
         }
@@ -543,7 +579,7 @@ pub(crate) fn scan_zip_central_directory(
         if !name.ends_with('/') && !name.starts_with("__MACOSX/") {
             if let Some(rule) = profile.classify_archive_entry(Path::new(&name)) {
                 entries.push(LibraryContainerEntry {
-                    file_path: file.path.display().to_string(),
+                    file_path: file_path.to_string(),
                     entry_path: name.clone(),
                     normalized_title: library_db::normalize_title(&name),
                     profile_id: profile.id.to_string(),
@@ -552,12 +588,22 @@ pub(crate) fn scan_zip_central_directory(
                     uncompressed_size: Some(uncompressed),
                     crc32: Some(crc32),
                     launchable: true,
-                    launch_ref: format!("{}/{}", file.path.display(), name),
+                    launch_ref: format!("{file_path}/{name}"),
                 });
             }
         }
     }
     Ok(entries)
+}
+
+fn discard_zip_bytes(reader: &mut impl Read, mut len: u64) -> Result<(), std::io::Error> {
+    let mut scratch = [0u8; ZIP_SKIP_BUFFER_BYTES];
+    while len > 0 {
+        let read_len = len.min(scratch.len() as u64) as usize;
+        reader.read_exact(&mut scratch[..read_len])?;
+        len -= read_len as u64;
+    }
+    Ok(())
 }
 
 struct ZipCentralDirectoryLocation {
@@ -791,6 +837,48 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].entry_path,
+            "World A-Z/Neo Bomberman (neobombe).neo"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn zip_central_directory_skips_large_metadata_padding() {
+        let root = unique_temp_dir("zip-central-large-padding");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let zip_path = root.join("games.zip");
+        let extra = vec![0x5a; ZIP_SKIP_BUFFER_BYTES + 17];
+        let comment = vec![0xa5; ZIP_SKIP_BUFFER_BYTES + 31];
+        write_stored_zip_with_central_metadata(
+            &zip_path,
+            &[
+                (
+                    "World A-Z/2020 Super Baseball (2020bb).neo",
+                    b"neo".as_slice(),
+                ),
+                ("World A-Z/Neo Bomberman (neobombe).neo", b"neo".as_slice()),
+            ],
+            &extra,
+            &comment,
+        );
+        let meta = std::fs::metadata(&zip_path).expect("stat zip");
+        let file = FoundFile {
+            path: zip_path.clone(),
+            ext: "zip".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "neogeo")
+            .expect("neogeo profile");
+
+        let entries = scan_zip_central_directory(&file, profile).expect("scan zip");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1].entry_path,
             "World A-Z/Neo Bomberman (neobombe).neo"
         );
         let _ = std::fs::remove_dir_all(root);
