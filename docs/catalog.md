@@ -254,8 +254,11 @@ the preferred size-qualified pack and falls back to legacy fixed-name files when
 needed. Current public packs are `320x320`; future smaller packs must preserve
 their size in the local filename.
 
-The downloader compares the expected SHA-256 with the raw manifest object and
-publishes verified packs atomically. The state file
+The downloader streams the raw manifest object directly into a hidden temporary
+file beside the final pack on `/media/fat` while feeding the same bytes to the
+SHA-256 verifier. It compares the streamed byte count and SHA-256 with both the
+selected raw variant and the raw pack manifest entry, then publishes verified
+packs atomically with file sync, rename, and parent-directory sync. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
 successful media update, preferred size, and the latest HTTP/cache headers
 observed for each downloaded pack. It is not a catalog stamp input.

@@ -70,9 +70,9 @@ cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warning
 The broader `mister-magik-fb` binary clippy target still reports unrelated
 pre-existing warnings outside this benchmark path.
 
-## Recommendation
+## Follow-Up
 
-Promote the streaming design from benchmark experiment to the production
-screenshot media downloader, preserving the same safety rule: write only to a
-hidden temp, verify size and SHA-256 before rename, then sync/rename/parent-sync
-and update state.
+The next commit promoted the streaming design from benchmark experiment to the
+production screenshot media downloader, preserving the same safety rule: write
+only to a hidden temp, verify size and SHA-256 before rename, then
+sync/rename/parent-sync and update state.

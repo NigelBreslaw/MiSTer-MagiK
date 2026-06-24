@@ -95,12 +95,25 @@ pub(crate) fn hidden_bench_temp_path_for(
     ))
 }
 
+pub(crate) fn hidden_timestamped_temp_path_for(
+    final_path: &Path,
+    fallback_name: &str,
+    stamp: impl std::fmt::Display,
+) -> PathBuf {
+    final_path.with_file_name(format!(
+        ".{}.tmp-{stamp}",
+        file_name_or(final_path, fallback_name)
+    ))
+}
+
 pub(crate) fn cleanup_static_and_timestamped_temps(final_path: &Path, fallback_name: &str) {
     let _ = fs::remove_file(static_temp_path_for(final_path, fallback_name));
     let Some(parent) = final_path.parent() else {
         return;
     };
-    let prefix = format!("{}.tmp-", file_name_or(final_path, fallback_name));
+    let base_name = file_name_or(final_path, fallback_name);
+    let prefix = format!("{base_name}.tmp-");
+    let hidden_prefix = format!(".{base_name}.tmp-");
     let Ok(entries) = fs::read_dir(parent) else {
         return;
     };
@@ -109,7 +122,7 @@ pub(crate) fn cleanup_static_and_timestamped_temps(final_path: &Path, fallback_n
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if name.starts_with(&prefix) {
+        if name.starts_with(&prefix) || name.starts_with(&hidden_prefix) {
             let _ = fs::remove_file(path);
         }
     }
@@ -168,6 +181,12 @@ mod tests {
                 .to_string(),
             "/media/fat/mister-magik/assets/.arcade-screenshots.mmlz4b.bench-bench.tmp"
         );
+        assert_eq!(
+            hidden_timestamped_temp_path_for(final_path, "screenshot-pack", 123)
+                .display()
+                .to_string(),
+            "/media/fat/mister-magik/assets/.arcade-screenshots.mmlz4b.tmp-123"
+        );
     }
 
     #[test]
@@ -176,10 +195,12 @@ mod tests {
         let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
         let static_tmp = dir.join("arcade-screenshots-320x320.mmlz4b.tmp");
         let stamped_tmp = dir.join("arcade-screenshots-320x320.mmlz4b.tmp-1");
+        let hidden_stamped_tmp = dir.join(".arcade-screenshots-320x320.mmlz4b.tmp-2");
         let other_tmp = dir.join("neogeo-screenshots-320x320.mmlz4b.tmp-1");
         let final_file = dir.join("arcade-screenshots-320x320.mmlz4b");
         fs::write(&static_tmp, b"partial").unwrap();
         fs::write(&stamped_tmp, b"partial").unwrap();
+        fs::write(&hidden_stamped_tmp, b"partial").unwrap();
         fs::write(&other_tmp, b"partial").unwrap();
         fs::write(&final_file, b"current").unwrap();
 
@@ -187,6 +208,7 @@ mod tests {
 
         assert!(!static_tmp.exists());
         assert!(!stamped_tmp.exists());
+        assert!(!hidden_stamped_tmp.exists());
         assert!(other_tmp.exists());
         assert_eq!(fs::read(final_file).unwrap(), b"current");
         let _ = fs::remove_dir_all(dir);
