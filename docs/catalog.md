@@ -265,15 +265,13 @@ observed for each downloaded pack. It is not a catalog stamp input.
 
 During catalog scans, the scanner emits the first discovery of each supported
 screenshot-pack system: `arcade`, `neogeo`, `nes`, `snes`, `n64`, `sms`,
-`megadrive`, and `saturn`. The launcher queues those exact discovered systems,
-retaining them through startup, launch-handoff, benchmark, and Arcade-scroll
-interaction gates, then starts the runtime media worker once the gate is idle.
-If the launcher starts from an already-usable SQLite catalog or summary
-projection and no scan discovery events will fire, it seeds the same selective
-requests from installed system counts after the first rendered frame.
-Unrequested packs are not checked or downloaded. The worker fetches the manifest
-once, de-duplicates system requests, and runs at most three pack downloads
-concurrently.
+`megadrive`, and `saturn`. The launcher starts the runtime media worker on the
+first discovered supported system and queues only those discovered systems. If
+the launcher starts from an already-usable SQLite catalog and no scan discovery
+events will fire, it seeds the same selective requests from the catalog's
+installed system list after the first rendered frame. Unrequested packs are not
+checked or downloaded. The worker fetches the manifest once, de-duplicates
+system requests, and runs at most three pack downloads concurrently.
 
 `MISTER_MEDIA_UPDATE=off` disables the media worker,
 `MISTER_MEDIA_UPDATE=check` reports status without downloading, and

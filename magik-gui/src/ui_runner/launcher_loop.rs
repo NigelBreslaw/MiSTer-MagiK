@@ -616,7 +616,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_refresh_done = false;
     let mut media_handle = None;
     let mut media_worker_unavailable = false;
-    let mut pending_media_systems = PendingMediaSystemQueue::default();
+    let mut media_catalog_seed_pending = false;
     let mut media_catalog_seed_defer_reason: Option<&'static str> = None;
     let mut media_interaction_block_until: Option<Instant> = None;
     let mut media_last_gate = MediaInteractionGate {
@@ -635,7 +635,7 @@ pub(super) fn run_launcher_loop(
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
         catalog_summary_only = true;
-        pending_media_systems.extend(catalog_media_system_ids(&catalog));
+        media_catalog_seed_pending = true;
         catalog_version = catalog_version.wrapping_add(1);
         let request = if deferred_library_rebuild {
             CatalogWorkerRequest::ForceBuild
@@ -670,7 +670,7 @@ pub(super) fn run_launcher_loop(
                 );
                 catalog = loaded.catalog;
                 catalog_ready = true;
-                pending_media_systems.extend(catalog_media_system_ids(&catalog));
+                media_catalog_seed_pending = true;
                 catalog_version = catalog_version.wrapping_add(1);
                 apply_forced_arcade_selected(&mut nav, &catalog);
                 apply_pending_launch_return_state(
@@ -1049,7 +1049,6 @@ pub(super) fn run_launcher_loop(
                             "catalog_system_discovered",
                             format!("system={system_id}"),
                         );
-                        let queued = pending_media_systems.push(system_id.clone());
                         let media_gate = current_media_interaction_gate(
                             frame_accounting.first_visible_copy_done(),
                             pending_launch.is_some() || launching,
@@ -1064,21 +1063,24 @@ pub(super) fn run_launcher_loop(
                             start,
                         );
                         if media_gate.active {
-                            if queued {
-                                print_startup_event(
-                                    start,
-                                    "screenshot_media_catalog_defer",
-                                    format!("system={system_id} reason={}", media_gate.reason),
-                                );
-                            }
+                            media_catalog_seed_pending = true;
+                            print_startup_event(
+                                start,
+                                "screenshot_media_catalog_defer",
+                                format!("system={system_id} reason={}", media_gate.reason),
+                            );
                         } else {
-                            flush_pending_media_systems(
-                                &mut pending_media_systems,
+                            ensure_media_worker_started(
                                 &mut media_handle,
                                 &mut media_worker_unavailable,
                                 start,
                                 "discovered-system",
                             );
+                        }
+                        if !media_gate.active {
+                            if let Some(handle) = media_handle.as_ref() {
+                                handle.ensure_system(&system_id);
+                            }
                         }
                     }
                     CatalogWorkerMessage::Ready {
@@ -1095,7 +1097,7 @@ pub(super) fn run_launcher_loop(
                             catalog_version = catalog_version.wrapping_add(1);
                             catalog_ready = true;
                             catalog_summary_only = false;
-                            pending_media_systems.extend(catalog_media_system_ids(&catalog));
+                            media_catalog_seed_pending = true;
                             apply_forced_arcade_selected(&mut nav, &catalog);
                             apply_pending_launch_return_state(
                                 &mut nav,
@@ -1109,7 +1111,7 @@ pub(super) fn run_launcher_loop(
                             );
                         }
                         if let Some(summary) = summary {
-                            if pending_media_systems.is_empty() {
+                            if !media_catalog_seed_pending {
                                 if let Some(handle) = media_handle.as_ref() {
                                     handle.finish();
                                 }
@@ -1926,14 +1928,14 @@ pub(super) fn run_launcher_loop(
                 media_gate,
                 start,
             );
-            if !pending_media_systems.is_empty() && !media_gate.active {
+            if media_catalog_seed_pending && !media_gate.active {
+                media_catalog_seed_pending = false;
                 media_catalog_seed_defer_reason = None;
-                flush_pending_media_systems(
-                    &mut pending_media_systems,
+                ensure_media_for_catalog_systems(
+                    &catalog,
                     &mut media_handle,
                     &mut media_worker_unavailable,
                     start,
-                    "catalog-systems",
                 );
                 sync_media_interaction_gate(
                     media_handle.as_ref(),
@@ -1941,7 +1943,7 @@ pub(super) fn run_launcher_loop(
                     media_gate,
                     start,
                 );
-            } else if !pending_media_systems.is_empty()
+            } else if media_catalog_seed_pending
                 && media_catalog_seed_defer_reason != Some(media_gate.reason)
             {
                 media_catalog_seed_defer_reason = Some(media_gate.reason);
@@ -2374,30 +2376,30 @@ fn ensure_media_worker_started(
     }
 }
 
-fn flush_pending_media_systems(
-    pending_systems: &mut PendingMediaSystemQueue,
+fn ensure_media_for_catalog_systems(
+    catalog: &ArcadeCatalog,
     media_handle: &mut Option<MediaWorkerHandle>,
     media_worker_unavailable: &mut bool,
     start: Instant,
-    mode: &str,
 ) {
-    let systems = pending_systems.drain_ordered();
+    let systems = catalog_media_system_ids(catalog);
     if systems.is_empty() {
         return;
     }
-    ensure_media_worker_started(media_handle, media_worker_unavailable, start, mode);
+    ensure_media_worker_started(
+        media_handle,
+        media_worker_unavailable,
+        start,
+        "catalog-systems",
+    );
     let Some(handle) = media_handle.as_ref() else {
         return;
-    };
-    let source = match mode {
-        "catalog-systems" => "catalog-seed",
-        other => other,
     };
     for system_id in systems {
         print_startup_event(
             start,
             "screenshot_media_catalog_system_present",
-            format!("system={system_id} source={source}"),
+            format!("system={system_id} source=catalog-seed"),
         );
         print_startup_event(
             start,
@@ -2416,42 +2418,11 @@ fn catalog_media_system_ids(catalog: &ArcadeCatalog) -> Vec<String> {
         .filter_map(|system| {
             let id = system.id.as_str();
             (mister_magik_fb::media_update::is_supported_pack_id(id)
-                && system.count > 0
+                && catalog.system_game_count(id) > 0
                 && seen.insert(system.id.clone()))
             .then(|| system.id.clone())
         })
         .collect()
-}
-
-#[derive(Debug, Default)]
-struct PendingMediaSystemQueue {
-    seen: BTreeSet<String>,
-    ordered: Vec<String>,
-}
-
-impl PendingMediaSystemQueue {
-    fn push(&mut self, system_id: String) -> bool {
-        if !self.seen.insert(system_id.clone()) {
-            return false;
-        }
-        self.ordered.push(system_id);
-        true
-    }
-
-    fn extend(&mut self, systems: impl IntoIterator<Item = String>) {
-        for system_id in systems {
-            self.push(system_id);
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.ordered.is_empty()
-    }
-
-    fn drain_ordered(&mut self) -> Vec<String> {
-        self.seen.clear();
-        self.ordered.drain(..).collect()
-    }
 }
 
 #[derive(Debug)]
@@ -2771,88 +2742,6 @@ mod tests {
             catalog_media_system_ids(&catalog),
             vec!["arcade".to_string(), "neogeo".to_string()]
         );
-    }
-
-    #[test]
-    pub(super) fn catalog_media_system_ids_use_summary_counts_without_game_rows() {
-        let catalog = ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
-            Vec::new(),
-            vec![
-                arcade_catalog::GameSystemEntry {
-                    id: "nes".to_string(),
-                    title: "NES".to_string(),
-                    count: 12,
-                },
-                arcade_catalog::GameSystemEntry {
-                    id: "snes".to_string(),
-                    title: "SNES".to_string(),
-                    count: 4,
-                },
-            ],
-        );
-
-        assert_eq!(
-            catalog_media_system_ids(&catalog),
-            vec!["nes".to_string(), "snes".to_string()]
-        );
-    }
-
-    #[test]
-    pub(super) fn catalog_media_system_ids_ignore_zero_count_and_unsupported_systems() {
-        let catalog = ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
-            Vec::new(),
-            vec![
-                arcade_catalog::GameSystemEntry {
-                    id: "arcade".to_string(),
-                    title: "Arcade".to_string(),
-                    count: 0,
-                },
-                arcade_catalog::GameSystemEntry {
-                    id: "gba".to_string(),
-                    title: "GBA".to_string(),
-                    count: 3,
-                },
-                arcade_catalog::GameSystemEntry {
-                    id: "saturn".to_string(),
-                    title: "Saturn".to_string(),
-                    count: 1,
-                },
-            ],
-        );
-
-        assert_eq!(
-            catalog_media_system_ids(&catalog),
-            vec!["saturn".to_string()]
-        );
-    }
-
-    #[test]
-    pub(super) fn pending_media_system_queue_dedupes_and_preserves_order() {
-        let mut queue = PendingMediaSystemQueue::default();
-
-        assert!(queue.push("nes".to_string()));
-        assert!(queue.push("snes".to_string()));
-        assert!(!queue.push("nes".to_string()));
-        queue.extend(vec![
-            "saturn".to_string(),
-            "snes".to_string(),
-            "megadrive".to_string(),
-        ]);
-
-        assert_eq!(
-            queue.drain_ordered(),
-            vec![
-                "nes".to_string(),
-                "snes".to_string(),
-                "saturn".to_string(),
-                "megadrive".to_string()
-            ]
-        );
-        assert!(queue.is_empty());
-        assert!(queue.push("nes".to_string()));
-        assert_eq!(queue.drain_ordered(), vec!["nes".to_string()]);
     }
 
     #[test]
