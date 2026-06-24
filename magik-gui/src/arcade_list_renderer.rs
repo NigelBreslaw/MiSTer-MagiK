@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
@@ -19,6 +20,8 @@ pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
 pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
 const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
+const ARCADE_ROW_FINGERPRINT_CACHE_MAX: usize = 512;
+const ARCADE_ROW_FINGERPRINT_CACHE_PRUNE_TO: usize = 384;
 const ARCADE_LIST_LAYER_COPY_BANDS: [(usize, usize); 1] = [(0, ARCADE_LIST_H)];
 const ARCADE_SELECTION_FRAME_THICKNESS: usize = 3;
 const ARCADE_SELECTION_FRAME_COLOR: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
@@ -34,6 +37,8 @@ pub(crate) struct ArcadeListRenderer {
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
     row_cache_epoch: u64,
+    row_fingerprint_epoch: u64,
+    row_fingerprint_cache: HashMap<usize, CachedArcadeRowFingerprint>,
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
 }
@@ -45,12 +50,34 @@ pub(crate) struct CachedArcadeRow {
     pub(crate) last_used: u64,
 }
 
+struct CachedArcadeRowFingerprint {
+    system_id: Arc<str>,
+    mra_path: Arc<str>,
+    preview_archive_path: Arc<str>,
+    preview_asset_key: Arc<str>,
+    title: Arc<str>,
+    is_new: bool,
+    hash: u64,
+    last_used: u64,
+}
+
+impl CachedArcadeRowFingerprint {
+    fn matches(&self, game: &ArcadeGameEntry) -> bool {
+        self.is_new == game.is_new
+            && arc_str_eq(&self.system_id, &game.system_id)
+            && arc_str_eq(&self.mra_path, &game.mra_path)
+            && arc_str_eq(&self.preview_archive_path, &game.preview_archive_path)
+            && arc_str_eq(&self.preview_asset_key, &game.preview_asset_key)
+            && arc_str_eq(&self.title, &game.title)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ArcadeListDrawKey {
     len: usize,
     visual_px: i32,
     anchor_hash: u64,
-    visible_hash: u64,
+    visible_hash: Option<u64>,
 }
 
 pub(crate) enum ArcadeListUpdate {
@@ -75,6 +102,8 @@ impl ArcadeListRenderer {
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             row_cache_epoch: 0,
+            row_fingerprint_epoch: 0,
+            row_fingerprint_cache: HashMap::new(),
             surface_y: 0,
             last_draw: None,
         }
@@ -100,11 +129,25 @@ impl ArcadeListRenderer {
             .round()
             .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
         let previous = self.last_draw;
+        let anchor_hash = games
+            .get(anchor)
+            .map(|game| self.arcade_cached_game_hash(anchor, game))
+            .unwrap_or(ARCADE_LIST_HASH_OFFSET);
+        let same_position = previous.as_ref().is_some_and(|previous| {
+            previous.len == games.len()
+                && previous.visual_px == visual_px
+                && previous.anchor_hash == anchor_hash
+        });
+        let visible_hash = if previous.is_none() || same_position {
+            Some(self.arcade_visible_window_hash(games, visual_index))
+        } else {
+            None
+        };
         let key = ArcadeListDrawKey {
             len: games.len(),
             visual_px,
-            anchor_hash: arcade_anchor_hash(games.get(anchor)),
-            visible_hash: arcade_visible_window_hash(games, visual_index),
+            anchor_hash,
+            visible_hash,
         };
         if !force && self.last_draw.as_ref() == Some(&key) {
             return None;
@@ -285,6 +328,54 @@ impl ArcadeListRenderer {
     fn next_row_cache_epoch(&mut self) -> u64 {
         self.row_cache_epoch = self.row_cache_epoch.wrapping_add(1);
         self.row_cache_epoch
+    }
+
+    fn next_row_fingerprint_epoch(&mut self) -> u64 {
+        self.row_fingerprint_epoch = self.row_fingerprint_epoch.wrapping_add(1);
+        self.row_fingerprint_epoch
+    }
+
+    fn arcade_visible_window_hash(&mut self, games: &[ArcadeGameEntry], visual_index: f32) -> u64 {
+        let mut hash = ARCADE_LIST_HASH_OFFSET;
+        let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
+            return hash;
+        };
+        arcade_hash_usize(&mut hash, first);
+        arcade_hash_usize(&mut hash, end);
+        for idx in first..=end {
+            arcade_hash_usize(&mut hash, idx);
+            let row_hash = self.arcade_cached_game_hash(idx, &games[idx]);
+            arcade_hash_u64(&mut hash, row_hash);
+        }
+        hash
+    }
+
+    fn arcade_cached_game_hash(&mut self, idx: usize, game: &ArcadeGameEntry) -> u64 {
+        let last_used = self.next_row_fingerprint_epoch();
+        if let Some(cached) = self.row_fingerprint_cache.get_mut(&idx) {
+            if cached.matches(game) {
+                cached.last_used = last_used;
+                return cached.hash;
+            }
+        }
+        if self.row_fingerprint_cache.len() >= ARCADE_ROW_FINGERPRINT_CACHE_MAX {
+            prune_arcade_row_fingerprint_cache(&mut self.row_fingerprint_cache);
+        }
+        let hash = arcade_game_hash(game);
+        self.row_fingerprint_cache.insert(
+            idx,
+            CachedArcadeRowFingerprint {
+                system_id: Arc::clone(&game.system_id),
+                mra_path: Arc::clone(&game.mra_path),
+                preview_archive_path: Arc::clone(&game.preview_archive_path),
+                preview_asset_key: Arc::clone(&game.preview_asset_key),
+                title: Arc::clone(&game.title),
+                is_new: game.is_new,
+                hash,
+                last_used,
+            },
+        );
+        hash
     }
 
     fn copy_band_to_surface(&mut self, band: &[Pixel], band_y: usize, band_h: usize) {
@@ -574,9 +665,25 @@ pub(crate) fn prune_arcade_row_cache(row_cache: &mut HashMap<usize, CachedArcade
     row_cache.retain(|_, row| row.last_used >= cutoff);
 }
 
+fn prune_arcade_row_fingerprint_cache(row_cache: &mut HashMap<usize, CachedArcadeRowFingerprint>) {
+    if row_cache.len() < ARCADE_ROW_FINGERPRINT_CACHE_MAX {
+        return;
+    }
+    let keep = ARCADE_ROW_FINGERPRINT_CACHE_PRUNE_TO.min(row_cache.len());
+    let mut last_used = row_cache
+        .values()
+        .map(|row| row.last_used)
+        .collect::<Vec<_>>();
+    let cutoff_index = last_used.len().saturating_sub(keep);
+    let (_, cutoff, _) = last_used.select_nth_unstable(cutoff_index);
+    let cutoff = *cutoff;
+    row_cache.retain(|_, row| row.last_used >= cutoff);
+}
+
 const ARCADE_LIST_HASH_OFFSET: u64 = 0xcbf29ce484222325;
 const ARCADE_LIST_HASH_PRIME: u64 = 0x100000001b3;
 
+#[cfg(test)]
 fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
     if let Some(game) = game {
@@ -585,6 +692,7 @@ fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
     hash
 }
 
+#[cfg(test)]
 fn arcade_visible_window_hash(games: &[ArcadeGameEntry], visual_index: f32) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
     let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
@@ -596,6 +704,12 @@ fn arcade_visible_window_hash(games: &[ArcadeGameEntry], visual_index: f32) -> u
         arcade_hash_usize(&mut hash, idx);
         arcade_hash_game(&mut hash, &games[idx]);
     }
+    hash
+}
+
+fn arcade_game_hash(game: &ArcadeGameEntry) -> u64 {
+    let mut hash = ARCADE_LIST_HASH_OFFSET;
+    arcade_hash_game(&mut hash, game);
     hash
 }
 
@@ -621,6 +735,10 @@ fn arcade_hash_usize(hash: &mut u64, value: usize) {
     arcade_hash_bytes(hash, &(value as u64).to_le_bytes());
 }
 
+fn arcade_hash_u64(hash: &mut u64, value: u64) {
+    arcade_hash_bytes(hash, &value.to_le_bytes());
+}
+
 fn arcade_hash_bytes(hash: &mut u64, bytes: &[u8]) {
     for byte in bytes {
         *hash ^= *byte as u64;
@@ -628,6 +746,10 @@ fn arcade_hash_bytes(hash: &mut u64, bytes: &[u8]) {
     }
     *hash ^= 0xff;
     *hash = hash.wrapping_mul(ARCADE_LIST_HASH_PRIME);
+}
+
+fn arc_str_eq(left: &Arc<str>, right: &Arc<str>) -> bool {
+    Arc::ptr_eq(left, right) || left.as_ref() == right.as_ref()
 }
 
 pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {

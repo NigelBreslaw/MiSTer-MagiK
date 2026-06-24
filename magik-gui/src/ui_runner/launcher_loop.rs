@@ -39,6 +39,37 @@ struct DeferredCatalogWorker {
     start_after: Option<Instant>,
 }
 
+struct LauncherStatusTextSnapshot {
+    catalog_scan_message: SharedString,
+    catalog_scan_title: SharedString,
+    catalog_scan_detail: SharedString,
+    confirm_title: SharedString,
+    confirm_left_label: SharedString,
+    confirm_right_label: SharedString,
+}
+
+impl LauncherStatusTextSnapshot {
+    fn from_bridge(bridge: &slint_ui::launcher::MisterBridge<'_>) -> Self {
+        Self {
+            catalog_scan_message: bridge.get_catalog_scan_message(),
+            catalog_scan_title: bridge.get_catalog_scan_title(),
+            catalog_scan_detail: bridge.get_catalog_scan_detail(),
+            confirm_title: bridge.get_confirm_title(),
+            confirm_left_label: bridge.get_confirm_left_label(),
+            confirm_right_label: bridge.get_confirm_right_label(),
+        }
+    }
+
+    fn bytes_len(&self) -> usize {
+        self.catalog_scan_message.len()
+            + self.catalog_scan_title.len()
+            + self.catalog_scan_detail.len()
+            + self.confirm_title.len()
+            + self.confirm_left_label.len()
+            + self.confirm_right_label.len()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LibraryChangedDialogTestPhase {
     Waiting,
@@ -855,6 +886,7 @@ pub(super) fn run_launcher_loop(
             force_full_present: false,
         };
         let defer_selected_preview = false;
+        let mut preview_scheduled_this_loop = false;
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
@@ -1828,6 +1860,7 @@ pub(super) fn run_launcher_loop(
                     catalog_version,
                     defer_selected_preview,
                 );
+                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 window.request_redraw();
             } else if light_bridge_dirty {
                 let active_games = if nav.screen == Screen::Arcade {
@@ -1846,6 +1879,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     defer_selected_preview,
                 );
+                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 window.request_redraw();
             }
         } else {
@@ -1913,29 +1947,21 @@ pub(super) fn run_launcher_loop(
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
         let catalog_background_scan_visible = bridge.get_catalog_background_scan_visible();
-        let catalog_scan_message = bridge.get_catalog_scan_message().to_string();
         let confirm_visible = bridge.get_confirm_visible();
-        let confirm_title = bridge.get_confirm_title().to_string();
         let confirm_selected = bridge.get_confirm_selected();
-        let confirm_left_label = bridge.get_confirm_left_label().to_string();
-        let confirm_right_label = bridge.get_confirm_right_label().to_string();
         let status_write_due = frame_accounting.status_write_due();
         let status_string_copy_start = (status_write_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
-        let status_catalog_scan_text = status_write_due.then(|| {
-            (
-                bridge.get_catalog_scan_title().to_string(),
-                bridge.get_catalog_scan_detail().to_string(),
-            )
-        });
+        let status_text =
+            status_write_due.then(|| LauncherStatusTextSnapshot::from_bridge(&bridge));
         let status_string_copy_us = status_string_copy_start
             .map(|start| start.elapsed().as_micros())
             .unwrap_or(0);
         prepare_trace.status_string_copy_us = status_string_copy_us;
-        let status_string_copy_bytes = status_catalog_scan_text
+        let status_string_copy_bytes = status_text
             .as_ref()
-            .map(|(title, detail)| title.len() + detail.len())
+            .map(LauncherStatusTextSnapshot::bytes_len)
             .unwrap_or(0);
         let games_found_detail_changed = if catalog_scan_visible && catalog_scan_percent < 0 {
             games_found_counter.tick(loop_start).is_some_and(|detail| {
@@ -1962,7 +1988,7 @@ pub(super) fn run_launcher_loop(
             &[]
         };
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
-        if dirty_opt && !launching && nav.screen == Screen::Arcade {
+        if dirty_opt && !preview_scheduled_this_loop && !launching && nav.screen == Screen::Arcade {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if schedule_arcade_preview_window(
                 &bridge,
@@ -2147,22 +2173,34 @@ pub(super) fn run_launcher_loop(
             launching,
             &loading_title,
             catalog_scan_visible,
-            status_catalog_scan_text
+            status_text
                 .as_ref()
-                .map(|(title, _)| title.as_str())
+                .map(|text| text.catalog_scan_title.as_str())
                 .unwrap_or(""),
-            status_catalog_scan_text
+            status_text
                 .as_ref()
-                .map(|(_, detail)| detail.as_str())
+                .map(|text| text.catalog_scan_detail.as_str())
                 .unwrap_or(""),
             catalog_scan_percent,
             catalog_background_scan_visible,
-            &catalog_scan_message,
+            status_text
+                .as_ref()
+                .map(|text| text.catalog_scan_message.as_str())
+                .unwrap_or(""),
             confirm_visible,
-            &confirm_title,
+            status_text
+                .as_ref()
+                .map(|text| text.confirm_title.as_str())
+                .unwrap_or(""),
             confirm_selected,
-            &confirm_left_label,
-            &confirm_right_label,
+            status_text
+                .as_ref()
+                .map(|text| text.confirm_left_label.as_str())
+                .unwrap_or(""),
+            status_text
+                .as_ref()
+                .map(|text| text.confirm_right_label.as_str())
+                .unwrap_or(""),
             launcher_bench_scenario,
             start_screen,
             lock_screen,
