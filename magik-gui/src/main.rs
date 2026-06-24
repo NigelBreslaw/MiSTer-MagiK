@@ -152,7 +152,6 @@ fn main() {
         return;
     }
 
-    #[cfg(feature = "diagnostics")]
     if cmd == "launch-prep-bench" {
         launch_preparation::run_launch_prep_bench();
         return;

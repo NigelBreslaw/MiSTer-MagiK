@@ -43,7 +43,6 @@ pub const COMMANDS: &[&str] = &[
     "hbmame-metadata-from-library",
     #[cfg(feature = "diagnostics")]
     "library-scan-bench",
-    #[cfg(feature = "diagnostics")]
     "launch-prep-bench",
     #[cfg(feature = "diagnostics")]
     "audio-tone",
@@ -127,7 +126,6 @@ mod tests {
             "library-sql",
             "hbmame-metadata-from-library",
             "library-scan-bench",
-            "launch-prep-bench",
             "audio-tone",
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");
@@ -148,11 +146,11 @@ mod tests {
             "library-sql",
             "hbmame-metadata-from-library",
             "library-scan-bench",
-            "launch-prep-bench",
             "audio-tone",
         ] {
             assert!(COMMANDS.contains(&command), "{command}");
         }
+        assert!(COMMANDS.contains(&"launch-prep-bench"));
     }
 
     #[test]
