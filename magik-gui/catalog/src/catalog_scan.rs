@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
+const DISCOVERY_EVENT_BUFFER: usize = 8192;
+
 pub(crate) struct FoundFile {
     pub(crate) path: PathBuf,
     pub(crate) ext: String,
@@ -82,8 +84,22 @@ pub(crate) enum DiscoveryEvent {
     Done { dirs: usize, discover_us: u64 },
 }
 
+struct WalkTargetStats {
+    dirs: usize,
+    files: usize,
+    candidates: usize,
+    elapsed_us: u64,
+    aborted: bool,
+}
+
+struct WalkTargetBatch {
+    target: PathBuf,
+    stats: WalkTargetStats,
+    files: Vec<FoundFile>,
+}
+
 pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
-    let (tx, rx) = mpsc::sync_channel(256);
+    let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
     std::thread::Builder::new()
         .name("library-walker".to_string())
         .spawn(move || {
@@ -117,72 +133,172 @@ fn walk_index_candidates(roots: &[String], tx: Option<&mpsc::SyncSender<Discover
         ),
     );
     let mut dirs = 0usize;
+    if let Some(tx) = tx {
+        return walk_index_candidates_streaming(targets, &profiles, &candidate_exts, tx);
+    }
     for target in targets {
-        let target_t = Instant::now();
-        let mut target_dirs = 1usize;
-        let mut target_files = 0usize;
-        let mut target_candidates = 0usize;
-        dirs += 1;
-        for entry in walkdir::WalkDir::new(&target)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !should_ignore_path(e.path()))
-            .filter_map(Result::ok)
-        {
-            let p = entry.path();
-            if p == target {
-                continue;
-            }
-            if should_ignore_path(p) {
-                continue;
-            }
-            if entry.file_type().is_dir() {
-                dirs += 1;
-                target_dirs += 1;
-                continue;
-            }
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            target_files += 1;
-            let ext = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if !is_source_index_extension(&candidate_exts, p, &ext) {
-                continue;
-            }
-            if !is_index_candidate(&profiles, p, &ext) {
-                continue;
-            }
-            let (size, mtime_secs) = candidate_signature_for_walk_entry(p, &ext, &entry);
-            let file = FoundFile {
-                path: p.to_path_buf(),
-                ext,
-                size,
-                mtime_secs,
-            };
-            target_candidates += 1;
-            if let Some(tx) = tx {
-                if tx.send(DiscoveryEvent::File(file)).is_err() {
-                    return dirs;
-                }
-            }
-        }
-        library_db::report_library_scan_timing(
-            "walk_target",
-            target_t.elapsed().as_micros() as u64,
-            format!(
-                "path={} dirs={} files={} candidates={}",
-                target.display(),
-                target_dirs,
-                target_files,
-                target_candidates
-            ),
-        );
+        let stats = scan_target_candidates(&target, &profiles, &candidate_exts, |_| true);
+        dirs += stats.dirs;
+        report_walk_target(&target, &stats);
     }
     dirs
+}
+
+fn walk_index_candidates_streaming(
+    targets: Vec<PathBuf>,
+    profiles: &[LaunchProfile],
+    candidate_exts: &HashSet<String>,
+    tx: &mpsc::SyncSender<DiscoveryEvent>,
+) -> usize {
+    if targets.is_empty() {
+        return 0;
+    }
+    let mut dirs = 0usize;
+    let (batch_tx, batch_rx) = mpsc::channel();
+    let background_targets: Vec<(usize, PathBuf)> =
+        targets.iter().cloned().enumerate().skip(1).collect();
+    let background_count = background_targets.len();
+    // Keep the first target streaming for early progress, while one extra walker
+    // pre-scans later targets and replays them in deterministic target order.
+    if !background_targets.is_empty() {
+        let profiles = profiles.to_vec();
+        let candidate_exts = candidate_exts.clone();
+        std::thread::Builder::new()
+            .name("library-walker-prefetch".to_string())
+            .spawn(move || {
+                for (idx, target) in background_targets {
+                    let batch = collect_target_candidates(target, &profiles, &candidate_exts);
+                    if batch_tx.send((idx, batch)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn library-walker-prefetch");
+    }
+
+    let first_target = &targets[0];
+    let first_stats = scan_target_candidates(first_target, profiles, candidate_exts, |file| {
+        tx.send(DiscoveryEvent::File(file)).is_ok()
+    });
+    dirs += first_stats.dirs;
+    report_walk_target(first_target, &first_stats);
+    if first_stats.aborted {
+        return dirs;
+    }
+
+    let mut batches: Vec<Option<WalkTargetBatch>> = std::iter::repeat_with(|| None)
+        .take(targets.len())
+        .collect();
+    for _ in 0..background_count {
+        let Ok((idx, batch)) = batch_rx.recv() else {
+            break;
+        };
+        batches[idx] = Some(batch);
+    }
+
+    for batch in batches.into_iter().skip(1).flatten() {
+        dirs += batch.stats.dirs;
+        report_walk_target(&batch.target, &batch.stats);
+        for file in batch.files {
+            if tx.send(DiscoveryEvent::File(file)).is_err() {
+                return dirs;
+            }
+        }
+    }
+    dirs
+}
+
+fn collect_target_candidates(
+    target: PathBuf,
+    profiles: &[LaunchProfile],
+    candidate_exts: &HashSet<String>,
+) -> WalkTargetBatch {
+    let mut files = Vec::new();
+    let stats = scan_target_candidates(&target, profiles, candidate_exts, |file| {
+        files.push(file);
+        true
+    });
+    WalkTargetBatch {
+        target,
+        stats,
+        files,
+    }
+}
+
+fn scan_target_candidates(
+    target: &Path,
+    profiles: &[LaunchProfile],
+    candidate_exts: &HashSet<String>,
+    mut emit: impl FnMut(FoundFile) -> bool,
+) -> WalkTargetStats {
+    let target_t = Instant::now();
+    let mut dirs = 1usize;
+    let mut files = 0usize;
+    let mut candidates = 0usize;
+    let mut aborted = false;
+    for entry in walkdir::WalkDir::new(target)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !should_ignore_path(e.path()))
+        .filter_map(Result::ok)
+    {
+        let p = entry.path();
+        if p == target {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            dirs += 1;
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        files += 1;
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !is_source_index_extension(candidate_exts, p, &ext) {
+            continue;
+        }
+        if !is_index_candidate(profiles, p, &ext) {
+            continue;
+        }
+        let (size, mtime_secs) = candidate_signature_for_walk_entry(p, &ext, &entry);
+        let file = FoundFile {
+            path: p.to_path_buf(),
+            ext,
+            size,
+            mtime_secs,
+        };
+        candidates += 1;
+        if !emit(file) {
+            aborted = true;
+            break;
+        }
+    }
+    WalkTargetStats {
+        dirs,
+        files,
+        candidates,
+        elapsed_us: target_t.elapsed().as_micros() as u64,
+        aborted,
+    }
+}
+
+fn report_walk_target(target: &Path, stats: &WalkTargetStats) {
+    library_db::report_library_scan_timing(
+        "walk_target",
+        stats.elapsed_us,
+        format!(
+            "path={} dirs={} files={} candidates={}",
+            target.display(),
+            stats.dirs,
+            stats.files,
+            stats.candidates
+        ),
+    );
 }
 
 fn source_index_extensions(profiles: &[LaunchProfile]) -> HashSet<String> {
