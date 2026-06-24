@@ -1536,6 +1536,25 @@ fn write_sqlite_scan_with_sources(
         let discoveries =
             preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
         let discovery_total = discoveries.len();
+        let mut system_rows = HashMap::<String, (String, String)>::new();
+        for discovery in discoveries.values() {
+            let system_id = catalog_system_id_for_discovery(discovery);
+            system_rows.entry(system_id.clone()).or_insert_with(|| {
+                (
+                    system_title_for_discovery(discovery, &system_id),
+                    discovery.category.clone(),
+                )
+            });
+        }
+        for (system_id, (title, category)) in system_rows {
+            system_stmt
+                .execute(params![
+                    system_id.as_str(),
+                    title.as_str(),
+                    category.as_str()
+                ])
+                .map_err(|e| format!("insert system: {e}"))?;
+        }
         report_sqlite_import_progress(&mut progress, 0, discovery_total);
         let mut chunk_t = Instant::now();
         let mut chunk_start = 0usize;
@@ -1557,13 +1576,6 @@ fn write_sqlite_scan_with_sources(
                 .as_ref()
                 .and_then(|identity| console_preview_asset(identity, sources.preview_paths));
             let game_has_preview = preview_asset.is_some();
-            system_stmt
-                .execute(params![
-                    system_id.as_str(),
-                    system_title_for_discovery(discovery, &system_id),
-                    discovery.category.as_str()
-                ])
-                .map_err(|e| format!("insert system: {e}"))?;
             game_stmt
                 .execute(params![
                     key.as_str(),
