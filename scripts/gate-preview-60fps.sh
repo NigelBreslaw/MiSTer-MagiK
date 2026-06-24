@@ -82,11 +82,13 @@ gate_trace() {
   )"
   read -r frames work_over vsync fallback timeout error other_source max_miss <<<"$summary"
   if [[ "${frames:-0}" == missing-column:* ]]; then
+    echo "validity_tsv	label=$name	valid=0	invalid_reason=missing_column	detail=${frames#missing-column:}"
     echo "$name gate failed: ${frames#missing-column:} column missing in $tsv" >&2
     rm -f "$works"
     return 9
   fi
   if [[ "$frames" -le 0 ]]; then
+    echo "validity_tsv	label=$name	valid=0	invalid_reason=no_frames	detail=$tsv"
     echo "$name gate failed: no frames after frame 30 in $tsv" >&2
     rm -f "$works"
     return 9
@@ -99,9 +101,11 @@ gate_trace() {
 
   echo "$name gate frames_after_30=$frames p99_work_us=$p99_work work_gt_16667=$work_over vsync=$vsync fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss"
   if [[ "$fallback" -ne 0 || "$timeout" -ne 0 || "$error" -ne 0 || "$other_source" -ne 0 || "$max_miss" -ne 0 || "$p99_work" -ge "$p99_work_us" ]]; then
+    echo "validity_tsv	label=$name	valid=0	invalid_reason=gate_failed	detail=p99_work_us=$p99_work threshold=$p99_work_us fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss"
     echo "$name gate failed" >&2
     return 9
   fi
+  echo "validity_tsv	label=$name	valid=1	invalid_reason=ok	detail=p99_work_us=$p99_work threshold=$p99_work_us fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss"
 }
 
 write_self_test_trace() {
