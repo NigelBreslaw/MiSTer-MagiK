@@ -11,10 +11,10 @@ use mister_magik_fb::media_update::{
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HEADER: &str = "screenshot_download_bench_tsv\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
@@ -29,6 +29,7 @@ struct BenchConfig {
     image_size: String,
     asset_dir: PathBuf,
     prime_cache: bool,
+    save_strategy: SaveStrategy,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +57,29 @@ struct HttpMetadata {
     etag: String,
     content_encoding: String,
     cf_cache_status: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SaveStrategy {
+    Staged,
+    StreamFat,
+}
+
+impl SaveStrategy {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "staged" | "stage" | "current" => Ok(Self::Staged),
+            "stream-fat" | "stream" | "direct" => Ok(Self::StreamFat),
+            other => Err(format!("unsupported --save-strategy: {other}")),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Staged => "staged",
+            Self::StreamFat => "stream-fat",
+        }
+    }
 }
 
 pub(crate) fn run() {
@@ -133,6 +157,7 @@ where
                 .unwrap_or_else(|_| DEFAULT_ASSET_DIR.to_string()),
         ),
         prime_cache: false,
+        save_strategy: SaveStrategy::Staged,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -168,6 +193,10 @@ where
                 config.asset_dir = PathBuf::from(args.next().ok_or("--asset-dir requires a path")?);
             }
             "--prime-cache" => config.prime_cache = true,
+            "--save-strategy" => {
+                config.save_strategy =
+                    SaveStrategy::parse(&args.next().ok_or("--save-strategy requires a value")?)?;
+            }
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
@@ -193,7 +222,7 @@ where
 
 fn print_usage() {
     println!(
-        "usage: mister-magik-fb media-bench-download --system ID [--variant identity] --iterations N [--prime-cache]"
+        "usage: mister-magik-fb media-bench-download --system ID [--variant identity] --iterations N [--prime-cache] [--save-strategy staged|stream-fat]"
     );
 }
 
@@ -268,27 +297,14 @@ fn run_one(
         result: "bench-ok".to_string(),
     };
     let result = (|| {
-        let download_started = Instant::now();
-        let metadata = download_to_path(&variant.url, &encoded)?;
-        row.download_ms = elapsed_ms(download_started.elapsed());
-        row.etag = metadata.etag.clone();
-        row.content_encoding = metadata.content_encoding.clone();
-        row.cf_cache_status = metadata.cf_cache_status.clone();
-        row.encoded_bytes = file_len(&encoded)?;
-
-        let verify_started = Instant::now();
-        verify_file(&encoded, variant.bytes, &variant.sha256)?;
-        row.verify_ms += elapsed_ms(verify_started.elapsed());
-
-        row.decompress_ms = 0;
-        row.decoded_bytes = file_len(&encoded)?;
-
-        let verify_started = Instant::now();
-        verify_file(&encoded, pack.raw.bytes, &pack.raw.sha256)?;
-        row.verify_ms += elapsed_ms(verify_started.elapsed());
-
-        let publish_metrics = publish_pack_file_with_progress(&encoded, &bench_final, |_| {})?;
-        emit_publish_stage_rows(label, pack, &publish_metrics);
+        let metadata = match config.save_strategy {
+            SaveStrategy::Staged => {
+                run_staged_download_publish(pack, variant, &encoded, &bench_final, label, &mut row)?
+            }
+            SaveStrategy::StreamFat => {
+                run_stream_fat_download_publish(variant, &bench_final, label, pack, &mut row)?
+            }
+        };
 
         let state_started = Instant::now();
         write_bench_download_state(&bench_state, pack, &bench_final, variant, &metadata)?;
@@ -300,9 +316,13 @@ fn run_one(
             state_ms,
             file_len(&bench_state).unwrap_or(0),
             "bench-ok",
-            &format!("path={}", bench_state.display()),
+            &format!(
+                "save_strategy={} path={}",
+                config.save_strategy.label(),
+                bench_state.display()
+            ),
         );
-        row.save_ms = publish_metrics.total_ms + state_ms;
+        row.save_ms += state_ms;
         Ok::<(), String>(())
     })();
     let cleanup_started = Instant::now();
@@ -322,7 +342,10 @@ fn run_one(
             .as_ref()
             .map(|_| "bench-ok")
             .unwrap_or("bench-cleanup-failed"),
-        &cleanup_detail,
+        &format!(
+            "save_strategy={} {cleanup_detail}",
+            config.save_strategy.label()
+        ),
     );
     if let Err(error) = result {
         row.result = error;
@@ -338,6 +361,266 @@ fn run_one(
         return Err(row.to_tsv());
     }
     Ok(row)
+}
+
+fn run_staged_download_publish(
+    pack: &MediaPack,
+    variant: &MediaVariant,
+    encoded: &Path,
+    bench_final: &Path,
+    label: &str,
+    row: &mut BenchRow,
+) -> Result<HttpMetadata, String> {
+    let download_started = Instant::now();
+    let metadata = download_to_path(&variant.url, encoded)?;
+    row.download_ms = elapsed_ms(download_started.elapsed());
+    row.etag = metadata.etag.clone();
+    row.content_encoding = metadata.content_encoding.clone();
+    row.cf_cache_status = metadata.cf_cache_status.clone();
+    row.encoded_bytes = file_len(encoded)?;
+
+    let verify_started = Instant::now();
+    verify_file(encoded, variant.bytes, &variant.sha256)?;
+    row.verify_ms += elapsed_ms(verify_started.elapsed());
+
+    row.decompress_ms = 0;
+    row.decoded_bytes = file_len(encoded)?;
+
+    let verify_started = Instant::now();
+    verify_file(encoded, pack.raw.bytes, &pack.raw.sha256)?;
+    row.verify_ms += elapsed_ms(verify_started.elapsed());
+
+    let publish_metrics = publish_pack_file_with_progress(encoded, bench_final, |_| {})?;
+    emit_publish_stage_rows(label, pack, SaveStrategy::Staged, &publish_metrics);
+    row.save_ms += publish_metrics.total_ms;
+    Ok(metadata)
+}
+
+fn run_stream_fat_download_publish(
+    variant: &MediaVariant,
+    bench_final: &Path,
+    label: &str,
+    pack: &MediaPack,
+    row: &mut BenchRow,
+) -> Result<HttpMetadata, String> {
+    let publish = prepare_artifact_publish(
+        bench_final,
+        timestamped_temp_path_for(bench_final, "screenshot-pack", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "streamed benchmark pack",
+            parent: "streamed benchmark pack parent",
+        },
+    )?;
+    let headers_dir = PathBuf::from("/tmp/mister-magik-media-bench");
+    fs::create_dir_all(&headers_dir)
+        .map_err(|e| format!("create headers dir {}: {e}", headers_dir.display()))?;
+    let headers_path =
+        headers_dir.join(format!("{}.stream-fat.{}.headers", pack.id, unix_ms_now()));
+    let result = stream_fat_download_to_publish_temp(variant, publish.temp_path(), &headers_path);
+    let _ = fs::remove_file(&headers_path);
+    let stream = result?;
+    row.download_ms = stream.download_ms;
+    row.verify_ms = stream.verify_ms;
+    row.decompress_ms = 0;
+    row.encoded_bytes = stream.bytes;
+    row.decoded_bytes = stream.bytes;
+    row.etag = stream.metadata.etag.clone();
+    row.content_encoding = stream.metadata.content_encoding.clone();
+    row.cf_cache_status = stream.metadata.cf_cache_status.clone();
+
+    emit_stage_row(
+        label,
+        pack,
+        "stream_write",
+        stream.download_ms,
+        stream.bytes,
+        "bench-ok",
+        &format!("save_strategy={}", SaveStrategy::StreamFat.label()),
+    );
+    emit_stage_row(
+        label,
+        pack,
+        "stream_verify_finalize",
+        stream.verify_ms,
+        stream.bytes,
+        "bench-ok",
+        &format!("save_strategy={}", SaveStrategy::StreamFat.label()),
+    );
+    verify_downloaded_bytes(
+        stream.bytes,
+        &stream.sha256,
+        pack.raw.bytes,
+        &pack.raw.sha256,
+    )?;
+    let save_metrics = install_verified_streamed_temp(
+        &publish,
+        stream.bytes,
+        &stream.sha256,
+        variant.bytes,
+        &variant.sha256,
+    )?;
+    emit_stream_publish_stage_rows(label, pack, &save_metrics);
+    row.save_ms += save_metrics.total_ms;
+    Ok(stream.metadata)
+}
+
+struct StreamDownloadResult {
+    metadata: HttpMetadata,
+    bytes: u64,
+    sha256: String,
+    download_ms: u64,
+    verify_ms: u64,
+}
+
+#[derive(Debug)]
+struct StreamPublishMetrics {
+    bytes: u64,
+    sync_ms: u64,
+    rename_ms: u64,
+    parent_sync_ms: u64,
+    total_ms: u64,
+}
+
+fn stream_fat_download_to_publish_temp(
+    variant: &MediaVariant,
+    temp_path: &Path,
+    headers_path: &Path,
+) -> Result<StreamDownloadResult, String> {
+    let headers = File::create(headers_path)
+        .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
+    let mut wget = Command::new("wget")
+        .arg("-S")
+        .arg("--header")
+        .arg("Accept-Encoding: identity")
+        .arg("-O")
+        .arg("-")
+        .arg(&variant.url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(headers))
+        .spawn()
+        .map_err(|e| format!("spawn wget: {e}"))?;
+    let mut sha = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn sha256sum: {e}"))?;
+    let mut output =
+        File::create(temp_path).map_err(|e| format!("create {}: {e}", temp_path.display()))?;
+    let mut input = wget
+        .stdout
+        .take()
+        .ok_or_else(|| "missing wget stdout pipe".to_string())?;
+    let mut sha_stdin = sha
+        .stdin
+        .take()
+        .ok_or_else(|| "missing sha256sum stdin pipe".to_string())?;
+    let started = Instant::now();
+    let mut bytes = 0u64;
+    let mut buffer = vec![0u8; 256 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|e| format!("read wget stdout: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..read])
+            .map_err(|e| format!("write streamed pack {}: {e}", temp_path.display()))?;
+        sha_stdin
+            .write_all(&buffer[..read])
+            .map_err(|e| format!("write sha256sum stdin: {e}"))?;
+        bytes += read as u64;
+    }
+    drop(sha_stdin);
+    output
+        .flush()
+        .map_err(|e| format!("flush streamed pack {}: {e}", temp_path.display()))?;
+    let download_ms = elapsed_ms(started.elapsed());
+    let wget_status = wget.wait().map_err(|e| format!("wait wget: {e}"))?;
+    if !wget_status.success() {
+        return Err(format!("download-failed-{wget_status}"));
+    }
+    let verify_started = Instant::now();
+    let sha_output = sha
+        .wait_with_output()
+        .map_err(|e| format!("wait sha256sum: {e}"))?;
+    let verify_ms = elapsed_ms(verify_started.elapsed());
+    if !sha_output.status.success() {
+        return Err(format!("sha256sum failed with {}", sha_output.status));
+    }
+    let actual_sha = parse_sha256_output(&sha_output.stdout)?;
+    let header_text = fs::read_to_string(headers_path).unwrap_or_default();
+    Ok(StreamDownloadResult {
+        metadata: parse_wget_headers(&header_text),
+        bytes,
+        sha256: actual_sha,
+        download_ms,
+        verify_ms,
+    })
+}
+
+fn parse_sha256_output(output: &[u8]) -> Result<String, String> {
+    let text = String::from_utf8(output.to_vec()).map_err(|e| format!("sha256 utf8: {e}"))?;
+    text.split_whitespace()
+        .next()
+        .filter(|sha| sha.len() == 64)
+        .map(str::to_string)
+        .ok_or_else(|| format!("could not parse sha256sum output: {text}"))
+}
+
+fn verify_downloaded_bytes(
+    actual_bytes: u64,
+    actual_sha: &str,
+    expected_bytes: u64,
+    expected_sha: &str,
+) -> Result<(), String> {
+    if actual_bytes != expected_bytes {
+        return Err(format!(
+            "size-mismatch-expected-{expected_bytes}-actual-{actual_bytes}"
+        ));
+    }
+    if actual_sha != expected_sha {
+        return Err(format!(
+            "sha256-mismatch-expected-{expected_sha}-actual-{actual_sha}"
+        ));
+    }
+    Ok(())
+}
+
+fn install_verified_streamed_temp(
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    actual_bytes: u64,
+    actual_sha: &str,
+    expected_bytes: u64,
+    expected_sha: &str,
+) -> Result<StreamPublishMetrics, String> {
+    verify_downloaded_bytes(actual_bytes, actual_sha, expected_bytes, expected_sha)?;
+    let started = Instant::now();
+    let bytes = file_len(publish.temp_path())?;
+    let sync_started = Instant::now();
+    File::options()
+        .read(true)
+        .open(publish.temp_path())
+        .and_then(|file| file.sync_all())
+        .map_err(|e| format!("sync {}: {e}", publish.temp_path().display()))?;
+    let sync_ms = elapsed_ms(sync_started.elapsed());
+
+    let rename_started = Instant::now();
+    publish.install_temp(Some("streamed benchmark pack"))?;
+    let rename_ms = elapsed_ms(rename_started.elapsed());
+
+    let parent_sync_started = Instant::now();
+    sync_path_with_fallback(publish.parent());
+    let parent_sync_ms = elapsed_ms(parent_sync_started.elapsed());
+
+    Ok(StreamPublishMetrics {
+        bytes,
+        sync_ms,
+        rename_ms,
+        parent_sync_ms,
+        total_ms: elapsed_ms(started.elapsed()),
+    })
 }
 
 fn download_to_path(url: &str, path: &Path) -> Result<HttpMetadata, String> {
@@ -402,15 +685,15 @@ fn sha256_hex(path: &Path) -> Result<String, String> {
     if !output.status.success() {
         return Err(format!("sha256sum failed with {}", output.status));
     }
-    let text = String::from_utf8(output.stdout).map_err(|e| format!("sha256 utf8: {e}"))?;
-    text.split_whitespace()
-        .next()
-        .filter(|sha| sha.len() == 64)
-        .map(str::to_string)
-        .ok_or_else(|| format!("could not parse sha256sum output: {text}"))
+    parse_sha256_output(&output.stdout)
 }
 
-fn emit_publish_stage_rows(label: &str, pack: &MediaPack, metrics: &PackSaveMetrics) {
+fn emit_publish_stage_rows(
+    label: &str,
+    pack: &MediaPack,
+    strategy: SaveStrategy,
+    metrics: &PackSaveMetrics,
+) {
     for (stage, ms) in [
         ("publish_copy", metrics.copy_ms),
         ("publish_sync", metrics.sync_ms),
@@ -424,7 +707,29 @@ fn emit_publish_stage_rows(label: &str, pack: &MediaPack, metrics: &PackSaveMetr
             ms,
             metrics.bytes,
             "bench-ok",
-            &format!("progress_events={}", metrics.progress_events),
+            &format!(
+                "save_strategy={} progress_events={}",
+                strategy.label(),
+                metrics.progress_events
+            ),
+        );
+    }
+}
+
+fn emit_stream_publish_stage_rows(label: &str, pack: &MediaPack, metrics: &StreamPublishMetrics) {
+    for (stage, ms) in [
+        ("stream_sync", metrics.sync_ms),
+        ("stream_rename", metrics.rename_ms),
+        ("stream_parent_sync", metrics.parent_sync_ms),
+    ] {
+        emit_stage_row(
+            label,
+            pack,
+            stage,
+            ms,
+            metrics.bytes,
+            "bench-ok",
+            &format!("save_strategy={}", SaveStrategy::StreamFat.label()),
         );
     }
 }
@@ -694,6 +999,8 @@ mod tests {
             "--label".to_string(),
             "CACHE-20260623".to_string(),
             "--prime-cache".to_string(),
+            "--save-strategy".to_string(),
+            "stream-fat".to_string(),
         ])
         .unwrap();
 
@@ -701,6 +1008,23 @@ mod tests {
         assert_eq!(config.variant, "identity");
         assert_eq!(config.iterations, 10);
         assert!(config.prime_cache);
+        assert_eq!(config.save_strategy, SaveStrategy::StreamFat);
+    }
+
+    #[test]
+    fn save_strategy_defaults_to_staged_and_rejects_unknown_values() {
+        assert_eq!(
+            parse_args(Vec::<String>::new()).unwrap().save_strategy,
+            SaveStrategy::Staged
+        );
+
+        let error = parse_args([
+            "--save-strategy".to_string(),
+            "optimistic-direct".to_string(),
+        ])
+        .unwrap_err();
+
+        assert!(error.contains("unsupported --save-strategy"));
     }
 
     #[test]
@@ -780,6 +1104,72 @@ mod tests {
             "HIT"
         );
         assert!(!dir.join(".screenshot-media-state.json").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn streamed_publish_rejects_bad_checksum_without_renaming_final_file() {
+        let dir = temp_dir("mister-magik-stream-fat-bad-sha");
+        let final_path = dir.join(".neogeo-screenshots-320x320.mmlz4b.bench-test");
+        let temp_path =
+            final_path.with_file_name(".neogeo-screenshots-320x320.mmlz4b.bench-test.tmp");
+        let publish = prepare_artifact_publish(
+            &final_path,
+            temp_path.clone(),
+            ArtifactPublishLabels {
+                destination: "stream test final",
+                parent: "stream test parent",
+            },
+        )
+        .unwrap();
+        fs::write(publish.temp_path(), b"bad-bytes").unwrap();
+
+        let error = install_verified_streamed_temp(
+            &publish,
+            9,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            9,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        .unwrap_err();
+
+        assert!(error.contains("sha256-mismatch"));
+        assert!(publish.temp_path().exists());
+        assert!(!final_path.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn streamed_publish_rejects_bad_size_without_renaming_final_file() {
+        let dir = temp_dir("mister-magik-stream-fat-bad-size");
+        let final_path = dir.join(".neogeo-screenshots-320x320.mmlz4b.bench-test");
+        let temp_path =
+            final_path.with_file_name(".neogeo-screenshots-320x320.mmlz4b.bench-test.tmp");
+        let publish = prepare_artifact_publish(
+            &final_path,
+            temp_path.clone(),
+            ArtifactPublishLabels {
+                destination: "stream test final",
+                parent: "stream test parent",
+            },
+        )
+        .unwrap();
+        fs::write(publish.temp_path(), b"bad-bytes").unwrap();
+
+        let error = install_verified_streamed_temp(
+            &publish,
+            9,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap_err();
+
+        assert!(error.contains("size-mismatch"));
+        assert!(publish.temp_path().exists());
+        assert!(!final_path.exists());
 
         let _ = fs::remove_dir_all(dir);
     }
