@@ -91,7 +91,7 @@ cleanup() {
 trap cleanup EXIT
 
 {
-  printf 'export MISTER_CATALOG_REFRESH=off\n'
+  printf 'export MISTER_CATALOG_REFRESH=default\n'
   printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=launch-handoff\n'

@@ -100,7 +100,7 @@ write_launcher_env() {
   local trace_path="$2"
   local selected_index="${3:-}"
   {
-    printf 'export MISTER_CATALOG_REFRESH=off\n'
+    printf 'export MISTER_CATALOG_REFRESH=default\n'
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$scenario_value"

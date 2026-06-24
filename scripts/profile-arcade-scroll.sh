@@ -65,7 +65,7 @@ esac
 echo "==> Capture supervised launcher Arcade held-scroll secs=$secs label=$label deploy=$deploy"
 "$MISTER" run "rm -f '$remote_tsv' '$remote_log'" >/dev/null
 "$MISTER" launcher-restart \
-  --env MISTER_CATALOG_REFRESH=off \
+  --env MISTER_CATALOG_REFRESH=default \
   --env MISTER_LAUNCHER_START_SCREEN=arcade \
   --env MISTER_LAUNCHER_LOCK_SCREEN=arcade \
   --env MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll \
