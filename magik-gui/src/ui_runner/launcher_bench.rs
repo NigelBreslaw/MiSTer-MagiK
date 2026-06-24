@@ -10,6 +10,7 @@ pub(super) enum LauncherBenchScenario {
     TurboHold,
     PreviewStepHold,
     ModelSync,
+    LaunchHandoff,
 }
 
 impl LauncherBenchScenario {
@@ -30,6 +31,7 @@ impl LauncherBenchScenario {
                 Some(Self::PreviewStepHold)
             }
             "model-sync" | "model_sync" => Some(Self::ModelSync),
+            "launch-handoff" | "launch_handoff" => Some(Self::LaunchHandoff),
             _ => None,
         }
     }
@@ -44,12 +46,13 @@ impl LauncherBenchScenario {
             Self::TurboHold => "turbo-hold",
             Self::PreviewStepHold => "preview-step-hold",
             Self::ModelSync => "model-sync",
+            Self::LaunchHandoff => "launch-handoff",
         }
     }
 
     pub(super) fn period(self) -> Duration {
         match self {
-            Self::Idle => Duration::MAX,
+            Self::Idle | Self::LaunchHandoff => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
             Self::ModelSync => Duration::from_millis(300),
             Self::QuickTap
@@ -68,6 +71,7 @@ impl LauncherBenchScenario {
                 | Self::HeldScroll
                 | Self::TurboHold
                 | Self::PreviewStepHold
+                | Self::LaunchHandoff
         )
     }
 }
@@ -111,7 +115,7 @@ pub(super) fn launcher_bench_step(
     now: Instant,
 ) -> bool {
     match scenario {
-        LauncherBenchScenario::Idle => false,
+        LauncherBenchScenario::Idle | LauncherBenchScenario::LaunchHandoff => false,
         LauncherBenchScenario::HomeNav => {
             let count = catalog.systems.len();
             if count == 0 {
