@@ -3,8 +3,8 @@
 use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};
 use crate::library_db;
 use crate::media_identity::ScreenshotAssetId;
-use rusqlite::{params, Connection};
-use std::collections::{BTreeMap, HashMap};
+use rusqlite::{params, params_from_iter, Connection};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -144,6 +144,50 @@ pub(crate) fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMac
     rows.filter_map(|row| row.ok()).collect()
 }
 
+pub(crate) fn load_mame_machine_metadata_for_setnames(
+    path: &Path,
+    setnames: &HashSet<String>,
+) -> HashMap<String, MameMachineMetadata> {
+    if setnames.is_empty() {
+        return HashMap::new();
+    }
+    let Ok(conn) = library_db::open_sqlite_read_only(path) else {
+        return HashMap::new();
+    };
+    let mut out = HashMap::with_capacity(setnames.len());
+    let setnames = setnames.iter().map(String::as_str).collect::<Vec<_>>();
+    for chunk in setnames.chunks(400) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT setname,parent_setname,title,year,manufacturer
+             FROM mame_machines
+             WHERE setname IN ({placeholders})"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            continue;
+        };
+        let Ok(rows) = stmt.query_map(params_from_iter(chunk.iter().copied()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                MameMachineMetadata {
+                    parent_setname: row.get(1)?,
+                    title: row.get(2)?,
+                    year: row.get(3)?,
+                    manufacturer: row.get(4)?,
+                },
+            ))
+        }) else {
+            continue;
+        };
+        for row in rows.flatten() {
+            out.insert(row.0, row.1);
+        }
+    }
+    out
+}
+
 pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return MameSoftwareMetadata::default();
@@ -256,6 +300,17 @@ pub(crate) fn load_arcade_machine_metadata(
     ArcadeMachineMetadata {
         mame: load_mame_machine_metadata(mame_path),
         hbmame: load_mame_machine_metadata(hbmame_path),
+    }
+}
+
+pub(crate) fn load_arcade_machine_metadata_for_setnames(
+    mame_path: &Path,
+    hbmame_path: &Path,
+    setnames: &HashSet<String>,
+) -> ArcadeMachineMetadata {
+    ArcadeMachineMetadata {
+        mame: load_mame_machine_metadata_for_setnames(mame_path, setnames),
+        hbmame: load_mame_machine_metadata_for_setnames(hbmame_path, setnames),
     }
 }
 
@@ -806,6 +861,34 @@ mod tests {
         write_sqlite_scan_with_mame_and_preview_pack,
     };
     use crate::test_support::*;
+
+    #[test]
+    fn mame_machine_metadata_filter_loads_only_needed_setnames() {
+        let root = unique_temp_dir("mame-machine-filter");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &db,
+            &[
+                (
+                    "needed",
+                    Some("parent"),
+                    "Needed Game",
+                    Some("1985"),
+                    Some("Maker"),
+                ),
+                ("other", None, "Other Game", Some("1986"), Some("Elsewhere")),
+            ],
+        );
+        let setnames = std::collections::HashSet::from(["needed".to_string()]);
+
+        let metadata = load_mame_machine_metadata_for_setnames(&db, &setnames);
+
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata["needed"].title, "Needed Game");
+        assert!(!metadata.contains_key("other"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn nes_software_identity_matches_title_and_preview_pack() {
