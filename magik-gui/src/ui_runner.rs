@@ -71,6 +71,7 @@ mod launcher_worker_intents;
 mod media_worker;
 #[cfg(mister_experiments)]
 mod raster_effects_loop;
+mod raw565_preview_renderer;
 #[cfg(mister_experiments)]
 mod screensaver_loop;
 mod screenshot_media_update_session;
@@ -100,6 +101,7 @@ use launcher_loop::*;
 use media_worker::*;
 #[cfg(mister_experiments)]
 use raster_effects_loop::run_raster_effects_loop;
+use raw565_preview_renderer::*;
 #[cfg(mister_experiments)]
 use screensaver_loop::*;
 use screenshot_media_update_session::*;
