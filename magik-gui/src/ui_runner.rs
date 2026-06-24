@@ -73,6 +73,7 @@ mod media_worker;
 mod raster_effects_loop;
 #[cfg(mister_experiments)]
 mod screensaver_loop;
+mod screenshot_media_update_session;
 #[cfg(mister_experiments)]
 mod sprite_effects_loop;
 #[cfg(mister_experiments)]
@@ -101,6 +102,7 @@ use media_worker::*;
 use raster_effects_loop::run_raster_effects_loop;
 #[cfg(mister_experiments)]
 use screensaver_loop::*;
+use screenshot_media_update_session::*;
 #[cfg(mister_experiments)]
 use sprite_effects_loop::run_sprite_effects_loop;
 #[cfg(mister_experiments)]

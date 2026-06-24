@@ -1236,3 +1236,39 @@ metric_tsv	label=STREAM-FAT-SATURN-20260624-10	suite_label=STREAM-FAT-SATURN-202
 metric_tsv	label=STREAM-FAT-SATURN-20260624-10	suite_label=STREAM-FAT-SATURN-20260624	system=saturn	metric=screenshot_download_total_ms	value=3357	unit=ms	valid=1
 metric_tsv	label=STREAM-FAT-SATURN-20260624-10	suite_label=STREAM-FAT-SATURN-20260624	system=saturn	metric=screenshot_download_verify_ms	value=2	unit=ms	valid=1
 metric_tsv	label=STREAM-FAT-SATURN-20260624-10	suite_label=STREAM-FAT-SATURN-20260624	system=saturn	metric=screenshot_download_wire_ms	value=3302	unit=ms	valid=1
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+stage_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	benchmark=media-bench-download	system=neogeo	stage=publish_copy	ms=2829	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	benchmark=media-bench-download	system=neogeo	stage=publish_sync	ms=0	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	benchmark=media-bench-download	system=neogeo	stage=publish_rename	ms=0	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	benchmark=media-bench-download	system=neogeo	stage=publish_parent_sync	ms=8	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	benchmark=media-bench-download	system=neogeo	stage=state	ms=20	bytes=1010	result=bench-ok	detail=save_strategy=staged path=/media/fat/mister-magik/assets/.screenshot-media-state.json.bench-1581-1782339499869
+stage_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	benchmark=media-bench-download	system=neogeo	stage=cleanup	ms=84	bytes=0	result=bench-ok	detail=save_strategy=staged removed=3
+screenshot_download_bench_tsv	ARCH-MEDIA-BEFORE-01	neogeo	identity	24283092	24283092	6219	0	2944	1295	10461	31.24	18.57	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_stage_publish_copy_ms	value=2829	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_stage_publish_sync_ms	value=0	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_stage_publish_rename_ms	value=0	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_stage_publish_parent_sync_ms	value=8	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_stage_state_ms	value=20	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_stage_cleanup_ms	value=84	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_save_ms	value=2944	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_total_ms	value=10461	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_verify_ms	value=1295	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-BEFORE-01	suite_label=ARCH-MEDIA-BEFORE	system=neogeo	metric=screenshot_download_wire_ms	value=6219	unit=ms	valid=1
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+stage_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	benchmark=media-bench-download	system=neogeo	stage=publish_copy	ms=1982	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	benchmark=media-bench-download	system=neogeo	stage=publish_sync	ms=0	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	benchmark=media-bench-download	system=neogeo	stage=publish_rename	ms=0	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	benchmark=media-bench-download	system=neogeo	stage=publish_parent_sync	ms=9	bytes=24283092	result=bench-ok	detail=save_strategy=staged progress_events=96
+stage_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	benchmark=media-bench-download	system=neogeo	stage=state	ms=15	bytes=1010	result=bench-ok	detail=save_strategy=staged path=/media/fat/mister-magik/assets/.screenshot-media-state.json.bench-2289-1782340703833
+stage_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	benchmark=media-bench-download	system=neogeo	stage=cleanup	ms=78	bytes=0	result=bench-ok	detail=save_strategy=staged removed=3
+screenshot_download_bench_tsv	ARCH-MEDIA-AFTER-01	neogeo	identity	24283092	24283092	6297	0	2087	1296	9684	30.85	20.06	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_stage_publish_copy_ms	value=1982	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_stage_publish_sync_ms	value=0	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_stage_publish_rename_ms	value=0	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_stage_publish_parent_sync_ms	value=9	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_stage_state_ms	value=15	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_stage_cleanup_ms	value=78	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_save_ms	value=2087	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_total_ms	value=9684	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_verify_ms	value=1296	unit=ms	valid=1
+metric_tsv	label=ARCH-MEDIA-AFTER-01	suite_label=ARCH-MEDIA-AFTER	system=neogeo	metric=screenshot_download_wire_ms	value=6297	unit=ms	valid=1

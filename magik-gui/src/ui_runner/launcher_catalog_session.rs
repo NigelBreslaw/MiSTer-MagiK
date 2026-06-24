@@ -4,12 +4,6 @@ use super::launcher_worker_intents::{
 };
 use super::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) struct MediaInteractionGate {
-    pub(super) active: bool,
-    pub(super) reason: &'static str,
-}
-
 pub(super) struct CatalogWorkerStart {
     pub(super) root: String,
     pub(super) request: CatalogWorkerRequest,
@@ -36,13 +30,12 @@ pub(super) enum CatalogSessionEffect {
     SyncCatalogBridge,
     Ui(LauncherWorkerUiIntent),
     FinishMediaWorker,
-    EnsureMediaWorker {
-        mode: &'static str,
-    },
-    EnsureMediaSystem {
+    FinishMediaWorkerIfNoCatalogSeedPending,
+    RequestMediaCatalogSeed,
+    MediaSystemDiscovered {
         system_id: String,
+        media_gate: Option<MediaInteractionGate>,
     },
-    EnsureMediaCatalogSystems,
     RequestLibraryRebuildOnNextBoot,
     Confirm(launcher::ConfirmAction),
     StartCatalogWorker(CatalogWorkerStart),
@@ -86,8 +79,6 @@ pub(super) struct LauncherCatalogSession {
     refresh_failed: bool,
     summary_only: bool,
     persisted_summary_seen: bool,
-    media_seed_pending: bool,
-    media_seed_defer_reason: Option<&'static str>,
     deferred_worker: Option<DeferredCatalogWorker>,
     games_found_counter: GamesFoundCounter,
     bootstrap_counter_climb_logged: bool,
@@ -103,8 +94,6 @@ impl LauncherCatalogSession {
             refresh_failed: false,
             summary_only: false,
             persisted_summary_seen: false,
-            media_seed_pending: false,
-            media_seed_defer_reason: None,
             deferred_worker: None,
             games_found_counter: GamesFoundCounter::default(),
             bootstrap_counter_climb_logged: false,
@@ -127,14 +116,10 @@ impl LauncherCatalogSession {
 
     pub(super) fn note_summary_seed_ready(&mut self) {
         self.summary_only = true;
-        self.media_seed_pending = true;
-        self.media_seed_defer_reason = None;
     }
 
     pub(super) fn note_cached_catalog_ready(&mut self) {
         self.summary_only = false;
-        self.media_seed_pending = true;
-        self.media_seed_defer_reason = None;
     }
 
     pub(super) fn defer_catalog_worker(&mut self, root: String, request: CatalogWorkerRequest) {
@@ -192,7 +177,10 @@ impl LauncherCatalogSession {
                 self.handle_progress(context, title, detail, percent, now, &mut effects);
             }
             CatalogWorkerMessage::SystemDiscovered { system_id } => {
-                self.handle_system_discovered(context.media_gate, system_id, &mut effects);
+                effects.push(CatalogSessionEffect::MediaSystemDiscovered {
+                    system_id,
+                    media_gate: context.media_gate,
+                });
             }
             CatalogWorkerMessage::Ready {
                 catalog,
@@ -289,22 +277,6 @@ impl LauncherCatalogSession {
         effects
     }
 
-    pub(super) fn apply_media_gate(&mut self, gate: MediaInteractionGate) -> CatalogSessionEffects {
-        let mut effects = CatalogSessionEffects::default();
-        if self.media_seed_pending && !gate.active {
-            self.media_seed_pending = false;
-            self.media_seed_defer_reason = None;
-            effects.push(CatalogSessionEffect::EnsureMediaCatalogSystems);
-        } else if self.media_seed_pending && self.media_seed_defer_reason != Some(gate.reason) {
-            self.media_seed_defer_reason = Some(gate.reason);
-            effects.event(
-                "screenshot_media_catalog_defer",
-                format!("reason={}", gate.reason),
-            );
-        }
-        effects
-    }
-
     pub(super) fn tick_games_found_counter(&mut self, now: Instant) -> Option<String> {
         self.games_found_counter.tick(now)
     }
@@ -367,35 +339,6 @@ impl LauncherCatalogSession {
         effects.ui(intent.ui_with_detail(detail));
     }
 
-    fn handle_system_discovered(
-        &mut self,
-        media_gate: Option<MediaInteractionGate>,
-        system_id: String,
-        effects: &mut CatalogSessionEffects,
-    ) {
-        effects.event("catalog_system_discovered", format!("system={system_id}"));
-        let Some(media_gate) = media_gate else {
-            self.media_seed_pending = true;
-            effects.event(
-                "screenshot_media_catalog_defer",
-                format!("system={system_id} reason=media-gate-unavailable"),
-            );
-            return;
-        };
-        if media_gate.active {
-            self.media_seed_pending = true;
-            effects.event(
-                "screenshot_media_catalog_defer",
-                format!("system={system_id} reason={}", media_gate.reason),
-            );
-        } else {
-            effects.push(CatalogSessionEffect::EnsureMediaWorker {
-                mode: "discovered-system",
-            });
-            effects.push(CatalogSessionEffect::EnsureMediaSystem { system_id });
-        }
-    }
-
     fn handle_ready(
         &mut self,
         catalog_ready: bool,
@@ -411,8 +354,7 @@ impl LauncherCatalogSession {
         let catalog_len = ready_catalog.len();
         if !duplicate_cached_catalog {
             self.summary_only = false;
-            self.media_seed_pending = true;
-            self.media_seed_defer_reason = None;
+            effects.push(CatalogSessionEffect::RequestMediaCatalogSeed);
             effects.push(CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
                 load_us,
@@ -423,9 +365,7 @@ impl LauncherCatalogSession {
             );
         }
         if let Some(summary) = summary {
-            if !self.media_seed_pending {
-                effects.push(CatalogSessionEffect::FinishMediaWorker);
-            }
+            effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
             self.foreground_update = false;
             self.refresh_failed = false;
             let event = if summary.skipped {
@@ -650,9 +590,11 @@ mod tests {
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
                 CatalogSessionEffect::Ui(_) => "ui",
                 CatalogSessionEffect::FinishMediaWorker => "finish-media",
-                CatalogSessionEffect::EnsureMediaWorker { .. } => "ensure-media-worker",
-                CatalogSessionEffect::EnsureMediaSystem { .. } => "ensure-media-system",
-                CatalogSessionEffect::EnsureMediaCatalogSystems => "ensure-media-catalog",
+                CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
+                    "finish-media-if-no-seed"
+                }
+                CatalogSessionEffect::RequestMediaCatalogSeed => "request-media-seed",
+                CatalogSessionEffect::MediaSystemDiscovered { .. } => "media-system-discovered",
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => "request-rebuild-marker",
                 CatalogSessionEffect::Confirm(_) => "confirm",
                 CatalogSessionEffect::StartCatalogWorker(_) => "start-worker",
@@ -680,10 +622,9 @@ mod tests {
 
         assert_eq!(
             effect_names(effects),
-            vec!["catalog", "event", "ui", "sync"]
+            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
         );
         assert!(!session.refresh_done());
-        assert!(session.media_seed_pending);
     }
 
     #[test]
@@ -722,26 +663,6 @@ mod tests {
         assert_eq!(effect_names(effects), vec!["ui", "confirm", "event"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
-    }
-
-    #[test]
-    fn media_seed_defers_until_interaction_gate_is_idle() {
-        let mut session = LauncherCatalogSession::new(false);
-        session.note_cached_catalog_ready();
-
-        let deferred = session.apply_media_gate(MediaInteractionGate {
-            active: true,
-            reason: "startup",
-        });
-        assert_eq!(effect_names(deferred), vec!["event"]);
-        assert!(session.media_seed_pending);
-
-        let ready = session.apply_media_gate(MediaInteractionGate {
-            active: false,
-            reason: "idle",
-        });
-        assert_eq!(effect_names(ready), vec!["ensure-media-catalog"]);
-        assert!(!session.media_seed_pending);
     }
 
     #[test]
