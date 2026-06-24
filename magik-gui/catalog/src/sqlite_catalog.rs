@@ -8,6 +8,7 @@ use crate::catalog_config::{
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
 use crate::catalog_store;
+use crate::catalog_summary;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
@@ -626,13 +627,17 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp(
                 stamp,
             )
         };
-    save_sqlite_scan_with_progress_using_writer(
+    let bytes = save_sqlite_scan_with_progress_using_writer(
         path,
         scan,
         progress,
         sqlite_build_temp_plan(path),
         &mut writer,
-    )
+    )?;
+    if let Some(stamp) = stamp {
+        catalog_summary::write_catalog_summary_for_sqlite(path, stamp)?;
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn save_sqlite_scan_with_progress_using_writer(
@@ -732,7 +737,8 @@ fn publish_sqlite_temp(
     metrics.final_sync_ms = elapsed_ms(final_sync_t.elapsed());
 
     let rename_t = Instant::now();
-    std::fs::rename(&plan.final_tmp_path, final_path).map_err(|e| format!("replace sqlite: {e}"))?;
+    std::fs::rename(&plan.final_tmp_path, final_path)
+        .map_err(|e| format!("replace sqlite: {e}"))?;
     metrics.rename_ms = elapsed_ms(rename_t.elapsed());
 
     let parent_sync_t = Instant::now();
@@ -775,7 +781,10 @@ fn copy_sqlite_temp_with_progress(
 }
 
 fn emit_sqlite_save_progress(progress: &mut ProgressCallback<'_>, done: u64, total: u64) {
-    report_catalog_progress(progress, CatalogProgress::saving_sqlite_publish(done, total));
+    report_catalog_progress(
+        progress,
+        CatalogProgress::saving_sqlite_publish(done, total),
+    );
 }
 
 fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
@@ -2331,6 +2340,102 @@ mod tests {
             .games
             .iter()
             .any(|game| game.title.as_ref() == "Game 20004"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_summary_publish_matches_sqlite_counts() {
+        let root = unique_temp_dir("sqlite-catalog-summary");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp(
+            &db,
+            &sqlite_scan_with_discoveries(vec![
+                mra_discovery(1, "Summary Alpha"),
+                mra_discovery(2, "Summary Beta"),
+            ]),
+            Some(&stamp),
+            None,
+        )
+        .expect("write catalog and summary");
+
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        assert!(summary_path.exists(), "summary should be published");
+        assert!(
+            !root.join(".library.summary.json.tmp").exists(),
+            "summary temp should not remain after successful publish"
+        );
+
+        let summary = catalog_summary::read_catalog_summary(&summary_path)
+            .expect("read summary")
+            .expect("current summary");
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load sqlite catalog");
+
+        assert_eq!(summary.catalog_stamp_fingerprint, stamp.fingerprint_hex());
+        assert_eq!(summary.catalog_generation, stamp.fingerprint_hex());
+        assert_eq!(summary.catalog_stamp_lines, stamp.lines());
+        assert_eq!(summary.total_game_count, loaded.catalog.games.len());
+        assert_eq!(summary.systems.len(), loaded.catalog.systems.len());
+        for (summary_system, sqlite_system) in summary.systems.iter().zip(&loaded.catalog.systems) {
+            assert_eq!(summary_system.id, sqlite_system.id);
+            assert_eq!(summary_system.title, sqlite_system.title);
+            assert_eq!(summary_system.count, sqlite_system.count);
+        }
+        let arcade = summary
+            .systems
+            .iter()
+            .find(|system| system.id == "arcade")
+            .expect("arcade summary system");
+        assert_eq!(arcade.supported_media, vec!["screenshots".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_summary_read_ignores_schema_or_build_mismatch() {
+        let root = unique_temp_dir("sqlite-catalog-summary-version");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Versioned Summary")]),
+            Some(&stamp),
+            None,
+        )
+        .expect("write catalog and summary");
+
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let original: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary_path).expect("read summary"))
+                .expect("summary json");
+        for (field, value) in [
+            (
+                "catalog_schema_version",
+                serde_json::json!(SCHEMA_VERSION - 1),
+            ),
+            ("catalog_build_version", serde_json::json!(0)),
+        ] {
+            let mut mismatched = original.clone();
+            mismatched[field] = value;
+            std::fs::write(
+                &summary_path,
+                serde_json::to_vec(&mismatched).expect("json bytes"),
+            )
+            .expect("write mismatched summary");
+            assert!(
+                catalog_summary::read_catalog_summary(&summary_path)
+                    .expect("read mismatched summary")
+                    .is_none(),
+                "{field} mismatch should be ignored"
+            );
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
