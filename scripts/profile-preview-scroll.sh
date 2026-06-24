@@ -485,6 +485,104 @@ check_steady_work_gate() {
   ' "$tsv"
 }
 
+report_slow_work_attribution() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" -v label="$label" '
+    BEGIN { FS="\t" }
+    function col_value(field) {
+      return (field in col) ? ($(col[field]) + 0) : 0
+    }
+    function choose_dominant(prepare, render, custom, present,    dominant, max_us) {
+      dominant = "prepare"; max_us = prepare
+      if (render > max_us) { dominant = "slint_render"; max_us = render }
+      if (custom > max_us) { dominant = "custom_draw"; max_us = custom }
+      if (present > max_us) { dominant = "fb_present"; max_us = present }
+      dominant_phase = dominant
+      dominant_phase_us = max_us
+    }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      has_base = ("frame" in col) && ("prepare_us" in col) && ("slint_render_us" in col) && ("custom_draw_us" in col) && ("fb_present_us" in col) && ("wall_us" in col)
+      has_detail = ("catalog_worker_us" in col) && ("media_worker_us" in col) && ("media_gate_us" in col) && ("preview_schedule_us" in col) && ("preview_apply_us" in col) && ("preview_blit_us" in col) && ("status_string_copy_us" in col) && ("runtime_status_write_us" in col)
+      next
+    }
+    NF && has_base && $(col["frame"]) + 0 > 30 {
+      prepare = col_value("prepare_us")
+      render = col_value("slint_render_us")
+      custom = col_value("custom_draw_us")
+      present = col_value("fb_present_us")
+      work = prepare + render + custom + present
+      if (work <= 16667) next
+
+      slow++
+      preview_schedule = col_value("preview_schedule_us")
+      preview_apply = col_value("preview_apply_us")
+      preview_blit = col_value("preview_blit_us")
+      preview = preview_schedule + preview_apply + preview_blit
+      catalog_worker = col_value("catalog_worker_us")
+      media_worker = col_value("media_worker_us")
+      worker = catalog_worker + media_worker
+      media_gate = col_value("media_gate_us")
+      status_copy = col_value("status_string_copy_us")
+      status_write = col_value("runtime_status_write_us")
+      status = status_copy + status_write
+      choose_dominant(prepare, render, custom, present)
+
+      specific_min_us = 1000
+      if (!has_detail) {
+        attribution = "unattributed"
+        unattributed++
+      } else if (preview >= specific_min_us && preview * 2 >= dominant_phase_us && preview >= worker && preview >= media_gate && preview >= status) {
+        attribution = "preview"
+        preview_count++
+        attributed++
+      } else if (worker >= specific_min_us && worker * 2 >= dominant_phase_us && worker >= media_gate && worker >= status) {
+        attribution = "worker"
+        worker_count++
+        attributed++
+      } else if (media_gate >= specific_min_us && media_gate * 2 >= dominant_phase_us && media_gate >= status) {
+        attribution = "media_gate"
+        media_gate_count++
+        attributed++
+      } else if (status >= specific_min_us && status * 2 >= dominant_phase_us) {
+        attribution = "status"
+        status_count++
+        attributed++
+      } else if (dominant_phase_us > 0) {
+        attribution = "dominant_" dominant_phase
+        dominant_count[dominant_phase]++
+        attributed++
+      } else {
+        attribution = "unattributed"
+        unattributed++
+      }
+
+      printf "slow_frame_attribution_tsv\tcase=%s\tframe=%d\twork_us=%d\twall_us=%d\tattribution=%s\tdominant_phase=%s\tdominant_phase_us=%d\tprepare_us=%d\tslint_render_us=%d\tcustom_draw_us=%d\tfb_present_us=%d\tpreview_us=%d\tworker_us=%d\tmedia_gate_us=%d\tstatus_us=%d\tpreview_schedule_us=%d\tpreview_apply_us=%d\tpreview_blit_us=%d\tcatalog_worker_us=%d\tmedia_worker_us=%d\tstatus_write_due=%d\tstatus_write_us=%d\n",
+        name, $(col["frame"]) + 0, work, col_value("wall_us"), attribution,
+        dominant_phase, dominant_phase_us, prepare, render, custom, present,
+        preview, worker, media_gate, status, preview_schedule, preview_apply,
+        preview_blit, catalog_worker, media_worker, col_value("status_write_due"),
+        status_write
+    }
+    END {
+      if (!has_base) {
+        printf "slow_frame_attribution_summary_tsv\tcase=%s\tvalid=0\tinvalid_reason=missing_base_columns\tslow_work_frames=0\tattributed=0\tunattributed=0\n", name
+        printf "metric_tsv\tlabel=%s\tcase=%s\tmetric=unattributed_slow_work_frames\tvalue=0\tunit=frames\tvalid=0\n", label, name
+        exit 11
+      }
+      printf "slow_frame_attribution_summary_tsv\tcase=%s\tvalid=%d\tinvalid_reason=%s\tslow_work_frames=%d\tattributed=%d\tunattributed=%d\tpreview=%d\tworker=%d\tmedia_gate=%d\tstatus=%d\tdominant_prepare=%d\tdominant_slint_render=%d\tdominant_custom_draw=%d\tdominant_fb_present=%d\n",
+        name, (unattributed == 0 ? 1 : 0), (unattributed == 0 ? "ok" : "unattributed_slow_work"),
+        slow + 0, attributed + 0, unattributed + 0, preview_count + 0, worker_count + 0,
+        media_gate_count + 0, status_count + 0, dominant_count["prepare"] + 0,
+        dominant_count["slint_render"] + 0, dominant_count["custom_draw"] + 0,
+        dominant_count["fb_present"] + 0
+      printf "metric_tsv\tlabel=%s\tcase=%s\tmetric=unattributed_slow_work_frames\tvalue=%d\tunit=frames\tvalid=%d\n",
+        label, name, unattributed + 0, (unattributed == 0 ? 1 : 0)
+      if (unattributed > 0) exit 11
+    }
+  ' "$tsv"
+}
+
 summarize_preview_timing() {
   local name="$1" log="$2"
   awk -v name="$name" '
@@ -787,6 +885,18 @@ frame	prepare_us	slint_render_us	custom_draw_us	vsync_us	fb_present_us	wall_us
 EOF
   check_steady_work_gate selftest "$wall_wait_ok" >/dev/null
   check_steady_work_gate selftest "$work_slow" >/dev/null
+  if report_slow_work_attribution selftest "$work_slow" >/dev/null 2>&1; then
+    echo "slow-frame attribution self-test expected missing detail failure" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+
+  local work_slow_attributed="$tmp/work-slow-attributed.tsv"
+  cat >"$work_slow_attributed" <<'EOF'
+frame	prepare_us	catalog_worker_us	media_worker_us	media_gate_us	preview_schedule_us	preview_apply_us	slint_render_us	custom_draw_us	arcade_list_update_us	preview_blit_us	effect_label_us	vsync_us	fb_present_us	cached_present_us	overlay_present_us	present_probe_us	status_write_due	status_string_copy_us	status_string_copy_bytes	runtime_status_write_us	wall_us
+31	1000	0	0	0	0	900	1000	14000	0	3000	0	500	1000	500	500	0	1	12	4	200	17500
+EOF
+  report_slow_work_attribution selftest "$work_slow_attributed" >/dev/null
 
   local unexpected_read="$tmp/unexpected-read.log"
   local archive_mem_ok="$tmp/archive-mem-ok.log"
@@ -873,6 +983,14 @@ summarize_frame_pacing arcade "$arcade_tsv"
 echo
 echo $'custom_draw_phase\tphase\tframes_after_30\tavg_us\tp95_us\tp99_us'
 summarize_custom_draw_phases arcade "$arcade_tsv"
+
+echo
+if ! report_slow_work_attribution arcade "$arcade_tsv"; then
+  emit_artifact_row "arcade-trace" "$arcade_tsv" "/tmp/${label}-arcade.tsv"
+  emit_artifact_row "arcade-log" "$arcade_log" "$REMOTE_LOG"
+  emit_validity_row "0" "slow_frame_unattributed" "trace=$arcade_tsv log=$arcade_log"
+  exit 11
+fi
 
 echo
 check_preview_hotpath_cache_gate arcade "$arcade_log"

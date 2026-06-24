@@ -833,6 +833,8 @@ pub(super) fn run_launcher_loop(
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
         let loop_start = Instant::now();
+        let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
+        let mut prepare_trace = LauncherPrepareTrace::default();
         if let Some(pending) = pending_launch.as_mut() {
             pending.record_loading_frame(loop_start);
         }
@@ -909,6 +911,7 @@ pub(super) fn run_launcher_loop(
             last_clock_update = Instant::now();
         }
 
+        let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         if !catalog_refresh_done && catalog_rx.is_none() {
             let mut start_deferred_worker = false;
             if let Some(deferred) = deferred_catalog_worker.as_mut() {
@@ -1247,7 +1250,11 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        if let Some(trace_start) = catalog_worker_trace_start {
+            prepare_trace.catalog_worker_us = trace_start.elapsed().as_micros();
+        }
 
+        let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         while let Some(message) = media_handle.as_ref().and_then(|handle| handle.try_recv()) {
             match message {
                 MediaWorkerMessage::Timing { name, detail } => {
@@ -1300,6 +1307,9 @@ pub(super) fn run_launcher_loop(
                     break;
                 }
             }
+        }
+        if let Some(trace_start) = media_worker_trace_start {
+            prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
         }
 
         if let Some(worker_result) = pending_launch
@@ -1854,27 +1864,14 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        let media_gate = current_media_interaction_gate(
-            frame_accounting.first_visible_copy_done(),
-            pending_launch.is_some() || launching,
-            benchmark_media_interaction_active,
-            media_interaction_block_until,
-            loop_start,
-        );
-        sync_media_interaction_gate(
-            media_handle.as_ref(),
-            &mut media_last_gate,
-            media_gate,
-            start,
-        );
-        if media_catalog_seed_pending && !media_gate.active {
-            media_catalog_seed_pending = false;
-            media_catalog_seed_defer_reason = None;
-            ensure_media_for_catalog_systems(
-                &catalog,
-                &mut media_handle,
-                &mut media_worker_unavailable,
-                start,
+        let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
+        {
+            let media_gate = current_media_interaction_gate(
+                frame_accounting.first_visible_copy_done(),
+                pending_launch.is_some() || launching,
+                benchmark_media_interaction_active,
+                media_interaction_block_until,
+                loop_start,
             );
             sync_media_interaction_gate(
                 media_handle.as_ref(),
@@ -1882,15 +1879,34 @@ pub(super) fn run_launcher_loop(
                 media_gate,
                 start,
             );
-        } else if media_catalog_seed_pending
-            && media_catalog_seed_defer_reason != Some(media_gate.reason)
-        {
-            media_catalog_seed_defer_reason = Some(media_gate.reason);
-            print_startup_event(
-                start,
-                "screenshot_media_catalog_defer",
-                format!("reason={}", media_gate.reason),
-            );
+            if media_catalog_seed_pending && !media_gate.active {
+                media_catalog_seed_pending = false;
+                media_catalog_seed_defer_reason = None;
+                ensure_media_for_catalog_systems(
+                    &catalog,
+                    &mut media_handle,
+                    &mut media_worker_unavailable,
+                    start,
+                );
+                sync_media_interaction_gate(
+                    media_handle.as_ref(),
+                    &mut media_last_gate,
+                    media_gate,
+                    start,
+                );
+            } else if media_catalog_seed_pending
+                && media_catalog_seed_defer_reason != Some(media_gate.reason)
+            {
+                media_catalog_seed_defer_reason = Some(media_gate.reason);
+                print_startup_event(
+                    start,
+                    "screenshot_media_catalog_defer",
+                    format!("reason={}", media_gate.reason),
+                );
+            }
+        }
+        if let Some(trace_start) = media_gate_trace_start {
+            prepare_trace.media_gate_us = trace_start.elapsed().as_micros();
         }
 
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -1916,6 +1932,7 @@ pub(super) fn run_launcher_loop(
         let status_string_copy_us = status_string_copy_start
             .map(|start| start.elapsed().as_micros())
             .unwrap_or(0);
+        prepare_trace.status_string_copy_us = status_string_copy_us;
         let status_string_copy_bytes = status_catalog_scan_text
             .as_ref()
             .map(|(title, detail)| title.len() + detail.len())
@@ -1944,6 +1961,7 @@ pub(super) fn run_launcher_loop(
         } else {
             &[]
         };
+        let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
         if dirty_opt && !launching && nav.screen == Screen::Arcade {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if schedule_arcade_preview_window(
@@ -1956,8 +1974,15 @@ pub(super) fn run_launcher_loop(
                 window.request_redraw();
             }
         }
+        if let Some(trace_start) = preview_schedule_trace_start {
+            prepare_trace.preview_schedule_us = trace_start.elapsed().as_micros();
+        }
+        let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         if !launching && apply_ready_preview(&app, &mut preview, defer_selected_preview) {
             window.request_redraw();
+        }
+        if let Some(trace_start) = preview_apply_trace_start {
+            prepare_trace.preview_apply_us = trace_start.elapsed().as_micros();
         }
 
         let frame_t0 = Instant::now();
@@ -2095,6 +2120,7 @@ pub(super) fn run_launcher_loop(
                 custom_draw_start,
                 custom_draw_done,
                 custom_draw_trace,
+                prepare_trace,
                 prepare_us,
                 dirty_rect: this_rect,
                 copied_rows,
