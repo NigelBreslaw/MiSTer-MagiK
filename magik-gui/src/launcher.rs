@@ -115,12 +115,12 @@ pub struct LauncherEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LibraryChangedTestAction {
+pub enum LibraryChangedTestDialogChoice {
     Continue,
     Rebuild,
 }
 
-impl LibraryChangedTestAction {
+impl LibraryChangedTestDialogChoice {
     pub fn label(self) -> &'static str {
         match self {
             Self::Continue => "continue",
@@ -129,33 +129,17 @@ impl LibraryChangedTestAction {
     }
 }
 
-pub fn parse_library_changed_test_action(
+pub fn parse_library_changed_test_dialog_choice(
     value: &str,
-) -> Result<Option<LibraryChangedTestAction>, String> {
+) -> Result<Option<LibraryChangedTestDialogChoice>, String> {
     match value.trim() {
         "" => Ok(None),
-        "continue" => Ok(Some(LibraryChangedTestAction::Continue)),
-        "rebuild" => Ok(Some(LibraryChangedTestAction::Rebuild)),
+        "continue" => Ok(Some(LibraryChangedTestDialogChoice::Continue)),
+        "rebuild" => Ok(Some(LibraryChangedTestDialogChoice::Rebuild)),
         other => Err(format!(
-            "unknown MISTER_MAGIK_TEST_LIBRARY_CHANGED_ACTION={other:?}; use continue|rebuild"
+            "unknown MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE={other:?}; use continue|rebuild"
         )),
     }
-}
-
-pub fn library_changed_test_action_event(
-    confirm_action: Option<ConfirmAction>,
-    action: LibraryChangedTestAction,
-) -> Option<LauncherEvent> {
-    if confirm_action != Some(ConfirmAction::LibraryChanged) {
-        return None;
-    }
-    Some(LauncherEvent {
-        action: match action {
-            LibraryChangedTestAction::Continue => LauncherAction::ContinueWithStaleLibrary,
-            LibraryChangedTestAction::Rebuild => LauncherAction::RebuildLibrary,
-        },
-        path: None,
-    })
 }
 
 pub struct ArcadeNav {
@@ -1961,36 +1945,20 @@ mod tests {
     }
 
     #[test]
-    fn library_changed_test_action_parser_accepts_only_continue_or_rebuild() {
+    fn library_changed_test_dialog_choice_parser_accepts_only_continue_or_rebuild() {
         assert_eq!(
-            parse_library_changed_test_action("continue").expect("parse continue"),
-            Some(LibraryChangedTestAction::Continue)
+            parse_library_changed_test_dialog_choice("continue").expect("parse continue"),
+            Some(LibraryChangedTestDialogChoice::Continue)
         );
         assert_eq!(
-            parse_library_changed_test_action("rebuild").expect("parse rebuild"),
-            Some(LibraryChangedTestAction::Rebuild)
+            parse_library_changed_test_dialog_choice("rebuild").expect("parse rebuild"),
+            Some(LibraryChangedTestDialogChoice::Rebuild)
         );
         assert_eq!(
-            parse_library_changed_test_action("").expect("parse empty"),
+            parse_library_changed_test_dialog_choice("").expect("parse empty"),
             None
         );
-        assert!(parse_library_changed_test_action("reset").is_err());
-    }
-
-    #[test]
-    fn library_changed_test_action_only_fires_for_library_changed_dialog() {
-        assert!(library_changed_test_action_event(
-            Some(ConfirmAction::ResetDatabase),
-            LibraryChangedTestAction::Continue,
-        )
-        .is_none());
-        let event = library_changed_test_action_event(
-            Some(ConfirmAction::LibraryChanged),
-            LibraryChangedTestAction::Rebuild,
-        )
-        .expect("library changed hook should emit event");
-        assert_eq!(event.action, LauncherAction::RebuildLibrary);
-        assert_eq!(event.path, None);
+        assert!(parse_library_changed_test_dialog_choice("reset").is_err());
     }
 
     #[test]

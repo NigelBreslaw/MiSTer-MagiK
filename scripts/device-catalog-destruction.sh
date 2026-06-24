@@ -184,7 +184,7 @@ write_launcher_env() {
   {
     printf 'export MISTER_CATALOG_BACKGROUND_DELAY_MS=0\n'
     if [ -n "$action" ]; then
-      printf 'export MISTER_MAGIK_TEST_LIBRARY_CHANGED_ACTION=%q\n' "$action"
+      printf 'export MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE=%q\n' "$action"
     fi
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
@@ -298,10 +298,10 @@ record_file_change_bench() {
   local commit changed action
   commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   changed="$(metric_ms "$local_log" "library_changed_detected")"
-  action="$(metric_ms "$local_log" "library_changed_test_action")"
+  action="$(metric_ms "$local_log" "library_changed_test_dialog_input")"
   {
     printf '%s\t%s\t%s\tlibrary_changed_detected\t%s\t-\n' "$LABEL" "$commit" "$scenario" "${changed:-}"
-    printf '%s\t%s\t%s\tlibrary_changed_test_action\t%s\t-\n' "$LABEL" "$commit" "$scenario" "${action:-}"
+    printf '%s\t%s\t%s\tlibrary_changed_test_dialog_input\t%s\t-\n' "$LABEL" "$commit" "$scenario" "${action:-}"
   } >>"$TSV"
   rm -f "$local_log"
 }
@@ -366,6 +366,7 @@ require_ready_rebuild "missing-db" "catalog_cache_load_failed"
 echo "== Zero-byte DB recovery"
 remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$TEMP_MRA"); : > $(sq "$REMOTE_DB"); sync"
 restart_launcher ""
+wait_remote "zero-byte orphan summary ignored" "$TIMEOUT_SECS" "grep -q 'catalog_summary_load.*status=sqlite_unusable' $(sq "$REMOTE_LOG")"
 wait_remote "zero-byte DB detected" "$TIMEOUT_SECS" "grep -Eq 'catalog_cache_load_failed|catalog_cache_empty' $(sq "$REMOTE_LOG")"
 require_first_run_scan "zero-byte-db"
 require_ready_rebuild "zero-byte-db" "catalog_cache_load_failed"
@@ -373,6 +374,7 @@ require_ready_rebuild "zero-byte-db" "catalog_cache_load_failed"
 echo "== Corrupt DB recovery"
 remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$TEMP_MRA"); printf 'not-a-sqlite-db-for-magik\n' > $(sq "$REMOTE_DB"); sync"
 restart_launcher ""
+wait_remote "corrupt orphan summary ignored" "$TIMEOUT_SECS" "grep -q 'catalog_summary_load.*status=sqlite_unusable' $(sq "$REMOTE_LOG")"
 wait_remote "corrupt DB detected" "$TIMEOUT_SECS" "grep -q 'catalog_cache_load_failed' $(sq "$REMOTE_LOG")"
 require_first_run_scan "corrupt-db"
 require_ready_rebuild "corrupt-db" "catalog_cache_load_failed"
@@ -393,7 +395,7 @@ assert_temp_mra_count 0
 restart_launcher "continue"
 wait_remote "file-change detected" "$TIMEOUT_SECS" "grep -q 'library_changed_detected' $(sq "$REMOTE_LOG")"
 wait_remote "file-change Library changed dialog" "$TIMEOUT_SECS" "grep -q '\"confirm_title\":\"Library changed\"' $(sq "$REMOTE_STATUS")"
-wait_remote "file-change test hook chose continue" "$TIMEOUT_SECS" "grep -q 'library_changed_test_action.*action=continue' $(sq "$REMOTE_LOG")"
+wait_remote "file-change test input chose continue" "$TIMEOUT_SECS" "grep -q 'library_changed_test_dialog_input.*choice=continue button=a' $(sq "$REMOTE_LOG")"
 wait_remote "file-change marker written" "$TIMEOUT_SECS" "grep -q 'library_rebuild_deferred' $(sq "$REMOTE_LOG") && test -f $(sq "$REMOTE_MARKER")"
 assert_remote "file-change did not rebuild in same session" "! grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
 assert_single_launcher

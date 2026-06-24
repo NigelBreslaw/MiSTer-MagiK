@@ -170,7 +170,7 @@ write_launcher_env() {
   {
     printf 'export MISTER_CATALOG_BACKGROUND_DELAY_MS=0\n'
     if [ -n "$action" ]; then
-      printf 'export MISTER_MAGIK_TEST_LIBRARY_CHANGED_ACTION=%q\n' "$action"
+      printf 'export MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE=%q\n' "$action"
     fi
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
@@ -249,6 +249,26 @@ metric_ms() {
   awk -F '\t' -v event="$event" '$1 == "startup_timing" && $2 == event { ms=$3; sub(/ms$/, "", ms); print ms; exit }' "$log"
 }
 
+metric_ms_after() {
+  local log="$1"
+  local event="$2"
+  local after_event="$3"
+  awk -F '\t' -v event="$event" -v after_event="$after_event" '
+    $1 == "startup_timing" && $2 == after_event && after_ms == "" {
+      after_ms=$3
+      sub(/ms$/, "", after_ms)
+    }
+    $1 == "startup_timing" && $2 == event && after_ms != "" {
+      ms=$3
+      sub(/ms$/, "", ms)
+      if (ms >= after_ms) {
+        print ms
+        exit
+      }
+    }
+  ' "$log"
+}
+
 record_bench() {
   local mode="$1"
   local start_event="$2"
@@ -258,13 +278,13 @@ record_bench() {
   local commit
   commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   local changed start scan saved ready duration
-  changed="$(metric_ms "$local_log" "library_changed_detected")"
   start="$(metric_ms "$local_log" "$start_event")"
-  scan="$(metric_ms "$local_log" "library_scan_complete")"
-  saved="$(metric_ms "$local_log" "library_db_saved")"
-  ready="$(metric_ms "$local_log" "library_ready")"
-  if [ -n "$start" ] && [ -n "$ready" ]; then
-    duration=$((ready - start))
+  changed="$(metric_ms "$local_log" "library_changed_detected")"
+  scan="$(metric_ms_after "$local_log" "library_scan_complete" "$start_event")"
+  saved="$(metric_ms_after "$local_log" "library_db_saved" "$start_event")"
+  ready="$(metric_ms_after "$local_log" "library_ready" "$start_event")"
+  if [ -n "$start" ] && [ -n "$saved" ]; then
+    duration=$((saved - start))
   else
     duration=""
   fi
@@ -274,13 +294,13 @@ record_bench() {
     printf '%s\t%s\t%s\tlibrary_scan_complete\t%s\t-\n' "$LABEL" "$commit" "$mode" "${scan:-}"
     printf '%s\t%s\t%s\tlibrary_db_saved\t%s\t-\n' "$LABEL" "$commit" "$mode" "${saved:-}"
     printf '%s\t%s\t%s\tlibrary_ready\t%s\t-\n' "$LABEL" "$commit" "$mode" "${ready:-}"
-    printf '%s\t%s\t%s\trebuild_duration\t%s\tthreshold_ms=60000\n' "$LABEL" "$commit" "$mode" "${duration:-}"
+    printf '%s\t%s\t%s\trebuild_save_duration\t%s\tthreshold_ms=60000\n' "$LABEL" "$commit" "$mode" "${duration:-}"
   } >>"$TSV"
   rm -f "$local_log"
   if [ -z "$duration" ] || [ "$duration" -gt 60000 ]; then
-    fail "$mode rebuild duration invalid_or_slow=${duration:-empty}"
+    fail "$mode rebuild save duration invalid_or_slow=${duration:-empty}"
   fi
-  echo "ok: $mode rebuild duration ${duration}ms"
+  echo "ok: $mode rebuild save duration ${duration}ms"
 }
 
 case "$DEPLOY" in
@@ -307,7 +327,7 @@ assert_temp_mra_count 0
 restart_launcher "continue"
 wait_remote "library changed detected" "$TIMEOUT_SECS" "grep -q 'library_changed_detected' $(sq "$REMOTE_LOG")"
 wait_remote "library changed dialog status" "$TIMEOUT_SECS" "grep -q '\"confirm_title\":\"Library changed\"' $(sq "$REMOTE_STATUS")"
-wait_remote "test hook chose continue" "$TIMEOUT_SECS" "grep -q 'library_changed_test_action.*action=continue' $(sq "$REMOTE_LOG")"
+wait_remote "test input chose continue" "$TIMEOUT_SECS" "grep -q 'library_changed_test_dialog_input.*choice=continue button=a' $(sq "$REMOTE_LOG")"
 wait_remote "rebuild deferred marker written" "$TIMEOUT_SECS" "grep -q 'library_rebuild_deferred' $(sq "$REMOTE_LOG") && test -f $(sq "$REMOTE_MARKER")"
 assert_remote "continue did not save database in same session" "! grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
 assert_temp_mra_count 0
@@ -317,7 +337,7 @@ restart_launcher ""
 wait_remote "marker consumed" "$TIMEOUT_SECS" "grep -q 'library_rebuild_marker_consumed' $(sq "$REMOTE_LOG")"
 wait_remote "updating library status" "$TIMEOUT_SECS" "grep -q '\"catalog_scan_message\":\"Updating Library\"' $(sq "$REMOTE_STATUS")"
 wait_remote "marker removed" "$TIMEOUT_SECS" "test ! -e $(sq "$REMOTE_MARKER")"
-wait_remote "deferred rebuild ready" "$TIMEOUT_SECS" "grep -q 'library_ready' $(sq "$REMOTE_LOG")"
+wait_remote "deferred rebuild saved database" "$TIMEOUT_SECS" "grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
 assert_temp_mra_count 1
 assert_temp_new_discovery_projection
 record_bench "deferred-marker" "library_rebuild_marker_consumed"
@@ -331,10 +351,11 @@ assert_temp_mra_count 0
 restart_launcher "rebuild"
 wait_remote "library changed detected for rebuild" "$TIMEOUT_SECS" "grep -q 'library_changed_detected' $(sq "$REMOTE_LOG")"
 wait_remote "library changed dialog status for rebuild" "$TIMEOUT_SECS" "grep -q '\"confirm_title\":\"Library changed\"' $(sq "$REMOTE_STATUS")"
-wait_remote "test hook chose rebuild" "$TIMEOUT_SECS" "grep -q 'library_changed_test_action.*action=rebuild' $(sq "$REMOTE_LOG")"
+wait_remote "test input selected rebuild" "$TIMEOUT_SECS" "grep -q 'library_changed_test_dialog_input.*choice=rebuild button=right' $(sq "$REMOTE_LOG")"
+wait_remote "test input confirmed rebuild" "$TIMEOUT_SECS" "grep -q 'library_changed_test_dialog_input.*choice=rebuild button=a' $(sq "$REMOTE_LOG")"
 wait_remote "dialog rebuild requested" "$TIMEOUT_SECS" "grep -q 'library_rebuild_requested.*source=dialog' $(sq "$REMOTE_LOG")"
 wait_remote "immediate rebuild updating status" "$TIMEOUT_SECS" "grep -q '\"catalog_scan_message\":\"Updating Library\"' $(sq "$REMOTE_STATUS")"
-wait_remote "immediate rebuild ready" "$TIMEOUT_SECS" "grep -q 'library_ready' $(sq "$REMOTE_LOG")"
+wait_remote "immediate rebuild saved database" "$TIMEOUT_SECS" "grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
 assert_remote "immediate rebuild wrote no marker" "test ! -e $(sq "$REMOTE_MARKER")"
 assert_temp_mra_count 1
 assert_temp_new_discovery_projection

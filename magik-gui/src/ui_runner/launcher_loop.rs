@@ -13,13 +13,14 @@ use super::launcher_worker_intents::{
 };
 use super::*;
 use crate::fb::VsyncWaitStatus;
+use crate::input_state::PadState;
 use crate::preview_worker;
 use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::framebuffer_ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 use std::collections::BTreeSet;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -29,11 +30,95 @@ const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 struct DeferredCatalogWorker {
     root: String,
     request: CatalogWorkerRequest,
     start_after: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryChangedDialogTestPhase {
+    Waiting,
+    RebuildReleaseRight,
+    RebuildPressA,
+    Done,
+}
+
+struct LibraryChangedDialogTestDriver {
+    choice: Option<launcher::LibraryChangedTestDialogChoice>,
+    dialog_seen_at: Option<Instant>,
+    phase: LibraryChangedDialogTestPhase,
+}
+
+impl LibraryChangedDialogTestDriver {
+    fn from_env(start: Instant) -> Self {
+        let choice = library_changed_test_dialog_choice_from_env(start);
+        Self {
+            choice,
+            dialog_seen_at: None,
+            phase: LibraryChangedDialogTestPhase::Waiting,
+        }
+    }
+
+    fn input_for(&mut self, nav: &LauncherNav, now: Instant, start: Instant) -> Option<PadState> {
+        let choice = self.choice?;
+        if nav.confirm_action != Some(launcher::ConfirmAction::LibraryChanged) {
+            self.dialog_seen_at = None;
+            return None;
+        }
+        let seen_at = *self.dialog_seen_at.get_or_insert(now);
+        if now.duration_since(seen_at) < LIBRARY_CHANGED_TEST_ACTION_SETTLE {
+            return None;
+        }
+
+        match choice {
+            launcher::LibraryChangedTestDialogChoice::Continue => {
+                if self.phase != LibraryChangedDialogTestPhase::Waiting {
+                    return None;
+                }
+                self.phase = LibraryChangedDialogTestPhase::Done;
+                print_startup_event(
+                    start,
+                    "library_changed_test_dialog_input",
+                    "choice=continue button=a",
+                );
+                Some(pad_state_with(|state| state.btn_a = true))
+            }
+            launcher::LibraryChangedTestDialogChoice::Rebuild => match self.phase {
+                LibraryChangedDialogTestPhase::Waiting => {
+                    self.phase = LibraryChangedDialogTestPhase::RebuildReleaseRight;
+                    print_startup_event(
+                        start,
+                        "library_changed_test_dialog_input",
+                        "choice=rebuild button=right",
+                    );
+                    Some(pad_state_with(|state| state.dpad_right = true))
+                }
+                LibraryChangedDialogTestPhase::RebuildReleaseRight => {
+                    self.phase = LibraryChangedDialogTestPhase::RebuildPressA;
+                    Some(PadState::default())
+                }
+                LibraryChangedDialogTestPhase::RebuildPressA => {
+                    self.phase = LibraryChangedDialogTestPhase::Done;
+                    print_startup_event(
+                        start,
+                        "library_changed_test_dialog_input",
+                        "choice=rebuild button=a",
+                    );
+                    Some(pad_state_with(|state| state.btn_a = true))
+                }
+                LibraryChangedDialogTestPhase::Done => None,
+            },
+        }
+    }
+}
+
+fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
+    let mut state = PadState::default();
+    set(&mut state);
+    state
 }
 
 struct PendingLaunch {
@@ -68,12 +153,25 @@ fn read_catalog_summary_seed(
     start: Instant,
 ) -> Option<catalog_summary::CatalogSummaryProjection> {
     let summary_t = Instant::now();
-    if !sqlite_path.is_file() {
+    if !sqlite_path.exists() {
         print_startup_event(
             start,
             "catalog_summary_load",
             format!(
                 "status=sqlite_missing elapsed_us={} sqlite_path={} path={}",
+                summary_t.elapsed().as_micros(),
+                sqlite_path.display(),
+                summary_path.display()
+            ),
+        );
+        return None;
+    }
+    if !sqlite_file_has_valid_header(sqlite_path) {
+        print_startup_event(
+            start,
+            "catalog_summary_load",
+            format!(
+                "status=sqlite_unusable elapsed_us={} sqlite_path={} path={}",
                 summary_t.elapsed().as_micros(),
                 sqlite_path.display(),
                 summary_path.display()
@@ -135,6 +233,15 @@ fn read_catalog_summary_seed(
             None
         }
     }
+}
+
+fn sqlite_file_has_valid_header(path: &Path) -> bool {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let mut header = [0u8; SQLITE_HEADER.len()];
+    file.read_exact(&mut header).is_ok() && &header == SQLITE_HEADER
 }
 
 struct LaunchWorkerResult {
@@ -487,9 +594,7 @@ pub(super) fn run_launcher_loop(
     let mut media_progress_display = MediaProgressDisplay::default();
     let mut catalog_persisted_summary_seen = false;
     let mut catalog_summary_only = false;
-    let library_changed_test_action = library_changed_test_action_from_env(start);
-    let mut library_changed_test_action_armed = library_changed_test_action.is_some();
-    let mut library_changed_test_dialog_seen_at: Option<Instant> = None;
+    let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
@@ -1380,20 +1485,12 @@ pub(super) fn run_launcher_loop(
                     }
                     transition_picker_prev_left = state.dpad_left;
                     transition_picker_prev_right = state.dpad_right;
-                    let test_library_changed_event = if library_changed_test_action_armed {
-                        library_changed_test_event(
-                            &nav,
-                            library_changed_test_action,
-                            &mut library_changed_test_dialog_seen_at,
-                            loop_start,
-                            start,
-                        )
-                        .inspect(|_| {
-                            library_changed_test_action_armed = false;
-                        })
-                    } else {
-                        None
-                    };
+                    let mut nav_state = state.clone();
+                    if let Some(test_state) =
+                        library_changed_dialog_test.input_for(&nav, loop_start, start)
+                    {
+                        nav_state = test_state;
+                    }
                     let event = if launcher_bench_launch_handoff
                         && launch_handoff_bench_iteration < launch_handoff_bench_iterations
                         && catalog_ready
@@ -1412,8 +1509,6 @@ pub(super) fn run_launcher_loop(
                             launch_handoff_bench_iteration += 1;
                         }
                         event
-                    } else if test_library_changed_event.is_some() {
-                        test_library_changed_event
                     } else if auto_launch_selected
                         && !auto_launch_selected_done
                         && catalog_ready
@@ -1431,7 +1526,7 @@ pub(super) fn run_launcher_loop(
                     } else if launcher_bench_launch_handoff {
                         None
                     } else {
-                        nav.handle_input(&state, frame_now, &catalog)
+                        nav.handle_input(&nav_state, frame_now, &catalog)
                     };
                     if let Some(event) = event {
                         match event.action {
@@ -2390,42 +2485,18 @@ fn catalog_background_validation_delay() -> Duration {
         .unwrap_or(DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY)
 }
 
-fn library_changed_test_action_from_env(
+fn library_changed_test_dialog_choice_from_env(
     start: Instant,
-) -> Option<launcher::LibraryChangedTestAction> {
-    let value = std::env::var("MISTER_MAGIK_TEST_LIBRARY_CHANGED_ACTION").ok()?;
-    match launcher::parse_library_changed_test_action(&value) {
-        Ok(action) => action,
+) -> Option<launcher::LibraryChangedTestDialogChoice> {
+    let value = std::env::var("MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE").ok()?;
+    match launcher::parse_library_changed_test_dialog_choice(&value) {
+        Ok(choice) => choice,
         Err(e) => {
             eprintln!("{e}");
-            print_startup_event(start, "library_changed_test_action_invalid", e);
+            print_startup_event(start, "library_changed_test_dialog_choice_invalid", e);
             None
         }
     }
-}
-
-fn library_changed_test_event(
-    nav: &LauncherNav,
-    action: Option<launcher::LibraryChangedTestAction>,
-    dialog_seen_at: &mut Option<Instant>,
-    now: Instant,
-    start: Instant,
-) -> Option<launcher::LauncherEvent> {
-    if nav.confirm_action != Some(launcher::ConfirmAction::LibraryChanged) {
-        *dialog_seen_at = None;
-        return None;
-    }
-    let action = action?;
-    let seen_at = *dialog_seen_at.get_or_insert(now);
-    if now.duration_since(seen_at) < LIBRARY_CHANGED_TEST_ACTION_SETTLE {
-        return None;
-    }
-    print_startup_event(
-        start,
-        "library_changed_test_action",
-        format!("action={}", action.label()),
-    );
-    launcher::library_changed_test_action_event(nav.confirm_action, action)
 }
 
 fn initial_catalog_scan_visible(
@@ -2580,7 +2651,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn catalog_summary_seed_requires_backing_sqlite_database() {
+    pub(super) fn catalog_summary_seed_requires_usable_sqlite_database() {
         let root = unique_temp_dir("catalog-summary-seed");
         let db = root.join("library.sqlite3");
         let summary_path = catalog_summary::summary_path_for_sqlite(&db);
@@ -2607,7 +2678,13 @@ mod tests {
 
         assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
 
-        std::fs::write(&db, b"placeholder").expect("write sqlite placeholder");
+        std::fs::write(&db, b"").expect("write zero-byte sqlite placeholder");
+        assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
+
+        std::fs::write(&db, b"not-a-sqlite-db").expect("write corrupt sqlite placeholder");
+        assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
+
+        std::fs::write(&db, SQLITE_HEADER).expect("write sqlite header");
         assert_eq!(
             read_catalog_summary_seed(&db, &summary_path, Instant::now()),
             Some(summary)
@@ -2635,37 +2712,90 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn library_changed_test_hook_waits_for_dialog_settle() {
+    pub(super) fn library_changed_test_driver_presses_continue_dialog_button() {
         let start = Instant::now();
         let mut nav = LauncherNav::new();
-        let mut seen_at = None;
+        let mut driver = LibraryChangedDialogTestDriver {
+            choice: Some(launcher::LibraryChangedTestDialogChoice::Continue),
+            dialog_seen_at: None,
+            phase: LibraryChangedDialogTestPhase::Waiting,
+        };
 
-        assert!(library_changed_test_event(
-            &nav,
-            Some(launcher::LibraryChangedTestAction::Continue),
-            &mut seen_at,
-            start,
-            start,
-        )
-        .is_none());
-
+        assert!(driver.input_for(&nav, start, start).is_none());
         nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
-        assert!(library_changed_test_event(
-            &nav,
-            Some(launcher::LibraryChangedTestAction::Continue),
-            &mut seen_at,
-            start,
-            start,
-        )
-        .is_none());
-        assert!(library_changed_test_event(
-            &nav,
-            Some(launcher::LibraryChangedTestAction::Continue),
-            &mut seen_at,
-            start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
-            start,
-        )
-        .is_some());
+
+        assert!(driver.input_for(&nav, start, start).is_none());
+        let input = driver
+            .input_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
+            .expect("continue driver should press A");
+        assert!(input.btn_a);
+        let event = nav
+            .handle_input(
+                &input,
+                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
+                &empty_arcade_catalog("/tmp"),
+            )
+            .expect("continue button should choose stale library");
+        assert_eq!(event.action, LauncherAction::ContinueWithStaleLibrary);
+        assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    pub(super) fn library_changed_test_driver_selects_rebuild_dialog_button() {
+        let start = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
+        let mut driver = LibraryChangedDialogTestDriver {
+            choice: Some(launcher::LibraryChangedTestDialogChoice::Rebuild),
+            dialog_seen_at: None,
+            phase: LibraryChangedDialogTestPhase::Waiting,
+        };
+        let catalog = empty_arcade_catalog("/tmp");
+
+        assert!(driver.input_for(&nav, start, start).is_none());
+        let right = driver
+            .input_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
+            .expect("rebuild driver should press right first");
+        assert!(right.dpad_right);
+        assert!(nav
+            .handle_input(&right, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, &catalog)
+            .is_none());
+        assert_eq!(nav.confirm_selected, 1);
+
+        let release = driver
+            .input_for(
+                &nav,
+                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
+                start,
+            )
+            .expect("rebuild driver should release right before A");
+        assert!(!release.dpad_right);
+        assert!(!release.btn_a);
+        assert!(nav
+            .handle_input(
+                &release,
+                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
+                &catalog,
+            )
+            .is_none());
+
+        let press_a = driver
+            .input_for(
+                &nav,
+                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(32),
+                start,
+            )
+            .expect("rebuild driver should press A");
+        assert!(press_a.btn_a);
+        let event = nav
+            .handle_input(
+                &press_a,
+                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(32),
+                &catalog,
+            )
+            .expect("A should confirm rebuild");
+        assert_eq!(event.action, LauncherAction::RebuildLibrary);
+        assert_eq!(nav.confirm_action, None);
     }
 
     #[test]
