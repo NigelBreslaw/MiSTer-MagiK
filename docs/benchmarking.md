@@ -164,14 +164,12 @@ The library scanner must not walk screenshot/cache media directories, read
 `gamelist.xml`, or probe normal PNG/JPG screenshots for metadata.
 
 Runtime screenshot-pack downloads are selective: the catalog scan announces the
-first discovered supported system, the launcher keeps the exact pending system
-IDs while interaction gates are active, and the media worker checks/downloads
-only those packs once the gate opens. Cached-catalog and summary boots seed the
-same selective requests from installed system counts after the first visible
-frame and after active Arcade/launch interaction settles, so deleting packs
-without changing the catalog still re-checks needed packs. Production download
-concurrency defaults to one to avoid stealing SD-card headroom from interaction;
-diagnostic runs may
+first discovered supported system, and the media worker checks/downloads only
+those packs. Cached-catalog boots seed the same selective requests from the
+ready catalog's installed systems after the first visible frame and after active
+Arcade/launch interaction settles, so deleting packs without changing the
+catalog still re-checks needed packs. Production download concurrency defaults
+to one to avoid stealing SD-card headroom from interaction; diagnostic runs may
 override `MISTER_MEDIA_CONCURRENCY`, clamped to the supported range. The
 catalog-build screen is sourced from structured download/save progress events
 rather than parsed log text.
