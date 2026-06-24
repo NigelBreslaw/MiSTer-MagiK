@@ -1640,12 +1640,9 @@ pub(super) fn run_launcher_loop(
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
         update_slint_animations(animation_clock);
+        let mut layer_target = LayerTarget::new(target, f, disp, ui);
         let frame_t1 = Instant::now();
-        let mut this_rect: Option<DirtyRect> = None;
-        window.draw_if_needed(|renderer| {
-            let region = target.render(renderer, ui);
-            this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-        });
+        let this_rect = layer_target.render_slint_base(&window);
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
         let full_frame_present = should_present_full_frame(launching, route_action);
@@ -1663,9 +1660,7 @@ pub(super) fn run_launcher_loop(
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let (raw_preview_rect, preview_transition_trace) = blit_raw_preview_if_needed(
-            target,
-            ui,
+        let (raw_preview_rect, preview_transition_trace) = layer_target.blit_raw_preview_if_needed(
             &mut preview,
             &mut preview_transition,
             loop_start.duration_since(run_start),
@@ -1676,9 +1671,9 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
         }
         let effect_label_start = Instant::now();
-        let effect_label_rect = effect_label_overlay
-            .as_mut()
-            .map(|overlay| overlay.draw(target, ui, preview_transition_trace.effect.label()));
+        let effect_label_rect = effect_label_overlay.as_mut().map(|overlay| {
+            layer_target.draw_effect_label(overlay, preview_transition_trace.effect.label())
+        });
         let effect_label_us = effect_label_start.elapsed().as_micros();
         let custom_draw_trace = LauncherCustomDrawTrace {
             arcade_list_update_us,
@@ -1717,46 +1712,20 @@ pub(super) fn run_launcher_loop(
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
-        let mut copied_rows = 0u32;
-        let mut cached_present_frame_us = 0u128;
-        let arcade_update_label = ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
-        let arcade_overlay_rect = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
-        let cached_base_rect = if full_frame_present {
-            Some(DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: ui.render_w(),
-                y1: ui.render_h(),
-            })
-        } else {
-            this_rect
+        let (presentation, frame_t4) = {
+            let presentation = LauncherCompositor::present(LauncherPresentRequest {
+                layer_target: &mut layer_target,
+                full_frame_present,
+                slint_dirty: this_rect,
+                raw_preview_rect,
+                effect_label_rect,
+                arcade_list_rect,
+                arcade_list_renderer: &mut arcade_list_renderer,
+                present_probe: present_probe.as_mut(),
+                frames,
+            });
+            (presentation, Instant::now())
         };
-        let mut cached_overlays = DirtyRectList::new();
-        cached_overlays.push_if_some(raw_preview_rect);
-        cached_overlays.push_if_some(effect_label_rect);
-        let mut direct_overlays = DirtyRectList::new();
-        direct_overlays.push_if_some(arcade_overlay_rect);
-        let cached_present_rects =
-            build_launcher_present_plan(cached_base_rect, &cached_overlays, &direct_overlays);
-        for rect in cached_present_rects.iter() {
-            let cached_copy_start = Instant::now();
-            copied_rows += target.present_rect(f, disp, ui, rect);
-            cached_present_frame_us += cached_copy_start.elapsed().as_micros();
-        }
-        let mut overlay_present_frame_us = 0u128;
-        if let Some(update) = arcade_list_rect {
-            let overlay_copy_start = Instant::now();
-            copied_rows +=
-                copy_arcade_list_update(target, disp, ui, &mut arcade_list_renderer, update);
-            overlay_present_frame_us = overlay_copy_start.elapsed().as_micros();
-        }
-        let mut present_probe_frame_us = 0u128;
-        if let Some(probe) = present_probe.as_mut() {
-            let probe_copy_start = Instant::now();
-            copied_rows += probe.present(disp, frames);
-            present_probe_frame_us = probe_copy_start.elapsed().as_micros();
-        }
-        let frame_t4 = Instant::now();
         frame_accounting.finish_frame(
             LauncherPresentedFrame {
                 frames,
@@ -1775,14 +1744,14 @@ pub(super) fn run_launcher_loop(
                 prepare_trace,
                 prepare_us,
                 dirty_rect: this_rect,
-                copied_rows,
-                cached_present_us: cached_present_frame_us,
-                overlay_present_us: overlay_present_frame_us,
-                present_probe_us: present_probe_frame_us,
+                copied_rows: presentation.copied_rows,
+                cached_present_us: presentation.cached_present_us,
+                overlay_present_us: presentation.overlay_present_us,
+                present_probe_us: presentation.present_probe_us,
                 vsync_source,
                 vsync_period_us,
                 vsync_miss_streak,
-                arcade_update_label,
+                arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
                 status_write_due,
