@@ -214,7 +214,7 @@ if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
 fi
 
 HOST_RUSTFLAGS="${RUSTFLAGS:-}"
-CONTAINER_RUSTFLAGS="${HOST_RUSTFLAGS:+$HOST_RUSTFLAGS }-D warnings -C target-cpu=cortex-a9"
+CONTAINER_RUSTFLAGS="${HOST_RUSTFLAGS:+$HOST_RUSTFLAGS }-D warnings -C target-cpu=cortex-a9 -C target-feature=+neon"
 if [ "$PROFILE" = release-device-profile ]; then
   CONTAINER_RUSTFLAGS="$CONTAINER_RUSTFLAGS -C force-frame-pointers=yes"
 fi

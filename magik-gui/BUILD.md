@@ -4,8 +4,8 @@
 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
-| **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 | ~4 min | ~5.6 MB | SD card / bench / production |
-| **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
+| **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 + neon | ~4 min | ~5.6 MB | SD card / bench / production |
+| **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + neon + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
 Historical benchmark labels: **A0** ≈ old thin-LTO `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
 
@@ -252,7 +252,7 @@ project-local minimal build.
   compiled into the ARM binary; by default, deployable builds use `all`.
 - **`magik-gui/.cargo/config.toml`** — keeps direct Cargo invocations on the
   normal compiler path; no always-on `rustflags`.
-- **`build-arm.sh`** — sets Cortex-A9 `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
+- **`build-arm.sh`** — sets Cortex-A9/NEON `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.
 
 Prerequisite for Cortex-A9 tuning: `scripts/audit-mister.sh` → `A1 prerequisite: OK`.
 

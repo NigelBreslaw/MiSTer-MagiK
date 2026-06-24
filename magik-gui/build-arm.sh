@@ -137,12 +137,12 @@ if ! docker info >/dev/null 2>"$DOCKER_INFO_ERR"; then
 fi
 rm -f "$DOCKER_INFO_ERR"
 
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9"
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9 -C target-feature=+neon"
 if [ "$PROFILE" = release-device-profile ]; then
   export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
-  echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 target, warnings denied)"
+  echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9/NEON target, warnings denied)"
 elif [ "$PROFILE" = release-device ]; then
-  echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 target, warnings denied)"
+  echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9/NEON target, warnings denied)"
 fi
 
 BUILD_LOG="$(mktemp)"
