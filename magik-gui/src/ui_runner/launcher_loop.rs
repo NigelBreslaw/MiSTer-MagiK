@@ -1,4 +1,6 @@
-use super::launcher_frame_accounting::{LauncherFrameAccounting, LauncherPresentedFrame};
+use super::launcher_frame_accounting::{
+    LauncherCustomDrawTrace, LauncherFrameAccounting, LauncherPresentedFrame,
+};
 use super::launcher_worker_intents::{
     apply_launcher_worker_ui_intent, cached_catalog_validation_intent,
     catalog_rebuild_started_intent, catalog_scan_message, parse_games_found_detail,
@@ -1473,6 +1475,7 @@ pub(super) fn run_launcher_loop(
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
         let full_frame_present = should_present_full_frame(launching, route_action);
+        let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
             let force_arcade_redraw =
                 arcade_list_needs_forced_redraw(this_rect, full_frame_present);
@@ -1484,6 +1487,8 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
+        let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
+        let preview_blit_start = Instant::now();
         let (raw_preview_rect, preview_transition_trace) = blit_raw_preview_if_needed(
             target,
             ui,
@@ -1492,12 +1497,20 @@ pub(super) fn run_launcher_loop(
             loop_start.duration_since(run_start),
             this_rect,
         );
+        let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             window.request_redraw();
         }
+        let effect_label_start = Instant::now();
         let effect_label_rect = effect_label_overlay
             .as_mut()
             .map(|overlay| overlay.draw(target, ui, preview_transition_trace.effect.label()));
+        let effect_label_us = effect_label_start.elapsed().as_micros();
+        let custom_draw_trace = LauncherCustomDrawTrace {
+            arcade_list_update_us,
+            preview_blit_us,
+            effect_label_us,
+        };
         let custom_draw_done = Instant::now();
         if !first_render_logged {
             first_render_logged = true;
@@ -1584,6 +1597,7 @@ pub(super) fn run_launcher_loop(
                 frame_t4,
                 custom_draw_start,
                 custom_draw_done,
+                custom_draw_trace,
                 prepare_us,
                 dirty_rect: this_rect,
                 copied_rows,

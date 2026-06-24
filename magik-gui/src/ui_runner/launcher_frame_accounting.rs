@@ -42,6 +42,7 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) frame_t4: Instant,
     pub(super) custom_draw_start: Instant,
     pub(super) custom_draw_done: Instant,
+    pub(super) custom_draw_trace: LauncherCustomDrawTrace,
     pub(super) prepare_us: u128,
     pub(super) dirty_rect: Option<DirtyRect>,
     pub(super) copied_rows: u32,
@@ -57,6 +58,13 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct LauncherCustomDrawTrace {
+    pub(super) arcade_list_update_us: u128,
+    pub(super) preview_blit_us: u128,
+    pub(super) effect_label_us: u128,
 }
 
 #[derive(Clone, Copy)]
@@ -227,7 +235,7 @@ impl LauncherFrameAccounting {
             let _ = std::io::Write::write_fmt(
                 file,
                 format_args!(
-                    "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     frame.frames,
                     frame.loop_start.duration_since(frame.run_start).as_micros(),
                     loop_delta_us,
@@ -241,6 +249,9 @@ impl LauncherFrameAccounting {
                     frame.prepare_us,
                     (frame.frame_t2 - frame.frame_t1).as_micros(),
                     (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
+                    frame.custom_draw_trace.arcade_list_update_us,
+                    frame.custom_draw_trace.preview_blit_us,
+                    frame.custom_draw_trace.effect_label_us,
                     (frame.frame_t3 - frame.custom_draw_done).as_micros(),
                     (frame.frame_t4 - frame.frame_t3).as_micros(),
                     frame.cached_present_us,
@@ -519,7 +530,7 @@ fn open_preview_scroll_trace() -> Option<std::fs::File> {
                 .ok()?;
             std::io::Write::write_all(
                 &mut file,
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

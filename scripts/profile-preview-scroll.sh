@@ -274,6 +274,60 @@ summarize_frame_pacing() {
   ' "$tsv"
 }
 
+summarize_custom_draw_phases() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" '
+    BEGIN { FS="\t" }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      has_phases = ("arcade_list_update_us" in col) && ("preview_blit_us" in col) && ("effect_label_us" in col)
+      next
+    }
+    NF && has_phases && $(col["frame"]) + 0 > 30 {
+      n++
+      phase["custom_draw_us", n] = $(col["custom_draw_us"]) + 0
+      phase["arcade_list_update_us", n] = $(col["arcade_list_update_us"]) + 0
+      phase["preview_blit_us", n] = $(col["preview_blit_us"]) + 0
+      phase["effect_label_us", n] = $(col["effect_label_us"]) + 0
+      phase["cached_present_us", n] = $(col["cached_present_us"]) + 0
+      phase["overlay_present_us", n] = $(col["overlay_present_us"]) + 0
+      sum["custom_draw_us"] += phase["custom_draw_us", n]
+      sum["arcade_list_update_us"] += phase["arcade_list_update_us", n]
+      sum["preview_blit_us"] += phase["preview_blit_us", n]
+      sum["effect_label_us"] += phase["effect_label_us", n]
+      sum["cached_present_us"] += phase["cached_present_us", n]
+      sum["overlay_present_us"] += phase["overlay_present_us", n]
+    }
+    END {
+      if (!has_phases || n == 0) {
+        printf "%s\tmissing\t0\t0\t0\t0\n", name
+        exit
+      }
+      fields[1] = "custom_draw_us"
+      fields[2] = "arcade_list_update_us"
+      fields[3] = "preview_blit_us"
+      fields[4] = "effect_label_us"
+      fields[5] = "cached_present_us"
+      fields[6] = "overlay_present_us"
+      for (field_i = 1; field_i <= 6; field_i++) {
+        field = fields[field_i]
+        for (i = 1; i <= n; i++) sorted[i] = phase[field, i]
+        for (i = 1; i <= n; i++) {
+          for (j = i + 1; j <= n; j++) {
+            if (sorted[j] < sorted[i]) {
+              tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp
+            }
+          }
+        }
+        p95 = int(n * 0.95); if (p95 < 1) p95 = 1; if (p95 > n) p95 = n
+        p99 = int(n * 0.99); if (p99 < 1) p99 = 1; if (p99 > n) p99 = n
+        printf "%s\t%s\t%d\t%.0f\t%d\t%d\n", name, field, n, sum[field] / n, sorted[p95], sorted[p99]
+        delete sorted
+      }
+    }
+  ' "$tsv"
+}
+
 report_steady_wall_gate() {
   local name="$1" tsv="$2"
   awk -v name="$name" -v allow="$allow_hotpath_misses" '
@@ -588,6 +642,10 @@ summarize_preview_timing arcade "$arcade_log"
 echo
 echo $'frame_pacing\tframes_after_30\tavg_wall_us\tp95_wall_us\tp99_wall_us\tavg_work_us\tp95_work_us\tp99_work_us\tavg_vsync_us\tp95_vsync_us\tp99_vsync_us\tavg_loop_delta_us\tp95_loop_delta_us\tp99_loop_delta_us\tslow_wall_gt_16_7ms\tslow_wall_gt_17ms\twork_gt_16_7ms\tvsync_gt_10ms\tlow_work_high_vsync_slow\tcpu_heavy_slow\tvsync_source_vsync\tvsync_source_fallback\tvsync_source_timeout\tvsync_source_error\tmax_vsync_miss_streak'
 summarize_frame_pacing arcade "$arcade_tsv"
+
+echo
+echo $'custom_draw_phase\tphase\tframes_after_30\tavg_us\tp95_us\tp99_us'
+summarize_custom_draw_phases arcade "$arcade_tsv"
 
 echo
 check_preview_hotpath_cache_gate arcade "$arcade_log"

@@ -497,6 +497,7 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
     let resolved_archive_path = resolve_preview_archive_path(&req.preview_archive_path);
     let cache_key = preview_cache_key(&resolved_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
+    let queue_age_us = req.requested_at.elapsed().as_micros() as u64;
     let loaded_result = if let Some(loaded) = decoded_cache.get(&cache_key) {
         cache_hit = true;
         Ok(loaded)
@@ -511,9 +512,10 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
         Ok(loaded) => {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace decoded generation={} priority={:?} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
+                    "preview_trace decoded generation={} priority={:?} queue_age_us={} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
                     req.generation,
                     req.priority,
+                    queue_age_us,
                     if cache_hit { 1 } else { 0 },
                     loaded.timing.load_source.label(),
                     storage.label(),
@@ -557,8 +559,9 @@ fn load_preview(req: PreviewRequest, decoded_cache: &mut PreviewDecodedCache) ->
         Err(e) => {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace decode_failed generation={} age_us={} archive_path={} asset_key={} error={}",
+                    "preview_trace decode_failed generation={} queue_age_us={} age_us={} archive_path={} asset_key={} error={}",
                     req.generation,
+                    queue_age_us,
                     req.requested_at.elapsed().as_micros(),
                     resolved_archive_path,
                     req.preview_asset_key,
