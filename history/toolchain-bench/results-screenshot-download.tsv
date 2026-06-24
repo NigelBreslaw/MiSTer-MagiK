@@ -1,0 +1,9 @@
+type	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	PERFAUDIT-20260624-SHOT-DL-01	neogeo	identity	24283092	24283092	6188	0	8302	1289	15780	31.39	12.31	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	MEDIA-BEFORE-01	neogeo	identity	24283092	24283092	6102	0	8431	1290	15824	31.84	12.28	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	MEDIA-AFTER-01	neogeo	identity	24283092	24283092	6221	0	8665	1282	16170	31.23	12.01	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	FINAL-MEDIA-DL-20260624-01	neogeo	identity	24283092	24283092	6240	0	8334	1331	15906	31.13	12.21	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok

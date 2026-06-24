@@ -9,3 +9,6 @@ library_sqlite_publish_tsv	LIBSAVE-20260623	2	progress	18026496	0	1414	0	0	0	142
 library_sqlite_publish_tsv	LIBSAVE-20260623	3	progress	18026496	0	1478	0	0	0	1490	70	bench-ok
 library_sqlite_publish_tsv	LIBSAVE-20260623	4	progress	18026496	0	1409	0	0	0	1421	70	bench-ok
 library_sqlite_publish_tsv	LIBSAVE-20260623	5	progress	18026496	0	1418	0	0	0	1430	70	bench-ok
+library_sqlite_publish_tsv	PERFAUDIT-20260624-LIBSAVE	1	progress	18026496	0	1930	0	0	0	1942	70	bench-ok
+library_sqlite_publish_tsv	PERFAUDIT-20260624-LIBSAVE	2	progress	18026496	0	1358	0	0	0	1370	70	bench-ok
+library_sqlite_publish_tsv	PERFAUDIT-20260624-LIBSAVE	3	progress	18026496	0	1484	0	0	0	1496	70	bench-ok

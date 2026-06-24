@@ -1,0 +1,5 @@
+label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	result
+WARMCAT-BEFORE 1 498 true 471 459165 -1  44 75 -1  ok
+WARMCAT-BEFORE 1 503 true 467 463360 -1  46 73 -1  ok
+WARMCAT-AFTER 1 48 true -1  2 200 34 72 498 474516 ok
+WARMCAT-AFTER	1	48	true	-1		2	194	33	74	515	486417	ok
