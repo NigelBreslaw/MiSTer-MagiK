@@ -270,7 +270,9 @@ first small batch.
 `device-catalog-destruction.sh` is the manual recovery integration check for
 missing, empty, corrupt, and marker-forced catalog states. Its missing-DB case
 intentionally leaves any orphan `library.summary.json` in place and asserts the
-launcher ignores that summary before showing the visible first-run scan.
+launcher ignores that summary before showing the visible first-run scan; empty
+and corrupt DB cases assert the same summary rejection for unusable SQLite
+files.
 
 `bench-library.sh` suspends the supervised launcher through `/dev/MiSTer_cmd`
 while running scanner/import CLI benchmarks. Do not benchmark by directly
