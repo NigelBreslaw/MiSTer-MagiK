@@ -1710,23 +1710,19 @@ fn write_sqlite_scan_with_sources(
                     ])
                     .map_err(|e| format!("insert software launchable identity: {e}"))?;
             }
-            let region = media_metadata::infer_region_metadata(discovery);
-            let region = if let Some(identity) = software_identity.as_ref() {
-                if let Some(region) = identity
-                    .region
-                    .as_deref()
-                    .and_then(media_metadata::canonical_region_static)
-                {
-                    media_metadata::RegionInference {
-                        region: Some(region),
-                        confidence: identity.source,
-                    }
-                } else {
-                    region
-                }
-            } else {
-                region
-            };
+            let region = software_identity
+                .as_ref()
+                .and_then(|identity| {
+                    identity
+                        .region
+                        .as_deref()
+                        .and_then(media_metadata::canonical_region_static)
+                        .map(|region| media_metadata::RegionInference {
+                            region: Some(region),
+                            confidence: identity.source,
+                        })
+                })
+                .unwrap_or_else(|| media_metadata::infer_region_metadata(discovery));
             region_stmt
                 .execute(params![
                     key.as_str(),
