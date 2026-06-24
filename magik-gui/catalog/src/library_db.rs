@@ -9,11 +9,11 @@ pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
 use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
+use crate::catalog_progress::report_catalog_progress;
+pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
     catalog_progress_percent_from_display, CatalogProgress, CatalogProgressPhase,
 };
-pub(crate) use crate::catalog_progress::ProgressCallback;
-use crate::catalog_progress::report_catalog_progress;
 use crate::catalog_scan::{self, DiscoveryEvent};
 use crate::catalog_stamp;
 use crate::game_discovery::{
@@ -195,6 +195,15 @@ impl LibraryScanArtifact {
         let cfg = BenchConfig::production();
         save_scan_artifact_to_sqlite(&cfg, self, progress)
     }
+
+    pub fn save_default_sqlite_with_catalog(
+        self,
+        root: impl AsRef<Path>,
+        progress: ProgressCallback<'_>,
+    ) -> Result<LibraryRefreshCatalog, String> {
+        let cfg = BenchConfig::production();
+        save_scan_artifact_to_sqlite_with_catalog(&cfg, self, root, progress)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +218,11 @@ pub struct LibraryRefreshSummary {
     pub containers: usize,
     pub entries: usize,
     pub discoveries: usize,
+}
+
+pub struct LibraryRefreshCatalog {
+    pub summary: LibraryRefreshSummary,
+    pub catalog: LibraryCatalogLoad,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,13 +347,16 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
     sqlite_catalog::save_sqlite_scan(path, scan)
 }
 
-fn save_sqlite_scan_with_progress_and_stamp(
+fn save_sqlite_scan_with_progress_and_stamp_and_catalog(
     path: &Path,
     scan: &LibraryScan,
     stamp: Option<&catalog_stamp::CatalogStamp>,
+    root: impl AsRef<Path>,
     progress: ProgressCallback<'_>,
-) -> Result<u64, String> {
-    sqlite_catalog::save_sqlite_scan_with_progress_and_stamp(path, scan, stamp, progress)
+) -> Result<sqlite_catalog::SqliteSavedCatalog, String> {
+    sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_catalog(
+        path, scan, stamp, root, progress,
+    )
 }
 
 fn sqlite_cached_summary(path: &Path, scan_us: u64) -> Result<LibraryRefreshSummary, String> {
@@ -369,6 +386,15 @@ pub fn rebuild_default_sqlite_database_with_events(
     rebuild_sqlite_database_with_events(&cfg, progress, scan_events)
 }
 
+pub fn rebuild_default_sqlite_database_with_catalog(
+    root: impl AsRef<Path>,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRefreshCatalog, String> {
+    let cfg = BenchConfig::production();
+    rebuild_sqlite_database_with_catalog(&cfg, root, progress, scan_events)
+}
+
 pub fn scan_default_library(progress: ProgressCallback<'_>) -> Result<LibraryScanArtifact, String> {
     scan_default_library_with_events(progress, None)
 }
@@ -378,7 +404,11 @@ pub fn scan_default_library_with_events(
     scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryScanArtifact, String> {
     let cfg = BenchConfig::production();
-    Ok(scan_library_artifact_with_events(&cfg, progress, scan_events))
+    Ok(scan_library_artifact_with_events(
+        &cfg,
+        progress,
+        scan_events,
+    ))
 }
 
 pub fn bootstrap_default_library_progress(
@@ -468,9 +498,24 @@ pub(crate) fn rebuild_sqlite_database(
 
 pub(crate) fn rebuild_sqlite_database_with_events(
     cfg: &BenchConfig,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
+    rebuild_sqlite_database_with_catalog(
+        cfg,
+        arcade_catalog::DEFAULT_ARCADE_ROOT,
+        progress,
+        scan_events,
+    )
+    .map(|refresh| refresh.summary)
+}
+
+pub(crate) fn rebuild_sqlite_database_with_catalog(
+    cfg: &BenchConfig,
+    root: impl AsRef<Path>,
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
-) -> Result<LibraryRefreshSummary, String> {
+) -> Result<LibraryRefreshCatalog, String> {
     let scan_t = Instant::now();
     report_catalog_progress(&mut progress, CatalogProgress::indexing_full_build());
     let artifact = match (progress.as_mut(), scan_events.as_mut()) {
@@ -489,9 +534,9 @@ pub(crate) fn rebuild_sqlite_database_with_events(
             artifact.stats.containers,
         ),
     );
-    let mut summary = save_scan_artifact_to_sqlite(cfg, artifact, progress)?;
-    summary.scan_us = scan_us;
-    Ok(summary)
+    let mut refresh = save_scan_artifact_to_sqlite_with_catalog(cfg, artifact, root, progress)?;
+    refresh.summary.scan_us = scan_us;
+    Ok(refresh)
 }
 
 pub(crate) struct BenchConfig {
@@ -546,7 +591,9 @@ pub(crate) fn scan_library_artifact_with_events(
     let scan_t = Instant::now();
     let scan = match (progress, scan_events) {
         (None, None) => scan_library(cfg),
-        (progress, scan_events) => scan_library_with_progress_and_events(cfg, progress, scan_events),
+        (progress, scan_events) => {
+            scan_library_with_progress_and_events(cfg, progress, scan_events)
+        }
     };
     let stats = LibraryScanStats {
         scan_us: scan_t.elapsed().as_micros() as u64,
@@ -565,25 +612,44 @@ pub(crate) fn save_scan_artifact_to_sqlite(
     artifact: LibraryScanArtifact,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
+    save_scan_artifact_to_sqlite_with_catalog(
+        cfg,
+        artifact,
+        arcade_catalog::DEFAULT_ARCADE_ROOT,
+        progress,
+    )
+    .map(|refresh| refresh.summary)
+}
+
+pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
+    cfg: &BenchConfig,
+    artifact: LibraryScanArtifact,
+    root: impl AsRef<Path>,
+    progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshCatalog, String> {
     let import_t = Instant::now();
-    let bytes = save_sqlite_scan_with_progress_and_stamp(
+    let saved = save_sqlite_scan_with_progress_and_stamp_and_catalog(
         &cfg.sqlite_path,
         &artifact.scan,
         Some(&artifact.stamp),
+        root,
         progress,
     )?;
     let import_us = import_t.elapsed().as_micros() as u64;
-    Ok(LibraryRefreshSummary {
-        skipped: false,
-        scan_us: artifact.stats.scan_us,
-        discover_us: artifact.stats.discover_us,
-        classify_us: artifact.stats.classify_us,
-        import_us,
-        bytes,
-        normal_files: artifact.stats.normal_files,
-        containers: artifact.stats.containers,
-        entries: artifact.stats.entries,
-        discoveries: artifact.stats.discoveries,
+    Ok(LibraryRefreshCatalog {
+        summary: LibraryRefreshSummary {
+            skipped: false,
+            scan_us: artifact.stats.scan_us,
+            discover_us: artifact.stats.discover_us,
+            classify_us: artifact.stats.classify_us,
+            import_us,
+            bytes: saved.bytes,
+            normal_files: artifact.stats.normal_files,
+            containers: artifact.stats.containers,
+            entries: artifact.stats.entries,
+            discoveries: artifact.stats.discoveries,
+        },
+        catalog: saved.catalog,
     })
 }
 
@@ -666,10 +732,7 @@ struct ScanTimingStats {
 }
 
 #[cfg(test)]
-fn scan_library_with_progress(
-    cfg: &BenchConfig,
-    progress: ProgressCallback<'_>,
-) -> LibraryScan {
+fn scan_library_with_progress(cfg: &BenchConfig, progress: ProgressCallback<'_>) -> LibraryScan {
     scan_library_with_progress_and_events(cfg, progress, None)
 }
 

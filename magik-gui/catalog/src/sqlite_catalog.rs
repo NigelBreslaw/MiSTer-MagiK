@@ -63,6 +63,11 @@ pub(crate) struct SqlitePublishMetrics {
     pub(crate) progress_events: u64,
 }
 
+pub(crate) struct SqliteSavedCatalog {
+    pub(crate) bytes: u64,
+    pub(crate) catalog: LibraryCatalogLoad,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DiscoveryHistory {
     by_game_id: HashMap<String, Option<i64>>,
@@ -320,19 +325,28 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     root: impl AsRef<Path>,
     path: &Path,
 ) -> Result<LibraryCatalogLoad, String> {
-    let root = root.as_ref().to_path_buf();
     let t = Instant::now();
     let open_t = Instant::now();
     let conn = open_sqlite_read_only(path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     ensure_sqlite_schema_current(&conn)?;
     let open_us = open_t.elapsed().as_micros() as u64;
+    load_arcade_catalog_from_connection(root, &conn, t, open_us)
+}
+
+fn load_arcade_catalog_from_connection(
+    root: impl AsRef<Path>,
+    conn: &Connection,
+    started: Instant,
+    open_us: u64,
+) -> Result<LibraryCatalogLoad, String> {
+    let root = root.as_ref().to_path_buf();
     let query_t = Instant::now();
-    let games = match load_materialized_ui_catalog(&conn) {
+    let games = match load_materialized_launcher_catalog(conn) {
         Ok(Some(games)) => games,
-        Ok(None) => match load_materialized_launcher_catalog(&conn) {
+        Ok(None) => match load_materialized_ui_catalog(conn) {
             Ok(Some(games)) => games,
-            Ok(None) => load_joined_launcher_catalog(&conn)?,
+            Ok(None) => load_joined_launcher_catalog(conn)?,
             Err(e) => return Err(e),
         },
         Err(e) => return Err(e),
@@ -347,7 +361,7 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
         catalog,
-        us: t.elapsed().as_micros() as u64,
+        us: started.elapsed().as_micros() as u64,
         open_us,
         query_us,
         systems_us,
@@ -614,12 +628,23 @@ pub(crate) fn save_sqlite_scan_with_progress(
     save_sqlite_scan_with_progress_and_stamp(path, scan, None, progress)
 }
 
+#[cfg(test)]
 pub(crate) fn save_sqlite_scan_with_progress_and_stamp(
     path: &Path,
     scan: &LibraryScan,
     stamp: Option<&catalog_stamp::CatalogStamp>,
     progress: ProgressCallback<'_>,
 ) -> Result<u64, String> {
+    if stamp.is_some() {
+        return save_sqlite_scan_with_progress_and_stamp_and_catalog(
+            path,
+            scan,
+            stamp,
+            arcade_catalog::DEFAULT_ARCADE_ROOT,
+            progress,
+        )
+        .map(|saved| saved.bytes);
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
     }
@@ -644,10 +669,52 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp(
         sqlite_build_temp_plan(path),
         &mut writer,
     )?;
-    if let Some(stamp) = stamp {
-        catalog_summary::write_catalog_summary_for_sqlite(path, stamp)?;
-    }
     Ok(bytes)
+}
+
+pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog(
+    path: &Path,
+    scan: &LibraryScan,
+    stamp: Option<&catalog_stamp::CatalogStamp>,
+    root: impl AsRef<Path>,
+    progress: ProgressCallback<'_>,
+) -> Result<SqliteSavedCatalog, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
+    }
+
+    let root = root.as_ref().to_path_buf();
+    let discovery_history = DiscoveryHistory::load(path);
+    let mut saved_catalog = None;
+    let bytes = {
+        let mut writer =
+            |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
+                let software_hash_cache = SoftwareHashCache::load(path);
+                let catalog = write_sqlite_scan_with_catalog(
+                    build_path,
+                    scan,
+                    &root,
+                    reborrow_progress(progress),
+                    software_hash_cache,
+                    discovery_history.clone(),
+                    stamp,
+                )?;
+                saved_catalog = Some(catalog);
+                Ok(())
+            };
+        save_sqlite_scan_with_progress_using_writer(
+            path,
+            scan,
+            progress,
+            sqlite_build_temp_plan(path),
+            &mut writer,
+        )?
+    };
+    let catalog = saved_catalog.ok_or_else(|| "saved catalog was not returned".to_string())?;
+    if let Some(stamp) = stamp {
+        catalog_summary::write_catalog_summary_for_catalog(path, &catalog.catalog, stamp)?;
+    }
+    Ok(SqliteSavedCatalog { bytes, catalog })
 }
 
 pub(crate) fn save_sqlite_scan_with_progress_using_writer(
@@ -1117,6 +1184,7 @@ pub(crate) fn materialize_arcade_ui_projections(
     .map_err(|e| format!("materialize arcade ui projections: {e}"))
 }
 
+#[cfg(test)]
 pub(crate) fn write_sqlite_scan(
     path: &Path,
     scan: &LibraryScan,
@@ -1125,6 +1193,27 @@ pub(crate) fn write_sqlite_scan(
     discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<(), String> {
+    write_sqlite_scan_with_catalog(
+        path,
+        scan,
+        arcade_catalog::DEFAULT_ARCADE_ROOT,
+        progress,
+        software_hash_cache,
+        discovery_history,
+        stamp,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn write_sqlite_scan_with_catalog(
+    path: &Path,
+    scan: &LibraryScan,
+    root: impl AsRef<Path>,
+    progress: ProgressCallback<'_>,
+    software_hash_cache: SoftwareHashCache,
+    discovery_history: Option<DiscoveryHistory>,
+    stamp: Option<&catalog_stamp::CatalogStamp>,
+) -> Result<LibraryCatalogLoad, String> {
     let preview_paths = PreviewArchivePaths::from_paths(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
@@ -1141,6 +1230,7 @@ pub(crate) fn write_sqlite_scan(
             discovery_history,
             stamp,
         },
+        root.as_ref(),
         progress,
     )
 }
@@ -1162,8 +1252,10 @@ pub(crate) fn write_sqlite_scan_with_mame(
             discovery_history: DiscoveryHistory::load(path),
             stamp: None,
         },
+        Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
         None,
     )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -1184,8 +1276,10 @@ pub(crate) fn write_sqlite_scan_with_mame_and_hbmame(
             discovery_history: DiscoveryHistory::load(path),
             stamp: None,
         },
+        Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
         None,
     )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -1207,8 +1301,10 @@ pub(crate) fn write_sqlite_scan_with_mame_and_preview_pack(
             discovery_history: DiscoveryHistory::load(path),
             stamp: None,
         },
+        Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
         None,
     )
+    .map(|_| ())
 }
 
 struct SqliteScanSources<'a> {
@@ -1224,8 +1320,9 @@ fn write_sqlite_scan_with_sources(
     path: &Path,
     scan: &LibraryScan,
     mut sources: SqliteScanSources<'_>,
+    root: &Path,
     mut progress: ProgressCallback<'_>,
-) -> Result<(), String> {
+) -> Result<LibraryCatalogLoad, String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     let schema_t = Instant::now();
@@ -1891,11 +1988,18 @@ fn write_sqlite_scan_with_sources(
             format!("rows={}", sources.software_hash_cache.entries.len()),
         );
     }
+    let saved_catalog_t = Instant::now();
+    let saved_catalog = load_arcade_catalog_from_connection(root, &tx, saved_catalog_t, 0)?;
+    report_library_import_timing(
+        "build_saved_catalog",
+        saved_catalog_t,
+        format!("rows={}", saved_catalog.rows),
+    );
     let commit_t = Instant::now();
     tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))?;
     report_library_import_timing("commit", commit_t, "");
     report_library_import_timing("total", total_t, format!("path={}", path.display()));
-    Ok(())
+    Ok(saved_catalog)
 }
 
 pub(crate) fn report_library_import_timing(
@@ -2370,13 +2474,14 @@ mod tests {
             "catalog-build\ttest".to_string(),
             "root\t0\tfixture".to_string(),
         ]);
-        save_sqlite_scan_with_progress_and_stamp(
+        let saved = save_sqlite_scan_with_progress_and_stamp_and_catalog(
             &db,
             &sqlite_scan_with_discoveries(vec![
                 mra_discovery(1, "Summary Alpha"),
                 mra_discovery(2, "Summary Beta"),
             ]),
             Some(&stamp),
+            "/media/fat/_Arcade",
             None,
         )
         .expect("write catalog and summary");
@@ -2394,11 +2499,14 @@ mod tests {
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load sqlite catalog");
 
+        assert_eq!(saved.catalog.rows, loaded.rows);
+        assert_eq!(saved.catalog.catalog.len(), loaded.catalog.len());
+        assert_eq!(saved.catalog.catalog.systems, loaded.catalog.systems);
         assert_eq!(summary.catalog_stamp_fingerprint, stamp.fingerprint_hex());
         assert_eq!(summary.catalog_generation, stamp.fingerprint_hex());
         assert_eq!(summary.catalog_stamp_lines, stamp.lines());
-        assert_eq!(summary.total_game_count, loaded.catalog.games.len());
-        assert_eq!(summary.systems.len(), loaded.catalog.systems.len());
+        assert_eq!(summary.total_game_count, saved.catalog.catalog.games.len());
+        assert_eq!(summary.systems.len(), saved.catalog.catalog.systems.len());
         for (summary_system, sqlite_system) in summary.systems.iter().zip(&loaded.catalog.systems) {
             assert_eq!(summary_system.id, sqlite_system.id);
             assert_eq!(summary_system.title, sqlite_system.title);
