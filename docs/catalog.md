@@ -391,12 +391,13 @@ Virtual launch files live in `/media/fat/mister-magik/launch-cache`.
 
 The cache stamp file is `.virtual-launch-cache.json`. It records a schema
 version, plan count, and a stable fingerprint of each generated basename plus
-generated `.mgl` content.
+generated `.mgl` content. Schema v2 also records each generated basename,
+content hash, and content length.
 
-If the stored stamp matches the expected stamp, cache materialization returns a
-fast unchanged summary and does not read each generated `.mgl` file. If the stamp
-is missing or stale, the existing files are materialized and the stamp is written
-only when there are zero errors.
+If the stored stamp matches the expected stamp, cache materialization uses file
+metadata to repair missing or wrong-sized generated `.mgl` files without reading
+every cached file. If the stamp is missing or stale, the existing files are
+materialized and the stamp is written only when there are zero errors.
 
 Launch-time behavior is unchanged: a missing virtual launch file is still
 created on demand. Worker prewarming is best-effort background maintenance after
