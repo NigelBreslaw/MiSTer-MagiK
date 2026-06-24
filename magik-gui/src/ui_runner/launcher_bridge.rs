@@ -350,7 +350,7 @@ pub(super) fn slint_game_systems(
         .map(|system| slint_ui::launcher::GameSystem {
             id: system.id.clone().into(),
             title: system.title.clone().into(),
-            count: catalog.system_game_count(&system.id) as i32,
+            count: system.count as i32,
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
