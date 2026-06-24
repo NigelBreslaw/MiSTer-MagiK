@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Benchmark MiSTer library scan/index performance on the device.
+# Benchmark MiSTer library-refresh scan/index performance on the device.
 #
 #   scripts/bench-library.sh LIB-BASE-20260605 --device --replace-label
 #
-# Appends library_scan_bench_tsv rows to history/toolchain-bench/results-library.tsv.
+# Appends production library-refresh timing rows to history/toolchain-bench/results-library.tsv.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -90,48 +90,63 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
 fi
 
 echo "== deploy =="
-trap cleanup_deploy_lock EXIT
-remote_run "mkdir -p '$REMOTE_DIR'; : > '$DEPLOY_LOCK'"
-magik_command "mister_magik_suspend"
-"$HERE/scripts/mister" put "$BIN" "$REMOTE.upload"
-remote_run "mv '$REMOTE.upload' '$REMOTE'; chmod +x '$REMOTE'; rm -f '$DEPLOY_LOCK'"
-magik_command "mister_magik_resume"
-trap - EXIT
-
-echo "== library-scan-bench on device =="
-remote_env="MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ITERATIONS=$ITERATIONS MISTER_LIBRARY_BENCH_SQLITE=$BENCH_SQLITE MISTER_LIBRARY_SQLITE=$BENCH_SQLITE"
-if [[ "$PRECOUNT" -eq 1 ]]; then
-  remote_env="$remote_env MISTER_LIBRARY_BENCH_PRECOUNT=1"
-fi
-if [[ -n "$SQLITE_BUILD_DIR" ]]; then
-  remote_env="$remote_env MISTER_LIBRARY_SQLITE_BUILD_DIR=$SQLITE_BUILD_DIR"
-fi
-OUT=$(run_with_launcher_suspended "chmod +x $REMOTE; $remote_env $REMOTE library-scan-bench" 2>&1) || true
-echo "$OUT"
-
-echo "$OUT" | awk -F '\t' '$1 == "library_scan_bench_tsv" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }' >> "$TSV"
-if ! echo "$OUT" | awk -F '\t' '
-  $1 == "library_scan_bench_tsv" && $4 == "root_stamp_check_error" {
-    printf "root stamp check failed: iteration=%s us=%s error=%s\n", $3, $5, $6 > "/dev/stderr"
-    failed = 1
-  }
-  $1 == "library_scan_bench_tsv" && $4 == "root_stamp_check" {
-    us = $5 + 0
-    if (us >= 2000000) {
-      printf "root stamp check exceeded hard gate: iteration=%s us=%s\n", $3, $5 > "/dev/stderr"
-      failed = 1
-    } else if (us > 500000) {
-      printf "warning: root stamp check exceeded soft target: iteration=%s us=%s\n", $3, $5 > "/dev/stderr"
-    }
-  }
-  END { exit failed ? 1 : 0 }
-'; then
+if [[ ! -f "$BIN" ]]; then
+  echo "missing built binary: $BIN" >&2
   exit 1
 fi
+"$HERE/scripts/mister" deploy-magik-bin "$BIN" "$REMOTE" >/dev/null
+
+echo "== production library-refresh on device =="
+if [[ -n "$SQLITE_BUILD_DIR" ]]; then
+  sqlite_build_env="MISTER_LIBRARY_SQLITE_BUILD_DIR=$SQLITE_BUILD_DIR"
+else
+  sqlite_build_env=""
+fi
+for iteration in $(seq 1 "$ITERATIONS"); do
+  echo "== iteration $iteration/$ITERATIONS =="
+  remote_run "rm -f '$BENCH_SQLITE'"
+  remote_env="MISTER_LIBRARY_BENCH_LABEL=$LABEL MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=$iteration MISTER_LIBRARY_SQLITE=$BENCH_SQLITE MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1"
+  if [[ -n "$sqlite_build_env" ]]; then
+    remote_env="$remote_env $sqlite_build_env"
+  fi
+  OUT=$(run_with_launcher_suspended "chmod +x $REMOTE; $remote_env $REMOTE library-refresh" 2>&1) || true
+  echo "$OUT"
+  echo "$OUT" | awk -v label="$LABEL" -v iteration="$iteration" -F '\t' '
+    BEGIN { OFS = "\t" }
+    $1 == "library_scan_timing" {
+      print label, iteration, "scan_stage_" $2, int(($3 + 500) / 1000), $4
+    }
+    $1 == "library_import_timing" {
+      print label, iteration, "import_stage_" $2, int(($3 + 500) / 1000), $4
+    }
+    $1 == "library_sqlite_publish_tsv" {
+      print label, iteration, "sqlite_publish_" $4, $11, "bytes=" $5 " copy_ms=" $7 " build_sync_ms=" $6 " final_sync_ms=" $8 " rename_ms=" $9 " parent_sync_ms=" $10 " progress_events=" $12 " result=" $13
+    }
+    $1 == "library_refresh" && $2 == "done" {
+      n = split($3, parts, " ")
+      scan_us = ""
+      import_us = ""
+      bytes = ""
+      for (i = 1; i <= n; i++) {
+        if (parts[i] ~ /^scan_us=/) { scan_us = parts[i]; sub(/^scan_us=/, "", scan_us) }
+        if (parts[i] ~ /^import_us=/) { import_us = parts[i]; sub(/^import_us=/, "", import_us) }
+        if (parts[i] ~ /^bytes=/) { bytes = parts[i]; sub(/^bytes=/, "", bytes) }
+      }
+      if (scan_us != "") print label, iteration, "refresh_scan", scan_us, $3
+      if (import_us != "") print label, iteration, "refresh_import", import_us, $3
+      print label, iteration, "refresh_done", 0, "bytes=" bytes " " $3
+    }
+    $1 == "library_refresh" && $2 == "failed" {
+      print label, iteration, "refresh_failed", 0, $3
+      failed = 1
+    }
+    END { exit failed ? 1 : 0 }
+  ' >> "$TSV"
+done
 if [[ "$POST_REBOOT" -eq 1 ]]; then
   echo "== post-reboot explicit full rebuild =="
   "$HERE/scripts/mister" reboot-wait
-  OUT=$(run_with_launcher_suspended "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE $REMOTE library-refresh" 2>&1) || true
+  OUT=$(run_with_launcher_suspended "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 $REMOTE library-refresh" 2>&1) || true
   echo "$OUT"
   echo "$OUT" | awk -v label="$LABEL" -F '\t' '
     $1 == "library_refresh" && $2 == "done" {

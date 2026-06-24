@@ -19,7 +19,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-library-io.sh LABEL [--replace-label] [--sqlite-build-dir DIR] [--sqlite-path PATH] [--sample-limit N]
 
-Runs one library-scan-bench pass while sampling process CPU, process I/O,
+Runs one production library-refresh pass while sampling process CPU, process I/O,
 system CPU/iowait, and backing-disk counters once per second.
 EOF
 }
@@ -123,11 +123,11 @@ read_proc_io() {
 
 disk="$(disk_name_for_path "$sqlite_path")"
 rm -f "$sqlite_path" "$log"
-env="MISTER_LIBRARY_BENCH_LABEL=$label MISTER_LIBRARY_BENCH_ITERATIONS=1 MISTER_LIBRARY_BENCH_SQLITE=$sqlite_path MISTER_LIBRARY_SQLITE=$sqlite_path"
+env="MISTER_LIBRARY_BENCH_LABEL=$label MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1 MISTER_LIBRARY_SQLITE=$sqlite_path MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1"
 if [ -n "$sqlite_build_dir" ]; then
   env="$env MISTER_LIBRARY_SQLITE_BUILD_DIR=$sqlite_build_dir"
 fi
-sh -c "$env $remote library-scan-bench" >"$log" 2>&1 &
+sh -c "$env $remote library-refresh" >"$log" 2>&1 &
 pid=$!
 start="$(date +%s)"
 i=0
@@ -142,8 +142,10 @@ while kill -0 "$pid" 2>/dev/null && [ "$i" -lt "$sample_limit" ]; do
   sleep 1
   i=$((i + 1))
 done
+set +e
 wait "$pid"
 rc=$?
+set -e
 cat "$log"
 echo "library_io_done_tsv	$label	$(( $(date +%s) - start ))	rc=$rc disk=$disk sqlite=$sqlite_path build_dir=${sqlite_build_dir:-none}"
 exit "$rc"
@@ -177,8 +179,25 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
   $1 == "library_scan_bench_tsv" {
     print label, $4, $3, $5, "", "", "", "", "", "", "", "", "", $6
   }
+  $1 == "library_scan_timing" {
+    print label, "scan_stage_" $2, int(($3 + 500) / 1000), "", "", "", "", "", "", "", "", "", "", $4
+  }
   $1 == "library_import_timing" {
     print label, "import_stage_" $2, int(($3 + 500) / 1000), "", "", "", "", "", "", "", "", "", "", $4
+  }
+  $1 == "library_sqlite_publish_tsv" {
+    print label, "sqlite_publish_" $4, int(($11 + 500) / 1000), "", "", "", "", "", "", "", "", "", "", "bytes=" $5 " copy_ms=" $7 " build_sync_ms=" $6 " final_sync_ms=" $8 " rename_ms=" $9 " parent_sync_ms=" $10 " progress_events=" $12 " result=" $13
+  }
+  $1 == "library_refresh" && $2 == "done" {
+    n = split($3, fields, " ")
+    us = ""
+    for (i = 1; i <= n; i++) {
+      if (fields[i] ~ /^scan_us=/) {
+        us = fields[i]
+        sub(/^scan_us=/, "", us)
+      }
+    }
+    print label, "refresh_done", 0, "", "", "", "", "", "", "", "", "", "", $3
   }
   $1 == "library_io_done_tsv" {
     print label, "done", $3, "", "", "", "", "", "", "", "", "", "", $4
