@@ -241,7 +241,12 @@ impl MediaProgressDisplay {
         }
     }
 
-    pub(super) fn visibility_log_detail(&self, system: &str, catalog_scan_visible: bool) -> String {
+    pub(super) fn visibility_log_detail(
+        &self,
+        system: &str,
+        catalog_scan_visible: bool,
+        standalone_visible: bool,
+    ) -> String {
         let visible_systems = self
             .active
             .values()
@@ -254,7 +259,7 @@ impl MediaProgressDisplay {
             .map(|index| index as isize)
             .unwrap_or(-1);
         let row_seen = row_index >= 0;
-        let rendered = row_seen && catalog_scan_visible;
+        let rendered = row_seen && (catalog_scan_visible || standalone_visible);
         let row = self.active.get(system);
         let phase = row
             .map(|row| log_token(&row.phase))
@@ -262,12 +267,13 @@ impl MediaProgressDisplay {
         let percent = row.map(|row| row.percent).unwrap_or(-1);
         let (active, done, failed, total) = self.counts();
         format!(
-            "system={} row_seen={} row_index={} rendered={} catalog_scan_visible={} active_rows={} visible_count={} visible_systems={} phase={} percent={} summary_active={} summary_done={} summary_failed={} summary_total={}",
+            "system={} row_seen={} row_index={} rendered={} catalog_scan_visible={} standalone_visible={} active_rows={} visible_count={} visible_systems={} phase={} percent={} summary_active={} summary_done={} summary_failed={} summary_total={}",
             log_token(system),
             if row_seen { 1 } else { 0 },
             row_index,
             if rendered { 1 } else { 0 },
             if catalog_scan_visible { 1 } else { 0 },
+            if standalone_visible { 1 } else { 0 },
             self.active.len(),
             visible_systems.len(),
             if visible_systems.is_empty() {
@@ -342,6 +348,15 @@ impl MediaProgressDisplay {
         } else {
             format!("screenshots {active} active · {done}/{total} done")
         }
+    }
+
+    pub(super) fn has_visible_rows(&self) -> bool {
+        !self.active.is_empty()
+    }
+
+    pub(super) fn all_requested_terminal(&self) -> bool {
+        let (active, _done, _failed, total) = self.counts();
+        total > 0 && active == 0
     }
 
     fn counts(&self) -> (usize, usize, usize, usize) {
@@ -567,17 +582,33 @@ mod tests {
             ));
         }
 
-        let arcade = display.visibility_log_detail("arcade", true);
+        let arcade = display.visibility_log_detail("arcade", true, false);
         assert!(arcade.contains("system=arcade"));
         assert!(arcade.contains("row_seen=1"));
         assert!(arcade.contains("rendered=1"));
         assert!(arcade.contains("visible_systems=arcade,megadrive,n64"));
 
-        let neogeo = display.visibility_log_detail("neogeo", true);
+        let neogeo = display.visibility_log_detail("neogeo", true, false);
         assert!(neogeo.contains("system=neogeo"));
         assert!(neogeo.contains("row_seen=0"));
         assert!(neogeo.contains("rendered=0"));
         assert!(neogeo.contains("row_index=-1"));
+    }
+
+    #[test]
+    fn media_progress_display_reports_standalone_rendered_rows() {
+        let mut display = MediaProgressDisplay::default();
+        let _ =
+            display.progress_intent(&media_progress_event("neogeo", "download", 128, 1024, 1, 1));
+
+        let detail = display.visibility_log_detail("neogeo", false, true);
+        assert!(detail.contains("row_seen=1"));
+        assert!(detail.contains("rendered=1"));
+        assert!(detail.contains("catalog_scan_visible=0"));
+        assert!(detail.contains("standalone_visible=1"));
+
+        let _ = display.progress_intent(&media_progress_event("neogeo", "done", 1024, 1024, 1, 1));
+        assert!(display.all_requested_terminal());
     }
 
     #[test]

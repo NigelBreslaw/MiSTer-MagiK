@@ -1298,14 +1298,21 @@ pub(super) fn run_launcher_loop(
                     let intent = media_progress_display.progress_intent(&event);
                     if event.system != "all" {
                         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        let catalog_scan_visible = bridge.get_catalog_scan_visible();
+                        let standalone_visible =
+                            !catalog_scan_visible && media_progress_display.has_visible_rows();
                         print_startup_event(
                             start,
                             "screenshot_media_ui_visibility",
                             media_progress_display.visibility_log_detail(
                                 &event.system,
-                                bridge.get_catalog_scan_visible(),
+                                catalog_scan_visible,
+                                standalone_visible,
                             ),
                         );
+                    }
+                    if media_progress_display.all_requested_terminal() {
+                        media_progress_clear_at = Some(loop_start + MEDIA_PROGRESS_DONE_HOLD);
                     }
                     apply_launcher_worker_ui_intent(&app, intent, &mut full_bridge_dirty);
                 }
