@@ -650,21 +650,37 @@ fn raw565_row_for_screen_y<'a>(view: &'a Raw565View<'a>, y: usize) -> Option<&'a
     }
 }
 
-fn raw565_row_pixel_or(
-    row: Option<&[Rgb565Pixel]>,
-    view: Option<&Raw565View<'_>>,
-    x: usize,
-    fallback: Rgb565Pixel,
-) -> Rgb565Pixel {
-    let Some((row, view)) = row.zip(view) else {
-        return fallback;
-    };
-    let sx = x as isize - view.x;
-    if sx < 0 || sx >= view.w as isize {
-        fallback
-    } else {
-        row[sx as usize]
+struct Raw565ScreenRow<'a> {
+    row: &'a [Rgb565Pixel],
+    x0: usize,
+    x1: usize,
+}
+
+fn raw565_screen_row_for_y<'a>(
+    view: &'a Raw565View<'a>,
+    y: usize,
+    x0: usize,
+    x1: usize,
+    render_w: usize,
+) -> Option<Raw565ScreenRow<'a>> {
+    let sy = y as isize - view.y;
+    if sy < 0 || sy >= view.h as isize {
+        return None;
     }
+    let row_x0 = x0.max(view.x.max(0) as usize);
+    let row_x1 = x1
+        .min((view.x + view.w as isize).max(0) as usize)
+        .min(render_w);
+    if row_x1 <= row_x0 {
+        return None;
+    }
+    let src_x0 = (row_x0 as isize - view.x) as usize;
+    let start = sy as usize * view.stride_pixels + src_x0;
+    Some(Raw565ScreenRow {
+        row: &view.pixels[start..start + (row_x1 - row_x0)],
+        x0: row_x0,
+        x1: row_x1,
+    })
 }
 
 fn raw565_view_screen_rect(
@@ -1298,21 +1314,82 @@ fn blit_transition_565_fade_generic(
     }
     let fade_rect = fade_rect.unwrap_or(screen);
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    let x1 = fade_rect.x1.min(ui.render_w());
     for y in fade_rect.y0..fade_rect.y1.min(ui.render_h()) {
         let row = y * ui.render_w();
-        let previous_row = previous
-            .as_ref()
-            .and_then(|view| raw565_row_for_screen_y(view, y));
-        let current_row = current
-            .as_ref()
-            .and_then(|view| raw565_row_for_screen_y(view, y));
-        for x in fade_rect.x0..fade_rect.x1.min(ui.render_w()) {
-            let prev = raw565_row_pixel_or(previous_row, previous, x, black);
-            let curr = raw565_row_pixel_or(current_row, current, x, black);
-            cached[row + x] = blend_565(prev, curr, alpha);
+        let previous_row = previous.as_ref().and_then(|view| {
+            raw565_screen_row_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
+        });
+        let current_row = current.as_ref().and_then(|view| {
+            raw565_screen_row_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
+        });
+
+        let mut bounds = [fade_rect.x0, x1, x1, x1, x1, x1];
+        let mut len = 2;
+        if let Some(previous_row) = previous_row.as_ref() {
+            push_sorted_unique_bound(&mut bounds, &mut len, previous_row.x0);
+            push_sorted_unique_bound(&mut bounds, &mut len, previous_row.x1);
+        }
+        if let Some(current_row) = current_row.as_ref() {
+            push_sorted_unique_bound(&mut bounds, &mut len, current_row.x0);
+            push_sorted_unique_bound(&mut bounds, &mut len, current_row.x1);
+        }
+
+        for idx in 0..len - 1 {
+            let seg_x0 = bounds[idx];
+            let seg_x1 = bounds[idx + 1];
+            if seg_x1 <= seg_x0 {
+                continue;
+            }
+            let previous_segment = previous_row
+                .as_ref()
+                .filter(|row| seg_x0 >= row.x0 && seg_x1 <= row.x1);
+            let current_segment = current_row
+                .as_ref()
+                .filter(|row| seg_x0 >= row.x0 && seg_x1 <= row.x1);
+            let dst = &mut cached[row + seg_x0..row + seg_x1];
+            match (previous_segment, current_segment) {
+                (Some(previous_row), Some(current_row)) => {
+                    let previous_start = seg_x0 - previous_row.x0;
+                    let current_start = seg_x0 - current_row.x0;
+                    for x in 0..dst.len() {
+                        dst[x] = blend_565(
+                            previous_row.row[previous_start + x],
+                            current_row.row[current_start + x],
+                            alpha,
+                        );
+                    }
+                }
+                (Some(previous_row), None) => {
+                    let previous_start = seg_x0 - previous_row.x0;
+                    for x in 0..dst.len() {
+                        dst[x] = blend_565(previous_row.row[previous_start + x], black, alpha);
+                    }
+                }
+                (None, Some(current_row)) => {
+                    let current_start = seg_x0 - current_row.x0;
+                    for x in 0..dst.len() {
+                        dst[x] = blend_565(black, current_row.row[current_start + x], alpha);
+                    }
+                }
+                (None, None) => dst.fill(black),
+            }
         }
     }
     Some(())
+}
+
+fn push_sorted_unique_bound(bounds: &mut [usize; 6], len: &mut usize, bound: usize) {
+    if bounds[..*len].contains(&bound) {
+        return;
+    }
+    let mut pos = *len;
+    while pos > 0 && bounds[pos - 1] > bound {
+        bounds[pos] = bounds[pos - 1];
+        pos -= 1;
+    }
+    bounds[pos] = bound;
+    *len += 1;
 }
 
 fn blit_transition_565_via_rgb(
