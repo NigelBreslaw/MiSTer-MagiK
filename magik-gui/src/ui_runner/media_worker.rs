@@ -1,8 +1,7 @@
 use crate::artifact_publish::{
-    prepare_artifact_publish, sync_path_with_fallback, timestamped_temp_path_for,
-    ArtifactPublishLabels,
+    hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_with_fallback,
+    timestamped_temp_path_for, ArtifactPublishLabels,
 };
-use crate::media_pack_save::publish_pack_file_with_progress;
 use mister_magik_fb::media_update::{
     pack_status_from_state, parse_manifest_json, size_qualified_pack_path, state_path,
     valid_image_size, LocalPackStatus, MediaPack, MediaUpdatePolicy, MediaVariant,
@@ -11,8 +10,9 @@ use mister_magik_fb::media_update::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -547,28 +547,30 @@ fn download_raw_pack(
     let work_dir = PathBuf::from("/tmp/mister-magik-media-download");
     fs::create_dir_all(&work_dir)
         .map_err(|e| format!("create media work dir {}: {e}", work_dir.display()))?;
-    let encoded_tmp = work_dir.join(format!(
-        "{}-{}-{}.mmlz4b.download",
-        pack.id,
-        pack.image_size,
-        unix_ms_now()
-    ));
     let headers_tmp = work_dir.join(format!(
         "{}-{}-{}.headers",
         pack.id,
         pack.image_size,
         unix_ms_now()
     ));
-    let result = download_variant_to_path(
+    let publish = prepare_artifact_publish(
+        local_path,
+        hidden_timestamped_temp_path_for(local_path, "screenshot-pack", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "pack destination",
+            parent: "pack destination parent",
+        },
+    )?;
+    let result = stream_variant_to_publish_temp(
         variant,
         pack,
-        &encoded_tmp,
+        &publish,
         &headers_tmp,
         pack_index,
         pack_count,
         tx,
     )
-    .and_then(|metadata| {
+    .and_then(|(streamed, metadata)| {
         let _ = tx.send(MediaWorkerMessage::CacheMetadata {
             scope: format!("pack:{}", pack.id),
             metadata: metadata.clone(),
@@ -578,23 +580,13 @@ fn download_raw_pack(
             MediaProgressEvent::for_pack(pack, "identity", "verify", pack_index, pack_count)
                 .with_done_bytes(variant.bytes),
         );
-        verify_downloaded_file(&encoded_tmp, variant.bytes, &variant.sha256).map(|()| metadata)
+        verify_streamed_download(&streamed, variant.bytes, &variant.sha256)?;
+        verify_streamed_download(&streamed, pack.raw.bytes, &pack.raw.sha256)?;
+        Ok((streamed, metadata))
     })
-    .and_then(|metadata| {
-        publish_pack_file_with_progress(&encoded_tmp, local_path, |progress| {
-            send_progress(
-                tx,
-                MediaProgressEvent::for_pack(
-                    pack,
-                    "identity",
-                    progress.phase.label(),
-                    pack_index,
-                    pack_count,
-                )
-                .with_bytes(progress.bytes_done, progress.bytes_total),
-            );
-        })
-        .map(|_| metadata)
+    .and_then(|(streamed, metadata)| {
+        install_streamed_pack(&publish, &streamed, pack, pack_index, pack_count, tx)
+            .map(|()| metadata)
     })
     .and_then(|metadata| {
         write_download_state(
@@ -605,74 +597,126 @@ fn download_raw_pack(
             Some(&metadata),
         )
     });
-    let _ = fs::remove_file(encoded_tmp);
+    if result.is_err() {
+        publish.cleanup_temp();
+    }
     let _ = fs::remove_file(headers_tmp);
     result
 }
 
-fn download_variant_to_path(
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StreamedPackDownload {
+    bytes: u64,
+    sha256: String,
+}
+
+fn stream_variant_to_publish_temp(
     variant: &MediaVariant,
     pack: &MediaPack,
-    output_path: &Path,
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
     headers_path: &Path,
     pack_index: usize,
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
-) -> Result<HttpCacheMetadata, String> {
+) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
     send_progress(
         tx,
         MediaProgressEvent::for_pack(pack, "identity", "download_start", pack_index, pack_count),
     );
     let headers = File::create(headers_path)
         .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
+    let mut output = File::create(publish.temp_path())
+        .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
+    let mut sha = spawn_sha256_stdin()?;
     let started = Instant::now();
-    let mut child = Command::new("wget")
+    let mut child = match Command::new("wget")
         .arg("-S")
         .arg("--header")
         .arg("Accept-Encoding: identity")
         .arg("-O")
-        .arg(output_path)
+        .arg("-")
         .arg(&variant.url)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::from(headers))
         .spawn()
-        .map_err(|e| format!("spawn wget: {e}"))?;
-    let mut last_bytes = 0;
-    let mut last_emit = Instant::now() - Duration::from_secs(1);
-    loop {
-        let bytes = output_path.metadata().map(|meta| meta.len()).unwrap_or(0);
-        if bytes != last_bytes || last_emit.elapsed() >= Duration::from_millis(500) {
-            last_bytes = bytes;
-            last_emit = Instant::now();
-            send_progress(
-                tx,
-                MediaProgressEvent::for_pack(pack, "identity", "download", pack_index, pack_count)
-                    .with_bytes(bytes, variant.bytes)
-                    .with_download_mbps(mbps(bytes, started.elapsed())),
-            );
+    {
+        Ok(child) => child,
+        Err(error) => {
+            drop(sha.stdin.take());
+            let _ = sha.wait();
+            return Err(format!("spawn wget: {error}"));
         }
-        match child.try_wait().map_err(|e| format!("wait wget: {e}"))? {
-            Some(status) if status.success() => {
-                let bytes = output_path.metadata().map(|meta| meta.len()).unwrap_or(0);
-                let header_text = fs::read_to_string(headers_path).unwrap_or_default();
+    };
+    let mut input = child
+        .stdout
+        .take()
+        .ok_or_else(|| "missing wget stdout pipe".to_string())?;
+    let mut sha_stdin = sha
+        .stdin
+        .take()
+        .ok_or_else(|| "missing sha256 stdin pipe".to_string())?;
+    let mut buffer = vec![0u8; crate::media_pack_save::PROGRESS_COPY_CHUNK_BYTES];
+    let mut bytes = 0u64;
+    let mut last_emit = Instant::now() - Duration::from_secs(1);
+    let transfer_result = (|| {
+        loop {
+            let read = input
+                .read(&mut buffer)
+                .map_err(|e| format!("read wget stdout: {e}"))?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read]).map_err(|e| {
+                format!("write streamed pack {}: {e}", publish.temp_path().display())
+            })?;
+            sha_stdin
+                .write_all(&buffer[..read])
+                .map_err(|e| format!("write sha256 stdin: {e}"))?;
+            bytes += read as u64;
+            if last_emit.elapsed() >= Duration::from_millis(250) || bytes >= variant.bytes {
+                last_emit = Instant::now();
                 send_progress(
                     tx,
                     MediaProgressEvent::for_pack(
-                        pack,
-                        "identity",
-                        "download_done",
-                        pack_index,
-                        pack_count,
+                        pack, "identity", "download", pack_index, pack_count,
                     )
                     .with_bytes(bytes, variant.bytes)
                     .with_download_mbps(mbps(bytes, started.elapsed())),
                 );
-                return Ok(parse_wget_headers(&header_text, &variant.url, "response"));
             }
-            Some(status) => return Err(format!("wget exited with {status}")),
-            None => std::thread::sleep(Duration::from_millis(200)),
         }
+        output
+            .flush()
+            .map_err(|e| format!("flush streamed pack {}: {e}", publish.temp_path().display()))
+    })();
+    drop(sha_stdin);
+    drop(output);
+    let status = child.wait().map_err(|e| format!("wait wget: {e}"))?;
+    let sha_output = sha
+        .wait_with_output()
+        .map_err(|e| format!("wait sha256 command: {e}"))?;
+    transfer_result?;
+    if !status.success() {
+        return Err(format!("wget exited with {status}"));
     }
+    if !sha_output.status.success() {
+        return Err(format!("sha256 command exited with {}", sha_output.status));
+    }
+    let actual_sha = parse_sha256_output(&sha_output.stdout)?;
+    let header_text = fs::read_to_string(headers_path).unwrap_or_default();
+    send_progress(
+        tx,
+        MediaProgressEvent::for_pack(pack, "identity", "download_done", pack_index, pack_count)
+            .with_bytes(bytes, variant.bytes)
+            .with_download_mbps(mbps(bytes, started.elapsed())),
+    );
+    Ok((
+        StreamedPackDownload {
+            bytes,
+            sha256: actual_sha,
+        },
+        parse_wget_headers(&header_text, &variant.url, "response"),
+    ))
 }
 
 fn mbps(bytes: u64, elapsed: Duration) -> f64 {
@@ -684,42 +728,95 @@ fn mbps(bytes: u64, elapsed: Duration) -> f64 {
     }
 }
 
-fn verify_downloaded_file(
-    path: &Path,
+fn verify_streamed_download(
+    streamed: &StreamedPackDownload,
     expected_bytes: u64,
     expected_sha: &str,
 ) -> Result<(), String> {
-    let bytes = path
-        .metadata()
-        .map_err(|e| format!("stat downloaded file {}: {e}", path.display()))?
-        .len();
-    if bytes != expected_bytes {
+    if streamed.bytes != expected_bytes {
         return Err(format!(
-            "size mismatch expected={expected_bytes} actual={bytes}"
+            "size mismatch expected={expected_bytes} actual={}",
+            streamed.bytes
         ));
     }
-    let sha = sha256_hex(path)?;
-    if sha != expected_sha {
+    if streamed.sha256 != expected_sha {
         return Err(format!(
-            "sha256 mismatch expected={expected_sha} actual={sha}"
+            "sha256 mismatch expected={expected_sha} actual={}",
+            streamed.sha256
         ));
     }
     Ok(())
 }
 
-fn sha256_hex(path: &Path) -> Result<String, String> {
-    let output = Command::new("sha256sum").arg(path).output().or_else(|_| {
-        Command::new("shasum")
-            .arg("-a")
-            .arg("256")
-            .arg(path)
-            .output()
-    });
-    let output = output.map_err(|e| format!("spawn sha256 command: {e}"))?;
-    if !output.status.success() {
-        return Err(format!("sha256 command exited with {}", output.status));
+fn install_streamed_pack(
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    streamed: &StreamedPackDownload,
+    pack: &MediaPack,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(), String> {
+    let bytes = publish
+        .temp_path()
+        .metadata()
+        .map_err(|e| format!("stat streamed pack {}: {e}", publish.temp_path().display()))?
+        .len();
+    if bytes != streamed.bytes {
+        return Err(format!(
+            "streamed file size mismatch counted={} stat={bytes}",
+            streamed.bytes
+        ));
     }
-    let text = String::from_utf8(output.stdout).map_err(|e| format!("sha256 output utf8: {e}"))?;
+    send_progress(
+        tx,
+        MediaProgressEvent::for_pack(pack, "identity", "save", pack_index, pack_count)
+            .with_done_bytes(streamed.bytes),
+    );
+    let file = File::options()
+        .read(true)
+        .open(publish.temp_path())
+        .map_err(|e| format!("open streamed pack {}: {e}", publish.temp_path().display()))?;
+    send_progress(
+        tx,
+        MediaProgressEvent::for_pack(pack, "identity", "sync", pack_index, pack_count)
+            .with_done_bytes(streamed.bytes),
+    );
+    file.sync_all()
+        .map_err(|e| format!("sync streamed pack {}: {e}", publish.temp_path().display()))?;
+    send_progress(
+        tx,
+        MediaProgressEvent::for_pack(pack, "identity", "rename", pack_index, pack_count)
+            .with_done_bytes(streamed.bytes),
+    );
+    publish.install_temp(Some("screenshot pack"))?;
+    send_progress(
+        tx,
+        MediaProgressEvent::for_pack(pack, "identity", "parent-sync", pack_index, pack_count)
+            .with_done_bytes(streamed.bytes),
+    );
+    sync_path_with_fallback(publish.parent());
+    Ok(())
+}
+
+fn spawn_sha256_stdin() -> Result<Child, String> {
+    Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .or_else(|_| {
+            Command::new("shasum")
+                .arg("-a")
+                .arg("256")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+        })
+        .map_err(|e| format!("spawn sha256 command: {e}"))
+}
+
+fn parse_sha256_output(output: &[u8]) -> Result<String, String> {
+    let text =
+        String::from_utf8(output.to_vec()).map_err(|e| format!("sha256 output utf8: {e}"))?;
     text.split_whitespace()
         .next()
         .filter(|sha| sha.len() == 64)
@@ -823,7 +920,6 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
         .map_err(|e| format!("create state tmp {}: {e}", publish.temp_path().display()))?;
     let text =
         serde_json::to_string_pretty(value).map_err(|e| format!("serialize media state: {e}"))?;
-    use std::io::Write;
     file.write_all(text.as_bytes())
         .and_then(|()| file.write_all(b"\n"))
         .map_err(|e| format!("write media state {}: {e}", publish.temp_path().display()))?;
@@ -1386,36 +1482,52 @@ mod tests {
     }
 
     #[test]
-    fn verify_downloaded_file_rejects_bad_checksum() {
-        let dir = temp_dir("mister-magik-verify-bad-sha");
-        let path = dir.join("pack.mmlz4b");
-        fs::write(&path, b"pack").unwrap();
+    fn verify_streamed_download_rejects_bad_checksum() {
+        let streamed = StreamedPackDownload {
+            bytes: 4,
+            sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        };
 
-        let err = verify_downloaded_file(&path, 4, SHA).unwrap_err();
+        let err = verify_streamed_download(&streamed, 4, SHA).unwrap_err();
 
         assert!(err.contains("sha256 mismatch"));
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn progress_publish_replaces_only_after_validated_copy() {
-        let dir = temp_dir("mister-magik-publish-pack");
-        let encoded = dir.join("downloaded.mmlz4b");
+    fn streamed_publish_replaces_only_after_validated_download() {
+        let dir = temp_dir("mister-magik-stream-publish-pack");
         let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
-        fs::write(&encoded, b"new").unwrap();
-        fs::write(&final_path, b"old").unwrap();
-        let mut save_events = Vec::new();
-
-        publish_pack_file_with_progress(&encoded, &final_path, |event| {
-            save_events.push(event);
-        })
+        let temp_path = hidden_timestamped_temp_path_for(&final_path, "screenshot-pack", "test");
+        let publish = prepare_artifact_publish(
+            &final_path,
+            temp_path.clone(),
+            ArtifactPublishLabels {
+                destination: "test pack destination",
+                parent: "test pack parent",
+            },
+        )
         .unwrap();
+        fs::write(publish.temp_path(), b"new").unwrap();
+        fs::write(&final_path, b"old").unwrap();
+        let streamed = StreamedPackDownload {
+            bytes: 3,
+            sha256: SHA.to_string(),
+        };
+        let pack = pack_fixture();
+        let (tx, rx) = mpsc::channel();
+
+        install_streamed_pack(&publish, &streamed, &pack, 1, 1, &tx).unwrap();
 
         assert_eq!(fs::read(&final_path).unwrap(), b"new");
-        assert!(!dir.join("arcade-screenshots-320x320.mmlz4b.tmp").exists());
-        assert!(save_events
-            .iter()
-            .any(|event| event.phase.label() == "save"));
+        assert!(!temp_path.exists());
+        let phases: Vec<_> = rx
+            .try_iter()
+            .filter_map(|message| match message {
+                MediaWorkerMessage::Progress(event) => Some(event.phase),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(phases, ["save", "sync", "rename", "parent-sync"]);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1424,15 +1536,18 @@ mod tests {
         let dir = temp_dir("mister-magik-clean-publish-temp");
         let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
         let matching = dir.join("arcade-screenshots-320x320.mmlz4b.tmp-1");
+        let hidden_matching = dir.join(".arcade-screenshots-320x320.mmlz4b.tmp-2");
         let other_pack = dir.join("neogeo-screenshots-320x320.mmlz4b.tmp-1");
         let final_file = dir.join("arcade-screenshots-320x320.mmlz4b");
         fs::write(&matching, b"partial").unwrap();
+        fs::write(&hidden_matching, b"partial").unwrap();
         fs::write(&other_pack, b"partial").unwrap();
         fs::write(&final_file, b"current").unwrap();
 
         cleanup_pack_publish_temps(&final_path);
 
         assert!(!matching.exists());
+        assert!(!hidden_matching.exists());
         assert!(other_pack.exists());
         assert_eq!(fs::read(&final_file).unwrap(), b"current");
         let _ = fs::remove_dir_all(dir);
@@ -1440,15 +1555,29 @@ mod tests {
 
     #[test]
     fn failed_verification_leaves_existing_pack_untouched() {
-        let dir = temp_dir("mister-magik-bad-download");
-        let encoded = dir.join("downloaded.mmlz4b");
+        let dir = temp_dir("mister-magik-bad-stream-download");
         let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
-        fs::write(&encoded, b"bad").unwrap();
+        let temp_path = hidden_timestamped_temp_path_for(&final_path, "screenshot-pack", "test");
+        let publish = prepare_artifact_publish(
+            &final_path,
+            temp_path.clone(),
+            ArtifactPublishLabels {
+                destination: "test pack destination",
+                parent: "test pack parent",
+            },
+        )
+        .unwrap();
+        fs::write(publish.temp_path(), b"bad").unwrap();
         fs::write(&final_path, b"old").unwrap();
+        let streamed = StreamedPackDownload {
+            bytes: 3,
+            sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        };
 
-        assert!(verify_downloaded_file(&encoded, 3, SHA).is_err());
+        assert!(verify_streamed_download(&streamed, 3, SHA).is_err());
 
         assert_eq!(fs::read(&final_path).unwrap(), b"old");
+        assert!(publish.temp_path().exists());
         let _ = fs::remove_dir_all(dir);
     }
 
