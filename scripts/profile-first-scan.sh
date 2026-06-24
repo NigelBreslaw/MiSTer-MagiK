@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
+REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-first-scan.tsv"
@@ -19,9 +20,9 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR]
 
-Deletes the launcher catalog database, reboots the MiSTer, waits for the visible
-first-boot scan to complete, and appends timing rows to
-history/toolchain-bench/results-first-scan.tsv.
+Deletes the launcher catalog database and summary projection, reboots the
+MiSTer, waits for the visible first-boot scan to complete, and appends timing
+rows to history/toolchain-bench/results-first-scan.tsv.
 EOF
 }
 
@@ -88,7 +89,7 @@ fi
 printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
 printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "rm -f '$REMOTE_DB' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log; sync"
+"$MISTER" run "rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log; sync"
 "$MISTER" reboot-wait
 
 deadline=$((SECONDS + TIMEOUT_SECS))

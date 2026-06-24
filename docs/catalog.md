@@ -45,12 +45,12 @@ Cold or reset database:
    loaded. Virtual launch cache materialization runs after readiness so it
    cannot extend first usable catalog time.
 
-The Settings-screen `Reset Database` action removes the SQLite catalog and all
-recognized screenshot pack files under `/media/fat/mister-magik/assets` before
-requesting the supervised reboot. It deletes size-qualified and legacy
-`<system>-screenshots*.mmlz4b` files for supported pack systems plus
-`.screenshot-media-state.json`; unrelated files in the assets directory are
-left alone.
+The Settings-screen `Reset Database` action removes the SQLite catalog, its
+adjacent `library.summary.json` projection, and all recognized screenshot pack
+files under `/media/fat/mister-magik/assets` before requesting the supervised
+reboot. It deletes size-qualified and legacy `<system>-screenshots*.mmlz4b`
+files for supported pack systems plus `.screenshot-media-state.json`; unrelated
+files in the assets directory are left alone.
 
 Warm boot with a usable cache:
 

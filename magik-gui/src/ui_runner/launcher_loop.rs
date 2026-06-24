@@ -20,6 +20,7 @@ use mister_magik_fb::framebuffer_ownership::{
 };
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
@@ -59,6 +60,81 @@ fn catalog_from_summary(
         })
         .collect();
     ArcadeCatalog::new(PathBuf::from(root), Vec::new(), systems)
+}
+
+fn read_catalog_summary_seed(
+    sqlite_path: &Path,
+    summary_path: &Path,
+    start: Instant,
+) -> Option<catalog_summary::CatalogSummaryProjection> {
+    let summary_t = Instant::now();
+    if !sqlite_path.is_file() {
+        print_startup_event(
+            start,
+            "catalog_summary_load",
+            format!(
+                "status=sqlite_missing elapsed_us={} sqlite_path={} path={}",
+                summary_t.elapsed().as_micros(),
+                sqlite_path.display(),
+                summary_path.display()
+            ),
+        );
+        return None;
+    }
+
+    match catalog_summary::read_catalog_summary(summary_path) {
+        Ok(Some(summary)) if !summary.systems.is_empty() => {
+            print_startup_event(
+                start,
+                "catalog_summary_load",
+                format!(
+                    "status=ready systems={} games={} elapsed_us={} path={}",
+                    summary.systems.len(),
+                    summary.total_game_count,
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display()
+                ),
+            );
+            Some(summary)
+        }
+        Ok(Some(_)) => {
+            print_startup_event(
+                start,
+                "catalog_summary_load",
+                format!(
+                    "status=empty elapsed_us={} path={}",
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display()
+                ),
+            );
+            None
+        }
+        Ok(None) => {
+            print_startup_event(
+                start,
+                "catalog_summary_load",
+                format!(
+                    "status=missing_or_stale elapsed_us={} path={}",
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display()
+                ),
+            );
+            None
+        }
+        Err(e) => {
+            print_startup_event(
+                start,
+                "catalog_summary_load_failed",
+                format!(
+                    "elapsed_us={} path={} error={}",
+                    summary_t.elapsed().as_micros(),
+                    summary_path.display(),
+                    e
+                ),
+            );
+            None
+        }
+    }
 }
 
 struct LaunchWorkerResult {
@@ -414,61 +490,9 @@ pub(super) fn run_launcher_loop(
     let library_changed_test_action = library_changed_test_action_from_env(start);
     let mut library_changed_test_action_armed = library_changed_test_action.is_some();
     let mut library_changed_test_dialog_seen_at: Option<Instant> = None;
-    let summary_path = catalog_summary::summary_path_for_sqlite(&library_db::default_sqlite_path());
-    let summary_t = Instant::now();
-    let summary_seed = match catalog_summary::read_catalog_summary(&summary_path) {
-        Ok(Some(summary)) if !summary.systems.is_empty() => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=ready systems={} games={} elapsed_us={} path={}",
-                    summary.systems.len(),
-                    summary.total_game_count,
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display()
-                ),
-            );
-            Some(summary)
-        }
-        Ok(Some(_)) => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=empty elapsed_us={} path={}",
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display()
-                ),
-            );
-            None
-        }
-        Ok(None) => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=missing_or_stale elapsed_us={} path={}",
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display()
-                ),
-            );
-            None
-        }
-        Err(e) => {
-            print_startup_event(
-                start,
-                "catalog_summary_load_failed",
-                format!(
-                    "elapsed_us={} path={} error={}",
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display(),
-                    e
-                ),
-            );
-            None
-        }
-    };
+    let sqlite_path = library_db::default_sqlite_path();
+    let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
+    let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
     if let Some(summary) = summary_seed {
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
@@ -2458,6 +2482,17 @@ mod tests {
     use mister_magik_fb::effects::EffectSize;
     use std::sync::Arc;
 
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mister-magik-{label}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
     #[cfg(mister_experiments)]
     #[test]
     pub(super) fn effect_half_target_allows_640x448_at_native_scale() {
@@ -2542,6 +2577,42 @@ mod tests {
             catalog_media_system_ids(&catalog),
             vec!["arcade".to_string(), "neogeo".to_string()]
         );
+    }
+
+    #[test]
+    pub(super) fn catalog_summary_seed_requires_backing_sqlite_database() {
+        let root = unique_temp_dir("catalog-summary-seed");
+        let db = root.join("library.sqlite3");
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let summary = catalog_summary::CatalogSummaryProjection {
+            schema: catalog_summary::CATALOG_SUMMARY_SCHEMA_VERSION,
+            catalog_schema_version: mister_magik_catalog::catalog_config::SCHEMA_VERSION,
+            catalog_build_version: mister_magik_catalog::catalog_config::CATALOG_BUILD_VERSION,
+            catalog_generation: "test-generation".to_string(),
+            catalog_stamp_fingerprint: "test-generation".to_string(),
+            catalog_stamp_lines: Vec::new(),
+            total_game_count: 7,
+            systems: vec![catalog_summary::CatalogSummarySystem {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 7,
+                supported_media: vec!["screenshots".to_string()],
+            }],
+        };
+        std::fs::write(
+            &summary_path,
+            serde_json::to_vec(&summary).expect("summary json"),
+        )
+        .expect("write summary");
+
+        assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
+
+        std::fs::write(&db, b"placeholder").expect("write sqlite placeholder");
+        assert_eq!(
+            read_catalog_summary_seed(&db, &summary_path, Instant::now()),
+            Some(summary)
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
