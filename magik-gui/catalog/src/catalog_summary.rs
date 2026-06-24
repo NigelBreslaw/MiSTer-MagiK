@@ -1,6 +1,6 @@
 //! Compact catalog summary projection for warm launcher startup.
 
-use crate::arcade_catalog::{self, ArcadeCatalog};
+use crate::arcade_catalog::ArcadeCatalog;
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_stamp::CatalogStamp;
 use crate::media_identity;
@@ -36,15 +36,12 @@ pub fn summary_path_for_sqlite(sqlite_path: &Path) -> PathBuf {
     sqlite_path.with_extension("summary.json")
 }
 
-pub(crate) fn write_catalog_summary_for_sqlite(
+pub(crate) fn write_catalog_summary_for_catalog(
     sqlite_path: &Path,
+    catalog: &ArcadeCatalog,
     stamp: &CatalogStamp,
 ) -> Result<(), String> {
-    let loaded = sqlite_catalog::load_arcade_catalog_from_sqlite_at(
-        arcade_catalog::DEFAULT_ARCADE_ROOT,
-        sqlite_path,
-    )?;
-    let summary = CatalogSummaryProjection::from_catalog(&loaded.catalog, stamp);
+    let summary = CatalogSummaryProjection::from_catalog(catalog, stamp);
     write_catalog_summary(&summary_path_for_sqlite(sqlite_path), &summary)
 }
 

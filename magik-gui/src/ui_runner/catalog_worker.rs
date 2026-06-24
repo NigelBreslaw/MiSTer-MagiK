@@ -140,32 +140,20 @@ pub(super) fn start_library_catalog_worker(
                     &tx,
                     library_db::CatalogProgress::saving_before_opening_launcher(),
                 );
-                match artifact.save_default_sqlite_with_progress(Some(&mut progress)) {
-                    Ok(summary) => {
+                match artifact.save_default_sqlite_with_catalog(&root, Some(&mut progress)) {
+                    Ok(refresh) => {
+                        let summary = refresh.summary;
+                        let loaded = refresh.catalog;
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
                         });
-                        match library_db::load_arcade_catalog_from_sqlite(&root) {
-                            Ok(loaded) => {
-                                send_catalog_load_timing(
-                                    &tx,
-                                    "catalog_worker_persisted_load",
-                                    &loaded,
-                                );
-                                let _ = tx.send(CatalogWorkerMessage::Ready {
-                                    catalog: loaded.catalog,
-                                    summary: Some(summary),
-                                    load_us: loaded.us,
-                                });
-                                materialize_virtual_launch_cache_after_ready(&tx);
-                            }
-                            Err(e) => {
-                                eprintln!("library catalog load failed after persistence: {e}");
-                                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                                    error: format!("load persisted catalog: {e}"),
-                                });
-                            }
-                        }
+                        send_catalog_load_timing(&tx, "catalog_worker_saved_catalog", &loaded);
+                        let _ = tx.send(CatalogWorkerMessage::Ready {
+                            catalog: loaded.catalog,
+                            summary: Some(summary),
+                            load_us: loaded.us,
+                        });
+                        materialize_virtual_launch_cache_after_ready(&tx);
                     }
                     Err(e) => {
                         eprintln!("library persistence failed after RAM catalog ready: {e}");
@@ -235,36 +223,41 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             restore_catalog_worker_priority();
-            let summary = match library_db::rebuild_default_sqlite_database_with_events(
+            let refresh = match library_db::rebuild_default_sqlite_database_with_catalog(
+                &root,
                 Some(&mut progress),
                 Some(&mut scan_events),
             ) {
-                Ok(summary) => Some(summary),
+                Ok(refresh) => Some(refresh),
                 Err(e) => {
                     eprintln!("library refresh failed: {e}");
                     send_catalog_progress(&tx, library_db::CatalogProgress::library_scan_failed(e));
                     None
                 }
             };
-            let rebuilt = summary.is_some();
+            let rebuilt = refresh.is_some();
             if rebuilt {
                 send_catalog_progress(&tx, library_db::CatalogProgress::loading_sqlite_catalog());
             }
-            match library_db::load_arcade_catalog_from_sqlite(&root) {
-                Ok(loaded) => {
-                    send_catalog_load_timing(&tx, "catalog_worker_refreshed_load", &loaded);
+            match refresh {
+                Some(refresh) => {
+                    let summary = refresh.summary;
+                    let loaded = refresh.catalog;
+                    send_catalog_load_timing(&tx, "catalog_worker_saved_catalog", &loaded);
                     let _ = tx.send(CatalogWorkerMessage::Ready {
                         catalog: loaded.catalog,
-                        summary,
+                        summary: Some(summary),
                         load_us: loaded.us,
                     });
-                    if rebuilt {
-                        materialize_virtual_launch_cache_after_ready(&tx);
-                    }
+                    materialize_virtual_launch_cache_after_ready(&tx);
                 }
-                Err(e) => {
-                    eprintln!("library catalog load failed: {e}");
-                    send_catalog_progress(&tx, library_db::CatalogProgress::library_load_failed(e));
+                None => {
+                    send_catalog_progress(
+                        &tx,
+                        library_db::CatalogProgress::library_load_failed(
+                            "library refresh did not produce a catalog".to_string(),
+                        ),
+                    );
                 }
             }
         })
