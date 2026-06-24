@@ -14,7 +14,7 @@ REPLACE_LABEL=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-launch-prep.sh LABEL [--replace-label] [--scenario warm|cold] [--iterations N]
+Usage: scripts/profile-launch-prep.sh LABEL [--replace-label] [--scenario warm|cold|priority-prewarm] [--iterations N]
 
 Runs the launch-prep benchmark on the MiSTer. The benchmark calls the launch
 ref preparation path only; it does not write the MiSTer FIFO or launch a core.
@@ -47,8 +47,8 @@ if [[ ! "$LABEL" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "label must contain only letters, numbers, _, ., or -" >&2
   exit 2
 fi
-if [[ "$SCENARIO" != "warm" && "$SCENARIO" != "cold" ]]; then
-  echo "--scenario must be warm or cold" >&2
+if [[ "$SCENARIO" != "warm" && "$SCENARIO" != "cold" && "$SCENARIO" != "priority-prewarm" ]]; then
+  echo "--scenario must be warm, cold, or priority-prewarm" >&2
   exit 2
 fi
 if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
@@ -65,8 +65,25 @@ elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
   mv "$tmp" "$TSV"
 fi
 
+REMOTE_ENV=""
+for var in \
+  MISTER_LAUNCH_PREP_VIRTUAL_SYSTEMS \
+  MISTER_LAUNCH_PREP_VIRTUAL_LIMIT \
+  MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT \
+  MISTER_LAUNCH_CACHE_PRIORITY_SYSTEMS \
+  MISTER_LAUNCH_CACHE_PRIORITY_PER_SYSTEM; do
+  value="${!var-}"
+  if [[ -n "$value" ]]; then
+    if [[ ! "$value" =~ ^[A-Za-z0-9_.:/\|,-]+$ ]]; then
+      echo "$var contains unsupported characters for remote benchmark passthrough" >&2
+      exit 2
+    fi
+    REMOTE_ENV+=" $var='$value'"
+  fi
+done
+
 echo "== launch prep profile label=$LABEL scenario=$SCENARIO iterations=$ITERATIONS"
-OUT=$("$MISTER" run "chmod +x '$REMOTE'; MISTER_LAUNCH_PREP_LABEL='$LABEL' MISTER_LAUNCH_PREP_ITERATIONS='$ITERATIONS' '$REMOTE' launch-prep-bench '$LABEL' '$SCENARIO' '$ITERATIONS'" 2>&1) || true
+OUT=$("$MISTER" run "chmod +x '$REMOTE';$REMOTE_ENV MISTER_LAUNCH_PREP_LABEL='$LABEL' MISTER_LAUNCH_PREP_ITERATIONS='$ITERATIONS' '$REMOTE' launch-prep-bench '$LABEL' '$SCENARIO' '$ITERATIONS'" 2>&1) || true
 echo "$OUT"
 
 echo "$OUT" | awk -F '\t' -v label="$LABEL" '
@@ -75,6 +92,16 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
     split($9, wb, "=")
     split($10, wc, "=")
     print label, $3, "sample", $4, $5, $6, $7, $8, wb[2], wc[2], $11 " " $12
+  }
+  $1 == "launch_prep_bench_prewarm_tsv" {
+    split($6, total, "=")
+    split($7, written, "=")
+    split($8, unchanged, "=")
+    split($9, errors, "=")
+    split($10, prewarm, "=")
+    split($11, wb, "=")
+    split($12, wc, "=")
+    print label, $3, "prewarm", $4, "", "", $5, prewarm[2], wb[2], wc[2], "total=" total[2] " written=" written[2] " unchanged=" unchanged[2] " errors=" errors[2]
   }
   $1 == "launch_prep_bench_summary" {
     split($4, count, "=")

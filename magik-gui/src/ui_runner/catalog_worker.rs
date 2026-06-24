@@ -477,6 +477,23 @@ fn materialize_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
     });
 }
 
+fn materialize_priority_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
+    let start = Instant::now();
+    let summary =
+        crate::launch_preparation::materialize_priority_virtual_launch_cache_from_default_db();
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "virtual_launch_cache_priority_materialized".to_string(),
+        detail: format!(
+            "total={} written={} unchanged={} errors={} us={}",
+            summary.total,
+            summary.written,
+            summary.unchanged,
+            summary.errors,
+            start.elapsed().as_micros()
+        ),
+    });
+}
+
 fn skip_virtual_launch_cache_prewarm(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     plan: CatalogWorkerPlan,
@@ -489,6 +506,7 @@ fn skip_virtual_launch_cache_prewarm(
 
 fn materialize_virtual_launch_cache_after_ready(tx: &mpsc::Sender<CatalogWorkerMessage>) {
     lower_background_priority();
+    materialize_priority_virtual_launch_cache(tx);
     std::thread::sleep(post_ready_virtual_launch_cache_delay());
     materialize_virtual_launch_cache(tx);
 }
