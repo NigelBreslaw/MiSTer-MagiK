@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 3;
 const MANIFEST_FETCH_ATTEMPTS: usize = 6;
 const MANIFEST_FETCH_INITIAL_RETRY: Duration = Duration::from_secs(2);
@@ -31,6 +32,15 @@ impl MediaWorkerHandle {
         let _ = self.command_tx.send(MediaWorkerCommand::EnsureSystem {
             system_id: system_id.to_string(),
         });
+    }
+
+    pub(super) fn set_interaction_active(&self, active: bool, reason: &str) {
+        let _ = self
+            .command_tx
+            .send(MediaWorkerCommand::SetInteractionActive {
+                active,
+                reason: reason.to_string(),
+            });
     }
 
     pub(super) fn finish(&self) {
@@ -68,6 +78,7 @@ pub(super) fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum MediaWorkerCommand {
     EnsureSystem { system_id: String },
+    SetInteractionActive { active: bool, reason: String },
     Finish,
 }
 
@@ -79,11 +90,12 @@ fn run_screenshot_media_worker(
     let _ = tx.send(MediaWorkerMessage::Timing {
         name: "screenshot_media_update_start".to_string(),
         detail: format!(
-            "policy={} manifest_url={} image_size={} asset_dir={}",
+            "policy={} manifest_url={} image_size={} asset_dir={} max_concurrent={}",
             config.policy.label(),
             config.manifest_url,
             config.image_size,
-            config.asset_dir.display()
+            config.asset_dir.display(),
+            config.max_concurrent_downloads
         ),
     });
     send_progress(
@@ -124,16 +136,35 @@ fn run_screenshot_media_worker(
     let mut queue = MediaRequestQueue::default();
     let mut active = Vec::<ActiveDownload>::new();
     let mut finish_requested = false;
+    let mut interaction_active = false;
+    let mut interaction_reason = "idle".to_string();
+    let mut defer_logged = false;
     loop {
-        start_ready_downloads(
-            &config,
-            &packs_by_system,
-            state.as_ref(),
-            &mut queue,
-            &mut active,
-            &mut counts,
-            &tx,
-        );
+        if interaction_active {
+            if !defer_logged && !queue.pending.is_empty() {
+                defer_logged = true;
+                let _ = tx.send(MediaWorkerMessage::Timing {
+                    name: "screenshot_media_defer".to_string(),
+                    detail: format!(
+                        "reason={} pending={} active={}",
+                        interaction_reason,
+                        queue.pending.len(),
+                        active.len()
+                    ),
+                });
+            }
+        } else {
+            defer_logged = false;
+            start_ready_downloads(
+                &config,
+                &packs_by_system,
+                state.as_ref(),
+                &mut queue,
+                &mut active,
+                &mut counts,
+                &tx,
+            );
+        }
         poll_active_downloads(&mut active, &mut counts, &tx);
         if finish_requested && active.is_empty() && queue.pending.is_empty() {
             break;
@@ -162,6 +193,21 @@ fn run_screenshot_media_worker(
                             detail: format!("system={system_id} reason=no-pack"),
                         });
                     }
+                }
+            }
+            Ok(MediaWorkerCommand::SetInteractionActive { active, reason }) => {
+                if interaction_active != active || interaction_reason != reason {
+                    interaction_active = active;
+                    interaction_reason = reason;
+                    defer_logged = false;
+                    let _ = tx.send(MediaWorkerMessage::Timing {
+                        name: "screenshot_media_interaction_state".to_string(),
+                        detail: format!(
+                            "active={} reason={}",
+                            if interaction_active { 1 } else { 0 },
+                            interaction_reason
+                        ),
+                    });
                 }
             }
             Ok(MediaWorkerCommand::Finish) | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -236,8 +282,9 @@ impl MediaRequestQueue {
 fn dequeue_startable_requests(
     pending: &mut VecDeque<QueuedPackRequest>,
     active_count: usize,
+    max_concurrent: usize,
 ) -> Vec<QueuedPackRequest> {
-    let slots = MAX_CONCURRENT_MEDIA_DOWNLOADS.saturating_sub(active_count);
+    let slots = max_concurrent.saturating_sub(active_count);
     let mut startable = Vec::new();
     for _ in 0..slots {
         let Some(request) = pending.pop_front() else {
@@ -265,7 +312,11 @@ fn start_ready_downloads(
     counts: &mut MediaCheckCounts,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) {
-    for request in dequeue_startable_requests(&mut queue.pending, active.len()) {
+    for request in dequeue_startable_requests(
+        &mut queue.pending,
+        active.len(),
+        config.max_concurrent_downloads,
+    ) {
         let Some(pack) = packs_by_system.get(&request.system_id).cloned() else {
             continue;
         };
@@ -861,6 +912,7 @@ struct MediaWorkerConfig {
     manifest_url: String,
     image_size: String,
     asset_dir: PathBuf,
+    max_concurrent_downloads: usize,
 }
 
 impl MediaWorkerConfig {
@@ -881,8 +933,17 @@ impl MediaWorkerConfig {
                 std::env::var("MISTER_MEDIA_ASSET_DIR")
                     .unwrap_or_else(|_| DEFAULT_ASSET_DIR.to_string()),
             ),
+            max_concurrent_downloads: media_download_concurrency_from_env(),
         })
     }
+}
+
+fn media_download_concurrency_from_env() -> usize {
+    std::env::var("MISTER_MEDIA_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS)
+        .clamp(1, MAX_CONCURRENT_MEDIA_DOWNLOADS)
 }
 
 #[derive(Default)]
@@ -1214,7 +1275,7 @@ mod tests {
     }
 
     #[test]
-    fn media_request_queue_starts_at_most_three_downloads() {
+    fn media_request_queue_starts_at_configured_download_limit() {
         let mut pending = VecDeque::new();
         for index in 1..=5 {
             pending.push_back(QueuedPackRequest {
@@ -1223,16 +1284,21 @@ mod tests {
             });
         }
 
-        let first_batch = dequeue_startable_requests(&mut pending, 0);
-        assert_eq!(first_batch.len(), MAX_CONCURRENT_MEDIA_DOWNLOADS);
-        assert_eq!(pending.len(), 2);
+        let first_batch =
+            dequeue_startable_requests(&mut pending, 0, DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        assert_eq!(first_batch.len(), DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        assert_eq!(pending.len(), 4);
 
-        let no_slots = dequeue_startable_requests(&mut pending, MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        let no_slots = dequeue_startable_requests(
+            &mut pending,
+            DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
+            DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
+        );
         assert!(no_slots.is_empty());
-        assert_eq!(pending.len(), 2);
+        assert_eq!(pending.len(), 4);
 
-        let one_slot = dequeue_startable_requests(&mut pending, MAX_CONCURRENT_MEDIA_DOWNLOADS - 1);
-        assert_eq!(one_slot.len(), 1);
+        let two_slots = dequeue_startable_requests(&mut pending, 1, MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        assert_eq!(two_slots.len(), 2);
         assert_eq!(pending.len(), 1);
     }
 
