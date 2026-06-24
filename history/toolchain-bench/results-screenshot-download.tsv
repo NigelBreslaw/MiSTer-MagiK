@@ -7,3 +7,34 @@ screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	d
 screenshot_download_bench_tsv	MEDIA-AFTER-01	neogeo	identity	24283092	24283092	6221	0	8665	1282	16170	31.23	12.01	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
 screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
 screenshot_download_bench_tsv	FINAL-MEDIA-DL-20260624-01	neogeo	identity	24283092	24283092	6240	0	8334	1331	15906	31.13	12.21	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	PERFREVIEW-20260624-SHOT-DL-01	neogeo	identity	24283092	24283092	6066	0	8314	1323	15704	32.03	12.37	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+stage_tsv	label=ITEM10-AFTER-save-path-01	suite_label=ITEM10-AFTER-save-path	benchmark=media-bench-download	system=neogeo	stage=publish_copy	ms=2057	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-01	suite_label=ITEM10-AFTER-save-path	benchmark=media-bench-download	system=neogeo	stage=publish_sync	ms=0	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-01	suite_label=ITEM10-AFTER-save-path	benchmark=media-bench-download	system=neogeo	stage=publish_rename	ms=0	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-01	suite_label=ITEM10-AFTER-save-path	benchmark=media-bench-download	system=neogeo	stage=publish_parent_sync	ms=7	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-01	suite_label=ITEM10-AFTER-save-path	benchmark=media-bench-download	system=neogeo	stage=state	ms=19	bytes=1010	result=bench-ok	detail=path=/media/fat/mister-magik/assets/.screenshot-media-state.json.bench-1964-1782325166742
+stage_tsv	label=ITEM10-AFTER-save-path-01	suite_label=ITEM10-AFTER-save-path	benchmark=media-bench-download	system=neogeo	stage=cleanup	ms=76	bytes=0	result=bench-ok	detail=removed=3
+screenshot_download_bench_tsv	ITEM10-AFTER-save-path-01	neogeo	identity	24283092	24283092	6185	0	2163	1284	9635	31.41	20.16	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+stage_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	benchmark=media-bench-download	system=neogeo	stage=publish_copy	ms=2100	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	benchmark=media-bench-download	system=neogeo	stage=publish_sync	ms=0	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	benchmark=media-bench-download	system=neogeo	stage=publish_rename	ms=0	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	benchmark=media-bench-download	system=neogeo	stage=publish_parent_sync	ms=7	bytes=24283092	result=bench-ok	detail=progress_events=96
+stage_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	benchmark=media-bench-download	system=neogeo	stage=state	ms=27	bytes=1010	result=bench-ok	detail=path=/media/fat/mister-magik/assets/.screenshot-media-state.json.bench-2050-1782325306340
+stage_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	benchmark=media-bench-download	system=neogeo	stage=cleanup	ms=76	bytes=0	result=bench-ok	detail=removed=3
+screenshot_download_bench_tsv	ITEM10-AFTER-save-path-gated-01	neogeo	identity	24283092	24283092	5897	0	2215	1285	9400	32.94	20.67	"9850b1a4046515e4f0f5130994cd4f49"	identity	HIT	bench-ok
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_stage_publish_copy_ms	value=2100	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_stage_publish_sync_ms	value=0	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_stage_publish_rename_ms	value=0	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_stage_publish_parent_sync_ms	value=7	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_stage_state_ms	value=27	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_stage_cleanup_ms	value=76	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_save_ms	value=2215	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_total_ms	value=9400	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_verify_ms	value=1285	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated-01	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_wire_ms	value=5897	unit=ms	valid=1
+metric_tsv	label=ITEM10-AFTER-save-path-gated	suite_label=ITEM10-AFTER-save-path-gated	system=neogeo	metric=screenshot_download_save_ms_max	value=2215	unit=ms	valid=1
+validity_tsv	label=ITEM10-AFTER-save-path-gated	valid=1	invalid_reason=ok	detail=max_save_ms=2215 limit_ms=2746 rows=1 systems=neogeo
