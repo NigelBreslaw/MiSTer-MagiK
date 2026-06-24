@@ -17,6 +17,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS: u64 = 1;
+const MGL_PREFIX_BYTES: usize = 32 * 1024;
 
 pub(crate) fn collection_discoveries_from_container(
     file: &FoundFile,
@@ -93,6 +94,7 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
         year: None,
         setname: None,
         parent: None,
+        covered_payload_path: None,
         confidence: DiscoveryConfidence::CatalogMetadata,
     }
 }
@@ -172,6 +174,7 @@ pub(crate) fn collection_discoveries_from_listing_text(
             year: None,
             setname: None,
             parent: None,
+            covered_payload_path: None,
             confidence: DiscoveryConfidence::CatalogMetadata,
         })
         .collect()
@@ -233,10 +236,12 @@ pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
 }
 
 pub(crate) fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
-    let mut file = File::open(path).ok()?;
-    let mut data = String::new();
-    file.read_to_string(&mut data).ok()?;
-    parse_mgl_metadata_xml(&data)
+    let file = File::open(path).ok()?;
+    let mut data = Vec::with_capacity(MGL_PREFIX_BYTES);
+    file.take(MGL_PREFIX_BYTES as u64)
+        .read_to_end(&mut data)
+        .ok()?;
+    parse_mgl_metadata_xml(&String::from_utf8_lossy(&data))
 }
 
 pub(crate) fn neogeo_mgl_setname(mgl_path: &Path, payload_path: Option<&str>) -> Option<String> {
@@ -476,12 +481,6 @@ pub(crate) fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInferenc
         };
     }
 
-    if let Some(region) = region_from_saturn_boot_header_file(&discovery.source_path) {
-        return RegionInference {
-            region: Some(region),
-            confidence: "disc-header",
-        };
-    }
     if let Some(region) = region_from_filename(&discovery.source_path) {
         return RegionInference {
             region: Some(region),
@@ -492,6 +491,12 @@ pub(crate) fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInferenc
         return RegionInference {
             region: Some(region),
             confidence: "folder-medium",
+        };
+    }
+    if let Some(region) = region_from_saturn_boot_header_file(&discovery.source_path) {
+        return RegionInference {
+            region: Some(region),
+            confidence: "disc-header",
         };
     }
     if let Some(region) = region_from_text(&discovery.title) {
@@ -509,6 +514,12 @@ pub(crate) fn infer_region_metadata(discovery: &GameDiscovery) -> RegionInferenc
 
 pub(crate) fn region_from_saturn_boot_header_file(path: &str) -> Option<&'static str> {
     let path = path.split("::").next().unwrap_or(path);
+    if matches!(
+        crate::library_db::path_ext(path).as_deref(),
+        Some("cue" | "chd")
+    ) {
+        return None;
+    }
     let mut file = File::open(path).ok()?;
     let mut header = [0u8; 256];
     file.read_exact(&mut header).ok()?;
@@ -631,7 +642,14 @@ mod tests {
 
     #[test]
     fn saturn_region_prefers_filename_markers() {
-        let discovery = saturn_payload("/media/fat/games/Saturn/Nights into Dreams (USA).chd");
+        let root = unique_temp_dir("saturn-region-filename");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Nights into Dreams (USA).chd");
+        let mut header = [b' '; 256];
+        header[0..15].copy_from_slice(b"SEGA SEGASATURN");
+        header[0x40..0x50].copy_from_slice(b"J               ");
+        std::fs::write(&path, header).expect("write saturn header fixture");
+        let discovery = saturn_payload(&path.display().to_string());
 
         assert_eq!(
             infer_region_metadata(&discovery),
@@ -640,6 +658,7 @@ mod tests {
                 confidence: "filename-high"
             }
         );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -666,6 +685,29 @@ mod tests {
                 confidence: "unknown"
             }
         );
+    }
+
+    #[test]
+    fn saturn_region_skips_disc_container_boot_header_probe() {
+        let root = unique_temp_dir("saturn-region-container-skip");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        for name in ["Clockwork Knight.chd", "Clockwork Knight.cue"] {
+            let path = root.join(name);
+            let mut header = [b' '; 256];
+            header[0..15].copy_from_slice(b"SEGA SEGASATURN");
+            header[0x40..0x50].copy_from_slice(b"U               ");
+            std::fs::write(&path, header).expect("write saturn header fixture");
+            let discovery = saturn_payload(&path.display().to_string());
+
+            assert_eq!(
+                infer_region_metadata(&discovery),
+                RegionInference {
+                    region: None,
+                    confidence: "unknown"
+                }
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -736,6 +778,32 @@ mod tests {
         .expect("write mgl fixture");
 
         let metadata = read_mgl_metadata(&path).expect("read mgl metadata");
+
+        assert_eq!(metadata.rbf.as_deref(), Some("NES"));
+        assert_eq!(
+            metadata.file_path.as_deref(),
+            Some("games/NES/Super Mario Bros.nes")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mgl_metadata_reader_uses_bounded_prefix() {
+        let root = unique_temp_dir("mgl-bounded-prefix");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Fixture.mgl");
+        let mut data = br#"
+            <mistergamelist>
+                <rbf>NES</rbf>
+                <file delay="1" type="s" path="games/NES/Super Mario Bros.nes"/>
+            </mistergamelist>
+            "#
+        .to_vec();
+        data.resize(MGL_PREFIX_BYTES + 128, b' ');
+        data.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        std::fs::write(&path, data).expect("write mgl fixture");
+
+        let metadata = read_mgl_metadata(&path).expect("read bounded mgl metadata");
 
         assert_eq!(metadata.rbf.as_deref(), Some("NES"));
         assert_eq!(

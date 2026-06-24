@@ -43,6 +43,7 @@ pub(crate) fn payload(path: &str) -> GameDiscovery {
         year: None,
         setname: None,
         parent: None,
+        covered_payload_path: None,
         confidence: DiscoveryConfidence::PayloadPath,
     }
 }
@@ -62,6 +63,7 @@ pub(crate) fn saturn_payload(path: &str) -> GameDiscovery {
         year: None,
         setname: None,
         parent: None,
+        covered_payload_path: None,
         confidence: DiscoveryConfidence::PayloadPath,
     }
 }
@@ -367,6 +369,7 @@ pub(crate) fn mgl(source_path: &str, launch_ref: &str) -> GameDiscovery {
         year: None,
         setname: None,
         parent: None,
+        covered_payload_path: None,
         confidence: DiscoveryConfidence::PayloadPath,
     }
 }
@@ -387,6 +390,7 @@ pub(crate) fn mra_discovery(idx: usize, title: &str) -> GameDiscovery {
         year: None,
         setname: Some(format!("game{idx:05}")),
         parent: None,
+        covered_payload_path: None,
         confidence: DiscoveryConfidence::MraCore,
     }
 }

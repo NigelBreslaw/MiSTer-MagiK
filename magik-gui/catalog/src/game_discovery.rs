@@ -25,6 +25,7 @@ pub(crate) struct GameDiscovery {
     pub(crate) year: Option<u16>,
     pub(crate) setname: Option<String>,
     pub(crate) parent: Option<String>,
+    pub(crate) covered_payload_path: Option<String>,
     pub(crate) confidence: DiscoveryConfidence,
 }
 
@@ -170,6 +171,7 @@ pub(crate) fn discovery_from_profile_file(
     rule: &PayloadRule,
     profiles: &[LaunchProfile],
 ) -> GameDiscovery {
+    let source_path = file.path.display().to_string();
     if file.ext == "mra" {
         if let Some(mra) = media_metadata::read_mra_metadata(&file.path) {
             let core_id = mra
@@ -185,12 +187,12 @@ pub(crate) fn discovery_from_profile_file(
                 .map(library_db::normalize_id)
                 .unwrap_or_else(|| core_id.clone());
             return GameDiscovery {
-                source_path: file.path.display().to_string(),
-                launch_ref: file.path.display().to_string(),
+                source_path: source_path.clone(),
+                launch_ref: source_path.clone(),
                 source_kind: DiscoverySourceKind::Mra,
-                title: mra.name.unwrap_or_else(|| {
-                    library_db::title_from_path(&file.path.display().to_string())
-                }),
+                title: mra
+                    .name
+                    .unwrap_or_else(|| library_db::title_from_path(&source_path)),
                 category: profile.category.to_string(),
                 platform_id: profile.system_id.to_string(),
                 core_id,
@@ -200,6 +202,7 @@ pub(crate) fn discovery_from_profile_file(
                 year: mra.year.and_then(|s| s.parse::<u16>().ok()),
                 setname: mra.setname,
                 parent: mra.parent,
+                covered_payload_path: None,
                 confidence: if mra.platform.is_some() {
                     DiscoveryConfidence::MraHardware
                 } else {
@@ -220,11 +223,16 @@ pub(crate) fn discovery_from_profile_file(
             } else {
                 None
             };
+            let covered_payload_path = mgl.file_path.as_deref().map(|payload| {
+                media_metadata::resolve_mgl_payload_path(&file.path, payload)
+                    .display()
+                    .to_string()
+            });
             return GameDiscovery {
-                source_path: file.path.display().to_string(),
-                launch_ref: file.path.display().to_string(),
+                source_path: source_path.clone(),
+                launch_ref: source_path.clone(),
                 source_kind: DiscoverySourceKind::Mgl,
-                title: library_db::title_from_path(&file.path.display().to_string()),
+                title: library_db::title_from_path(&source_path),
                 category: profile.category.to_string(),
                 platform_id: profile.system_id.to_string(),
                 core_id: mgl
@@ -239,16 +247,17 @@ pub(crate) fn discovery_from_profile_file(
                 year: None,
                 setname,
                 parent: None,
+                covered_payload_path,
                 confidence: DiscoveryConfidence::PayloadPath,
             };
         }
     }
 
     GameDiscovery {
-        source_path: file.path.display().to_string(),
-        launch_ref: file.path.display().to_string(),
+        source_path: source_path.clone(),
+        launch_ref: source_path.clone(),
         source_kind: DiscoverySourceKind::PayloadFile,
-        title: library_db::title_from_path(&file.path.display().to_string()),
+        title: library_db::title_from_path(&source_path),
         category: profile.category.to_string(),
         platform_id: profile.system_id.to_string(),
         core_id: profile.core_name.to_string(),
@@ -258,6 +267,7 @@ pub(crate) fn discovery_from_profile_file(
         year: None,
         setname: None,
         parent: None,
+        covered_payload_path: None,
         confidence: profile_confidence(rule),
     }
 }
@@ -281,6 +291,7 @@ pub(crate) fn discovery_from_profile_archive_entry(
         year: None,
         setname: media_metadata::parenthesized_setname(&entry.entry_path),
         parent: None,
+        covered_payload_path: None,
         confidence: match rule.provenance.kind {
             RuleSourceKind::MainSource | RuleSourceKind::Mgl | RuleSourceKind::Mra => {
                 DiscoveryConfidence::ArchiveToc
@@ -413,6 +424,10 @@ pub(crate) fn covered_payload_paths(discoveries: &[GameDiscovery]) -> HashSet<St
     let mut covered = HashSet::new();
     for discovery in discoveries {
         if discovery.source_kind != DiscoverySourceKind::Mgl {
+            continue;
+        }
+        if let Some(payload) = discovery.covered_payload_path.as_deref() {
+            covered.insert(normalize_launch_path(payload));
             continue;
         }
         let path = Path::new(&discovery.source_path);
@@ -612,22 +627,29 @@ mod tests {
 
     #[test]
     fn mgl_covered_payload_does_not_get_virtual_duplicate() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-mgl-dedupe-test-{}.mgl",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            r#"<mistergamelist><file delay="1" type="f" path="games/NES/Mario.nes"/></mistergamelist>"#,
-        )
-        .expect("write mgl fixture");
+        let path = "/media/fat/_Console/NES/Mario.mgl";
         let discoveries = vec![
-            mgl(&path.display().to_string(), &path.display().to_string()),
+            GameDiscovery {
+                source_path: path.to_string(),
+                launch_ref: path.to_string(),
+                source_kind: DiscoverySourceKind::Mgl,
+                title: "Mario".to_string(),
+                category: "Console".to_string(),
+                platform_id: "nes".to_string(),
+                core_id: "nes".to_string(),
+                hardware_id: "nes".to_string(),
+                manufacturer: None,
+                genre: None,
+                year: None,
+                setname: None,
+                parent: None,
+                covered_payload_path: Some("/media/fat/games/NES/Mario.nes".to_string()),
+                confidence: DiscoveryConfidence::PayloadPath,
+            },
             payload("/media/fat/games/NES/Mario.nes"),
         ];
 
         assert_eq!(unique_discovery_count(&discoveries), 1);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -646,6 +668,7 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
+            covered_payload_path: None,
             confidence: DiscoveryConfidence::MraCore,
         };
 
