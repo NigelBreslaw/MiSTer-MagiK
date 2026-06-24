@@ -1295,11 +1295,19 @@ pub(super) fn run_launcher_loop(
                 MediaWorkerMessage::Progress(event) => {
                     media_progress_clear_at = None;
                     print_startup_event(start, "screenshot_media_progress", event.log_detail());
-                    apply_launcher_worker_ui_intent(
-                        &app,
-                        media_progress_display.progress_intent(&event),
-                        &mut full_bridge_dirty,
-                    );
+                    let intent = media_progress_display.progress_intent(&event);
+                    if event.system != "all" {
+                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                        print_startup_event(
+                            start,
+                            "screenshot_media_ui_visibility",
+                            media_progress_display.visibility_log_detail(
+                                &event.system,
+                                bridge.get_catalog_scan_visible(),
+                            ),
+                        );
+                    }
+                    apply_launcher_worker_ui_intent(&app, intent, &mut full_bridge_dirty);
                 }
                 MediaWorkerMessage::CacheMetadata { scope, metadata } => {
                     print_startup_event(
@@ -2381,6 +2389,11 @@ fn ensure_media_for_catalog_systems(
         return;
     };
     for system_id in systems {
+        print_startup_event(
+            start,
+            "screenshot_media_catalog_system_present",
+            format!("system={system_id} source=catalog-seed"),
+        );
         print_startup_event(
             start,
             "screenshot_media_catalog_ensure",

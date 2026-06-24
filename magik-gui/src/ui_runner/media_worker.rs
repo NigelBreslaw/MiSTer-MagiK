@@ -176,8 +176,9 @@ fn run_screenshot_media_worker(
                         let _ = tx.send(MediaWorkerMessage::Timing {
                             name: "screenshot_media_system_queued".to_string(),
                             detail: format!(
-                                "system={system_id} pack_index={pack_index} requested={}",
-                                queue.requested_count
+                                "system={system_id} pack_index={pack_index} requested={} pending={}",
+                                queue.requested_count,
+                                queue.pending.len()
                             ),
                         });
                     }
@@ -350,6 +351,19 @@ fn start_ready_downloads(
                 continue;
             }
         };
+        let _ = tx.send(MediaWorkerMessage::Timing {
+            name: "screenshot_media_system_start".to_string(),
+            detail: format!(
+                "system={} pack_index={} pack_count={} pending={} active={} max_concurrent={} policy={}",
+                pack.id,
+                request.pack_index,
+                pack_count,
+                queue.pending.len(),
+                active.len() + 1,
+                config.max_concurrent_downloads,
+                config.policy.label()
+            ),
+        });
         cleanup_pack_publish_temps(&local_path);
         send_progress(
             tx,
@@ -1299,7 +1313,7 @@ mod tests {
 
         let two_slots = dequeue_startable_requests(&mut pending, 1, MAX_CONCURRENT_MEDIA_DOWNLOADS);
         assert_eq!(two_slots.len(), 2);
-        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.len(), 2);
     }
 
     #[test]

@@ -241,6 +241,49 @@ impl MediaProgressDisplay {
         }
     }
 
+    pub(super) fn visibility_log_detail(&self, system: &str, catalog_scan_visible: bool) -> String {
+        let visible_systems = self
+            .active
+            .values()
+            .take(3)
+            .map(|row| row.system.as_str())
+            .collect::<Vec<_>>();
+        let row_index = visible_systems
+            .iter()
+            .position(|visible| *visible == system)
+            .map(|index| index as isize)
+            .unwrap_or(-1);
+        let row_seen = row_index >= 0;
+        let rendered = row_seen && catalog_scan_visible;
+        let row = self.active.get(system);
+        let phase = row
+            .map(|row| log_token(&row.phase))
+            .unwrap_or_else(|| "-".to_string());
+        let percent = row.map(|row| row.percent).unwrap_or(-1);
+        let (active, done, failed, total) = self.counts();
+        format!(
+            "system={} row_seen={} row_index={} rendered={} catalog_scan_visible={} active_rows={} visible_count={} visible_systems={} phase={} percent={} summary_active={} summary_done={} summary_failed={} summary_total={}",
+            log_token(system),
+            if row_seen { 1 } else { 0 },
+            row_index,
+            if rendered { 1 } else { 0 },
+            if catalog_scan_visible { 1 } else { 0 },
+            self.active.len(),
+            visible_systems.len(),
+            if visible_systems.is_empty() {
+                "-".to_string()
+            } else {
+                visible_systems.join(",")
+            },
+            phase,
+            percent,
+            active,
+            done,
+            failed,
+            total
+        )
+    }
+
     fn apply(&mut self, event: &MediaProgressEvent) -> bool {
         if event.system == "all" {
             return false;
@@ -290,14 +333,7 @@ impl MediaProgressDisplay {
     }
 
     pub(super) fn summary(&self) -> String {
-        let active = self
-            .active
-            .keys()
-            .filter(|system| !self.done.contains(*system) && !self.failed.contains(*system))
-            .count();
-        let done = self.done.len();
-        let failed = self.failed.len();
-        let total = self.requested_count.max(active + done + failed);
+        let (active, done, failed, total) = self.counts();
         if total == 0 {
             return String::new();
         }
@@ -306,6 +342,30 @@ impl MediaProgressDisplay {
         } else {
             format!("screenshots {active} active · {done}/{total} done")
         }
+    }
+
+    fn counts(&self) -> (usize, usize, usize, usize) {
+        let active = self
+            .active
+            .keys()
+            .filter(|system| !self.done.contains(*system) && !self.failed.contains(*system))
+            .count();
+        let done = self.done.len();
+        let failed = self.failed.len();
+        let total = self.requested_count.max(active + done + failed);
+        (active, done, failed, total)
+    }
+}
+
+fn log_token(value: &str) -> String {
+    let token = value
+        .chars()
+        .map(|ch| if ch.is_ascii_whitespace() { '_' } else { ch })
+        .collect::<String>();
+    if token.is_empty() {
+        "-".to_string()
+    } else {
+        token
     }
 }
 
@@ -488,6 +548,36 @@ mod tests {
             display.summary(),
             "screenshots 0 active · 1/2 done · 1 failed"
         );
+    }
+
+    #[test]
+    fn media_progress_display_reports_visible_row_truth() {
+        let mut display = MediaProgressDisplay::default();
+        for (idx, system) in ["arcade", "megadrive", "n64", "neogeo"]
+            .into_iter()
+            .enumerate()
+        {
+            let _ = display.progress_intent(&media_progress_event(
+                system,
+                "download",
+                128,
+                1024,
+                idx + 1,
+                4,
+            ));
+        }
+
+        let arcade = display.visibility_log_detail("arcade", true);
+        assert!(arcade.contains("system=arcade"));
+        assert!(arcade.contains("row_seen=1"));
+        assert!(arcade.contains("rendered=1"));
+        assert!(arcade.contains("visible_systems=arcade,megadrive,n64"));
+
+        let neogeo = display.visibility_log_detail("neogeo", true);
+        assert!(neogeo.contains("system=neogeo"));
+        assert!(neogeo.contains("row_seen=0"));
+        assert!(neogeo.contains("rendered=0"));
+        assert!(neogeo.contains("row_index=-1"));
     }
 
     #[test]
