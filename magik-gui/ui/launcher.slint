@@ -338,6 +338,39 @@ component CatalogScanPopup inherits Rectangle {
     }
 }
 
+component MediaProgressPopup inherits Rectangle {
+    in property <int> s;
+
+    width: 560px * s;
+    height: 100px * s;
+    x: MisterUi.window-width * 1px / 2 - self.width / 2;
+    y: MisterUi.window-height * 1px - self.height - 24px * s;
+    background: #0b0d14;
+    border-width: 1px;
+    border-color: #5c4a72;
+    clip: true;
+
+    VerticalLayout {
+        padding-left: 12px * root.s;
+        padding-right: 12px * root.s;
+        padding-top: 8px * root.s;
+        padding-bottom: 8px * root.s;
+        spacing: 5px * root.s;
+
+        Text {
+            text: MisterBridge.media-pack-summary;
+            color: #d7eef8;
+            font-size: 6px * root.s;
+            horizontal-alignment: center;
+        }
+
+        for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+            s: root.s;
+            pack: pack;
+        }
+    }
+}
+
 component StartupSplash inherits Rectangle {
     property <int> s: MisterUi.scale;
 
@@ -528,6 +561,10 @@ export component Launcher inherits MisterWindow {
         config-values: MisterBridge.setup-config-values;
         setup-name: MisterBridge.setup-name;
         setup-kind-label: MisterBridge.setup-kind-label;
+    }
+
+    if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
+        s: MisterUi.scale;
     }
 
     if MisterBridge.catalog-scan-visible : CatalogScanPopup {
