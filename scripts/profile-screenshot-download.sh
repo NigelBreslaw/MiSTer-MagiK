@@ -14,12 +14,13 @@ MANIFEST_URL="${MISTER_MEDIA_MANIFEST_URL:-https://assets.mistermagik.com/mister
 ITERATIONS=1
 PRIME_CACHE=0
 SAVE_PREFERENCE=0
+MAX_SAVE_MS=""
 REPLACE_LABEL=0
 REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variant identity] [--iterations N] [--prime-cache] [--manifest-url URL] [--replace-label]
+Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variant identity] [--iterations N] [--prime-cache] [--manifest-url URL] [--max-save-ms MS] [--replace-label]
 
 Benchmarks screenshot pack download paths inside the deployed MagiK binary on
 the MiSTer. The timing rows include network download, decompression,
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --iterations) ITERATIONS="${2:?}"; shift 2 ;;
     --prime-cache) PRIME_CACHE=1; shift ;;
     --manifest-url) MANIFEST_URL="${2:?}"; shift 2 ;;
+    --max-save-ms) MAX_SAVE_MS="${2:?}"; shift 2 ;;
     --save-preference) SAVE_PREFERENCE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -66,6 +68,10 @@ if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
   echo "iterations must be a positive integer" >&2
   exit 2
 fi
+if [[ -n "$MAX_SAVE_MS" && ( ! "$MAX_SAVE_MS" =~ ^[0-9]+$ || "$MAX_SAVE_MS" -lt 1 ) ]]; then
+  echo "max-save-ms must be a positive integer" >&2
+  exit 2
+fi
 case "$VARIANT" in
   identity|none|plain) ;;
   *) echo "MagiK only benchmarks the raw identity screenshot variant" >&2; exit 2 ;;
@@ -86,6 +92,100 @@ shell_quote() {
   printf "'%s'" "${1//\'/\'\\\'\'}"
 }
 
+emit_metric_rows() {
+  awk -F '\t' '
+    function suite_label(label,   prefix, suffix) {
+      prefix = label
+      suffix = label
+      if (match(label, /-[0-9][0-9]$/)) {
+        prefix = substr(label, 1, length(label) - 3)
+      }
+      return prefix
+    }
+    function kv(name,   i, prefix) {
+      prefix = name "="
+      for (i = 1; i <= NF; i++) {
+        if (index($i, prefix) == 1) {
+          return substr($i, length(prefix) + 1)
+        }
+      }
+      return ""
+    }
+    $1 == "screenshot_download_bench_tsv" && $2 != "label" {
+      valid = ($17 == "bench-ok") ? 1 : 0
+      suite = suite_label($2)
+      print "metric_tsv\tlabel=" $2 "\tsuite_label=" suite "\tsystem=" $3 "\tmetric=screenshot_download_save_ms\tvalue=" $9 "\tunit=ms\tvalid=" valid
+      print "metric_tsv\tlabel=" $2 "\tsuite_label=" suite "\tsystem=" $3 "\tmetric=screenshot_download_total_ms\tvalue=" $11 "\tunit=ms\tvalid=" valid
+      print "metric_tsv\tlabel=" $2 "\tsuite_label=" suite "\tsystem=" $3 "\tmetric=screenshot_download_verify_ms\tvalue=" $10 "\tunit=ms\tvalid=" valid
+      print "metric_tsv\tlabel=" $2 "\tsuite_label=" suite "\tsystem=" $3 "\tmetric=screenshot_download_wire_ms\tvalue=" $7 "\tunit=ms\tvalid=" valid
+    }
+    $1 == "stage_tsv" {
+      label = kv("label")
+      suite = kv("suite_label")
+      system_id = kv("system")
+      stage = kv("stage")
+      ms = kv("ms")
+      result = kv("result")
+      if (label == "" || stage == "" || ms == "") {
+        next
+      }
+      metric_stage = stage
+      gsub(/[^A-Za-z0-9_.-]/, "_", metric_stage)
+      valid = (result == "bench-ok") ? 1 : 0
+      print "metric_tsv\tlabel=" label "\tsuite_label=" suite "\tsystem=" system_id "\tmetric=screenshot_download_stage_" metric_stage "_ms\tvalue=" ms "\tunit=ms\tvalid=" valid
+    }
+  '
+}
+
+emit_save_threshold_rows() {
+  awk -F '\t' -v suite="$LABEL" -v limit="$MAX_SAVE_MS" '
+    function add_system(system_id) {
+      if (system_id == "") {
+        return
+      }
+      if (systems == "") {
+        systems = system_id
+      } else if (index("," systems ",", "," system_id ",") == 0) {
+        systems = systems "," system_id
+      }
+    }
+    BEGIN {
+      rows = 0
+      max_save = 0
+      valid = 1
+      reason = "ok"
+      systems = ""
+    }
+    $1 == "screenshot_download_bench_tsv" && $2 != "label" {
+      rows += 1
+      save_ms = $9 + 0
+      add_system($3)
+      if (save_ms > max_save) {
+        max_save = save_ms
+      }
+      if ($17 != "bench-ok" && valid == 1) {
+        valid = 0
+        reason = "result_" $17
+      }
+      if (save_ms > limit && valid == 1) {
+        valid = 0
+        reason = "save_ms_gt_limit"
+      }
+    }
+    END {
+      if (rows == 0) {
+        valid = 0
+        reason = "missing_download_row"
+      }
+      print "metric_tsv\tlabel=" suite "\tsuite_label=" suite "\tsystem=" systems "\tmetric=screenshot_download_save_ms_max\tvalue=" max_save "\tunit=ms\tvalid=" valid
+      print "validity_tsv\tlabel=" suite "\tvalid=" valid "\tinvalid_reason=" reason "\tdetail=max_save_ms=" max_save " limit_ms=" limit " rows=" rows " systems=" systems
+      if (valid != 1) {
+        exit 1
+      }
+    }
+  '
+}
+
 remote_cmd="$(shell_quote "$REMOTE_BIN") media-bench-download"
 remote_cmd+=" --label $(shell_quote "$LABEL")"
 remote_cmd+=" --system $(shell_quote "$SYSTEM")"
@@ -98,11 +198,27 @@ fi
 
 out="$("$MISTER" run "$remote_cmd")"
 printf '%s\n' "$out"
+metric_rows="$(printf '%s\n' "$out" | emit_metric_rows)"
+if [[ -n "$metric_rows" ]]; then
+  printf '%s\n' "$metric_rows"
+  out="${out}"$'\n'"${metric_rows}"
+fi
+threshold_status=0
+if [[ -n "$MAX_SAVE_MS" ]]; then
+  threshold_rows="$(printf '%s\n' "$out" | emit_save_threshold_rows)" || threshold_status=$?
+  if [[ -n "$threshold_rows" ]]; then
+    printf '%s\n' "$threshold_rows"
+    out="${out}"$'\n'"${threshold_rows}"
+  fi
+fi
 if [[ ! -f "$TSV" ]]; then
   printf 'type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult\n' >"$TSV"
 fi
-printf '%s\n' "$out" | grep -E '^(screenshot_download_bench_tsv|stage_tsv)	' >>"$TSV" || true
+printf '%s\n' "$out" | grep -E '^(screenshot_download_bench_tsv|stage_tsv|metric_tsv|validity_tsv)	' >>"$TSV" || true
 if [[ "$SAVE_PREFERENCE" -eq 1 ]]; then
   echo "warning: --save-preference is ignored by the MagiK benchmark wrapper" >&2
 fi
 echo "appended to $TSV"
+if [[ "$threshold_status" -ne 0 ]]; then
+  exit "$threshold_status"
+fi
