@@ -7,6 +7,7 @@ MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/preview-scroll-profiles"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
+ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -72,6 +73,100 @@ if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be 
 mkdir -p "$OUT_DIR"
 env_file="$(mktemp)"
 
+tsv_value() {
+  printf '%s' "$1" | tr '\t\r\n' '   '
+}
+
+file_sha256() {
+  local path="$1"
+  shasum -a 256 "$path" 2>/dev/null | awk '{ print $1 }'
+}
+
+png_stats() {
+  local path="$1"
+  python3 - "$path" <<'PY' 2>/dev/null || printf '0\t0\tunknown\n'
+import struct
+import sys
+import zlib
+
+path = sys.argv[1]
+with open(path, "rb") as f:
+    data = f.read()
+if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+    raise SystemExit(1)
+offset = 8
+width = height = None
+idat = bytearray()
+while offset + 8 <= len(data):
+    length = struct.unpack(">I", data[offset:offset + 4])[0]
+    tag = data[offset + 4:offset + 8]
+    payload = data[offset + 8:offset + 8 + length]
+    offset += 12 + length
+    if tag == b"IHDR":
+        width, height, bit_depth, color_type = struct.unpack(">IIBB", payload[:10])
+        if bit_depth != 8 or color_type != 6:
+            raise SystemExit(1)
+    elif tag == b"IDAT":
+        idat.extend(payload)
+    elif tag == b"IEND":
+        break
+if not width or not height:
+    raise SystemExit(1)
+raw = zlib.decompress(bytes(idat))
+stride = width * 4
+first = None
+nonblank = False
+for y in range(height):
+    row = raw[y * (stride + 1):(y + 1) * (stride + 1)]
+    if not row or row[0] != 0:
+        raise SystemExit(1)
+    pixels = row[1:]
+    for x in range(0, len(pixels), 4):
+        rgb = bytes(pixels[x:x + 3])
+        if first is None:
+            first = rgb
+        elif rgb != first:
+            nonblank = True
+            break
+    if nonblank:
+        break
+print(f"{width}\t{height}\t{str(nonblank).lower()}")
+PY
+}
+
+emit_artifact_row() {
+  local kind="$1" local_path="$2" remote_path="${3:-}"
+  local exists="false" bytes="0" sha="" width="0" height="0" nonblank="unknown"
+  if [[ -f "$local_path" ]]; then
+    exists="true"
+    bytes="$(wc -c <"$local_path" | tr -d ' ')"
+    sha="$(file_sha256 "$local_path")"
+    if [[ "$local_path" == *.png ]]; then
+      IFS=$'\t' read -r width height nonblank <<<"$(png_stats "$local_path")"
+    fi
+  fi
+  printf 'artifact_tsv\tlabel=%s\tkind=%s\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\tsha256=%s\twidth=%s\theight=%s\tnonblank=%s\n' \
+    "$(tsv_value "$label")" "$(tsv_value "$kind")" "$(tsv_value "$local_path")" \
+    "$(tsv_value "$remote_path")" "$exists" "$bytes" "$sha" "$width" "$height" "$nonblank"
+}
+
+emit_validity_row() {
+  local valid="$1" reason="$2" detail="${3:-}"
+  printf 'validity_tsv\tlabel=%s\tvalid=%s\tinvalid_reason=%s\tdetail=%s\n' \
+    "$(tsv_value "$label")" "$valid" "$(tsv_value "$reason")" "$(tsv_value "$detail")"
+}
+
+emit_run_context_row() {
+  local commit command_text started_at
+  commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tstarted_at=%s\n' \
+    "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
+    "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
+    "$cpu_profile" "$visual_captures" "$started_at"
+}
+
 cleanup() {
   rm -f "$env_file"
   if [[ "$self_test" == "1" ]]; then return; fi
@@ -127,6 +222,7 @@ run_case() {
   local remote_tsv="/tmp/${label}-${name}.tsv"
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
+  local local_status="$OUT_DIR/${label}-${name}.status.txt"
   local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
   cpu_profile_remote_svg="/tmp/${label}-${name}-cpu.svg"
 
@@ -139,22 +235,38 @@ run_case() {
   sleep $((secs + 7))
   if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
     "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
+    "$MISTER" status >"$local_status" 2>&1 || true
+    emit_artifact_row "${name}-trace" "$local_tsv" "$remote_tsv"
+    emit_artifact_row "${name}-log" "$local_log" "$REMOTE_LOG"
+    emit_artifact_row "${name}-status" "$local_status" "scripts/mister status"
+    emit_validity_row "0" "missing_trace" "case=$name remote_tsv=$remote_tsv local_log=$local_log status=$local_status"
     echo "$name failed; see $local_log" >&2
     exit 1
   fi
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
+  "$MISTER" status >"$local_status" 2>&1 || true
   echo "wrote $local_tsv"
   echo "wrote $local_log"
+  emit_artifact_row "${name}-trace" "$local_tsv" "$remote_tsv"
+  emit_artifact_row "${name}-log" "$local_log" "$REMOTE_LOG"
+  emit_artifact_row "${name}-status" "$local_status" "scripts/mister status"
   if [[ "$cpu_profile" == "1" ]]; then
     if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
+      "$MISTER" status >"$local_status" 2>&1 || true
+      emit_artifact_row "${name}-cpu-svg" "$local_cpu_svg" "$cpu_profile_remote_svg"
+      emit_artifact_row "${name}-status" "$local_status" "scripts/mister status"
+      emit_validity_row "0" "missing_cpu_profile" "case=$name svg=$local_cpu_svg log=$local_log"
       echo "$name CPU profile failed or produced an empty SVG; see $local_log" >&2
       exit 9
     fi
     if ! grep -q 'cpu_profile:' "$local_log"; then
+      emit_artifact_row "${name}-cpu-svg" "$local_cpu_svg" "$cpu_profile_remote_svg"
+      emit_validity_row "0" "missing_cpu_profile_log" "case=$name svg=$local_cpu_svg log=$local_log"
       echo "$name CPU profile log does not contain cpu_profile output; see $local_log" >&2
       exit 9
     fi
     echo "wrote $local_cpu_svg"
+    emit_artifact_row "${name}-cpu-svg" "$local_cpu_svg" "$cpu_profile_remote_svg"
   fi
 }
 
@@ -178,6 +290,13 @@ capture_visuals() {
     cp "$snap_dir/fb0.png" "$png_out"
     "$MISTER" get "$REMOTE_LOG" "$visual_dir/idx${idx_pad}.log" >/dev/null || true
     echo "wrote $png_out"
+    emit_artifact_row "visual-idx${idx_pad}" "$png_out" "$snap_dir/fb0.png"
+    IFS=$'\t' read -r png_w png_h png_nonblank <<<"$(png_stats "$png_out")"
+    if [[ "$png_nonblank" != "true" ]]; then
+      emit_validity_row "0" "blank_visual_capture" "path=$png_out width=$png_w height=$png_h"
+      echo "visual capture appears blank: $png_out" >&2
+      exit 10
+    fi
   done
 }
 
@@ -598,8 +717,22 @@ check_velocity_motion() {
       last = vi; seen = 1
     }
     END {
-      printf "%s\t%d\t%d\t%d\n", name, n, fractional, moving
+      valid = 1
+      reason = "ok"
       requires_motion = (scenario == "held-scroll" || scenario == "velocity-scroll" || scenario == "turbo-hold")
+      if (requires_motion && n == 0) {
+        valid = 0
+        reason = "no_frames"
+      } else if (requires_motion && moving == 0) {
+        valid = 0
+        reason = "no_motion"
+      } else if (moving > 0 && fractional == 0) {
+        valid = 0
+        reason = "no_fractional_motion"
+      }
+      printf "%s\t%d\t%d\t%d\n", name, n, fractional, moving
+      printf "motion_valid_tsv\tcase=%s\tscenario=%s\tvalid=%d\tinvalid_reason=%s\tframes=%d\tfractional_visual_index_frames=%d\tmoving_frames=%d\tvisual_min=%.3f\tvisual_max=%.3f\tselected_min=%d\tselected_max=%d\n",
+        name, scenario, valid, reason, n, fractional + 0, moving + 0, min_vi, max_vi, min_selected, max_selected
       if (requires_motion && n == 0) {
         printf "%s motion gate failed: scenario=%s reason=no_frames\n", name, scenario > "/dev/stderr"
         exit 8
@@ -695,6 +828,7 @@ if [[ "$self_test" == "1" ]]; then
   exit 0
 fi
 
+emit_run_context_row
 run_case arcade
 capture_visuals
 
@@ -711,7 +845,12 @@ summarize_trace_by_effect "$arcade_tsv"
 
 echo
 echo $'motion_check\tframes\tfractional_visual_index_frames\tmoving_frames'
-check_velocity_motion arcade "$arcade_tsv" "$remote_scenario"
+if ! check_velocity_motion arcade "$arcade_tsv" "$remote_scenario"; then
+  emit_artifact_row "arcade-trace" "$arcade_tsv" "/tmp/${label}-arcade.tsv"
+  emit_artifact_row "arcade-log" "$arcade_log" "$REMOTE_LOG"
+  emit_validity_row "0" "motion_gate" "scenario=$remote_scenario trace=$arcade_tsv log=$arcade_log"
+  exit 8
+fi
 
 echo
 echo "preview trace counts:"
@@ -741,3 +880,4 @@ check_preview_hotpath_io_gate arcade "$arcade_log"
 check_preview_visibility_gate arcade "$arcade_tsv"
 check_steady_work_gate arcade "$arcade_tsv"
 report_steady_wall_gate arcade "$arcade_tsv"
+emit_validity_row "1" "ok" "trace=$arcade_tsv log=$arcade_log"
