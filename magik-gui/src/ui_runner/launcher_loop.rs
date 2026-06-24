@@ -1,10 +1,7 @@
 use super::launcher_frame_accounting::{
     LauncherCustomDrawTrace, LauncherFrameAccounting, LauncherPresentedFrame,
 };
-use super::launcher_worker_intents::{
-    apply_launcher_worker_ui_intent, catalog_scan_message, sync_launcher_worker_ui_intent,
-    MediaProgressDisplay,
-};
+use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
     catalog_background_scan_progress_visible, catalog_scan_progress_visible,
@@ -28,7 +25,6 @@ const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
-const MEDIA_PROGRESS_DONE_HOLD: Duration = Duration::from_secs(8);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 struct LauncherStatusTextSnapshot {
@@ -588,15 +584,9 @@ pub(super) fn run_launcher_loop(
     let deferred_library_rebuild = consume_library_rebuild_marker(catalog_worker_enabled, start);
     let mut catalog_session = LauncherCatalogSession::new(deferred_library_rebuild);
     let mut catalog_rx = None;
+    let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut media_handle = None;
     let mut media_worker_unavailable = false;
-    let mut media_interaction_block_until: Option<Instant> = None;
-    let mut media_last_gate = MediaInteractionGate {
-        active: true,
-        reason: "startup",
-    };
-    let mut media_progress_display = MediaProgressDisplay::default();
-    let mut media_progress_clear_at: Option<Instant> = None;
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
@@ -605,6 +595,7 @@ pub(super) fn run_launcher_loop(
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
         catalog_session.note_summary_seed_ready();
+        media_session.request_catalog_seed();
         catalog_version = catalog_version.wrapping_add(1);
         let request = if deferred_library_rebuild {
             CatalogWorkerRequest::ForceBuild
@@ -640,6 +631,7 @@ pub(super) fn run_launcher_loop(
                 catalog = loaded.catalog;
                 catalog_ready = true;
                 catalog_session.note_cached_catalog_ready();
+                media_session.request_catalog_seed();
                 catalog_version = catalog_version.wrapping_add(1);
                 apply_forced_arcade_selected(&mut nav, &catalog);
                 apply_pending_launch_return_state(
@@ -833,14 +825,15 @@ pub(super) fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
-        if media_progress_clear_at.is_some_and(|deadline| loop_start >= deadline) {
-            apply_launcher_worker_ui_intent(
-                &app,
-                media_progress_display.clear_intent(),
-                &mut full_bridge_dirty,
-            );
-            media_progress_clear_at = None;
-        }
+        apply_screenshot_media_update_effects(
+            media_session.clear_progress_if_due(loop_start),
+            &app,
+            &catalog,
+            &mut media_handle,
+            &mut media_worker_unavailable,
+            &mut full_bridge_dirty,
+            start,
+        );
         let mut route_action = FramebufferRouteAction {
             reassert_route: false,
             force_full_present: false,
@@ -922,17 +915,19 @@ pub(super) fn run_launcher_loop(
             while let Some(message) = catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 let media_gate =
                     if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
-                        let media_gate = current_media_interaction_gate(
+                        let media_gate = media_session.current_gate(
                             frame_accounting.first_visible_copy_done(),
                             pending_launch.is_some() || launching,
                             benchmark_media_interaction_active,
-                            media_interaction_block_until,
                             loop_start,
                         );
-                        sync_media_interaction_gate(
-                            media_handle.as_ref(),
-                            &mut media_last_gate,
-                            media_gate,
+                        apply_screenshot_media_update_effects(
+                            media_session.sync_gate(media_gate),
+                            &app,
+                            &catalog,
+                            &mut media_handle,
+                            &mut media_worker_unavailable,
+                            &mut full_bridge_dirty,
                             start,
                         );
                         Some(media_gate)
@@ -961,6 +956,7 @@ pub(super) fn run_launcher_loop(
                     &mut pending_launch_return_state,
                     &mut preview,
                     &mut bridge_models,
+                    &mut media_session,
                     &mut media_handle,
                     &mut media_worker_unavailable,
                     &mut catalog_rx,
@@ -975,72 +971,19 @@ pub(super) fn run_launcher_loop(
 
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         while let Some(message) = media_handle.as_ref().and_then(|handle| handle.try_recv()) {
-            match message {
-                MediaWorkerMessage::Timing { name, detail } => {
-                    print_startup_event(start, &name, detail);
-                }
-                MediaWorkerMessage::Progress(event) => {
-                    media_progress_clear_at = None;
-                    print_startup_event(start, "screenshot_media_progress", event.log_detail());
-                    let intent = media_progress_display.progress_intent(&event);
-                    if event.system != "all" {
-                        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                        let catalog_scan_visible = bridge.get_catalog_scan_visible();
-                        let standalone_visible =
-                            !catalog_scan_visible && media_progress_display.has_visible_rows();
-                        print_startup_event(
-                            start,
-                            "screenshot_media_ui_visibility",
-                            media_progress_display.visibility_log_detail(
-                                &event.system,
-                                catalog_scan_visible,
-                                standalone_visible,
-                            ),
-                        );
-                    }
-                    if media_progress_display.all_requested_terminal() {
-                        media_progress_clear_at = Some(loop_start + MEDIA_PROGRESS_DONE_HOLD);
-                    }
-                    apply_launcher_worker_ui_intent(&app, intent, &mut full_bridge_dirty);
-                }
-                MediaWorkerMessage::CacheMetadata { scope, metadata } => {
-                    print_startup_event(
-                        start,
-                        "screenshot_media_cache_metadata",
-                        metadata.log_detail(&scope),
-                    );
-                }
-                MediaWorkerMessage::PackStatus {
-                    system,
-                    image_size,
-                    status,
-                    detail,
-                } => {
-                    print_startup_event(
-                        start,
-                        "screenshot_media_pack_status",
-                        format!("system={system} image_size={image_size} status={status} {detail}"),
-                    );
-                }
-                MediaWorkerMessage::Failed { detail } => {
-                    print_startup_event(start, "screenshot_media_update_failed", detail);
-                    media_worker_unavailable = true;
-                    media_progress_clear_at = None;
-                    apply_launcher_worker_ui_intent(
-                        &app,
-                        media_progress_display.clear_intent(),
-                        &mut full_bridge_dirty,
-                    );
-                    media_handle = None;
-                    break;
-                }
-                MediaWorkerMessage::Done { detail } => {
-                    print_startup_event(start, "screenshot_media_update_done", detail);
-                    media_progress_clear_at = Some(loop_start + MEDIA_PROGRESS_DONE_HOLD);
-                    media_handle = None;
-                    break;
-                }
-            }
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            let catalog_scan_visible = bridge.get_catalog_scan_visible();
+            let effects =
+                media_session.handle_worker_message(message, catalog_scan_visible, loop_start);
+            apply_screenshot_media_update_effects(
+                effects,
+                &app,
+                &catalog,
+                &mut media_handle,
+                &mut media_worker_unavailable,
+                &mut full_bridge_dirty,
+                start,
+            );
         }
         if let Some(trace_start) = media_worker_trace_start {
             prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
@@ -1135,12 +1078,7 @@ pub(super) fn run_launcher_loop(
                 if bench_step_ran {
                     let after = LauncherBridgeKey::from_nav(&nav);
                     if before != after {
-                        mark_media_interaction_for_nav_change(
-                            &before,
-                            &after,
-                            &mut media_interaction_block_until,
-                            Instant::now(),
-                        );
+                        media_session.note_nav_change(&before, &after, Instant::now());
                         if !dirty_opt || before.screen != after.screen {
                             full_bridge_dirty = true;
                         } else {
@@ -1317,14 +1255,14 @@ pub(super) fn run_launcher_loop(
                             }
                             LauncherAction::ResetDatabase => {
                                 loading_title = "Shutting down…".to_string();
-                                if let Some(handle) = media_handle.as_ref() {
-                                    handle.finish();
-                                }
-                                media_worker_unavailable = true;
-                                media_handle = None;
-                                sync_launcher_worker_ui_intent(
+                                apply_screenshot_media_update_effects(
+                                    media_session.shutdown_for_reset(),
                                     &app,
-                                    media_progress_display.clear_intent(),
+                                    &catalog,
+                                    &mut media_handle,
+                                    &mut media_worker_unavailable,
+                                    &mut full_bridge_dirty,
+                                    start,
                                 );
                                 sync_bridge_launcher(
                                     &app,
@@ -1403,6 +1341,7 @@ pub(super) fn run_launcher_loop(
                                     &mut pending_launch_return_state,
                                     &mut preview,
                                     &mut bridge_models,
+                                    &mut media_session,
                                     &mut media_handle,
                                     &mut media_worker_unavailable,
                                     &mut catalog_rx,
@@ -1427,6 +1366,7 @@ pub(super) fn run_launcher_loop(
                                     &mut pending_launch_return_state,
                                     &mut preview,
                                     &mut bridge_models,
+                                    &mut media_session,
                                     &mut media_handle,
                                     &mut media_worker_unavailable,
                                     &mut catalog_rx,
@@ -1514,12 +1454,7 @@ pub(super) fn run_launcher_loop(
                     }
                     let nav_after = LauncherBridgeKey::from_nav(&nav);
                     if nav_before != nav_after {
-                        mark_media_interaction_for_nav_change(
-                            &nav_before,
-                            &nav_after,
-                            &mut media_interaction_block_until,
-                            Instant::now(),
-                        );
+                        media_session.note_nav_change(&nav_before, &nav_after, Instant::now());
                     }
                     if pad_changed && nav.screen == Screen::Controller {
                         full_bridge_dirty = true;
@@ -1594,43 +1529,37 @@ pub(super) fn run_launcher_loop(
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
         {
-            let media_gate = current_media_interaction_gate(
+            let media_gate = media_session.current_gate(
                 frame_accounting.first_visible_copy_done(),
                 pending_launch.is_some() || launching,
                 benchmark_media_interaction_active,
-                media_interaction_block_until,
                 loop_start,
             );
-            sync_media_interaction_gate(
-                media_handle.as_ref(),
-                &mut media_last_gate,
-                media_gate,
-                start,
-            );
-            let effects = catalog_session.apply_media_gate(media_gate);
-            apply_catalog_session_effects(
-                effects,
+            apply_screenshot_media_update_effects(
+                media_session.sync_gate(media_gate),
                 &app,
-                &pad,
-                &mut nav,
-                &setup,
-                &loading_title,
-                &mut catalog,
-                &mut catalog_ready,
-                &mut catalog_version,
-                &mut pending_launch_return_state,
-                &mut preview,
-                &mut bridge_models,
+                &catalog,
                 &mut media_handle,
                 &mut media_worker_unavailable,
-                &mut catalog_rx,
                 &mut full_bridge_dirty,
                 start,
             );
-            sync_media_interaction_gate(
-                media_handle.as_ref(),
-                &mut media_last_gate,
-                media_gate,
+            apply_screenshot_media_update_effects(
+                media_session.apply_gate(media_gate),
+                &app,
+                &catalog,
+                &mut media_handle,
+                &mut media_worker_unavailable,
+                &mut full_bridge_dirty,
+                start,
+            );
+            apply_screenshot_media_update_effects(
+                media_session.sync_gate(media_gate),
+                &app,
+                &catalog,
+                &mut media_handle,
+                &mut media_worker_unavailable,
+                &mut full_bridge_dirty,
                 start,
             );
         }
@@ -1966,6 +1895,7 @@ fn apply_catalog_session_effects(
     pending_launch_return_state: &mut Option<launcher::LaunchReturnState>,
     preview: &mut PreviewState,
     bridge_models: &mut LauncherBridgeModels,
+    media_session: &mut ScreenshotMediaUpdateSession,
     media_handle: &mut Option<MediaWorkerHandle>,
     media_worker_unavailable: &mut bool,
     catalog_rx: &mut Option<mpsc::Receiver<CatalogWorkerMessage>>,
@@ -2016,23 +1946,41 @@ fn apply_catalog_session_effects(
                 apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
             }
             CatalogSessionEffect::FinishMediaWorker => {
-                if let Some(handle) = media_handle.as_ref() {
-                    handle.finish();
-                }
-            }
-            CatalogSessionEffect::EnsureMediaWorker { mode } => {
-                ensure_media_worker_started(media_handle, media_worker_unavailable, start, mode);
-            }
-            CatalogSessionEffect::EnsureMediaSystem { system_id } => {
-                if let Some(handle) = media_handle.as_ref() {
-                    handle.ensure_system(&system_id);
-                }
-            }
-            CatalogSessionEffect::EnsureMediaCatalogSystems => {
-                ensure_media_for_catalog_systems(
+                apply_screenshot_media_update_effects(
+                    media_session.finish_worker(),
+                    app,
                     catalog,
                     media_handle,
                     media_worker_unavailable,
+                    full_bridge_dirty,
+                    start,
+                );
+            }
+            CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
+                apply_screenshot_media_update_effects(
+                    media_session.finish_worker_if_no_catalog_seed_pending(),
+                    app,
+                    catalog,
+                    media_handle,
+                    media_worker_unavailable,
+                    full_bridge_dirty,
+                    start,
+                );
+            }
+            CatalogSessionEffect::RequestMediaCatalogSeed => {
+                media_session.request_catalog_seed();
+            }
+            CatalogSessionEffect::MediaSystemDiscovered {
+                system_id,
+                media_gate,
+            } => {
+                apply_screenshot_media_update_effects(
+                    media_session.handle_catalog_system_discovered(system_id, media_gate),
+                    app,
+                    catalog,
+                    media_handle,
+                    media_worker_unavailable,
+                    full_bridge_dirty,
                     start,
                 );
             }
@@ -2064,77 +2012,56 @@ fn apply_catalog_session_effects(
     }
 }
 
-const MEDIA_INTERACTION_SETTLE: Duration = Duration::from_millis(500);
-
-fn current_media_interaction_gate(
-    first_visible_copy_done: bool,
-    launch_handoff_active: bool,
-    benchmark_interaction_active: bool,
-    interaction_block_until: Option<Instant>,
-    now: Instant,
-) -> MediaInteractionGate {
-    if !first_visible_copy_done {
-        return MediaInteractionGate {
-            active: true,
-            reason: "startup",
-        };
-    }
-    if launch_handoff_active {
-        return MediaInteractionGate {
-            active: true,
-            reason: "launch-handoff",
-        };
-    }
-    if benchmark_interaction_active {
-        return MediaInteractionGate {
-            active: true,
-            reason: "benchmark",
-        };
-    }
-    if interaction_block_until.is_some_and(|until| now < until) {
-        return MediaInteractionGate {
-            active: true,
-            reason: "arcade-scroll",
-        };
-    }
-    MediaInteractionGate {
-        active: false,
-        reason: "idle",
-    }
-}
-
-fn mark_media_interaction_for_nav_change(
-    before: &LauncherBridgeKey,
-    after: &LauncherBridgeKey,
-    interaction_block_until: &mut Option<Instant>,
-    now: Instant,
-) {
-    if before.screen == Screen::Arcade || after.screen == Screen::Arcade {
-        *interaction_block_until = Some(now + MEDIA_INTERACTION_SETTLE);
-    }
-}
-
-fn sync_media_interaction_gate(
-    media_handle: Option<&MediaWorkerHandle>,
-    last_gate: &mut MediaInteractionGate,
-    gate: MediaInteractionGate,
+fn apply_screenshot_media_update_effects(
+    effects: ScreenshotMediaUpdateEffects,
+    app: &slint_ui::launcher::Launcher,
+    catalog: &ArcadeCatalog,
+    media_handle: &mut Option<MediaWorkerHandle>,
+    media_worker_unavailable: &mut bool,
+    full_bridge_dirty: &mut bool,
     start: Instant,
 ) {
-    if *last_gate == gate {
-        return;
-    }
-    *last_gate = gate;
-    print_startup_event(
-        start,
-        "screenshot_media_interaction_gate",
-        format!(
-            "active={} reason={}",
-            if gate.active { 1 } else { 0 },
-            gate.reason
-        ),
-    );
-    if let Some(handle) = media_handle {
-        handle.set_interaction_active(gate.active, gate.reason);
+    for effect in effects.into_effects() {
+        match effect {
+            ScreenshotMediaUpdateEffect::StartupEvent(event) => {
+                print_startup_event(start, &event.name, event.detail);
+            }
+            ScreenshotMediaUpdateEffect::Ui(intent) => {
+                apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
+            }
+            ScreenshotMediaUpdateEffect::EnsureWorker { mode } => {
+                ensure_media_worker_started(media_handle, media_worker_unavailable, start, mode);
+            }
+            ScreenshotMediaUpdateEffect::EnsureSystem { system_id } => {
+                if let Some(handle) = media_handle.as_ref() {
+                    handle.ensure_system(&system_id);
+                }
+            }
+            ScreenshotMediaUpdateEffect::EnsureCatalogSystems => {
+                ensure_media_for_catalog_systems(
+                    catalog,
+                    media_handle,
+                    media_worker_unavailable,
+                    start,
+                );
+            }
+            ScreenshotMediaUpdateEffect::FinishWorker => {
+                if let Some(handle) = media_handle.as_ref() {
+                    handle.finish();
+                }
+            }
+            ScreenshotMediaUpdateEffect::DropWorker => {
+                *media_handle = None;
+            }
+            ScreenshotMediaUpdateEffect::MarkWorkerUnavailable => {
+                *media_worker_unavailable = true;
+            }
+            ScreenshotMediaUpdateEffect::SetInteractionActive { active, reason } => {
+                if let Some(handle) = media_handle.as_ref() {
+                    handle.set_interaction_active(active, reason);
+                }
+            }
+        }
     }
 }
 
@@ -2451,19 +2378,6 @@ mod tests {
             Some(summary)
         );
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    pub(super) fn media_gate_treats_benchmark_as_active_interaction() {
-        let now = Instant::now();
-
-        let benchmark_gate = current_media_interaction_gate(true, false, true, None, now);
-        assert!(benchmark_gate.active);
-        assert_eq!(benchmark_gate.reason, "benchmark");
-
-        let idle_gate = current_media_interaction_gate(true, false, false, None, now);
-        assert!(!idle_gate.active);
-        assert_eq!(idle_gate.reason, "idle");
     }
 
     #[test]
