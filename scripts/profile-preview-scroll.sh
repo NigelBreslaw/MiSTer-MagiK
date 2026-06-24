@@ -89,7 +89,10 @@ if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
   echo "==> Build profiling binary for supervised Arcade CPU profile"
   "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher
   echo "==> Deploy profiling binary for supervised Arcade CPU profile"
-  "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
+  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null; then
+    echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
+    "$MISTER" deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
+  fi
 fi
 
 write_launcher_env() {
