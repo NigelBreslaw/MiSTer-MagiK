@@ -1012,4 +1012,106 @@ mod tests {
         assert_eq!(row.save_ms, 3);
         assert_eq!(row.result, "bench-ok");
     }
+
+    #[test]
+    fn media_args_normalize_variants_and_validate_labels() {
+        let args = vec![
+            "--manifest-url".to_string(),
+            "https://example.test/manifest.json".to_string(),
+            "--system".to_string(),
+            "nes".to_string(),
+            "--variant".to_string(),
+            "br".to_string(),
+            "--variants".to_string(),
+            "none,gz,brotli".to_string(),
+            "--label".to_string(),
+            "COV-20260624.1".to_string(),
+            "--save-preference".to_string(),
+        ];
+
+        let parsed = parse_media_args(&args).expect("parse media args");
+
+        assert_eq!(parsed.manifest_url, "https://example.test/manifest.json");
+        assert_eq!(parsed.system, "nes");
+        assert_eq!(parsed.variant, "brotli");
+        assert_eq!(
+            parsed.variants,
+            vec![
+                "identity".to_string(),
+                "gzip".to_string(),
+                "brotli".to_string()
+            ]
+        );
+        assert_eq!(parsed.label, "COV-20260624.1");
+        assert!(parsed.save_preference);
+        assert!(media_help_requested(&["--help".to_string()]));
+        assert_eq!(accept_encoding_for_variant("gzip"), "gzip");
+        assert_eq!(accept_encoding_for_variant("brotli"), "br");
+        assert_eq!(accept_encoding_for_variant("unknown"), "identity");
+    }
+
+    #[test]
+    fn media_args_reject_missing_values_unknown_variants_and_bad_labels() {
+        assert!(parse_media_args(&["--system".to_string()]).is_err());
+        assert!(parse_media_args(&["--variant".to_string(), "zip".to_string()]).is_err());
+        assert!(parse_media_args(&["--variants".to_string(), "gzip,zip".to_string()]).is_err());
+        assert!(parse_media_args(&["--label".to_string(), "bad label".to_string()]).is_err());
+        assert!(parse_media_args(&["--surprise".to_string()]).is_err());
+    }
+
+    #[test]
+    fn selected_packs_filters_systems_and_reports_missing_pack() {
+        let value = json!({
+            "schema_version": 1,
+            "base_url": "https://media.example.test",
+            "packs": [
+                {
+                    "system": "nes",
+                    "remote_path": "packs/nes.mmlz4b",
+                    "bytes": 10,
+                    "sha256": "aaaaaaaa"
+                },
+                {
+                    "system": "snes",
+                    "remote_path": "packs/snes.mmlz4b",
+                    "bytes": 20,
+                    "sha256": "bbbbbbbb"
+                }
+            ]
+        });
+        let manifest = parse_manifest(&value, "https://media.example.test/manifest.json").unwrap();
+
+        assert_eq!(selected_packs(&manifest, "all").unwrap().len(), 2);
+        let selected = selected_packs(&manifest, "snes").unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].system, "snes");
+
+        let err = selected_packs(&manifest, "arcade").expect_err("missing pack");
+        assert!(err
+            .to_string()
+            .contains("manifest has no screenshot pack for system 'arcade'"));
+    }
+
+    #[test]
+    fn manifest_parsing_rejects_incomplete_or_unsupported_packs() {
+        let missing_schema = json!({ "packs": [] });
+        assert!(parse_manifest(&missing_schema, "https://example.test/manifest.json").is_err());
+
+        let missing_packs = json!({ "schema_version": 1 });
+        assert!(parse_manifest(&missing_packs, "https://example.test/manifest.json").is_err());
+
+        let unsupported_codec = json!({
+            "schema_version": 1,
+            "packs": [{
+                "system": "nes",
+                "remote_path": "packs/nes.zip",
+                "bytes": 10,
+                "sha256": "aaaaaaaa",
+                "codec": "zip"
+            }]
+        });
+        let err =
+            parse_manifest(&unsupported_codec, "https://example.test/manifest.json").unwrap_err();
+        assert!(err.to_string().contains("unsupported codec zip"));
+    }
 }
