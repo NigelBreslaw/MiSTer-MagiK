@@ -262,6 +262,7 @@ pub(super) fn run_launcher_loop(
     let mut pending_launch: Option<PendingLaunch> = None;
     let bench_starts_on_arcade =
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
+    let benchmark_media_interaction_active = launcher_bench_scenario.is_some();
     let env_start_screen = launcher_start_screen_from_env();
     let start_screen = env_start_screen
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
@@ -877,6 +878,7 @@ pub(super) fn run_launcher_loop(
                         let media_gate = current_media_interaction_gate(
                             frame_accounting.first_visible_copy_done(),
                             pending_launch.is_some() || launching,
+                            benchmark_media_interaction_active,
                             media_interaction_block_until,
                             loop_start,
                         );
@@ -1726,6 +1728,7 @@ pub(super) fn run_launcher_loop(
         let media_gate = current_media_interaction_gate(
             frame_accounting.first_visible_copy_done(),
             pending_launch.is_some() || launching,
+            benchmark_media_interaction_active,
             media_interaction_block_until,
             loop_start,
         );
@@ -2070,6 +2073,7 @@ struct MediaInteractionGate {
 fn current_media_interaction_gate(
     first_visible_copy_done: bool,
     launch_handoff_active: bool,
+    benchmark_interaction_active: bool,
     interaction_block_until: Option<Instant>,
     now: Instant,
 ) -> MediaInteractionGate {
@@ -2083,6 +2087,12 @@ fn current_media_interaction_gate(
         return MediaInteractionGate {
             active: true,
             reason: "launch-handoff",
+        };
+    }
+    if benchmark_interaction_active {
+        return MediaInteractionGate {
+            active: true,
+            reason: "benchmark",
         };
     }
     if interaction_block_until.is_some_and(|until| now < until) {
@@ -2532,6 +2542,19 @@ mod tests {
             catalog_media_system_ids(&catalog),
             vec!["arcade".to_string(), "neogeo".to_string()]
         );
+    }
+
+    #[test]
+    pub(super) fn media_gate_treats_benchmark_as_active_interaction() {
+        let now = Instant::now();
+
+        let benchmark_gate = current_media_interaction_gate(true, false, true, None, now);
+        assert!(benchmark_gate.active);
+        assert_eq!(benchmark_gate.reason, "benchmark");
+
+        let idle_gate = current_media_interaction_gate(true, false, false, None, now);
+        assert!(!idle_gate.active);
+        assert_eq!(idle_gate.reason, "idle");
     }
 
     #[test]
