@@ -593,8 +593,10 @@ pub(super) fn hash2_u8(x: usize, y: usize) -> u8 {
 pub(super) struct Raw565View<'a> {
     pixels: &'a [Rgb565Pixel],
     stride_pixels: usize,
-    w: usize,
-    h: usize,
+    source_w: usize,
+    source_h: usize,
+    display_w: usize,
+    display_h: usize,
     x: isize,
     y: isize,
 }
@@ -607,9 +609,6 @@ pub(super) fn raw565_view<'a>(
     if frame.status() != PreviewRawFrameStatus::Ready {
         return None;
     }
-    if frame.display_w != frame.source_w || frame.display_h != frame.source_h {
-        return None;
-    }
     let PreviewRawPixels::Rgb565 {
         pixels,
         stride_pixels,
@@ -617,15 +616,22 @@ pub(super) fn raw565_view<'a>(
     else {
         return None;
     };
-    let w = frame.source_w as usize;
-    let h = frame.source_h as usize;
+    let source_w = frame.source_w as usize;
+    let source_h = frame.source_h as usize;
+    let display_w = frame.display_w as usize;
+    let display_h = frame.display_h as usize;
+    if source_w == 0 || source_h == 0 || display_w == 0 || display_h == 0 {
+        return None;
+    }
     Some(Raw565View {
         pixels,
         stride_pixels,
-        w,
-        h,
-        x: screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - w as isize) / 2 + offset_x,
-        y: screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - h as isize) / 2,
+        source_w,
+        source_h,
+        display_w,
+        display_h,
+        x: screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - display_w as isize) / 2 + offset_x,
+        y: screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - display_h as isize) / 2,
     })
 }
 
@@ -633,20 +639,25 @@ pub(super) fn raw565_view<'a>(
 pub(super) fn sample_raw565(view: &Raw565View<'_>, x: usize, y: usize) -> Option<Rgb565Pixel> {
     let sx = x as isize - view.x;
     let sy = y as isize - view.y;
-    if sx < 0 || sy < 0 || sx >= view.w as isize || sy >= view.h as isize {
+    if sx < 0 || sy < 0 || sx >= view.display_w as isize || sy >= view.display_h as isize {
         None
     } else {
-        Some(view.pixels[sy as usize * view.stride_pixels + sx as usize])
+        let src_x = ((sx as usize * view.source_w) / view.display_w).min(view.source_w - 1);
+        let src_y = ((sy as usize * view.source_h) / view.display_h).min(view.source_h - 1);
+        Some(view.pixels[src_y * view.stride_pixels + src_x])
     }
 }
 
 fn raw565_row_for_screen_y<'a>(view: &'a Raw565View<'a>, y: usize) -> Option<&'a [Rgb565Pixel]> {
+    if view.display_w != view.source_w || view.display_h != view.source_h {
+        return None;
+    }
     let sy = y as isize - view.y;
-    if sy < 0 || sy >= view.h as isize {
+    if sy < 0 || sy >= view.display_h as isize {
         None
     } else {
         let start = sy as usize * view.stride_pixels;
-        Some(&view.pixels[start..start + view.w])
+        Some(&view.pixels[start..start + view.source_w])
     }
 }
 
@@ -663,13 +674,16 @@ fn raw565_screen_row_for_y<'a>(
     x1: usize,
     render_w: usize,
 ) -> Option<Raw565ScreenRow<'a>> {
+    if view.display_w != view.source_w || view.display_h != view.source_h {
+        return None;
+    }
     let sy = y as isize - view.y;
-    if sy < 0 || sy >= view.h as isize {
+    if sy < 0 || sy >= view.display_h as isize {
         return None;
     }
     let row_x0 = x0.max(view.x.max(0) as usize);
     let row_x1 = x1
-        .min((view.x + view.w as isize).max(0) as usize)
+        .min((view.x + view.display_w as isize).max(0) as usize)
         .min(render_w);
     if row_x1 <= row_x0 {
         return None;
@@ -683,6 +697,24 @@ fn raw565_screen_row_for_y<'a>(
     })
 }
 
+fn raw565_screen_bounds_for_y(
+    view: &Raw565View<'_>,
+    y: usize,
+    x0: usize,
+    x1: usize,
+    render_w: usize,
+) -> Option<(usize, usize)> {
+    let sy = y as isize - view.y;
+    if sy < 0 || sy >= view.display_h as isize {
+        return None;
+    }
+    let row_x0 = x0.max(view.x.max(0) as usize);
+    let row_x1 = x1
+        .min((view.x + view.display_w as isize).max(0) as usize)
+        .min(render_w);
+    (row_x1 > row_x0).then_some((row_x0, row_x1))
+}
+
 fn raw565_view_screen_rect(
     view: &Raw565View<'_>,
     ui: &UiDisplay,
@@ -692,19 +724,25 @@ fn raw565_view_screen_rect(
     let y0 = screen.y0.max(view.y.max(0) as usize);
     let x1 = screen
         .x1
-        .min((view.x + view.w as isize).max(0) as usize)
+        .min((view.x + view.display_w as isize).max(0) as usize)
         .min(ui.render_w());
     let y1 = screen
         .y1
-        .min((view.y + view.h as isize).max(0) as usize)
+        .min((view.y + view.display_h as isize).max(0) as usize)
         .min(ui.render_h());
     (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
 }
 
 pub(super) fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
+    let a = ((alpha as u32 + 4) >> 3).min(32);
+    blend_565_bucket(from, to, a as u16)
+}
+
+#[inline(always)]
+fn blend_565_bucket(from: Rgb565Pixel, to: Rgb565Pixel, alpha_bucket: u16) -> Rgb565Pixel {
     let f = from.0 as u32;
     let t = to.0 as u32;
-    let a = ((alpha as u32 + 4) >> 3).min(32);
+    let a = alpha_bucket.min(32) as u32;
     if a == 0 {
         return from;
     }
@@ -717,105 +755,111 @@ pub(super) fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565
     Rgb565Pixel((rb | g) as u16)
 }
 
-const BLEND_565_ALPHA_BUCKETS: usize = 33;
-const BLEND_565_RB_VALUES: usize = 32;
-const BLEND_565_G_VALUES: usize = 64;
-
-struct Blend565Tables {
-    r: Box<[u16]>,
-    g: Box<[u16]>,
-    b: Box<[u16]>,
-}
-
-fn blend_565_tables() -> &'static Blend565Tables {
-    static TABLES: OnceLock<Blend565Tables> = OnceLock::new();
-    TABLES.get_or_init(Blend565Tables::new)
-}
-
-fn warm_blend_565_tables() {
-    let _ = blend_565_tables();
-}
-
-impl Blend565Tables {
-    fn new() -> Self {
-        let mut r = vec![0; BLEND_565_ALPHA_BUCKETS * BLEND_565_RB_VALUES * BLEND_565_RB_VALUES];
-        let mut g = vec![0; BLEND_565_ALPHA_BUCKETS * BLEND_565_G_VALUES * BLEND_565_G_VALUES];
-        let mut b = vec![0; BLEND_565_ALPHA_BUCKETS * BLEND_565_RB_VALUES * BLEND_565_RB_VALUES];
-        for alpha in 0..BLEND_565_ALPHA_BUCKETS {
-            let inv = BLEND_565_ALPHA_BUCKETS - 1 - alpha;
-            for from in 0..BLEND_565_RB_VALUES {
-                for to in 0..BLEND_565_RB_VALUES {
-                    let value = ((from * inv + to * alpha) >> 5) as u16;
-                    let idx = blend_565_pair_index(alpha, from, to, BLEND_565_RB_VALUES);
-                    r[idx] = value << 11;
-                    b[idx] = value;
-                }
-            }
-            for from in 0..BLEND_565_G_VALUES {
-                for to in 0..BLEND_565_G_VALUES {
-                    let value = ((from * inv + to * alpha) >> 5) as u16;
-                    let idx = blend_565_pair_index(alpha, from, to, BLEND_565_G_VALUES);
-                    g[idx] = value << 5;
-                }
-            }
-        }
-        Self {
-            r: r.into_boxed_slice(),
-            g: g.into_boxed_slice(),
-            b: b.into_boxed_slice(),
-        }
-    }
-
-    #[inline(always)]
-    fn blend_bucket(
-        &self,
-        previous: Rgb565Pixel,
-        current: Rgb565Pixel,
-        alpha: usize,
-    ) -> Rgb565Pixel {
-        let prev = previous.0 as usize;
-        let curr = current.0 as usize;
-        let r = self.r[blend_565_pair_index(
-            alpha,
-            (prev >> 11) & 0x1f,
-            (curr >> 11) & 0x1f,
-            BLEND_565_RB_VALUES,
-        )];
-        let g = self.g[blend_565_pair_index(
-            alpha,
-            (prev >> 5) & 0x3f,
-            (curr >> 5) & 0x3f,
-            BLEND_565_G_VALUES,
-        )];
-        let b = self.b[blend_565_pair_index(alpha, prev & 0x1f, curr & 0x1f, BLEND_565_RB_VALUES)];
-        Rgb565Pixel(r | g | b)
-    }
-}
-
-#[inline(always)]
-fn blend_565_pair_index(alpha: usize, from: usize, to: usize, values: usize) -> usize {
-    (alpha * values + from) * values + to
-}
-
 fn blend_565_row(
     dst: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
     current: &[Rgb565Pixel],
     alpha: u8,
-    tables: &Blend565Tables,
 ) {
-    let a = ((alpha as usize + 4) >> 3).min(BLEND_565_ALPHA_BUCKETS - 1);
+    let a = ((alpha as u16 + 4) >> 3).min(32);
     if a == 0 {
         dst.copy_from_slice(previous);
         return;
     }
-    if a >= BLEND_565_ALPHA_BUCKETS - 1 {
+    if a >= 32 {
         dst.copy_from_slice(current);
         return;
     }
-    for x in 0..dst.len() {
-        dst[x] = tables.blend_bucket(previous[x], current[x], a);
+    let start = blend_565_row_platform(dst, previous, current, a);
+    for x in start..dst.len() {
+        dst[x] = blend_565_bucket(previous[x], current[x], a);
     }
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+#[inline]
+fn blend_565_row_platform(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha_bucket: u16,
+) -> usize {
+    let vector_len = dst.len() & !3;
+    if vector_len == 0 {
+        return 0;
+    }
+    unsafe { blend_565_row_neon_u32rb(dst, previous, current, vector_len, alpha_bucket) };
+    vector_len
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn blend_565_row_neon_u32rb(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    vector_len: usize,
+    alpha_bucket: u16,
+) {
+    use core::arch::arm::{
+        vaddq_u32, vandq_u32, vdupq_n_u32, vld1_u16, vmovl_u16, vmovn_u32, vmulq_n_u32, vorrq_u32,
+        vshrq_n_u32, vst1_u16,
+    };
+
+    let rb_mask = vdupq_n_u32(0xf81f);
+    let g_mask = vdupq_n_u32(0x07e0);
+    let alpha = alpha_bucket as u32;
+    let inv_alpha = 32 - alpha;
+    let previous = previous.as_ptr().cast::<u16>();
+    let current = current.as_ptr().cast::<u16>();
+    let dst = dst.as_mut_ptr().cast::<u16>();
+    let mut i = 0;
+    macro_rules! blend4 {
+        ($offset:expr) => {{
+            let prev = vmovl_u16(vld1_u16(previous.add($offset)));
+            let curr = vmovl_u16(vld1_u16(current.add($offset)));
+            let rb = vandq_u32(
+                vshrq_n_u32(
+                    vaddq_u32(
+                        vmulq_n_u32(vandq_u32(prev, rb_mask), inv_alpha),
+                        vmulq_n_u32(vandq_u32(curr, rb_mask), alpha),
+                    ),
+                    5,
+                ),
+                rb_mask,
+            );
+            let g = vandq_u32(
+                vshrq_n_u32(
+                    vaddq_u32(
+                        vmulq_n_u32(vandq_u32(prev, g_mask), inv_alpha),
+                        vmulq_n_u32(vandq_u32(curr, g_mask), alpha),
+                    ),
+                    5,
+                ),
+                g_mask,
+            );
+            vst1_u16(dst.add($offset), vmovn_u32(vorrq_u32(rb, g)));
+        }};
+    }
+    while i + 8 <= vector_len {
+        blend4!(i);
+        blend4!(i + 4);
+        i += 8;
+    }
+    while i + 4 <= vector_len {
+        blend4!(i);
+        i += 4;
+    }
+}
+
+#[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+#[inline(always)]
+fn blend_565_row_platform(
+    _dst: &mut [Rgb565Pixel],
+    _previous: &[Rgb565Pixel],
+    _current: &[Rgb565Pixel],
+    _alpha_bucket: u16,
+) -> usize {
+    0
 }
 
 #[cfg(mister_bench_scenes)]
@@ -1191,12 +1235,16 @@ fn blit_preview_frame_565_cut(
         for x in screen.x0..image_rect.x0 {
             cached[row + x] = black;
         }
-        let src_y = (y as isize - current.y) as usize;
-        let src_x = (image_rect.x0 as isize - current.x) as usize;
-        let src_a = src_y * current.stride_pixels + src_x;
         let dst_a = row + image_rect.x0;
-        cached[dst_a..dst_a + image_rect.width()]
-            .copy_from_slice(&current.pixels[src_a..src_a + image_rect.width()]);
+        if let Some(src_row) = raw565_row_for_screen_y(&current, y) {
+            let src_x = (image_rect.x0 as isize - current.x) as usize;
+            cached[dst_a..dst_a + image_rect.width()]
+                .copy_from_slice(&src_row[src_x..src_x + image_rect.width()]);
+        } else {
+            for x in image_rect.x0..image_rect.x1 {
+                cached[row + x] = sample_raw565(&current, x, y).unwrap_or(black);
+            }
+        }
         for x in image_rect.x1..screen.x1.min(ui.render_w()) {
             cached[row + x] = black;
         }
@@ -1210,12 +1258,12 @@ fn blit_transition_565_fade(
     screen: DirtyRect,
     frame: &PreviewRawTransitionFrame<'_>,
     progress: f32,
-) -> Option<()> {
+) {
     let current_empty = matches!(frame.current.pixels, PreviewRawPixels::Empty);
     let current = if current_empty {
         None
     } else {
-        Some(raw565_view(&frame.current, screen, 0)?)
+        raw565_view(&frame.current, screen, 0)
     };
     let previous = frame
         .previous
@@ -1224,7 +1272,9 @@ fn blit_transition_565_fade(
     let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
     if alpha == 0 {
         if let Some(previous) = frame.previous.as_ref() {
-            return blit_preview_frame_565_cut(cached, ui, screen, previous);
+            if blit_preview_frame_565_cut(cached, ui, screen, previous).is_some() {
+                return;
+            }
         }
         let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
         for y in screen.y0..screen.y1.min(ui.render_h()) {
@@ -1233,79 +1283,38 @@ fn blit_transition_565_fade(
                 cached[row + x] = black;
             }
         }
-        return Some(());
+        return;
     }
     if alpha == 255 {
-        return blit_preview_frame_565_cut(cached, ui, screen, &frame.current);
-    }
-    if let (Some(previous), Some(current)) = (previous.as_ref(), current.as_ref()) {
-        if blit_transition_565_fade_same_geometry(cached, ui, screen, previous, current, alpha)
-            .is_some()
-        {
-            return Some(());
+        if blit_preview_frame_565_cut(cached, ui, screen, &frame.current).is_none() {
+            let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+            for y in screen.y0..screen.y1.min(ui.render_h()) {
+                let row = y * ui.render_w();
+                for x in screen.x0..screen.x1.min(ui.render_w()) {
+                    cached[row + x] = black;
+                }
+            }
         }
+        return;
     }
-    blit_transition_565_fade_generic(
+    blit_transition_565_fade_rows(
         cached,
         ui,
         screen,
         previous.as_ref(),
         current.as_ref(),
         alpha,
-    )
+    );
 }
 
-fn blit_transition_565_fade_same_geometry(
-    cached: &mut [Rgb565Pixel],
-    ui: &UiDisplay,
-    screen: DirtyRect,
-    previous: &Raw565View<'_>,
-    current: &Raw565View<'_>,
-    alpha: u8,
-) -> Option<()> {
-    if previous.x != current.x
-        || previous.y != current.y
-        || previous.w != current.w
-        || previous.h != current.h
-    {
-        return None;
-    }
-    let rect = raw565_view_screen_rect(previous, ui, screen)?;
-    if Some(rect) != raw565_view_screen_rect(current, ui, screen) {
-        return None;
-    }
-    if previous.x < 0
-        || previous.y < 0
-        || rect.x0 != previous.x as usize
-        || rect.y0 != previous.y as usize
-        || rect.width() != previous.w
-        || rect.y1 - rect.y0 != previous.h
-    {
-        return None;
-    }
-    let width = rect.width();
-    let tables = blend_565_tables();
-    for y in rect.y0..rect.y1 {
-        let src_y = y - previous.y as usize;
-        let previous_start = src_y * previous.stride_pixels;
-        let current_start = src_y * current.stride_pixels;
-        let dst_start = y * ui.render_w() + rect.x0;
-        let previous_row = &previous.pixels[previous_start..previous_start + width];
-        let current_row = &current.pixels[current_start..current_start + width];
-        let dst_row = &mut cached[dst_start..dst_start + width];
-        blend_565_row(dst_row, previous_row, current_row, alpha, tables);
-    }
-    Some(())
-}
-
-fn blit_transition_565_fade_generic(
+fn blit_transition_565_fade_rows(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
     screen: DirtyRect,
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
-) -> Option<()> {
+) {
     let mut fade_rect: Option<DirtyRect> = None;
     for view in [previous, current].into_iter().flatten() {
         if let Some(rect) = raw565_view_screen_rect(view, ui, screen) {
@@ -1314,9 +1323,16 @@ fn blit_transition_565_fade_generic(
     }
     let fade_rect = fade_rect.unwrap_or(screen);
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
     let x1 = fade_rect.x1.min(ui.render_w());
     for y in fade_rect.y0..fade_rect.y1.min(ui.render_h()) {
         let row = y * ui.render_w();
+        let previous_bounds = previous.as_ref().and_then(|view| {
+            raw565_screen_bounds_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
+        });
+        let current_bounds = current.as_ref().and_then(|view| {
+            raw565_screen_bounds_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
+        });
         let previous_row = previous.as_ref().and_then(|view| {
             raw565_screen_row_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
         });
@@ -1326,13 +1342,13 @@ fn blit_transition_565_fade_generic(
 
         let mut bounds = [fade_rect.x0, x1, x1, x1, x1, x1];
         let mut len = 2;
-        if let Some(previous_row) = previous_row.as_ref() {
-            push_sorted_unique_bound(&mut bounds, &mut len, previous_row.x0);
-            push_sorted_unique_bound(&mut bounds, &mut len, previous_row.x1);
+        if let Some((x0, x1)) = previous_bounds {
+            push_sorted_unique_bound(&mut bounds, &mut len, x0);
+            push_sorted_unique_bound(&mut bounds, &mut len, x1);
         }
-        if let Some(current_row) = current_row.as_ref() {
-            push_sorted_unique_bound(&mut bounds, &mut len, current_row.x0);
-            push_sorted_unique_bound(&mut bounds, &mut len, current_row.x1);
+        if let Some((x0, x1)) = current_bounds {
+            push_sorted_unique_bound(&mut bounds, &mut len, x0);
+            push_sorted_unique_bound(&mut bounds, &mut len, x1);
         }
 
         for idx in 0..len - 1 {
@@ -1352,31 +1368,71 @@ fn blit_transition_565_fade_generic(
                 (Some(previous_row), Some(current_row)) => {
                     let previous_start = seg_x0 - previous_row.x0;
                     let current_start = seg_x0 - current_row.x0;
-                    for x in 0..dst.len() {
-                        dst[x] = blend_565(
-                            previous_row.row[previous_start + x],
-                            current_row.row[current_start + x],
-                            alpha,
-                        );
-                    }
+                    blend_565_row(
+                        dst,
+                        &previous_row.row[previous_start..previous_start + dst.len()],
+                        &current_row.row[current_start..current_start + dst.len()],
+                        alpha,
+                    );
                 }
                 (Some(previous_row), None) => {
                     let previous_start = seg_x0 - previous_row.x0;
                     for x in 0..dst.len() {
-                        dst[x] = blend_565(previous_row.row[previous_start + x], black, alpha);
+                        dst[x] = blend_565_bucket(
+                            previous_row.row[previous_start + x],
+                            black,
+                            alpha_bucket,
+                        );
                     }
                 }
                 (None, Some(current_row)) => {
                     let current_start = seg_x0 - current_row.x0;
                     for x in 0..dst.len() {
-                        dst[x] = blend_565(black, current_row.row[current_start + x], alpha);
+                        dst[x] = blend_565_bucket(
+                            black,
+                            current_row.row[current_start + x],
+                            alpha_bucket,
+                        );
                     }
                 }
-                (None, None) => dst.fill(black),
+                (None, None) => {
+                    let previous_covers =
+                        previous_bounds.is_some_and(|(x0, x1)| seg_x0 >= x0 && seg_x1 <= x1);
+                    let current_covers =
+                        current_bounds.is_some_and(|(x0, x1)| seg_x0 >= x0 && seg_x1 <= x1);
+                    match (previous_covers, current_covers) {
+                        (true, true) => {
+                            let previous = previous.expect("previous bounds require view");
+                            let current = current.expect("current bounds require view");
+                            for x in 0..dst.len() {
+                                let screen_x = seg_x0 + x;
+                                let prev = sample_raw565(previous, screen_x, y).unwrap_or(black);
+                                let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
+                                dst[x] = blend_565_bucket(prev, curr, alpha_bucket);
+                            }
+                        }
+                        (true, false) => {
+                            let previous = previous.expect("previous bounds require view");
+                            for x in 0..dst.len() {
+                                let screen_x = seg_x0 + x;
+                                let prev = sample_raw565(previous, screen_x, y).unwrap_or(black);
+                                dst[x] = blend_565_bucket(prev, black, alpha_bucket);
+                            }
+                        }
+                        (false, true) => {
+                            let current = current.expect("current bounds require view");
+                            for x in 0..dst.len() {
+                                let screen_x = seg_x0 + x;
+                                let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
+                                dst[x] = blend_565_bucket(black, curr, alpha_bucket);
+                            }
+                        }
+                        (false, false) => dst.fill(black),
+                    }
+                }
             }
         }
     }
-    Some(())
 }
 
 fn push_sorted_unique_bound(bounds: &mut [usize; 6], len: &mut usize, bound: usize) {
@@ -1390,37 +1446,6 @@ fn push_sorted_unique_bound(bounds: &mut [usize; 6], len: &mut usize, bound: usi
     }
     bounds[pos] = bound;
     *len += 1;
-}
-
-fn blit_transition_565_via_rgb(
-    cached: &mut [Rgb565Pixel],
-    ui: &UiDisplay,
-    screen: DirtyRect,
-    frame: &PreviewRawTransitionFrame<'_>,
-    effect: PreviewTransitionEffect,
-    progress: f32,
-) {
-    let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
-    for y in screen.y0..screen.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
-        for x in screen.x0..screen.x1.min(ui.render_w()) {
-            let current = sample_preview_rgb(&frame.current, screen, x, y, 0, 1024, 1024)
-                .unwrap_or((0, 0, 0));
-            let rgb = match effect {
-                PreviewTransitionEffect::Fade => {
-                    let prev = frame
-                        .previous
-                        .as_ref()
-                        .and_then(|prev| sample_preview_rgb(prev, screen, x, y, 0, 1024, 1024))
-                        .unwrap_or((0, 0, 0));
-                    blend_rgb(prev, current, alpha)
-                }
-                #[cfg(mister_bench_scenes)]
-                _ => unreachable!("non-production transitions use bench blitters"),
-            };
-            cached[row + x] = <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
-        }
-    }
 }
 
 #[cfg(mister_bench_scenes)]
@@ -2132,7 +2157,6 @@ impl UiFrameTarget {
             "slint-render-target=cached fb-format={}",
             FramebufferFormat::production_default().label()
         );
-        warm_blend_565_tables();
         Self::cached(ui)
     }
 
@@ -2301,9 +2325,7 @@ impl UiFrameTarget {
         match self {
             Self::Rgb565 { cached } => match effect {
                 PreviewTransitionEffect::Fade => {
-                    if blit_transition_565_fade(cached, ui, screen, frame, progress).is_none() {
-                        blit_transition_565_via_rgb(cached, ui, screen, frame, effect, progress);
-                    }
+                    blit_transition_565_fade(cached, ui, screen, frame, progress)
                 }
                 #[cfg(mister_bench_scenes)]
                 _ => {
@@ -2637,7 +2659,7 @@ mod tests {
         };
         let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
 
-        blit_transition_565_fade(&mut cached, &ui, screen, &frame, 0.5).expect("fade blit");
+        blit_transition_565_fade(&mut cached, &ui, screen, &frame, 0.5);
 
         let image_x = screen.x0 + (ARCADE_PREVIEW_BOX_W as usize - 2) / 2;
         let image_y = screen.y0 + (ARCADE_PREVIEW_BOX_H as usize - 2) / 2;
@@ -2648,7 +2670,7 @@ mod tests {
     }
 
     #[test]
-    fn rgb565_row_table_blend_matches_scalar_blend() {
+    fn rgb565_row_blend_matches_scalar_blend() {
         let previous = [
             Rgb565Pixel(0x0000),
             Rgb565Pixel(0xffff),
@@ -2677,11 +2699,9 @@ mod tests {
             Rgb565Pixel(0x8410),
             Rgb565Pixel(0xffe0),
         ];
-        let tables = blend_565_tables();
-
         for alpha in 0..=255 {
             let mut optimized = [Rgb565Pixel(0); 12];
-            blend_565_row(&mut optimized, &previous, &current, alpha, tables);
+            blend_565_row(&mut optimized, &previous, &current, alpha);
             let expected: Vec<_> = previous
                 .iter()
                 .zip(current.iter())
@@ -2693,7 +2713,7 @@ mod tests {
     }
 
     #[test]
-    fn rgb565_same_geometry_fade_matches_generic_path() {
+    fn rgb565_single_fade_matches_scalar_reference() {
         let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
         let screen = preview_screen_rect(&ui);
         let previous_pixels = [
@@ -2744,34 +2764,109 @@ mod tests {
             display_w: 3,
             display_h: 3,
         };
-        let previous = raw565_view(&previous, screen, 0).expect("previous raw565 view");
-        let current = raw565_view(&current, screen, 0).expect("current raw565 view");
+        let frame = PreviewRawTransitionFrame {
+            previous: Some(previous),
+            current,
+            transition_id: 1,
+        };
 
         for alpha in [1, 64, 128, 192, 254] {
             let sentinel = Rgb565Pixel(0x4208);
-            let mut optimized = vec![sentinel; ui.render_w() * ui.render_h()];
-            let mut generic = optimized.clone();
+            let mut actual = vec![sentinel; ui.render_w() * ui.render_h()];
+            let mut expected = actual.clone();
 
-            blit_transition_565_fade_same_geometry(
-                &mut optimized,
-                &ui,
-                screen,
-                &previous,
-                &current,
-                alpha,
-            )
-            .expect("same-geometry fast path");
-            blit_transition_565_fade_generic(
-                &mut generic,
-                &ui,
-                screen,
-                Some(&previous),
-                Some(&current),
-                alpha,
-            )
-            .expect("generic fade path");
+            blit_transition_565_fade(&mut actual, &ui, screen, &frame, alpha as f32 / 255.0);
+            paint_scalar_fade_reference(&mut expected, &ui, screen, &frame, alpha);
 
-            assert_eq!(optimized, generic, "alpha={alpha}");
+            assert_eq!(actual, expected, "alpha={alpha}");
+        }
+    }
+
+    #[test]
+    fn rgb565_single_fade_handles_scaled_frames() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let screen = preview_screen_rect(&ui);
+        let previous_pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0xffff),
+        ];
+        let current_pixels = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x0000),
+        ];
+        let previous = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &previous_pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 4,
+            display_h: 4,
+        };
+        let current = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &current_pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 4,
+            display_h: 4,
+        };
+        let frame = PreviewRawTransitionFrame {
+            previous: Some(previous),
+            current,
+            transition_id: 1,
+        };
+        let alpha = 128;
+        let sentinel = Rgb565Pixel(0x4208);
+        let mut actual = vec![sentinel; ui.render_w() * ui.render_h()];
+        let mut expected = actual.clone();
+
+        blit_transition_565_fade(&mut actual, &ui, screen, &frame, alpha as f32 / 255.0);
+        paint_scalar_fade_reference(&mut expected, &ui, screen, &frame, alpha);
+
+        assert_eq!(actual, expected);
+    }
+
+    fn paint_scalar_fade_reference(
+        cached: &mut [Rgb565Pixel],
+        ui: &UiDisplay,
+        screen: DirtyRect,
+        frame: &PreviewRawTransitionFrame<'_>,
+        alpha: u8,
+    ) {
+        let previous = frame
+            .previous
+            .as_ref()
+            .and_then(|frame| raw565_view(frame, screen, 0));
+        let current = raw565_view(&frame.current, screen, 0);
+        let mut fade_rect: Option<DirtyRect> = None;
+        for view in [previous.as_ref(), current.as_ref()].into_iter().flatten() {
+            if let Some(rect) = raw565_view_screen_rect(view, ui, screen) {
+                fade_rect = Some(fade_rect.map_or(rect, |existing| existing.union(rect)));
+            }
+        }
+        let fade_rect = fade_rect.unwrap_or(screen);
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        for y in fade_rect.y0..fade_rect.y1.min(ui.render_h()) {
+            let row = y * ui.render_w();
+            for x in fade_rect.x0..fade_rect.x1.min(ui.render_w()) {
+                let previous = previous
+                    .as_ref()
+                    .and_then(|view| sample_raw565(view, x, y))
+                    .unwrap_or(black);
+                let current = current
+                    .as_ref()
+                    .and_then(|view| sample_raw565(view, x, y))
+                    .unwrap_or(black);
+                cached[row + x] = blend_565(previous, current, alpha);
+            }
         }
     }
 }
