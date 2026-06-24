@@ -1,4 +1,6 @@
 use super::*;
+use std::fmt::Write as _;
+use std::io::{BufWriter, Write as _};
 
 pub(super) struct LauncherFrameAccounting {
     fps_window_start: Instant,
@@ -11,7 +13,7 @@ pub(super) struct LauncherFrameAccounting {
     cached_present_us: u128,
     overlay_present_us: u128,
     rows: u128,
-    preview_scroll_trace: Option<std::fs::File>,
+    preview_scroll_trace: Option<PreviewScrollTrace>,
     preview_scroll_trace_duration: Option<Duration>,
     last_preview_trace_loop_start: Option<Instant>,
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
@@ -58,6 +60,107 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
+}
+
+struct PreviewScrollTrace {
+    writer: BufWriter<std::fs::File>,
+    rows: Vec<PreviewScrollTraceRow>,
+    row_text: String,
+}
+
+struct PreviewScrollTraceRow {
+    frame: u64,
+    elapsed_us: u128,
+    loop_delta_us: u128,
+    selected: usize,
+    visual_index: f32,
+    cache_state: &'static str,
+    transition_effect: &'static str,
+    transition_progress: f32,
+    arcade_update: ArcadeUpdateTrace,
+    copied_rows: u32,
+    prepare_us: u128,
+    slint_render_us: u128,
+    custom_draw_us: u128,
+    arcade_list_update_us: u128,
+    preview_blit_us: u128,
+    effect_label_us: u128,
+    vsync_us: u128,
+    fb_present_us: u128,
+    cached_present_us: u128,
+    overlay_present_us: u128,
+    present_probe_us: u128,
+    vsync_source: &'static str,
+    vsync_period_us: u64,
+    vsync_miss_streak: u32,
+    status_write_due: u8,
+    status_string_copy_us: u128,
+    status_string_copy_bytes: usize,
+    wall_us: u128,
+}
+
+impl PreviewScrollTrace {
+    fn new(writer: BufWriter<std::fs::File>) -> Self {
+        Self {
+            writer,
+            rows: Vec::with_capacity(4096),
+            row_text: String::with_capacity(384),
+        }
+    }
+
+    fn push(&mut self, row: PreviewScrollTraceRow) {
+        self.rows.push(row);
+        if self.rows.len() >= 4096 {
+            self.flush_rows();
+        }
+    }
+
+    fn flush_rows(&mut self) {
+        let rows = std::mem::take(&mut self.rows);
+        for row in rows {
+            self.row_text.clear();
+            let _ = write!(
+                self.row_text,
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                row.frame,
+                row.elapsed_us,
+                row.loop_delta_us,
+                row.selected,
+                row.visual_index,
+                row.cache_state,
+                row.transition_effect,
+                row.transition_progress,
+                row.arcade_update,
+                row.copied_rows,
+                row.prepare_us,
+                row.slint_render_us,
+                row.custom_draw_us,
+                row.arcade_list_update_us,
+                row.preview_blit_us,
+                row.effect_label_us,
+                row.vsync_us,
+                row.fb_present_us,
+                row.cached_present_us,
+                row.overlay_present_us,
+                row.present_probe_us,
+                row.vsync_source,
+                row.vsync_period_us,
+                row.vsync_miss_streak,
+                row.status_write_due,
+                row.status_string_copy_us,
+                row.status_string_copy_bytes,
+                row.wall_us
+            );
+            let _ = self.writer.write_all(self.row_text.as_bytes());
+        }
+        let _ = self.writer.flush();
+    }
+}
+
+impl Drop for PreviewScrollTrace {
+    fn drop(&mut self) {
+        self.flush_rows();
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -218,58 +321,66 @@ impl LauncherFrameAccounting {
             .preview_scroll_trace_duration
             .is_some_and(|limit| frame.loop_start.duration_since(frame.run_start) > limit)
         {
-            self.preview_scroll_trace = None;
+            self.close_preview_scroll_trace();
             return;
         }
-        if let Some(file) = self.preview_scroll_trace.as_mut() {
-            let loop_delta_us = self
-                .last_preview_trace_loop_start
-                .map(|previous| {
-                    frame
-                        .loop_start
-                        .saturating_duration_since(previous)
-                        .as_micros()
-                })
-                .unwrap_or(0);
-            self.last_preview_trace_loop_start = Some(frame.loop_start);
-            let _ = std::io::Write::write_fmt(
-                file,
-                format_args!(
-                    "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                    frame.frames,
-                    frame.loop_start.duration_since(frame.run_start).as_micros(),
-                    loop_delta_us,
-                    frame.selected,
-                    frame.visual_index,
-                    frame.preview_cache_state,
-                    frame.preview_transition.effect.label(),
-                    frame.preview_transition.progress,
-                    frame.arcade_update_label,
-                    frame.copied_rows,
-                    frame.prepare_us,
-                    (frame.frame_t2 - frame.frame_t1).as_micros(),
-                    (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
-                    frame.custom_draw_trace.arcade_list_update_us,
-                    frame.custom_draw_trace.preview_blit_us,
-                    frame.custom_draw_trace.effect_label_us,
-                    (frame.frame_t3 - frame.custom_draw_done).as_micros(),
-                    (frame.frame_t4 - frame.frame_t3).as_micros(),
-                    frame.cached_present_us,
-                    frame.overlay_present_us,
-                    frame.present_probe_us,
-                    frame
-                        .vsync_source
-                        .map(VsyncPaceSource::label)
-                        .unwrap_or("none"),
-                    frame.vsync_period_us,
-                    frame.vsync_miss_streak,
-                    u8::from(frame.status_write_due),
-                    frame.status_string_copy_us,
-                    frame.status_string_copy_bytes,
-                    (frame.frame_t4 - frame.loop_start).as_micros()
-                ),
-            );
-            let _ = std::io::Write::flush(file);
+
+        if self.preview_scroll_trace.is_none() {
+            return;
+        }
+
+        let loop_delta_us = self
+            .last_preview_trace_loop_start
+            .map(|previous| {
+                frame
+                    .loop_start
+                    .saturating_duration_since(previous)
+                    .as_micros()
+            })
+            .unwrap_or(0);
+        self.last_preview_trace_loop_start = Some(frame.loop_start);
+
+        let row = PreviewScrollTraceRow {
+            frame: frame.frames,
+            elapsed_us: frame.loop_start.duration_since(frame.run_start).as_micros(),
+            loop_delta_us,
+            selected: frame.selected,
+            visual_index: frame.visual_index,
+            cache_state: frame.preview_cache_state,
+            transition_effect: frame.preview_transition.effect.label(),
+            transition_progress: frame.preview_transition.progress,
+            arcade_update: frame.arcade_update_label,
+            copied_rows: frame.copied_rows,
+            prepare_us: frame.prepare_us,
+            slint_render_us: (frame.frame_t2 - frame.frame_t1).as_micros(),
+            custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
+            arcade_list_update_us: frame.custom_draw_trace.arcade_list_update_us,
+            preview_blit_us: frame.custom_draw_trace.preview_blit_us,
+            effect_label_us: frame.custom_draw_trace.effect_label_us,
+            vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
+            fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
+            cached_present_us: frame.cached_present_us,
+            overlay_present_us: frame.overlay_present_us,
+            present_probe_us: frame.present_probe_us,
+            vsync_source: frame
+                .vsync_source
+                .map(VsyncPaceSource::label)
+                .unwrap_or("none"),
+            vsync_period_us: frame.vsync_period_us,
+            vsync_miss_streak: frame.vsync_miss_streak,
+            status_write_due: u8::from(frame.status_write_due),
+            status_string_copy_us: frame.status_string_copy_us,
+            status_string_copy_bytes: frame.status_string_copy_bytes,
+            wall_us: (frame.frame_t4 - frame.loop_start).as_micros(),
+        };
+        if let Some(trace) = self.preview_scroll_trace.as_mut() {
+            trace.push(row);
+        }
+    }
+
+    fn close_preview_scroll_trace(&mut self) {
+        if let Some(mut trace) = self.preview_scroll_trace.take() {
+            trace.flush_rows();
         }
     }
 
@@ -521,20 +632,20 @@ fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
-fn open_preview_scroll_trace() -> Option<std::fs::File> {
+fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
     std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
         .ok()
         .and_then(|path| {
-            let mut file = std::fs::File::create(&path)
+            let file = std::fs::File::create(&path)
                 .map_err(|e| eprintln!("preview scroll trace: create {path} failed: {e}"))
                 .ok()?;
-            std::io::Write::write_all(
-                &mut file,
+            let mut file = BufWriter::with_capacity(64 * 1024, file);
+            file.write_all(
                 b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
             println!("preview_scroll_trace={path}");
-            Some(file)
+            Some(PreviewScrollTrace::new(file))
         })
 }
