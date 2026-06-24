@@ -109,10 +109,20 @@ impl DiscoveryHistory {
 
 pub(crate) fn remove_default_sqlite_database() -> Result<(), String> {
     let path = default_sqlite_path();
-    match std::fs::remove_file(&path) {
+    remove_sqlite_database_at(&path)
+}
+
+fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
+    remove_file_if_exists(path, "database")?;
+    let summary_path = catalog_summary::summary_path_for_sqlite(path);
+    remove_file_if_exists(&summary_path, "catalog summary")
+}
+
+fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
+    match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("failed to delete {}: {e}", path.display())),
+        Err(e) => return Err(format!("failed to delete {label} {}: {e}", path.display())),
     }
     Ok(())
 }
@@ -2404,6 +2414,33 @@ mod tests {
             .find(|system| system.id == "arcade")
             .expect("arcade summary system");
         assert_eq!(arcade.supported_media, vec!["screenshots".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_remove_deletes_catalog_summary_projection() {
+        let root = unique_temp_dir("sqlite-remove-summary");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Summary Survivor")]),
+            Some(&stamp),
+            None,
+        )
+        .expect("write catalog and summary");
+
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        assert!(db.exists(), "database should be published");
+        assert!(summary_path.exists(), "summary should be published");
+
+        remove_sqlite_database_at(&db).expect("remove database and summary");
+
+        assert!(!db.exists(), "database should be removed");
+        assert!(!summary_path.exists(), "summary should be removed");
         let _ = std::fs::remove_dir_all(root);
     }
 

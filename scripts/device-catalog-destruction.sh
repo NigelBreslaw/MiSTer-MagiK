@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
+REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
@@ -29,9 +30,10 @@ usage() {
 usage: scripts/device-catalog-destruction.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--keep-temp] [--no-warn-delay]
 
 Destructively mutates /media/fat/mister-magik/library.sqlite3 on a real MiSTer:
-missing DB, zero-byte DB, corrupt DB, bad marker plus bad DB, and a real
-_Arcade file-change detection path. The script does not back up the production
-DB; it verifies recovery and finishes with a forced library-refresh cleanup.
+missing DB with any orphan summary projection, zero-byte DB, corrupt DB, bad
+marker plus bad DB, and a real _Arcade file-change detection path. The script
+does not back up the production DB; it verifies recovery and finishes with a
+forced library-refresh cleanup.
 EOF
 }
 
@@ -121,6 +123,8 @@ dump_failure_artifacts() {
   remote "test -e $(sq "$REMOTE_MARKER") && echo marker=present || echo marker=absent" || true
   echo "== db file =="
   remote "ls -l $(sq "$REMOTE_DB") 2>/dev/null || true" || true
+  echo "== summary file =="
+  remote "ls -l $(sq "$REMOTE_SUMMARY") 2>/dev/null || true" || true
   echo "== db counts =="
   db "SELECT 'games', count(*) FROM games;" || true
   db "SELECT 'launcher_catalog', count(*) FROM launcher_catalog;" || true
@@ -354,6 +358,7 @@ assert_single_launcher
 echo "== Missing DB recovery"
 remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$TEMP_MRA") $(sq "$REMOTE_DB"); sync"
 restart_launcher ""
+wait_remote "missing-db orphan summary ignored" "$TIMEOUT_SECS" "grep -q 'catalog_summary_load.*status=sqlite_missing' $(sq "$REMOTE_LOG")"
 wait_remote "missing-db cache load failed" "$TIMEOUT_SECS" "grep -q 'catalog_cache_load_failed' $(sq "$REMOTE_LOG")"
 require_first_run_scan "missing-db"
 require_ready_rebuild "missing-db" "catalog_cache_load_failed"
