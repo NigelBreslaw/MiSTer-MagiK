@@ -250,29 +250,18 @@ impl MediaProgressDisplay {
         }
         if event.phase == "failed" {
             self.failed.insert(event.system.clone());
-            self.active.remove(&event.system);
+            self.active
+                .insert(event.system.clone(), media_progress_display_row(event));
             return true;
         }
         if media_progress_terminal_phase(&event.phase) {
             self.done.insert(event.system.clone());
-            self.active.remove(&event.system);
+            self.active
+                .insert(event.system.clone(), media_progress_display_row(event));
             return true;
         }
-        self.active.insert(
-            event.system.clone(),
-            MediaProgressDisplayRow {
-                system: event.system.clone(),
-                image_size: event.image_size.clone(),
-                phase: media_progress_phase_label(&event.phase),
-                percent: media_progress_percent(event.bytes_done, event.bytes_total),
-                bytes_label: media_progress_bytes_label(event.bytes_done, event.bytes_total),
-                pack_position: if event.pack_index > 0 && event.pack_count > 0 {
-                    format!("{}/{}", event.pack_index, event.pack_count)
-                } else {
-                    String::new()
-                },
-            },
-        );
+        self.active
+            .insert(event.system.clone(), media_progress_display_row(event));
         true
     }
 
@@ -301,7 +290,11 @@ impl MediaProgressDisplay {
     }
 
     pub(super) fn summary(&self) -> String {
-        let active = self.active.len();
+        let active = self
+            .active
+            .keys()
+            .filter(|system| !self.done.contains(*system) && !self.failed.contains(*system))
+            .count();
         let done = self.done.len();
         let failed = self.failed.len();
         let total = self.requested_count.max(active + done + failed);
@@ -316,47 +309,60 @@ impl MediaProgressDisplay {
     }
 }
 
+fn media_progress_display_row(event: &MediaProgressEvent) -> MediaProgressDisplayRow {
+    MediaProgressDisplayRow {
+        system: event.system.clone(),
+        image_size: event.image_size.clone(),
+        phase: media_progress_phase_label(&event.phase),
+        percent: media_progress_percent(&event.phase, event.bytes_done, event.bytes_total),
+        bytes_label: String::new(),
+        pack_position: if event.pack_index > 0 && event.pack_count > 0 {
+            format!("{}/{}", event.pack_index, event.pack_count)
+        } else {
+            String::new()
+        },
+    }
+}
+
 fn media_progress_terminal_phase(phase: &str) -> bool {
     matches!(phase, "done" | "skipped-current" | "check-only")
 }
 
-fn media_progress_percent(done: u64, total: u64) -> i32 {
-    done.min(total)
-        .saturating_mul(100)
+fn media_progress_percent(phase: &str, done: u64, total: u64) -> i32 {
+    match phase {
+        "check" | "download_start" => 0,
+        "download" => scaled_progress(done, total, 0, 50),
+        "download_done" => 50,
+        "verify" => 60,
+        "save" => scaled_progress(done, total, 60, 40),
+        "sync" | "rename" | "parent-sync" | "done" | "skipped-current" | "check-only" => 100,
+        "failed" => scaled_progress(done, total, 0, 100),
+        _ => scaled_progress(done, total, 0, 100),
+    }
+}
+
+fn scaled_progress(done: u64, total: u64, offset: i32, span: i32) -> i32 {
+    if total == 0 {
+        return offset;
+    }
+    let phase_percent = done
+        .min(total)
+        .saturating_mul(span as u64)
         .checked_div(total)
         .map(|value| value as i32)
-        .unwrap_or(-1)
+        .unwrap_or(0);
+    (offset + phase_percent).clamp(0, 100)
 }
 
 fn media_progress_phase_label(phase: &str) -> String {
     match phase {
         "download_start" | "download" | "download_done" => "download".to_string(),
+        "verify" => "verify".to_string(),
+        "save" | "sync" | "rename" | "parent-sync" => "saving".to_string(),
+        "done" => "downloaded".to_string(),
         "skipped-current" => "current".to_string(),
         "check-only" => "checked".to_string(),
         other => other.replace('_', " "),
-    }
-}
-
-fn media_progress_bytes_label(done: u64, total: u64) -> String {
-    if total == 0 {
-        return String::new();
-    }
-    format!(
-        "{} / {}",
-        media_progress_byte_label(done),
-        media_progress_byte_label(total)
-    )
-}
-
-fn media_progress_byte_label(bytes: u64) -> String {
-    const KB: f64 = 1000.0;
-    const MB: f64 = 1000.0 * 1000.0;
-    if bytes >= 10_000_000 {
-        format!("{:.1} MB", bytes as f64 / MB)
-    } else if bytes >= 1000 {
-        format!("{:.0} KB", bytes as f64 / KB)
-    } else {
-        format!("{bytes} B")
     }
 }
 
@@ -453,9 +459,11 @@ mod tests {
         let _ = display.progress_intent(&media_progress_event("neogeo", "save", 128, 1024, 2, 2));
 
         assert_eq!(display.active.len(), 2);
-        assert_eq!(display.active["arcade"].percent, 50);
+        assert_eq!(display.active["arcade"].percent, 25);
         assert_eq!(display.active["arcade"].phase, "download");
-        assert_eq!(display.active["arcade"].bytes_label, "512 B / 1 KB");
+        assert_eq!(display.active["arcade"].bytes_label, "");
+        assert_eq!(display.active["neogeo"].percent, 65);
+        assert_eq!(display.active["neogeo"].phase, "saving");
         assert_eq!(display.summary(), "screenshots 2 active · 0/2 done");
     }
 
@@ -470,12 +478,25 @@ mod tests {
         let _ = display.progress_intent(&media_progress_event("arcade", "done", 1024, 1024, 1, 2));
         let _ = display.progress_intent(&media_progress_event("neogeo", "failed", 128, 1024, 2, 2));
 
-        assert!(display.active.is_empty());
+        assert_eq!(display.active.len(), 2);
         assert!(display.done.contains("arcade"));
         assert!(display.failed.contains("neogeo"));
+        assert_eq!(display.active["arcade"].phase, "downloaded");
+        assert_eq!(display.active["arcade"].percent, 100);
+        assert_eq!(display.active["neogeo"].phase, "failed");
         assert_eq!(
             display.summary(),
             "screenshots 0 active · 1/2 done · 1 failed"
         );
+    }
+
+    #[test]
+    fn media_progress_percent_reserves_ranges_for_download_verify_and_save() {
+        assert_eq!(media_progress_percent("download", 512, 1024), 25);
+        assert_eq!(media_progress_percent("download_done", 1024, 1024), 50);
+        assert_eq!(media_progress_percent("verify", 1024, 1024), 60);
+        assert_eq!(media_progress_percent("save", 512, 1024), 80);
+        assert_eq!(media_progress_percent("sync", 1024, 1024), 100);
+        assert_eq!(media_progress_percent("done", 1024, 1024), 100);
     }
 }

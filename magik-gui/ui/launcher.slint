@@ -185,7 +185,7 @@ component ScreenshotPackProgressRow inherits Rectangle {
             spacing: 6px * root.s;
 
             Text {
-                width: 90px * root.s;
+                width: 130px * root.s;
                 text: root.pack.system + " " + root.pack.image-size;
                 color: #d7eef8;
                 font-size: 6px * root.s;
@@ -195,13 +195,6 @@ component ScreenshotPackProgressRow inherits Rectangle {
                 width: 86px * root.s;
                 text: root.pack.phase;
                 color: #06d6a0;
-                font-size: 6px * root.s;
-            }
-
-            Text {
-                width: 170px * root.s;
-                text: root.pack.bytes-label;
-                color: #9080a8;
                 font-size: 6px * root.s;
             }
 
@@ -223,6 +216,7 @@ component ScreenshotPackProgressRow inherits Rectangle {
             clip: true;
 
             if root.determinate : Rectangle {
+                x: 0;
                 width: parent.width * root.clamped-percent / 100;
                 height: parent.height;
                 background: #06d6a0;

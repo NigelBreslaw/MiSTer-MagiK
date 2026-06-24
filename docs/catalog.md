@@ -276,9 +276,10 @@ system requests, and runs at most three pack downloads concurrently.
 `320x320`. Progress is emitted as structured `screenshot_media_progress` startup
 events with system, size, phase, byte counts, pack index/count, and optional
 download Mbps. The catalog-build screen renders up to three compact active pack
-rows from the same events. Download and save phases show byte progress; verify,
-sync, rename, and parent sync are phase-only unless future evidence shows that
-more granularity is needed.
+rows from the same events. Each visible pack row uses one normalized progress
+bar: download fills 0-50%, verify advances to 60%, and saving fills the final
+60-100%. The row omits byte labels and keeps completed packs visible briefly so
+users can see every requested pack finish.
 
 The production path is the canonical `.mmlz4b` object served with
 `Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"`.
