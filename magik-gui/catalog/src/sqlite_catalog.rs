@@ -13,7 +13,7 @@ use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
     profile_id_for_discovery, system_title_for_discovery, unique_discovery_count,
-    DiscoverySourceKind,
+    DiscoverySourceKind, GameDiscovery,
 };
 use crate::launch_profiles::{self, MountKind, PayloadDisposition, RuleSourceKind};
 use crate::library_db::{
@@ -23,12 +23,12 @@ use crate::library_db::{
 use crate::media_metadata;
 use crate::preview_worker;
 use crate::software_identity::{
-    console_preview_asset, load_arcade_machine_metadata, load_mame_software_metadata,
+    console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
     PreviewArchivePaths, SoftwareHashCache,
 };
 use rusqlite::{params, Connection, OpenFlags};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -1493,16 +1493,23 @@ fn write_sqlite_scan_with_sources(
     let metadata_t = Instant::now();
     let mame_signature = library_db::file_signature(sources.mame_sqlite_path);
     let hbmame_signature = library_db::file_signature(sources.hbmame_sqlite_path);
+    let covered_payloads = covered_payload_paths(&scan.discoveries);
+    let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
+    let arcade_setnames = arcade_metadata_setnames(discoveries.values().copied());
     let software_metadata = load_mame_software_metadata(sources.mame_sqlite_path);
-    let arcade_metadata =
-        load_arcade_machine_metadata(sources.mame_sqlite_path, sources.hbmame_sqlite_path);
+    let arcade_metadata = load_arcade_machine_metadata_for_setnames(
+        sources.mame_sqlite_path,
+        sources.hbmame_sqlite_path,
+        &arcade_setnames,
+    );
     report_library_import_timing(
         "metadata_load",
         metadata_t,
         format!(
-            "mame={} hbmame={} software_lists={} preview_paths={}",
+            "mame={} hbmame={} mame_needed={} software_lists={} preview_paths={}",
             arcade_metadata.mame.len(),
             arcade_metadata.hbmame.len(),
+            arcade_setnames.len(),
             software_metadata.items.len(),
             sources.preview_paths.len()
         ),
@@ -1639,9 +1646,6 @@ fn write_sqlite_scan_with_sources(
                  VALUES (?1,?2,?3,?4)",
             )
             .map_err(|e| format!("prepare region metadata insert: {e}"))?;
-        let covered_payloads = covered_payload_paths(&scan.discoveries);
-        let discoveries =
-            preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
         let discovery_total = discoveries.len();
         let mut system_rows = HashMap::<String, (String, String)>::new();
         for discovery in discoveries.values() {
@@ -2079,6 +2083,14 @@ pub(crate) fn source_kind_name(kind: RuleSourceKind) -> &'static str {
         RuleSourceKind::ConfStr => "conf-str",
         RuleSourceKind::MagikProfile => "magik-profile",
     }
+}
+
+fn arcade_metadata_setnames<'a>(
+    discoveries: impl Iterator<Item = &'a GameDiscovery>,
+) -> HashSet<String> {
+    discoveries
+        .filter_map(mame_identity_for_discovery)
+        .collect()
 }
 
 pub(crate) fn mount_kind_str(kind: MountKind) -> &'static str {
