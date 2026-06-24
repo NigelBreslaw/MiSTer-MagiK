@@ -1143,7 +1143,9 @@ pub fn execute_game_launch_handoff_bench(
         fn wait_for_command_fifo(&mut self) -> bool {
             let start = Instant::now();
             thread::sleep(self.fifo_delay);
-            self.handoff_us = self.handoff_us.saturating_add(start.elapsed().as_micros() as u64);
+            self.handoff_us = self
+                .handoff_us
+                .saturating_add(start.elapsed().as_micros() as u64);
             false
         }
 
