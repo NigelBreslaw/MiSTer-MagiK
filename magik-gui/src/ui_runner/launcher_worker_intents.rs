@@ -406,11 +406,9 @@ fn media_progress_terminal_phase(phase: &str) -> bool {
 fn media_progress_percent(phase: &str, done: u64, total: u64) -> i32 {
     match phase {
         "check" | "download_start" => 0,
-        "download" => scaled_progress(done, total, 0, 50),
-        "download_done" => 50,
-        "verify" => 60,
-        "save" => scaled_progress(done, total, 60, 40),
-        "sync" | "rename" | "parent-sync" | "done" | "skipped-current" | "check-only" => 100,
+        "download" => scaled_progress(done, total, 0, 100),
+        "download_done" | "verify" | "save" | "sync" | "rename" | "parent-sync" | "done"
+        | "skipped-current" | "check-only" => 100,
         "failed" => scaled_progress(done, total, 0, 100),
         _ => scaled_progress(done, total, 0, 100),
     }
@@ -534,10 +532,10 @@ mod tests {
         let _ = display.progress_intent(&media_progress_event("neogeo", "save", 128, 1024, 2, 2));
 
         assert_eq!(display.active.len(), 2);
-        assert_eq!(display.active["arcade"].percent, 25);
+        assert_eq!(display.active["arcade"].percent, 50);
         assert_eq!(display.active["arcade"].phase, "download");
         assert_eq!(display.active["arcade"].bytes_label, "");
-        assert_eq!(display.active["neogeo"].percent, 65);
+        assert_eq!(display.active["neogeo"].percent, 100);
         assert_eq!(display.active["neogeo"].phase, "saving");
         assert_eq!(display.summary(), "screenshots 2 active · 0/2 done");
     }
@@ -612,11 +610,11 @@ mod tests {
     }
 
     #[test]
-    fn media_progress_percent_reserves_ranges_for_download_verify_and_save() {
-        assert_eq!(media_progress_percent("download", 512, 1024), 25);
-        assert_eq!(media_progress_percent("download_done", 1024, 1024), 50);
-        assert_eq!(media_progress_percent("verify", 1024, 1024), 60);
-        assert_eq!(media_progress_percent("save", 512, 1024), 80);
+    fn media_progress_percent_uses_download_for_full_streamed_pack_flow() {
+        assert_eq!(media_progress_percent("download", 512, 1024), 50);
+        assert_eq!(media_progress_percent("download_done", 1024, 1024), 100);
+        assert_eq!(media_progress_percent("verify", 1024, 1024), 100);
+        assert_eq!(media_progress_percent("save", 512, 1024), 100);
         assert_eq!(media_progress_percent("sync", 1024, 1024), 100);
         assert_eq!(media_progress_percent("done", 1024, 1024), 100);
     }
