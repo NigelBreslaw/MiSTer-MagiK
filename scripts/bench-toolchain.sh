@@ -281,14 +281,32 @@ function number_after(line, key, rest) {
   sub(/[^0-9].*/, "", rest)
   return rest + 0
 }
-/fallback=/ {
-  fallback += number_after($0, "fallback=")
-}
-/errors=/ {
-  errors += number_after($0, "errors=")
+/fps ~ / && /fallback=/ {
+  count++
+  hits[count] = number_after($0, "vsync hits=")
+  fallback[count] = number_after($0, "fallback=")
+  errors[count] = number_after($0, "errors=")
+  if (hits[count] > 100) cumulative = 1
 }
 END {
-  print fallback + 0, errors + 0
+  warmup = 3
+  if (count == 0) {
+    print 0, 0
+    exit
+  }
+  if (cumulative) {
+    base_i = (count < warmup) ? count : warmup
+    fallback_total = fallback[count] - fallback[base_i]
+    errors_total = errors[count] - errors[base_i]
+  } else {
+    for (i = warmup + 1; i <= count; i++) {
+      fallback_total += fallback[i]
+      errors_total += errors[i]
+    }
+  }
+  if (fallback_total < 0) fallback_total = 0
+  if (errors_total < 0) errors_total = 0
+  print fallback_total + 0, errors_total + 0
 }
 ' "$ui_log"
 }
@@ -419,6 +437,42 @@ run_self_test() {
     END { exit ok ? 0 : 1 }
   ' || {
     echo "self-test: split visual/timing/capture row was not written correctly" >&2
+    return 1
+  }
+
+  cat >"$tmp_dir/cumulative-warmup.log" <<'EOF'
+  fps ~ 61  | slint-render 850us  vsync-wait 15221us  fb-present 431us (314 logical rows avg)  vsync hits=60 timeouts=0 fallback=1 errors=0 hz=60.01
+  fps ~ 60  | slint-render 790us  vsync-wait 15427us  fb-present 420us (310 logical rows avg)  vsync hits=120 timeouts=0 fallback=1 errors=0 hz=60.01
+  fps ~ 61  | slint-render 793us  vsync-wait 15422us  fb-present 412us (310 logical rows avg)  vsync hits=181 timeouts=0 fallback=1 errors=0 hz=60.01
+  fps ~ 60  | slint-render 799us  vsync-wait 15400us  fb-present 436us (310 logical rows avg)  vsync hits=241 timeouts=0 fallback=1 errors=0 hz=60.02
+  fps ~ 61  | slint-render 790us  vsync-wait 15429us  fb-present 410us (310 logical rows avg)  vsync hits=302 timeouts=0 fallback=1 errors=0 hz=60.01
+EOF
+  [[ "$(parse_vsync_counters "$tmp_dir/cumulative-warmup.log")" == "0 0" ]] || {
+    echo "self-test: cumulative warmup fallback was not ignored" >&2
+    return 1
+  }
+
+  cat >"$tmp_dir/cumulative-post-warmup.log" <<'EOF'
+  fps ~ 61  | slint-render 850us  vsync-wait 15221us  fb-present 431us (314 logical rows avg)  vsync hits=60 timeouts=0 fallback=0 errors=0 hz=60.01
+  fps ~ 60  | slint-render 790us  vsync-wait 15427us  fb-present 420us (310 logical rows avg)  vsync hits=120 timeouts=0 fallback=0 errors=0 hz=60.01
+  fps ~ 61  | slint-render 793us  vsync-wait 15422us  fb-present 412us (310 logical rows avg)  vsync hits=181 timeouts=0 fallback=0 errors=0 hz=60.01
+  fps ~ 60  | slint-render 799us  vsync-wait 15400us  fb-present 436us (310 logical rows avg)  vsync hits=241 timeouts=0 fallback=1 errors=0 hz=60.02
+  fps ~ 61  | slint-render 790us  vsync-wait 15429us  fb-present 410us (310 logical rows avg)  vsync hits=302 timeouts=0 fallback=1 errors=1 hz=60.01
+EOF
+  [[ "$(parse_vsync_counters "$tmp_dir/cumulative-post-warmup.log")" == "1 1" ]] || {
+    echo "self-test: cumulative post-warmup fallback was not counted" >&2
+    return 1
+  }
+
+  cat >"$tmp_dir/window-post-warmup.log" <<'EOF'
+  fps ~ 61  | prepare 0us  anim 0us  slint-render 850us  custom-draw 0us  vsync-wait 15221us  fb-present 431us cached-present 0us overlay-present 0us (314 logical rows avg)  vsync hits=61 timeouts=0 fallback=3 errors=0
+  fps ~ 60  | prepare 0us  anim 0us  slint-render 790us  custom-draw 0us  vsync-wait 15427us  fb-present 420us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=60 timeouts=0 fallback=2 errors=0
+  fps ~ 61  | prepare 0us  anim 0us  slint-render 793us  custom-draw 0us  vsync-wait 15422us  fb-present 412us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=61 timeouts=0 fallback=1 errors=0
+  fps ~ 60  | prepare 0us  anim 0us  slint-render 799us  custom-draw 0us  vsync-wait 15400us  fb-present 436us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=59 timeouts=1 fallback=1 errors=0
+  fps ~ 61  | prepare 0us  anim 0us  slint-render 790us  custom-draw 0us  vsync-wait 15429us  fb-present 410us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=60 timeouts=0 fallback=0 errors=1
+EOF
+  [[ "$(parse_vsync_counters "$tmp_dir/window-post-warmup.log")" == "1 1" ]] || {
+    echo "self-test: windowed post-warmup fallback was not counted" >&2
     return 1
   }
 
