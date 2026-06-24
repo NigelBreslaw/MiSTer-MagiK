@@ -414,6 +414,63 @@ summarize_preview_timing() {
   ' "$log"
 }
 
+summarize_preview_latency() {
+  local name="$1" log="$2"
+  awk -v name="$name" '
+    function sort_values(values, count,    i, j, tmp) {
+      for (i = 1; i <= count; i++) {
+        for (j = i + 1; j <= count; j++) {
+          if (values[j] < values[i]) {
+            tmp = values[i]; values[i] = values[j]; values[j] = tmp
+          }
+        }
+      }
+    }
+    function print_metric(metric, values, count,    p95, p99) {
+      if (count == 0) {
+        printf "%s\t%s\t0\t0\t0\t0\n", name, metric
+        return
+      }
+      sort_values(values, count)
+      p95_raw = count * 0.95
+      p99_raw = count * 0.99
+      p95 = int(p95_raw); if (p95 < p95_raw) p95++
+      p99 = int(p99_raw); if (p99 < p99_raw) p99++
+      if (p95 < 1) p95 = 1; if (p95 > count) p95 = count
+      if (p99 < 1) p99 = 1; if (p99 > count) p99 = count
+      printf "%s\t%s\t%d\t%d\t%d\t%d\n", name, metric, count, values[p95], values[p99], values[count]
+    }
+    /preview_trace apply / {
+      selected = "unknown"
+      age = ""
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        if (kv[1] == "selected") selected = kv[2]
+        else if (kv[1] == "age_us") age = kv[2] + 0
+      }
+      if (selected == "true" && age != "") selected_apply[++selected_apply_n] = age
+    }
+    /preview_trace decoded / {
+      priority = "unknown"
+      queue_age = ""
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        if (kv[1] == "priority") priority = kv[2]
+        else if (kv[1] == "queue_age_us") queue_age = kv[2] + 0
+      }
+      if (queue_age != "") {
+        if (priority == "Selected") selected_decode[++selected_decode_n] = queue_age
+        else if (priority ~ /^Prefetch/) prefetch_decode[++prefetch_decode_n] = queue_age
+      }
+    }
+    END {
+      print_metric("selected_apply_age_us", selected_apply, selected_apply_n + 0)
+      print_metric("selected_decode_queue_age_us", selected_decode, selected_decode_n + 0)
+      print_metric("prefetch_decode_queue_age_us", prefetch_decode, prefetch_decode_n + 0)
+    }
+  ' "$log"
+}
+
 check_preview_hotpath_cache_gate() {
   local name="$1" log="$2"
   awk -v name="$name" -v allow="$allow_hotpath_misses" '
@@ -592,8 +649,9 @@ preview_trace apply generation=1 priority=Selected selected=true age_us=1 load_s
 preview_trace decoded generation=2 priority=Prefetch cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=b.png
 EOF
   cat >"$archive_mem_ok" <<'EOF'
-preview_trace decoded generation=1 priority=Selected cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
+preview_trace decoded generation=1 priority=Selected queue_age_us=7 cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
 preview_trace apply generation=1 priority=Selected selected=true age_us=1 load_source=archive_mem format=raw-rgb565 filter=Hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=a.png
+preview_trace decoded generation=2 priority=Prefetch queue_age_us=11 cache_hit=0 load_source=archive_mem format=raw-rgb565 filter=hybrid source=320x224 output=320x224 total_us=300 read_us=0 decode_us=300 resize_us=0 encoded_bytes=100 decoded_bytes=100 path=b.png
 EOF
   if check_preview_hotpath_io_gate selftest "$unexpected_read" >/dev/null 2>&1; then
     echo "preview hot-path io self-test expected unexpected file read failure" >&2
@@ -638,6 +696,10 @@ printf "arcade decoded=%s apply=%s\n" \
 echo
 echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tselected_file_reads'
 summarize_preview_timing arcade "$arcade_log"
+
+echo
+echo $'preview_latency\tmetric\trows\tp95_us\tp99_us\tmax_us'
+summarize_preview_latency arcade "$arcade_log"
 
 echo
 echo $'frame_pacing\tframes_after_30\tavg_wall_us\tp95_wall_us\tp99_wall_us\tavg_work_us\tp95_work_us\tp99_work_us\tavg_vsync_us\tp95_vsync_us\tp99_vsync_us\tavg_loop_delta_us\tp95_loop_delta_us\tp99_loop_delta_us\tslow_wall_gt_16_7ms\tslow_wall_gt_17ms\twork_gt_16_7ms\tvsync_gt_10ms\tlow_work_high_vsync_slow\tcpu_heavy_slow\tvsync_source_vsync\tvsync_source_fallback\tvsync_source_timeout\tvsync_source_error\tmax_vsync_miss_streak'
