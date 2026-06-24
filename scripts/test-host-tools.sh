@@ -46,6 +46,7 @@ for script in \
   "$ROOT/scripts/mister-magik-agent.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
   "$ROOT/scripts/profile-preview-scroll.sh" \
+  "$ROOT/scripts/profile-screenshot-download.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"

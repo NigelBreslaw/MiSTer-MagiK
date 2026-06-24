@@ -1,13 +1,18 @@
 use crate::artifact_publish::{
-    hidden_bench_temp_path_for, prepare_artifact_publish, sync_path_best_effort,
+    prepare_artifact_publish, sync_path_with_fallback, timestamped_temp_path_for,
     ArtifactPublishLabels,
 };
-use mister_magik_fb::media_update::{
-    parse_manifest_json, size_qualified_pack_path, valid_image_size, MediaPack, MediaVariant,
-    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
+use crate::media_pack_save::{
+    cleanup_pack_publish_temps, publish_pack_file_with_progress, PackSaveMetrics,
 };
+use mister_magik_fb::media_update::{
+    parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size, MediaPack,
+    MediaVariant, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
+};
+use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -241,7 +246,8 @@ fn run_one(
         .map_err(|e| format!("create work dir {}: {e}", work_dir.display()))?;
     let stamp = format!("{}-{}", std::process::id(), unix_ms_now());
     let encoded = work_dir.join(format!("{}.identity.{stamp}.encoded", pack.id));
-    let final_tmp = final_temp_path(local_path, &stamp);
+    let bench_final = bench_final_path(local_path, &stamp);
+    let bench_state = bench_state_path(&config.asset_dir, &stamp);
     let started = Instant::now();
     let mut row = BenchRow {
         label: label.to_string(),
@@ -265,9 +271,9 @@ fn run_one(
         let download_started = Instant::now();
         let metadata = download_to_path(&variant.url, &encoded)?;
         row.download_ms = elapsed_ms(download_started.elapsed());
-        row.etag = metadata.etag;
-        row.content_encoding = metadata.content_encoding;
-        row.cf_cache_status = metadata.cf_cache_status;
+        row.etag = metadata.etag.clone();
+        row.content_encoding = metadata.content_encoding.clone();
+        row.cf_cache_status = metadata.cf_cache_status.clone();
         row.encoded_bytes = file_len(&encoded)?;
 
         let verify_started = Instant::now();
@@ -281,26 +287,53 @@ fn run_one(
         verify_file(&encoded, pack.raw.bytes, &pack.raw.sha256)?;
         row.verify_ms += elapsed_ms(verify_started.elapsed());
 
-        let save_started = Instant::now();
-        copy_file_durable(&encoded, &final_tmp)?;
-        fs::remove_file(&final_tmp)
-            .map_err(|e| format!("remove bench temp {}: {e}", final_tmp.display()))?;
-        sync_path_best_effort(
-            local_path
-                .parent()
-                .unwrap_or_else(|| Path::new(DEFAULT_ASSET_DIR)),
+        let publish_metrics = publish_pack_file_with_progress(&encoded, &bench_final, |_| {})?;
+        emit_publish_stage_rows(label, pack, &publish_metrics);
+
+        let state_started = Instant::now();
+        write_bench_download_state(&bench_state, pack, &bench_final, variant, &metadata)?;
+        let state_ms = elapsed_ms(state_started.elapsed());
+        emit_stage_row(
+            label,
+            pack,
+            "state",
+            state_ms,
+            file_len(&bench_state).unwrap_or(0),
+            "bench-ok",
+            &format!("path={}", bench_state.display()),
         );
-        row.save_ms = elapsed_ms(save_started.elapsed());
+        row.save_ms = publish_metrics.total_ms + state_ms;
         Ok::<(), String>(())
     })();
+    let cleanup_started = Instant::now();
+    let cleanup_result = cleanup_bench_artifacts(&encoded, &bench_final, &bench_state);
+    let cleanup_ms = elapsed_ms(cleanup_started.elapsed());
+    let cleanup_detail = cleanup_result
+        .as_ref()
+        .map(|removed| format!("removed={removed}"))
+        .unwrap_or_else(|error| tsv(error));
+    emit_stage_row(
+        label,
+        pack,
+        "cleanup",
+        cleanup_ms,
+        0,
+        cleanup_result
+            .as_ref()
+            .map(|_| "bench-ok")
+            .unwrap_or("bench-cleanup-failed"),
+        &cleanup_detail,
+    );
     if let Err(error) = result {
         row.result = error;
+    } else if let Err(error) = cleanup_result {
+        row.result = error;
+    } else {
+        row.save_ms += cleanup_ms;
     }
     row.total_ms = elapsed_ms(started.elapsed());
     row.wire_mbps = mbps(row.encoded_bytes, row.download_ms);
     row.decoded_mbps = mbps(row.decoded_bytes, row.total_ms);
-    let _ = fs::remove_file(&encoded);
-    let _ = fs::remove_file(&final_tmp);
     if row.result != "bench-ok" {
         return Err(row.to_tsv());
     }
@@ -377,33 +410,177 @@ fn sha256_hex(path: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("could not parse sha256sum output: {text}"))
 }
 
-fn copy_file_durable(src: &Path, dst: &Path) -> Result<(), String> {
+fn emit_publish_stage_rows(label: &str, pack: &MediaPack, metrics: &PackSaveMetrics) {
+    for (stage, ms) in [
+        ("publish_copy", metrics.copy_ms),
+        ("publish_sync", metrics.sync_ms),
+        ("publish_rename", metrics.rename_ms),
+        ("publish_parent_sync", metrics.parent_sync_ms),
+    ] {
+        emit_stage_row(
+            label,
+            pack,
+            stage,
+            ms,
+            metrics.bytes,
+            "bench-ok",
+            &format!("progress_events={}", metrics.progress_events),
+        );
+    }
+}
+
+fn emit_stage_row(
+    label: &str,
+    pack: &MediaPack,
+    stage: &str,
+    ms: u64,
+    bytes: u64,
+    result: &str,
+    detail: &str,
+) {
+    println!(
+        "stage_tsv\tlabel={}\tsuite_label={}\tbenchmark=media-bench-download\tsystem={}\tstage={}\tms={}\tbytes={}\tresult={}\tdetail={}",
+        tsv(label),
+        suite_label(label),
+        tsv(&pack.id),
+        tsv(stage),
+        ms,
+        bytes,
+        tsv(result),
+        tsv(detail)
+    );
+}
+
+fn suite_label(label: &str) -> String {
+    label
+        .rsplit_once('-')
+        .and_then(|(prefix, suffix)| {
+            (suffix.len() == 2 && suffix.chars().all(|ch| ch.is_ascii_digit())).then_some(prefix)
+        })
+        .unwrap_or(label)
+        .to_string()
+}
+
+fn bench_final_path(local_path: &Path, stamp: &str) -> PathBuf {
+    let file_name = local_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("screenshot-pack");
+    local_path.with_file_name(format!(".{file_name}.bench-{stamp}"))
+}
+
+fn bench_state_path(asset_dir: &Path, stamp: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "{}.bench-{stamp}",
+        state_path(&asset_dir.display().to_string())
+    ))
+}
+
+fn write_bench_download_state(
+    path: &Path,
+    pack: &MediaPack,
+    local_path: &Path,
+    variant: &MediaVariant,
+    metadata: &HttpMetadata,
+) -> Result<(), String> {
+    let mut root = fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let systems = root
+        .entry("systems".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let systems = systems
+        .as_object_mut()
+        .ok_or("media state systems must be an object")?;
+    let system = systems
+        .entry(pack.id.clone())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let system = system
+        .as_object_mut()
+        .ok_or("media state system entry must be an object")?;
+    system.insert(
+        "preferred_size".to_string(),
+        Value::String(pack.image_size.clone()),
+    );
+    system.insert(
+        "preferred_variant".to_string(),
+        Value::String("identity".to_string()),
+    );
+    let packs = system
+        .entry("packs".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let packs = packs
+        .as_object_mut()
+        .ok_or("media state packs must be an object")?;
+    packs.insert(
+        pack.image_size.clone(),
+        serde_json::json!({
+            "version": pack.version,
+            "image_size": pack.image_size,
+            "sha256": pack.raw.sha256,
+            "bytes": pack.raw.bytes,
+            "variant": "identity",
+            "compression": variant.compression,
+            "local_path": local_path.display().to_string(),
+            "object": variant.object,
+            "updated_at_unix": unix_secs_now(),
+            "cache": {
+                "etag": metadata.etag,
+                "content_encoding": metadata.content_encoding,
+                "cf_cache_status": metadata.cf_cache_status,
+                "source": "media-bench-download",
+            },
+        }),
+    );
+    root.insert("schema".to_string(), Value::from(1));
+    root.insert("updated_at_unix".to_string(), Value::from(unix_secs_now()));
+    write_json_atomic(path, &Value::Object(root))
+}
+
+fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
     let publish = prepare_artifact_publish(
-        dst,
-        dst.to_path_buf(),
+        path,
+        timestamped_temp_path_for(path, "media-state", unix_ms_now()),
         ArtifactPublishLabels {
-            destination: "bench temp",
-            parent: "bench temp parent",
+            destination: "bench media state",
+            parent: "bench media state parent",
         },
     )?;
-    let mut input = File::open(src).map_err(|e| format!("open {}: {e}", src.display()))?;
-    let mut output = File::create(publish.temp_path())
-        .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
-    std::io::copy(&mut input, &mut output).map_err(|e| {
-        format!(
-            "copy {} -> {}: {e}",
-            src.display(),
-            publish.temp_path().display()
-        )
-    })?;
-    output
-        .sync_all()
-        .map_err(|e| format!("sync {}: {e}", publish.temp_path().display()))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(publish.temp_path())
+        .map_err(|e| format!("create state tmp {}: {e}", publish.temp_path().display()))?;
+    let text =
+        serde_json::to_string_pretty(value).map_err(|e| format!("serialize media state: {e}"))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|e| format!("write media state {}: {e}", publish.temp_path().display()))?;
+    file.sync_all()
+        .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
+    publish.install_temp(Some("bench media state"))?;
+    sync_path_with_fallback(publish.parent());
     Ok(())
 }
 
-fn final_temp_path(local_path: &Path, stamp: &str) -> PathBuf {
-    hidden_bench_temp_path_for(local_path, "screenshot-pack", stamp)
+fn cleanup_bench_artifacts(
+    encoded: &Path,
+    bench_final: &Path,
+    bench_state: &Path,
+) -> Result<usize, String> {
+    let mut removed = 0usize;
+    cleanup_pack_publish_temps(bench_final);
+    for path in [encoded, bench_final, bench_state] {
+        match fs::remove_file(path) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("remove bench artifact {}: {error}", path.display())),
+        }
+    }
+    Ok(removed)
 }
 
 fn file_len(path: &Path) -> Result<u64, String> {
@@ -432,6 +609,13 @@ fn unix_ms_now() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn unix_secs_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
 
@@ -469,6 +653,34 @@ fn tsv(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn test_pack() -> MediaPack {
+        MediaPack {
+            id: "neogeo".to_string(),
+            version: "2026-06-24".to_string(),
+            image_size: "320x320".to_string(),
+            raw: test_variant(),
+            variants: vec![test_variant()],
+        }
+    }
+
+    fn test_variant() -> MediaVariant {
+        MediaVariant {
+            compression: "none".to_string(),
+            codec: "mmlz4b".to_string(),
+            object: "packs/neogeo.mmlz4b".to_string(),
+            bytes: 4,
+            sha256: "abcd".to_string(),
+            url: "https://assets.example.test/packs/neogeo.mmlz4b".to_string(),
+        }
+    }
 
     #[test]
     fn parses_benchmark_args() {
@@ -513,5 +725,62 @@ mod tests {
         assert_eq!(metadata.etag, "\"abc\"");
         assert_eq!(metadata.cf_cache_status, "HIT");
         assert_eq!(metadata.content_encoding, "identity");
+    }
+
+    #[test]
+    fn derives_suite_labels_from_iteration_labels() {
+        assert_eq!(suite_label("DL-20260624-01"), "DL-20260624");
+        assert_eq!(suite_label("DL-20260624"), "DL-20260624");
+    }
+
+    #[test]
+    fn benchmark_paths_are_hidden_and_label_scoped() {
+        let final_path =
+            Path::new("/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b");
+        assert_eq!(
+            bench_final_path(final_path, "123").display().to_string(),
+            "/media/fat/mister-magik/assets/.neogeo-screenshots-320x320.mmlz4b.bench-123"
+        );
+        assert_eq!(
+            bench_state_path(Path::new("/media/fat/mister-magik/assets"), "123")
+                .display()
+                .to_string(),
+            "/media/fat/mister-magik/assets/.screenshot-media-state.json.bench-123"
+        );
+    }
+
+    #[test]
+    fn writes_benchmark_download_state_without_touching_production_state() {
+        let dir = temp_dir("mister-magik-download-bench-state");
+        let state = bench_state_path(&dir, "state-test");
+        let final_path = dir.join(".neogeo-screenshots-320x320.mmlz4b.bench-state-test");
+        let metadata = HttpMetadata {
+            etag: "\"etag\"".to_string(),
+            content_encoding: "identity".to_string(),
+            cf_cache_status: "HIT".to_string(),
+        };
+
+        write_bench_download_state(
+            &state,
+            &test_pack(),
+            &final_path,
+            &test_variant(),
+            &metadata,
+        )
+        .unwrap();
+
+        let value: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        assert_eq!(value["schema"], 1);
+        assert_eq!(
+            value["systems"]["neogeo"]["packs"]["320x320"]["local_path"],
+            final_path.display().to_string()
+        );
+        assert_eq!(
+            value["systems"]["neogeo"]["packs"]["320x320"]["cache"]["cf_cache_status"],
+            "HIT"
+        );
+        assert!(!dir.join(".screenshot-media-state.json").exists());
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -73,7 +73,12 @@ esac
 mkdir -p "$BENCH_DIR"
 if [[ "$REPLACE_LABEL" -eq 1 && -f "$TSV" ]]; then
   tmp="$(mktemp)"
-  { head -1 "$TSV"; grep -v "^screenshot_download_bench_tsv	${LABEL}	" "$TSV" | tail -n +2; } >"$tmp" || true
+  awk -v label="$LABEL" -F '\t' '
+    NR == 1 { print; next }
+    $1 == "screenshot_download_bench_tsv" && ($2 == label || index($2, label "-") == 1) { next }
+    $1 == "stage_tsv" && index($0, "\tsuite_label=" label "\t") > 0 { next }
+    { print }
+  ' "$TSV" >"$tmp" || true
   mv "$tmp" "$TSV"
 fi
 
@@ -96,7 +101,7 @@ printf '%s\n' "$out"
 if [[ ! -f "$TSV" ]]; then
   printf 'type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult\n' >"$TSV"
 fi
-printf '%s\n' "$out" | grep '^screenshot_download_bench_tsv	' >>"$TSV" || true
+printf '%s\n' "$out" | grep -E '^(screenshot_download_bench_tsv|stage_tsv)	' >>"$TSV" || true
 if [[ "$SAVE_PREFERENCE" -eq 1 ]]; then
   echo "warning: --save-preference is ignored by the MagiK benchmark wrapper" >&2
 fi
