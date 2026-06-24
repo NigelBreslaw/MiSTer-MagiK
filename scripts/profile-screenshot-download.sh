@@ -15,12 +15,13 @@ ITERATIONS=1
 PRIME_CACHE=0
 SAVE_PREFERENCE=0
 MAX_SAVE_MS=""
+SAVE_STRATEGY="staged"
 REPLACE_LABEL=0
 REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variant identity] [--iterations N] [--prime-cache] [--manifest-url URL] [--max-save-ms MS] [--replace-label]
+Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variant identity] [--iterations N] [--prime-cache] [--manifest-url URL] [--save-strategy staged|stream-fat] [--max-save-ms MS] [--replace-label]
 
 Benchmarks screenshot pack download paths inside the deployed MagiK binary on
 the MiSTer. The timing rows include network download, decompression,
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --prime-cache) PRIME_CACHE=1; shift ;;
     --manifest-url) MANIFEST_URL="${2:?}"; shift 2 ;;
     --max-save-ms) MAX_SAVE_MS="${2:?}"; shift 2 ;;
+    --save-strategy) SAVE_STRATEGY="${2:?}"; shift 2 ;;
     --save-preference) SAVE_PREFERENCE=1; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -76,6 +78,10 @@ case "$VARIANT" in
   identity|none|plain) ;;
   *) echo "MagiK only benchmarks the raw identity screenshot variant" >&2; exit 2 ;;
 esac
+case "$SAVE_STRATEGY" in
+  staged|stream-fat) ;;
+  *) echo "save-strategy must be staged or stream-fat" >&2; exit 2 ;;
+esac
 mkdir -p "$BENCH_DIR"
 if [[ "$REPLACE_LABEL" -eq 1 && -f "$TSV" ]]; then
   tmp="$(mktemp)"
@@ -83,6 +89,8 @@ if [[ "$REPLACE_LABEL" -eq 1 && -f "$TSV" ]]; then
     NR == 1 { print; next }
     $1 == "screenshot_download_bench_tsv" && ($2 == label || index($2, label "-") == 1) { next }
     $1 == "stage_tsv" && index($0, "\tsuite_label=" label "\t") > 0 { next }
+    $1 == "metric_tsv" && index($0, "\tsuite_label=" label "\t") > 0 { next }
+    $1 == "validity_tsv" && index($0, "\tlabel=" label "\t") > 0 { next }
     { print }
   ' "$TSV" >"$tmp" || true
   mv "$tmp" "$TSV"
@@ -192,6 +200,7 @@ remote_cmd+=" --system $(shell_quote "$SYSTEM")"
 remote_cmd+=" --variant $(shell_quote "$VARIANT")"
 remote_cmd+=" --iterations $(shell_quote "$ITERATIONS")"
 remote_cmd+=" --manifest-url $(shell_quote "$MANIFEST_URL")"
+remote_cmd+=" --save-strategy $(shell_quote "$SAVE_STRATEGY")"
 if [[ "$PRIME_CACHE" -eq 1 ]]; then
   remote_cmd+=" --prime-cache"
 fi
