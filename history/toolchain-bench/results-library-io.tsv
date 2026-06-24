@@ -491,3 +491,446 @@ FINAL-LIBIO-20260624	import_stage_total	4926											path=/tmp/mister-magik/sq
 FINAL-LIBIO-20260624	sqlite_publish_progress	2											bytes=18026496 copy_ms=1507 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 FINAL-LIBIO-20260624	refresh_done	0											skipped=false bytes=18026496 scan_us=2715090 discover_us=2007160 classify_us=2562816 import_us=7078451 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
 FINAL-LIBIO-20260624	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	0	0	1	0	0	4327	9217	5695	1657	21912	107	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	2	73	59	0	0	4423	9352	5696	1657	21912	107	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	3	151	101	0	4096	4523	9478	5698	1657	21912	114	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	4	252	111	0	4096	4648	9581	5698	1657	21912	114	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	5	356	120	0	4096	4779	9683	5698	1657	21912	114	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	6	462	126	0	4096	4910	9780	5698	1657	21912	114	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	7	567	133	0	4096	5037	9882	5698	1657	21912	114	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	8	674	137	0	4096	5169	9978	5698	1657	21912	115	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	10	678	150	0	11296768	5196	10083	5698	1741	21912	159	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	sample	11	727	162	0	18055168	5273	10188	5698	1782	21912	187	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+PERFREVIEW-20260624-LIBIO	scan_stage_first_candidate	57											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERFREVIEW-20260624-LIBIO	scan_stage_first_discovery	62											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	580											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	75											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	176											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	8											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	26											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	393											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	39											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	305											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	290											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	117											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	287											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	135											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	17											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PERFREVIEW-20260624-LIBIO	scan_stage_walk_target	2											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PERFREVIEW-20260624-LIBIO	scan_stage_walk	1893											candidates=7905
+PERFREVIEW-20260624-LIBIO	scan_stage_profile_match	73											calls=7905
+PERFREVIEW-20260624-LIBIO	scan_stage_installed_collection	110											calls=7513
+PERFREVIEW-20260624-LIBIO	scan_stage_archive_toc	33											containers=154
+PERFREVIEW-20260624-LIBIO	scan_stage_collection_listings	0											collections=0
+PERFREVIEW-20260624-LIBIO	scan_stage_file_discovery	2159											files=7511
+PERFREVIEW-20260624-LIBIO	scan_stage_classify_total	2588											discoveries=9354 normal_files=7897 containers=154 entries=281
+PERFREVIEW-20260624-LIBIO	import_stage_schema	11											tables=14
+PERFREVIEW-20260624-LIBIO	import_stage_metadata_load	1440											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+PERFREVIEW-20260624-LIBIO	import_stage_begin_tx	0											
+PERFREVIEW-20260624-LIBIO	import_stage_insert_profiles	1											rows=16
+PERFREVIEW-20260624-LIBIO	import_stage_insert_payloads	477											normal_files=7897 entries=281
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	181											from=0 to=1000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	165											from=1000 to=2000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	183											from=2000 to=3000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	187											from=3000 to=4000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	186											from=4000 to=5000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	216											from=5000 to=6000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	226											from=6000 to=7000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	259											from=7000 to=8000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	251											from=8000 to=9000 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	78											from=9000 to=9229 total=9229
+PERFREVIEW-20260624-LIBIO	import_stage_insert_games_total	2096											rows=9229 launcher_rows=6245
+PERFREVIEW-20260624-LIBIO	import_stage_materialize_arcade_ui	471											
+PERFREVIEW-20260624-LIBIO	import_stage_insert_launcher_arcade	12											
+PERFREVIEW-20260624-LIBIO	import_stage_insert_launcher_console	225											rows=6185
+PERFREVIEW-20260624-LIBIO	import_stage_insert_meta	159											rows=11
+PERFREVIEW-20260624-LIBIO	import_stage_insert_catalog_stamp	0											rows=11
+PERFREVIEW-20260624-LIBIO	import_stage_insert_software_hash_cache	0											rows=0
+PERFREVIEW-20260624-LIBIO	import_stage_commit	8											
+PERFREVIEW-20260624-LIBIO	import_stage_total	4918											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1682
+PERFREVIEW-20260624-LIBIO	sqlite_publish_progress	2											bytes=18026496 copy_ms=1623 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+PERFREVIEW-20260624-LIBIO	refresh_done	0											skipped=false bytes=18026496 scan_us=2734028 discover_us=1892866 classify_us=2588224 import_us=7177473 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+PERFREVIEW-20260624-LIBIO	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	0	0	1	0	0	9026	23828	21911	2104	22787	226	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	1	60	67	2623488	0	9111	23972	21911	2105	23024	226	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	3	136	105	3140608	0	9210	24096	21913	2105	23076	226	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	4	234	119	3140608	0	9334	24204	21913	2105	23076	232	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	5	338	127	3140608	0	9462	24304	21913	2105	23076	232	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	6	444	133	3140608	0	9592	24402	21913	2105	23076	232	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	7	550	139	3140608	0	9719	24504	21913	2105	23076	232	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	8	655	145	3140608	0	9848	24605	21913	2105	23076	232	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	9	674	160	3140608	12079104	9889	24715	21913	2175	23076	280	disk_io_ms=839 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	sample	11	729	173	3140608	18059264	9972	24822	21913	2208	23076	305	disk_io_ms=1253 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-BEFORE-zip-toc	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ITEM11-BEFORE-zip-toc	scan_stage_first_candidate	48											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM11-BEFORE-zip-toc	scan_stage_first_discovery	79											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	509											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	55											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	148											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	10											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	386											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	29											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	342											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	321											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	114											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	305											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	123											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	21											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ITEM11-BEFORE-zip-toc	scan_stage_walk_target	8											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ITEM11-BEFORE-zip-toc	scan_stage_walk	1876											candidates=7905
+ITEM11-BEFORE-zip-toc	scan_stage_profile_match	78											calls=7905
+ITEM11-BEFORE-zip-toc	scan_stage_installed_collection	78											calls=7513
+ITEM11-BEFORE-zip-toc	scan_stage_archive_toc	27											containers=154
+ITEM11-BEFORE-zip-toc	scan_stage_collection_listings	0											collections=0
+ITEM11-BEFORE-zip-toc	scan_stage_file_discovery	2328											files=7511
+ITEM11-BEFORE-zip-toc	scan_stage_classify_total	2727											discoveries=9354 normal_files=7897 containers=154 entries=281
+ITEM11-BEFORE-zip-toc	import_stage_schema	12											tables=14
+ITEM11-BEFORE-zip-toc	import_stage_metadata_load	1451											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+ITEM11-BEFORE-zip-toc	import_stage_begin_tx	0											
+ITEM11-BEFORE-zip-toc	import_stage_insert_profiles	0											rows=16
+ITEM11-BEFORE-zip-toc	import_stage_insert_payloads	484											normal_files=7897 entries=281
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	168											from=1000 to=2000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	183											from=2000 to=3000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	185											from=3000 to=4000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	222											from=4000 to=5000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	185											from=5000 to=6000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	227											from=6000 to=7000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	261											from=7000 to=8000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	255											from=8000 to=9000 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	102											from=9000 to=9229 total=9229
+ITEM11-BEFORE-zip-toc	import_stage_insert_games_total	2124											rows=9229 launcher_rows=6245
+ITEM11-BEFORE-zip-toc	import_stage_materialize_arcade_ui	443											
+ITEM11-BEFORE-zip-toc	import_stage_insert_launcher_arcade	12											
+ITEM11-BEFORE-zip-toc	import_stage_insert_launcher_console	235											rows=6185
+ITEM11-BEFORE-zip-toc	import_stage_insert_meta	158											rows=11
+ITEM11-BEFORE-zip-toc	import_stage_insert_catalog_stamp	0											rows=11
+ITEM11-BEFORE-zip-toc	import_stage_insert_software_hash_cache	0											rows=0
+ITEM11-BEFORE-zip-toc	import_stage_commit	8											
+ITEM11-BEFORE-zip-toc	import_stage_total	4945											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1827
+ITEM11-BEFORE-zip-toc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1387 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ITEM11-BEFORE-zip-toc	refresh_done	0											skipped=false bytes=18026496 scan_us=2875279 discover_us=1875838 classify_us=2727285 import_us=6994598 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ITEM11-BEFORE-zip-toc	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	0	0	1	0	0	10614	26594	22914	2256	23076	333	disk_io_ms=1803 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	1	70	64	0	0	10705	26731	22915	2256	23076	333	disk_io_ms=1803 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	3	153	105	0	0	10811	26854	22915	2256	23076	333	disk_io_ms=1803 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	4	253	115	0	0	10933	26960	22915	2256	23076	333	disk_io_ms=1803 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	5	356	121	0	0	11059	27063	22915	2256	23076	340	disk_io_ms=1822 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	6	460	127	0	0	11188	27163	22915	2256	23076	340	disk_io_ms=1822 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	7	564	136	0	0	11316	27266	22915	2256	23076	340	disk_io_ms=1822 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	8	670	140	0	278528	11440	27364	22915	2257	23076	343	disk_io_ms=1865 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	9	670	156	0	13950976	11463	27477	22915	2334	23076	408	disk_io_ms=2828 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	sample	10	729	166	0	18108416	11548	27581	22915	2369	23076	427	disk_io_ms=3231 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM11-AFTER-zip-toc	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ITEM11-AFTER-zip-toc	scan_stage_first_candidate	49											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM11-AFTER-zip-toc	scan_stage_first_discovery	53											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	536											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	87											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	166											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	25											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	386											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	57											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	282											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	284											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	116											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	337											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	130											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	15											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ITEM11-AFTER-zip-toc	scan_stage_walk_target	10											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ITEM11-AFTER-zip-toc	scan_stage_walk	1909											candidates=7905
+ITEM11-AFTER-zip-toc	scan_stage_profile_match	98											calls=7905
+ITEM11-AFTER-zip-toc	scan_stage_installed_collection	88											calls=7513
+ITEM11-AFTER-zip-toc	scan_stage_archive_toc	9											containers=154
+ITEM11-AFTER-zip-toc	scan_stage_collection_listings	0											collections=0
+ITEM11-AFTER-zip-toc	scan_stage_file_discovery	2109											files=7511
+ITEM11-AFTER-zip-toc	scan_stage_classify_total	2503											discoveries=9354 normal_files=7897 containers=154 entries=281
+ITEM11-AFTER-zip-toc	import_stage_schema	12											tables=14
+ITEM11-AFTER-zip-toc	import_stage_metadata_load	1483											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+ITEM11-AFTER-zip-toc	import_stage_begin_tx	0											
+ITEM11-AFTER-zip-toc	import_stage_insert_profiles	1											rows=16
+ITEM11-AFTER-zip-toc	import_stage_insert_payloads	464											normal_files=7897 entries=281
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	164											from=1000 to=2000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	181											from=2000 to=3000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	183											from=3000 to=4000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	177											from=4000 to=5000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	233											from=5000 to=6000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	226											from=6000 to=7000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	258											from=7000 to=8000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	250											from=8000 to=9000 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	77											from=9000 to=9229 total=9229
+ITEM11-AFTER-zip-toc	import_stage_insert_games_total	2107											rows=9229 launcher_rows=6245
+ITEM11-AFTER-zip-toc	import_stage_materialize_arcade_ui	483											
+ITEM11-AFTER-zip-toc	import_stage_insert_launcher_arcade	12											
+ITEM11-AFTER-zip-toc	import_stage_insert_launcher_console	218											rows=6185
+ITEM11-AFTER-zip-toc	import_stage_insert_meta	157											rows=11
+ITEM11-AFTER-zip-toc	import_stage_insert_catalog_stamp	0											rows=11
+ITEM11-AFTER-zip-toc	import_stage_insert_software_hash_cache	0											rows=0
+ITEM11-AFTER-zip-toc	import_stage_commit	8											
+ITEM11-AFTER-zip-toc	import_stage_total	4963											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2020
+ITEM11-AFTER-zip-toc	sqlite_publish_progress	2											bytes=18026496 copy_ms=1544 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ITEM11-AFTER-zip-toc	refresh_done	0											skipped=false bytes=18026496 scan_us=2646070 discover_us=1908766 classify_us=2503280 import_us=7133660 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ITEM11-AFTER-zip-toc	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	0	0	1	0	0	15213	41736	39210	2370	23076	441	disk_io_ms=3269 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	1	75	62	0	0	15310	41872	39210	2370	23076	441	disk_io_ms=3269 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	2	150	103	0	0	15412	41999	39211	2370	23076	441	disk_io_ms=3269 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	3	253	112	0	0	15536	42105	39211	2370	23076	449	disk_io_ms=3287 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	4	356	119	0	0	15663	42206	39211	2370	23076	449	disk_io_ms=3287 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	5	459	123	0	0	15789	42309	39211	2370	23076	449	disk_io_ms=3287 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	7	562	131	0	0	15913	42413	39211	2370	23076	449	disk_io_ms=3287 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	8	667	136	0	0	16044	42510	39211	2370	23076	449	disk_io_ms=3287 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	9	675	151	0	13152256	16073	42624	39211	2447	23076	513	disk_io_ms=4231 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	sample	10	740	162	0	18087936	16165	42730	39211	2475	23076	532	disk_io_ms=4561 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ITEM12-BEFORE-metadata-caps	scan_stage_first_candidate	50											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM12-BEFORE-metadata-caps	scan_stage_first_discovery	54											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	538											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	89											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	193											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	25											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	396											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	51											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	330											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	283											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	108											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	316											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	117											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	16											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ITEM12-BEFORE-metadata-caps	scan_stage_walk_target	2											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ITEM12-BEFORE-metadata-caps	scan_stage_walk	1951											candidates=7905
+ITEM12-BEFORE-metadata-caps	scan_stage_profile_match	65											calls=7905
+ITEM12-BEFORE-metadata-caps	scan_stage_installed_collection	96											calls=7513
+ITEM12-BEFORE-metadata-caps	scan_stage_archive_toc	15											containers=154
+ITEM12-BEFORE-metadata-caps	scan_stage_collection_listings	0											collections=0
+ITEM12-BEFORE-metadata-caps	scan_stage_file_discovery	2161											files=7511
+ITEM12-BEFORE-metadata-caps	scan_stage_classify_total	2561											discoveries=9354 normal_files=7897 containers=154 entries=281
+ITEM12-BEFORE-metadata-caps	import_stage_schema	12											tables=14
+ITEM12-BEFORE-metadata-caps	import_stage_metadata_load	1474											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+ITEM12-BEFORE-metadata-caps	import_stage_begin_tx	0											
+ITEM12-BEFORE-metadata-caps	import_stage_insert_profiles	1											rows=16
+ITEM12-BEFORE-metadata-caps	import_stage_insert_payloads	492											normal_files=7897 entries=281
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	165											from=1000 to=2000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	206											from=2000 to=3000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	184											from=3000 to=4000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	203											from=4000 to=5000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	212											from=5000 to=6000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	226											from=6000 to=7000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	259											from=7000 to=8000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	250											from=8000 to=9000 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	77											from=9000 to=9229 total=9229
+ITEM12-BEFORE-metadata-caps	import_stage_insert_games_total	2125											rows=9229 launcher_rows=6245
+ITEM12-BEFORE-metadata-caps	import_stage_materialize_arcade_ui	483											
+ITEM12-BEFORE-metadata-caps	import_stage_insert_launcher_arcade	12											
+ITEM12-BEFORE-metadata-caps	import_stage_insert_launcher_console	217											rows=6185
+ITEM12-BEFORE-metadata-caps	import_stage_insert_meta	156											rows=11
+ITEM12-BEFORE-metadata-caps	import_stage_insert_catalog_stamp	0											rows=11
+ITEM12-BEFORE-metadata-caps	import_stage_insert_software_hash_cache	0											rows=0
+ITEM12-BEFORE-metadata-caps	import_stage_commit	8											
+ITEM12-BEFORE-metadata-caps	import_stage_total	4998											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2255
+ITEM12-BEFORE-metadata-caps	sqlite_publish_progress	1											bytes=18026496 copy_ms=1404 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ITEM12-BEFORE-metadata-caps	refresh_done	0											skipped=false bytes=18026496 scan_us=2704220 discover_us=1950828 classify_us=2560632 import_us=7072425 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ITEM12-BEFORE-metadata-caps	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	0	0	1	0	0	26702	80694	82153	2731	23228	675	disk_io_ms=7660 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	1	83	63	0	0	26806	80826	82153	2731	23228	675	disk_io_ms=7660 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	3	161	102	626688	0	26908	80952	82153	2733	23289	675	disk_io_ms=7771 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	4	265	111	626688	0	27037	81054	82153	2733	23289	682	disk_io_ms=7917 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	5	369	119	626688	0	27162	81158	82153	2733	23289	682	disk_io_ms=7917 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	6	474	125	626688	0	27289	81259	82153	2733	23289	682	disk_io_ms=7917 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	7	579	131	626688	0	27420	81360	82153	2733	23289	682	disk_io_ms=7917 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	8	675	135	626688	802816	27534	81458	82153	2740	23289	686	disk_io_ms=8031 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	9	675	147	626688	10788864	27556	81566	82153	2824	23289	733	disk_io_ms=8997 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	sample	10	721	160	626688	18083840	27629	81675	82153	2867	23289	762	disk_io_ms=9513 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM12-AFTER-metadata-caps	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ITEM12-AFTER-metadata-caps	scan_stage_first_candidate	52											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM12-AFTER-metadata-caps	scan_stage_first_discovery	56											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	514											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	84											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	172											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	19											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	404											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	52											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	364											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	273											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	132											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	302											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	120											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	10											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ITEM12-AFTER-metadata-caps	scan_stage_walk_target	6											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ITEM12-AFTER-metadata-caps	scan_stage_walk	1973											candidates=7905
+ITEM12-AFTER-metadata-caps	scan_stage_profile_match	69											calls=7905
+ITEM12-AFTER-metadata-caps	scan_stage_installed_collection	82											calls=7513
+ITEM12-AFTER-metadata-caps	scan_stage_archive_toc	9											containers=154
+ITEM12-AFTER-metadata-caps	scan_stage_collection_listings	0											collections=0
+ITEM12-AFTER-metadata-caps	scan_stage_file_discovery	2091											files=7511
+ITEM12-AFTER-metadata-caps	scan_stage_classify_total	2494											discoveries=9354 normal_files=7897 containers=154 entries=281
+ITEM12-AFTER-metadata-caps	import_stage_schema	12											tables=14
+ITEM12-AFTER-metadata-caps	import_stage_metadata_load	1486											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+ITEM12-AFTER-metadata-caps	import_stage_begin_tx	0											
+ITEM12-AFTER-metadata-caps	import_stage_insert_profiles	1											rows=16
+ITEM12-AFTER-metadata-caps	import_stage_insert_payloads	441											normal_files=7897 entries=281
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	184											from=0 to=1000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	166											from=1000 to=2000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	183											from=2000 to=3000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	186											from=3000 to=4000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	178											from=4000 to=5000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	231											from=5000 to=6000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	231											from=6000 to=7000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	260											from=7000 to=8000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	252											from=8000 to=9000 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	65											from=9000 to=9229 total=9229
+ITEM12-AFTER-metadata-caps	import_stage_insert_games_total	2113											rows=9229 launcher_rows=6245
+ITEM12-AFTER-metadata-caps	import_stage_materialize_arcade_ui	497											
+ITEM12-AFTER-metadata-caps	import_stage_insert_launcher_arcade	12											
+ITEM12-AFTER-metadata-caps	import_stage_insert_launcher_console	217											rows=6185
+ITEM12-AFTER-metadata-caps	import_stage_insert_meta	134											rows=11
+ITEM12-AFTER-metadata-caps	import_stage_insert_catalog_stamp	0											rows=11
+ITEM12-AFTER-metadata-caps	import_stage_insert_software_hash_cache	0											rows=0
+ITEM12-AFTER-metadata-caps	import_stage_commit	8											
+ITEM12-AFTER-metadata-caps	import_stage_total	4939											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2813
+ITEM12-AFTER-metadata-caps	sqlite_publish_progress	2											bytes=18026496 copy_ms=1749 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ITEM12-AFTER-metadata-caps	refresh_done	0											skipped=false bytes=18026496 scan_us=2616140 discover_us=1973029 classify_us=2493958 import_us=7324140 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ITEM12-AFTER-metadata-caps	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	0	0	1	0	0	6843	19232	17987	1918	22490	141	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	1	47	71	7720960	0	6914	19390	17988	1919	22671	141	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	2	66	85	14467584	0	6954	19497	17988	1987	22943	141	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	3	110	98	17382400	0	7025	19609	17988	2028	23328	141	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	4	205	112	17382400	4096	7144	19717	17988	2030	23328	148	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	5	309	121	17382400	4096	7272	19817	17988	2030	23328	148	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	7	416	125	17382400	4096	7406	19912	17988	2030	23328	148	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	8	524	130	17382400	4096	7537	20010	17988	2030	23328	148	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	9	630	134	17382400	4096	7667	20108	17988	2030	23328	148	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	10	691	142	17382400	6316032	7745	20212	17988	2066	23328	177	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	sample	11	706	158	17382400	18059264	7790	20323	17988	2134	23328	223	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ITEM14-BEFORE-metadata-alloc	scan_stage_first_candidate	50											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM14-BEFORE-metadata-alloc	scan_stage_first_discovery	109											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	506											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	56											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	4											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	148											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	3											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	23											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	287											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	42											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	177											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	148											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	102											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	236											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	73											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	11											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk_target	3											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ITEM14-BEFORE-metadata-alloc	scan_stage_walk	1327											candidates=7905
+ITEM14-BEFORE-metadata-alloc	scan_stage_profile_match	56											calls=7905
+ITEM14-BEFORE-metadata-alloc	scan_stage_installed_collection	71											calls=7513
+ITEM14-BEFORE-metadata-alloc	scan_stage_archive_toc	10											containers=154
+ITEM14-BEFORE-metadata-alloc	scan_stage_collection_listings	0											collections=0
+ITEM14-BEFORE-metadata-alloc	scan_stage_file_discovery	3792											files=7511
+ITEM14-BEFORE-metadata-alloc	scan_stage_classify_total	4114											discoveries=9354 normal_files=7897 containers=154 entries=281
+ITEM14-BEFORE-metadata-alloc	import_stage_schema	12											tables=14
+ITEM14-BEFORE-metadata-alloc	import_stage_metadata_load	1534											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
+ITEM14-BEFORE-metadata-alloc	import_stage_begin_tx	0											
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_profiles	1											rows=16
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_payloads	447											normal_files=7897 entries=281
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	165											from=1000 to=2000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	225											from=2000 to=3000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	186											from=3000 to=4000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	178											from=4000 to=5000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	184											from=5000 to=6000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	228											from=6000 to=7000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	285											from=7000 to=8000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	266											from=8000 to=9000 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	65											from=9000 to=9229 total=9229
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_total	2096											rows=9229 launcher_rows=6245
+ITEM14-BEFORE-metadata-alloc	import_stage_materialize_arcade_ui	456											
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_launcher_arcade	12											
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_launcher_console	215											rows=6185
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_meta	169											rows=11
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_catalog_stamp	0											rows=11
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_software_hash_cache	0											rows=0
+ITEM14-BEFORE-metadata-alloc	import_stage_build_saved_catalog	117											rows=7256
+ITEM14-BEFORE-metadata-alloc	import_stage_commit	8											
+ITEM14-BEFORE-metadata-alloc	import_stage_total	5086											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1705
+ITEM14-BEFORE-metadata-alloc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1395 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ITEM14-BEFORE-metadata-alloc	refresh_done	0											skipped=false bytes=18026496 scan_us=4237840 discover_us=1326701 classify_us=4114533 import_us=6894486 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ITEM14-BEFORE-metadata-alloc	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	0	0	1	0	0	13421	42019	42577	2172	23329	247	disk_io_ms=383 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	1	76	64	49152	0	13515	42148	42578	2172	23336	247	disk_io_ms=391 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	2	151	108	293376	0	13613	42276	42579	2172	23367	254	disk_io_ms=457 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	4	254	116	293376	0	13740	42378	42579	2172	23367	254	disk_io_ms=457 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	5	357	123	293376	0	13868	42479	42579	2172	23367	254	disk_io_ms=457 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	6	464	127	293376	0	14000	42576	42579	2172	23367	254	disk_io_ms=457 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	7	569	132	293376	0	14129	42676	42579	2172	23367	254	disk_io_ms=457 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	8	627	142	293376	7106560	14207	42781	42579	2210	23367	284	disk_io_ms=949 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	sample	9	653	158	293376	18063360	14257	42897	42579	2269	23367	327	disk_io_ms=1647 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ITEM14-AFTER-metadata-alloc	scan_stage_first_candidate	45											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM14-AFTER-metadata-alloc	scan_stage_first_discovery	49											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	538											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	93											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	185											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	17											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	435											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	59											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	378											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	266											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	103											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	326											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	115											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	16											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ITEM14-AFTER-metadata-alloc	scan_stage_walk_target	2											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ITEM14-AFTER-metadata-alloc	scan_stage_walk	2020											candidates=7905
+ITEM14-AFTER-metadata-alloc	scan_stage_profile_match	86											calls=7905
+ITEM14-AFTER-metadata-alloc	scan_stage_installed_collection	102											calls=7513
+ITEM14-AFTER-metadata-alloc	scan_stage_archive_toc	15											containers=154
+ITEM14-AFTER-metadata-alloc	scan_stage_collection_listings	0											collections=0
+ITEM14-AFTER-metadata-alloc	scan_stage_file_discovery	2069											files=7511
+ITEM14-AFTER-metadata-alloc	scan_stage_classify_total	2494											discoveries=9354 normal_files=7897 containers=154 entries=281
+ITEM14-AFTER-metadata-alloc	import_stage_schema	12											tables=14
+ITEM14-AFTER-metadata-alloc	import_stage_metadata_load	1168											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ITEM14-AFTER-metadata-alloc	import_stage_begin_tx	0											
+ITEM14-AFTER-metadata-alloc	import_stage_insert_profiles	1											rows=16
+ITEM14-AFTER-metadata-alloc	import_stage_insert_payloads	450											normal_files=7897 entries=281
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	185											from=0 to=1000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	212											from=1000 to=2000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	194											from=2000 to=3000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	189											from=3000 to=4000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	180											from=4000 to=5000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	186											from=5000 to=6000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	230											from=6000 to=7000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	313											from=7000 to=8000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	254											from=8000 to=9000 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	66											from=9000 to=9229 total=9229
+ITEM14-AFTER-metadata-alloc	import_stage_insert_games_total	2024											rows=9229 launcher_rows=6245
+ITEM14-AFTER-metadata-alloc	import_stage_materialize_arcade_ui	429											
+ITEM14-AFTER-metadata-alloc	import_stage_insert_launcher_arcade	11											
+ITEM14-AFTER-metadata-alloc	import_stage_insert_launcher_console	269											rows=6185
+ITEM14-AFTER-metadata-alloc	import_stage_insert_meta	135											rows=11
+ITEM14-AFTER-metadata-alloc	import_stage_insert_catalog_stamp	0											rows=11
+ITEM14-AFTER-metadata-alloc	import_stage_insert_software_hash_cache	0											rows=0
+ITEM14-AFTER-metadata-alloc	import_stage_build_saved_catalog	121											rows=7256
+ITEM14-AFTER-metadata-alloc	import_stage_commit	8											
+ITEM14-AFTER-metadata-alloc	import_stage_total	4648											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2004
+ITEM14-AFTER-metadata-alloc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1319 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ITEM14-AFTER-metadata-alloc	refresh_done	0											skipped=false bytes=18026496 scan_us=2617554 discover_us=2019650 classify_us=2493746 import_us=6207050 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ITEM14-AFTER-metadata-alloc	done	10											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
