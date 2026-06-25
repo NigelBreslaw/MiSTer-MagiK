@@ -7,23 +7,19 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::input_state::PadLayout;
+use crate::input_state::{InputProfile, PadRawEvent, JS_EVENT_AXIS, JS_EVENT_BUTTON};
 pub use crate::input_state::{PadInfo, PadState};
 
 const JS_EVENT_SIZE: usize = 8;
-const JS_EVENT_BUTTON: u8 = 0x01;
-const JS_EVENT_AXIS: u8 = 0x02;
 const JS_EVENT_INIT: u8 = 0x80;
 
-const AXIS_MAX: f32 = 32767.0;
-const STICK_DEADZONE: f32 = 8000.0;
 const PAD_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct PadReader {
     file: File,
     pub path: String,
     pub info: PadInfo,
-    layout: PadLayout,
+    profile: InputProfile,
     state: PadState,
 }
 
@@ -134,7 +130,7 @@ impl PadPool {
         self.db.upsert(&info, entry);
         self.db.save()?;
         if let Some(pad) = self.pads.get_mut(idx) {
-            pad.refresh_layout();
+            pad.refresh_profile();
         }
         Ok(())
     }
@@ -153,7 +149,7 @@ impl PadPool {
         self.db.claim_existing(&info, &item.id)?;
         self.db.save()?;
         if let Some(pad) = self.pads.get_mut(idx) {
-            pad.refresh_layout();
+            pad.refresh_profile();
         }
         Ok(())
     }
@@ -272,6 +268,32 @@ impl PadPool {
             self.merged.last_event_label = last_event_label;
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_states(states: Vec<PadState>) -> Self {
+        let mut pool = Self {
+            pads: states
+                .into_iter()
+                .enumerate()
+                .map(|(idx, state)| PadReader {
+                    file: File::open("/dev/null").expect("open /dev/null"),
+                    path: format!("/dev/input/js{idx}"),
+                    info: PadInfo {
+                        name: format!("Test pad {idx}"),
+                        ..PadInfo::default()
+                    },
+                    profile: InputProfile::generic(),
+                    state,
+                })
+                .collect(),
+            merged: PadState::default(),
+            active_idx: 0,
+            db: crate::controller_db::ControllerDb::load(),
+            last_rescan: Instant::now(),
+        };
+        pool.rebuild_merged_state();
+        pool
+    }
 }
 
 impl crate::setup_nav::SetupPadSource for PadPool {
@@ -311,20 +333,17 @@ impl PadReader {
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
         let info = read_pad_info(path, &file)?;
-        let layout = PadLayout::guess(&info);
+        let profile = InputProfile::guess(&info);
         db.log_pad_status(&info, path);
         eprintln!(
-            "pad: opened {path} ({info}) layout={layout:?}",
-            info = format!(
-                "{} usb={} {} btn={} axes={}",
-                info.name, info.usb_port, info.vendor_id, info.js_buttons, info.js_axes
-            )
+            "pad: opened {path} ({} usb={} {} btn={} axes={}) input_profile={profile:?}",
+            info.name, info.usb_port, info.vendor_id, info.js_buttons, info.js_axes
         );
         Ok(Self {
             path: path.to_string(),
             file,
             info,
-            layout,
+            profile,
             state: PadState::default(),
         })
     }
@@ -333,8 +352,8 @@ impl PadReader {
         &self.info
     }
 
-    fn refresh_layout(&mut self) {
-        self.layout = PadLayout::guess(&self.info);
+    fn refresh_profile(&mut self) {
+        self.profile = InputProfile::guess(&self.info);
     }
 
     pub fn state(&self) -> &PadState {
@@ -359,9 +378,14 @@ impl PadReader {
                     let event_type = buf[6] & !JS_EVENT_INIT;
                     let number = buf[7];
                     let value = i16::from_le_bytes([buf[4], buf[5]]);
+                    let event = PadRawEvent {
+                        event_type,
+                        number,
+                        value,
+                    };
                     if self
-                        .state
-                        .apply_event(self.layout, event_type, number, value, debug_labels)
+                        .profile
+                        .apply_js_event(&mut self.state, event, debug_labels)
                     {
                         changed = true;
                     }
@@ -392,412 +416,6 @@ fn pad_index_error(idx: usize) -> io::Error {
         io::ErrorKind::InvalidInput,
         format!("pad index {idx} out of range"),
     )
-}
-
-trait PadStateEventExt {
-    fn apply_event(
-        &mut self,
-        layout: PadLayout,
-        event_type: u8,
-        number: u8,
-        value: i16,
-        debug_labels: bool,
-    ) -> bool;
-    fn apply_event_dpad_axes_45(
-        &mut self,
-        event_type: u8,
-        number: u8,
-        value: i16,
-        debug_labels: bool,
-    ) -> bool;
-    fn apply_event_generic(
-        &mut self,
-        event_type: u8,
-        number: u8,
-        value: i16,
-        debug_labels: bool,
-    ) -> bool;
-    fn apply_dpad_x(&mut self, v: f32, label: &'static str) -> &'static str;
-    fn apply_dpad_y(&mut self, v: f32, label: &'static str) -> &'static str;
-    fn apply_hat_x(&mut self, v: f32);
-    fn apply_hat_y(&mut self, v: f32);
-    fn rebuild_pressed_now(&mut self);
-}
-
-impl PadStateEventExt for PadState {
-    fn apply_event(
-        &mut self,
-        layout: PadLayout,
-        event_type: u8,
-        number: u8,
-        value: i16,
-        debug_labels: bool,
-    ) -> bool {
-        self.record_raw_event(event_type, number, value, debug_labels);
-        match layout {
-            PadLayout::DpadAxes45 => {
-                self.apply_event_dpad_axes_45(event_type, number, value, debug_labels)
-            }
-            PadLayout::Generic => self.apply_event_generic(event_type, number, value, debug_labels),
-        }
-    }
-
-    fn apply_event_dpad_axes_45(
-        &mut self,
-        event_type: u8,
-        number: u8,
-        value: i16,
-        debug_labels: bool,
-    ) -> bool {
-        let changed = match event_type {
-            JS_EVENT_BUTTON => {
-                let pressed = value != 0;
-                let label = match number {
-                    0 => {
-                        self.btn_y = pressed;
-                        "Y"
-                    }
-                    1 => {
-                        self.btn_b = pressed;
-                        "B"
-                    }
-                    2 => {
-                        self.btn_a = pressed;
-                        "A"
-                    }
-                    3 => {
-                        self.btn_x = pressed;
-                        "X"
-                    }
-                    4 => {
-                        self.btn_l = pressed;
-                        "L"
-                    }
-                    5 => {
-                        self.btn_r = pressed;
-                        "R"
-                    }
-                    6 => {
-                        self.btn_zl = pressed;
-                        "ZL"
-                    }
-                    7 => {
-                        self.btn_zr = pressed;
-                        "ZR"
-                    }
-                    8 => {
-                        self.btn_select = pressed;
-                        "Select"
-                    }
-                    9 => {
-                        self.btn_start = pressed;
-                        "Start"
-                    }
-                    10 => {
-                        self.btn_l3 = pressed;
-                        "L3"
-                    }
-                    11 => {
-                        self.btn_r3 = pressed;
-                        "R3"
-                    }
-                    12 => {
-                        self.btn_home = pressed;
-                        "Home"
-                    }
-                    13 => {
-                        self.btn_capture = pressed;
-                        "Capture"
-                    }
-                    _ => {
-                        self.set_debug_event_label(debug_labels, || {
-                            format!(
-                                "unknown btn {number} {}",
-                                if pressed { "down" } else { "up" }
-                            )
-                        });
-                        self.rebuild_pressed_now();
-                        return false;
-                    }
-                };
-                self.set_debug_event_label(debug_labels, || {
-                    format!(
-                        "{label} {} (js btn {number})",
-                        if pressed { "down" } else { "up" }
-                    )
-                });
-                true
-            }
-            JS_EVENT_AXIS => {
-                let v = value as f32;
-                let label = match number {
-                    0 => {
-                        self.left_x = normalize_stick(v);
-                        "Left X"
-                    }
-                    1 => {
-                        self.left_y = normalize_stick(v);
-                        "Left Y"
-                    }
-                    2 => {
-                        self.right_x = normalize_stick(v);
-                        "Right X"
-                    }
-                    3 => {
-                        self.right_y = normalize_stick(v);
-                        "Right Y"
-                    }
-                    4 => self.apply_dpad_x(v, "D-pad X"),
-                    5 => self.apply_dpad_y(v, "D-pad Y"),
-                    _ => {
-                        self.set_debug_event_label(debug_labels, || {
-                            format!("unknown axis {number} val={value}")
-                        });
-                        self.rebuild_pressed_now();
-                        return false;
-                    }
-                };
-                if number <= 3 {
-                    self.set_debug_event_label(debug_labels, || {
-                        format!("{label} axis {number} = {value}")
-                    });
-                }
-                true
-            }
-            _ => return false,
-        };
-        self.rebuild_pressed_now();
-        changed
-    }
-
-    fn apply_event_generic(
-        &mut self,
-        event_type: u8,
-        number: u8,
-        value: i16,
-        debug_labels: bool,
-    ) -> bool {
-        let changed = match event_type {
-            JS_EVENT_BUTTON => {
-                let pressed = value != 0;
-                let label = match number {
-                    0 => {
-                        self.btn_a = pressed;
-                        "A"
-                    }
-                    1 => {
-                        self.btn_b = pressed;
-                        "B"
-                    }
-                    2 => {
-                        self.btn_x = pressed;
-                        "X"
-                    }
-                    3 => {
-                        self.btn_y = pressed;
-                        "Y"
-                    }
-                    4 => {
-                        self.btn_l = pressed;
-                        "L"
-                    }
-                    5 => {
-                        self.btn_r = pressed;
-                        "R"
-                    }
-                    6 => {
-                        self.btn_select = pressed;
-                        "Select"
-                    }
-                    7 => {
-                        self.btn_start = pressed;
-                        "Start"
-                    }
-                    8 => {
-                        self.btn_l3 = pressed;
-                        "L3"
-                    }
-                    9 => {
-                        self.btn_r3 = pressed;
-                        "R3"
-                    }
-                    10 | 11 => {
-                        self.btn_home = pressed;
-                        "Home"
-                    }
-                    _ => {
-                        self.set_debug_event_label(debug_labels, || {
-                            format!(
-                                "unknown btn {number} {}",
-                                if pressed { "down" } else { "up" }
-                            )
-                        });
-                        self.rebuild_pressed_now();
-                        return false;
-                    }
-                };
-                self.set_debug_event_label(debug_labels, || {
-                    format!(
-                        "{label} {} (js btn {number})",
-                        if pressed { "down" } else { "up" }
-                    )
-                });
-                true
-            }
-            JS_EVENT_AXIS => {
-                let v = value as f32;
-                match number {
-                    0 => {
-                        self.left_x = normalize_stick(v);
-                        self.apply_dpad_x(v, "Stick X");
-                    }
-                    1 => {
-                        self.left_y = normalize_stick(v);
-                        self.apply_dpad_y(v, "Stick Y");
-                    }
-                    2 => {
-                        self.right_x = normalize_stick(v);
-                    }
-                    3 => {
-                        self.right_y = normalize_stick(v);
-                    }
-                    4 => {
-                        self.apply_dpad_x(v, "D-pad X");
-                    }
-                    5 => {
-                        self.apply_dpad_y(v, "D-pad Y");
-                    }
-                    6 => {
-                        self.apply_hat_x(v);
-                    }
-                    7 => {
-                        self.apply_hat_y(v);
-                    }
-                    _ => {
-                        self.set_debug_event_label(debug_labels, || {
-                            format!("unknown axis {number} val={value}")
-                        });
-                        self.rebuild_pressed_now();
-                        return false;
-                    }
-                };
-                self.set_debug_event_label(debug_labels, || format!("axis {number} = {value}"));
-                true
-            }
-            _ => return false,
-        };
-        self.rebuild_pressed_now();
-        changed
-    }
-
-    fn apply_dpad_x(&mut self, v: f32, label: &'static str) -> &'static str {
-        if v < -STICK_DEADZONE {
-            self.dpad_left = true;
-            self.dpad_right = false;
-        } else if v > STICK_DEADZONE {
-            self.dpad_right = true;
-            self.dpad_left = false;
-        } else {
-            self.dpad_left = false;
-            self.dpad_right = false;
-        }
-        label
-    }
-
-    fn apply_dpad_y(&mut self, v: f32, label: &'static str) -> &'static str {
-        if v < -STICK_DEADZONE {
-            self.dpad_up = true;
-            self.dpad_down = false;
-        } else if v > STICK_DEADZONE {
-            self.dpad_down = true;
-            self.dpad_up = false;
-        } else {
-            self.dpad_up = false;
-            self.dpad_down = false;
-        }
-        label
-    }
-
-    fn apply_hat_x(&mut self, v: f32) {
-        if v < 0.0 {
-            self.dpad_left = true;
-            self.dpad_right = false;
-        } else if v > 0.0 {
-            self.dpad_right = true;
-            self.dpad_left = false;
-        } else {
-            self.dpad_left = false;
-            self.dpad_right = false;
-        }
-    }
-
-    fn apply_hat_y(&mut self, v: f32) {
-        if v < 0.0 {
-            self.dpad_up = true;
-            self.dpad_down = false;
-        } else if v > 0.0 {
-            self.dpad_down = true;
-            self.dpad_up = false;
-        } else {
-            self.dpad_up = false;
-            self.dpad_down = false;
-        }
-    }
-
-    fn rebuild_pressed_now(&mut self) {
-        let mut parts: Vec<&str> = Vec::new();
-        if self.dpad_up {
-            parts.push("D-Up");
-        }
-        if self.dpad_down {
-            parts.push("D-Down");
-        }
-        if self.dpad_left {
-            parts.push("D-Left");
-        }
-        if self.dpad_right {
-            parts.push("D-Right");
-        }
-        macro_rules! btn {
-            ($field:ident, $name:expr) => {
-                if self.$field {
-                    parts.push($name);
-                }
-            };
-        }
-        btn!(btn_y, "Y");
-        btn!(btn_b, "B");
-        btn!(btn_a, "A");
-        btn!(btn_x, "X");
-        btn!(btn_l, "L");
-        btn!(btn_r, "R");
-        btn!(btn_zl, "ZL");
-        btn!(btn_zr, "ZR");
-        btn!(btn_select, "Select");
-        btn!(btn_start, "Start");
-        btn!(btn_l3, "L3");
-        btn!(btn_r3, "R3");
-        btn!(btn_home, "Home");
-        btn!(btn_capture, "Capture");
-        if self.left_x.abs() > 0.01 || self.left_y.abs() > 0.01 {
-            parts.push("Left stick");
-        }
-        if self.right_x.abs() > 0.01 || self.right_y.abs() > 0.01 {
-            parts.push("Right stick");
-        }
-        self.pressed_now = if parts.is_empty() {
-            "—".into()
-        } else {
-            parts.join(", ")
-        };
-    }
-}
-
-fn normalize_stick(v: f32) -> f32 {
-    if v.abs() < STICK_DEADZONE {
-        return 0.0;
-    }
-    (v / AXIS_MAX).clamp(-1.0, 1.0)
 }
 
 fn discover_js_devices() -> Vec<String> {
@@ -1302,14 +920,14 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         ("D-pad Right", |s| s.dpad_right),
     ];
     let mut file = reader.file;
-    let layout = reader.layout;
+    let profile = reader.profile;
     let mut buf = [0u8; JS_EVENT_SIZE];
     let mut state = PadState::default();
     for (label, _) in prompts {
         println!("\n>>> Press [{label}] ...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
-            if read_one_event(&mut file, &mut buf, layout, &mut state) {
+            if read_one_event(&mut file, &mut buf, profile, &mut state) {
                 println!("    raw: {}", state.last_raw);
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1320,7 +938,7 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         println!("\n>>> Move [{label}] ...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if read_one_event(&mut file, &mut buf, layout, &mut state) {
+            if read_one_event(&mut file, &mut buf, profile, &mut state) {
                 println!(
                     "    raw: {}  L=({:.2},{:.2}) R=({:.2},{:.2})",
                     state.last_raw, state.left_x, state.left_y, state.right_x, state.right_y
@@ -1335,7 +953,7 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
 fn read_one_event(
     file: &mut File,
     buf: &mut [u8; JS_EVENT_SIZE],
-    layout: PadLayout,
+    profile: InputProfile,
     state: &mut PadState,
 ) -> bool {
     match file.read(buf) {
@@ -1343,7 +961,15 @@ fn read_one_event(
             let event_type = buf[6] & !JS_EVENT_INIT;
             let number = buf[7];
             let value = i16::from_le_bytes([buf[4], buf[5]]);
-            state.apply_event(layout, event_type, number, value, true)
+            profile.apply_js_event(
+                state,
+                PadRawEvent {
+                    event_type,
+                    number,
+                    value,
+                },
+                true,
+            )
         }
         _ => false,
     }
@@ -1352,8 +978,7 @@ fn read_one_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input_state::PadRawEvent;
-
+    use crate::input_state::JS_EVENT_BUTTON;
     fn empty_pool() -> PadPool {
         PadPool {
             pads: Vec::new(),
@@ -1402,40 +1027,35 @@ mod tests {
     }
 
     #[test]
-    fn normal_event_polling_stores_compact_raw_without_debug_strings() {
+    fn merged_state_keeps_compact_raw_event_from_active_state() {
         let mut state = PadState::default();
-
-        assert!(state.apply_event(PadLayout::Generic, JS_EVENT_BUTTON, 0, 1, false));
-
-        assert!(state.btn_a);
-        assert_eq!(
-            state.last_raw_event,
-            Some(PadRawEvent {
-                event_type: JS_EVENT_BUTTON,
-                number: 0,
-                value: 1,
-            })
-        );
-        assert!(state.last_raw.is_empty());
-        assert!(state.last_event_label.is_empty());
+        state.record_raw_event(JS_EVENT_BUTTON, 0, 1, false);
+        state.btn_a = true;
+        state.rebuild_pressed_now();
 
         let merged = merge_pad_states(&[&state]);
+
         assert_eq!(merged.last_raw_event, state.last_raw_event);
+        assert!(merged.btn_a);
         assert!(merged.last_raw.is_empty());
         assert!(merged.last_event_label.is_empty());
     }
 
     #[test]
-    fn debug_event_polling_formats_raw_and_event_labels() {
+    fn merged_state_uses_active_debug_label_when_present() {
         let mut state = PadState::default();
-
-        assert!(state.apply_event(PadLayout::Generic, JS_EVENT_BUTTON, 0, 1, true));
+        state.record_raw_event(JS_EVENT_BUTTON, 0, 1, true);
+        state.set_debug_event_label(true, || "A down (js btn 0)".to_string());
+        state.btn_a = true;
+        state.rebuild_pressed_now();
+        let merged = merge_pad_states(&[&state]);
 
         assert_eq!(state.last_raw, "type=1 num=0 val=1");
-        assert_eq!(state.last_event_label, "A down (js btn 0)");
+        assert_eq!(merged.last_raw, "type=1 num=0 val=1");
+        assert_eq!(merged.last_event_label, "A down (js btn 0)");
         assert_eq!(
-            state.last_raw_event,
-            Some(PadRawEvent {
+            merged.last_raw_event,
+            Some(crate::input_state::PadRawEvent {
                 event_type: JS_EVENT_BUTTON,
                 number: 0,
                 value: 1,
