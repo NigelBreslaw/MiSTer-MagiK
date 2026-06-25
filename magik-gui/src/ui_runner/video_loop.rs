@@ -318,12 +318,12 @@ pub(super) fn run_video_playback_loop(
                 let mut copied_rect = None;
                 let rows = if direct_frame.is_some() {
                     let rect = direct_video_copy_rect(this_rect, video_dirty_clip_ready);
-                    copy_cached_rect(disp, ui, &cached, rect);
+                    copy_cached_rect_565(disp, ui, &cached, rect);
                     copied_rect = Some(rect);
                     rect.rows()
                 } else if let Some(rect) = this_rect {
                     let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
-                    copy_cached_rect(disp, ui, &cached, rect);
+                    copy_cached_rect_565(disp, ui, &cached, rect);
                     copied_rect = Some(rect);
                     rect.rows()
                 } else {
@@ -435,12 +435,12 @@ pub(super) fn run_video_playback_loop(
                 let mut copied_rect = None;
                 let rows = if direct_frame.is_some() {
                     let rect = direct_video_copy_rect(this_rect, video_dirty_clip_ready);
-                    copy_cached_rect(disp, ui, &cached, rect);
+                    copy_cached_rect_565(disp, ui, &cached, rect);
                     copied_rect = Some(rect);
                     rect.rows()
                 } else if let Some(rect) = this_rect {
                     let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
-                    copy_cached_rect(disp, ui, &cached, rect);
+                    copy_cached_rect_565(disp, ui, &cached, rect);
                     copied_rect = Some(rect);
                     rect.rows()
                 } else {
