@@ -1,16 +1,11 @@
 pub const COMMANDS: &[&str] = &[
     #[cfg(feature = "diagnostics")]
     "read",
-    #[cfg(feature = "diagnostics")]
-    "route",
-    #[cfg(feature = "diagnostics")]
-    "fb",
-    #[cfg(feature = "diagnostics")]
-    "fb-format-smoke",
     "early-black",
     "ui",
     #[cfg(mister_bench_scenes)]
     "scenes",
+    #[cfg(mister_experiments)]
     "experiment-capabilities",
     #[cfg(mister_experiments)]
     "preview-transitions",
@@ -103,7 +98,6 @@ mod tests {
         assert!(COMMANDS.contains(&"library-refresh"));
         assert!(COMMANDS.contains(&"media-bench-download"));
         assert!(COMMANDS.contains(&"media-bench-save"));
-        assert!(COMMANDS.contains(&"experiment-capabilities"));
         for command in COMMANDS {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),
@@ -118,9 +112,6 @@ mod tests {
     fn production_command_list_hides_diagnostics() {
         for command in [
             "read",
-            "route",
-            "fb",
-            "fb-format-smoke",
             "vsync-probe",
             "cpu-profile-smoke",
             "input",
@@ -138,9 +129,6 @@ mod tests {
     fn diagnostics_command_list_exposes_diagnostics() {
         for command in [
             "read",
-            "route",
-            "fb",
-            "fb-format-smoke",
             "vsync-probe",
             "cpu-profile-smoke",
             "input",
@@ -167,6 +155,7 @@ mod tests {
             "effects",
             "effect-bench",
             "scenes",
+            "experiment-capabilities",
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");
         }
@@ -184,6 +173,7 @@ mod tests {
             "transition-effects",
             "effects",
             "effect-bench",
+            "experiment-capabilities",
         ] {
             assert!(COMMANDS.contains(&command), "{command}");
         }

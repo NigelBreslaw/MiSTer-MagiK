@@ -469,22 +469,6 @@ restart_with_env() {
     "str(data['runtime'].get('slint_status', {}).get('screen', '?')) + ' fps=' + str(data['runtime'].get('slint_status', {}).get('rolling_fps', data['runtime'].get('slint_status', {}).get('fps_estimate', '?')))"
 }
 
-run_framebuffer_route_recovery() {
-  local before after
-  status_json "route-before" || {
-    record_fail "route recovery initial status"
-    return
-  }
-  before="$(json_value "$OUT/status-route-before.json" "data['runtime']['slint_status'].get('route_reassert_count', 0)" || echo 0)"
-  remote "'$REMOTE_BIN' fb-format-smoke 565 1 normal >/tmp/mister-magik-fb-format-smoke.log 2>&1 || true"
-  wait_status_expr "framebuffer route reasserts after contamination" 90 \
-    "int(data['runtime']['slint_status'].get('route_reassert_count', 0)) > int('$before') and data['runtime']['slint_status'].get('last_route_reassert_ok') is True and data['display']['fb0_visual'].get('class') == 'slint_like'" \
-    "'route_count=' + str(data['runtime'].get('slint_status', {}).get('route_reassert_count', '?')) + ' fb0=' + str(data['display'].get('fb0_visual', {}).get('class', '?'))"
-  status_json "route-after" || true
-  after="$(json_value "$OUT/status-route-after.json" "data['runtime']['slint_status'].get('route_reassert_count', 0)" 2>/dev/null || echo 0)"
-  append_report "- route_reassert_count: ${before:-0} -> ${after:-0}"
-}
-
 run_preview_render_acceptance() {
   local trace="/tmp/mister-acceptance-preview.tsv"
   write_launcher_env "$trace" "preview-step-hold" ""
@@ -790,8 +774,6 @@ run_tier_framebuffer_route() {
     "data['display']['active_vt'] == 'tty2'"
   assert_status "$OUT/status-initial.json" "framebuffer is RGB565 launcher mode" \
     "str(data['display']['fb_mode']).startswith('565 ')"
-
-  run_framebuffer_route_recovery || true
 }
 
 run_tier_catalog() {

@@ -2,7 +2,7 @@
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
 use crate::fb::{Display, Pixel, VsyncPacer};
-use crate::fb_format::FramebufferFormat;
+use crate::fb_format::production_label;
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
@@ -26,7 +26,6 @@ use crate::arcade_list_renderer::{
     ArcadeListRenderer, ArcadeListUpdate, ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X,
     ARCADE_LIST_Y,
 };
-use crate::bitmap_text::ConsoleFont;
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
@@ -269,7 +268,6 @@ pub fn run_ui(f: &mut Fpga) {
     let UiBootFramebufferSession {
         ui,
         mut disp,
-        format: _fb_format,
         _fb_mode_guard,
     } = UiBootFramebufferSession::start_ui_or_exit(f);
 
@@ -281,41 +279,38 @@ pub fn run_ui(f: &mut Fpga) {
         }
     }
     #[cfg(mister_experiments)]
-    let fb_format = _fb_format;
-
-    #[cfg(mister_experiments)]
     if scene == "screensaver" {
-        run_screensaver_loop(secs, &ui, &mut disp, fb_format);
+        run_screensaver_loop(secs, &ui, &mut disp);
         return;
     }
 
     #[cfg(mister_experiments)]
     if scene == "camera-effects" {
-        run_camera_effects_loop(secs, &ui, &mut disp, fb_format);
+        run_camera_effects_loop(secs, &ui, &mut disp);
         return;
     }
 
     #[cfg(mister_experiments)]
     if scene == "sprite-effects" {
-        run_sprite_effects_loop(secs, &ui, &mut disp, fb_format);
+        run_sprite_effects_loop(secs, &ui, &mut disp);
         return;
     }
 
     #[cfg(mister_experiments)]
     if scene == "text-effects" {
-        run_text_effects_loop(secs, &ui, &mut disp, fb_format);
+        run_text_effects_loop(secs, &ui, &mut disp);
         return;
     }
 
     #[cfg(mister_experiments)]
     if scene == "raster-effects" {
-        run_raster_effects_loop(secs, &ui, &mut disp, fb_format);
+        run_raster_effects_loop(secs, &ui, &mut disp);
         return;
     }
 
     #[cfg(mister_experiments)]
     if scene == "transition-effects" {
-        run_transition_effects_loop(secs, &ui, &mut disp, fb_format);
+        run_transition_effects_loop(secs, &ui, &mut disp);
         return;
     }
 

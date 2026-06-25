@@ -174,7 +174,7 @@ mkdir -p "$BENCH_DIR"
 
 OLD_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	notes"
 SPLIT_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
-TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	prepare_us	render_us	custom_draw_us	vsync_us	copy_us	cached_present_us	overlay_present_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
+TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	prepare_us	render_us	custom_draw_us	vsync_us	copy_us	cached_present_us	arcade_list_present_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
 
 normalize_results_tsv() {
   local tsv="$1"
@@ -261,7 +261,7 @@ function rows_avg(line, rest) {
     if (index($0, "fb-present ") > 0) copy = number_after($0, "fb-present ")
     else copy = number_after($0, "copy ")
     cached_present = number_after($0, "cached-present ")
-    overlay_present = number_after($0, "overlay-present ")
+    overlay_present = number_after($0, "arcade-list-present ")
     rows = rows_avg($0)
   } else {
     next
@@ -398,7 +398,7 @@ detect_ini_mode_notes() {
 append_tsv_row() {
   local scene="$1" date_iso="$2"
   local prepare_us="$3" render_us="$4" custom_draw_us="$5" vsync_us="$6" copy_us="$7"
-  local cached_present_us="$8" overlay_present_us="$9" rows_avg="${10}" fps_val="${11}"
+  local cached_present_us="$8" arcade_list_present_us="$9" rows_avg="${10}" fps_val="${11}"
   local cpu_mean="${12}" cpu_max="${13}" rss_kb="${14}" visual_ok="${15}" timing_ok="${16}" capture_ok="${17}" notes="${18}"
   if [[ -n "${HOST_NOTES:-}" ]]; then
     notes="${HOST_NOTES}${notes:+; }${notes}"
@@ -408,7 +408,7 @@ append_tsv_row() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$LABEL" "$scene" "$date_iso" "$(rustc_version)" "${HOST_COMPILE_SEC:-}" "${HOST_BYTES:-}" \
     "${prepare_us:-}" "${render_us:-}" "${custom_draw_us:-}" "${vsync_us:-}" "${copy_us:-}" \
-    "${cached_present_us:-}" "${overlay_present_us:-}" "${rows_avg:-}" "${fps_val:-}" \
+    "${cached_present_us:-}" "${arcade_list_present_us:-}" "${rows_avg:-}" "${fps_val:-}" \
     "${cpu_mean:-}" "${cpu_max:-}" "${rss_kb:-}" "$visual_ok" "$timing_ok" "$capture_ok" "$notes" >>"$TSV"
 }
 
@@ -497,11 +497,11 @@ EOF
   }
 
   cat >"$tmp_dir/window-post-warmup.log" <<'EOF'
-  fps ~ 61  | prepare 0us  anim 0us  slint-render 850us  custom-draw 0us  vsync-wait 15221us  fb-present 431us cached-present 0us overlay-present 0us (314 logical rows avg)  vsync hits=61 timeouts=0 fallback=3 errors=0
-  fps ~ 60  | prepare 0us  anim 0us  slint-render 790us  custom-draw 0us  vsync-wait 15427us  fb-present 420us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=60 timeouts=0 fallback=2 errors=0
-  fps ~ 61  | prepare 0us  anim 0us  slint-render 793us  custom-draw 0us  vsync-wait 15422us  fb-present 412us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=61 timeouts=0 fallback=1 errors=0
-  fps ~ 60  | prepare 0us  anim 0us  slint-render 799us  custom-draw 0us  vsync-wait 15400us  fb-present 436us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=59 timeouts=1 fallback=1 errors=0
-  fps ~ 61  | prepare 0us  anim 0us  slint-render 790us  custom-draw 0us  vsync-wait 15429us  fb-present 410us cached-present 0us overlay-present 0us (310 logical rows avg)  vsync hits=60 timeouts=0 fallback=0 errors=1
+  fps ~ 61  | prepare 0us  anim 0us  slint-render 850us  custom-draw 0us  vsync-wait 15221us  fb-present 431us cached-present 0us arcade-list-present 0us (314 logical rows avg)  vsync hits=61 timeouts=0 fallback=3 errors=0
+  fps ~ 60  | prepare 0us  anim 0us  slint-render 790us  custom-draw 0us  vsync-wait 15427us  fb-present 420us cached-present 0us arcade-list-present 0us (310 logical rows avg)  vsync hits=60 timeouts=0 fallback=2 errors=0
+  fps ~ 61  | prepare 0us  anim 0us  slint-render 793us  custom-draw 0us  vsync-wait 15422us  fb-present 412us cached-present 0us arcade-list-present 0us (310 logical rows avg)  vsync hits=61 timeouts=0 fallback=1 errors=0
+  fps ~ 60  | prepare 0us  anim 0us  slint-render 799us  custom-draw 0us  vsync-wait 15400us  fb-present 436us cached-present 0us arcade-list-present 0us (310 logical rows avg)  vsync hits=59 timeouts=1 fallback=1 errors=0
+  fps ~ 61  | prepare 0us  anim 0us  slint-render 790us  custom-draw 0us  vsync-wait 15429us  fb-present 410us cached-present 0us arcade-list-present 0us (310 logical rows avg)  vsync hits=60 timeouts=0 fallback=0 errors=1
 EOF
   [[ "$(parse_vsync_counters "$tmp_dir/window-post-warmup.log")" == "1 1" ]] || {
     echo "self-test: windowed post-warmup fallback was not counted" >&2
@@ -723,11 +723,11 @@ cat /tmp/bench-ui.log
   fi
 
   local render_us="" vsync_us="" copy_us="" rows_avg="" fps_val="" visual_ok="no" timing_ok="yes" capture_ok="no" notes="" mode_notes=""
-  local prepare_us="" custom_draw_us="" cached_present_us="" overlay_present_us=""
+  local prepare_us="" custom_draw_us="" cached_present_us="" arcade_list_present_us=""
   local scene_failures=""
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
-    read -r render_us vsync_us copy_us rows_avg fps_val _cnt prepare_us custom_draw_us cached_present_us overlay_present_us <<<"$parse_stats"
+    read -r render_us vsync_us copy_us rows_avg fps_val _cnt prepare_us custom_draw_us cached_present_us arcade_list_present_us <<<"$parse_stats"
   else
     timing_ok="no"
     notes="no-fps-lines"
@@ -814,7 +814,7 @@ cat /tmp/bench-ui.log
 
   append_tsv_row "$scene" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     "$prepare_us" "$render_us" "$custom_draw_us" "$vsync_us" "$copy_us" \
-    "$cached_present_us" "$overlay_present_us" "$rows_avg" "$fps_val" \
+    "$cached_present_us" "$arcade_list_present_us" "$rows_avg" "$fps_val" \
     "$cpu_mean" "$cpu_max" "$rss_kb" "$visual_ok" "$timing_ok" "$capture_ok" "$notes"
 
   rm -f "$ui_log" "$ui_full"

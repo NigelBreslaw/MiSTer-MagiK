@@ -23,7 +23,6 @@ deploy="skip"
 mode="mega"
 segment_secs="20"
 secs=""
-fb_format="565"
 visual_captures="0"
 positionals=()
 

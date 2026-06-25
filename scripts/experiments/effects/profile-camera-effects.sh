@@ -8,7 +8,7 @@ EFFECT_COUNT=20
 
 usage() {
   cat <<'EOF'
-Usage: scripts/experiments/effects/profile-camera-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
+Usage: scripts/experiments/effects/profile-camera-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
 
 Runs the experimental scene:
   mister-magik-fb ui camera-effects
@@ -22,7 +22,6 @@ deploy="skip"
 mode="mega"
 segment_secs="20"
 secs=""
-fb_format="565"
 preview_format="raw-rgb565"
 visual_captures="0"
 replace_label="0"
@@ -35,7 +34,6 @@ while [[ $# -gt 0 ]]; do
     --mode) mode="${2:-}"; shift 2 ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
     --secs) secs="${2:-}"; shift 2 ;;
-    --fb-format) fb_format="${2:-}"; shift 2 ;;
     --preview-format) preview_format="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     --replace-label) replace_label="1"; shift ;;
@@ -50,7 +48,6 @@ if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 effect_validate_label "$label"
 effect_validate_mode "$mode" "effect"
 effect_validate_positive_int "$segment_secs" "--segment-secs"
-effect_validate_fb_format "$fb_format"
 effect_validate_preview_format "$preview_format"
 effect_validate_nonnegative_int "$visual_captures" "--visual-captures"
 secs="$(effect_resolve_secs "$secs" "$mode" "$segment_secs" "$EFFECT_COUNT")"
@@ -67,13 +64,13 @@ fi
 
 effect_profile_paths "$label" "camera-effects"
 
-echo "==> camera-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
+echo "==> camera-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs preview_format=$preview_format"
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_CAMERA_EFFECTS='$mode' MISTER_CAMERA_EFFECTS_AUTO=1 MISTER_CAMERA_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_CAMERA_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui camera-effects '$secs' >'$remote_log' 2>&1 &
+MISTER_PREVIEW_FORMAT='$preview_format' MISTER_CAMERA_EFFECTS='$mode' MISTER_CAMERA_EFFECTS_AUTO=1 MISTER_CAMERA_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_CAMERA_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui camera-effects '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
 CPU_SUM=0
@@ -130,7 +127,7 @@ if [[ "$visual_captures" != "0" ]]; then
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_CAMERA_EFFECTS='$mode' MISTER_CAMERA_EFFECTS_AUTO=1 MISTER_CAMERA_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_CAMERA_EFFECTS_HUD=1 '$REMOTE' ui camera-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
+MISTER_PREVIEW_FORMAT='$preview_format' MISTER_CAMERA_EFFECTS='$mode' MISTER_CAMERA_EFFECTS_AUTO=1 MISTER_CAMERA_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_CAMERA_EFFECTS_HUD=1 '$REMOTE' ui camera-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
 echo \$! >/tmp/${label}-visual-${i}.pid
 " >/dev/null
     sleep $((8 + i * segment_secs))
@@ -204,7 +201,7 @@ summarize_by_effect() {
 
 rss="$(sed -n 's/^rss_hwm_kb=//p' "$local_log" | tail -1)"
 cpu_sample_max="$(sed -n 's/^cpu_sample_max_pct=//p' "$local_log" | tail -1)"
-notes="fb_format=$fb_format; preview_format=$preview_format; mode=$mode; segment_secs=$segment_secs"
+notes="preview_format=$preview_format; mode=$mode; segment_secs=$segment_secs"
 visual_ok="yes"
 if [[ "$visual_captures" == "0" ]]; then
   visual_ok="not-run"

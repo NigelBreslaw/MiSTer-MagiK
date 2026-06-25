@@ -318,7 +318,7 @@ impl LaunchHandoffSession {
     pub(super) fn recover_launcher_ui(&mut self, f: &mut Fpga, ui: &UiDisplay) {
         if self.spawned_mister {
             launcher::stop_mister();
-            let route = FpgaFramebufferRoute::for_ui_rgb565(ui);
+            let route = LauncherFramebufferRoute::for_ui(ui);
             if let Err(e) = route.enable(f, ui.fb_w(), ui.fb_h()) {
                 eprintln!("failed to recover Slint framebuffer route after launch failure: {e}");
             }

@@ -382,7 +382,7 @@ pub(super) fn run_launcher_loop(
     println!(
         "launcher_mode={} fb_format={}",
         "launcher",
-        FramebufferFormat::production().label()
+        production_label()
     );
     if let Some(scenario) = launcher_bench_scenario {
         println!("launcher_bench_scenario={}", scenario.label());
@@ -408,7 +408,6 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut pacer = VsyncPacer::from_env();
-    let mut present_probe = PresentProbe::from_env();
     if launcher_bench_scenario.is_some() {
         let warm_t = Instant::now();
         match preview_worker::warm_preview_archives_from_env() {
@@ -433,9 +432,6 @@ pub(super) fn run_launcher_loop(
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let mut route_guard = FramebufferRouteGuard::from_env();
     let mut preview_transition = PreviewTransitionDemo::from_env();
-    let mut effect_label_overlay = preview_transition
-        .label_overlay_enabled()
-        .then(EffectLabelOverlay::new);
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
@@ -720,7 +716,7 @@ pub(super) fn run_launcher_loop(
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
-                let route = FpgaFramebufferRoute::for_ui_rgb565(ui);
+                let route = LauncherFramebufferRoute::for_ui(ui);
                 match route.enable(f, ui.fb_w(), ui.fb_h()) {
                     Ok(flag) => {
                         route_reassert_count = route_reassert_count.saturating_add(1);
@@ -1464,11 +1460,7 @@ pub(super) fn run_launcher_loop(
         if preview_transition_trace.active {
             window.request_redraw();
         }
-        let effect_label_start = Instant::now();
-        let effect_label_rect = effect_label_overlay.as_mut().map(|overlay| {
-            layer_target.draw_effect_label(overlay, preview_transition_trace.effect.label())
-        });
-        let effect_label_us = effect_label_start.elapsed().as_micros();
+        let effect_label_us = 0;
         let custom_draw_trace = LauncherCustomDrawTrace {
             arcade_list_update_us,
             preview_blit_us,
@@ -1512,11 +1504,8 @@ pub(super) fn run_launcher_loop(
                 full_frame_present,
                 slint_dirty: this_rect,
                 raw_preview_rect,
-                effect_label_rect,
                 arcade_list_rect,
                 arcade_list_renderer: &mut arcade_list_renderer,
-                present_probe: present_probe.as_mut(),
-                frames,
             });
             (presentation, Instant::now())
         };
@@ -1540,8 +1529,7 @@ pub(super) fn run_launcher_loop(
                 dirty_rect: this_rect,
                 copied_rows: presentation.copied_rows,
                 cached_present_us: presentation.cached_present_us,
-                overlay_present_us: presentation.overlay_present_us,
-                present_probe_us: presentation.present_probe_us,
+                arcade_list_present_us: presentation.arcade_list_present_us,
                 vsync_source,
                 vsync_period_us,
                 vsync_miss_streak,

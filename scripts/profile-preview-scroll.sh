@@ -406,6 +406,9 @@ summarize_custom_draw_phases() {
     BEGIN { FS="\t" }
     NR == 1 {
       for (i = 1; i <= NF; i++) col[$i] = i
+      if (!("arcade_list_present_us" in col) && ("overlay_present_us" in col)) {
+        col["arcade_list_present_us"] = col["overlay_present_us"]
+      }
       has_phases = ("arcade_list_update_us" in col) && ("preview_blit_us" in col) && ("effect_label_us" in col)
       next
     }
@@ -416,13 +419,13 @@ summarize_custom_draw_phases() {
       phase["preview_blit_us", n] = $(col["preview_blit_us"]) + 0
       phase["effect_label_us", n] = $(col["effect_label_us"]) + 0
       phase["cached_present_us", n] = $(col["cached_present_us"]) + 0
-      phase["overlay_present_us", n] = $(col["overlay_present_us"]) + 0
+      phase["arcade_list_present_us", n] = $(col["arcade_list_present_us"]) + 0
       sum["custom_draw_us"] += phase["custom_draw_us", n]
       sum["arcade_list_update_us"] += phase["arcade_list_update_us", n]
       sum["preview_blit_us"] += phase["preview_blit_us", n]
       sum["effect_label_us"] += phase["effect_label_us", n]
       sum["cached_present_us"] += phase["cached_present_us", n]
-      sum["overlay_present_us"] += phase["overlay_present_us", n]
+      sum["arcade_list_present_us"] += phase["arcade_list_present_us", n]
     }
     END {
       if (!has_phases || n == 0) {
@@ -434,7 +437,7 @@ summarize_custom_draw_phases() {
       fields[3] = "preview_blit_us"
       fields[4] = "effect_label_us"
       fields[5] = "cached_present_us"
-      fields[6] = "overlay_present_us"
+      fields[6] = "arcade_list_present_us"
       for (field_i = 1; field_i <= 6; field_i++) {
         field = fields[field_i]
         for (i = 1; i <= n; i++) sorted[i] = phase[field, i]
@@ -900,8 +903,8 @@ EOF
 
   local work_slow_attributed="$tmp/work-slow-attributed.tsv"
   cat >"$work_slow_attributed" <<'EOF'
-frame	prepare_us	catalog_worker_us	media_worker_us	media_gate_us	preview_schedule_us	preview_apply_us	slint_render_us	custom_draw_us	arcade_list_update_us	preview_blit_us	effect_label_us	vsync_us	fb_present_us	cached_present_us	overlay_present_us	present_probe_us	status_write_due	status_string_copy_us	status_string_copy_bytes	runtime_status_write_us	wall_us
-31	1000	0	0	0	0	900	1000	14000	0	3000	0	500	1000	500	500	0	1	12	4	200	17500
+frame	prepare_us	catalog_worker_us	media_worker_us	media_gate_us	preview_schedule_us	preview_apply_us	slint_render_us	custom_draw_us	arcade_list_update_us	preview_blit_us	effect_label_us	vsync_us	fb_present_us	cached_present_us	arcade_list_present_us	status_write_due	status_string_copy_us	status_string_copy_bytes	runtime_status_write_us	wall_us
+31	1000	0	0	0	0	900	1000	14000	0	3000	0	500	1000	500	500	1	12	4	200	17500
 EOF
   report_slow_work_attribution selftest "$work_slow_attributed" >/dev/null
 

@@ -8,11 +8,13 @@
 //!
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
-use crate::fb_format::FramebufferFormat;
+use crate::fb_format::{
+    fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line, rgb565_mode_line,
+    rgb565_stride_bytes, RGB565_BITS_PER_PIXEL,
+};
 use crate::fpga::FB_SIZE_PX;
 #[cfg(mister_experiments)]
 use mister_magik_fb::camera_effects::CameraPixel;
-use mister_magik_fb::framebuffer_copy;
 use mister_magik_fb::vsync_pacer::VsyncPaceSource;
 
 use crate::boot_analytics;
@@ -102,7 +104,6 @@ pub struct Display {
     map_len: usize,
     w: usize,
     h: usize,
-    format: FramebufferFormat,
     info: FbInfo,
     #[allow(dead_code)]
     fb0: std::fs::File,
@@ -368,11 +369,11 @@ impl FbInfo {
     pub fn mode_line(self) -> String {
         let w = self.visible_w.max(1);
         let h = self.visible_h.max(1);
-        FramebufferFormat::from_bits_per_pixel(self.bits_per_pixel).mode_line(
+        restore_mode_line(
+            fb_mode_format_from_bits_per_pixel(self.bits_per_pixel),
             w,
             h,
             self.stride_bytes,
-            true,
         )
     }
 }
@@ -485,12 +486,12 @@ fn fb_info_from(
         stride_bytes: if fix_ok && fix.line_length != 0 {
             fix.line_length as usize
         } else {
-            fallback_w * 4
+            rgb565_stride_bytes(fallback_w)
         },
         bits_per_pixel: if var_ok && var.bits_per_pixel != 0 {
             var.bits_per_pixel
         } else {
-            32
+            RGB565_BITS_PER_PIXEL
         },
         red_offset: var.red.offset,
         green_offset: var.green.offset,
@@ -499,30 +500,9 @@ fn fb_info_from(
     }
 }
 
-#[allow(dead_code)]
-fn pixels_as_u32(src: &[Pixel]) -> &[u32] {
-    unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u32>(), src.len()) }
-}
-
-#[allow(dead_code)]
-fn pixels_as_u32_mut(dst: &mut [Pixel]) -> &mut [u32] {
-    unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u32>(), dst.len()) }
-}
-
 impl Display {
-    #[allow(dead_code)]
-    pub fn write_mister_mode(w: usize, h: usize, stride_bytes: usize) -> io::Result<()> {
-        Self::write_mister_mode_format(FramebufferFormat::Xrgb8888, w, h, stride_bytes)
-    }
-
-    pub fn write_mister_mode_format(
-        format: FramebufferFormat,
-        w: usize,
-        h: usize,
-        stride_bytes: usize,
-    ) -> io::Result<()> {
-        let rb = format.route_rb();
-        let expected = format.stride_bytes(w);
+    pub fn write_mister_mode_rgb565(w: usize, h: usize, stride_bytes: usize) -> io::Result<()> {
+        let expected = rgb565_stride_bytes(w);
         let stride_bytes = if stride_bytes == 0 {
             expected
         } else {
@@ -530,11 +510,7 @@ impl Display {
         };
         std::fs::write(
             "/sys/module/MiSTer_fb/parameters/mode",
-            format!(
-                "{} {} {w} {h} {stride_bytes}\n",
-                format.mister_mode_format(),
-                if rb { 1 } else { 0 }
-            ),
+            format!("{}\n", rgb565_mode_line(w, h, stride_bytes)),
         )
     }
 
@@ -558,7 +534,7 @@ impl Display {
             } else {
                 200
             }));
-            match Self::open_current() {
+            match Self::open_current_rgb565() {
                 Ok(d) => {
                     let info = d.info();
                     boot_analytics::event(
@@ -588,7 +564,7 @@ impl Display {
         Err(last_err)
     }
 
-    pub fn open_current() -> io::Result<Self> {
+    pub fn open_current_rgb565() -> io::Result<Self> {
         let info = Self::read_fb_info()?;
         let w = info.visible_w;
         let h = info.virtual_h.max(info.visible_h);
@@ -604,7 +580,7 @@ impl Display {
                 format!("fb0 current size {w}x{h} exceeds MiSTer buffer"),
             ));
         }
-        Self::open_with_format(w, h, FramebufferFormat::from_bits_per_pixel(info.bits_per_pixel))
+        Self::open_rgb565(w, h)
     }
 
     fn read_fb_info() -> io::Result<FbInfo> {
@@ -625,15 +601,6 @@ impl Display {
     }
 
     pub fn open_rgb565(w: usize, h: usize) -> io::Result<Self> {
-        Self::open_with_format(w, h, FramebufferFormat::production())
-    }
-
-    #[cfg(any(test, feature = "diagnostics", mister_experiments))]
-    pub fn open_xrgb8888_diagnostic(w: usize, h: usize) -> io::Result<Self> {
-        Self::open_with_format(w, h, FramebufferFormat::Xrgb8888)
-    }
-
-    pub fn open_with_format(w: usize, h: usize, format: FramebufferFormat) -> io::Result<Self> {
         assert!(w * h <= FB_SIZE_PX as usize);
         let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
         let mut var = FbVarScreeninfo::zeroed();
@@ -654,45 +621,39 @@ impl Display {
                     format!("fb0 is {}px tall, need {h}", virt),
                 ));
             }
-            let expected_bpp = (format.bytes_per_pixel() * 8) as u32;
-            if var.bits_per_pixel != 0 && var.bits_per_pixel != expected_bpp {
+            if var.bits_per_pixel != 0 && var.bits_per_pixel != RGB565_BITS_PER_PIXEL {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
                         "fb0 is {}bpp, need {}bpp for {}",
                         var.bits_per_pixel,
-                        expected_bpp,
-                        format.label()
+                        RGB565_BITS_PER_PIXEL,
+                        production_label()
                     ),
                 ));
             }
-            let expected_offsets = match format {
-                FramebufferFormat::Xrgb8888 => Some((16, 8, 0)),
-                FramebufferFormat::Rgb565 => Some((11, 5, 0)),
-            };
-            if let Some(expected_offsets) = expected_offsets {
-                if var.red.length != 0
-                    && (var.red.offset, var.green.offset, var.blue.offset) != expected_offsets
-                {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                            "fb0 channel offsets are r{} g{} b{}, expected r{} g{} b{} for {}",
-                            var.red.offset,
-                            var.green.offset,
-                            var.blue.offset,
-                            expected_offsets.0,
-                            expected_offsets.1,
-                            expected_offsets.2,
-                            format.label()
-                        ),
-                    ));
-                }
+            let expected_offsets = (11, 5, 0);
+            if var.red.length != 0
+                && (var.red.offset, var.green.offset, var.blue.offset) != expected_offsets
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "fb0 channel offsets are r{} g{} b{}, expected r{} g{} b{} for {}",
+                        var.red.offset,
+                        var.green.offset,
+                        var.blue.offset,
+                        expected_offsets.0,
+                        expected_offsets.1,
+                        expected_offsets.2,
+                        production_label()
+                    ),
+                ));
             }
         }
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
         if fix_ok {
-            let expected = format.stride_bytes(w);
+            let expected = rgb565_stride_bytes(w);
             if fix.line_length != 0 && fix.line_length as usize != expected {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -701,7 +662,7 @@ impl Display {
             }
         }
         let info = fb_info_from(var_ok, &var, fix_ok, &fix, w, h);
-        let map_len = format.stride_bytes(w) * h;
+        let map_len = rgb565_stride_bytes(w) * h;
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
         let mem = unsafe {
             libc::mmap(
@@ -721,7 +682,6 @@ impl Display {
             map_len,
             w,
             h,
-            format,
             info,
             fb0,
         })
@@ -739,32 +699,12 @@ impl Display {
         self.h
     }
 
-    /// The (single) on-screen buffer, as a mutable pixel slice.
-    pub fn buffer_mut(&mut self) -> &mut [Pixel] {
-        assert_eq!(self.format, FramebufferFormat::Xrgb8888);
-        unsafe { std::slice::from_raw_parts_mut(self.mem.cast::<Pixel>(), self.w * self.h) }
-    }
-
     pub fn buffer_565_mut(&mut self) -> &mut [Rgb565Pixel] {
-        assert_eq!(self.format, FramebufferFormat::Rgb565);
         unsafe { std::slice::from_raw_parts_mut(self.mem.cast::<Rgb565Pixel>(), self.w * self.h) }
     }
 
-    #[allow(dead_code)]
-    pub fn buffer_u32_mut(&mut self) -> &mut [u32] {
-        pixels_as_u32_mut(self.buffer_mut())
-    }
-
-    #[allow(dead_code)]
-    pub fn clear(&mut self, color: Pixel) {
-        self.buffer_mut().fill(color);
-    }
-
     pub fn clear_black(&mut self) {
-        match self.format {
-            FramebufferFormat::Xrgb8888 => self.buffer_mut().fill(Pixel(0)),
-            FramebufferFormat::Rgb565 => self.buffer_565_mut().fill(Rgb565Pixel(0)),
-        }
+        self.buffer_565_mut().fill(Rgb565Pixel(0));
     }
 
     pub fn right_edge_signature(&self, cols: usize) -> (u64, u32) {
@@ -882,17 +822,9 @@ impl Display {
     }
 
     fn pixel_rgb(&self, idx: usize) -> u32 {
-        match self.format {
-            FramebufferFormat::Xrgb8888 => unsafe {
-                let pixels = std::slice::from_raw_parts(self.mem.cast::<Pixel>(), self.w * self.h);
-                pixels[idx].0 & 0x00ff_ffff
-            },
-            FramebufferFormat::Rgb565 => unsafe {
-                let pixels =
-                    std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.w * self.h);
-                rgb565_to_rgb888(pixels[idx])
-            },
-        }
+        let pixels =
+            unsafe { std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.w * self.h) };
+        rgb565_to_rgb888(pixels[idx])
     }
 
     fn vertical_edge_signature(&self, x0: usize, x1: usize, min_cols: usize) -> (u64, u32) {
@@ -991,21 +923,7 @@ impl Display {
         }
     }
 
-    /// Copy rows [y0,y1) from `src` into the framebuffer (write-combined).
-    /// `src` stride is `self.w`; used when render size equals fb size.
-    pub fn copy_rows(&mut self, src: &[Pixel], y0: usize, y1: usize) {
-        assert_eq!(self.format, FramebufferFormat::Xrgb8888);
-        let w = self.w;
-        let dst = self.buffer_mut();
-        let a = y0 * w;
-        let b = (y1 * w).min(dst.len());
-        if b > a {
-            dst[a..b].copy_from_slice(&src[a..b]);
-        }
-    }
-
     pub fn copy_rows_565(&mut self, src: &[Rgb565Pixel], y0: usize, y1: usize) {
-        assert_eq!(self.format, FramebufferFormat::Rgb565);
         let w = self.w;
         let dst = self.buffer_565_mut();
         let a = y0 * w;
@@ -1017,7 +935,6 @@ impl Display {
 
     #[cfg(mister_experiments)]
     pub fn copy_rows_camera_565(&mut self, src: &[CameraPixel], y0: usize, y1: usize) {
-        assert_eq!(self.format, FramebufferFormat::Rgb565);
         let w = self.w;
         let dst = self.buffer_565_mut();
         let a = y0 * w;
@@ -1026,36 +943,6 @@ impl Display {
             for (dst, src) in dst[a..b].iter_mut().zip(src[a..b].iter()) {
                 *dst = Rgb565Pixel(src.0);
             }
-        }
-    }
-
-    /// Copy logical rect [src_x0,src_x1) × [src_y0,src_y1) from `src` into the fb.
-    /// This avoids copying full-width dirty rows when Slint reports a narrow
-    /// bounding box.
-    pub fn copy_rect(
-        &mut self,
-        src: &[Pixel],
-        src_w: usize,
-        src_x0: usize,
-        src_y0: usize,
-        src_x1: usize,
-        src_y1: usize,
-    ) {
-        assert_eq!(self.format, FramebufferFormat::Xrgb8888);
-        if src_x1 <= src_x0 || src_y1 <= src_y0 {
-            return;
-        }
-        if src_x0 == 0 && src_x1 == self.w && src_w == self.w {
-            self.copy_rows(src, src_y0, src_y1);
-            return;
-        }
-        debug_assert_eq!(src_w, self.w);
-        let dst_w = self.w;
-        let dst = self.buffer_mut();
-        for sy in src_y0..src_y1 {
-            let a = sy * dst_w + src_x0;
-            let b = sy * dst_w + src_x1;
-            dst[a..b].copy_from_slice(&src[a..b]);
         }
     }
 
@@ -1068,7 +955,6 @@ impl Display {
         src_x1: usize,
         src_y1: usize,
     ) {
-        assert_eq!(self.format, FramebufferFormat::Rgb565);
         if src_x1 <= src_x0 || src_y1 <= src_y0 {
             return;
         }
@@ -1117,27 +1003,15 @@ impl Display {
         }
         let copy_w = x1 - x;
         let copy_h = y1 - y;
-        match self.format {
-            FramebufferFormat::Xrgb8888 => {
-                let dst = self.buffer_mut();
-                for row in 0..copy_h {
-                    let src_a = row * w;
-                    let dst_a = (y + row) * dst_w + x;
-                    dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
-                }
-            }
-            FramebufferFormat::Rgb565 => {
-                let dst = self.buffer_565_mut();
-                for row in 0..copy_h {
-                    let src_a = row * w;
-                    let dst_a = (y + row) * dst_w + x;
-                    for (dst, src) in dst[dst_a..dst_a + copy_w]
-                        .iter_mut()
-                        .zip(&src[src_a..src_a + copy_w])
-                    {
-                        *dst = pixel_to_rgb565(*src);
-                    }
-                }
+        let dst = self.buffer_565_mut();
+        for row in 0..copy_h {
+            let src_a = row * w;
+            let dst_a = (y + row) * dst_w + x;
+            for (dst, src) in dst[dst_a..dst_a + copy_w]
+                .iter_mut()
+                .zip(&src[src_a..src_a + copy_w])
+            {
+                *dst = pixel_to_rgb565(*src);
             }
         }
     }
@@ -1152,7 +1026,6 @@ impl Display {
         h: usize,
         src: &[Rgb565Pixel],
     ) {
-        debug_assert_eq!(self.format, FramebufferFormat::Rgb565);
         if w == 0 || h == 0 {
             return;
         }
@@ -1186,7 +1059,6 @@ impl Display {
         src_x: usize,
         src_y: usize,
     ) {
-        debug_assert_eq!(self.format, FramebufferFormat::Rgb565);
         if w == 0 || h == 0 || src_stride == 0 {
             return;
         }
@@ -1222,31 +1094,26 @@ impl Display {
             self.copy_rect_from(dst_x, dst_y, src_w, src_h, src);
             return;
         }
-        if scale == 2 {
-            let dst_w = self.w;
-            let dst_h = self.h;
-            let dst = self.buffer_mut();
-            framebuffer_copy::copy_rect_2x_u32_to(
-                pixels_as_u32_mut(dst),
-                dst_w,
-                dst_h,
-                dst_x,
-                dst_y,
-                pixels_as_u32(src),
-                src_w,
-                0,
-                0,
-                src_w,
-                src_h,
-            );
-            return;
-        }
         let dst_w = self.w;
         let dst_h = self.h;
-        let dst = self.buffer_mut();
-        framebuffer_copy::copy_rect_scaled_to(
-            dst, dst_w, dst_h, dst_x, dst_y, scale, src, src_w, 0, 0, src_w, src_h,
-        );
+        let dst = self.buffer_565_mut();
+        for sy in 0..src_h {
+            for yy in 0..scale {
+                let dy = dst_y + sy * scale + yy;
+                if dy >= dst_h {
+                    continue;
+                }
+                for sx in 0..src_w {
+                    let color = pixel_to_rgb565(src[sy * src_w + sx]);
+                    for xx in 0..scale {
+                        let dx = dst_x + sx * scale + xx;
+                        if dx < dst_w {
+                            dst[dy * dst_w + dx] = color;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -1264,32 +1131,25 @@ impl Display {
         }
         let dst_w = self.w;
         let dst_h = self.h;
-        let dst = pixels_as_u32_mut(self.buffer_mut());
-        if scale == 1 {
-            for sy in 0..src_h {
-                let dy = dst_y + sy;
+        let dst = self.buffer_565_mut();
+        for sy in 0..src_h {
+            for yy in 0..scale {
+                let dy = dst_y + sy * scale + yy;
                 if dy >= dst_h {
-                    break;
-                }
-                let copy_w = src_w.min(dst_w.saturating_sub(dst_x));
-                if copy_w == 0 {
                     continue;
                 }
-                let src_a = sy * src_w;
-                let dst_a = dy * dst_w + dst_x;
-                dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+                for sx in 0..src_w {
+                    let pixel = Pixel(src[sy * src_w + sx]);
+                    let color = pixel_to_rgb565(pixel);
+                    for xx in 0..scale {
+                        let dx = dst_x + sx * scale + xx;
+                        if dx < dst_w {
+                            dst[dy * dst_w + dx] = color;
+                        }
+                    }
+                }
             }
-            return;
         }
-        if scale == 2 {
-            framebuffer_copy::copy_rect_2x_u32_to(
-                dst, dst_w, dst_h, dst_x, dst_y, src, src_w, 0, 0, src_w, src_h,
-            );
-            return;
-        }
-        framebuffer_copy::copy_rect_scaled_to(
-            dst, dst_w, dst_h, dst_x, dst_y, scale, src, src_w, 0, 0, src_w, src_h,
-        );
     }
 }
 
@@ -1393,8 +1253,8 @@ mod tests {
     }
 
     #[test]
-    fn mode_line_preserves_xrgb8888_framebuffer_mode() {
-        assert_eq!(fb_info(32, 3840).mode_line(), "8888 1 960 540 3840");
+    fn mode_line_preserves_non_rgb565_framebuffer_mode_numerically() {
+        assert_eq!(fb_info(32, 3840).mode_line(), "32 1 960 540 3840");
     }
 
     fn test_pacer(period_us: u64) -> VsyncPacer {

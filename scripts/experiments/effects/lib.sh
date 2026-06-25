@@ -56,16 +56,6 @@ effect_validate_nonnegative_int() {
   fi
 }
 
-effect_validate_fb_format() {
-  case "$1" in
-    565) ;;
-    *)
-      echo "--fb-format must be 565; RGB888 UI support was removed" >&2
-      return 2
-      ;;
-  esac
-}
-
 effect_validate_preview_format() {
   case "$1" in
     png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;;

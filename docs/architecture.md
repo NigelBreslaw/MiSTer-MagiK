@@ -53,9 +53,9 @@ Important policy:
   cached-RAM plus dirty-copy path is the current reliable 60fps design.
 - Do not assume `/dev/fb0` contents are visible on HDMI. The FPGA may be scanning
   another buffer.
-- RGB888 UI support has been removed. Keep any 8888 work in explicit low-level
-  diagnostics such as framebuffer smoke/recovery tooling, not in app rendering
-  or benchmarks.
+- RGB888/8888 UI support and color-route smoke tooling have been removed from
+  the app. Do not add framebuffer format selection back to rendering,
+  diagnostics, experiments, or benchmarks.
 
 Historical evidence:
 

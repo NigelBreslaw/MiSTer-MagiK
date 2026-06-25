@@ -67,12 +67,7 @@ impl SpriteEffectsConfig {
     }
 }
 
-pub(super) fn run_sprite_effects_loop(
-    secs: u64,
-    ui: &UiDisplay,
-    disp: &mut Display,
-    _fb_format: FramebufferFormat,
-) {
+pub(super) fn run_sprite_effects_loop(secs: u64, ui: &UiDisplay, disp: &mut Display) {
     let mut cfg = SpriteEffectsConfig::from_env();
     let arcade_root = arcade_root_from_env();
     let images = load_sprite_effect_images(&arcade_root, cfg.cache_cap);

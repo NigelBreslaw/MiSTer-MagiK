@@ -1,4 +1,5 @@
 use super::*;
+use mister_magik_fb::fb_format::{rgb565_stride_bytes, RGB565_BITS_PER_PIXEL};
 
 const DEFAULT_BOOT_BLACK_SETTLE_FRAMES: u32 = 4;
 const MAX_BOOT_BLACK_SETTLE_FRAMES: u32 = 60;
@@ -26,16 +27,8 @@ pub(crate) struct FbModeGuard {
 impl FbModeGuard {
     #[allow(dead_code)]
     pub(crate) fn set_temporary(w: usize, h: usize) -> std::io::Result<Self> {
-        Self::set_temporary_format(w, h, FramebufferFormat::Xrgb8888)
-    }
-
-    pub(crate) fn set_temporary_format(
-        w: usize,
-        h: usize,
-        format: FramebufferFormat,
-    ) -> std::io::Result<Self> {
         let previous = Display::current_info()?;
-        Display::write_mister_mode_format(format, w, h, format.stride_bytes(w))?;
+        Display::write_mister_mode_rgb565(w, h, rgb565_stride_bytes(w))?;
         remember_fb_mode_for_exit(previous);
         Ok(Self {
             previous,
@@ -68,10 +61,9 @@ impl Drop for FbModeGuard {
 pub(crate) fn fb_mode_action(
     current: crate::fb::FbInfo,
     plan: crate::ui_display::UiDisplayPlan,
-    format: FramebufferFormat,
 ) -> FbModeAction {
-    let expected_bpp = (format.bytes_per_pixel() * 8) as u32;
-    let expected_stride = format.stride_bytes(plan.fb_w);
+    let expected_bpp = RGB565_BITS_PER_PIXEL;
+    let expected_stride = rgb565_stride_bytes(plan.fb_w);
     if current.visible_w == plan.fb_w
         && current.visible_h == plan.fb_h
         && current.virtual_w == plan.fb_w
@@ -85,75 +77,26 @@ pub(crate) fn fb_mode_action(
     }
 }
 
-pub(crate) fn boot_framebuffer_format() -> FramebufferFormat {
-    FramebufferFormat::production()
-}
-
 #[derive(Clone, Copy)]
-pub(crate) struct FpgaFramebufferRoute {
+pub(crate) struct LauncherFramebufferRoute {
     mode: Mode,
-    xoff: Option<i32>,
-    yoff: Option<i32>,
     set_vga_fb: bool,
-    format: FramebufferFormat,
 }
 
-impl FpgaFramebufferRoute {
-    pub(crate) fn for_ui_rgb565(ui: &UiDisplay) -> Self {
-        Self::for_scan(
-            ui.scan_w(),
-            ui.scan_h(),
-            ui.direct_video(),
-            FramebufferFormat::production(),
-        )
+impl LauncherFramebufferRoute {
+    pub(crate) fn for_ui(ui: &UiDisplay) -> Self {
+        Self::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video())
     }
 
-    pub(crate) fn for_plan_rgb565(plan: crate::ui_display::UiDisplayPlan) -> Self {
-        Self::for_scan(
-            plan.scan_w,
-            plan.scan_h,
-            plan.direct_video,
-            FramebufferFormat::production(),
-        )
+    pub(crate) fn for_plan(plan: crate::ui_display::UiDisplayPlan) -> Self {
+        Self::for_scan(plan.scan_w, plan.scan_h, plan.direct_video)
     }
 
-    pub(crate) fn for_scan(
-        scan_w: u16,
-        scan_h: u16,
-        set_vga_fb: bool,
-        format: FramebufferFormat,
-    ) -> Self {
-        Self::new(ui_fpga_scaled_mode(scan_w, scan_h), set_vga_fb, format)
-    }
-
-    pub(crate) fn framebuffer_sized(
-        w: usize,
-        h: usize,
-        set_vga_fb: bool,
-        format: FramebufferFormat,
-    ) -> Self {
-        Self::new(
-            Mode::framebuffer_sized(w as u16, h as u16),
-            set_vga_fb,
-            format,
-        )
-    }
-
-    pub(crate) fn new(mode: Mode, set_vga_fb: bool, format: FramebufferFormat) -> Self {
+    fn for_scan(scan_w: u16, scan_h: u16, set_vga_fb: bool) -> Self {
         Self {
-            mode,
-            xoff: Some(0),
-            yoff: Some(0),
+            mode: ui_fpga_scaled_mode(scan_w, scan_h),
             set_vga_fb,
-            format,
         }
-    }
-
-    #[cfg(mister_experiments)]
-    pub(crate) fn with_offsets(mut self, xoff: Option<i32>, yoff: Option<i32>) -> Self {
-        self.xoff = xoff;
-        self.yoff = yoff;
-        self
     }
 
     pub(crate) fn enable(
@@ -162,15 +105,12 @@ impl FpgaFramebufferRoute {
         fb_width: usize,
         fb_height: usize,
     ) -> std::io::Result<u16> {
-        f.fb_enable_format(
+        f.fb_enable_rgb565(
             0,
             fb_width as u16,
             fb_height as u16,
             self.mode,
-            self.xoff,
-            self.yoff,
             self.set_vga_fb,
-            self.format,
         )
     }
 
@@ -186,13 +126,11 @@ impl FpgaFramebufferRoute {
 pub(crate) struct UiBootFramebufferSession {
     pub(crate) ui: UiDisplay,
     pub(crate) disp: Display,
-    pub(crate) format: FramebufferFormat,
     pub(crate) _fb_mode_guard: Option<FbModeGuard>,
 }
 
 impl UiBootFramebufferSession {
     pub(crate) fn start_ui_or_exit(f: &mut Fpga) -> Self {
-        let format = boot_framebuffer_format();
         let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "ui");
         let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
         println!("{}", display_plan.log_line());
@@ -203,7 +141,7 @@ impl UiBootFramebufferSession {
             "ui-fb-mode=temporary {}x{} format={} output={}x{} scan={}x{} restore=on-drop",
             display_plan.fb_w,
             display_plan.fb_h,
-            format.label(),
+            production_label(),
             display_plan.output_w,
             display_plan.output_h,
             display_plan.scan_w,
@@ -217,17 +155,13 @@ impl UiBootFramebufferSession {
                 std::process::exit(1);
             }
         };
-        let fb_mode_action = fb_mode_action(current_fb, display_plan, format);
+        let fb_mode_action = fb_mode_action(current_fb, display_plan);
         println!("fb_mode_action={}", fb_mode_action.label());
         boot_analytics::event("fb_mode_action", fb_mode_action.label());
         let fb_mode_guard = match fb_mode_action {
             FbModeAction::AdoptCurrent => None,
             FbModeAction::WriteMode => {
-                match FbModeGuard::set_temporary_format(
-                    display_plan.fb_w,
-                    display_plan.fb_h,
-                    format,
-                ) {
+                match FbModeGuard::set_temporary(display_plan.fb_w, display_plan.fb_h) {
                     Ok(guard) => Some(guard),
                     Err(e) => {
                         eprintln!(
@@ -254,7 +188,7 @@ impl UiBootFramebufferSession {
             "ui_black_frame_copied",
             format!(
                 "format={} w={} h={}",
-                format.label(),
+                production_label(),
                 disp.width(),
                 disp.height()
             ),
@@ -274,7 +208,7 @@ impl UiBootFramebufferSession {
             println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
-        let route = FpgaFramebufferRoute::for_ui_rgb565(&ui);
+        let route = LauncherFramebufferRoute::for_ui(&ui);
         boot_analytics::event(
             "initial_fb_enable_direct_attempt",
             format!(
@@ -301,7 +235,7 @@ impl UiBootFramebufferSession {
             "rust_framebuffer_route_completed",
             format!(
                 "format={} w={} h={} output={}x{} scan={}x{} support_flag={support_flag}",
-                format.label(),
+                production_label(),
                 disp.width(),
                 disp.height(),
                 ui.output_w(),
@@ -311,7 +245,7 @@ impl UiBootFramebufferSession {
             ),
         );
         if fb_mode_action == FbModeAction::WriteMode {
-            settle_boot_black_frame("ui-startup", &mut disp, f, route, format);
+            settle_boot_black_frame("ui-startup", &mut disp, f, route);
         }
         disp.record_visual_sample("after_initial_route_before_slint_draw");
         println!(
@@ -321,7 +255,6 @@ impl UiBootFramebufferSession {
         Self {
             ui,
             disp,
-            format,
             _fb_mode_guard: fb_mode_guard,
         }
     }
@@ -365,8 +298,7 @@ pub(crate) fn settle_boot_black_frame(
     label: &str,
     disp: &mut Display,
     f: &mut Fpga,
-    route: FpgaFramebufferRoute,
-    format: FramebufferFormat,
+    route: LauncherFramebufferRoute,
 ) {
     let frames = boot_black_settle_frames();
     if frames == 0 {
@@ -404,7 +336,7 @@ pub(crate) fn settle_boot_black_frame(
         "boot_black_settle_completed",
         format!(
             "label={label} frames={frames} routed={routed} support_flag={last_flag} format={} w={} h={} scan={}x{}",
-            format.label(),
+            production_label(),
             disp.width(),
             disp.height(),
             route.mode().hact,
@@ -488,10 +420,7 @@ mod tests {
         let plan = UiDisplayPlan::from_mister_ini_text("[Menu]\nvideo_mode=8\n").expect("plan");
         let current = fb_info(960, 540, 1920, 16);
 
-        assert_eq!(
-            fb_mode_action(current, plan, FramebufferFormat::Rgb565),
-            FbModeAction::AdoptCurrent
-        );
+        assert_eq!(fb_mode_action(current, plan), FbModeAction::AdoptCurrent);
         assert_eq!(FbModeAction::AdoptCurrent.label(), "adopt");
     }
 
@@ -500,56 +429,26 @@ mod tests {
         let plan = UiDisplayPlan::from_mister_ini_text("[Menu]\nvideo_mode=8\n").expect("plan");
 
         assert_eq!(
-            fb_mode_action(
-                fb_info(1920, 1080, 3840, 16),
-                plan,
-                FramebufferFormat::Rgb565
-            ),
+            fb_mode_action(fb_info(1920, 1080, 3840, 16), plan),
             FbModeAction::WriteMode
         );
         assert_eq!(
-            fb_mode_action(fb_info(960, 540, 3840, 32), plan, FramebufferFormat::Rgb565),
+            fb_mode_action(fb_info(960, 540, 3840, 32), plan),
             FbModeAction::WriteMode
         );
         assert_eq!(FbModeAction::WriteMode.label(), "write");
     }
 
     #[test]
-    fn boot_framebuffer_format_ignores_diagnostic_format_override_policy() {
-        assert_eq!(
-            FramebufferFormat::from_label("8888"),
-            Some(FramebufferFormat::Xrgb8888)
-        );
-        assert_eq!(boot_framebuffer_format(), FramebufferFormat::Rgb565);
-    }
-
-    #[test]
-    fn framebuffer_route_for_plan_rgb565_uses_scan_dimensions_and_direct_video() {
+    fn launcher_framebuffer_route_for_plan_uses_scan_dimensions_and_direct_video() {
         let plan =
             UiDisplayPlan::from_mister_ini_text("[Menu]\nvideo_mode=8\n[MiSTer]\ndirect_video=1\n")
                 .expect("plan");
 
-        let route = FpgaFramebufferRoute::for_plan_rgb565(plan);
+        let route = LauncherFramebufferRoute::for_plan(plan);
 
         assert_eq!(route.mode().hact, plan.scan_w);
         assert_eq!(route.mode().vact, plan.scan_h);
         assert!(route.set_vga_fb());
-        assert_eq!(route.format, FramebufferFormat::Rgb565);
-        assert_eq!(route.xoff, Some(0));
-        assert_eq!(route.yoff, Some(0));
-    }
-
-    #[cfg(mister_experiments)]
-    #[test]
-    fn framebuffer_route_can_carry_diagnostic_offsets() {
-        let route =
-            FpgaFramebufferRoute::framebuffer_sized(960, 540, false, FramebufferFormat::Xrgb8888)
-                .with_offsets(Some(12), Some(34));
-
-        assert_eq!(route.mode().hact, 960);
-        assert_eq!(route.mode().vact, 540);
-        assert!(!route.set_vga_fb());
-        assert_eq!(route.xoff, Some(12));
-        assert_eq!(route.yoff, Some(34));
     }
 }

@@ -352,31 +352,6 @@ pub(super) fn dirty_rect_from_bounds(
     }
 }
 
-pub(super) fn copy_cached_rows(
-    disp: &mut Display,
-    ui: &UiDisplay,
-    cached: &[Pixel],
-    y0: usize,
-    y1: usize,
-) {
-    debug_assert_eq!(ui.fb_scale(), 1);
-    disp.copy_rows(cached, y0, y1);
-}
-
-pub(super) fn copy_cached_rect(
-    disp: &mut Display,
-    ui: &UiDisplay,
-    cached: &[Pixel],
-    rect: DirtyRect,
-) {
-    if rect.is_full_width(ui.render_w()) || dirty_rect_is_broad(rect, ui.render_w()) {
-        copy_cached_rows(disp, ui, cached, rect.y0, rect.y1);
-        return;
-    }
-    debug_assert_eq!(ui.fb_scale(), 1);
-    disp.copy_rect(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
-}
-
 pub(super) fn copy_cached_rows_565(
     disp: &mut Display,
     ui: &UiDisplay,
@@ -434,180 +409,6 @@ pub(super) fn brighten_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
 }
 
-pub(super) struct PresentProbe {
-    pixels: Vec<Pixel>,
-}
-
-impl PresentProbe {
-    const X: usize = 12;
-    const Y: usize = 12;
-    const W: usize = 208;
-    const H: usize = 72;
-
-    pub(super) fn from_env() -> Option<Self> {
-        matches!(
-            std::env::var("MISTER_PRESENT_PROBE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-        .then(|| Self {
-            pixels: vec![Pixel(0); Self::W * Self::H],
-        })
-    }
-
-    pub(super) fn present(&mut self, disp: &mut Display, frame: u64) -> u32 {
-        self.draw(frame);
-        disp.copy_rect_from(Self::X, Self::Y, Self::W, Self::H, &self.pixels);
-        Self::H as u32
-    }
-
-    pub(super) fn draw(&mut self, frame: u64) {
-        self.pixels.fill(Pixel::from_rgb(0, 0, 0));
-        let edge = if frame & 1 == 0 {
-            Pixel::from_rgb(0, 255, 255)
-        } else {
-            Pixel::from_rgb(255, 0, 255)
-        };
-        self.fill_rect(0, 0, Self::W, Self::H, Pixel::from_rgb(8, 8, 14));
-        self.stroke_rect(0, 0, Self::W, Self::H, edge);
-
-        let flash = if frame & 1 == 0 {
-            Pixel::from_rgb(255, 255, 255)
-        } else {
-            Pixel::from_rgb(0, 0, 0)
-        };
-        self.fill_rect(6, 6, 36, 36, flash);
-        self.stroke_rect(6, 6, 36, 36, edge);
-
-        let marker_x = 48 + (frame as usize % 150);
-        self.fill_rect(marker_x, 4, 3, Self::H - 8, Pixel::from_rgb(255, 40, 40));
-
-        let mut value = (frame % 10_000) as u16;
-        let mut digits = [0u8; 4];
-        for digit in digits.iter_mut().rev() {
-            *digit = (value % 10) as u8;
-            value /= 10;
-        }
-        for (i, digit) in digits.into_iter().enumerate() {
-            self.draw_digit(58 + i * 28, 9, digit, Pixel::from_rgb(255, 242, 96));
-        }
-
-        for bit in 0..8 {
-            let on = ((frame >> (7 - bit)) & 1) != 0;
-            let color = if on {
-                Pixel::from_rgb(64, 255, 96)
-            } else {
-                Pixel::from_rgb(32, 44, 40)
-            };
-            self.fill_rect(8 + bit * 24, 52, 18, 12, color);
-            self.stroke_rect(8 + bit * 24, 52, 18, 12, Pixel::from_rgb(160, 160, 160));
-        }
-    }
-
-    pub(super) fn draw_digit(&mut self, x: usize, y: usize, digit: u8, color: Pixel) {
-        const SEGMENTS: [u8; 10] = [
-            0b1111110, 0b0110000, 0b1101101, 0b1111001, 0b0110011, 0b1011011, 0b1011111, 0b1110000,
-            0b1111111, 0b1111011,
-        ];
-        let mask = SEGMENTS[digit as usize];
-        let seg = |this: &mut Self, bit: u8, rx: usize, ry: usize, rw: usize, rh: usize| {
-            if (mask & (1 << bit)) != 0 {
-                this.fill_rect(x + rx, y + ry, rw, rh, color);
-            }
-        };
-        seg(self, 6, 3, 0, 18, 4);
-        seg(self, 5, 20, 3, 4, 14);
-        seg(self, 4, 20, 21, 4, 14);
-        seg(self, 3, 3, 36, 18, 4);
-        seg(self, 2, 0, 21, 4, 14);
-        seg(self, 1, 0, 3, 4, 14);
-        seg(self, 0, 3, 18, 18, 4);
-    }
-
-    pub(super) fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
-        let x1 = (x + w).min(Self::W);
-        let y1 = (y + h).min(Self::H);
-        for yy in y..y1 {
-            let row = yy * Self::W;
-            for xx in x..x1 {
-                self.pixels[row + xx] = color;
-            }
-        }
-    }
-
-    pub(super) fn stroke_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        self.fill_rect(x, y, w, 1, color);
-        self.fill_rect(x, y + h - 1, w, 1, color);
-        self.fill_rect(x, y, 1, h, color);
-        self.fill_rect(x + w - 1, y, 1, h, color);
-    }
-}
-
-pub(super) struct EffectLabelOverlay {
-    font: ConsoleFont,
-    pixels: Vec<Pixel>,
-}
-
-impl EffectLabelOverlay {
-    const X: usize = 10;
-    const Y: usize = 10;
-    const W: usize = 260;
-    const H: usize = 26;
-
-    pub(super) fn new() -> Self {
-        Self {
-            font: ConsoleFont::new(10.0),
-            pixels: vec![Pixel(0); Self::W * Self::H],
-        }
-    }
-
-    pub(super) fn draw(
-        &mut self,
-        target: &mut UiFrameTarget,
-        ui: &UiDisplay,
-        effect: &str,
-    ) -> DirtyRect {
-        self.pixels.fill(Pixel::from_rgb(0, 0, 0));
-        self.fill_rect(1, 1, Self::W - 2, Self::H - 2, Pixel::from_rgb(10, 14, 20));
-        self.stroke_rect(0, 0, Self::W, Self::H, Pixel::from_rgb(69, 229, 255));
-        self.font.draw_text_clipped(
-            &mut self.pixels,
-            Self::W,
-            Self::W,
-            0,
-            Self::H,
-            8,
-            18,
-            &format!("EFFECT: {}", effect.to_ascii_uppercase()),
-            Pixel::from_rgb(255, 244, 126),
-        );
-        target.blit_pixel_rect(ui, Self::X, Self::Y, Self::W, Self::H, &self.pixels)
-    }
-
-    pub(super) fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
-        let x1 = (x + w).min(Self::W);
-        let y1 = (y + h).min(Self::H);
-        for yy in y..y1 {
-            let row = yy * Self::W;
-            for xx in x..x1 {
-                self.pixels[row + xx] = color;
-            }
-        }
-    }
-
-    pub(super) fn stroke_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Pixel) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        self.fill_rect(x, y, w, 1, color);
-        self.fill_rect(x, y + h - 1, w, 1, color);
-        self.fill_rect(x, y, 1, h, color);
-        self.fill_rect(x + w - 1, y, 1, h, color);
-    }
-}
-
 pub(crate) enum UiFrameTarget {
     Rgb565 { cached: Vec<Rgb565Pixel> },
 }
@@ -622,7 +423,7 @@ impl UiFrameTarget {
     pub(super) fn open(ui: &UiDisplay) -> Self {
         println!(
             "slint-render-target=cached fb-format={}",
-            FramebufferFormat::production().label()
+            production_label()
         );
         Self::cached(ui)
     }
@@ -724,8 +525,7 @@ impl UiFrameTarget {
             let src_idx = yy * w;
             for xx in 0..w {
                 let rgb = pixel_to_rgb(src[src_idx + xx]);
-                cached[dst + xx] =
-                    <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
+                cached[dst + xx] = <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
             }
         }
         DirtyRect {

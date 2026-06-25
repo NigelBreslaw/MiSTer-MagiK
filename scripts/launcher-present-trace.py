@@ -24,8 +24,7 @@ REQUIRED_COLUMNS = {
     "rows",
     "fb_present_us",
     "cached_present_us",
-    "overlay_present_us",
-    "present_probe_us",
+    "arcade_list_present_us",
     "vsync_source",
     "vsync_miss_streak",
 }
@@ -34,8 +33,7 @@ METRICS = [
     "rows",
     "fb_present_us",
     "cached_present_us",
-    "overlay_present_us",
-    "present_probe_us",
+    "arcade_list_present_us",
 ]
 
 FAILURE_EXIT = 9
@@ -100,10 +98,17 @@ def read_trace(path: Path, *, ignore_frames_through: int) -> TraceData:
     with path.open(newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         columns = set(reader.fieldnames or [])
+        if "arcade_list_present_us" not in columns and "overlay_present_us" in columns:
+            columns.add("arcade_list_present_us")
         missing = sorted(REQUIRED_COLUMNS - columns)
         if missing:
             raise ValueError(f"{path}: missing required columns: {','.join(missing)}")
-        rows = [row for row in reader if int_field(row, "frame") > ignore_frames_through]
+        rows = []
+        for row in reader:
+            if "arcade_list_present_us" not in row and "overlay_present_us" in row:
+                row["arcade_list_present_us"] = row["overlay_present_us"]
+            if int_field(row, "frame") > ignore_frames_through:
+                rows.append(row)
     if not rows:
         raise ValueError(f"{path}: no rows after frame {ignore_frames_through}")
     return TraceData(path=path, rows=rows)
@@ -249,10 +254,6 @@ def verdict_for_metric(
                 f"{fmt_float(max_present_regression_pct)}"
             )
         return "pass", "ok"
-    if metric == "present_probe_us":
-        if before.p99 != 0 or after.p99 != 0:
-            return "fail", "present_probe_p99_nonzero"
-        return "pass", "ok"
     return "pass", "info"
 
 
@@ -349,8 +350,7 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
         "rows": 704,
         "fb_present_us": 900,
         "cached_present_us": 400,
-        "overlay_present_us": 500,
-        "present_probe_us": 0,
+        "arcade_list_present_us": 500,
         "vsync_source": "vsync",
         "vsync_miss_streak": 0,
     }
@@ -364,8 +364,7 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                 "rows",
                 "fb_present_us",
                 "cached_present_us",
-                "overlay_present_us",
-                "present_probe_us",
+                "arcade_list_present_us",
                 "vsync_source",
                 "vsync_miss_streak",
             ]
@@ -378,8 +377,7 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                     defaults["rows"],
                     defaults["fb_present_us"],
                     defaults["cached_present_us"],
-                    defaults["overlay_present_us"],
-                    defaults["present_probe_us"],
+                    defaults["arcade_list_present_us"],
                     defaults["vsync_source"],
                     defaults["vsync_miss_streak"],
                 ]
@@ -392,18 +390,15 @@ def run_self_test() -> int:
         before = root / "before.tsv"
         after_good = root / "after-good.tsv"
         after_bad_copy = root / "after-bad-copy.tsv"
-        after_bad_probe = root / "after-bad-probe.tsv"
         after_no_scroll = root / "after-no-scroll.tsv"
         write_fixture(before, 180, cached_present_us=400, fb_present_us=900)
         write_fixture(after_good, 180, cached_present_us=410, fb_present_us=920)
         write_fixture(after_bad_copy, 180, cached_present_us=500, fb_present_us=1060)
-        write_fixture(after_bad_probe, 180, present_probe_us=1)
         write_fixture(after_no_scroll, 180, group="full")
 
         before_trace = read_trace(before, ignore_frames_through=30)
         good_trace = read_trace(after_good, ignore_frames_through=30)
         bad_copy_trace = read_trace(after_bad_copy, ignore_frames_through=30)
-        bad_probe_trace = read_trace(after_bad_probe, ignore_frames_through=30)
         no_scroll_trace = read_trace(after_no_scroll, ignore_frames_through=30)
 
         if compare_traces(
@@ -425,16 +420,6 @@ def run_self_test() -> int:
             max_rows_regression=1,
         ) == 0:
             print("self-test: expected copy regression to fail", file=sys.stderr)
-            return 1
-        if compare_traces(
-            before_trace,
-            bad_probe_trace,
-            case="self-bad-probe",
-            min_frames=120,
-            max_present_regression_pct=5.0,
-            max_rows_regression=1,
-        ) == 0:
-            print("self-test: expected present probe regression to fail", file=sys.stderr)
             return 1
         if compare_traces(
             before_trace,
