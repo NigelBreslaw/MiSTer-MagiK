@@ -454,3 +454,116 @@ fn any_control_rising(now: &PadState, prev: &PadState) -> bool {
         || rising(now.btn_home, prev.btn_home)
         || rising(now.btn_capture, prev.btn_capture)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller_db::{ControllerEntry, ControllerKind};
+
+    fn pad_info(port: &str) -> PadInfo {
+        PadInfo {
+            name: "Test Pad".to_string(),
+            vendor_id: "0x2563".to_string(),
+            product_id: "0x0575".to_string(),
+            serial: "SN-A".to_string(),
+            phys: format!("usb-ffb40000.usb-{port}/input0"),
+            usb_port: port.to_string(),
+            js_buttons: 13,
+            js_axes: 6,
+            evdev_key_count: 0,
+            evdev_abs_count: 0,
+            capture_available: false,
+        }
+    }
+
+    fn press_a() -> PadState {
+        PadState {
+            btn_a: true,
+            ..PadState::default()
+        }
+    }
+
+    fn configured_entry(port: &str) -> ControllerEntry {
+        ControllerEntry {
+            label: "Arcade Pad".to_string(),
+            kernel_name: "Test Pad".to_string(),
+            kind: ControllerKind::Gamepad,
+            setup_complete: true,
+            last_usb_port: port.to_string(),
+        }
+    }
+
+    fn empty_db(label: &str) -> ControllerDb {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-setup-nav-{label}-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        ControllerDb::load_from(&path.display().to_string())
+    }
+
+    #[test]
+    fn activity_open_debounces_triggering_button_press() {
+        let info = pad_info("1-1.3");
+        let db = empty_db("debounce");
+        let mut nav = SetupNav::new();
+        nav.maybe_open(&info, 0, &db, true);
+
+        let now = Instant::now();
+        let action = nav.handle_input(&press_a(), now, &info, &db);
+
+        assert!(matches!(action, SetupAction::None));
+        assert_eq!(nav.phase, SetupPhase::Detected);
+    }
+
+    #[test]
+    fn moved_port_existing_choice_with_empty_registry_stays_on_choice() {
+        let info = pad_info("1-1.7");
+        let db = empty_db("empty-registry");
+        let mut nav = SetupNav::new();
+        nav.open_for(PadRegistryStatus::MovedPort, 0);
+        let now = Instant::now();
+        let mut first = PadState {
+            btn_start: true,
+            ..PadState::default()
+        };
+        let _ = nav.handle_input(&first, now, &info, &db);
+        assert_eq!(nav.phase, SetupPhase::NewOrExisting);
+
+        first.btn_start = false;
+        first.dpad_right = true;
+        let _ = nav.handle_input(
+            &first,
+            now + std::time::Duration::from_millis(16),
+            &info,
+            &db,
+        );
+        assert_eq!(nav.list_index, 1);
+
+        let action = nav.handle_input(
+            &press_a(),
+            now + std::time::Duration::from_millis(32),
+            &info,
+            &db,
+        );
+
+        assert!(matches!(action, SetupAction::None));
+        assert_eq!(nav.phase, SetupPhase::NewOrExisting);
+        assert_eq!(nav.list_index, 1);
+    }
+
+    #[test]
+    fn configured_pad_finishes_from_configure_without_renaming() {
+        let info = pad_info("1-1.3");
+        let mut db = empty_db("configured");
+        db.upsert(&info, configured_entry("1-1.3"));
+        let mut nav = SetupNav::new();
+        nav.open_for(PadRegistryStatus::PendingSetup, 0);
+        nav.phase = SetupPhase::Configure;
+
+        let action = nav.handle_input(&press_a(), Instant::now(), &info, &db);
+
+        assert!(matches!(action, SetupAction::Done));
+        assert_eq!(nav.phase, SetupPhase::None);
+    }
+}

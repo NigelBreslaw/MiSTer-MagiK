@@ -29,6 +29,15 @@ APIs, progress states, and benchmark expectations.
 - `magik-gui/src/launcher.rs` owns the library rebuild-on-next-boot marker plus
   virtual launch cache stamping and materialization.
 
+## Read-Only Inspection
+
+Use `scripts/mister db` or `mister-magik-fb library-sql` for catalog database
+inspection. These entrypoints are intentionally read-only: they accept
+`SELECT`/read-only `WITH` queries, reject obvious write statements before
+opening the database, and also open SQLite with read-only/query-only settings.
+Do not add write, repair, migration, or cache rebuild behavior to these
+inspection paths; use the catalog builder and launcher worker flows instead.
+
 ## Lifecycle
 
 Cold or reset database:

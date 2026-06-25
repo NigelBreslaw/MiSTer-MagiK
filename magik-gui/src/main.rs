@@ -69,7 +69,6 @@ mod mr_audio;
 mod preview_state;
 mod runtime_status;
 mod screenshot_transitions;
-mod setup_nav;
 mod ui_display;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
@@ -81,7 +80,7 @@ mod vt;
 pub use mister_magik_fb::fb_format;
 pub use mister_magik_fb::{
     arcade_catalog, command_args, controller_db, input_repeat, input_state, library_db,
-    media_update, preview_worker,
+    media_update, preview_worker, setup_nav,
 };
 
 use fb::{Display, Pixel, VsyncPacer, VsyncWaitStatus};

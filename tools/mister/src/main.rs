@@ -3184,11 +3184,96 @@ fn parse_library_db_query(args: &[String]) -> Result<(String, String)> {
         return Err("usage: scripts/mister db [--path PATH] SELECT ...".into());
     }
     let query = query_parts.join(" ");
-    let trimmed = query.trim_start().to_ascii_lowercase();
-    if !trimmed.starts_with("select") && !trimmed.starts_with("with") {
+    if !library_db_query_is_read_only(&query) {
         return Err("scripts/mister db only allows read-only SELECT/WITH queries".into());
     }
     Ok((remote_path, query))
+}
+
+fn library_db_query_is_read_only(query: &str) -> bool {
+    let tokens = library_db_query_tokens(query);
+    let Some(first) = tokens.first().map(String::as_str) else {
+        return false;
+    };
+    (first == "select" || first == "with") && !library_db_query_tokens_contain_write(&tokens)
+}
+
+fn library_db_query_tokens_contain_write(tokens: &[String]) -> bool {
+    tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "insert"
+                | "update"
+                | "delete"
+                | "replace"
+                | "create"
+                | "drop"
+                | "alter"
+                | "pragma"
+                | "attach"
+                | "detach"
+                | "vacuum"
+                | "reindex"
+        )
+    })
+}
+
+fn library_db_query_tokens(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut chars = query.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' | '"' => {
+                if !token.is_empty() {
+                    tokens.push(std::mem::take(&mut token));
+                }
+                while let Some(quoted) = chars.next() {
+                    if quoted == ch {
+                        if chars.peek() == Some(&ch) {
+                            let _ = chars.next();
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                if !token.is_empty() {
+                    tokens.push(std::mem::take(&mut token));
+                }
+                let _ = chars.next();
+                for comment in chars.by_ref() {
+                    if comment == '\n' {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                if !token.is_empty() {
+                    tokens.push(std::mem::take(&mut token));
+                }
+                let _ = chars.next();
+                let mut prev = '\0';
+                for comment in chars.by_ref() {
+                    if prev == '*' && comment == '/' {
+                        break;
+                    }
+                    prev = comment;
+                }
+            }
+            ch if ch.is_ascii_alphanumeric() || ch == '_' => token.push(ch.to_ascii_lowercase()),
+            _ => {
+                if !token.is_empty() {
+                    tokens.push(std::mem::take(&mut token));
+                }
+            }
+        }
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    tokens
 }
 
 fn temporary_library_db_path() -> PathBuf {
@@ -4978,6 +5063,39 @@ video_mode=14
 
         assert!(text.contains("export MISTER_CATALOG_REFRESH='off'\n"));
         assert!(text.contains("export MISTER_LABEL='kid'\"'\"'s test'\n"));
+    }
+
+    #[test]
+    fn library_db_query_allows_comments_before_read_only_queries() {
+        let args = vec![
+            "--path".to_string(),
+            "/tmp/library.sqlite3".to_string(),
+            "-- comment\n/* more */ WITH recent AS (SELECT 'delete from games')".to_string(),
+            "SELECT * FROM recent".to_string(),
+        ];
+
+        let (path, query) = parse_library_db_query(&args).expect("read-only query");
+
+        assert_eq!(path, "/tmp/library.sqlite3");
+        assert!(query.contains("WITH recent"));
+    }
+
+    #[test]
+    fn library_db_query_rejects_with_write_statements() {
+        for query in [
+            "WITH doomed AS (SELECT 1) DELETE FROM games",
+            "WITH changed AS (SELECT 1) UPDATE games SET title='x'",
+            "WITH created AS (SELECT 1) INSERT INTO games(title) VALUES('x')",
+            "SELECT 1; DELETE FROM games",
+            "/* comment */ PRAGMA writable_schema=ON",
+        ] {
+            let err = parse_library_db_query(&[query.to_string()])
+                .expect_err("write-capable query should be rejected");
+            assert!(
+                err.to_string().contains("read-only SELECT/WITH"),
+                "{query}: {err}"
+            );
+        }
     }
 
     #[test]

@@ -69,6 +69,7 @@ pub fn should_handoff_to_mister(arg: &str) -> bool {
 }
 
 pub fn is_launchable_arg(arg: &str) -> bool {
+    let arg = arg.to_ascii_lowercase();
     arg.ends_with(".rbf")
         || arg.ends_with(".mra")
         || arg.ends_with(".mgl")
@@ -199,6 +200,18 @@ mod tests {
             "/media/fat/games/foo.lha",
             "/media/fat/games/foo.lzh",
             "/media/fat/games/foo.rar",
+        ] {
+            assert!(is_launchable_arg(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn detects_launchable_files_with_uppercase_extensions() {
+        for path in [
+            "/media/fat/_Arcade/1942.MRA",
+            "/media/fat/games/Saturn/NIGHTS.RBF",
+            "/media/fat/games/SNES/Mario.ZIP",
+            "/media/fat/games/Amiga/Demo.LHA",
         ] {
             assert!(is_launchable_arg(path), "{path}");
         }
