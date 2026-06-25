@@ -1487,3 +1487,125 @@ ARCH-CATALOG-AFTER	26614cdb	library_db_saved	51105	bytes=18026496 scan_us=381823
 ARCH-CATALOG-AFTER	26614cdb	library_ready	51106	games=7256 load_us=231812
 ARCH-CATALOG-AFTER	26614cdb	catalog_bridge_sync_update	51106	games=7256 elapsed_us=95
 ARCH-CATALOG-AFTER	26614cdb	db_count	0	9229
+ARCH-INDEXER-BEFORE	c77413d2	first_frame	374	catalog_ready=false
+ARCH-INDEXER-BEFORE	c77413d2	bootstrap_counter_climb	390	target=50
+ARCH-INDEXER-BEFORE	c77413d2	bootstrap_counter_sustained_climb	948	target=900
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_first_candidate	2349	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_first_discovery	2529	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	10790	path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ARCH-INDEXER-BEFORE	c77413d2	full_scan_counter_climb	21382	target=1050
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	2297	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	0	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	6441	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	32	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	120	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	6618	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	522	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	6365	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	4219	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	1038	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	5370	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	873	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	18	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk_target	3	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_walk	36259	candidates=7905
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_profile_match	86	calls=7905
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_installed_collection	136	calls=7513
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_archive_toc	687	containers=154
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_collection_listings	0	collections=0
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_file_discovery	34259	files=7511
+ARCH-INDEXER-BEFORE	c77413d2	scan_stage_classify_total	38069	discoveries=9354 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-BEFORE	c77413d2	library_scan_complete	39298	scan_us=38070163 discover_us=36258822 classify_us=38069075 discoveries=9229 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_schema	29	tables=14
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_metadata_load	2689	mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_begin_tx	0	-
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_profiles	8	rows=16
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_payloads	859	normal_files=7897 entries=281
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	377	from=0 to=1000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	354	from=1000 to=2000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	389	from=2000 to=3000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	374	from=3000 to=4000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	375	from=4000 to=5000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	362	from=5000 to=6000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	469	from=6000 to=7000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	498	from=7000 to=8000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	526	from=8000 to=9000 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_chunk	204	from=9000 to=9229 total=9229
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_games_total	3966	rows=9229 launcher_rows=6245
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_materialize_arcade_ui	819	-
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_launcher_arcade	14	-
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_launcher_console	453	rows=6185
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_meta	260	rows=11
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_catalog_stamp	0	rows=11
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_insert_software_hash_cache	0	rows=0
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_build_saved_catalog	239	rows=7256
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_commit	18	-
+ARCH-INDEXER-BEFORE	c77413d2	import_stage_total	9361	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+ARCH-INDEXER-BEFORE	c77413d2	sqlite_publish_progress	1501	bytes=18026496 copy_ms=1481 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ARCH-INDEXER-BEFORE	c77413d2	library_db_saved	50665	bytes=18026496 scan_us=38070163 discover_us=36258822 classify_us=38069075 import_us=11312970 discoveries=9229 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-BEFORE	c77413d2	library_ready	50715	games=7256 load_us=239252
+ARCH-INDEXER-BEFORE	c77413d2	catalog_bridge_sync_update	50715	games=7256 elapsed_us=95
+ARCH-INDEXER-BEFORE	c77413d2	db_count	0	9229
+ARCH-INDEXER-AFTER	c77413d2	first_frame	443	catalog_ready=false
+ARCH-INDEXER-AFTER	c77413d2	bootstrap_counter_climb	445	target=50
+ARCH-INDEXER-AFTER	c77413d2	bootstrap_counter_sustained_climb	898	target=900
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_first_candidate	2370	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_first_discovery	2449	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	11214	path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ARCH-INDEXER-AFTER	c77413d2	full_scan_counter_climb	21865	target=1050
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	1650	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	0	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	7495	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	16	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	121	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	6480	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	491	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	6555	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	4477	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	992	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	5477	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	985	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	18	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk_target	3	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_walk	37117	candidates=7905
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_profile_match	88	calls=7905
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_installed_collection	161	calls=7513
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_archive_toc	647	containers=154
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_collection_listings	0	collections=0
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_file_discovery	35156	files=7511
+ARCH-INDEXER-AFTER	c77413d2	scan_stage_classify_total	38880	discoveries=9354 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-AFTER	c77413d2	library_scan_complete	40048	scan_us=38880786 discover_us=37116857 classify_us=38879600 discoveries=9229 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-AFTER	c77413d2	import_stage_schema	26	tables=14
+ARCH-INDEXER-AFTER	c77413d2	import_stage_metadata_load	2757	mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ARCH-INDEXER-AFTER	c77413d2	import_stage_begin_tx	0	-
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_profiles	0	rows=16
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_payloads	881	normal_files=7897 entries=281
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	362	from=0 to=1000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	338	from=1000 to=2000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	410	from=2000 to=3000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	386	from=3000 to=4000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	361	from=4000 to=5000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	364	from=5000 to=6000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	459	from=6000 to=7000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	503	from=7000 to=8000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	523	from=8000 to=9000 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_chunk	198	from=9000 to=9229 total=9229
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_games_total	3927	rows=9229 launcher_rows=6245
+ARCH-INDEXER-AFTER	c77413d2	import_stage_materialize_arcade_ui	834	-
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_launcher_arcade	23	-
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_launcher_console	438	rows=6185
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_meta	261	rows=11
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_catalog_stamp	10	rows=11
+ARCH-INDEXER-AFTER	c77413d2	import_stage_insert_software_hash_cache	0	rows=0
+ARCH-INDEXER-AFTER	c77413d2	import_stage_build_saved_catalog	215	rows=7256
+ARCH-INDEXER-AFTER	c77413d2	import_stage_commit	21	-
+ARCH-INDEXER-AFTER	c77413d2	import_stage_total	9412	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+ARCH-INDEXER-AFTER	c77413d2	sqlite_publish_progress	1384	bytes=18026496 copy_ms=1366 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ARCH-INDEXER-AFTER	c77413d2	library_db_saved	51348	bytes=18026496 scan_us=38880786 discover_us=37116857 classify_us=38879600 import_us=11236603 discoveries=9229 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-AFTER	c77413d2	library_ready	51503	games=7256 load_us=215391
+ARCH-INDEXER-AFTER	c77413d2	catalog_bridge_sync_update	51504	games=7256 elapsed_us=90
+ARCH-INDEXER-AFTER	c77413d2	db_count	0	9229

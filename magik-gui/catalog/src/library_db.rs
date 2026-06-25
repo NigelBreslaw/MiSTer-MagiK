@@ -3,57 +3,40 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use crate::arcade_catalog::{self, ArcadeCatalog};
+use crate::arcade_catalog::ArcadeCatalog;
+use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_config;
+use crate::catalog_config::DEFAULT_SQLITE_PATH;
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
-use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
-use crate::catalog_projection::{
-    self, CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
-};
-use crate::catalog_progress::report_catalog_progress;
 pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
     catalog_progress_percent_from_display, CatalogProgress, CatalogProgressPhase,
 };
-use crate::catalog_scan::{self, DiscoveryEvent};
+pub(crate) use crate::catalog_projection::canonical_variant_title;
+use crate::catalog_projection::{
+    self, CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
+};
 use crate::catalog_stamp;
 use crate::game_discovery::{
-    catalog_system_id_for_discovery, covered_payload_paths, discovery_from_profile_archive_entry,
-    discovery_from_profile_file, is_launcher_launch_ref, launch_kind_for_discovery,
-    launch_ref_for_discovery, preferred_playable_discoveries_by_key, unique_discovery_count,
+    catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
+    launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
     GameDiscovery,
 };
-use crate::launch_profiles::{
-    self, CollectionListing, PayloadDisposition, PayloadRule, ProfilePathClass,
-};
-pub(crate) use crate::catalog_projection::canonical_variant_title;
-use crate::media_metadata;
+use crate::launch_profiles::{CollectionListing, PayloadRule};
+use crate::library_indexer::LibraryIndexer;
 use crate::software_identity::{
     load_arcade_machine_metadata, mame_identity_for_discovery, mame_identity_projection,
     write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
 pub type ScanEventCallback<'a> = Option<&'a mut dyn FnMut(LibraryScanEvent)>;
-const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
-const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
-const SCREENSHOT_PACK_SYSTEM_IDS: &[&str] = &[
-    "arcade",
-    "neogeo",
-    "nes",
-    "snes",
-    "n64",
-    "sms",
-    "megadrive",
-    "saturn",
-];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryScanEvent {
@@ -165,9 +148,9 @@ pub struct LibraryScanStats {
 }
 
 pub struct LibraryScanArtifact {
-    scan: LibraryScan,
-    stats: LibraryScanStats,
-    stamp: catalog_stamp::CatalogStamp,
+    pub(crate) scan: LibraryScan,
+    pub(crate) stats: LibraryScanStats,
+    pub(crate) stamp: catalog_stamp::CatalogStamp,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -348,18 +331,6 @@ fn save_sqlite_scan(path: &Path, scan: &LibraryScan) -> Result<u64, String> {
     sqlite_catalog::save_sqlite_scan(path, scan)
 }
 
-fn save_sqlite_scan_with_progress_and_stamp_and_catalog(
-    path: &Path,
-    scan: &LibraryScan,
-    stamp: Option<&catalog_stamp::CatalogStamp>,
-    root: impl AsRef<Path>,
-    progress: ProgressCallback<'_>,
-) -> Result<sqlite_catalog::SqliteSavedCatalog, String> {
-    sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_catalog(
-        path, scan, stamp, root, progress,
-    )
-}
-
 fn sqlite_cached_summary(path: &Path, scan_us: u64) -> Result<LibraryRefreshSummary, String> {
     sqlite_catalog::sqlite_cached_summary(path, scan_us)
 }
@@ -502,42 +473,16 @@ pub(crate) fn rebuild_sqlite_database_with_events(
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
-    rebuild_sqlite_database_with_catalog(
-        cfg,
-        arcade_catalog::DEFAULT_ARCADE_ROOT,
-        progress,
-        scan_events,
-    )
-    .map(|refresh| refresh.summary)
+    CatalogRefreshPipeline::new(cfg).rebuild_with_events(progress, scan_events)
 }
 
 pub(crate) fn rebuild_sqlite_database_with_catalog(
     cfg: &BenchConfig,
     root: impl AsRef<Path>,
-    mut progress: ProgressCallback<'_>,
-    mut scan_events: ScanEventCallback<'_>,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryRefreshCatalog, String> {
-    let scan_t = Instant::now();
-    report_catalog_progress(&mut progress, CatalogProgress::indexing_full_build());
-    let artifact = match (progress.as_mut(), scan_events.as_mut()) {
-        (Some(report), Some(events)) => {
-            scan_library_artifact_with_events(cfg, Some(&mut **report), Some(&mut **events))
-        }
-        (Some(report), None) => scan_library_artifact_with_events(cfg, Some(&mut **report), None),
-        (None, Some(events)) => scan_library_artifact_with_events(cfg, None, Some(&mut **events)),
-        (None, None) => scan_library_artifact_with_events(cfg, None, None),
-    };
-    let scan_us = scan_t.elapsed().as_micros() as u64;
-    report_catalog_progress(
-        &mut progress,
-        CatalogProgress::indexing_write_summary(
-            artifact.stats.discoveries,
-            artifact.stats.containers,
-        ),
-    );
-    let mut refresh = save_scan_artifact_to_sqlite_with_catalog(cfg, artifact, root, progress)?;
-    refresh.summary.scan_us = scan_us;
-    Ok(refresh)
+    CatalogRefreshPipeline::new(cfg).rebuild_with_catalog(root, progress, scan_events)
 }
 
 pub(crate) struct BenchConfig {
@@ -573,14 +518,14 @@ pub(crate) fn env_bool(name: &str) -> bool {
 }
 
 pub(crate) fn scan_library(cfg: &BenchConfig) -> LibraryScan {
-    scan_library_with_progress_and_events(cfg, None, None)
+    LibraryIndexer::new(cfg).scan()
 }
 
 pub(crate) fn scan_library_artifact(
     cfg: &BenchConfig,
     progress: ProgressCallback<'_>,
 ) -> LibraryScanArtifact {
-    scan_library_artifact_with_events(cfg, progress, None)
+    CatalogRefreshPipeline::new(cfg).scan_artifact(progress)
 }
 
 pub(crate) fn scan_library_artifact_with_events(
@@ -588,24 +533,7 @@ pub(crate) fn scan_library_artifact_with_events(
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
 ) -> LibraryScanArtifact {
-    let stamp = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
-    let scan_t = Instant::now();
-    let scan = match (progress, scan_events) {
-        (None, None) => scan_library(cfg),
-        (progress, scan_events) => {
-            scan_library_with_progress_and_events(cfg, progress, scan_events)
-        }
-    };
-    let stats = LibraryScanStats {
-        scan_us: scan_t.elapsed().as_micros() as u64,
-        discover_us: scan.discover_us,
-        classify_us: scan.classify_us,
-        normal_files: scan.normal_files.len(),
-        containers: scan.containers.len(),
-        entries: scan.entries.len(),
-        discoveries: unique_discovery_count(&scan.discoveries),
-    };
-    LibraryScanArtifact { scan, stats, stamp }
+    CatalogRefreshPipeline::new(cfg).scan_artifact_with_events(progress, scan_events)
 }
 
 pub(crate) fn save_scan_artifact_to_sqlite(
@@ -613,13 +541,7 @@ pub(crate) fn save_scan_artifact_to_sqlite(
     artifact: LibraryScanArtifact,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
-    save_scan_artifact_to_sqlite_with_catalog(
-        cfg,
-        artifact,
-        arcade_catalog::DEFAULT_ARCADE_ROOT,
-        progress,
-    )
-    .map(|refresh| refresh.summary)
+    CatalogRefreshPipeline::new(cfg).save_artifact(artifact, progress)
 }
 
 pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
@@ -628,30 +550,7 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
     root: impl AsRef<Path>,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshCatalog, String> {
-    let import_t = Instant::now();
-    let saved = save_sqlite_scan_with_progress_and_stamp_and_catalog(
-        &cfg.sqlite_path,
-        &artifact.scan,
-        Some(&artifact.stamp),
-        root,
-        progress,
-    )?;
-    let import_us = import_t.elapsed().as_micros() as u64;
-    Ok(LibraryRefreshCatalog {
-        summary: LibraryRefreshSummary {
-            skipped: false,
-            scan_us: artifact.stats.scan_us,
-            discover_us: artifact.stats.discover_us,
-            classify_us: artifact.stats.classify_us,
-            import_us,
-            bytes: saved.bytes,
-            normal_files: artifact.stats.normal_files,
-            containers: artifact.stats.containers,
-            entries: artifact.stats.entries,
-            discoveries: artifact.stats.discoveries,
-        },
-        catalog: saved.catalog,
-    })
+    CatalogRefreshPipeline::new(cfg).save_artifact_with_catalog(artifact, root, progress)
 }
 
 fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
@@ -713,332 +612,25 @@ fn catalog_family_fields_for_discovery(
     )
 }
 
-#[derive(Default)]
-struct ScanTimingStats {
-    profile_match_us: u64,
-    profile_match_count: usize,
-    file_discovery_us: u64,
-    file_discovery_count: usize,
-    archive_toc_us: u64,
-    archive_toc_count: usize,
-    installed_collection_us: u64,
-    installed_collection_count: usize,
-    collection_listing_us: u64,
-    collection_listing_count: usize,
+#[cfg(test)]
+fn scan_library_with_progress(cfg: &BenchConfig, progress: ProgressCallback<'_>) -> LibraryScan {
+    LibraryIndexer::new(cfg).scan_with_progress_and_events(progress, None)
 }
 
 #[cfg(test)]
-fn scan_library_with_progress(cfg: &BenchConfig, progress: ProgressCallback<'_>) -> LibraryScan {
-    scan_library_with_progress_and_events(cfg, progress, None)
-}
-
 fn scan_library_with_progress_and_events(
     cfg: &BenchConfig,
-    mut progress: ProgressCallback<'_>,
-    mut scan_events: ScanEventCallback<'_>,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
-    let discover_t = Instant::now();
-    let rx = catalog_scan::discover_files_pipelined(cfg.roots.clone());
-    let profiles = launch_profiles::builtin_profiles();
-    let mut discover_us = 0;
-
-    let mut normal_files = Vec::new();
-    let mut containers = Vec::new();
-    let mut entries = Vec::new();
-    let mut ignored_files = 0usize;
-    let mut discoveries = Vec::new();
-    let classify_t = Instant::now();
-    let mut timing = ScanTimingStats::default();
-    let mut idx = 0usize;
-    let mut first_discovery_reported = false;
-    let mut discovered_systems = BTreeSet::new();
-    while let Ok(event) = rx.recv() {
-        let f = match event {
-            DiscoveryEvent::File(file) => file,
-            DiscoveryEvent::Done {
-                discover_us: us, ..
-            } => {
-                discover_us = us;
-                break;
-            }
-        };
-        if idx == 0 {
-            report_library_scan_timing(
-                "first_candidate",
-                classify_t.elapsed().as_micros() as u64,
-                format!("path={}", f.path.display()),
-            );
-        }
-        idx += 1;
-        let discoveries_before = discoveries.len();
-        let profile_match_t = Instant::now();
-        let profile_match = catalog_scan::classify_profile_path(&profiles, &f.path);
-        timing.profile_match_us += profile_match_t.elapsed().as_micros() as u64;
-        timing.profile_match_count += 1;
-        match profile_match {
-            Some((
-                profile,
-                ProfilePathClass::Payload {
-                    rule:
-                        payload_rule @ PayloadRule {
-                            disposition: PayloadDisposition::Playable,
-                            ..
-                        },
-                },
-            )) => {
-                if media_metadata::is_amigavision_save_media_path(&f.path) {
-                    ignored_files += 1;
-                    continue;
-                }
-                let installed_t = Instant::now();
-                let installed =
-                    media_metadata::installed_amigavision_discoveries_from_hdf(&f, profile);
-                timing.installed_collection_us += installed_t.elapsed().as_micros() as u64;
-                timing.installed_collection_count += 1;
-                if let Some(installed) = installed {
-                    ignored_files += 1;
-                    discoveries.extend(installed);
-                    continue;
-                }
-                let mut has_archive_entries = false;
-                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                    let archive_t = Instant::now();
-                    let scan = catalog_scan::scan_archive_toc(&f, format, profile);
-                    timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
-                    timing.archive_toc_count += 1;
-                    has_archive_entries = !scan.entries.is_empty();
-                    for entry in scan.entries {
-                        discoveries.push(discovery_from_profile_archive_entry(
-                            &entry,
-                            profile,
-                            &entry.rule,
-                        ));
-                        entries.push(entry);
-                    }
-                    containers.push(scan.container);
-                }
-                if has_archive_entries {
-                    continue;
-                }
-                normal_files.push(LibraryPayloadFile {
-                    path: f.path.display().to_string(),
-                    profile_id: profile.id.to_string(),
-                    size: f.size,
-                    mtime_secs: f.mtime_secs,
-                    rule: payload_rule,
-                });
-                let discovery_t = Instant::now();
-                discoveries.push(discovery_from_profile_file(
-                    &f,
-                    profile,
-                    &payload_rule,
-                    &profiles,
-                ));
-                timing.file_discovery_us += discovery_t.elapsed().as_micros() as u64;
-                timing.file_discovery_count += 1;
-            }
-            Some((
-                profile,
-                ProfilePathClass::Payload {
-                    rule:
-                        payload_rule @ PayloadRule {
-                            disposition: PayloadDisposition::AttachedMedia,
-                            ..
-                        },
-                },
-            )) => {
-                normal_files.push(LibraryPayloadFile {
-                    path: f.path.display().to_string(),
-                    profile_id: profile.id.to_string(),
-                    size: f.size,
-                    mtime_secs: f.mtime_secs,
-                    rule: payload_rule,
-                });
-                ignored_files += 1;
-            }
-            Some((profile, ProfilePathClass::Collection { rule })) => {
-                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                    containers.push(catalog_scan::scan_container_header(&f, format));
-                }
-                let collection_t = Instant::now();
-                discoveries.extend(media_metadata::collection_discoveries_from_container(
-                    &f, profile, &rule,
-                ));
-                timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
-                timing.collection_listing_count += 1;
-            }
-            Some((_profile, ProfilePathClass::Ignored { .. })) => {
-                ignored_files += 1;
-            }
-            Some((_, ProfilePathClass::NotMatched)) | None => {}
-        }
-        report_new_discovered_systems(
-            &discoveries[discoveries_before..],
-            &mut discovered_systems,
-            &mut scan_events,
-        );
-        if discoveries.len() > discoveries_before && !first_discovery_reported {
-            first_discovery_reported = true;
-            report_library_scan_timing(
-                "first_discovery",
-                classify_t.elapsed().as_micros() as u64,
-                format!(
-                    "candidate={} discoveries={} path={}",
-                    idx,
-                    discoveries.len(),
-                    f.path.display()
-                ),
-            );
-        }
-        if idx.is_multiple_of(SCAN_PROGRESS_CANDIDATE_BATCH) {
-            report_catalog_progress(
-                &mut progress,
-                CatalogProgress::classifying_games_found(discoveries.len()),
-            );
-        }
-    }
-    if discover_us == 0 {
-        discover_us = discover_t.elapsed().as_micros() as u64;
-    }
-    report_library_scan_timing("walk", discover_us, format!("candidates={idx}"));
-    report_library_scan_timing(
-        "profile_match",
-        timing.profile_match_us,
-        format!("calls={}", timing.profile_match_count),
-    );
-    report_library_scan_timing(
-        "installed_collection",
-        timing.installed_collection_us,
-        format!("calls={}", timing.installed_collection_count),
-    );
-    report_library_scan_timing(
-        "archive_toc",
-        timing.archive_toc_us,
-        format!("containers={}", timing.archive_toc_count),
-    );
-    report_library_scan_timing(
-        "collection_listings",
-        timing.collection_listing_us,
-        format!("collections={}", timing.collection_listing_count),
-    );
-    report_library_scan_timing(
-        "file_discovery",
-        timing.file_discovery_us,
-        format!("files={}", timing.file_discovery_count),
-    );
-    report_library_scan_timing(
-        "classify_total",
-        classify_t.elapsed().as_micros() as u64,
-        format!(
-            "discoveries={} normal_files={} containers={} entries={}",
-            discoveries.len(),
-            normal_files.len(),
-            containers.len(),
-            entries.len()
-        ),
-    );
-    LibraryScan {
-        version: SCHEMA_VERSION,
-        scanned_at_unix: unix_now_secs(),
-        normal_files,
-        containers,
-        entries,
-        ignored_files,
-        discoveries,
-        discover_us,
-        classify_us: classify_t.elapsed().as_micros() as u64,
-    }
-}
-
-fn report_new_discovered_systems(
-    discoveries: &[GameDiscovery],
-    discovered_systems: &mut BTreeSet<String>,
-    scan_events: &mut ScanEventCallback<'_>,
-) {
-    let Some(report) = scan_events.as_mut() else {
-        return;
-    };
-    for discovery in discoveries {
-        let system_id = catalog_system_id_for_discovery(discovery);
-        if !screenshot_pack_system_supported(&system_id) {
-            continue;
-        }
-        if discovered_systems.insert(system_id.clone()) {
-            report(LibraryScanEvent::SystemDiscovered { system_id });
-        }
-    }
-}
-
-fn screenshot_pack_system_supported(system_id: &str) -> bool {
-    SCREENSHOT_PACK_SYSTEM_IDS.contains(&system_id)
+    LibraryIndexer::new(cfg).scan_with_progress_and_events(progress, scan_events)
 }
 
 fn bootstrap_library_progress(
     cfg: &BenchConfig,
-    mut progress: ProgressCallback<'_>,
+    progress: ProgressCallback<'_>,
 ) -> LibraryBootstrapSummary {
-    let started = Instant::now();
-    let mut launchers = 0usize;
-    for target in bootstrap_launcher_targets(&cfg.roots) {
-        scan_bootstrap_launcher_target(&target, &mut launchers, &mut progress);
-    }
-    LibraryBootstrapSummary {
-        launchers,
-        scan_us: started.elapsed().as_micros() as u64,
-    }
-}
-
-fn bootstrap_launcher_targets(roots: &[String]) -> Vec<PathBuf> {
-    let mut targets = Vec::new();
-    for root in roots {
-        let path = Path::new(root);
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("_Arcade"))
-        {
-            targets.push(path.to_path_buf());
-        } else {
-            targets.push(path.join("_Arcade"));
-        }
-    }
-    targets
-}
-
-fn scan_bootstrap_launcher_target(
-    target: &Path,
-    launchers: &mut usize,
-    progress: &mut ProgressCallback<'_>,
-) {
-    let Ok(entries) = std::fs::read_dir(target) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if !is_bootstrap_launcher_path(&path) {
-            continue;
-        }
-        *launchers += 1;
-        if launchers.is_multiple_of(BOOTSTRAP_PROGRESS_BATCH) {
-            report_catalog_progress(progress, CatalogProgress::finding_games_found(*launchers));
-        }
-    }
-}
-
-fn is_bootstrap_launcher_path(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    if name.starts_with("._") {
-        return false;
-    }
-    matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("mra" | "mgl")
-    )
+    LibraryIndexer::new(cfg).bootstrap_progress(progress)
 }
 
 pub(crate) fn normalize_id(value: &str) -> String {
@@ -1147,6 +739,7 @@ pub(crate) fn unix_now_secs() -> i64 {
 mod tests {
     use super::*;
     use crate::catalog_store;
+    use crate::game_discovery::unique_discovery_count;
     use crate::test_support::*;
 
     #[test]
