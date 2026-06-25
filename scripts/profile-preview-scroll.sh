@@ -5,6 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/preview-scroll-profiles"
+PRESENT_TRACE="$HERE/scripts/launcher-present-trace.py"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 ORIGINAL_ARGS=("$@")
@@ -989,6 +990,14 @@ summarize_frame_pacing arcade "$arcade_tsv"
 echo
 echo $'custom_draw_phase\tphase\tframes_after_30\tavg_us\tp95_us\tp99_us'
 summarize_custom_draw_phases arcade "$arcade_tsv"
+
+echo
+if ! "$PRESENT_TRACE" summarize "$arcade_tsv" --case arcade; then
+  emit_artifact_row "arcade-trace" "$arcade_tsv" "/tmp/${label}-arcade.tsv"
+  emit_artifact_row "arcade-log" "$arcade_log" "$REMOTE_LOG"
+  emit_validity_row "0" "present_path_summary" "trace=$arcade_tsv log=$arcade_log"
+  exit 12
+fi
 
 echo
 if ! report_slow_work_attribution arcade "$arcade_tsv"; then

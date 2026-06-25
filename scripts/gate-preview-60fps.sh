@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="$ROOT/scripts/profile-preview-scroll.sh"
+PRESENT_TRACE="$ROOT/scripts/launcher-present-trace.py"
 OUT_DIR="$ROOT/build/preview-scroll-profiles"
 
 secs=60
@@ -10,11 +11,12 @@ deploy_arg="--skip-build"
 visual_captures=0
 p99_work_us=14500
 self_test=0
+baseline_label=""
 label=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/gate-preview-60fps.sh LABEL [--secs N] [--skip-build|--deploy-device] [--visual-captures N] [--p99-work-us N] [--self-test]
+Usage: scripts/gate-preview-60fps.sh LABEL [--secs N] [--skip-build|--deploy-device] [--visual-captures N] [--p99-work-us N] [--baseline-label BASE] [--self-test]
 
 Runs the final Arcade preview fade pacing gate:
   - held-scroll fade
@@ -23,6 +25,13 @@ Runs the final Arcade preview fade pacing gate:
 Fails if either run has vsync fallback/timeout/error, non-zero max vsync miss
 streak, or p99 work above the threshold. Reports work-over-budget outliers
 separately so scheduler spikes do not hide p99 headroom.
+
+When --baseline-label is provided, also compares BASE-FADE-VEL/TURBO traces
+against the current run and fails on present-path regressions:
+  - cached_present_us p95/p99 > +5%
+  - fb_present_us p95/p99 > +5%
+  - rows p95/p99 increase > 1 row
+  - present_probe_us p99 != 0
 EOF
 }
 
@@ -33,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy_arg="--deploy-device"; shift ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     --p99-work-us) p99_work_us="${2:-}"; shift 2 ;;
+    --baseline-label) baseline_label="${2:-}"; shift 2 ;;
     --self-test) self_test=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -118,6 +128,16 @@ write_self_test_trace() {
   } >"$path"
 }
 
+write_present_self_test_trace() {
+  local path="$1" cached_present="$2" fb_present="$3" rows="$4" source="$5" miss="$6"
+  {
+    echo $'frame\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_miss_streak'
+    for frame in $(seq 0 180); do
+      echo "${frame}"$'\tscroll:-12\t'"${rows}"$'\t0\t0\t0\t'"${fb_present}"$'\t'"${cached_present}"$'\t500\t0\t'"${source}"$'\t'"${miss}"
+    done
+  } >"$path"
+}
+
 if [[ "$self_test" == "1" ]]; then
   tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/preview-gate-self.XXXXXX")"
   trap 'rm -rf "$tmpdir"' EXIT
@@ -131,6 +151,13 @@ if [[ "$self_test" == "1" ]]; then
   write_self_test_trace "$tmpdir/bad-vsync.tsv" 1000 fallback 1
   if gate_trace self-bad-vsync "$tmpdir/bad-vsync.tsv" >/dev/null 2>&1; then
     echo "self-test expected vsync gate failure" >&2
+    exit 1
+  fi
+  write_present_self_test_trace "$tmpdir/present-before.tsv" 400 900 704 vsync 0
+  write_present_self_test_trace "$tmpdir/present-after-bad.tsv" 500 1060 704 vsync 0
+  gate_trace self-present-broad-still-ok "$tmpdir/present-after-bad.tsv" >/dev/null
+  if "$PRESENT_TRACE" compare "$tmpdir/present-before.tsv" "$tmpdir/present-after-bad.tsv" --case self-present-regression >/dev/null 2>&1; then
+    echo "self-test expected present-path comparison failure while broad gate passes" >&2
     exit 1
   fi
   echo "gate-preview-60fps self-test ok"
@@ -147,6 +174,16 @@ run_and_gate() {
   local run_label="${label}-${suffix}"
   "$PROFILE" "$secs" "$scenario" "$run_label" "$deploy_arg" --visual-captures "$visual_captures"
   gate_trace "$run_label" "$OUT_DIR/${run_label}-arcade.tsv"
+  if [[ -n "$baseline_label" ]]; then
+    local baseline_tsv="$OUT_DIR/${baseline_label}-${suffix}-arcade.tsv"
+    local after_tsv="$OUT_DIR/${run_label}-arcade.tsv"
+    if [[ ! -f "$baseline_tsv" ]]; then
+      echo "validity_tsv	label=$run_label	valid=0	invalid_reason=missing_present_baseline	detail=$baseline_tsv"
+      echo "$run_label gate failed: missing baseline trace $baseline_tsv" >&2
+      return 9
+    fi
+    "$PRESENT_TRACE" compare "$baseline_tsv" "$after_tsv" --case "$run_label"
+  fi
 }
 
 run_and_gate held-scroll FADE-VEL

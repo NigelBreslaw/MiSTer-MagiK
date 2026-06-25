@@ -297,7 +297,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
         None
     };
     let mut disp = if fill == EffectFill::FpgaHalf {
-        match Display::open(size.w, size.h) {
+        match Display::open_with_format(size.w, size.h, FramebufferFormat::Xrgb8888) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("failed to open temporary display (/dev/fb0): {e}");

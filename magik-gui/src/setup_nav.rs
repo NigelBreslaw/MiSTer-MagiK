@@ -419,6 +419,12 @@ impl SetupNav {
     }
 }
 
+impl Default for SetupNav {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn default_draft_label(info: &PadInfo) -> String {
     if !info.name.is_empty() {
         return info.name.clone();

@@ -382,7 +382,7 @@ pub(super) fn run_launcher_loop(
     println!(
         "launcher_mode={} fb_format={}",
         "launcher",
-        FramebufferFormat::production_default().label()
+        FramebufferFormat::production().label()
     );
     if let Some(scenario) = launcher_bench_scenario {
         println!("launcher_bench_scenario={}", scenario.label());
@@ -720,8 +720,7 @@ pub(super) fn run_launcher_loop(
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
-                let route =
-                    FpgaFramebufferRoute::for_ui(ui, FramebufferFormat::production_default());
+                let route = FpgaFramebufferRoute::for_ui_rgb565(ui);
                 match route.enable(f, ui.fb_w(), ui.fb_h()) {
                     Ok(flag) => {
                         route_reassert_count = route_reassert_count.saturating_add(1);

@@ -73,6 +73,11 @@ Acceptance fields for Arcade preview pacing:
 - `vsync_source_fallback=0`, `vsync_source_timeout=0`,
   `vsync_source_error=0`, and `max_vsync_miss_streak=0`.
 - `p99_work_us < 14500` for the preservation-of-fade milestone.
+- For render-contract, framebuffer-format, route, or copy-helper changes, use
+  `scripts/launcher-present-trace.py compare BEFORE.tsv AFTER.tsv` and report
+  the `present_path_tsv` rows. `cached_present_us` and `fb_present_us` p95/p99
+  must stay within +5%, `rows` p95/p99 must not increase by more than one row,
+  and steady `present_probe_us` p99 must remain zero.
 - Visual captures must preserve the current fade appearance when enabled.
 
 After the preview fade optimization work, run the final release gate with:
@@ -85,7 +90,9 @@ The gate runs 60s held-scroll fade and 60s turbo-hold fade, then fails if either
 trace has non-vsync pacing sources, non-zero max miss streak, or p99 work
 at/above the configured threshold. It reports `work_gt_16_7ms` separately so
 isolated scheduler/prepare-wall outliers can be investigated without hiding p99
-headroom. Its parser self-test is:
+headroom. Pass `--baseline-label BASE` when validating a before/after change so
+the gate also fails on present-path regressions in the copied RGB565 rows. Its
+parser self-test is:
 
 ```bash
 scripts/gate-preview-60fps.sh --self-test

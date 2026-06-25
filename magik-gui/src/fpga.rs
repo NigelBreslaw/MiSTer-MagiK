@@ -414,7 +414,7 @@ impl Fpga {
 
         let stream_res: io::Result<()> = (|| {
             let mut fpga_format = FB_EN | format.fpga_format_bits();
-            if format.rb_from_env() {
+            if format.route_rb() {
                 fpga_format |= FB_FMT_RXB;
             }
             self.spi_w(fpga_format)?; // format + enable
