@@ -174,6 +174,7 @@ mkdir -p "$BENCH_DIR"
 
 OLD_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	notes"
 SPLIT_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
+OVERLAY_PRESENT_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	prepare_us	render_us	custom_draw_us	vsync_us	copy_us	cached_present_us	overlay_present_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
 TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	prepare_us	render_us	custom_draw_us	vsync_us	copy_us	cached_present_us	arcade_list_present_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
 
 normalize_results_tsv() {
@@ -211,6 +212,16 @@ normalize_results_tsv() {
         if (notes == "") notes = "legacy-no-notes"
         print $1, $2, $3, $4, $5, $6, "", $7, "", $8, $9, "", "", $10, $11, $12, $13, $14, $15, $16, $17, notes
       }
+    ' "$tsv" >"$tmp_tsv"
+    mv "$tmp_tsv" "$tsv"
+    return 0
+  fi
+  if [[ "$header" == "$OVERLAY_PRESENT_TSV_HEADER" ]]; then
+    tmp_tsv="$(mktemp)"
+    awk -v new_header="$TSV_HEADER" 'BEGIN { FS = OFS = "\t" }
+      NR == 1 { print new_header; next }
+      NF == 0 { next }
+      { print }
     ' "$tsv" >"$tmp_tsv"
     mv "$tmp_tsv" "$tsv"
     return 0
@@ -453,6 +464,19 @@ run_self_test() {
     END { exit ok ? 0 : 1 }
   ' "$TSV" || {
     echo "self-test: split TSV row was not preserved with promoted timing columns" >&2
+    return 1
+  }
+
+  TSV="$tmp_dir/overlay-present-results.tsv"
+  printf '%s\n' "$OVERLAY_PRESENT_TSV_HEADER" >"$TSV"
+  printf 'OVERLAY\tlauncher\t2026-06-21T00:00:00Z\t1.96.0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t60\t11\t12\t13\tyes\tyes\tno\toverlay-notes\n' >>"$TSV"
+  normalize_results_tsv "$TSV"
+  awk 'BEGIN { FS = "\t" }
+    NR == 1 && $13 == "arcade_list_present_us" { header_ok = 1 }
+    NR == 2 && NF == 22 && $7 == "3" && $12 == "8" && $13 == "9" && $20 == "yes" && $21 == "no" && $22 == "overlay-notes" { row_ok = 1 }
+    END { exit (header_ok && row_ok) ? 0 : 1 }
+  ' "$TSV" || {
+    echo "self-test: overlay-present TSV row was not renamed in place" >&2
     return 1
   }
 
