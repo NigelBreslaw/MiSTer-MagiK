@@ -3,9 +3,10 @@
 
 use crate::display_config::DisplayConfig;
 use crate::fb::{Display, Pixel, VsyncPacer};
+use crate::fb_format::FramebufferFormat;
 use crate::fpga::{Fpga, Mode};
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
-use crate::ui_runner::ui_boot::FbModeGuard;
+use crate::ui_runner::ui_boot::{FbModeGuard, FpgaFramebufferRoute};
 use crate::ui_runner::ui_platform::{update_slint_animations, AnimationClock, MisterPlatform};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState};
@@ -351,15 +352,13 @@ pub fn run_effect_bench(f: &mut Fpga) {
     } else {
         (Some(0), Some(0))
     };
-    let flag = match f.fb_enable(
-        0,
-        disp.width() as u16,
-        disp.height() as u16,
+    let route = FpgaFramebufferRoute::new(
         route_mode,
-        xoff,
-        yoff,
         std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-    ) {
+        FramebufferFormat::Xrgb8888,
+    )
+    .with_offsets(xoff, yoff);
+    let flag = match route.enable(f, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
             eprintln!("failed to route framebuffer for effect benchmark: {e}");

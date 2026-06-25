@@ -84,13 +84,15 @@ pub use mister_magik_fb::{
     media_update, preview_worker,
 };
 
-use display_config::detect_runtime_display_geometry;
 use fb::{Display, Pixel, VsyncPacer, VsyncWaitStatus};
-use fpga::{Fpga, Mode, UIO_GET_FB_PAR, UIO_GET_VRES};
+use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::FramebufferFormat;
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
-use ui_display::{RuntimeDisplayGeometry, UiDisplayPlan};
-use ui_runner::ui_boot::{boot_framebuffer_format, settle_boot_black_frame, ui_fpga_scaled_mode};
+use ui_display::UiDisplayPlan;
+use ui_runner::ui_boot::{
+    boot_framebuffer_format, detect_runtime_display_geometry_for_plan, settle_boot_black_frame,
+    FpgaFramebufferRoute,
+};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
@@ -716,15 +718,13 @@ fn route_framebuffer(f: &mut Fpga) {
     };
     let w = disp.width();
     let h = disp.height();
-    let flag = match f.fb_enable(
-        0,
-        w as u16,
-        h as u16,
-        Mode::framebuffer_sized(w as u16, h as u16),
-        Some(0),
-        Some(0),
+    let route = FpgaFramebufferRoute::framebuffer_sized(
+        w,
+        h,
         std::env::var_os("MISTER_DIRECT_VIDEO").is_some(),
-    ) {
+        FramebufferFormat::Xrgb8888,
+    );
+    let flag = match route.enable(f, w, h) {
         Ok(flag) => flag,
         Err(e) => {
             eprintln!("failed to route current fb to HDMI: {e}");
@@ -771,31 +771,16 @@ fn early_black_route(f: &mut Fpga) {
         ),
     );
 
-    let route_mode = ui_fpga_scaled_mode(display_plan.scan_w, display_plan.scan_h);
-    let flag = match f.fb_enable_format(
-        0,
-        disp.width() as u16,
-        disp.height() as u16,
-        route_mode,
-        Some(0),
-        Some(0),
-        display_plan.direct_video,
-        format,
-    ) {
+    let route = FpgaFramebufferRoute::for_plan(display_plan, format);
+    let flag = match route.enable(f, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
             eprintln!("early-black: failed to route framebuffer: {e}");
             std::process::exit(1);
         }
     };
-    settle_boot_black_frame(
-        "early-black",
-        &mut disp,
-        f,
-        route_mode,
-        display_plan.direct_video,
-        format,
-    );
+    settle_boot_black_frame("early-black", &mut disp, f, route, format);
+    let route_mode = route.mode();
     boot_analytics::event(
         "early_black_route_completed",
         format!(
@@ -815,47 +800,6 @@ fn early_black_route(f: &mut Fpga) {
         route_mode.hact,
         route_mode.vact
     );
-}
-
-fn detect_runtime_display_geometry_for_plan(
-    f: &mut Fpga,
-    label: &str,
-) -> Option<RuntimeDisplayGeometry> {
-    match detect_runtime_display_geometry(f) {
-        Ok(detected) => {
-            println!("runtime-video-info[{label}]: {}", detected.video.log_line());
-            match detected.geometry {
-                Some(geometry) => {
-                    boot_analytics::event(
-                        "runtime_display_geometry_detected",
-                        format!(
-                            "label={label} output={}x{} scan={}x{}",
-                            geometry.output_w, geometry.output_h, geometry.scan_w, geometry.scan_h
-                        ),
-                    );
-                    Some(geometry)
-                }
-                None => {
-                    eprintln!(
-                        "warning: runtime display geometry invalid for {label}; falling back to MiSTer.ini"
-                    );
-                    boot_analytics::event(
-                        "runtime_display_geometry_invalid",
-                        format!("label={label} {}", detected.video.log_line()),
-                    );
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("warning: failed to detect runtime display geometry for {label}: {e}");
-            boot_analytics::event(
-                "runtime_display_geometry_detect_failed",
-                format!("label={label} error={e}"),
-            );
-            None
-        }
-    }
 }
 
 fn fb_probe(f: &mut Fpga) {
@@ -879,15 +823,9 @@ fn fb_probe(f: &mut Fpga) {
 
     match route.as_str() {
         "normal" => {
-            let flag = match f.fb_enable(
-                0,
-                w as u16,
-                h as u16,
-                Mode::framebuffer_sized(w as u16, h as u16),
-                Some(0),
-                Some(0),
-                false,
-            ) {
+            let route =
+                FpgaFramebufferRoute::framebuffer_sized(w, h, false, FramebufferFormat::Xrgb8888);
+            let flag = match route.enable(f, w, h) {
                 Ok(flag) => flag,
                 Err(e) => {
                     eprintln!("failed to route current fb via SET_FBUF: {e}");
@@ -897,14 +835,9 @@ fn fb_probe(f: &mut Fpga) {
             println!("routed current fb via SET_FBUF only support_flag={flag}");
         }
         "direct" => {
-            let flag = match f.fb_enable_direct(
-                0,
-                w as u16,
-                h as u16,
-                Mode::framebuffer_sized(w as u16, h as u16),
-                Some(0),
-                Some(0),
-            ) {
+            let route =
+                FpgaFramebufferRoute::framebuffer_sized(w, h, true, FramebufferFormat::Xrgb8888);
+            let flag = match route.enable(f, w, h) {
                 Ok(flag) => flag,
                 Err(e) => {
                     eprintln!("failed to route current fb via SET_FBUF + set_vga_fb: {e}");
@@ -966,7 +899,6 @@ fn fb_format_smoke(f: &mut Fpga) {
     const H: usize = 540;
     const HDMI_W: u16 = 1920;
     const HDMI_H: u16 = 1080;
-    let scan_mode = Mode::framebuffer_sized(HDMI_W, HDMI_H);
     if let Err(e) = Display::write_mister_mode_format(format, W, H, format.stride_bytes(W)) {
         eprintln!("failed to set framebuffer mode for smoke: {e}");
         std::process::exit(1);
@@ -989,26 +921,8 @@ fn fb_format_smoke(f: &mut Fpga) {
         FramebufferFormat::Rgb565 => paint_pattern_565(disp.buffer_565_mut(), W, H),
     }
     let route_res = match route.as_str() {
-        "normal" => f.fb_enable_format(
-            0,
-            W as u16,
-            H as u16,
-            scan_mode,
-            Some(0),
-            Some(0),
-            false,
-            format,
-        ),
-        "direct" => f.fb_enable_format(
-            0,
-            W as u16,
-            H as u16,
-            scan_mode,
-            Some(0),
-            Some(0),
-            true,
-            format,
-        ),
+        "normal" => FpgaFramebufferRoute::for_scan(HDMI_W, HDMI_H, false, format).enable(f, W, H),
+        "direct" => FpgaFramebufferRoute::for_scan(HDMI_W, HDMI_H, true, format).enable(f, W, H),
         "none" => Ok(0),
         other => {
             restore();

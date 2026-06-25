@@ -257,47 +257,6 @@ macro_rules! with_scene_app {
     }};
 }
 
-fn detect_runtime_display_geometry_for_plan(
-    f: &mut Fpga,
-    label: &str,
-) -> Option<RuntimeDisplayGeometry> {
-    match detect_runtime_display_geometry(f) {
-        Ok(detected) => {
-            println!("runtime-video-info[{label}]: {}", detected.video.log_line());
-            match detected.geometry {
-                Some(geometry) => {
-                    boot_analytics::event(
-                        "runtime_display_geometry_detected",
-                        format!(
-                            "label={label} output={}x{} scan={}x{}",
-                            geometry.output_w, geometry.output_h, geometry.scan_w, geometry.scan_h
-                        ),
-                    );
-                    Some(geometry)
-                }
-                None => {
-                    eprintln!(
-                        "warning: runtime display geometry invalid for {label}; falling back to MiSTer.ini"
-                    );
-                    boot_analytics::event(
-                        "runtime_display_geometry_invalid",
-                        format!("label={label} {}", detected.video.log_line()),
-                    );
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("warning: failed to detect runtime display geometry for {label}: {e}");
-            boot_analytics::event(
-                "runtime_display_geometry_detect_failed",
-                format!("label={label} error={e}"),
-            );
-            None
-        }
-    }
-}
-
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
@@ -305,140 +264,13 @@ pub fn run_ui(f: &mut Fpga) {
     println!("ui_render_mode=cached");
 
     let _vt = VtGraphicsGuard::enter_or_warn();
+    let UiBootFramebufferSession {
+        ui,
+        mut disp,
+        format: _fb_format,
+        _fb_mode_guard,
+    } = UiBootFramebufferSession::start_ui_or_exit(f);
 
-    let fb_format = boot_framebuffer_format();
-    let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "ui");
-    let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
-    println!("{}", display_plan.log_line());
-    if display_plan.fallback {
-        boot_analytics::event("display_plan_fallback", display_plan.log_line());
-    }
-    println!(
-        "ui-fb-mode=temporary {}x{} format={} output={}x{} scan={}x{} restore=on-drop",
-        display_plan.fb_w,
-        display_plan.fb_h,
-        fb_format.label(),
-        display_plan.output_w,
-        display_plan.output_h,
-        display_plan.scan_w,
-        display_plan.scan_h
-    );
-    let current_fb = match Display::current_info() {
-        Ok(info) => info,
-        Err(e) => {
-            eprintln!("failed to read current framebuffer mode for FPGA-scaled UI: {e}");
-            std::process::exit(1);
-        }
-    };
-    let fb_mode_action = fb_mode_action(current_fb, display_plan, fb_format);
-    println!("fb_mode_action={}", fb_mode_action.label());
-    boot_analytics::event("fb_mode_action", fb_mode_action.label());
-    let _fb_mode_guard = match fb_mode_action {
-        FbModeAction::AdoptCurrent => None,
-        FbModeAction::WriteMode => {
-            match FbModeGuard::set_temporary_format(display_plan.fb_w, display_plan.fb_h, fb_format)
-            {
-                Ok(guard) => Some(guard),
-                Err(e) => {
-                    eprintln!("failed to set temporary framebuffer mode for FPGA-scaled UI: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-    };
-
-    println!("display-open-path=temporary-fb-fpga-scale");
-    let mut disp = match Display::open_with_format(display_plan.fb_w, display_plan.fb_h, fb_format)
-    {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("failed to open display (/dev/fb0): {e}");
-            std::process::exit(1);
-        }
-    };
-    let ui = UiDisplay::for_plan(display_plan);
-    println!("{}", ui.log_line());
-    disp.clear_black();
-    boot_analytics::event(
-        "ui_black_frame_copied",
-        format!(
-            "format={} w={} h={}",
-            fb_format.label(),
-            disp.width(),
-            disp.height()
-        ),
-    );
-    disp.record_visual_sample("after_ui_black_frame_before_initial_route");
-    match DisplayConfig::detect(f, disp.info(), &ui) {
-        Ok(config) => {
-            println!("{}", config.log_line());
-            boot_analytics::event("display_config_detected", config.boot_analytics_detail());
-        }
-        Err(e) => {
-            eprintln!("warning: failed to read display configuration from FPGA: {e}");
-            boot_analytics::event("display_config_detect_failed", format!("error={e}"));
-        }
-    }
-    if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
-        println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
-    }
-    let route_mode = ui_fpga_scaled_mode(ui.scan_w(), ui.scan_h());
-    let route_mode_label = "fpga-scale-scan";
-    let set_vga_fb = ui.direct_video();
-    boot_analytics::event(
-        "initial_fb_enable_direct_attempt",
-        format!(
-            "w={} h={} mode={route_mode_label} scan={}x{} set_vga_fb={set_vga_fb}",
-            disp.width(),
-            disp.height(),
-            ui.scan_w(),
-            ui.scan_h()
-        ),
-    );
-    let flag = match f.fb_enable_format(
-        0,
-        disp.width() as u16,
-        disp.height() as u16,
-        route_mode,
-        Some(0),
-        Some(0),
-        set_vga_fb,
-        fb_format,
-    ) {
-        Ok(flag) => flag,
-        Err(e) => {
-            eprintln!("failed to route framebuffer for Slint UI: {e}");
-            std::process::exit(1);
-        }
-    };
-    boot_analytics::event(
-        "initial_fb_enable_direct_done",
-        format!("support_flag={flag}"),
-    );
-    boot_analytics::event(
-        "rust_framebuffer_route_completed",
-        format!(
-            "format={} w={} h={} output={}x{} scan={}x{} support_flag={flag}",
-            fb_format.label(),
-            disp.width(),
-            disp.height(),
-            ui.output_w(),
-            ui.output_h(),
-            ui.scan_w(),
-            ui.scan_h()
-        ),
-    );
-    if fb_mode_action == FbModeAction::WriteMode {
-        settle_boot_black_frame(
-            "ui-startup",
-            &mut disp,
-            f,
-            route_mode,
-            set_vga_fb,
-            fb_format,
-        );
-    }
-    disp.record_visual_sample("after_initial_route_before_slint_draw");
     match f.set_audio_volume(0) {
         Ok(()) => boot_analytics::event("set_audio_volume", "attenuation=0"),
         Err(e) => {
@@ -446,9 +278,8 @@ pub fn run_ui(f: &mut Fpga) {
             boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
         }
     }
-    println!(
-        "fb routed (support_flag={flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
-    );
+    #[cfg(mister_experiments)]
+    let fb_format = _fb_format;
 
     #[cfg(mister_experiments)]
     if scene == "screensaver" {
