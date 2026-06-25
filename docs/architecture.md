@@ -69,6 +69,28 @@ Historical evidence:
 Slint does not directly load cores. It hands launch requests back to Main so the
 normal MiSTer loader path controls FPGA/core state and HDMI recovery.
 
+Launcher orchestration runs through an explicit Rust lifecycle state chart:
+
+```text
+BootSplash -> CatalogBuilding|CatalogReady -> Idle -> Launching -> Handoff|Recovered
+Recovered -> Idle
+```
+
+`magik-gui/src/ui_runner/launcher_lifecycle.rs` owns lifecycle policy,
+catalog-readiness state, launch staging, recovery transitions, and the small
+effect stream that records bridge/render intent. `launcher_scheduler.rs` is the
+central adapter for starting and polling catalog, media, launch, and background
+jobs. The hot frame loop still owns Slint rendering, row-copy decisions,
+framebuffer presentation, route reassertion, and frame accounting.
+
+Launch is intentionally two-phase. `Idle -> Launching` first updates the Slint
+bridge and presents the loading frame. Only after
+`loading_frame_presented(...)` does the scheduler let the existing
+`LaunchHandoffSession` start the Main/FIFO handoff. If handoff fails, the
+lifecycle enters `Recovered`, the scheduler reasserts the launcher framebuffer
+route, the recovery UI is presented, and only then does
+`recovery_frame_presented(...)` return the lifecycle to `Idle`.
+
 Current command surface:
 
 ```text
@@ -97,14 +119,17 @@ Current rules:
   Low-level probes are diagnostic/experiment builds, not release commands.
 - Build/update the library cache outside the UI hot path with
   `mister-magik-fb library-refresh` or `scripts/mister` helpers.
-- Launcher boot loads the cached SQLite catalog before the first frame when a
-  usable database exists, then performs a delayed catalog stamp check in the
-  background. If the stamp is stale, the launcher shows a `Library changed`
-  dialog instead of rebuilding automatically. `Rebuild` runs the same full
-  database builder used by explicit refresh; `Continue` writes a one-shot marker
-  so the next MagiK boot goes directly to the `Updating Library` rebuild screen.
-  Use `startup_timing` log lines to separate SQLite load, catalog construction,
-  Slint bridge sync, stamp check, user choice, and build costs.
+- Launcher boot may seed Home/system counts from `library.summary.json` before
+  the first usable frame when a usable database exists. Full SQLite row
+  hydration then runs through the lifecycle scheduler after the first visible
+  copy and configured warm-validation delay, without forcing a rebuild. If the
+  stamp is stale, the launcher shows a `Library changed` dialog instead of
+  rebuilding automatically. `Rebuild` runs the same full database builder used
+  by explicit refresh; `Continue` writes a one-shot marker so the next MagiK
+  boot goes directly to the `Updating Library` rebuild screen. Use
+  `startup_timing` log lines to separate summary seed, full SQLite hydration,
+  catalog construction, Slint bridge sync, stamp check, user choice, and build
+  costs.
 - Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
   `library-refresh` only for the missing/empty DB first-boot deferral path and
   must not schedule delayed background refreshes when a database already exists.

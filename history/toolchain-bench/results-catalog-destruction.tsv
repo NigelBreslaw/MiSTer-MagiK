@@ -22,3 +22,26 @@ DESTROY-20260622	c7a12728	bad-marker-bad-db	library_ready	24280	-
 DESTROY-20260622	c7a12728	bad-marker-bad-db	rebuild_duration	24272	threshold_ms=60000
 DESTROY-20260622	c7a12728	file-change-continue	library_changed_detected	494	-
 DESTROY-20260622	c7a12728	file-change-continue	library_changed_test_action	1694	-
+LIFECYCLE-20260625	49a4563e	missing-db	catalog_cache_load_failed	5	-
+LIFECYCLE-20260625	49a4563e	missing-db	catalog_cache_empty		-
+LIFECYCLE-20260625	49a4563e	missing-db	library_db_saved	17439	-
+LIFECYCLE-20260625	49a4563e	missing-db	library_ready	17487	-
+LIFECYCLE-20260625	49a4563e	missing-db	rebuild_duration	17482	threshold_ms=60000
+LIFECYCLE-20260625	49a4563e	zero-byte-db	catalog_cache_load_failed	8	-
+LIFECYCLE-20260625	49a4563e	zero-byte-db	catalog_cache_empty		-
+LIFECYCLE-20260625	49a4563e	zero-byte-db	library_db_saved	17206	-
+LIFECYCLE-20260625	49a4563e	zero-byte-db	library_ready	17381	-
+LIFECYCLE-20260625	49a4563e	zero-byte-db	rebuild_duration	17373	threshold_ms=60000
+LIFECYCLE-20260625	49a4563e	corrupt-db	catalog_cache_load_failed	7	-
+LIFECYCLE-20260625	49a4563e	corrupt-db	catalog_cache_empty		-
+LIFECYCLE-20260625	49a4563e	corrupt-db	library_db_saved	16823	-
+LIFECYCLE-20260625	49a4563e	corrupt-db	library_ready	16824	-
+LIFECYCLE-20260625	49a4563e	corrupt-db	rebuild_duration	16817	threshold_ms=60000
+LIFECYCLE-20260625	49a4563e	bad-marker-bad-db	catalog_cache_load_failed	7	-
+LIFECYCLE-20260625	49a4563e	bad-marker-bad-db	catalog_cache_empty		-
+LIFECYCLE-20260625	49a4563e	bad-marker-bad-db	library_rebuild_marker_consumed	4	-
+LIFECYCLE-20260625	49a4563e	bad-marker-bad-db	library_db_saved	17506	-
+LIFECYCLE-20260625	49a4563e	bad-marker-bad-db	library_ready	17669	-
+LIFECYCLE-20260625	49a4563e	bad-marker-bad-db	rebuild_duration	17665	threshold_ms=60000
+LIFECYCLE-20260625	49a4563e	file-change-continue	library_changed_detected	548	-
+LIFECYCLE-20260625	49a4563e	file-change-continue	library_changed_test_dialog_input	1748	-

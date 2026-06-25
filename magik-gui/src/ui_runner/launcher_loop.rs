@@ -17,7 +17,6 @@ use mister_magik_fb::framebuffer_ownership::{
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::Path;
-use std::sync::mpsc;
 
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
@@ -343,7 +342,10 @@ pub(super) fn run_launcher_loop(
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_launch_handoff =
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
-    let mut launch_handoff = LaunchHandoffSession::from_env(launcher_bench_launch_handoff);
+    let mut scheduler = LauncherScheduler::new(launcher_bench_launch_handoff);
+    let mut catalog_events = CatalogJobEventBuf::new();
+    let mut media_events = MediaJobEventBuf::new();
+    let mut lifecycle_effects = LifecycleEffects::new();
     let bench_starts_on_arcade =
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let benchmark_media_interaction_active = launcher_bench_scenario.is_some();
@@ -456,19 +458,24 @@ pub(super) fn run_launcher_loop(
     let catalog_refresh_policy = catalog_refresh_policy();
     let catalog_refresh = catalog_refresh_policy.force_requested();
     let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
+    let mut lifecycle = LauncherLifecycle::new(
+        LauncherLifecycleConfig {
+            catalog_worker_enabled,
+        },
+        start,
+    );
     let deferred_library_rebuild = consume_library_rebuild_marker(catalog_worker_enabled, start);
     let mut catalog_session = LauncherCatalogSession::new(deferred_library_rebuild);
-    let mut catalog_rx = None;
     let mut media_session = ScreenshotMediaUpdateSession::default();
-    let mut media_handle = None;
-    let mut media_worker_unavailable = false;
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
+    let mut startup_catalog_source = None;
     if let Some(summary) = summary_seed {
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
+        startup_catalog_source = Some(CatalogSource::SummaryProjection);
         catalog_session.note_summary_seed_ready();
         media_session.request_catalog_seed();
         catalog_version = catalog_version.wrapping_add(1);
@@ -477,14 +484,7 @@ pub(super) fn run_launcher_loop(
         } else {
             ready_catalog_worker_request(catalog_refresh_policy)
         };
-        if catalog_worker_enabled {
-            print_startup_event(start, "catalog_worker_start", &arcade_root);
-            catalog_rx = Some(start_library_catalog_worker(
-                arcade_root.clone(),
-                request,
-                CatalogWorkerInitialCache::ProbeSqlite,
-            ));
-        } else {
+        if !catalog_worker_enabled || request == CatalogWorkerRequest::LoadOnly {
             print_startup_event(
                 start,
                 "catalog_refresh_decision",
@@ -494,6 +494,30 @@ pub(super) fn run_launcher_loop(
                 ),
             );
             catalog_session.mark_refresh_done();
+        } else if request == CatalogWorkerRequest::ForceBuild {
+            print_startup_event(start, "catalog_worker_start", &arcade_root);
+            scheduler.start_catalog_worker(
+                arcade_root.clone(),
+                request,
+                CatalogWorkerInitialCache::ProbeSqlite,
+            );
+        } else {
+            let delay = catalog_background_validation_delay();
+            print_startup_event(
+                start,
+                "catalog_worker_deferred",
+                format!(
+                    "root={} request={} delay_ms={}",
+                    arcade_root,
+                    request.label(),
+                    delay.as_millis()
+                ),
+            );
+            catalog_session.defer_catalog_worker(
+                arcade_root.clone(),
+                request,
+                CatalogWorkerInitialCache::ProbeSqlite,
+            );
         }
     } else {
         match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
@@ -505,6 +529,7 @@ pub(super) fn run_launcher_loop(
                 );
                 catalog = loaded.catalog;
                 catalog_ready = true;
+                startup_catalog_source = Some(CatalogSource::FullSqlite);
                 catalog_session.note_cached_catalog_ready();
                 media_session.request_catalog_seed();
                 catalog_version = catalog_version.wrapping_add(1);
@@ -517,11 +542,11 @@ pub(super) fn run_launcher_loop(
                 let request = ready_catalog_worker_request(catalog_refresh_policy);
                 if deferred_library_rebuild {
                     print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    catalog_rx = Some(start_library_catalog_worker(
+                    scheduler.start_catalog_worker(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
                         CatalogWorkerInitialCache::AlreadyLoadedReady,
-                    ));
+                    );
                 } else if request != CatalogWorkerRequest::LoadOnly {
                     let delay = catalog_background_validation_delay();
                     print_startup_event(
@@ -534,7 +559,11 @@ pub(super) fn run_launcher_loop(
                             delay.as_millis()
                         ),
                     );
-                    catalog_session.defer_catalog_worker(arcade_root.clone(), request);
+                    catalog_session.defer_catalog_worker(
+                        arcade_root.clone(),
+                        request,
+                        CatalogWorkerInitialCache::AlreadyLoadedReady,
+                    );
                 } else {
                     print_startup_event(
                         start,
@@ -544,7 +573,6 @@ pub(super) fn run_launcher_loop(
                             catalog_refresh_policy.label()
                         ),
                     );
-                    catalog_rx = None;
                     catalog_session.mark_refresh_done();
                 }
             }
@@ -556,11 +584,11 @@ pub(super) fn run_launcher_loop(
                 );
                 if catalog_worker_enabled {
                     print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    catalog_rx = Some(start_library_catalog_worker(
+                    scheduler.start_catalog_worker(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
                         CatalogWorkerInitialCache::ProbeSqlite,
-                    ));
+                    );
                 } else {
                     print_startup_event(
                         start,
@@ -578,11 +606,11 @@ pub(super) fn run_launcher_loop(
                 print_startup_event(start, "catalog_cache_load_failed", e);
                 if catalog_worker_enabled {
                     print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    catalog_rx = Some(start_library_catalog_worker(
+                    scheduler.start_catalog_worker(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
                         CatalogWorkerInitialCache::ProbeSqlite,
-                    ));
+                    );
                 } else {
                     print_startup_event(
                         start,
@@ -671,6 +699,19 @@ pub(super) fn run_launcher_loop(
             bridge_sync_t.elapsed().as_micros()
         ),
     );
+    lifecycle_effects.clear();
+    let _ = lifecycle.after_boot_splash_presented(
+        StartupInput {
+            catalog_ready,
+            catalog_source: startup_catalog_source,
+            foreground_catalog_update: catalog_session.foreground_update(),
+            has_stale_catalog: false,
+            validation_scheduled: scheduler.catalog_worker_running()
+                || !catalog_session.refresh_done(),
+        },
+        &mut lifecycle_effects,
+    );
+    apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
     let run_start = if arcade_catalog_required_at_start && catalog_ready {
         Instant::now()
@@ -693,17 +734,23 @@ pub(super) fn run_launcher_loop(
         let loop_start = Instant::now();
         let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
         let mut prepare_trace = LauncherPrepareTrace::default();
-        launch_handoff.record_loading_frame(loop_start);
-        let launching = launch_handoff.is_active() || !loading_title.is_empty();
+        scheduler.record_loading_frame(loop_start);
+        let launching = scheduler.launch_is_active() || !loading_title.is_empty();
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
+        let _ = lifecycle.tick(
+            LauncherTickInput {
+                input: LauncherLifecycleInputTag::None,
+            },
+            &mut lifecycle_effects,
+        );
+        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         apply_screenshot_media_update_effects(
             media_session.clear_progress_if_due(loop_start),
             &app,
             &catalog,
-            &mut media_handle,
-            &mut media_worker_unavailable,
+            &mut scheduler,
             &mut full_bridge_dirty,
             start,
         );
@@ -763,26 +810,28 @@ pub(super) fn run_launcher_loop(
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
-            catalog_rx.is_some(),
+            scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done(),
             loop_start,
             catalog_background_validation_delay(),
         ) {
             print_startup_event(start, "catalog_worker_start", &worker.root);
-            catalog_rx = Some(start_library_catalog_worker(
-                worker.root,
-                worker.request,
-                worker.initial_cache,
-            ));
+            lifecycle.handle(
+                LauncherLifecycleInput::CatalogValidationStarted,
+                &mut lifecycle_effects,
+            );
+            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+            scheduler.start_catalog_worker(worker.root, worker.request, worker.initial_cache);
         }
 
         if !catalog_session.refresh_done() {
-            while let Some(message) = catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            scheduler.poll_catalog(&mut catalog_events);
+            for message in catalog_events.drain() {
                 let media_gate =
                     if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
                         let media_gate = media_session.current_gate(
                             frame_accounting.first_visible_copy_done(),
-                            launch_handoff.has_pending_launch() || launching,
+                            scheduler.has_pending_launch() || launching,
                             benchmark_media_interaction_active,
                             loop_start,
                         );
@@ -790,8 +839,7 @@ pub(super) fn run_launcher_loop(
                             media_session.sync_gate(media_gate),
                             &app,
                             &catalog,
-                            &mut media_handle,
-                            &mut media_worker_unavailable,
+                            &mut scheduler,
                             &mut full_bridge_dirty,
                             start,
                         );
@@ -814,7 +862,7 @@ pub(super) fn run_launcher_loop(
                     &pad,
                     &mut nav,
                     &setup,
-                    launch_handoff.visible_loading_title(&loading_title),
+                    &loading_title,
                     &mut catalog,
                     &mut catalog_ready,
                     &mut catalog_version,
@@ -822,9 +870,9 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     &mut bridge_models,
                     &mut media_session,
-                    &mut media_handle,
-                    &mut media_worker_unavailable,
-                    &mut catalog_rx,
+                    &mut scheduler,
+                    &mut lifecycle,
+                    &mut lifecycle_effects,
                     &mut full_bridge_dirty,
                     start,
                 );
@@ -835,7 +883,8 @@ pub(super) fn run_launcher_loop(
         }
 
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
-        while let Some(message) = media_handle.as_ref().and_then(|handle| handle.try_recv()) {
+        scheduler.poll_media(&mut media_events);
+        for message in media_events.drain() {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             let catalog_scan_visible = bridge.get_catalog_scan_visible();
             let effects =
@@ -844,8 +893,7 @@ pub(super) fn run_launcher_loop(
                 effects,
                 &app,
                 &catalog,
-                &mut media_handle,
-                &mut media_worker_unavailable,
+                &mut scheduler,
                 &mut full_bridge_dirty,
                 start,
             );
@@ -854,14 +902,29 @@ pub(super) fn run_launcher_loop(
             prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
         }
 
-        if let Some(completion) = launch_handoff.poll_completion(Instant::now()) {
+        if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
-                LaunchHandoffCompletion::Success => {}
+                LaunchHandoffCompletion::Success => {
+                    lifecycle.handle(
+                        LauncherLifecycleInput::LaunchSucceeded {
+                            spawned_mister: false,
+                        },
+                        &mut lifecycle_effects,
+                    );
+                    apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                }
                 LaunchHandoffCompletion::Failure { error } => {
+                    lifecycle.handle(
+                        LauncherLifecycleInput::LaunchFailed {
+                            message: error.to_string(),
+                        },
+                        &mut lifecycle_effects,
+                    );
+                    apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                     LauncherStatusPresenter::new(&bridge)
                         .sync_loading("Launch failed", "Returning to launcher...");
-                    launch_handoff.recover_launcher_ui(f, ui);
+                    scheduler.recover_launcher_ui(f, ui);
                     update_slint_animations(animation_clock);
                     let mut recovery_rect = None;
                     window.draw_if_needed(|renderer| {
@@ -875,9 +938,11 @@ pub(super) fn run_launcher_loop(
                     }
                     let recovery_presented = Instant::now();
                     window.request_redraw();
-                    launch_handoff.finish_failure_recovery(recovery_presented);
+                    scheduler.finish_launch_failure_recovery(recovery_presented);
+                    lifecycle.recovery_frame_presented(recovery_presented, &mut lifecycle_effects);
+                    apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                     LauncherStatusPresenter::new(&bridge)
-                        .sync_loading(launch_handoff.loading_title(), "");
+                        .sync_loading(scheduler.launch_loading_title(), "");
                     eprintln!("game launch failed: {error}");
                 }
             }
@@ -1020,7 +1085,7 @@ pub(super) fn run_launcher_loop(
                     {
                         nav_state = test_state;
                     }
-                    let event = if launch_handoff.should_request_benchmark_launch()
+                    let event = if scheduler.should_request_benchmark_launch()
                         && catalog_ready
                         && !launcher_bench_waiting_for_initial_preview
                         && nav.screen == Screen::Arcade
@@ -1047,7 +1112,7 @@ pub(super) fn run_launcher_loop(
                                 action: LauncherAction::LaunchGame,
                                 path: Some(game.mra_path.to_string()),
                             })
-                    } else if launch_handoff.benchmark_enabled() {
+                    } else if scheduler.launch_benchmark_enabled() {
                         None
                     } else {
                         nav.handle_input(&nav_state, frame_now, &catalog)
@@ -1061,7 +1126,7 @@ pub(super) fn run_launcher_loop(
                                     &pad,
                                     &nav,
                                     &setup,
-                                    launch_handoff.visible_loading_title(&loading_title),
+                                    scheduler.visible_loading_title(&loading_title),
                                     "Return to MiSTer MagiK after reboot",
                                     Some(&catalog),
                                     &mut preview,
@@ -1091,8 +1156,7 @@ pub(super) fn run_launcher_loop(
                                     media_session.shutdown_for_reset(),
                                     &app,
                                     &catalog,
-                                    &mut media_handle,
-                                    &mut media_worker_unavailable,
+                                    &mut scheduler,
                                     &mut full_bridge_dirty,
                                     start,
                                 );
@@ -1101,7 +1165,7 @@ pub(super) fn run_launcher_loop(
                                     &pad,
                                     &nav,
                                     &setup,
-                                    launch_handoff.visible_loading_title(&loading_title),
+                                    scheduler.visible_loading_title(&loading_title),
                                     "Restarting MiSTer",
                                     Some(&catalog),
                                     &mut preview,
@@ -1133,7 +1197,7 @@ pub(super) fn run_launcher_loop(
                                     &pad,
                                     &nav,
                                     &setup,
-                                    launch_handoff.visible_loading_title(&loading_title),
+                                    scheduler.visible_loading_title(&loading_title),
                                     "Restarting MiSTer",
                                     Some(&catalog),
                                     &mut preview,
@@ -1166,7 +1230,7 @@ pub(super) fn run_launcher_loop(
                                     &pad,
                                     &mut nav,
                                     &setup,
-                                    launch_handoff.visible_loading_title(&loading_title),
+                                    &loading_title,
                                     &mut catalog,
                                     &mut catalog_ready,
                                     &mut catalog_version,
@@ -1174,9 +1238,9 @@ pub(super) fn run_launcher_loop(
                                     &mut preview,
                                     &mut bridge_models,
                                     &mut media_session,
-                                    &mut media_handle,
-                                    &mut media_worker_unavailable,
-                                    &mut catalog_rx,
+                                    &mut scheduler,
+                                    &mut lifecycle,
+                                    &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
                                     start,
                                 );
@@ -1191,7 +1255,7 @@ pub(super) fn run_launcher_loop(
                                     &pad,
                                     &mut nav,
                                     &setup,
-                                    launch_handoff.visible_loading_title(&loading_title),
+                                    &loading_title,
                                     &mut catalog,
                                     &mut catalog_ready,
                                     &mut catalog_version,
@@ -1199,9 +1263,9 @@ pub(super) fn run_launcher_loop(
                                     &mut preview,
                                     &mut bridge_models,
                                     &mut media_session,
-                                    &mut media_handle,
-                                    &mut media_worker_unavailable,
-                                    &mut catalog_rx,
+                                    &mut scheduler,
+                                    &mut lifecycle,
+                                    &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
                                     start,
                                 );
@@ -1213,15 +1277,22 @@ pub(super) fn run_launcher_loop(
                         let Some(mra) = event.path else {
                             continue;
                         };
-                        if !launch_handoff.begin_launch(&nav, &catalog, &mra, Instant::now()) {
+                        if !scheduler.begin_launch(&nav, &catalog, &mra, Instant::now()) {
                             continue;
                         }
+                        lifecycle.handle(
+                            LauncherLifecycleInput::LaunchRequested {
+                                launch_ref: mra.clone(),
+                            },
+                            &mut lifecycle_effects,
+                        );
+                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                         sync_bridge_launcher(
                             &app,
                             &pad,
                             &nav,
                             &setup,
-                            launch_handoff.loading_title(),
+                            scheduler.launch_loading_title(),
                             "",
                             Some(&catalog),
                             &mut preview,
@@ -1238,7 +1309,9 @@ pub(super) fn run_launcher_loop(
                         let _pace = pacer.wait();
                         target.present_rows(f, disp, ui, 0, ui.render_h());
                         let loading_presented = Instant::now();
-                        launch_handoff.complete_loading_frame(loading_presented);
+                        lifecycle
+                            .loading_frame_presented(loading_presented, &mut lifecycle_effects);
+                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                         window.request_redraw();
                     }
                     let nav_after = LauncherBridgeKey::from_nav(&nav);
@@ -1270,7 +1343,7 @@ pub(super) fn run_launcher_loop(
                     &pad,
                     &nav,
                     &setup,
-                    launch_handoff.visible_loading_title(&loading_title),
+                    scheduler.visible_loading_title(&loading_title),
                     "",
                     Some(&catalog),
                     &mut preview,
@@ -1290,7 +1363,7 @@ pub(super) fn run_launcher_loop(
                     &app,
                     &nav,
                     &setup,
-                    launch_handoff.visible_loading_title(&loading_title),
+                    scheduler.visible_loading_title(&loading_title),
                     "",
                     &catalog,
                     active_games,
@@ -1302,7 +1375,7 @@ pub(super) fn run_launcher_loop(
             }
         } else {
             let _ = pad.poll();
-            if let Some(action) = launch_handoff.runtime_action(Instant::now()) {
+            if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
                 match action {
                     LaunchHandoffRuntimeAction::ArcadeCoreRunning => {
                         println!("arcade core running — handing off to MiSTer");
@@ -1310,7 +1383,12 @@ pub(super) fn run_launcher_loop(
                     }
                     LaunchHandoffRuntimeAction::TimedOut => {
                         eprintln!("game launch timed out");
-                        launch_handoff.recover_launcher_ui(f, ui);
+                        lifecycle.handle(
+                            LauncherLifecycleInput::LaunchTimedOut,
+                            &mut lifecycle_effects,
+                        );
+                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                        scheduler.recover_launcher_ui(f, ui);
                         std::process::exit(1);
                     }
                 }
@@ -1321,7 +1399,7 @@ pub(super) fn run_launcher_loop(
         {
             let media_gate = media_session.current_gate(
                 frame_accounting.first_visible_copy_done(),
-                launch_handoff.has_pending_launch() || launching,
+                scheduler.has_pending_launch() || launching,
                 benchmark_media_interaction_active,
                 loop_start,
             );
@@ -1329,8 +1407,7 @@ pub(super) fn run_launcher_loop(
                 media_session.sync_gate(media_gate),
                 &app,
                 &catalog,
-                &mut media_handle,
-                &mut media_worker_unavailable,
+                &mut scheduler,
                 &mut full_bridge_dirty,
                 start,
             );
@@ -1338,8 +1415,7 @@ pub(super) fn run_launcher_loop(
                 media_session.apply_gate(media_gate),
                 &app,
                 &catalog,
-                &mut media_handle,
-                &mut media_worker_unavailable,
+                &mut scheduler,
                 &mut full_bridge_dirty,
                 start,
             );
@@ -1347,8 +1423,7 @@ pub(super) fn run_launcher_loop(
                 media_session.sync_gate(media_gate),
                 &app,
                 &catalog,
-                &mut media_handle,
-                &mut media_worker_unavailable,
+                &mut scheduler,
                 &mut full_bridge_dirty,
                 start,
             );
@@ -1548,7 +1623,7 @@ pub(super) fn run_launcher_loop(
             catalog_ready,
             catalog_session.refresh_done(),
             launching,
-            launch_handoff.visible_loading_title(&loading_title),
+            scheduler.visible_loading_title(&loading_title),
             catalog_scan_visible,
             status_text
                 .as_ref()
@@ -1632,6 +1707,48 @@ fn apply_pending_launch_return_state(
     launcher::apply_launch_return_state(nav, catalog, state)
 }
 
+fn apply_lifecycle_effects(
+    effects: &mut LifecycleEffects,
+    scheduler: &mut LauncherScheduler,
+    start: Instant,
+) {
+    for effect in effects.drain() {
+        match effect {
+            LauncherEffect::StartupEvent { name, detail } => {
+                print_startup_event(start, name, detail);
+            }
+            LauncherEffect::BeginLoadingFrame { launch_ref } => {
+                print_startup_event(
+                    start,
+                    "launcher_lifecycle_loading_frame_requested",
+                    format!("launch_ref={launch_ref}"),
+                );
+            }
+            LauncherEffect::BeginLaunchHandoff {
+                launch_ref,
+                presented_at,
+            } => {
+                scheduler.complete_loading_frame(presented_at);
+                print_startup_event(
+                    start,
+                    "launcher_lifecycle_handoff_requested",
+                    format!("launch_ref={launch_ref}"),
+                );
+            }
+            LauncherEffect::PresentRecoveryFrame => {
+                print_startup_event(
+                    start,
+                    "launcher_lifecycle_recovery_requested",
+                    "reason=launch",
+                );
+            }
+            LauncherEffect::ReturnToIdle => {
+                print_startup_event(start, "launcher_lifecycle_recovered", "state=idle");
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
@@ -1647,9 +1764,9 @@ fn apply_catalog_session_effects(
     preview: &mut PreviewState,
     bridge_models: &mut LauncherBridgeModels,
     media_session: &mut ScreenshotMediaUpdateSession,
-    media_handle: &mut Option<MediaWorkerHandle>,
-    media_worker_unavailable: &mut bool,
-    catalog_rx: &mut Option<mpsc::Receiver<CatalogWorkerMessage>>,
+    scheduler: &mut LauncherScheduler,
+    lifecycle: &mut LauncherLifecycle,
+    lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
     start: Instant,
 ) {
@@ -1661,15 +1778,25 @@ fn apply_catalog_session_effects(
             CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
                 load_us: _,
+                source,
             } => {
                 *catalog = ready_catalog;
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
                 apply_forced_arcade_selected(nav, catalog);
                 apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                lifecycle.handle(
+                    LauncherLifecycleInput::CatalogReady {
+                        source,
+                        validating: false,
+                    },
+                    lifecycle_effects,
+                );
+                apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
             CatalogSessionEffect::SyncCatalogBridge => {
                 let bridge_sync_t = Instant::now();
+                let loading_title = scheduler.visible_loading_title(loading_title);
                 sync_bridge_launcher(
                     app,
                     pad,
@@ -1701,8 +1828,7 @@ fn apply_catalog_session_effects(
                     media_session.finish_worker(),
                     app,
                     catalog,
-                    media_handle,
-                    media_worker_unavailable,
+                    scheduler,
                     full_bridge_dirty,
                     start,
                 );
@@ -1712,11 +1838,17 @@ fn apply_catalog_session_effects(
                     media_session.finish_worker_if_no_catalog_seed_pending(),
                     app,
                     catalog,
-                    media_handle,
-                    media_worker_unavailable,
+                    scheduler,
                     full_bridge_dirty,
                     start,
                 );
+            }
+            CatalogSessionEffect::CatalogValidationFinished => {
+                lifecycle.handle(
+                    LauncherLifecycleInput::CatalogValidationFinished,
+                    lifecycle_effects,
+                );
+                apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
             CatalogSessionEffect::RequestMediaCatalogSeed => {
                 media_session.request_catalog_seed();
@@ -1729,8 +1861,7 @@ fn apply_catalog_session_effects(
                     media_session.handle_catalog_system_discovered(system_id, media_gate),
                     app,
                     catalog,
-                    media_handle,
-                    media_worker_unavailable,
+                    scheduler,
                     full_bridge_dirty,
                     start,
                 );
@@ -1753,11 +1884,15 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::StartCatalogWorker(worker) => {
                 print_startup_event(start, "catalog_worker_start", &worker.root);
-                *catalog_rx = Some(start_library_catalog_worker(
-                    worker.root,
-                    worker.request,
-                    worker.initial_cache,
-                ));
+                lifecycle.handle(
+                    LauncherLifecycleInput::CatalogBuilding {
+                        foreground: worker.request == CatalogWorkerRequest::ForceBuild,
+                        has_stale_catalog: *catalog_ready,
+                    },
+                    lifecycle_effects,
+                );
+                apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+                scheduler.start_catalog_worker(worker.root, worker.request, worker.initial_cache);
             }
         }
     }
@@ -1767,8 +1902,7 @@ fn apply_screenshot_media_update_effects(
     effects: ScreenshotMediaUpdateEffects,
     app: &slint_ui::launcher::Launcher,
     catalog: &ArcadeCatalog,
-    media_handle: &mut Option<MediaWorkerHandle>,
-    media_worker_unavailable: &mut bool,
+    scheduler: &mut LauncherScheduler,
     full_bridge_dirty: &mut bool,
     start: Instant,
 ) {
@@ -1781,86 +1915,40 @@ fn apply_screenshot_media_update_effects(
                 apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
             }
             ScreenshotMediaUpdateEffect::EnsureWorker { mode } => {
-                ensure_media_worker_started(media_handle, media_worker_unavailable, start, mode);
+                scheduler.ensure_media_worker_started(start, mode);
             }
             ScreenshotMediaUpdateEffect::EnsureSystem { system_id } => {
-                if let Some(handle) = media_handle.as_ref() {
-                    handle.ensure_system(&system_id);
-                }
+                scheduler.ensure_media_system(&system_id);
             }
             ScreenshotMediaUpdateEffect::EnsureCatalogSystems => {
-                ensure_media_for_catalog_systems(
-                    catalog,
-                    media_handle,
-                    media_worker_unavailable,
-                    start,
-                );
+                ensure_media_for_catalog_systems(catalog, scheduler, start);
             }
             ScreenshotMediaUpdateEffect::FinishWorker => {
-                if let Some(handle) = media_handle.as_ref() {
-                    handle.finish();
-                }
+                scheduler.finish_media_worker();
             }
             ScreenshotMediaUpdateEffect::DropWorker => {
-                *media_handle = None;
+                scheduler.drop_media_worker();
             }
             ScreenshotMediaUpdateEffect::MarkWorkerUnavailable => {
-                *media_worker_unavailable = true;
+                scheduler.mark_media_worker_unavailable();
             }
             ScreenshotMediaUpdateEffect::SetInteractionActive { active, reason } => {
-                if let Some(handle) = media_handle.as_ref() {
-                    handle.set_interaction_active(active, reason);
-                }
+                scheduler.set_media_interaction_active(active, reason);
             }
         }
     }
 }
 
-fn ensure_media_worker_started(
-    media_handle: &mut Option<MediaWorkerHandle>,
-    media_worker_unavailable: &mut bool,
-    start: Instant,
-    mode: &str,
-) {
-    if media_handle.is_some() || *media_worker_unavailable {
-        return;
-    }
-    *media_handle = start_screenshot_media_worker();
-    if media_handle.is_some() {
-        print_startup_event(
-            start,
-            "screenshot_media_worker_start",
-            format!("mode={mode}"),
-        );
-    } else {
-        *media_worker_unavailable = true;
-        print_startup_event(
-            start,
-            "screenshot_media_worker_skip",
-            format!("mode={mode}"),
-        );
-    }
-}
-
 fn ensure_media_for_catalog_systems(
     catalog: &ArcadeCatalog,
-    media_handle: &mut Option<MediaWorkerHandle>,
-    media_worker_unavailable: &mut bool,
+    scheduler: &mut LauncherScheduler,
     start: Instant,
 ) {
     let systems = catalog_media_system_ids(catalog);
     if systems.is_empty() {
         return;
     }
-    ensure_media_worker_started(
-        media_handle,
-        media_worker_unavailable,
-        start,
-        "catalog-systems",
-    );
-    let Some(handle) = media_handle.as_ref() else {
-        return;
-    };
+    scheduler.ensure_media_worker_started(start, "catalog-systems");
     for system_id in systems {
         print_startup_event(
             start,
@@ -1872,7 +1960,7 @@ fn ensure_media_for_catalog_systems(
             "screenshot_media_catalog_ensure",
             format!("system={system_id}"),
         );
-        handle.ensure_system(&system_id);
+        scheduler.ensure_media_system(&system_id);
     }
 }
 
@@ -1884,7 +1972,7 @@ fn catalog_media_system_ids(catalog: &ArcadeCatalog) -> Vec<String> {
         .filter_map(|system| {
             let id = system.id.as_str();
             (mister_magik_fb::media_update::is_supported_pack_id(id)
-                && catalog.system_game_count(id) > 0
+                && (system.count > 0 || catalog.system_game_count(id) > 0)
                 && seen.insert(system.id.clone()))
             .then(|| system.id.clone())
         })
@@ -2079,9 +2167,31 @@ mod tests {
         ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems)
     }
 
+    fn summary_catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
+        let systems = system_ids
+            .iter()
+            .map(|system_id| arcade_catalog::GameSystemEntry {
+                id: (*system_id).to_string(),
+                title: (*system_id).to_string(),
+                count: 1,
+            })
+            .collect();
+        ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), systems)
+    }
+
     #[test]
     pub(super) fn catalog_media_system_ids_are_selective_and_supported() {
         let catalog = catalog_for_media_systems(&["arcade", "pcengine", "neogeo", "arcade"]);
+
+        assert_eq!(
+            catalog_media_system_ids(&catalog),
+            vec!["arcade".to_string(), "neogeo".to_string()]
+        );
+    }
+
+    #[test]
+    pub(super) fn catalog_media_system_ids_use_summary_counts_before_full_hydration() {
+        let catalog = summary_catalog_for_media_systems(&["arcade", "pcengine", "neogeo"]);
 
         assert_eq!(
             catalog_media_system_ids(&catalog),
