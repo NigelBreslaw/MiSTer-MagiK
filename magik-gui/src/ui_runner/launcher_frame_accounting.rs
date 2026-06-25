@@ -11,7 +11,7 @@ pub(super) struct LauncherFrameAccounting {
     vsync_us: u128,
     copy_us: u128,
     cached_present_us: u128,
-    overlay_present_us: u128,
+    arcade_list_present_us: u128,
     rows: u128,
     preview_scroll_trace: Option<PreviewScrollTrace>,
     preview_scroll_trace_duration: Option<Duration>,
@@ -50,8 +50,7 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) dirty_rect: Option<DirtyRect>,
     pub(super) copied_rows: u32,
     pub(super) cached_present_us: u128,
-    pub(super) overlay_present_us: u128,
-    pub(super) present_probe_us: u128,
+    pub(super) arcade_list_present_us: u128,
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
@@ -104,8 +103,7 @@ struct PreviewScrollTraceRow {
     vsync_us: u128,
     fb_present_us: u128,
     cached_present_us: u128,
-    overlay_present_us: u128,
-    present_probe_us: u128,
+    arcade_list_present_us: u128,
     vsync_source: &'static str,
     vsync_period_us: u64,
     vsync_miss_streak: u32,
@@ -138,7 +136,7 @@ impl PreviewScrollTrace {
             self.row_text.clear();
             let _ = write!(
                 self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.frame,
                 row.elapsed_us,
                 row.loop_delta_us,
@@ -163,8 +161,7 @@ impl PreviewScrollTrace {
                 row.vsync_us,
                 row.fb_present_us,
                 row.cached_present_us,
-                row.overlay_present_us,
-                row.present_probe_us,
+                row.arcade_list_present_us,
                 row.vsync_source,
                 row.vsync_period_us,
                 row.vsync_miss_streak,
@@ -231,7 +228,7 @@ impl LauncherFrameAccounting {
             vsync_us: 0,
             copy_us: 0,
             cached_present_us: 0,
-            overlay_present_us: 0,
+            arcade_list_present_us: 0,
             rows: 0,
             preview_scroll_trace: open_preview_scroll_trace(),
             preview_scroll_trace_duration: preview_scroll_trace_duration_from_env(),
@@ -397,8 +394,7 @@ impl LauncherFrameAccounting {
             vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
             fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
             cached_present_us: frame.cached_present_us,
-            overlay_present_us: frame.overlay_present_us,
-            present_probe_us: frame.present_probe_us,
+            arcade_list_present_us: frame.arcade_list_present_us,
             vsync_source: frame
                 .vsync_source
                 .map(VsyncPaceSource::label)
@@ -453,7 +449,7 @@ impl LauncherFrameAccounting {
         self.vsync_us += (frame.frame_t3 - frame.custom_draw_done).as_micros();
         self.copy_us += (frame.frame_t4 - frame.frame_t3).as_micros();
         self.cached_present_us += frame.cached_present_us;
-        self.overlay_present_us += frame.overlay_present_us;
+        self.arcade_list_present_us += frame.arcade_list_present_us;
         self.rows += frame.copied_rows as u128;
         if self.fps_window_start.elapsed() >= Duration::from_secs(1) {
             let n = self.fps_frames.max(1) as u128;
@@ -470,7 +466,7 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
             println!(
-                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us overlay-present {}us ({} rows avg)",
+                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us arcade-list-present {}us ({} rows avg)",
                 self.fps_frames,
                 self.prepare_us / n,
                 self.render_us / n,
@@ -478,7 +474,7 @@ impl LauncherFrameAccounting {
                 self.vsync_us / n,
                 self.copy_us / n,
                 self.cached_present_us / n,
-                self.overlay_present_us / n,
+                self.arcade_list_present_us / n,
                 self.rows / n
             );
             self.fps_window_start = Instant::now();
@@ -489,7 +485,7 @@ impl LauncherFrameAccounting {
             self.vsync_us = 0;
             self.copy_us = 0;
             self.cached_present_us = 0;
-            self.overlay_present_us = 0;
+            self.arcade_list_present_us = 0;
             self.rows = 0;
         }
     }
@@ -679,7 +675,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tcatalog_worker_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tcatalog_worker_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

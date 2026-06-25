@@ -42,7 +42,7 @@ pub struct FrameSample {
     pub vsync_us: u64,
     pub fb_present_us: u64,
     pub cached_present_us: u64,
-    pub overlay_present_us: u64,
+    pub arcade_list_present_us: u64,
     pub rows: u32,
     pub present_rect: Option<FrameRect>,
     pub wall_us: u64,
@@ -207,7 +207,7 @@ impl FrameProfiler {
         match self.mode {
             ProfileMode::Slow if total >= self.slow_threshold_us => {
                 println!(
-                    "  SLOW frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} overlay-present={} rows={} dominant={}",
+                    "  SLOW frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={} dominant={}",
                     self.frames.len(),
                     sample.phases_us(),
                     sample.prepare_us,
@@ -217,14 +217,14 @@ impl FrameProfiler {
                     sample.vsync_us,
                     sample.fb_present_us,
                     sample.cached_present_us,
-                    sample.overlay_present_us,
+                    sample.arcade_list_present_us,
                     sample.rows,
                     sample.dominant_phase()
                 );
             }
             ProfileMode::Full => {
                 println!(
-                    "  frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} overlay-present={} rows={}",
+                    "  frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={}",
                     self.frames.len(),
                     sample.phases_us(),
                     sample.prepare_us,
@@ -234,7 +234,7 @@ impl FrameProfiler {
                     sample.vsync_us,
                     sample.fb_present_us,
                     sample.cached_present_us,
-                    sample.overlay_present_us,
+                    sample.arcade_list_present_us,
                     sample.rows
                 );
             }
@@ -251,7 +251,7 @@ impl FrameProfiler {
         self.window_vsync += sample.vsync_us as u128;
         self.window_fb_present += sample.fb_present_us as u128;
         self.window_cached_present += sample.cached_present_us as u128;
-        self.window_overlay_present += sample.overlay_present_us as u128;
+        self.window_overlay_present += sample.arcade_list_present_us as u128;
         self.window_rows += sample.rows as u128;
         match sample.vsync_source {
             VsyncPaceSource::Vsync => self.window_vsync_hits += 1,
@@ -274,7 +274,7 @@ impl FrameProfiler {
     fn flush_window(&mut self) {
         let nn = self.window_frames.max(1) as u128;
         println!(
-            "  fps ~ {}  | prepare {}us  anim {}us  slint-render {}us  custom-draw {}us  vsync-wait {}us  fb-present {}us cached-present {}us overlay-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={}",
+            "  fps ~ {}  | prepare {}us  anim {}us  slint-render {}us  custom-draw {}us  vsync-wait {}us  fb-present {}us cached-present {}us arcade-list-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={}",
             self.window_frames,
             self.window_prepare / nn,
             self.window_anim / nn,
@@ -345,7 +345,7 @@ impl FrameProfiler {
         let mut f = File::create(path)?;
         writeln!(
             f,
-            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\toverlay_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
+            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
         )?;
         for (i, s) in self.frames.iter().enumerate() {
             let (x0, y0, x1, y1, pixels) = s
@@ -362,7 +362,7 @@ impl FrameProfiler {
                 s.vsync_us,
                 s.fb_present_us,
                 s.cached_present_us,
-                s.overlay_present_us,
+                s.arcade_list_present_us,
                 s.phases_us(),
                 s.wall_us,
                 s.rows,
@@ -414,14 +414,14 @@ impl FrameProfiler {
                     Some(s),
                 )?;
             }
-            if s.overlay_present_us > 0 {
+            if s.arcade_list_present_us > 0 {
                 write_trace_event(
                     &mut f,
                     &mut first,
-                    "overlay-present",
+                    "arcade-list-present",
                     i,
                     present_ts.saturating_add(s.cached_present_us),
-                    s.overlay_present_us,
+                    s.arcade_list_present_us,
                     Some(s),
                 )?;
             }
@@ -458,8 +458,8 @@ impl FrameProfiler {
             &col(&self.frames, |s| s.cached_present_us),
         );
         print_phase_stats(
-            "overlay-present",
-            &col(&self.frames, |s| s.overlay_present_us),
+            "arcade-list-present",
+            &col(&self.frames, |s| s.arcade_list_present_us),
         );
         self.print_present_bandwidth();
         let hits = self
@@ -541,7 +541,7 @@ impl FrameProfiler {
         for (i, total) in indexed.into_iter().take(10) {
             let s = self.frames[i];
             println!(
-                "  #{i} wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} overlay-present={} rows={} dominant={}",
+                "  #{i} wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={} dominant={}",
                 s.phases_us(),
                 s.prepare_us,
                 s.anim_us,
@@ -550,7 +550,7 @@ impl FrameProfiler {
                 s.vsync_us,
                 s.fb_present_us,
                 s.cached_present_us,
-                s.overlay_present_us,
+                s.arcade_list_present_us,
                 s.rows,
                 s.dominant_phase()
             );

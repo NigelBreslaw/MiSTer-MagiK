@@ -23,7 +23,7 @@ PHASES = [
     ("custom_draw_us", "custom-draw", "#a855f7"),
     ("vsync_us", "vsync-wait", "#f59e0b"),
     ("cached_present_us", "cached-present", "#06b6d4"),
-    ("overlay_present_us", "overlay-present", "#ef4444"),
+    ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
 ]
 
 DETAIL_PHASES = [
@@ -36,12 +36,14 @@ DETAIL_PHASES = [
     ("custom_draw_other_us", "custom-other", "#c084fc"),
     ("vsync_us", "vsync-wait", "#f59e0b"),
     ("cached_present_us", "cached-present", "#06b6d4"),
-    ("overlay_present_us", "overlay-present", "#ef4444"),
+    ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
     ("fb_present_other_us", "present-other", "#94a3b8"),
 ]
 
 
 def int_field(row: dict[str, str], key: str) -> int:
+    if key == "arcade_list_present_us" and key not in row:
+        key = "overlay_present_us"
     value = row.get(key, "")
     if value == "":
         return 0
@@ -73,7 +75,7 @@ def phase_value(row: dict[str, str], key: str) -> int:
         )
         return max(0, int_field(row, "custom_draw_us") - known)
     if key == "fb_present_other_us":
-        known = int_field(row, "cached_present_us") + int_field(row, "overlay_present_us")
+        known = int_field(row, "cached_present_us") + int_field(row, "arcade_list_present_us")
         return max(0, int_field(row, "fb_present_us") - known)
     return int_field(row, key)
 

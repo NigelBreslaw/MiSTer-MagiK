@@ -30,8 +30,7 @@ PHASES = [
     "vsync_us",
     "fb_present_us",
     "cached_present_us",
-    "overlay_present_us",
-    "present_probe_us",
+    "arcade_list_present_us",
     "wall_us",
     "rows",
 ]
@@ -93,8 +92,8 @@ def main() -> int:
             row["update"] = row["arcade_update"]
         if "arcade_draw_us" in row and "custom_draw_us" not in row:
             row["custom_draw_us"] = row["arcade_draw_us"]
-        if "present_probe_us" not in row:
-            row["present_probe_us"] = 0
+        if "overlay_present_us" in row and "arcade_list_present_us" not in row:
+            row["arcade_list_present_us"] = row["overlay_present_us"]
     if not args.include_first:
         rows = [row for row in rows if int(row["frame"]) != 0]
 
@@ -127,8 +126,7 @@ def main() -> int:
             "custom_draw_us",
             "fb_present_us",
             "cached_present_us",
-            "overlay_present_us",
-            "present_probe_us",
+            "arcade_list_present_us",
             "wall_us",
         ]
         print("\t".join(f"{field}={row[field]}" for field in fields if field in row))

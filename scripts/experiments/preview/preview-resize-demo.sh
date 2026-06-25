@@ -32,7 +32,6 @@ trap cleanup EXIT
 for filter in nearest box lanczos hybrid; do
   echo "preview_resize_demo filter=$filter max=$MAX_SIZE"
   {
-    printf 'export MISTER_FB_FORMAT=565\n'
     printf 'export MISTER_CATALOG_REFRESH=off\n'
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'

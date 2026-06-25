@@ -9,7 +9,7 @@ pub(super) fn run_controller_loop(
     app: slint_ui::controller::ControllerTest,
     animation_clock: &AnimationClock,
 ) {
-    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut frames = 0u64;
     let mut pacer = VsyncPacer::from_env();
@@ -35,7 +35,7 @@ pub(super) fn run_controller_loop(
         });
         let _pace = pacer.wait();
         if let Some(rect) = this_rect {
-            copy_cached_rect(disp, ui, &cached, rect);
+            copy_cached_rect_565(disp, ui, &cached, rect);
         }
         frames += 1;
     }

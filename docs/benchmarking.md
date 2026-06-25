@@ -6,8 +6,8 @@ This document defines current benchmark policy. Dated measurement logs live in
 ## General Rules
 
 - Use RGB565 for production launcher and arcade conclusions. The UI/app
-  benchmark path is RGB565-only; RGB888/XRGB8888 env overrides are retired.
-  Use explicit diagnostic/experiment builds for framebuffer/color-route work.
+  benchmark path is RGB565-only; wider-color env overrides and color-route
+  smoke paths are deleted from the app.
 - Start visual benchmarks from a clean display-owner state. If stock OSD/menu is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
@@ -75,9 +75,9 @@ Acceptance fields for Arcade preview pacing:
 - `p99_work_us < 14500` for the preservation-of-fade milestone.
 - For render-contract, framebuffer-format, route, or copy-helper changes, use
   `scripts/launcher-present-trace.py compare BEFORE.tsv AFTER.tsv` and report
-  the `present_path_tsv` rows. `cached_present_us` and `fb_present_us` p95/p99
-  must stay within +5%, `rows` p95/p99 must not increase by more than one row,
-  and steady `present_probe_us` p99 must remain zero.
+  the `present_path_tsv` rows. `cached_present_us`, `arcade_list_present_us`,
+  and `fb_present_us` p95/p99 must stay within +5%, and `rows` p95/p99 must not
+  increase by more than one row.
 - Visual captures must preserve the current fade appearance when enabled.
 
 After the preview fade optimization work, run the final release gate with:

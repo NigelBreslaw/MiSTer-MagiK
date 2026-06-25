@@ -19,11 +19,13 @@ PHASES = [
     "custom_draw_us",
     "vsync_us",
     "cached_present_us",
-    "overlay_present_us",
+    "arcade_list_present_us",
 ]
 
 
 def int_field(row: dict[str, str], key: str) -> int:
+    if key == "arcade_list_present_us" and key not in row:
+        key = "overlay_present_us"
     try:
         return int(float(row.get(key, "") or 0))
     except ValueError:

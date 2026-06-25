@@ -12,7 +12,7 @@ EFFECT_COUNT=15
 
 usage() {
   cat <<'EOF'
-Usage: scripts/experiments/effects/profile-raster-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--fb-format 565] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
+Usage: scripts/experiments/effects/profile-raster-effects.sh [LABEL] [--skip-build|--deploy-device] [--mode mega|EFFECT[,EFFECT...]] [--segment-secs N] [--secs N] [--preview-format png|derived-png|raw-rgb|raw-rgb565] [--visual-captures N] [--replace-label]
 
 Runs the experimental scene:
   mister-magik-fb ui raster-effects
@@ -26,7 +26,6 @@ deploy="skip"
 mode="mega"
 segment_secs="20"
 secs=""
-fb_format="565"
 preview_format="raw-rgb565"
 visual_captures="0"
 replace_label="0"
@@ -39,7 +38,6 @@ while [[ $# -gt 0 ]]; do
     --mode) mode="${2:-}"; shift 2 ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
     --secs) secs="${2:-}"; shift 2 ;;
-    --fb-format) fb_format="${2:-}"; shift 2 ;;
     --preview-format) preview_format="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     --replace-label) replace_label="1"; shift ;;
@@ -54,7 +52,6 @@ if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$mode" =~ ^[A-Za-z0-9_,.-]+$ ]]; then echo "--mode must be a comma-separated effect label list or mega" >&2; exit 2; fi
 if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
-case "$fb_format" in 565) ;; *) echo "--fb-format must be 565; RGB888 UI support was removed" >&2; exit 2 ;; esac
 case "$preview_format" in png|derived-png|raw-rgb|raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be png, derived-png, raw-rgb, or raw-rgb565" >&2; exit 2 ;; esac
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
@@ -91,13 +88,13 @@ remote_log="/tmp/${label}-raster-effects.log"
 local_tsv="$OUT_DIR/${label}-raster-effects.tsv"
 local_log="$OUT_DIR/${label}-raster-effects.log"
 
-echo "==> raster-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs fb_format=$fb_format preview_format=$preview_format"
+echo "==> raster-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs preview_format=$preview_format"
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 rm -f '$remote_tsv' '$remote_log'
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_RASTER_EFFECTS='$mode' MISTER_RASTER_EFFECTS_AUTO=1 MISTER_RASTER_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_RASTER_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui raster-effects '$secs' >'$remote_log' 2>&1 &
+MISTER_PREVIEW_FORMAT='$preview_format' MISTER_RASTER_EFFECTS='$mode' MISTER_RASTER_EFFECTS_AUTO=1 MISTER_RASTER_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_RASTER_EFFECTS_TRACE='$remote_tsv' '$REMOTE' ui raster-effects '$secs' >'$remote_log' 2>&1 &
 UI_PID=\$!
 RSS_MAX=0
 CPU_SUM=0
@@ -159,7 +156,7 @@ if [[ "$visual_captures" != "0" ]]; then
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep 5
-MISTER_FB_FORMAT='$fb_format' MISTER_PREVIEW_FORMAT='$preview_format' MISTER_RASTER_EFFECTS='$mode' MISTER_RASTER_EFFECTS_AUTO=1 MISTER_RASTER_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_RASTER_EFFECTS_HUD=1 '$REMOTE' ui raster-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
+MISTER_PREVIEW_FORMAT='$preview_format' MISTER_RASTER_EFFECTS='$mode' MISTER_RASTER_EFFECTS_AUTO=1 MISTER_RASTER_EFFECTS_SEGMENT_SECS='$segment_secs' MISTER_RASTER_EFFECTS_HUD=1 '$REMOTE' ui raster-effects 30 >/tmp/${label}-visual-${i}.log 2>&1 &
 echo \$! >/tmp/${label}-visual-${i}.pid
 " >/dev/null
     sleep $((8 + i * segment_secs))
@@ -247,7 +244,7 @@ summarize_by_effect() {
 
 rss="$(sed -n 's/^rss_hwm_kb=//p' "$local_log" | tail -1)"
 cpu_sample_max="$(sed -n 's/^cpu_sample_max_pct=//p' "$local_log" | tail -1)"
-notes="fb_format=$fb_format; preview_format=$preview_format; mode=$mode; segment_secs=$segment_secs"
+notes="preview_format=$preview_format; mode=$mode; segment_secs=$segment_secs"
 visual_ok="yes"
 if [[ "$visual_captures" == "0" ]]; then
   visual_ok="not-run"

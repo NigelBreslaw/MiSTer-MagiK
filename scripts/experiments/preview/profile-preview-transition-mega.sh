@@ -12,7 +12,7 @@ OUT_DIR="$HERE/build/preview-scroll-profiles"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/experiments/preview/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-device] [--segment-secs N] [--transition-ms N] [--fb-format 565] [--preview-format raw-rgb565] [--visual-captures 0]
+Usage: scripts/experiments/preview/profile-preview-transition-mega.sh [LABEL] [--skip-build|--deploy-device] [--segment-secs N] [--transition-ms N] [--preview-format raw-rgb565] [--visual-captures 0]
 
 Runs an experiment-enabled Main-supervised launcher Arcade screen with
 `MISTER_PREVIEW_TRANSITION=mega`.
@@ -25,7 +25,6 @@ label="preview-transition-mega-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="--skip-build"
 segment_secs="5"
 transition_ms="320"
-fb_format="565"
 preview_format="raw-rgb565"
 visual_captures="0"
 positionals=()
@@ -36,7 +35,6 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="--deploy-device"; shift ;;
     --segment-secs) segment_secs="${2:-}"; shift 2 ;;
     --transition-ms) transition_ms="${2:-}"; shift 2 ;;
-    --fb-format) fb_format="${2:-}"; shift 2 ;;
     --preview-format) preview_format="${2:-}"; shift 2 ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -50,7 +48,6 @@ if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$segment_secs" =~ ^[0-9]+$ || "$segment_secs" -lt 1 ]]; then echo "--segment-secs must be a positive integer" >&2; exit 2; fi
 if [[ ! "$transition_ms" =~ ^[0-9]+$ || "$transition_ms" -lt 1 ]]; then echo "--transition-ms must be a positive integer" >&2; exit 2; fi
-case "$fb_format" in 565) ;; *) echo "--fb-format must be 565; RGB888 UI support was removed" >&2; exit 2 ;; esac
 case "$preview_format" in raw-rgb565|raw565|rgb565|565) ;; *) echo "--preview-format must be raw-rgb565" >&2; exit 2 ;; esac
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
@@ -79,7 +76,6 @@ cleanup() {
 trap cleanup EXIT
 
 {
-  printf 'export MISTER_FB_FORMAT=%q\n' "$fb_format"
   printf 'export MISTER_CATALOG_REFRESH=off\n'
   printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'

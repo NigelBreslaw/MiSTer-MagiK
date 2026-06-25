@@ -143,9 +143,9 @@ Effect-scene and mega-transition work is experimental only; see
   Slint while the FPGA is scanning another buffer. Confirm route/status or HDMI.
 - Do not use row-by-row selected-index jumps for arcade performance conclusions.
   Use velocity scenarios from `docs/benchmarking.md`.
-- Use RGB565 for production launcher/arcade performance conclusions.
-  RGB888/XRGB8888 app env overrides are retired; use explicit diagnostic
-  commands or feature-gated diagnostics for color-route A/B work.
+- Use RGB565 for launcher/arcade performance conclusions. The app render
+  contract is RGB565-only; do not reintroduce wider-color env overrides, smoke
+  commands, or framebuffer color-route A/B paths.
 - Do not rebuild or write preview caches on the MiSTer hot path. Build source
   screenshots, raw565 caches, and snapshot packs from the sibling
   `../magik-cloud` repo.

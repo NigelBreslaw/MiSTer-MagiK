@@ -31,7 +31,6 @@ against the current run and fails on present-path regressions:
   - cached_present_us p95/p99 > +5%
   - fb_present_us p95/p99 > +5%
   - rows p95/p99 increase > 1 row
-  - present_probe_us p99 != 0
 EOF
 }
 
@@ -131,9 +130,9 @@ write_self_test_trace() {
 write_present_self_test_trace() {
   local path="$1" cached_present="$2" fb_present="$3" rows="$4" source="$5" miss="$6"
   {
-    echo $'frame\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tcached_present_us\toverlay_present_us\tpresent_probe_us\tvsync_source\tvsync_miss_streak'
+    echo $'frame\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_miss_streak'
     for frame in $(seq 0 180); do
-      echo "${frame}"$'\tscroll:-12\t'"${rows}"$'\t0\t0\t0\t'"${fb_present}"$'\t'"${cached_present}"$'\t500\t0\t'"${source}"$'\t'"${miss}"
+      echo "${frame}"$'\tscroll:-12\t'"${rows}"$'\t0\t0\t0\t'"${fb_present}"$'\t'"${cached_present}"$'\t500\t'"${source}"$'\t'"${miss}"
     done
   } >"$path"
 }

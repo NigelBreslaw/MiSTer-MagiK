@@ -36,7 +36,7 @@ pub const CONF_VGA_SCALER: u16 = 0x0004;
 pub const CONF_DIRECT_VIDEO: u16 = 0x0400;
 pub const CONF_VGA_FB: u16 = 0x1000;
 
-use crate::fb_format::{FramebufferFormat, FB_FMT_RXB};
+use crate::fb_format::{rgb565_stride_bytes, FB_FMT_565, FB_FMT_RXB};
 
 // HPS framebuffer constants (video.cpp).
 pub const FB_ADDR: u32 = 0x2000_0000 + (32 * 1024 * 1024); // 0x22000000
@@ -370,21 +370,18 @@ impl Fpga {
     /// video.cpp:3290-3321. Routes HPS buffer `n` to scan-out. `mode` is the
     /// active video mode (for positioning); the fb itself is
     /// `fb_width`x`fb_height`.
-    pub fn fb_enable_format(
+    pub fn fb_enable_rgb565(
         &mut self,
         n: u32,
         fb_width: u16,
         fb_height: u16,
         mode: Mode,
-        xoff_override: Option<i32>,
-        yoff_override: Option<i32>,
         set_vga_fb: bool,
-        format: FramebufferFormat,
     ) -> io::Result<u16> {
         let fb_addr = FB_ADDR + (FB_SIZE_PX * 4 * n) + if n == 0 { 4096 } else { 0 };
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
-        let xoff = xoff_override.unwrap_or(mode.hbp as i32 - FB_DV_LBRD);
-        let yoff = yoff_override.unwrap_or(mode.vbp as i32 - FB_DV_UBRD);
+        let xoff = mode.hbp as i32 - FB_DV_LBRD;
+        let yoff = mode.vbp as i32 - FB_DV_UBRD;
         // The MiSTer HPS framebuffer path exposes an unstable shimmer on the
         // final HDMI column when the scaled rectangle reaches the inclusive
         // active-area right edge. Keep one guard column off the scan rectangle;
@@ -406,17 +403,13 @@ impl Fpga {
         crate::boot_analytics::event(
             "rust_fb_enable_direct_route",
             format!(
-                "n={n} fb_width={fb_width} fb_height={fb_height} format={} xoff={xoff} yoff={yoff} right={right} bottom={bottom} right_guard_cols={right_guard_cols} stride={} support_flag={flag}",
-                format.label(),
-                format.stride_bytes(fb_width as usize)
+                "n={n} fb_width={fb_width} fb_height={fb_height} format=565 xoff={xoff} yoff={yoff} right={right} bottom={bottom} right_guard_cols={right_guard_cols} stride={} support_flag={flag}",
+                rgb565_stride_bytes(fb_width as usize)
             ),
         );
 
         let stream_res: io::Result<()> = (|| {
-            let mut fpga_format = FB_EN | format.fpga_format_bits();
-            if format.route_rb() {
-                fpga_format |= FB_FMT_RXB;
-            }
+            let fpga_format = FB_EN | FB_FMT_565 | FB_FMT_RXB;
             self.spi_w(fpga_format)?; // format + enable
             self.spi_w(fb_addr as u16)?; // base addr low
             self.spi_w((fb_addr >> 16) as u16)?; // base addr high
@@ -426,7 +419,7 @@ impl Fpga {
             self.spi_w(right as u16)?; // scaled right
             self.spi_w(yoff as u16)?; // scaled top
             self.spi_w(bottom as u16)?; // scaled bottom
-            self.spi_w(format.stride_bytes(fb_width as usize) as u16)?; // stride (bytes)
+            self.spi_w(rgb565_stride_bytes(fb_width as usize) as u16)?; // stride (bytes)
             Ok(())
         })();
         self.disable_io();

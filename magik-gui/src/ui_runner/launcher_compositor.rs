@@ -51,14 +51,6 @@ impl<'a> LayerTarget<'a> {
         )
     }
 
-    pub(super) fn draw_effect_label(
-        &mut self,
-        overlay: &mut EffectLabelOverlay,
-        effect: &str,
-    ) -> DirtyRect {
-        overlay.draw(self.target, self.ui, effect)
-    }
-
     fn full_rect(&self) -> DirtyRect {
         DirtyRect {
             x0: 0,
@@ -79,10 +71,6 @@ impl<'a> LayerTarget<'a> {
     ) -> u32 {
         copy_arcade_list_update(self.target, self.disp, self.ui, renderer, update)
     }
-
-    fn present_probe(&mut self, probe: &mut PresentProbe, frames: u64) -> u32 {
-        probe.present(self.disp, frames)
-    }
 }
 
 pub(super) struct LauncherPresentRequest<'a, 'b> {
@@ -90,25 +78,21 @@ pub(super) struct LauncherPresentRequest<'a, 'b> {
     pub(super) full_frame_present: bool,
     pub(super) slint_dirty: Option<DirtyRect>,
     pub(super) raw_preview_rect: Option<DirtyRect>,
-    pub(super) effect_label_rect: Option<DirtyRect>,
     pub(super) arcade_list_rect: Option<ArcadeListUpdate>,
     pub(super) arcade_list_renderer: &'a mut ArcadeListRenderer,
-    pub(super) present_probe: Option<&'a mut PresentProbe>,
-    pub(super) frames: u64,
 }
 
 pub(super) struct LauncherPresentResult {
     pub(super) copied_rows: u32,
     pub(super) cached_present_us: u128,
-    pub(super) overlay_present_us: u128,
-    pub(super) present_probe_us: u128,
+    pub(super) arcade_list_present_us: u128,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
 }
 
 pub(super) struct LauncherCompositor;
 
 impl LauncherCompositor {
-    pub(super) fn present(mut request: LauncherPresentRequest<'_, '_>) -> LauncherPresentResult {
+    pub(super) fn present(request: LauncherPresentRequest<'_, '_>) -> LauncherPresentResult {
         let arcade_update_label = ArcadeUpdateTrace::from_update(request.arcade_list_rect.as_ref());
         let arcade_overlay_rect = request
             .arcade_list_rect
@@ -119,7 +103,6 @@ impl LauncherCompositor {
             request.full_frame_present,
             request.slint_dirty,
             request.raw_preview_rect,
-            request.effect_label_rect,
             arcade_overlay_rect,
         );
 
@@ -131,27 +114,19 @@ impl LauncherCompositor {
             cached_present_us += copy_start.elapsed().as_micros();
         }
 
-        let mut overlay_present_us = 0u128;
+        let mut arcade_list_present_us = 0u128;
         if let Some(update) = request.arcade_list_rect {
             let copy_start = Instant::now();
             copied_rows += request
                 .layer_target
                 .present_arcade_list_update(request.arcade_list_renderer, update);
-            overlay_present_us = copy_start.elapsed().as_micros();
-        }
-
-        let mut present_probe_us = 0u128;
-        if let Some(probe) = request.present_probe.as_deref_mut() {
-            let copy_start = Instant::now();
-            copied_rows += request.layer_target.present_probe(probe, request.frames);
-            present_probe_us = copy_start.elapsed().as_micros();
+            arcade_list_present_us = copy_start.elapsed().as_micros();
         }
 
         LauncherPresentResult {
             copied_rows,
             cached_present_us,
-            overlay_present_us,
-            present_probe_us,
+            arcade_list_present_us,
             arcade_update_label,
         }
     }
@@ -161,7 +136,6 @@ impl LauncherCompositor {
         full_frame_present: bool,
         slint_dirty: Option<DirtyRect>,
         raw_preview_rect: Option<DirtyRect>,
-        effect_label_rect: Option<DirtyRect>,
         arcade_overlay_rect: Option<DirtyRect>,
     ) -> DirtyRectList {
         let cached_base_rect = if full_frame_present {
@@ -171,7 +145,6 @@ impl LauncherCompositor {
         };
         let mut cached_overlays = DirtyRectList::new();
         cached_overlays.push_if_some(raw_preview_rect);
-        cached_overlays.push_if_some(effect_label_rect);
         let mut direct_overlays = DirtyRectList::new();
         direct_overlays.push_if_some(arcade_overlay_rect);
         build_launcher_present_plan(cached_base_rect, &cached_overlays, &direct_overlays)
@@ -190,7 +163,6 @@ mod tests {
         full_frame_present: bool,
         slint_dirty: Option<DirtyRect>,
         raw_preview_rect: Option<DirtyRect>,
-        effect_label_rect: Option<DirtyRect>,
         arcade_overlay_rect: Option<DirtyRect>,
     ) -> Vec<DirtyRect> {
         let full_rect = if full_frame_present {
@@ -203,7 +175,6 @@ mod tests {
             full_frame_present,
             slint_dirty,
             raw_preview_rect,
-            effect_label_rect,
             arcade_overlay_rect,
         )
         .iter()
@@ -216,12 +187,10 @@ mod tests {
             true,
             None,
             Some(rect(600, 120, 920, 360)),
-            Some(rect(10, 10, 270, 36)),
             Some(rect(48, 54, 432, 486)),
         );
 
         assert!(plan.contains(&rect(600, 120, 920, 360)));
-        assert!(plan.contains(&rect(10, 10, 270, 36)));
         assert!(!plan
             .iter()
             .any(|candidate| candidate.intersection(rect(48, 54, 432, 486)).is_some()));
@@ -233,7 +202,6 @@ mod tests {
             false,
             Some(rect(100, 100, 200, 200)),
             Some(rect(600, 120, 920, 360)),
-            None,
             None,
         );
 
