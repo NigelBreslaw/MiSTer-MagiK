@@ -316,7 +316,9 @@ fn prepare_launch_bench_ref(
         LaunchTarget::Path(path) => path.to_string(),
         LaunchTarget::Structured(plan) => format!("structured:{}", plan.launch_ref),
         LaunchTarget::MissingStructured(launch_ref) => {
-            return Err(format!("structured launch plan missing from catalog: {launch_ref}"));
+            return Err(format!(
+                "structured launch plan missing from catalog: {launch_ref}"
+            ));
         }
     })
 }

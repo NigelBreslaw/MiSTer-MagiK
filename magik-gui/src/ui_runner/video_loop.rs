@@ -142,7 +142,7 @@ pub(super) fn direct_video_copy_rect(
 #[cfg(all(feature = "video", mister_bench_scenes))]
 pub(super) fn blit_video_frame_to_cached(
     frame: &SharedPixelBuffer<Rgb8Pixel>,
-    cached: &mut [Pixel],
+    cached: &mut [Rgb565Pixel],
     render_w: usize,
 ) {
     let src_w = frame.width() as usize;
@@ -158,10 +158,11 @@ pub(super) fn blit_video_frame_to_cached(
             let mut src = src.as_ptr();
             let mut dst = dst.as_mut_ptr();
             for _ in 0..src_w {
-                let r = *src as u32;
-                let g = *src.add(1) as u32;
-                let b = *src.add(2) as u32;
-                dst.write(Pixel((r << 16) | (g << 8) | b));
+                dst.write(<Rgb565Pixel as TargetPixel>::from_rgb(
+                    *src,
+                    *src.add(1),
+                    *src.add(2),
+                ));
                 src = src.add(3);
                 dst = dst.add(1);
             }
@@ -197,7 +198,7 @@ pub(super) fn run_video_playback_loop(
         }
     };
 
-    let mut cached = vec![Pixel(0); ui.render_w() * ui.render_h()];
+    let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
     let mut next_video_at = Duration::ZERO;
     let frame_interval = frame_worker.frame_interval();
