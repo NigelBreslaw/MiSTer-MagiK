@@ -17,3 +17,8 @@ library_sqlite_publish_tsv	PERFREVIEW-20260624-LIBSAVE	2	progress	18026496	0	144
 library_sqlite_publish_tsv	PERFREVIEW-20260624-LIBSAVE	3	progress	18026496	0	1450	0	0	0	1462	70	bench-ok
 library_sqlite_publish_tsv	PERFREVIEW-20260624-LIBSAVE	4	progress	18026496	0	1384	0	0	0	1396	70	bench-ok
 library_sqlite_publish_tsv	PERFREVIEW-20260624-LIBSAVE	5	progress	18026496	0	1507	0	0	0	1519	70	bench-ok
+library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	1	progress	18026496	0	1392	0	0	0	1404	70	bench-ok
+library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	2	progress	18026496	0	1396	0	0	0	1407	70	bench-ok
+library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	3	progress	18026496	0	1465	0	0	0	1477	70	bench-ok
+library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	4	progress	18026496	0	1390	0	0	0	1402	70	bench-ok
+library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	5	progress	18026496	0	1409	0	0	0	1421	70	bench-ok
