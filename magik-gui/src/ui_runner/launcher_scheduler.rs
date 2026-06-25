@@ -60,25 +60,34 @@ impl MediaJobEventBuf {
     }
 }
 
+enum CatalogJobState {
+    Idle,
+    Running(mpsc::Receiver<CatalogWorkerMessage>),
+}
+
+enum MediaJobState {
+    Idle,
+    Running(MediaWorkerHandle),
+    Unavailable,
+}
+
 pub(super) struct LauncherScheduler {
-    catalog_rx: Option<mpsc::Receiver<CatalogWorkerMessage>>,
-    media_handle: Option<MediaWorkerHandle>,
-    media_worker_unavailable: bool,
+    catalog: CatalogJobState,
+    media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
 }
 
 impl LauncherScheduler {
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
         Self {
-            catalog_rx: None,
-            media_handle: None,
-            media_worker_unavailable: false,
+            catalog: CatalogJobState::Idle,
+            media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
     }
 
     pub(super) fn catalog_worker_running(&self) -> bool {
-        self.catalog_rx.is_some()
+        matches!(self.catalog, CatalogJobState::Running(_))
     }
 
     pub(super) fn start_catalog_worker(
@@ -87,79 +96,83 @@ impl LauncherScheduler {
         request: CatalogWorkerRequest,
         initial_cache: CatalogWorkerInitialCache,
     ) {
-        self.catalog_rx = Some(start_library_catalog_worker(root, request, initial_cache));
+        self.catalog =
+            CatalogJobState::Running(start_library_catalog_worker(root, request, initial_cache));
     }
 
     pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) {
         out.clear();
-        while let Some(message) = self.catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            out.push(message);
+        if let CatalogJobState::Running(rx) = &self.catalog {
+            while let Ok(message) = rx.try_recv() {
+                out.push(message);
+            }
         }
     }
 
     pub(super) fn media_worker_running(&self) -> bool {
-        self.media_handle.is_some()
+        matches!(self.media, MediaJobState::Running(_))
     }
 
     pub(super) fn media_worker_unavailable(&self) -> bool {
-        self.media_worker_unavailable
+        matches!(self.media, MediaJobState::Unavailable)
     }
 
     pub(super) fn ensure_media_worker_started(&mut self, start: Instant, mode: &str) {
-        if self.media_handle.is_some() || self.media_worker_unavailable {
+        if !matches!(self.media, MediaJobState::Idle) {
             return;
         }
-        self.media_handle = start_screenshot_media_worker();
-        if self.media_handle.is_some() {
-            print_startup_event(
-                start,
-                "screenshot_media_worker_start",
-                format!("mode={mode}"),
-            );
-        } else {
-            self.media_worker_unavailable = true;
-            print_startup_event(
-                start,
-                "screenshot_media_worker_skip",
-                format!("mode={mode}"),
-            );
+        match start_screenshot_media_worker() {
+            Some(handle) => {
+                self.media = MediaJobState::Running(handle);
+                print_startup_event(
+                    start,
+                    "screenshot_media_worker_start",
+                    format!("mode={mode}"),
+                );
+            }
+            None => {
+                self.media = MediaJobState::Unavailable;
+                print_startup_event(
+                    start,
+                    "screenshot_media_worker_skip",
+                    format!("mode={mode}"),
+                );
+            }
         }
     }
 
     pub(super) fn ensure_media_system(&self, system_id: &str) {
-        if let Some(handle) = self.media_handle.as_ref() {
+        if let MediaJobState::Running(handle) = &self.media {
             handle.ensure_system(system_id);
         }
     }
 
     pub(super) fn finish_media_worker(&self) {
-        if let Some(handle) = self.media_handle.as_ref() {
+        if let MediaJobState::Running(handle) = &self.media {
             handle.finish();
         }
     }
 
     pub(super) fn drop_media_worker(&mut self) {
-        self.media_handle = None;
+        self.media = MediaJobState::Idle;
     }
 
     pub(super) fn mark_media_worker_unavailable(&mut self) {
-        self.media_worker_unavailable = true;
+        self.media = MediaJobState::Unavailable;
     }
 
     pub(super) fn set_media_interaction_active(&self, active: bool, reason: &str) {
-        if let Some(handle) = self.media_handle.as_ref() {
+        if let MediaJobState::Running(handle) = &self.media {
             handle.set_interaction_active(active, reason);
         }
     }
 
     pub(super) fn poll_media(&mut self, out: &mut MediaJobEventBuf) {
         out.clear();
-        while let Some(message) = self
-            .media_handle
-            .as_ref()
-            .and_then(|handle| handle.try_recv())
-        {
-            out.push(message);
+        if let MediaJobState::Running(handle) = &self.media {
+            while let Some(message) = handle.try_recv() {
+                out.push(message);
+            }
         }
     }
 

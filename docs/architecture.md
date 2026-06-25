@@ -82,6 +82,9 @@ effect stream that records bridge/render intent. `launcher_scheduler.rs` is the
 central adapter for starting and polling catalog, media, launch, and background
 jobs. The hot frame loop still owns Slint rendering, row-copy decisions,
 framebuffer presentation, route reassertion, and frame accounting.
+Lifecycle and scheduler internals should use explicit enum states for startup
+readiness, pending launch refs, and worker availability instead of parallel
+booleans or `Option` fields that can express impossible combinations.
 
 Launch is intentionally two-phase. `Idle -> Launching` first updates the Slint
 bridge and presents the loading frame. Only after
