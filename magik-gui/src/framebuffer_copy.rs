@@ -138,11 +138,13 @@ pub fn copy_rect_2x_u32_to(
 fn copy_2x_row<T: Copy>(dst: &mut [T], src: &[T]) {
     for (sx, &color) in src.iter().enumerate() {
         let dx = sx * 2;
-        if dx + 1 >= dst.len() {
+        if dx >= dst.len() {
             break;
         }
         dst[dx] = color;
-        dst[dx + 1] = color;
+        if dx + 1 < dst.len() {
+            dst[dx + 1] = color;
+        }
     }
 }
 
@@ -289,6 +291,14 @@ mod tests {
         let src = vec![1u32, 2, 3];
         let mut dst = vec![0; 5];
         copy_rect_2x_u32_to(&mut dst, 5, 1, 0, 0, &src, 3, 0, 0, 3, 1);
+        assert_eq!(dst, vec![1, 1, 2, 2, 3]);
+    }
+
+    #[test]
+    fn specialized_2x_handles_odd_right_clip() {
+        let src = vec![1u8, 2, 3];
+        let mut dst = vec![0; 5];
+        copy_rect_2x_to(&mut dst, 5, 1, 0, 0, &src, 3, 0, 0, 3, 1);
         assert_eq!(dst, vec![1, 1, 2, 2, 3]);
     }
 
