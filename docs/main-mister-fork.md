@@ -70,12 +70,21 @@ The explicit command surface is:
 
 ```text
 mister_magik_launch <absolute .mgl/.mra/.rbf path>
+mister_magik_launch_plan_v1 <encoded structured catalog plan>
 mister_magik_exit_to_menu
 ```
 
 Commands are valid only from `LauncherActive`. Launch shuts down Slint and uses
 Main's normal loader path. Exit shuts down Slint and restores the stock Main
 menu path.
+
+Structured catalog plans are a MagiK-only handoff path for virtual
+`magik-plan:*` launcher rows. Rust sends `schema=1`, `core_path`,
+`payload_path`, `mount_kind`, `mount_index`, `delay_secs`, title/system
+metadata, and `launch_ref`; Main resolves `core_path` with MRA-style RBF
+semantics, carries the encoded plan through re-exec as `magik-plan-v1:...`, and
+seeds the existing MGL action state directly in `user_io_init`. Real user `.mra`,
+`.mgl`, and `.rbf` paths stay on `mister_magik_launch`.
 
 ## Defensive Diagnostics
 
@@ -97,6 +106,12 @@ cd ../Main_MiSTer
 scripts/test-magik-state.sh
 scripts/check-magik-patch-surface.sh
 ```
+
+The current approved patch surface includes the narrow
+`support/arcade/mra_loader.cpp` / `.h` helper extraction needed for structured
+handoff: shared RBF-name resolution and direct MGL action seeding. Keep the
+protocol details and device smoke results current in the fork's
+`MAGIK_PATCHSET.md`; that file is the rebuild ledger.
 
 Deploy from this app repo:
 

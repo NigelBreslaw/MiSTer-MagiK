@@ -3,9 +3,12 @@
 //! The runtime launcher catalog is SQLite-backed. This module keeps the shared
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
+use crate::launch_profiles::{self, MountKind, PayloadRule};
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 
@@ -42,18 +45,59 @@ pub struct ArcadeCatalog {
     pub systems: Vec<GameSystemEntry>,
     games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
     preview_games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
+    games_by_ref: HashMap<Arc<str>, usize>,
+    launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuredLaunchPlan {
+    pub launch_ref: Arc<str>,
+    pub title: Arc<str>,
+    pub system_id: Arc<str>,
+    pub core_path: Arc<str>,
+    pub payload_path: Arc<str>,
+    pub mount_kind: Arc<str>,
+    pub mount_index: u8,
+    pub delay_secs: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchTarget {
+    Path(Arc<str>),
+    Structured(StructuredLaunchPlan),
+    MissingStructured(Arc<str>),
 }
 
 impl ArcadeCatalog {
     pub fn new(root: PathBuf, games: Vec<ArcadeGameEntry>, systems: Vec<GameSystemEntry>) -> Self {
+        Self::new_with_launch_plans(root, games, systems, Vec::new())
+    }
+
+    pub fn new_with_launch_plans(
+        root: PathBuf,
+        games: Vec<ArcadeGameEntry>,
+        systems: Vec<GameSystemEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+    ) -> Self {
         let games_by_system = games_by_system(&games);
         let preview_games_by_system = preview_games_by_system(&games);
+        let games_by_ref: HashMap<Arc<str>, usize> = games
+            .iter()
+            .enumerate()
+            .map(|(idx, game)| (game.mra_path.clone(), idx))
+            .collect();
+        let launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan> = launch_plans
+            .into_iter()
+            .map(|plan| (plan.launch_ref.clone(), plan))
+            .collect();
         Self {
             root,
             games,
             systems,
             games_by_system,
             preview_games_by_system,
+            games_by_ref,
+            launch_plans_by_ref,
         }
     }
 
@@ -71,6 +115,25 @@ impl ArcadeCatalog {
             .find(|g| g.mra_path.as_ref() == mra_path)
             .map(|g| g.title.as_ref())
             .unwrap_or("Game")
+    }
+
+    pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {
+        self.launch_plans_by_ref
+            .get(launch_ref)
+            .cloned()
+            .map(LaunchTarget::Structured)
+            .unwrap_or_else(|| {
+                if launch_ref.starts_with("magik-plan:") {
+                    self.games_by_ref
+                        .get(launch_ref)
+                        .and_then(|idx| self.games.get(*idx))
+                        .and_then(|game| derive_structured_launch_plan(game, profiles_by_system()))
+                        .map(LaunchTarget::Structured)
+                        .unwrap_or_else(|| LaunchTarget::MissingStructured(Arc::from(launch_ref)))
+                } else {
+                    LaunchTarget::Path(Arc::from(launch_ref))
+                }
+            })
     }
 
     pub fn system_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
@@ -111,6 +174,69 @@ impl ArcadeCatalog {
             .get(system_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+}
+
+fn derive_structured_launch_plan(
+    game: &ArcadeGameEntry,
+    profiles_by_system: &HashMap<&'static str, launch_profiles::LaunchProfile>,
+) -> Option<StructuredLaunchPlan> {
+    let encoded_payload = game.mra_path.strip_prefix("magik-plan:")?;
+    let (archive_entry, payload_path) = encoded_payload
+        .strip_prefix("archive:")
+        .map(|payload| (true, payload))
+        .unwrap_or_else(|| {
+            encoded_payload
+                .strip_prefix("payload:")
+                .map(|payload| (false, payload))
+                .unwrap_or((false, encoded_payload))
+        });
+    let profile = profiles_by_system.get(game.system_id.as_ref())?;
+    let core_path = profile.core_path?;
+    let payload_rule = if archive_entry {
+        profile.classify_archive_entry(Path::new(payload_path))
+    } else {
+        payload_rule_for_path(profile, payload_path)
+    }?;
+    Some(StructuredLaunchPlan {
+        launch_ref: game.mra_path.clone(),
+        title: game.title.clone(),
+        system_id: game.system_id.clone(),
+        core_path: core_path.into(),
+        payload_path: payload_path.into(),
+        mount_kind: mount_kind_label(payload_rule.mount.kind).into(),
+        mount_index: payload_rule.mount.index,
+        delay_secs: payload_rule.mount.delay_secs,
+    })
+}
+
+fn profiles_by_system() -> &'static HashMap<&'static str, launch_profiles::LaunchProfile> {
+    static PROFILES_BY_SYSTEM: OnceLock<HashMap<&'static str, launch_profiles::LaunchProfile>> =
+        OnceLock::new();
+    PROFILES_BY_SYSTEM.get_or_init(|| {
+        launch_profiles::builtin_profiles()
+            .into_iter()
+            .map(|profile| (profile.system_id, profile))
+            .collect()
+    })
+}
+
+fn payload_rule_for_path(
+    profile: &launch_profiles::LaunchProfile,
+    payload_path: &str,
+) -> Option<PayloadRule> {
+    match profile.classify_path(Path::new(payload_path)) {
+        launch_profiles::ProfilePathClass::Payload { rule } => Some(rule),
+        _ => None,
+    }
+}
+
+fn mount_kind_label(kind: MountKind) -> &'static str {
+    match kind {
+        MountKind::Launcher => "launcher",
+        MountKind::LoadFile => "load-file",
+        MountKind::MountImage => "mount-image",
+        MountKind::Core => "core",
     }
 }
 

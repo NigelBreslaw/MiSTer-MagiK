@@ -80,8 +80,6 @@ pub(super) fn start_library_catalog_worker(
             });
             match plan {
                 CatalogWorkerPlan::LoadOnly => {
-                    debug_assert!(!catalog_worker_plan_prewarm_required(plan));
-                    skip_virtual_launch_cache_prewarm(&tx, plan);
                     let _ = tx.send(CatalogWorkerMessage::Done);
                     return;
                 }
@@ -153,7 +151,6 @@ pub(super) fn start_library_catalog_worker(
                             summary: Some(summary),
                             load_us: loaded.us,
                         });
-                        materialize_virtual_launch_cache_after_ready(&tx);
                     }
                     Err(e) => {
                         eprintln!("library persistence failed after RAM catalog ready: {e}");
@@ -185,7 +182,6 @@ pub(super) fn start_library_catalog_worker(
                             match library_db::default_sqlite_cached_summary(check.check_us) {
                                 Ok(summary) => {
                                     let _ = tx.send(CatalogWorkerMessage::Unchanged { summary });
-                                    materialize_virtual_launch_cache(&tx);
                                     return;
                                 }
                                 Err(e) => {
@@ -249,7 +245,6 @@ pub(super) fn start_library_catalog_worker(
                         summary: Some(summary),
                         load_us: loaded.us,
                     });
-                    materialize_virtual_launch_cache_after_ready(&tx);
                 }
                 None => {
                     send_catalog_progress(
@@ -324,13 +319,6 @@ impl CatalogWorkerPlan {
             Self::ForceBuild => "force_build",
         }
     }
-}
-
-fn catalog_worker_plan_prewarm_required(plan: CatalogWorkerPlan) -> bool {
-    matches!(
-        plan,
-        CatalogWorkerPlan::CheckStamp | CatalogWorkerPlan::ForceBuild
-    )
 }
 
 fn catalog_worker_plan(
@@ -461,60 +449,6 @@ fn send_catalog_load_timing(
     });
 }
 
-fn materialize_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
-    let start = Instant::now();
-    let summary = crate::launch_preparation::materialize_virtual_launch_cache_from_default_db();
-    let _ = tx.send(CatalogWorkerMessage::Timing {
-        name: "virtual_launch_cache_materialized".to_string(),
-        detail: format!(
-            "total={} written={} unchanged={} errors={} us={}",
-            summary.total,
-            summary.written,
-            summary.unchanged,
-            summary.errors,
-            start.elapsed().as_micros()
-        ),
-    });
-}
-
-fn materialize_priority_virtual_launch_cache(tx: &mpsc::Sender<CatalogWorkerMessage>) {
-    let start = Instant::now();
-    let summary =
-        crate::launch_preparation::materialize_priority_virtual_launch_cache_from_default_db();
-    let _ = tx.send(CatalogWorkerMessage::Timing {
-        name: "virtual_launch_cache_priority_materialized".to_string(),
-        detail: format!(
-            "total={} written={} unchanged={} errors={} us={}",
-            summary.total,
-            summary.written,
-            summary.unchanged,
-            summary.errors,
-            start.elapsed().as_micros()
-        ),
-    });
-}
-
-fn skip_virtual_launch_cache_prewarm(
-    tx: &mpsc::Sender<CatalogWorkerMessage>,
-    plan: CatalogWorkerPlan,
-) {
-    let _ = tx.send(CatalogWorkerMessage::Timing {
-        name: "virtual_launch_cache_prewarm_skipped".to_string(),
-        detail: format!("plan={} reason=catalog-cache-ready", plan.label()),
-    });
-}
-
-fn materialize_virtual_launch_cache_after_ready(tx: &mpsc::Sender<CatalogWorkerMessage>) {
-    lower_background_priority();
-    materialize_priority_virtual_launch_cache(tx);
-    std::thread::sleep(post_ready_virtual_launch_cache_delay());
-    materialize_virtual_launch_cache(tx);
-}
-
-fn post_ready_virtual_launch_cache_delay() -> Duration {
-    Duration::from_millis(1500)
-}
-
 pub(super) fn lower_background_priority() {
     #[cfg(target_os = "linux")]
     unsafe {
@@ -544,7 +478,6 @@ mod tests {
     fn catalog_worker_uses_cached_database_without_refresh() {
         let plan = catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::LoadOnly);
         assert_eq!(plan, CatalogWorkerPlan::LoadOnly);
-        assert!(!catalog_worker_plan_prewarm_required(plan));
     }
 
     #[test]
@@ -586,24 +519,6 @@ mod tests {
         assert!(staged_ram_catalog_enabled(CatalogCacheState::Missing));
         assert!(staged_ram_catalog_enabled(CatalogCacheState::Empty));
         assert!(!staged_ram_catalog_enabled(CatalogCacheState::Ready));
-    }
-
-    #[test]
-    fn refresh_plan_keeps_virtual_launch_cache_prewarm() {
-        assert!(catalog_worker_plan_prewarm_required(
-            CatalogWorkerPlan::ForceBuild
-        ));
-        assert!(catalog_worker_plan_prewarm_required(
-            CatalogWorkerPlan::CheckStamp
-        ));
-    }
-
-    #[test]
-    fn post_ready_virtual_launch_cache_delay_is_short_and_fixed() {
-        assert_eq!(
-            post_ready_virtual_launch_cache_delay(),
-            Duration::from_millis(1500)
-        );
     }
 
     #[test]

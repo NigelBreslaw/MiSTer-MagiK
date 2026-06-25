@@ -288,11 +288,9 @@ fn run_library_refresh() {
     };
     match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
-            let launch_cache =
-                launch_preparation::materialize_virtual_launch_cache_from_default_db();
             drop(lock);
             println!(
-                "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={} virtual_launch_total={} virtual_launch_written={} virtual_launch_unchanged={} virtual_launch_errors={}",
+                "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                 summary.skipped,
                 summary.bytes,
                 summary.scan_us,
@@ -302,11 +300,7 @@ fn run_library_refresh() {
                 summary.discoveries,
                 summary.normal_files,
                 summary.containers,
-                summary.entries,
-                launch_cache.total,
-                launch_cache.written,
-                launch_cache.unchanged,
-                launch_cache.errors
+                summary.entries
             );
         }
         Err(e) => {

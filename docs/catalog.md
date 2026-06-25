@@ -401,31 +401,32 @@ library_sqlite_publish_tsv	label	iteration	mode	bytes	build_sync_ms	copy_ms	fina
 UI code should read catalog data through the existing `library_db` facade:
 
 - `load_arcade_catalog_from_sqlite`
-- `load_virtual_launch_plan`
-- `load_virtual_launch_plans`
-- `load_virtual_launch_plans_for_system`
 - `load_amigavision_launch_refs`
+
+Diagnostic tools may still query virtual launch plans directly for benchmark
+sample selection, but selected launcher rows must use the structured launch
+plans hydrated into `ArcadeCatalog`.
 
 These APIs reject old-schema databases. Callers should treat a schema mismatch
 as "cache unusable" and let the worker rebuild.
 
-## Virtual Launch Cache
+## Structured Launch Handoff
 
-Virtual launch files live in `/media/fat/mister-magik/launch-cache`.
+Virtual `magik-plan:*` rows are not materialized as temporary `.mgl` files.
+Catalog build publishes structured launch descriptors into
+`launcher_launch_plans`, and catalog load hydrates them into the runtime
+`ArcadeCatalog`.
 
-The cache stamp file is `.virtual-launch-cache.json`. It records a schema
-version, plan count, and a stable fingerprint of each generated basename plus
-generated `.mgl` content. Schema v2 also records each generated basename,
-content hash, and content length.
+Selected launch resolves the row in memory:
 
-If the stored stamp matches the expected stamp, cache materialization uses file
-metadata to repair missing or wrong-sized generated `.mgl` files without reading
-every cached file. If the stamp is missing or stale, the existing files are
-materialized and the stamp is written only when there are zero errors.
+- Real `.mra`, `.mgl`, and `.rbf` paths continue through
+  `mister_magik_launch <path>`.
+- Structured virtual rows use
+  `mister_magik_launch_plan_v1 <encoded-plan>`.
 
-Launch-time behavior is unchanged: a missing virtual launch file is still
-created on demand. Worker prewarming is best-effort background maintenance after
-catalog readiness, not a prerequisite for browsing games.
+Launch selection must not query SQLite, read or write generated descriptors,
+repair descriptor stamps, or start post-ready descriptor prewarming.
+`MiSTer_MagiK` and `mister-magik-fb` are deployed together for this interface.
 
 ## Benchmarking
 

@@ -23,4 +23,3 @@ mod software_identity;
 mod sqlite_catalog;
 #[cfg(test)]
 mod test_support;
-pub mod virtual_launch_cache;
