@@ -54,9 +54,9 @@ impl LauncherLifecycleState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum LaunchingPhase {
-    LoadingFramePending,
+    LoadingFramePending { launch_ref: String },
     HandoffPending,
 }
 
@@ -144,17 +144,19 @@ pub(super) struct LauncherLifecycleConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct StartupInput {
-    pub(super) catalog_ready: bool,
-    pub(super) catalog_source: Option<CatalogSource>,
-    pub(super) foreground_catalog_update: bool,
-    pub(super) has_stale_catalog: bool,
-    pub(super) validation_scheduled: bool,
+pub(super) enum StartupCatalogState {
+    Ready {
+        source: CatalogSource,
+        validation_scheduled: bool,
+    },
+    Building {
+        foreground_catalog_update: bool,
+        has_stale_catalog: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum LauncherLifecycleInput {
-    None,
     CatalogReady {
         source: CatalogSource,
         validating: bool,
@@ -177,24 +179,8 @@ pub(super) enum LauncherLifecycleInput {
     LaunchTimedOut,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LauncherTickInput {
-    pub(super) input: LauncherLifecycleInputTag,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LauncherLifecycleInputTag {
-    None,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LauncherLifecycleStep {
-    pub(super) state: LauncherLifecycleState,
-    pub(super) bridge_sync: BridgeSyncPlan,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FramePlan {
     pub(super) state: LauncherLifecycleState,
     pub(super) bridge_sync: BridgeSyncPlan,
 }
@@ -208,7 +194,6 @@ pub(super) struct LauncherLifecycle {
     state: LauncherLifecycleState,
     config: LauncherLifecycleConfig,
     boot_splash_presented: bool,
-    pending_launch_ref: Option<String>,
 }
 
 impl LauncherLifecycle {
@@ -217,38 +202,45 @@ impl LauncherLifecycle {
             state: LauncherLifecycleState::BootSplash,
             config,
             boot_splash_presented: false,
-            pending_launch_ref: None,
         }
     }
 
     pub(super) fn after_boot_splash_presented(
         &mut self,
-        input: StartupInput,
+        input: StartupCatalogState,
         out: &mut LifecycleEffects,
     ) -> LauncherLifecycleStep {
         self.boot_splash_presented = true;
-        if input.catalog_ready {
-            self.transition(
-                LauncherLifecycleState::CatalogReady {
-                    source: input.catalog_source.unwrap_or(CatalogSource::FullSqlite),
-                    validating: input.validation_scheduled,
-                },
-                out,
-                "boot_splash_presented",
-            );
-            if !input.validation_scheduled {
-                self.transition(LauncherLifecycleState::Idle, out, "catalog_idle");
+        match input {
+            StartupCatalogState::Ready {
+                source,
+                validation_scheduled,
+            } => {
+                self.transition(
+                    LauncherLifecycleState::CatalogReady {
+                        source,
+                        validating: validation_scheduled,
+                    },
+                    out,
+                    "boot_splash_presented",
+                );
+                if !validation_scheduled {
+                    self.transition(LauncherLifecycleState::Idle, out, "catalog_idle");
+                }
             }
-        } else {
-            self.transition(
-                LauncherLifecycleState::CatalogBuilding {
-                    foreground: input.foreground_catalog_update
-                        || self.config.catalog_worker_enabled,
-                    has_stale_catalog: input.has_stale_catalog,
-                },
-                out,
-                "boot_splash_presented",
-            );
+            StartupCatalogState::Building {
+                foreground_catalog_update,
+                has_stale_catalog,
+            } => {
+                self.transition(
+                    LauncherLifecycleState::CatalogBuilding {
+                        foreground: foreground_catalog_update || self.config.catalog_worker_enabled,
+                        has_stale_catalog,
+                    },
+                    out,
+                    "boot_splash_presented",
+                );
+            }
         }
         self.step(BridgeSyncPlan::Full)
     }
@@ -262,27 +254,15 @@ impl LauncherLifecycle {
         }
     }
 
-    pub(super) fn tick(
-        &mut self,
-        _input: LauncherTickInput,
-        _out: &mut LifecycleEffects,
-    ) -> FramePlan {
-        FramePlan {
-            state: self.state.clone(),
-            bridge_sync: BridgeSyncPlan::None,
-        }
-    }
-
     pub(super) fn handle(
         &mut self,
         input: LauncherLifecycleInput,
         out: &mut LifecycleEffects,
     ) -> LauncherLifecycleStep {
-        if !self.boot_splash_presented && !matches!(input, LauncherLifecycleInput::None) {
+        if !self.boot_splash_presented {
             return self.step(BridgeSyncPlan::None);
         }
         match input {
-            LauncherLifecycleInput::None => {}
             LauncherLifecycleInput::CatalogReady { source, validating } => {
                 self.transition(
                     LauncherLifecycleState::CatalogReady { source, validating },
@@ -333,13 +313,12 @@ impl LauncherLifecycle {
             }
             LauncherLifecycleInput::LaunchRequested { launch_ref } => {
                 if matches!(self.state, LauncherLifecycleState::Idle) {
-                    self.pending_launch_ref = Some(launch_ref.clone());
                     out.push(LauncherEffect::BeginLoadingFrame {
                         launch_ref: launch_ref.clone(),
                     });
                     self.transition(
                         LauncherLifecycleState::Launching {
-                            phase: LaunchingPhase::LoadingFramePending,
+                            phase: LaunchingPhase::LoadingFramePending { launch_ref },
                         },
                         out,
                         "launch_requested",
@@ -347,7 +326,6 @@ impl LauncherLifecycle {
                 }
             }
             LauncherLifecycleInput::LaunchFailed { message } => {
-                self.pending_launch_ref = None;
                 out.push(LauncherEffect::PresentRecoveryFrame);
                 self.transition(
                     LauncherLifecycleState::Recovered {
@@ -358,7 +336,6 @@ impl LauncherLifecycle {
                 );
             }
             LauncherLifecycleInput::LaunchSucceeded { spawned_mister } => {
-                self.pending_launch_ref = None;
                 self.transition(
                     LauncherLifecycleState::Handoff { spawned_mister },
                     out,
@@ -366,7 +343,6 @@ impl LauncherLifecycle {
                 );
             }
             LauncherLifecycleInput::LaunchTimedOut => {
-                self.pending_launch_ref = None;
                 out.push(LauncherEffect::PresentRecoveryFrame);
                 self.transition(
                     LauncherLifecycleState::Recovered {
@@ -381,16 +357,11 @@ impl LauncherLifecycle {
     }
 
     pub(super) fn loading_frame_presented(&mut self, at: Instant, out: &mut LifecycleEffects) {
-        if !matches!(
-            self.state,
+        let launch_ref = match &self.state {
             LauncherLifecycleState::Launching {
-                phase: LaunchingPhase::LoadingFramePending
-            }
-        ) {
-            return;
-        }
-        let Some(launch_ref) = self.pending_launch_ref.take() else {
-            return;
+                phase: LaunchingPhase::LoadingFramePending { launch_ref },
+            } => launch_ref.clone(),
+            _ => return,
         };
         out.push(LauncherEffect::BeginLaunchHandoff {
             launch_ref,
@@ -469,11 +440,8 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
         lifecycle.after_boot_splash_presented(
-            StartupInput {
-                catalog_ready: true,
-                catalog_source: Some(CatalogSource::FullSqlite),
-                foreground_catalog_update: false,
-                has_stale_catalog: false,
+            StartupCatalogState::Ready {
+                source: CatalogSource::FullSqlite,
                 validation_scheduled: false,
             },
             &mut effects,
@@ -511,11 +479,8 @@ mod tests {
         let mut effects = LifecycleEffects::new();
 
         lifecycle.after_boot_splash_presented(
-            StartupInput {
-                catalog_ready: true,
-                catalog_source: Some(CatalogSource::SummaryProjection),
-                foreground_catalog_update: false,
-                has_stale_catalog: false,
+            StartupCatalogState::Ready {
+                source: CatalogSource::SummaryProjection,
                 validation_scheduled: true,
             },
             &mut effects,
@@ -537,12 +502,9 @@ mod tests {
         let mut effects = LifecycleEffects::new();
 
         lifecycle.after_boot_splash_presented(
-            StartupInput {
-                catalog_ready: false,
-                catalog_source: None,
+            StartupCatalogState::Building {
                 foreground_catalog_update: false,
                 has_stale_catalog: false,
-                validation_scheduled: false,
             },
             &mut effects,
         );
@@ -562,12 +524,9 @@ mod tests {
         let mut effects = LifecycleEffects::new();
 
         lifecycle.after_boot_splash_presented(
-            StartupInput {
-                catalog_ready: false,
-                catalog_source: None,
+            StartupCatalogState::Building {
                 foreground_catalog_update: false,
                 has_stale_catalog: false,
-                validation_scheduled: false,
             },
             &mut effects,
         );
@@ -590,11 +549,8 @@ mod tests {
         let mut effects = LifecycleEffects::new();
 
         lifecycle.after_boot_splash_presented(
-            StartupInput {
-                catalog_ready: true,
-                catalog_source: Some(CatalogSource::FullSqlite),
-                foreground_catalog_update: false,
-                has_stale_catalog: false,
+            StartupCatalogState::Ready {
+                source: CatalogSource::FullSqlite,
                 validation_scheduled: false,
             },
             &mut effects,
@@ -609,11 +565,8 @@ mod tests {
         let mut effects = LifecycleEffects::new();
 
         lifecycle.after_boot_splash_presented(
-            StartupInput {
-                catalog_ready: true,
-                catalog_source: Some(CatalogSource::FullSqlite),
-                foreground_catalog_update: false,
-                has_stale_catalog: false,
+            StartupCatalogState::Ready {
+                source: CatalogSource::FullSqlite,
                 validation_scheduled: true,
             },
             &mut effects,
@@ -638,7 +591,9 @@ mod tests {
         assert_eq!(
             lifecycle.state(),
             &LauncherLifecycleState::Launching {
-                phase: LaunchingPhase::LoadingFramePending
+                phase: LaunchingPhase::LoadingFramePending {
+                    launch_ref: "ready.mra".to_string()
+                }
             }
         );
     }
@@ -657,7 +612,9 @@ mod tests {
         assert_eq!(
             lifecycle.state(),
             &LauncherLifecycleState::Launching {
-                phase: LaunchingPhase::LoadingFramePending
+                phase: LaunchingPhase::LoadingFramePending {
+                    launch_ref: "/media/fat/_Arcade/1942.mra".to_string()
+                }
             }
         );
         assert!(matches!(

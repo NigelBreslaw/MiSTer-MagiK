@@ -471,11 +471,11 @@ pub(super) fn run_launcher_loop(
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
-    let mut startup_catalog_source = None;
+    let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
     if let Some(summary) = summary_seed {
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
-        startup_catalog_source = Some(CatalogSource::SummaryProjection);
+        startup_ready_catalog_source = CatalogSource::SummaryProjection;
         catalog_session.note_summary_seed_ready();
         media_session.request_catalog_seed();
         catalog_version = catalog_version.wrapping_add(1);
@@ -529,7 +529,7 @@ pub(super) fn run_launcher_loop(
                 );
                 catalog = loaded.catalog;
                 catalog_ready = true;
-                startup_catalog_source = Some(CatalogSource::FullSqlite);
+                startup_ready_catalog_source = CatalogSource::FullSqlite;
                 catalog_session.note_cached_catalog_ready();
                 media_session.request_catalog_seed();
                 catalog_version = catalog_version.wrapping_add(1);
@@ -700,17 +700,19 @@ pub(super) fn run_launcher_loop(
         ),
     );
     lifecycle_effects.clear();
-    let _ = lifecycle.after_boot_splash_presented(
-        StartupInput {
-            catalog_ready,
-            catalog_source: startup_catalog_source,
-            foreground_catalog_update: catalog_session.foreground_update(),
-            has_stale_catalog: false,
+    let startup_catalog_state = if catalog_ready {
+        StartupCatalogState::Ready {
+            source: startup_ready_catalog_source,
             validation_scheduled: scheduler.catalog_worker_running()
                 || !catalog_session.refresh_done(),
-        },
-        &mut lifecycle_effects,
-    );
+        }
+    } else {
+        StartupCatalogState::Building {
+            foreground_catalog_update: catalog_session.foreground_update(),
+            has_stale_catalog: false,
+        }
+    };
+    let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
     let run_start = if arcade_catalog_required_at_start && catalog_ready {
@@ -739,13 +741,6 @@ pub(super) fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
-        let _ = lifecycle.tick(
-            LauncherTickInput {
-                input: LauncherLifecycleInputTag::None,
-            },
-            &mut lifecycle_effects,
-        );
-        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         apply_screenshot_media_update_effects(
             media_session.clear_progress_if_due(loop_start),
             &app,
