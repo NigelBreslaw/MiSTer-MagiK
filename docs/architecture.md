@@ -159,8 +159,10 @@ Current rules:
   them to `mame.sqlite3` with `scripts/mister mame-metadata-build`; the runtime
   scanner consumes the SQLite rows, not those XML files.
 - Runtime preview loading is raw565-oriented. Build source screenshots, raw565
-  caches, and fixed LZ4-block `.mmlz4b` preview packs from the sibling
-  `../magik-cloud` repo. Runtime deploy does not build catalog/media artifacts.
+  caches, and fixed LZ4-block `.mmlz4b` preview packs from the private
+  `private/magik-cloud` submodule. Runtime deploy does not build catalog/media
+  artifacts. Use `scripts/magik-cloud path` when a command needs to resolve the
+  checkout.
 
 Relevant docs:
 

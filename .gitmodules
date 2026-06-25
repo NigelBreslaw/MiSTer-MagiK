@@ -1,0 +1,3 @@
+[submodule "private/magik-cloud"]
+	path = private/magik-cloud
+	url = git@github.com:NigelBreslaw/magik-cloud.git

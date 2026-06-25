@@ -148,12 +148,12 @@ Generated MagiK screenshot packs live under:
 
 Only generated cache directories should be deleted/recreated. Runtime preview
 loading is raw565-oriented; build caches and publish-ready packs from the Mac in
-the sibling `../magik-cloud` repo with:
+the private `private/magik-cloud` submodule with:
 
 ```bash
-scripts/build-arcade-screenshot-pack.sh
-scripts/build-neogeo-screenshot-pack.sh
-scripts/build-console-screenshot-pack.sh --system saturn --input data/sources/saturn/canonical
+scripts/magik-cloud run -- scripts/build-arcade-screenshot-pack.sh
+scripts/magik-cloud run -- scripts/build-neogeo-screenshot-pack.sh
+scripts/magik-cloud run -- scripts/build-console-screenshot-pack.sh --system saturn --input data/sources/saturn/canonical
 ```
 
 `magik-cloud` writes resized PNGs, `.rgb565` files, and compressed LZ4 block

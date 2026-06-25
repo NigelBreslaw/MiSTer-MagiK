@@ -33,7 +33,7 @@ Options:
                        Default if --hbmame-sqlite-default: $DEFAULT_HBMAME
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
-  --asset-pack PATH    Optional preview asset pack. Build/publish packs from ../magik-cloud.
+  --asset-pack PATH    Optional preview asset pack. Build/publish packs from private/magik-cloud.
   --hbmame-sqlite-default
                        Include the default HBMame metadata DB if present.
   --main-bin PATH      Optional MiSTer_MagiK Main fork binary.
