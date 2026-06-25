@@ -69,3 +69,14 @@ screenshot_save_bench_tsv	ARCH-MEDIA-AFTER	neogeo	progress	7	24283092	2001	0	0	7
 screenshot_save_bench_tsv	ARCH-MEDIA-AFTER	neogeo	progress	8	24283092	1833	0	0	7	1841	96	bench-ok
 screenshot_save_bench_tsv	ARCH-MEDIA-AFTER	neogeo	progress	9	24283092	2205	0	0	7	2213	96	bench-ok
 screenshot_save_bench_tsv	ARCH-MEDIA-AFTER	neogeo	progress	10	24283092	1706	0	0	7	1714	96	bench-ok
+screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	1	24283092	1942	0	0	7	1952	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	2	24283092	2007	0	0	7	2015	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	3	24283092	1879	0	0	7	1886	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	4	24283092	1940	0	0	7	1948	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	5	24283092	1916	0	0	7	1924	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	6	24283092	2396	0	0	7	2409	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	7	24283092	1953	0	0	7	1961	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	8	24283092	1880	0	0	7	1888	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	9	24283092	2034	0	0	7	2042	96	bench-ok
+screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	10	24283092	1954	0	0	7	1962	96	bench-ok

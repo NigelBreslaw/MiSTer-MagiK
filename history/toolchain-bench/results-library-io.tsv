@@ -1250,3 +1250,67 @@ ARCH-INDEXER-AFTER	import_stage_total	4585											path=/tmp/mister-magik/sqli
 ARCH-INDEXER-AFTER	sqlite_publish_progress	1											bytes=18026496 copy_ms=1228 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ARCH-INDEXER-AFTER	refresh_done	0											skipped=false bytes=18026496 scan_us=2731632 discover_us=1953717 classify_us=2609286 import_us=6055420 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
 ARCH-INDEXER-AFTER	done	45											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	0	1	4	8192	0	25214	65661	62735	3991	23246	3206	disk_io_ms=48678 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	1	72	65	1133056	0	25306	65798	62736	3992	23367	3206	disk_io_ms=49000 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	3	146	103	2230784	0	25405	65924	62737	3998	23470	3206	disk_io_ms=49179 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	4	246	114	2292224	0	25527	66029	62737	4000	23480	3206	disk_io_ms=49204 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	5	333	119	2292224	0	25637	66129	62757	4000	23480	3210	disk_io_ms=49422 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	6	439	126	2292224	0	25768	66229	62757	4000	23480	3210	disk_io_ms=49422 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	7	545	131	2292224	0	25897	66329	62757	4000	23480	3210	disk_io_ms=49422 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	8	630	138	2292224	3424256	25999	66431	62757	4015	23480	3224	disk_io_ms=49647 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	9	630	154	2292224	16531456	26023	66541	62757	4095	23480	3274	disk_io_ms=50606 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	sample	10	711	167	2292736	18079744	26131	66647	62757	4104	23481	3290	disk_io_ms=50744 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+SHIP-20260625-DCD0DBB1	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+SHIP-20260625-DCD0DBB1	scan_stage_first_candidate	51											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+SHIP-20260625-DCD0DBB1	scan_stage_first_discovery	68											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	523											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	60											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	5											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	167											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	2											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	12											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	388											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	60											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	310											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	292											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	112											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	258											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	115											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	16											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+SHIP-20260625-DCD0DBB1	scan_stage_walk_target	3											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+SHIP-20260625-DCD0DBB1	scan_stage_walk	1850											candidates=7905
+SHIP-20260625-DCD0DBB1	scan_stage_profile_match	72											calls=7905
+SHIP-20260625-DCD0DBB1	scan_stage_installed_collection	80											calls=7513
+SHIP-20260625-DCD0DBB1	scan_stage_archive_toc	47											containers=154
+SHIP-20260625-DCD0DBB1	scan_stage_collection_listings	0											collections=0
+SHIP-20260625-DCD0DBB1	scan_stage_file_discovery	2325											files=7511
+SHIP-20260625-DCD0DBB1	scan_stage_classify_total	2724											discoveries=9354 normal_files=7897 containers=154 entries=281
+SHIP-20260625-DCD0DBB1	import_stage_schema	12											tables=14
+SHIP-20260625-DCD0DBB1	import_stage_metadata_load	1379											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+SHIP-20260625-DCD0DBB1	import_stage_begin_tx	0											stage=begin_tx
+SHIP-20260625-DCD0DBB1	import_stage_insert_profiles	1											rows=16
+SHIP-20260625-DCD0DBB1	import_stage_insert_payloads	470											normal_files=7897 entries=281
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	197											from=0 to=1000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	167											from=1000 to=2000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	184											from=2000 to=3000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	188											from=3000 to=4000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	177											from=4000 to=5000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	211											from=5000 to=6000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	248											from=6000 to=7000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	258											from=7000 to=8000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	245											from=8000 to=9000 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_chunk	64											from=9000 to=9229 total=9229
+SHIP-20260625-DCD0DBB1	import_stage_insert_games_total	1957											rows=9229 launcher_rows=6245
+SHIP-20260625-DCD0DBB1	import_stage_materialize_arcade_ui	470											stage=materialize_arcade_ui
+SHIP-20260625-DCD0DBB1	import_stage_insert_launcher_arcade	12											stage=insert_launcher_arcade
+SHIP-20260625-DCD0DBB1	import_stage_insert_launcher_console	232											rows=6185
+SHIP-20260625-DCD0DBB1	import_stage_insert_meta	136											rows=11
+SHIP-20260625-DCD0DBB1	import_stage_insert_catalog_stamp	0											rows=11
+SHIP-20260625-DCD0DBB1	import_stage_insert_software_hash_cache	0											rows=0
+SHIP-20260625-DCD0DBB1	import_stage_build_saved_catalog	121											rows=7256
+SHIP-20260625-DCD0DBB1	import_stage_commit	8											stage=commit
+SHIP-20260625-DCD0DBB1	import_stage_total	4798											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.3323
+SHIP-20260625-DCD0DBB1	sqlite_publish_progress	1											bytes=18026496 copy_ms=1451 build_sync_ms=0 final_sync_ms=0 rename_ms=7 parent_sync_ms=0 progress_events=70 result=bench-ok
+SHIP-20260625-DCD0DBB1	refresh_done	0											skipped=false bytes=18026496 scan_us=2845523 discover_us=1849951 classify_us=2723945 import_us=6497996 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+SHIP-20260625-DCD0DBB1	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
