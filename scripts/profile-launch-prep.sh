@@ -58,7 +58,7 @@ fi
 
 mkdir -p "$BENCH_DIR"
 if [[ ! -f "$TSV" ]]; then
-  echo "label	scenario	type	iteration	ref_index	kind	status	prepare_us	write_bytes	wchar	notes" >"$TSV"
+  echo "label	scenario	type	iteration	ref_index	kind	status	prepare_us	read_bytes	rchar	syscr	write_bytes	wchar	syscw	notes" >"$TSV"
 elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
   tmp="$(mktemp)"
   { head -1 "$TSV"; grep -v "^${LABEL}	" "$TSV" | tail -n +2; } >"$tmp" || true
@@ -69,9 +69,7 @@ REMOTE_ENV=""
 for var in \
   MISTER_LAUNCH_PREP_VIRTUAL_SYSTEMS \
   MISTER_LAUNCH_PREP_VIRTUAL_LIMIT \
-  MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT \
-  MISTER_LAUNCH_CACHE_PRIORITY_SYSTEMS \
-  MISTER_LAUNCH_CACHE_PRIORITY_PER_SYSTEM; do
+  MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT; do
   value="${!var-}"
   if [[ -n "$value" ]]; then
     if [[ ! "$value" =~ ^[A-Za-z0-9_.:/\|,-]+$ ]]; then
@@ -89,9 +87,13 @@ echo "$OUT"
 echo "$OUT" | awk -F '\t' -v label="$LABEL" '
   BEGIN { OFS = "\t" }
   $1 == "launch_prep_bench_tsv" {
-    split($9, wb, "=")
-    split($10, wc, "=")
-    print label, $3, "sample", $4, $5, $6, $7, $8, wb[2], wc[2], $11 " " $12
+    split($9, rb, "=")
+    split($10, rc, "=")
+    split($11, sr, "=")
+    split($12, wb, "=")
+    split($13, wc, "=")
+    split($14, sw, "=")
+    print label, $3, "sample", $4, $5, $6, $7, $8, rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], $15 " " $16
   }
   $1 == "launch_prep_bench_prewarm_tsv" {
     split($6, total, "=")
@@ -99,18 +101,26 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
     split($8, unchanged, "=")
     split($9, errors, "=")
     split($10, prewarm, "=")
-    split($11, wb, "=")
-    split($12, wc, "=")
-    print label, $3, "prewarm", $4, "", "", $5, prewarm[2], wb[2], wc[2], "total=" total[2] " written=" written[2] " unchanged=" unchanged[2] " errors=" errors[2]
+    split($11, rb, "=")
+    split($12, rc, "=")
+    split($13, sr, "=")
+    split($14, wb, "=")
+    split($15, wc, "=")
+    split($16, sw, "=")
+    print label, $3, "prewarm", $4, "", "", $5, prewarm[2], rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], "total=" total[2] " written=" written[2] " unchanged=" unchanged[2] " errors=" errors[2]
   }
   $1 == "launch_prep_bench_summary" {
     split($4, count, "=")
     split($5, errors, "=")
     split($6, p50, "=")
     split($7, p95, "=")
-    split($8, wb, "=")
-    split($9, wc, "=")
-    print label, $3, "summary", "", "", "", "errors=" errors[2] " count=" count[2], "", p50[2], p95[2], "write_bytes=" wb[2] " wchar=" wc[2]
+    split($8, rb, "=")
+    split($9, rc, "=")
+    split($10, sr, "=")
+    split($11, wb, "=")
+    split($12, wc, "=")
+    split($13, sw, "=")
+    print label, $3, "summary", "", "", "", "errors=" errors[2] " count=" count[2], "", rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], "p50_us=" p50[2] " p95_us=" p95[2]
   }
 ' >>"$TSV"
 

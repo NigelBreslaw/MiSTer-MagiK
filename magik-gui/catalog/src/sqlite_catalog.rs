@@ -136,72 +136,6 @@ fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn load_virtual_launch_plan(
-    launch_ref: &str,
-) -> Result<Option<VirtualLaunchPlan>, String> {
-    let path = default_sqlite_path();
-    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
-    let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    ensure_sqlite_schema_current(&conn)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT launch_plans.launch_ref,
-                    games.title,
-                    games.system_id,
-                    COALESCE(profiles.core_path, launch_plans.core_id),
-                    COALESCE(launch_plans.payload_path, ''),
-                    COALESCE(payloads.mount_kind, 'mount-image'),
-                    COALESCE(payloads.mount_index, 0),
-                    COALESCE(payloads.mount_delay_secs, 1)
-             FROM launch_plans
-             JOIN games ON games.game_id = launch_plans.game_id
-             LEFT JOIN profiles ON profiles.profile_id = launch_plans.profile_id
-             LEFT JOIN payloads
-                    ON payloads.launch_ref = launch_plans.payload_path
-                   AND payloads.profile_id = launch_plans.profile_id
-             WHERE launch_plans.launch_ref = ?1
-               AND launch_plans.launch_kind = 'virtual-mgl'",
-        )
-        .map_err(|e| format!("prepare virtual launch query: {e}"))?;
-    let mut rows = stmt
-        .query([launch_ref])
-        .map_err(|e| format!("query virtual launch: {e}"))?;
-    let Some(row) = rows
-        .next()
-        .map_err(|e| format!("read virtual launch: {e}"))?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(VirtualLaunchPlan {
-        launch_ref: row
-            .get::<_, String>(0)
-            .map_err(|e| format!("read launch_ref: {e}"))?,
-        title: row
-            .get::<_, String>(1)
-            .map_err(|e| format!("read title: {e}"))?,
-        system_id: row
-            .get::<_, String>(2)
-            .map_err(|e| format!("read system_id: {e}"))?,
-        core_path: row
-            .get::<_, String>(3)
-            .map_err(|e| format!("read core_path: {e}"))?,
-        payload_path: row
-            .get::<_, String>(4)
-            .map_err(|e| format!("read payload_path: {e}"))?,
-        mount_kind: row
-            .get::<_, String>(5)
-            .map_err(|e| format!("read mount_kind: {e}"))?,
-        mount_index: row
-            .get::<_, i64>(6)
-            .map_err(|e| format!("read mount_index: {e}"))?
-            .clamp(0, u8::MAX as i64) as u8,
-        mount_delay_secs: row
-            .get::<_, i64>(7)
-            .map_err(|e| format!("read mount_delay_secs: {e}"))?
-            .clamp(0, u8::MAX as i64) as u8,
-    }))
-}
-
 pub(crate) fn load_virtual_launch_plans_for_system(
     system_id: &str,
     limit: usize,
@@ -211,38 +145,6 @@ pub(crate) fn load_virtual_launch_plans_for_system(
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     ensure_sqlite_schema_current(&conn)?;
     load_virtual_launch_plans_for_system_from_conn(&conn, system_id, limit)
-}
-
-pub(crate) fn load_virtual_launch_plans() -> Result<Vec<VirtualLaunchPlan>, String> {
-    let path = default_sqlite_path();
-    let conn = open_sqlite_read_only(&path).map_err(|e| format!("open library db: {e}"))?;
-    let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    ensure_sqlite_schema_current(&conn)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT launch_plans.launch_ref,
-                    games.title,
-                    games.system_id,
-                    COALESCE(profiles.core_path, launch_plans.core_id),
-                    COALESCE(launch_plans.payload_path, ''),
-                    COALESCE(payloads.mount_kind, 'mount-image'),
-                    COALESCE(payloads.mount_index, 0),
-                    COALESCE(payloads.mount_delay_secs, 1)
-             FROM launch_plans
-             JOIN games ON games.game_id = launch_plans.game_id
-             LEFT JOIN profiles ON profiles.profile_id = launch_plans.profile_id
-             LEFT JOIN payloads
-                    ON payloads.launch_ref = launch_plans.payload_path
-                   AND payloads.profile_id = launch_plans.profile_id
-             WHERE launch_plans.launch_kind = 'virtual-mgl'
-             ORDER BY games.system_id, games.sort_title, launch_plans.launch_ref",
-        )
-        .map_err(|e| format!("prepare virtual launch list query: {e}"))?;
-    let rows = stmt
-        .query_map([], virtual_launch_plan_from_row)
-        .map_err(|e| format!("query virtual launch list: {e}"))?;
-    rows.map(|row| row.map_err(|e| format!("read virtual launch row: {e}")))
-        .collect()
 }
 
 pub(crate) fn load_virtual_launch_plans_for_system_from_conn(
@@ -357,11 +259,12 @@ fn load_arcade_catalog_from_connection(
     };
     let query_us = query_t.elapsed().as_micros() as u64;
     let rows = games.len();
+    let launch_plans = Vec::new();
     let systems_t = Instant::now();
     let systems = arcade_catalog::systems_from_games(&games);
     let systems_us = systems_t.elapsed().as_micros() as u64;
     let catalog_t = Instant::now();
-    let catalog = ArcadeCatalog::new(root, games, systems);
+    let catalog = ArcadeCatalog::new_with_launch_plans(root, games, systems, launch_plans);
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
         catalog,
@@ -1297,6 +1200,16 @@ fn write_sqlite_scan_with_sources(
             system_id TEXT NOT NULL,
             discovered_at_unix INTEGER
         );
+        CREATE TABLE launcher_launch_plans (
+            launch_ref TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            system_id TEXT NOT NULL,
+            core_path TEXT NOT NULL,
+            payload_path TEXT NOT NULL,
+            mount_kind TEXT NOT NULL,
+            mount_index INTEGER NOT NULL,
+            delay_secs INTEGER NOT NULL
+        ) WITHOUT ROWID;
         CREATE TABLE region_metadata (
             game_id TEXT PRIMARY KEY,
             inferred_region TEXT,
@@ -1708,6 +1621,13 @@ fn write_sqlite_scan_with_sources(
             "insert_launcher_console",
             launcher_console_t,
             format!("rows={launcher_game_count}"),
+        );
+        let launcher_plans_t = Instant::now();
+        let launcher_plan_count = catalog_projection::materialize_launcher_launch_plans(&tx)?;
+        report_library_import_timing(
+            "insert_launcher_launch_plans",
+            launcher_plans_t,
+            format!("rows={launcher_plan_count}"),
         );
     }
     {
@@ -2565,6 +2485,47 @@ mod tests {
         assert_eq!(rows[1].0, 1);
         assert_eq!(rows[1].1, "Alpha Console");
         assert_eq!(rows[1].2, "snes");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_catalog_hydrates_structured_launch_plans() {
+        let root = unique_temp_dir("sqlite-launcher-structured-plans");
+        let db = root.join("library.sqlite3");
+        let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn]))
+            .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let materialized_plans: i64 = conn
+            .query_row("SELECT count(*) FROM launcher_launch_plans", [], |row| {
+                row.get(0)
+            })
+            .expect("count launcher launch plans");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        let launch_ref = loaded.catalog.games[0].mra_path.as_ref();
+
+        let target = loaded.catalog.launch_target_for_ref(launch_ref);
+
+        assert_eq!(materialized_plans, 1);
+        match target {
+            crate::arcade_catalog::LaunchTarget::Structured(plan) => {
+                assert_eq!(plan.launch_ref.as_ref(), launch_ref);
+                assert_eq!(plan.system_id.as_ref(), "saturn");
+                assert_eq!(plan.core_path.as_ref(), "_Console/Saturn");
+                assert_eq!(plan.payload_path.as_ref(), "/media/fat/games/Saturn/Nights.chd");
+                assert_eq!(plan.mount_kind.as_ref(), "mount-image");
+                assert_eq!(plan.mount_index, 0);
+                assert_eq!(plan.delay_secs, 1);
+            }
+            crate::arcade_catalog::LaunchTarget::Path(path) => {
+                panic!("expected structured plan, got path {path}")
+            }
+            crate::arcade_catalog::LaunchTarget::MissingStructured(launch_ref) => {
+                panic!("expected structured plan, got missing {launch_ref}")
+            }
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

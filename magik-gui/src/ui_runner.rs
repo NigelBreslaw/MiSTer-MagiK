@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use mister_magik_ui as slint_ui;
 
 use crate::arcade_catalog::{
-    self, ArcadeCatalog, ArcadeGameEntry, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
+    self, ArcadeCatalog, ArcadeGameEntry, LaunchTarget, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
     HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
 };
 use crate::arcade_list_renderer::{

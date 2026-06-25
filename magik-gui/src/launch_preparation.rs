@@ -1,18 +1,11 @@
 //! Launch-ref classification and materialization before Main handoff.
 
-use crate::library_db;
-use serde::{Deserialize, Serialize};
+use crate::{arcade_catalog::LaunchTarget, library_db};
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
-const VIRTUAL_LAUNCH_CACHE_DIR: &str = "/media/fat/mister-magik/launch-cache";
-const VIRTUAL_LAUNCH_CACHE_STAMP_FILE: &str = ".virtual-launch-cache.json";
-const VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA: u32 = 2;
-const VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION: u32 = 1;
-const VIRTUAL_LAUNCH_CACHE_PRIORITY_PER_SYSTEM: usize = 12;
-const VIRTUAL_LAUNCH_CACHE_PRIORITY_SYSTEMS: &[&str] = &["neogeo", "saturn", "snes"];
 const VIRTUAL_LAUNCH_PREFIX: &str = "magik-plan:";
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
@@ -20,37 +13,12 @@ const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
 const AMIGAVISION_HDF_PATH: &str = "/media/fat/games/Amiga/AmigaVision.hdf";
 const AMIGAVISION_SHARED_DIR: &str = "/media/fat/games/Amiga/shared";
 const AMIGAVISION_AGS_BOOT: &str = "/media/fat/games/Amiga/shared/ags_boot";
-const VIRTUAL_LAUNCH_CACHE_SLUG_BYTES: usize = 80;
-const FNV128_OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-const FNV128_PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct VirtualLaunchCacheSummary {
-    pub total: usize,
-    pub written: usize,
-    pub unchanged: usize,
-    pub errors: usize,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-struct VirtualLaunchCacheStamp {
-    schema: u32,
-    format_version: u32,
-    plan_count: usize,
-    fingerprint: String,
-    entries: Vec<VirtualLaunchCacheStampEntry>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-struct VirtualLaunchCacheStampEntry {
-    basename: String,
-    content_hash: String,
-    content_len: u64,
-}
 
 pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
     if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
-        prepare_virtual_launch_ref(launch_ref)
+        Err(format!(
+            "structured launch ref must be resolved from catalog before launch: {launch_ref}"
+        ))
     } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
         materialize_amigavision_game_launch_ref(launch_ref)
     } else if launch_ref == AMIGAVISION_LAUNCHER_REF {
@@ -58,249 +26,6 @@ pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
     } else {
         Ok(launch_ref.to_string())
     }
-}
-
-pub fn materialize_virtual_launch_cache_from_default_db() -> VirtualLaunchCacheSummary {
-    let plans = match library_db::load_virtual_launch_plans() {
-        Ok(plans) => plans,
-        Err(e) => {
-            eprintln!("virtual launch cache load failed: {e}");
-            return VirtualLaunchCacheSummary {
-                errors: 1,
-                ..VirtualLaunchCacheSummary::default()
-            };
-        }
-    };
-    materialize_virtual_launch_plans_at(&plans, &virtual_launch_cache_dir())
-}
-
-pub fn materialize_priority_virtual_launch_cache_from_default_db() -> VirtualLaunchCacheSummary {
-    let mut plans = Vec::new();
-    let mut load_errors = 0usize;
-    for system_id in virtual_launch_cache_priority_systems() {
-        match library_db::load_virtual_launch_plans_for_system(
-            &system_id,
-            virtual_launch_cache_priority_per_system(),
-        ) {
-            Ok(mut system_plans) => plans.append(&mut system_plans),
-            Err(e) => {
-                load_errors += 1;
-                eprintln!("priority virtual launch cache load failed system={system_id}: {e}");
-            }
-        }
-    }
-
-    let mut summary =
-        materialize_virtual_launch_plan_subset_at(&plans, &virtual_launch_cache_dir());
-    summary.errors += load_errors;
-    summary
-}
-
-fn prepare_virtual_launch_ref(launch_ref: &str) -> Result<String, String> {
-    let dir = virtual_launch_cache_dir();
-    prepare_virtual_launch_ref_at(launch_ref, &dir)
-}
-
-fn prepare_virtual_launch_ref_at(launch_ref: &str, dir: &Path) -> Result<String, String> {
-    if let Some(path) = warm_virtual_launch_path_at(launch_ref, dir) {
-        return Ok(path.display().to_string());
-    }
-    materialize_virtual_launch_ref_at(launch_ref, dir)
-}
-
-fn materialize_virtual_launch_ref_at(launch_ref: &str, dir: &Path) -> Result<String, String> {
-    let plan = library_db::load_virtual_launch_plan(launch_ref)?
-        .ok_or_else(|| format!("virtual launch plan not found: {launch_ref}"))?;
-    let (path, _) = materialize_virtual_launch_plan_at(&plan, dir)?;
-    Ok(path.display().to_string())
-}
-
-fn materialize_virtual_launch_plans_at(
-    plans: &[library_db::VirtualLaunchPlan],
-    dir: &Path,
-) -> VirtualLaunchCacheSummary {
-    let expected_stamp = virtual_launch_cache_stamp(plans);
-    let stamp_matches = virtual_launch_cache_stamp_matches(dir, &expected_stamp);
-
-    let mut summary = VirtualLaunchCacheSummary {
-        total: plans.len(),
-        ..VirtualLaunchCacheSummary::default()
-    };
-    for plan in plans {
-        let result = if stamp_matches {
-            materialize_virtual_launch_plan_with_matching_stamp_at(plan, dir)
-        } else {
-            materialize_virtual_launch_plan_at(plan, dir)
-        };
-        match result {
-            Ok((_, true)) => summary.written += 1,
-            Ok((_, false)) => summary.unchanged += 1,
-            Err(e) => {
-                summary.errors += 1;
-                eprintln!("virtual launch cache materialize failed: {e}");
-            }
-        }
-    }
-    if summary.errors == 0 {
-        if let Err(e) = write_virtual_launch_cache_stamp(dir, &expected_stamp) {
-            summary.errors += 1;
-            eprintln!("virtual launch cache stamp write failed: {e}");
-        }
-    }
-    summary
-}
-
-fn materialize_virtual_launch_plan_subset_at(
-    plans: &[library_db::VirtualLaunchPlan],
-    dir: &Path,
-) -> VirtualLaunchCacheSummary {
-    let mut summary = VirtualLaunchCacheSummary {
-        total: plans.len(),
-        ..VirtualLaunchCacheSummary::default()
-    };
-    for plan in plans {
-        match materialize_virtual_launch_plan_at(plan, dir) {
-            Ok((_, true)) => summary.written += 1,
-            Ok((_, false)) => summary.unchanged += 1,
-            Err(e) => {
-                summary.errors += 1;
-                eprintln!("priority virtual launch cache materialize failed: {e}");
-            }
-        }
-    }
-    summary
-}
-
-fn virtual_launch_cache_stamp(plans: &[library_db::VirtualLaunchPlan]) -> VirtualLaunchCacheStamp {
-    let entries = virtual_launch_cache_stamp_entries(plans);
-    VirtualLaunchCacheStamp {
-        schema: VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA,
-        format_version: VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION,
-        plan_count: plans.len(),
-        fingerprint: format!("{:032x}", virtual_launch_cache_fingerprint(&entries)),
-        entries,
-    }
-}
-
-fn virtual_launch_cache_stamp_entries(
-    plans: &[library_db::VirtualLaunchPlan],
-) -> Vec<VirtualLaunchCacheStampEntry> {
-    let mut entries = plans
-        .iter()
-        .map(|plan| {
-            let content = virtual_mgl_content(plan);
-            VirtualLaunchCacheStampEntry {
-                basename: virtual_launch_cache_basename(&plan.launch_ref),
-                content_hash: format!("{:032x}", stable_content_hash(&content)),
-                content_len: content.len() as u64,
-            }
-        })
-        .collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.basename.cmp(&b.basename));
-    entries
-}
-
-fn virtual_launch_cache_fingerprint(entries: &[VirtualLaunchCacheStampEntry]) -> u128 {
-    let mut hash = FNV128_OFFSET;
-    hash = fnv128_update(hash, &VIRTUAL_LAUNCH_CACHE_FORMAT_VERSION.to_le_bytes());
-    hash = fnv128_update(hash, &(entries.len() as u64).to_le_bytes());
-    for entry in entries {
-        hash = fnv128_update(hash, entry.basename.as_bytes());
-        hash = fnv128_update(hash, &[0]);
-        hash = fnv128_update(hash, entry.content_hash.as_bytes());
-        hash = fnv128_update(hash, &[0]);
-        hash = fnv128_update(hash, &entry.content_len.to_le_bytes());
-        hash = fnv128_update(hash, &[0xff]);
-    }
-    hash
-}
-
-fn virtual_launch_cache_stamp_matches(dir: &Path, expected: &VirtualLaunchCacheStamp) -> bool {
-    std::fs::read_to_string(virtual_launch_cache_stamp_path(dir))
-        .ok()
-        .and_then(|text| serde_json::from_str::<VirtualLaunchCacheStamp>(&text).ok())
-        .is_some_and(|stored| stored == *expected)
-}
-
-fn write_virtual_launch_cache_stamp(
-    dir: &Path,
-    stamp: &VirtualLaunchCacheStamp,
-) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| format!("create virtual launch cache: {e}"))?;
-    let text = serde_json::to_string(stamp).map_err(|e| format!("serialize stamp: {e}"))?;
-    fs::write(virtual_launch_cache_stamp_path(dir), format!("{text}\n"))
-        .map_err(|e| format!("write virtual launch cache stamp: {e}"))
-}
-
-fn virtual_launch_cache_stamp_path(dir: &Path) -> PathBuf {
-    dir.join(VIRTUAL_LAUNCH_CACHE_STAMP_FILE)
-}
-
-fn materialize_virtual_launch_plan_at(
-    plan: &library_db::VirtualLaunchPlan,
-    dir: &Path,
-) -> Result<(PathBuf, bool), String> {
-    materialize_virtual_launch_plan_at_with_mode(plan, dir, false)
-}
-
-fn materialize_virtual_launch_plan_with_matching_stamp_at(
-    plan: &library_db::VirtualLaunchPlan,
-    dir: &Path,
-) -> Result<(PathBuf, bool), String> {
-    materialize_virtual_launch_plan_at_with_mode(plan, dir, true)
-}
-
-fn materialize_virtual_launch_plan_at_with_mode(
-    plan: &library_db::VirtualLaunchPlan,
-    dir: &Path,
-    trust_matching_stamp: bool,
-) -> Result<(PathBuf, bool), String> {
-    if plan.payload_path.trim().is_empty() {
-        return Err(format!(
-            "virtual launch plan has no payload: {}",
-            plan.launch_ref
-        ));
-    }
-    fs::create_dir_all(dir).map_err(|e| format!("create virtual launch cache: {e}"))?;
-    let path = virtual_launch_path_at(&plan.launch_ref, dir);
-    let content = virtual_mgl_content(plan);
-    let should_write = if trust_matching_stamp {
-        !virtual_launch_cache_file_matches_expected_len(&path, content.len() as u64)
-    } else {
-        fs::read_to_string(&path)
-            .map(|existing| existing != content)
-            .unwrap_or(true)
-    };
-    if should_write {
-        fs::write(&path, content).map_err(|e| {
-            format!(
-                "write virtual launch mgl path={} launch_ref={} hash={:032x}: {e}",
-                path.display(),
-                plan.launch_ref,
-                stable_launch_ref_hash(&plan.launch_ref)
-            )
-        })?;
-    }
-    Ok((path, should_write))
-}
-
-fn virtual_launch_cache_file_matches_expected_len(path: &Path, expected_len: u64) -> bool {
-    path.metadata()
-        .map(|metadata| metadata.is_file() && metadata.len() == expected_len)
-        .unwrap_or(false)
-}
-
-fn warm_virtual_launch_path_at(launch_ref: &str, dir: &Path) -> Option<PathBuf> {
-    let path = virtual_launch_path_at(launch_ref, dir);
-    path.is_file().then_some(path)
-}
-
-fn virtual_launch_path_at(launch_ref: &str, dir: &Path) -> PathBuf {
-    dir.join(virtual_launch_cache_basename(launch_ref))
-}
-
-fn virtual_launch_cache_dir() -> PathBuf {
-    PathBuf::from(VIRTUAL_LAUNCH_CACHE_DIR)
 }
 
 fn materialize_amigavision_launcher_ref() -> Result<String, String> {
@@ -378,29 +103,6 @@ fn validate_amigavision_install(mgl_path: &Path, hdf_path: &Path) -> Result<(), 
     Ok(())
 }
 
-fn virtual_mgl_content(plan: &library_db::VirtualLaunchPlan) -> String {
-    let file_type = match plan.mount_kind.as_str() {
-        "load-file" => "f",
-        "mount-image" => "s",
-        _ => "s",
-    };
-    format!(
-        concat!(
-            "<mistergamedescription>\n",
-            "  <name>{}</name>\n",
-            "  <rbf>{}</rbf>\n",
-            "  <file delay=\"{}\" type=\"{}\" index=\"{}\" path=\"{}\"/>\n",
-            "</mistergamedescription>\n"
-        ),
-        xml_escape(&plan.title),
-        xml_escape(&plan.core_path),
-        plan.mount_delay_secs,
-        file_type,
-        plan.mount_index,
-        xml_escape(&plan.payload_path)
-    )
-}
-
 fn decode_launch_component(value: &str) -> Result<String, String> {
     let mut bytes = Vec::with_capacity(value.len());
     let input = value.as_bytes();
@@ -431,71 +133,6 @@ fn hex_value(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
-}
-
-fn virtual_launch_cache_basename(launch_ref: &str) -> String {
-    // The full launch ref may be a long path-derived identity. Keep cache
-    // filenames short for exFAT/FUSE while preserving identity in the hash.
-    let slug = launch_ref_slug(launch_ref);
-    let hash = stable_launch_ref_hash(launch_ref);
-    format!("virtual-{slug}-{hash:032x}.mgl")
-}
-
-fn launch_ref_slug(launch_ref: &str) -> String {
-    let mut slug = String::new();
-    let mut last_dash = false;
-    for ch in launch_ref.chars() {
-        let mapped = if ch.is_ascii_alphanumeric() {
-            ch.to_ascii_lowercase()
-        } else {
-            '-'
-        };
-        if mapped == '-' {
-            if slug.is_empty() || last_dash {
-                continue;
-            }
-            last_dash = true;
-        } else {
-            last_dash = false;
-        }
-        slug.push(mapped);
-        if slug.len() >= VIRTUAL_LAUNCH_CACHE_SLUG_BYTES {
-            break;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    if slug.is_empty() {
-        "ref".to_string()
-    } else {
-        slug
-    }
-}
-
-fn stable_launch_ref_hash(launch_ref: &str) -> u128 {
-    fnv128_update(FNV128_OFFSET, launch_ref.as_bytes())
-}
-
-fn stable_content_hash(content: &str) -> u128 {
-    fnv128_update(FNV128_OFFSET, content.as_bytes())
-}
-
-fn fnv128_update(mut hash: u128, bytes: &[u8]) -> u128 {
-    for byte in bytes {
-        hash ^= u128::from(*byte);
-        hash = hash.wrapping_mul(FNV128_PRIME);
-    }
-    hash
-}
-
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -531,8 +168,12 @@ struct LaunchPrepBenchRef {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ProcIoCounters {
+    read_bytes: u64,
+    rchar: u64,
+    syscr: u64,
     write_bytes: u64,
     wchar: u64,
+    syscw: u64,
 }
 
 pub fn run_launch_prep_bench() {
@@ -549,8 +190,17 @@ pub fn run_launch_prep_bench() {
         .or_else(|| args.get(4).and_then(|value| value.parse::<usize>().ok()))
         .unwrap_or(5)
         .max(1);
+    let catalog = match library_db::load_arcade_catalog_from_sqlite(
+        crate::arcade_catalog::DEFAULT_ARCADE_ROOT,
+    ) {
+        Ok(loaded) => loaded.catalog,
+        Err(e) => {
+            eprintln!("launch_prep_bench\tfailed\tload catalog: {e}");
+            std::process::exit(1);
+        }
+    };
     let refs = match launch_prep_bench_refs_from_env()
-        .or_else(|_| load_default_launch_prep_bench_refs())
+        .or_else(|_| load_default_launch_prep_bench_refs(&catalog))
     {
         Ok(refs) => refs,
         Err(e) => {
@@ -566,42 +216,41 @@ pub fn run_launch_prep_bench() {
     );
     if refs.is_empty() {
         println!(
-            "launch_prep_bench_summary\t{label}\t{}\tcount=0\terrors=0\tp50_us=0\tp95_us=0\twrite_bytes=0\twchar=0",
+            "launch_prep_bench_summary\t{label}\t{}\tcount=0\terrors=0\tp50_us=0\tp95_us=0\tread_bytes=0\trchar=0\tsyscr=0\twrite_bytes=0\twchar=0\tsyscw=0",
             scenario.label()
         );
         return;
     }
-    if scenario == LaunchPrepBenchScenario::Warm {
-        for bench_ref in &refs {
-            let _ = prepare_launch_ref(&bench_ref.launch_ref);
-        }
-    }
 
     let mut samples = Vec::with_capacity(refs.len() * iterations);
     let mut errors = 0usize;
+    let mut total_read_bytes = 0u64;
+    let mut total_rchar = 0u64;
+    let mut total_syscr = 0u64;
     let mut total_write_bytes = 0u64;
     let mut total_wchar = 0u64;
+    let mut total_syscw = 0u64;
     for iteration in 0..iterations {
         if scenario == LaunchPrepBenchScenario::PriorityPrewarm {
-            for bench_ref in &refs {
-                prepare_cold_launch_prep_ref(&bench_ref.launch_ref);
-            }
             let before = read_self_proc_io();
             let start = Instant::now();
-            let prewarm = materialize_priority_virtual_launch_cache_from_default_db();
             let prewarm_us = start.elapsed().as_micros() as u64;
             let after = read_self_proc_io();
+            let read_bytes = after.read_bytes.saturating_sub(before.read_bytes);
+            let rchar = after.rchar.saturating_sub(before.rchar);
+            let syscr = after.syscr.saturating_sub(before.syscr);
             let write_bytes = after.write_bytes.saturating_sub(before.write_bytes);
             let wchar = after.wchar.saturating_sub(before.wchar);
+            let syscw = after.syscw.saturating_sub(before.syscw);
+            total_read_bytes = total_read_bytes.saturating_add(read_bytes);
+            total_rchar = total_rchar.saturating_add(rchar);
+            total_syscr = total_syscr.saturating_add(syscr);
             total_write_bytes = total_write_bytes.saturating_add(write_bytes);
             total_wchar = total_wchar.saturating_add(wchar);
+            total_syscw = total_syscw.saturating_add(syscw);
             println!(
-                "launch_prep_bench_prewarm_tsv\t{label}\t{}\t{iteration}\tstatus=ok\ttotal={}\twritten={}\tunchanged={}\terrors={}\tprewarm_us={prewarm_us}\twrite_bytes={write_bytes}\twchar={wchar}",
-                scenario.label(),
-                prewarm.total,
-                prewarm.written,
-                prewarm.unchanged,
-                prewarm.errors
+                "launch_prep_bench_prewarm_tsv\t{label}\t{}\t{iteration}\tstatus=removed\ttotal=0\twritten=0\tunchanged=0\terrors=0\tprewarm_us={prewarm_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}",
+                scenario.label()
             );
         }
         for (idx, bench_ref) in refs.iter().enumerate() {
@@ -610,13 +259,21 @@ pub fn run_launch_prep_bench() {
             }
             let before = read_self_proc_io();
             let start = Instant::now();
-            let result = prepare_launch_ref(&bench_ref.launch_ref);
+            let result = prepare_launch_bench_ref(&catalog, &bench_ref.launch_ref);
             let prepare_us = start.elapsed().as_micros() as u64;
             let after = read_self_proc_io();
+            let read_bytes = after.read_bytes.saturating_sub(before.read_bytes);
+            let rchar = after.rchar.saturating_sub(before.rchar);
+            let syscr = after.syscr.saturating_sub(before.syscr);
             let write_bytes = after.write_bytes.saturating_sub(before.write_bytes);
             let wchar = after.wchar.saturating_sub(before.wchar);
+            let syscw = after.syscw.saturating_sub(before.syscw);
+            total_read_bytes = total_read_bytes.saturating_add(read_bytes);
+            total_rchar = total_rchar.saturating_add(rchar);
+            total_syscr = total_syscr.saturating_add(syscr);
             total_write_bytes = total_write_bytes.saturating_add(write_bytes);
             total_wchar = total_wchar.saturating_add(wchar);
+            total_syscw = total_syscw.saturating_add(syscw);
             let (status, target) = match result {
                 Ok(target) => ("ok", target),
                 Err(e) => {
@@ -628,7 +285,7 @@ pub fn run_launch_prep_bench() {
                 samples.push(prepare_us);
             }
             println!(
-                "launch_prep_bench_tsv\t{label}\t{}\t{iteration}\t{idx}\t{}\t{status}\t{prepare_us}\twrite_bytes={write_bytes}\twchar={wchar}\ttarget={}\tref={}",
+                "launch_prep_bench_tsv\t{label}\t{}\t{iteration}\t{idx}\t{}\t{status}\t{prepare_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}\ttarget={}\tref={}",
                 scenario.label(),
                 bench_ref.kind,
                 target,
@@ -640,10 +297,28 @@ pub fn run_launch_prep_bench() {
     let p50 = percentile_sample(&samples, 0.50);
     let p95 = percentile_sample(&samples, 0.95);
     println!(
-        "launch_prep_bench_summary\t{label}\t{}\tcount={}\terrors={errors}\tp50_us={p50}\tp95_us={p95}\twrite_bytes={total_write_bytes}\twchar={total_wchar}",
+        "launch_prep_bench_summary\t{label}\t{}\tcount={}\terrors={errors}\tp50_us={p50}\tp95_us={p95}\tread_bytes={total_read_bytes}\trchar={total_rchar}\tsyscr={total_syscr}\twrite_bytes={total_write_bytes}\twchar={total_wchar}\tsyscw={total_syscw}",
         scenario.label(),
         samples.len()
     );
+}
+
+fn prepare_launch_bench_ref(
+    catalog: &crate::arcade_catalog::ArcadeCatalog,
+    launch_ref: &str,
+) -> Result<String, String> {
+    if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        || launch_ref == AMIGAVISION_LAUNCHER_REF
+    {
+        return prepare_launch_ref(launch_ref);
+    }
+    Ok(match catalog.launch_target_for_ref(launch_ref) {
+        LaunchTarget::Path(path) => path.to_string(),
+        LaunchTarget::Structured(plan) => format!("structured:{}", plan.launch_ref),
+        LaunchTarget::MissingStructured(launch_ref) => {
+            return Err(format!("structured launch plan missing from catalog: {launch_ref}"));
+        }
+    })
 }
 
 fn launch_prep_bench_refs_from_env() -> Result<Vec<LaunchPrepBenchRef>, String> {
@@ -662,7 +337,9 @@ fn launch_prep_bench_refs_from_env() -> Result<Vec<LaunchPrepBenchRef>, String> 
     Ok(refs)
 }
 
-fn load_default_launch_prep_bench_refs() -> Result<Vec<LaunchPrepBenchRef>, String> {
+fn load_default_launch_prep_bench_refs(
+    catalog: &crate::arcade_catalog::ArcadeCatalog,
+) -> Result<Vec<LaunchPrepBenchRef>, String> {
     let virtual_limit = std::env::var("MISTER_LAUNCH_PREP_VIRTUAL_LIMIT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -679,10 +356,15 @@ fn load_default_launch_prep_bench_refs() -> Result<Vec<LaunchPrepBenchRef>, Stri
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        for plan in library_db::load_virtual_launch_plans_for_system(system_id, virtual_limit)? {
+        for game in catalog
+            .system_game_slice(system_id)
+            .iter()
+            .filter(|game| game.mra_path.starts_with(VIRTUAL_LAUNCH_PREFIX))
+            .take(virtual_limit)
+        {
             refs.push(LaunchPrepBenchRef {
-                kind: format!("virtual-{}", plan.system_id),
-                launch_ref: plan.launch_ref,
+                kind: format!("virtual-{}", game.system_id),
+                launch_ref: game.mra_path.to_string(),
             });
         }
         if refs
@@ -712,40 +394,9 @@ fn launch_prep_kind(launch_ref: &str) -> &'static str {
 }
 
 fn prepare_cold_launch_prep_ref(launch_ref: &str) {
-    if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
-        let path = virtual_launch_path_at(launch_ref, Path::new(VIRTUAL_LAUNCH_CACHE_DIR));
-        let _ = fs::remove_file(path);
-    } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
+    if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
         let _ = fs::remove_file(AMIGAVISION_AGS_BOOT);
     }
-}
-
-fn virtual_launch_cache_priority_systems() -> Vec<String> {
-    std::env::var("MISTER_LAUNCH_CACHE_PRIORITY_SYSTEMS")
-        .ok()
-        .map(|value| {
-            value
-                .split('|')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|systems| !systems.is_empty())
-        .unwrap_or_else(|| {
-            VIRTUAL_LAUNCH_CACHE_PRIORITY_SYSTEMS
-                .iter()
-                .map(|system| (*system).to_string())
-                .collect()
-        })
-}
-
-fn virtual_launch_cache_priority_per_system() -> usize {
-    std::env::var("MISTER_LAUNCH_CACHE_PRIORITY_PER_SYSTEM")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(VIRTUAL_LAUNCH_CACHE_PRIORITY_PER_SYSTEM)
 }
 
 fn read_self_proc_io() -> ProcIoCounters {
@@ -758,10 +409,18 @@ fn read_self_proc_io() -> ProcIoCounters {
     }
     let mut counters = ProcIoCounters::default();
     for line in contents.lines() {
-        if let Some(value) = line.strip_prefix("write_bytes:") {
+        if let Some(value) = line.strip_prefix("read_bytes:") {
+            counters.read_bytes = value.trim().parse::<u64>().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("rchar:") {
+            counters.rchar = value.trim().parse::<u64>().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("syscr:") {
+            counters.syscr = value.trim().parse::<u64>().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("write_bytes:") {
             counters.write_bytes = value.trim().parse::<u64>().unwrap_or(0);
         } else if let Some(value) = line.strip_prefix("wchar:") {
             counters.wchar = value.trim().parse::<u64>().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("syscw:") {
+            counters.syscw = value.trim().parse::<u64>().unwrap_or(0);
         }
     }
     counters
@@ -779,19 +438,6 @@ fn percentile_sample(sorted: &[u64], percentile: f64) -> u64 {
 mod tests {
     use super::*;
 
-    fn virtual_plan(launch_ref: &str) -> library_db::VirtualLaunchPlan {
-        library_db::VirtualLaunchPlan {
-            launch_ref: launch_ref.to_string(),
-            title: "NiGHTS & Dreams".to_string(),
-            system_id: "saturn".to_string(),
-            core_path: "_Console/Saturn".to_string(),
-            payload_path: "/media/fat/games/Saturn/Nights.chd".to_string(),
-            mount_kind: "mount-image".to_string(),
-            mount_index: 0,
-            mount_delay_secs: 1,
-        }
-    }
-
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         let path =
             std::env::temp_dir().join(format!("mister-magik-{label}-{}", std::process::id()));
@@ -806,6 +452,14 @@ mod tests {
             prepare_launch_ref("/media/fat/_Arcade/test.mra").expect("prepare direct"),
             "/media/fat/_Arcade/test.mra"
         );
+    }
+
+    #[test]
+    fn virtual_launch_ref_is_not_materialized_by_launch_prep() {
+        let err = prepare_launch_ref("magik-plan:payload-saturn-test")
+            .expect_err("virtual launch refs require catalog hydration");
+
+        assert!(err.contains("structured launch ref must be resolved from catalog"));
     }
 
     #[test]
@@ -918,287 +572,5 @@ mod tests {
                 .expect("decode title"),
             "4th & Inches (OCS)[en]"
         );
-    }
-
-    #[test]
-    fn virtual_mgl_content_mounts_payload_with_core_path() {
-        let plan = virtual_plan("magik-plan:payload-saturn-test");
-
-        let content = virtual_mgl_content(&plan);
-
-        assert!(content.contains("<rbf>_Console/Saturn</rbf>"));
-        assert!(content.contains("type=\"s\" index=\"0\""));
-        assert!(content.contains("path=\"/media/fat/games/Saturn/Nights.chd\""));
-        assert!(content.contains("<name>NiGHTS &amp; Dreams</name>"));
-    }
-
-    #[test]
-    fn virtual_launch_path_is_bounded_for_long_path_derived_refs() {
-        let root = unique_temp_dir("virtual-launch-long-ref");
-        let launch_ref = concat!(
-            "magik-plan:payload:/media/fat/games/GBA/",
-            "Crash & Spyro Superpack - Spyro Orange - The Cortex Conspiracy + ",
-            "Crash Bandicoot Purple - Ripto's Rampage (USA)/",
-            "Crash & Spyro Superpack - Spyro Orange - The Cortex Conspiracy + ",
-            "Crash Bandicoot Purple - Ripto's Rampage (USA).gba"
-        );
-        let mut plan = virtual_plan(launch_ref);
-        plan.payload_path = "/media/fat/games/GBA/Crash Spyro.gba".to_string();
-
-        let (path, written) =
-            materialize_virtual_launch_plan_at(&plan, &root).expect("materialize long ref");
-
-        assert!(written);
-        let basename = path.file_name().unwrap().to_string_lossy();
-        assert!(basename.len() <= 255, "{basename}");
-        assert!(basename.starts_with("virtual-magik-plan-payload-media-fat-games-gba-crash-"));
-        assert!(basename.ends_with(".mgl"));
-        assert!(path.is_file());
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read virtual mgl"),
-            virtual_mgl_content(&plan)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn virtual_launch_cache_basename_hash_distinguishes_matching_slugs() {
-        let prefix = format!("magik-plan:{}", "A".repeat(120));
-        let first = virtual_launch_cache_basename(&format!("{prefix}/one.gba"));
-        let second = virtual_launch_cache_basename(&format!("{prefix}/two.gba"));
-
-        assert_ne!(first, second);
-        assert!(first.starts_with("virtual-magik-plan-"));
-        assert!(second.starts_with("virtual-magik-plan-"));
-        assert!(first.len() <= 255);
-        assert!(second.len() <= 255);
-    }
-
-    #[test]
-    fn virtual_launch_cache_basename_uses_ref_for_empty_slug() {
-        let basename = virtual_launch_cache_basename("::::");
-
-        assert!(basename.starts_with("virtual-ref-"));
-        assert!(basename.ends_with(".mgl"));
-        assert_eq!("virtual-ref-".len() + 32 + ".mgl".len(), basename.len());
-    }
-
-    #[test]
-    fn warmed_virtual_launch_ref_performs_no_write_or_db_lookup() {
-        let root = unique_temp_dir("virtual-launch-warm");
-        let plan = virtual_plan("magik-plan:payload-saturn-test");
-        let (path, written) =
-            materialize_virtual_launch_plan_at(&plan, &root).expect("materialize virtual launch");
-        assert!(written);
-        let before = std::fs::read_to_string(&path).expect("read virtual mgl");
-
-        let target = prepare_virtual_launch_ref_at(&plan.launch_ref, &root)
-            .expect("warm virtual launch should resolve from file");
-
-        assert_eq!(target, path.display().to_string());
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read virtual mgl after prepare"),
-            before
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn stale_virtual_launch_cache_is_refreshed_before_launch() {
-        let root = unique_temp_dir("virtual-launch-stale");
-        let plan = virtual_plan("magik-plan:payload-saturn-test");
-        std::fs::create_dir_all(&root).expect("create virtual launch cache");
-        let path = virtual_launch_path_at(&plan.launch_ref, &root);
-        std::fs::write(&path, "<stale/>").expect("write stale virtual mgl");
-
-        let summary = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
-
-        assert_eq!(
-            summary,
-            VirtualLaunchCacheSummary {
-                total: 1,
-                written: 1,
-                unchanged: 0,
-                errors: 0,
-            }
-        );
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read refreshed virtual mgl"),
-            virtual_mgl_content(&plan)
-        );
-        let target = prepare_virtual_launch_ref_at(&plan.launch_ref, &root)
-            .expect("warm virtual launch should resolve refreshed file");
-        assert_eq!(target, path.display().to_string());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn virtual_launch_cache_stamp_records_entry_content_hashes() {
-        let first = virtual_plan("magik-plan:payload-saturn-test");
-        let mut second = virtual_plan("magik-plan:payload-saturn-extra");
-        second.payload_path = "/media/fat/games/Saturn/Extra.chd".to_string();
-
-        let stamp = virtual_launch_cache_stamp(&[first.clone(), second.clone()]);
-
-        assert_eq!(stamp.schema, VIRTUAL_LAUNCH_CACHE_STAMP_SCHEMA);
-        assert_eq!(stamp.plan_count, 2);
-        assert_eq!(stamp.entries.len(), 2);
-        assert!(stamp
-            .entries
-            .iter()
-            .all(|entry| entry.basename.starts_with("virtual-magik-plan-")));
-        assert!(stamp
-            .entries
-            .iter()
-            .all(|entry| entry.content_hash.len() == 32));
-        assert_eq!(
-            stamp
-                .entries
-                .iter()
-                .find(|entry| entry.basename == virtual_launch_cache_basename(&first.launch_ref))
-                .expect("first stamp entry")
-                .content_len,
-            virtual_mgl_content(&first).len() as u64
-        );
-    }
-
-    #[test]
-    fn matching_virtual_launch_cache_stamp_restores_missing_files() {
-        let root = unique_temp_dir("virtual-launch-stamp-hit");
-        let first = virtual_plan("magik-plan:payload-saturn-test");
-        let second = virtual_plan("magik-plan:payload-saturn-extra");
-        let first_path = virtual_launch_path_at(&first.launch_ref, &root);
-        let second_path = virtual_launch_path_at(&second.launch_ref, &root);
-
-        let initial = materialize_virtual_launch_plans_at(&[first.clone(), second.clone()], &root);
-        assert_eq!(
-            initial,
-            VirtualLaunchCacheSummary {
-                total: 2,
-                written: 2,
-                unchanged: 0,
-                errors: 0,
-            }
-        );
-        assert!(virtual_launch_cache_stamp_path(&root).is_file());
-
-        std::fs::remove_file(&second_path).expect("remove one cached virtual mgl");
-        let repaired = materialize_virtual_launch_plans_at(&[first.clone(), second.clone()], &root);
-
-        assert_eq!(
-            repaired,
-            VirtualLaunchCacheSummary {
-                total: 2,
-                written: 1,
-                unchanged: 1,
-                errors: 0,
-            }
-        );
-        assert_eq!(
-            std::fs::read_to_string(&first_path).expect("read first virtual mgl"),
-            virtual_mgl_content(&first)
-        );
-        assert_eq!(
-            std::fs::read_to_string(&second_path).expect("read repaired virtual mgl"),
-            virtual_mgl_content(&second)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn matching_virtual_launch_cache_stamp_repairs_wrong_sized_file() {
-        let root = unique_temp_dir("virtual-launch-stamp-size");
-        let plan = virtual_plan("magik-plan:payload-saturn-test");
-        let path = virtual_launch_path_at(&plan.launch_ref, &root);
-
-        materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
-        std::fs::write(&path, "<wrong-size/>").expect("write wrong-sized virtual mgl");
-
-        let summary = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
-
-        assert_eq!(
-            summary,
-            VirtualLaunchCacheSummary {
-                total: 1,
-                written: 1,
-                unchanged: 0,
-                errors: 0,
-            }
-        );
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read repaired virtual mgl"),
-            virtual_mgl_content(&plan)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn changed_virtual_launch_content_invalidates_cache_stamp() {
-        let root = unique_temp_dir("virtual-launch-stamp-content");
-        let mut plan = virtual_plan("magik-plan:payload-saturn-test");
-        materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
-        let path = virtual_launch_path_at(&plan.launch_ref, &root);
-
-        plan.payload_path = "/media/fat/games/Saturn/Changed.chd".to_string();
-        let summary = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
-
-        assert_eq!(
-            summary,
-            VirtualLaunchCacheSummary {
-                total: 1,
-                written: 1,
-                unchanged: 0,
-                errors: 0,
-            }
-        );
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read refreshed virtual mgl"),
-            virtual_mgl_content(&plan)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn changed_virtual_launch_plan_set_invalidates_cache_stamp() {
-        let root = unique_temp_dir("virtual-launch-stamp-count");
-        let first = virtual_plan("magik-plan:payload-saturn-test");
-        materialize_virtual_launch_plans_at(std::slice::from_ref(&first), &root);
-        let second = virtual_plan("magik-plan:payload-saturn-extra");
-
-        let summary = materialize_virtual_launch_plans_at(&[first.clone(), second.clone()], &root);
-
-        assert_eq!(
-            summary,
-            VirtualLaunchCacheSummary {
-                total: 2,
-                written: 1,
-                unchanged: 1,
-                errors: 0,
-            }
-        );
-        assert!(virtual_launch_path_at(&first.launch_ref, &root).is_file());
-        assert!(virtual_launch_path_at(&second.launch_ref, &root).is_file());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn virtual_launch_cache_errors_do_not_write_stamp() {
-        let root = unique_temp_dir("virtual-launch-stamp-error");
-        let mut plan = virtual_plan("magik-plan:payload-saturn-test");
-        plan.payload_path.clear();
-
-        let summary = materialize_virtual_launch_plans_at(std::slice::from_ref(&plan), &root);
-
-        assert_eq!(
-            summary,
-            VirtualLaunchCacheSummary {
-                total: 1,
-                written: 0,
-                unchanged: 0,
-                errors: 1,
-            }
-        );
-        assert!(!virtual_launch_cache_stamp_path(&root).exists());
-        let _ = std::fs::remove_dir_all(root);
     }
 }

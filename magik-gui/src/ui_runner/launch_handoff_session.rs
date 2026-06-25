@@ -41,6 +41,7 @@ impl PendingLaunch {
 #[derive(Debug)]
 struct StagedLaunch {
     launch_ref: String,
+    launch_target: LaunchTarget,
     action_start: Instant,
     return_state: Option<launcher::LaunchReturnState>,
     bench_iteration: Option<usize>,
@@ -141,6 +142,7 @@ impl LaunchHandoffBenchConfig {
 #[derive(Debug)]
 struct LaunchWorkerRequest {
     launch_ref: String,
+    launch_target: LaunchTarget,
     bench_iteration: Option<usize>,
     bench_delay: Duration,
 }
@@ -232,6 +234,7 @@ impl LaunchHandoffSession {
             return false;
         }
 
+        let launch_target = catalog.launch_target_for_ref(launch_ref);
         self.loading_title = format!("Loading {}…", launcher::game_title(catalog, launch_ref));
         let bench_iteration = self.bench.begin_launch();
         let return_state = if bench_iteration.is_some() {
@@ -241,6 +244,7 @@ impl LaunchHandoffSession {
         };
         self.staged = Some(StagedLaunch {
             launch_ref: launch_ref.to_string(),
+            launch_target,
             action_start: now,
             return_state,
             bench_iteration,
@@ -259,6 +263,7 @@ impl LaunchHandoffSession {
         }
         let rx = (self.spawn_worker)(LaunchWorkerRequest {
             launch_ref: staged.launch_ref,
+            launch_target: staged.launch_target,
             bench_iteration: staged.bench_iteration,
             bench_delay: self.bench.delay,
         });
@@ -374,7 +379,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
         .spawn(move || {
             let result = if request.bench_iteration.is_some() {
                 let bench = launcher::execute_game_launch_handoff_bench(
-                    &request.launch_ref,
+                    &request.launch_target,
                     request.bench_delay,
                 );
                 LaunchWorkerResult {
@@ -383,7 +388,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                 }
             } else {
                 LaunchWorkerResult {
-                    result: launcher::execute_game_launch(&request.launch_ref),
+                    result: launcher::execute_game_launch(&request.launch_target),
                     bench: None,
                 }
             };
@@ -450,7 +455,9 @@ mod tests {
     ) -> mpsc::Receiver<LaunchWorkerResult> {
         let (tx, rx) = mpsc::channel();
         tx.send(LaunchWorkerResult {
-            result: launcher::execute_game_launch("/tmp/mister-magik-test-missing-target.mra"),
+            result: launcher::execute_game_launch(&LaunchTarget::Path(
+                "/tmp/mister-magik-test-missing-target.mra".into(),
+            )),
             bench: None,
         })
         .expect("send failure result");
@@ -462,7 +469,7 @@ mod tests {
     ) -> mpsc::Receiver<LaunchWorkerResult> {
         let (tx, rx) = mpsc::channel();
         let bench =
-            launcher::execute_game_launch_handoff_bench(&request.launch_ref, Duration::ZERO);
+            launcher::execute_game_launch_handoff_bench(&request.launch_target, Duration::ZERO);
         tx.send(LaunchWorkerResult {
             result: bench.result.clone(),
             bench: Some(bench),

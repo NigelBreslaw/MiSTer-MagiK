@@ -1,11 +1,11 @@
 //! Launcher navigation and arcade game launch.
 
 use crate::arcade_catalog::{
-    ArcadeCatalog, ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
+    ArcadeCatalog, LaunchTarget, StructuredLaunchPlan, ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W,
+    HOME_TILE_GAP, HOME_TILE_WIDTH,
 };
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
-use crate::launch_preparation;
 use crate::library_db;
 use mister_magik_catalog::media_identity::{
     screenshot_reset_deletes_filename, DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
@@ -941,7 +941,6 @@ fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
 }
 
 trait LaunchIo {
-    fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String>;
     fn target_exists(&mut self, path: &str) -> bool;
     fn mister_running(&mut self) -> bool;
     fn magik_running(&mut self) -> bool;
@@ -954,10 +953,6 @@ trait LaunchIo {
 struct SystemLaunchIo;
 
 impl LaunchIo for SystemLaunchIo {
-    fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
-        launch_preparation::prepare_launch_ref(launch_ref)
-    }
-
     fn target_exists(&mut self, path: &str) -> bool {
         Path::new(path).exists()
     }
@@ -1034,6 +1029,42 @@ fn write_mister_command(cmd: &str) -> Result<(), String> {
     write_mister_command_nonblocking(cmd)
 }
 
+fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
+    let mount_index = plan.mount_index.to_string();
+    let delay_secs = plan.delay_secs.to_string();
+    let fields = [
+        ("schema", "1"),
+        ("launch_ref", plan.launch_ref.as_ref()),
+        ("title", plan.title.as_ref()),
+        ("system_id", plan.system_id.as_ref()),
+        ("core_path", plan.core_path.as_ref()),
+        ("payload_path", plan.payload_path.as_ref()),
+        ("mount_kind", plan.mount_kind.as_ref()),
+        ("mount_index", mount_index.as_str()),
+        ("delay_secs", delay_secs.as_str()),
+    ];
+    fields
+        .into_iter()
+        .map(|(key, value)| format!("{key}={}", percent_encode_plan_value(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn percent_encode_plan_value(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-' | b':') {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
 pub fn exit_to_mister() -> Result<(), String> {
     restore_menu_wallpaper();
 
@@ -1074,9 +1105,9 @@ pub fn mister_running_arcade_core() -> bool {
 
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
 /// Returns `true` if Main was spawned for this launch (caller should stop it on failure).
-pub fn execute_game_launch(launch_ref: &str) -> Result<bool, LaunchError> {
+pub fn execute_game_launch(launch_target: &LaunchTarget) -> Result<bool, LaunchError> {
     let mut io = SystemLaunchIo;
-    execute_game_launch_with(launch_ref, &mut io)
+    execute_game_launch_with(launch_target, &mut io)
 }
 
 #[derive(Debug)]
@@ -1087,23 +1118,15 @@ pub struct LaunchHandoffBenchResult {
 }
 
 pub fn execute_game_launch_handoff_bench(
-    launch_ref: &str,
+    launch_target: &LaunchTarget,
     fifo_delay: Duration,
 ) -> LaunchHandoffBenchResult {
     struct BenchLaunchIo {
         fifo_delay: Duration,
-        prepare_us: u64,
         handoff_us: u64,
     }
 
     impl LaunchIo for BenchLaunchIo {
-        fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
-            let start = Instant::now();
-            let result = launch_preparation::prepare_launch_ref(launch_ref);
-            self.prepare_us = start.elapsed().as_micros() as u64;
-            result
-        }
-
         fn target_exists(&mut self, path: &str) -> bool {
             Path::new(path).exists()
         }
@@ -1140,26 +1163,34 @@ pub fn execute_game_launch_handoff_bench(
 
     let mut io = BenchLaunchIo {
         fifo_delay,
-        prepare_us: 0,
         handoff_us: 0,
     };
-    let result = execute_game_launch_with(launch_ref, &mut io);
+    let prepare = Instant::now();
+    let result = execute_game_launch_with(launch_target, &mut io);
     LaunchHandoffBenchResult {
         result,
-        prepare_us: io.prepare_us,
+        prepare_us: prepare.elapsed().as_micros() as u64,
         handoff_us: io.handoff_us,
     }
 }
 
-fn execute_game_launch_with(launch_ref: &str, io: &mut impl LaunchIo) -> Result<bool, LaunchError> {
-    let launch_target = io
-        .prepare_launch_ref(launch_ref)
-        .map_err(|e| LaunchError::new(e, false))?;
-    if !io.target_exists(&launch_target) {
+fn execute_game_launch_with(
+    launch_target: &LaunchTarget,
+    io: &mut impl LaunchIo,
+) -> Result<bool, LaunchError> {
+    if let LaunchTarget::MissingStructured(launch_ref) = launch_target {
         return Err(LaunchError::new(
-            format!("launch target not found: {launch_target}"),
+            format!("structured launch plan missing from catalog: {launch_ref}"),
             false,
         ));
+    }
+    if let LaunchTarget::Path(path) = launch_target {
+        if !io.target_exists(path) {
+            return Err(LaunchError::new(
+                format!("launch target not found: {path}"),
+                false,
+            ));
+        }
     }
 
     let spawned = if io.mister_running() {
@@ -1183,10 +1214,31 @@ fn execute_game_launch_with(launch_ref: &str, io: &mut impl LaunchIo) -> Result<
         ));
     }
 
-    let cmd = if io.magik_running() {
-        format!("mister_magik_launch {launch_target}\n")
-    } else {
-        format!("load_core {launch_target}\n")
+    let magik_running = io.magik_running();
+    let cmd = match (magik_running, launch_target) {
+        (true, LaunchTarget::Path(path)) => format!("mister_magik_launch {path}\n"),
+        (true, LaunchTarget::Structured(plan)) => {
+            format!("mister_magik_launch_plan_v1 {}\n", encode_launch_plan(plan))
+        }
+        (true, LaunchTarget::MissingStructured(launch_ref)) => {
+            return Err(LaunchError::new(
+                format!("structured launch plan missing from catalog: {launch_ref}"),
+                spawned,
+            ));
+        }
+        (false, LaunchTarget::Path(path)) => format!("load_core {path}\n"),
+        (false, LaunchTarget::Structured(_)) => {
+            return Err(LaunchError::new(
+                "structured launch plan requires MiSTer_MagiK".to_string(),
+                spawned,
+            ));
+        }
+        (false, LaunchTarget::MissingStructured(launch_ref)) => {
+            return Err(LaunchError::new(
+                format!("structured launch plan missing from catalog: {launch_ref}"),
+                spawned,
+            ));
+        }
     };
     println!("launch: {}", cmd.trim_end());
     io.write_mister_command(&cmd)
@@ -1306,24 +1358,11 @@ mod tests {
         started_ready: bool,
         fifo_ready: bool,
         write_result: Result<(), String>,
-        prepared_launch_ref: Option<String>,
-        prepare_result: Result<(), String>,
         start_calls: usize,
         commands: Vec<String>,
     }
 
     impl LaunchIo for FakeLaunchIo {
-        fn prepare_launch_ref(&mut self, launch_ref: &str) -> Result<String, String> {
-            self.prepared_launch_ref = Some(launch_ref.to_string());
-            self.prepare_result.clone().map(|_| {
-                if launch_ref.starts_with("magik-plan:") {
-                    "/tmp/mister-magik-virtual-test.mgl".to_string()
-                } else {
-                    launch_ref.to_string()
-                }
-            })
-        }
-
         fn target_exists(&mut self, _path: &str) -> bool {
             self.target_exists
         }
@@ -1364,11 +1403,26 @@ mod tests {
             started_ready: true,
             fifo_ready: true,
             write_result: Ok(()),
-            prepared_launch_ref: None,
-            prepare_result: Ok(()),
             start_calls: 0,
             commands: Vec::new(),
         }
+    }
+
+    fn path_target(path: &str) -> LaunchTarget {
+        LaunchTarget::Path(path.into())
+    }
+
+    fn structured_target() -> LaunchTarget {
+        LaunchTarget::Structured(StructuredLaunchPlan {
+            launch_ref: "magik-plan:test game".into(),
+            title: "Test Game".into(),
+            system_id: "neogeo".into(),
+            core_path: "NeoGeo".into(),
+            payload_path: "/media/fat/games/NEOGEO/Test Game.neo".into(),
+            mount_kind: "mount-image".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        })
     }
 
     fn input(nav: &mut ArcadeNav, dir: i32, previous_dir: i32, count: usize, now: Instant) {
@@ -2348,7 +2402,8 @@ mod tests {
         let mut io = launch_io();
         io.target_exists = false;
 
-        let err = execute_game_launch_with("/missing.mra", &mut io).expect_err("launch fails");
+        let err = execute_game_launch_with(&path_target("/missing.mra"), &mut io)
+            .expect_err("launch fails");
 
         assert!(!err.spawned_mister());
         assert_eq!(io.start_calls, 0);
@@ -2363,7 +2418,7 @@ mod tests {
         io.mister_running = false;
         io.started_ready = false;
 
-        let err = execute_game_launch_with("/media/fat/_Arcade/test.mra", &mut io)
+        let err = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
             .expect_err("launch fails");
 
         assert!(err.spawned_mister());
@@ -2380,7 +2435,7 @@ mod tests {
         io.mister_running = false;
         io.write_result = Err("fifo write failed".to_string());
 
-        let err = execute_game_launch_with("/media/fat/_Arcade/test.mra", &mut io)
+        let err = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
             .expect_err("launch fails");
 
         assert!(err.spawned_mister());
@@ -2400,8 +2455,9 @@ mod tests {
         let mut io = launch_io();
         io.magik_running = false;
 
-        let spawned = execute_game_launch_with("/media/fat/_Arcade/test.mra", &mut io)
-            .expect("launch succeeds");
+        let spawned =
+            execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+                .expect("launch succeeds");
 
         assert!(!spawned);
         assert_eq!(io.start_calls, 0);
@@ -2442,23 +2498,55 @@ mod tests {
     }
 
     #[test]
-    fn virtual_launch_ref_is_materialized_before_fifo_command() {
+    fn structured_launch_plan_writes_plan_command_without_materialization() {
         let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
 
-        let spawned = execute_game_launch_with("magik-plan:payload-saturn-test", &mut io)
-            .expect("launch succeeds");
+        let spawned =
+            execute_game_launch_with(&structured_target(), &mut io).expect("launch succeeds");
 
         assert!(!spawned);
-        assert_eq!(
-            io.prepared_launch_ref.as_deref(),
-            Some("magik-plan:payload-saturn-test")
-        );
+        assert_eq!(io.start_calls, 0);
         assert_eq!(
             io.commands,
-            vec!["mister_magik_launch /tmp/mister-magik-virtual-test.mgl\n"]
+            vec![
+                "mister_magik_launch_plan_v1 schema=1&launch_ref=magik-plan:test%20game&title=Test%20Game&system_id=neogeo&core_path=NeoGeo&payload_path=/media/fat/games/NEOGEO/Test%20Game.neo&mount_kind=mount-image&mount_index=0&delay_secs=1\n"
+            ]
         );
         reset_launch();
+    }
+
+    #[test]
+    fn structured_launch_plan_requires_magik_main() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.magik_running = false;
+
+        let err =
+            execute_game_launch_with(&structured_target(), &mut io).expect_err("launch fails");
+
+        assert!(err.to_string().contains("requires MiSTer_MagiK"));
+        assert!(io.commands.is_empty());
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn missing_structured_launch_plan_does_not_fall_back_to_path_launch() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+
+        let err = execute_game_launch_with(
+            &LaunchTarget::MissingStructured("magik-plan:missing".into()),
+            &mut io,
+        )
+        .expect_err("launch fails");
+
+        assert!(err.to_string().contains("missing from catalog"));
+        assert_eq!(io.start_calls, 0);
+        assert!(io.commands.is_empty());
+        assert!(!launch_in_progress());
     }
 }

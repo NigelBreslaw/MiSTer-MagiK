@@ -267,19 +267,11 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
     sqlite_catalog::remove_default_sqlite_database()
 }
 
-pub fn load_virtual_launch_plan(launch_ref: &str) -> Result<Option<VirtualLaunchPlan>, String> {
-    sqlite_catalog::load_virtual_launch_plan(launch_ref)
-}
-
 pub fn load_virtual_launch_plans_for_system(
     system_id: &str,
     limit: usize,
 ) -> Result<Vec<VirtualLaunchPlan>, String> {
     sqlite_catalog::load_virtual_launch_plans_for_system(system_id, limit)
-}
-
-pub fn load_virtual_launch_plans() -> Result<Vec<VirtualLaunchPlan>, String> {
-    sqlite_catalog::load_virtual_launch_plans()
 }
 
 pub fn load_amigavision_launch_refs(limit: usize) -> Result<Vec<String>, String> {
