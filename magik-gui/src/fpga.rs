@@ -370,28 +370,6 @@ impl Fpga {
     /// video.cpp:3290-3321. Routes HPS buffer `n` to scan-out. `mode` is the
     /// active video mode (for positioning); the fb itself is
     /// `fb_width`x`fb_height`.
-    pub fn fb_enable(
-        &mut self,
-        n: u32,
-        fb_width: u16,
-        fb_height: u16,
-        mode: Mode,
-        xoff_override: Option<i32>,
-        yoff_override: Option<i32>,
-        set_vga_fb: bool,
-    ) -> io::Result<u16> {
-        self.fb_enable_format(
-            n,
-            fb_width,
-            fb_height,
-            mode,
-            xoff_override,
-            yoff_override,
-            set_vga_fb,
-            FramebufferFormat::Xrgb8888,
-        )
-    }
-
     pub fn fb_enable_format(
         &mut self,
         n: u32,
@@ -459,27 +437,6 @@ impl Fpga {
             self.set_vga_fb(true)?;
         }
         Ok(flag)
-    }
-
-    /// Historical helper for the direct-video path.
-    pub fn fb_enable_direct(
-        &mut self,
-        n: u32,
-        fb_width: u16,
-        fb_height: u16,
-        mode: Mode,
-        xoff_override: Option<i32>,
-        yoff_override: Option<i32>,
-    ) -> io::Result<u16> {
-        self.fb_enable(
-            n,
-            fb_width,
-            fb_height,
-            mode,
-            xoff_override,
-            yoff_override,
-            true,
-        )
     }
 }
 

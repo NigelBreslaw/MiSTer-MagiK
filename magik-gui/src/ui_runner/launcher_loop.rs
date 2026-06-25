@@ -288,16 +288,8 @@ impl PendingLaunch {
 pub(super) fn recover_launcher_ui(f: &mut Fpga, ui: &UiDisplay, spawned_mister: &mut bool) {
     if *spawned_mister {
         launcher::stop_mister();
-        if let Err(e) = f.fb_enable_format(
-            0,
-            ui.fb_w() as u16,
-            ui.fb_h() as u16,
-            ui_fpga_scaled_mode(ui.scan_w(), ui.scan_h()),
-            Some(0),
-            Some(0),
-            ui.direct_video(),
-            FramebufferFormat::production_default(),
-        ) {
+        let route = FpgaFramebufferRoute::for_ui(ui, FramebufferFormat::production_default());
+        if let Err(e) = route.enable(f, ui.fb_w(), ui.fb_h()) {
             eprintln!("failed to recover Slint framebuffer route after launch failure: {e}");
         }
         *spawned_mister = false;
@@ -843,16 +835,9 @@ pub(super) fn run_launcher_loop(
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
-                match f.fb_enable_format(
-                    0,
-                    ui.fb_w() as u16,
-                    ui.fb_h() as u16,
-                    ui_fpga_scaled_mode(ui.scan_w(), ui.scan_h()),
-                    Some(0),
-                    Some(0),
-                    ui.direct_video(),
-                    FramebufferFormat::production_default(),
-                ) {
+                let route =
+                    FpgaFramebufferRoute::for_ui(ui, FramebufferFormat::production_default());
+                match route.enable(f, ui.fb_w(), ui.fb_h()) {
                     Ok(flag) => {
                         route_reassert_count = route_reassert_count.saturating_add(1);
                         last_route_reassert_frame = frames;
