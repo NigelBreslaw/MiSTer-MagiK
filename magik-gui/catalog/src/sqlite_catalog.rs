@@ -5,6 +5,10 @@ use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
 };
+use crate::catalog_projection::{
+    self, ArcadePreviewProjection, CatalogProjectionRow, CatalogProjectionSource,
+    LauncherPreviewAsset,
+};
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
 use crate::catalog_store;
@@ -17,7 +21,7 @@ use crate::game_discovery::{
 };
 use crate::launch_profiles::{self, MountKind, PayloadDisposition, RuleSourceKind};
 use crate::library_db::{
-    self, BenchConfig, CatalogRow, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
+    self, BenchConfig, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
     LibraryRefreshSummary, LibraryScan, ProgressCallback, VirtualLaunchPlan,
 };
 use crate::media_metadata;
@@ -547,22 +551,25 @@ pub(crate) fn load_joined_launcher_catalog(
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(CatalogRow {
-                game: ArcadeGameEntry {
-                    title: row.get::<_, String>(0)?.into(),
-                    mra_path: row.get::<_, String>(1)?.into(),
-                    preview_archive_path: row.get::<_, String>(2)?.into(),
-                    preview_asset_key: row.get::<_, String>(3)?.into(),
-                    has_preview: row.get::<_, i64>(4)? != 0,
-                    system_id: row.get::<_, String>(5)?.into(),
-                    is_new: is_new_discovery(row.get::<_, Option<i64>>(6)?, now),
+            let discovered_at_unix = row.get::<_, Option<i64>>(6)?;
+            let preview = LauncherPreviewAsset::new(
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            );
+            Ok(CatalogProjectionRow::new(
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(5)?,
+                preview,
+                is_new_discovery(discovered_at_unix, now),
+                CatalogProjectionSource {
+                    discovered_at_unix,
+                    source_kind: row.get::<_, String>(7)?,
+                    setname: row.get::<_, String>(8)?,
+                    parent: row.get::<_, String>(9)?,
+                    family_key: None,
                 },
-                discovered_at_unix: row.get::<_, Option<i64>>(6)?,
-                source_kind: row.get::<_, String>(7)?,
-                setname: row.get::<_, String>(8)?,
-                parent: row.get::<_, String>(9)?,
-                family_key: None,
-            })
+            ))
         })
         .map_err(|e| format!("query arcade catalog: {e}"))?;
     let mut rows_out = Vec::new();
@@ -570,7 +577,7 @@ pub(crate) fn load_joined_launcher_catalog(
         rows_out.push(row.map_err(|e| format!("read arcade catalog row: {e}"))?);
     }
     rows_out.retain(|row| is_launcher_launch_ref(&row.game.mra_path));
-    Ok(library_db::collapse_catalog_variants(rows_out))
+    Ok(catalog_projection::collapse_catalog_variants(rows_out))
 }
 
 pub(crate) fn sqlite_catalog_stamp_check(
@@ -1011,179 +1018,6 @@ pub(crate) fn file_signature(path: &Path) -> FileSignature {
         .unwrap_or_default()
 }
 
-pub(crate) fn materialize_arcade_ui_projections(
-    tx: &rusqlite::Transaction<'_>,
-    arcade_preview_archive_path: &str,
-    neogeo_preview_archive_path: &str,
-) -> Result<(), String> {
-    tx.execute(
-        r#"
-        INSERT INTO ui_arcade_variants(
-            family_id,
-            variant_ordinal,
-            launchable_id,
-            title,
-            sort_title,
-            launch_ref,
-            preview_archive_path,
-            preview_asset_key,
-            has_preview,
-            system_id,
-            discovered_at_unix,
-            identity_id,
-            parent_setname,
-            asset_pack_id,
-            asset_key,
-            asset_link_reason,
-            preferred,
-            preferred_reason
-        )
-        WITH candidates AS (
-            SELECT
-                COALESCE(i.family_id, l.launchable_id) AS family_id,
-                l.launchable_id AS launchable_id,
-                l.title AS title,
-                lower(l.title) AS sort_title,
-                l.launch_ref AS launch_ref,
-                l.system_id AS system_id,
-                g.discovered_at_unix AS discovered_at_unix,
-                l.setname AS setname,
-                i.identity_id AS identity_id,
-                CASE
-                    WHEN i.identity_id IS NOT NULL
-                     AND i.family_id IS NOT NULL
-                     AND i.identity_id != i.family_id
-                    THEN i.family_id
-                    ELSE NULL
-                END AS parent_setname,
-                CASE
-                    WHEN i.identity_id IS NOT NULL
-                     AND i.identity_id = COALESCE(i.family_id, i.identity_id)
-                    THEN 1
-                    ELSE 0
-                END AS is_parent
-            FROM launchables l
-            JOIN games g ON g.game_id = l.launchable_id
-            LEFT JOIN launchable_identities i
-              ON i.launchable_id = l.launchable_id
-             AND i.namespace = 'mame'
-            WHERE l.system_id IN ('arcade','neogeo')
-              AND l.launch_ref != ''
-        ),
-        resolved AS (
-            SELECT
-                *,
-                CASE
-                    WHEN system_id = 'neogeo' THEN ?2
-                    ELSE ?1
-                END AS preview_archive_path,
-                COALESCE(NULLIF(family_id, ''), NULLIF(identity_id, ''), NULLIF(setname, ''), '') AS preview_key
-            FROM candidates
-        ),
-        resolved_with_preview AS (
-            SELECT
-                *,
-                CASE
-                    WHEN preview_archive_path != '' AND preview_key != '' THEN 1
-                    ELSE 0
-                END AS preview_available
-            FROM resolved
-        ),
-        ranked AS (
-            SELECT
-                *,
-                row_number() OVER (
-                    PARTITION BY family_id
-                    ORDER BY is_parent DESC,
-                             sort_title ASC,
-                             launch_ref ASC
-                ) AS family_rank,
-                row_number() OVER (
-                    PARTITION BY family_id
-                    ORDER BY is_parent DESC,
-                             sort_title ASC,
-                             launch_ref ASC
-                ) - 1 AS variant_ordinal
-            FROM resolved_with_preview
-        )
-        SELECT
-            family_id,
-            variant_ordinal,
-            launchable_id,
-            title,
-            sort_title,
-            launch_ref,
-            preview_archive_path,
-            preview_key,
-            preview_available,
-            system_id,
-            discovered_at_unix,
-            identity_id,
-            parent_setname,
-            NULL,
-            preview_key,
-            CASE WHEN preview_available = 1 THEN 'derived-family' ELSE 'none' END,
-            CASE WHEN family_rank = 1 THEN 1 ELSE 0 END,
-            CASE
-                WHEN family_rank = 1 AND is_parent = 1 THEN 'installed-parent'
-                WHEN family_rank = 1 THEN 'deterministic-child'
-                ELSE 'variant'
-            END
-        FROM ranked
-        ORDER BY family_id, variant_ordinal;
-        "#,
-        params![arcade_preview_archive_path, neogeo_preview_archive_path],
-    )
-    .map_err(|e| format!("materialize arcade ui variants: {e}"))?;
-    tx.execute(
-        r#"
-        INSERT INTO ui_arcade_preferred(
-            ordinal,
-            launchable_id,
-            title,
-            sort_title,
-            launch_ref,
-            preview_archive_path,
-            preview_asset_key,
-            has_preview,
-            system_id,
-            discovered_at_unix,
-            identity_id,
-            family_id,
-            parent_setname,
-            asset_pack_id,
-            asset_key,
-            asset_link_reason,
-            preferred_reason
-        )
-        SELECT
-            row_number() OVER (ORDER BY sort_title ASC, launch_ref ASC) - 1,
-            launchable_id,
-            title,
-            sort_title,
-            launch_ref,
-            preview_archive_path,
-            preview_asset_key,
-            has_preview,
-            system_id,
-            discovered_at_unix,
-            identity_id,
-            family_id,
-            parent_setname,
-            asset_pack_id,
-            asset_key,
-            asset_link_reason,
-            preferred_reason
-        FROM ui_arcade_variants
-        WHERE preferred = 1
-        ORDER BY sort_title ASC, launch_ref ASC;
-        "#,
-        [],
-    )
-    .map(|_| ())
-    .map_err(|e| format!("materialize arcade ui projections: {e}"))
-}
-
 #[cfg(test)]
 pub(crate) fn write_sqlite_scan(
     path: &Path,
@@ -1612,7 +1446,7 @@ fn write_sqlite_scan_with_sources(
     }
     {
         let stage_t = Instant::now();
-        let mut launcher_rows = Vec::<CatalogRow>::new();
+        let mut launcher_rows = Vec::<CatalogProjectionRow>::new();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
             .map_err(|e| format!("prepare system insert: {e}"))?;
@@ -1686,7 +1520,6 @@ fn write_sqlite_scan_with_sources(
             let preview_asset = software_identity
                 .as_ref()
                 .and_then(|identity| console_preview_asset(identity, sources.preview_paths));
-            let game_has_preview = preview_asset.is_some();
             game_stmt
                 .execute(params![
                     key.as_str(),
@@ -1720,30 +1553,20 @@ fn write_sqlite_scan_with_sources(
                 let software_family_key = software_identity
                     .as_ref()
                     .map(|identity| format!("mame-software:{}", identity.family_id));
-                launcher_rows.push(CatalogRow {
-                    game: ArcadeGameEntry {
-                        title: discovery.title.clone().into(),
-                        mra_path: plan_launch_ref.clone().into(),
-                        preview_archive_path: preview_asset
-                            .as_ref()
-                            .map(|asset| asset.archive_path.as_str())
-                            .unwrap_or_default()
-                            .into(),
-                        preview_asset_key: preview_asset
-                            .as_ref()
-                            .map(|asset| asset.asset_key.as_str())
-                            .unwrap_or_default()
-                            .into(),
-                        has_preview: game_has_preview,
-                        system_id: system_id.clone().into(),
-                        is_new: false,
+                launcher_rows.push(CatalogProjectionRow::new(
+                    discovery.title.clone(),
+                    plan_launch_ref.clone(),
+                    system_id.clone(),
+                    LauncherPreviewAsset::from_console_asset(preview_asset.as_ref()),
+                    false,
+                    CatalogProjectionSource {
+                        discovered_at_unix,
+                        source_kind: launch_kind_for_discovery(discovery).to_string(),
+                        setname: discovery.setname.clone().unwrap_or_default(),
+                        parent: discovery.parent.clone().unwrap_or_default(),
+                        family_key: software_family_key,
                     },
-                    discovered_at_unix,
-                    source_kind: launch_kind_for_discovery(discovery).to_string(),
-                    setname: discovery.setname.clone().unwrap_or_default(),
-                    parent: discovery.parent.clone().unwrap_or_default(),
-                    family_key: software_family_key,
-                });
+                ));
             }
             plan_stmt
                 .execute(params![
@@ -1863,8 +1686,7 @@ fn write_sqlite_scan_with_sources(
         );
         report_sqlite_import_finalizing(&mut progress);
         let projection_t = Instant::now();
-        materialize_arcade_ui_projections(
-            &tx,
+        let arcade_preview_projection = ArcadePreviewProjection::new(
             sources
                 .preview_paths
                 .archive_for_platform("arcade")
@@ -1873,52 +1695,19 @@ fn write_sqlite_scan_with_sources(
                 .preview_paths
                 .archive_for_platform("neogeo")
                 .unwrap_or_default(),
-        )?;
+        );
+        catalog_projection::materialize_arcade_ui_projections(&tx, &arcade_preview_projection)?;
         report_library_import_timing("materialize_arcade_ui", projection_t, "");
         let launcher_arcade_t = Instant::now();
-        tx.execute(
-            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix)
-             SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix
-             FROM ui_arcade_preferred
-             ORDER BY ordinal",
-            [],
-        )
-        .map_err(|e| format!("insert preferred launcher catalog: {e}"))?;
+        catalog_projection::insert_arcade_launcher_catalog(&tx)?;
         report_library_import_timing("insert_launcher_arcade", launcher_arcade_t, "");
-        let ordinal_offset = tx
-            .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .map_err(|e| format!("query launcher catalog offset: {e}"))?;
         let launcher_console_t = Instant::now();
-        launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
-        let launcher_games = library_db::collapse_catalog_variant_rows(launcher_rows);
-        let mut launcher_stmt = tx
-            .prepare(
-                "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            )
-            .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
-        for (idx, row) in launcher_games.iter().enumerate() {
-            let game = &row.game;
-            launcher_stmt
-                .execute(params![
-                    ordinal_offset + idx as i64,
-                    game.title.as_ref(),
-                    library_db::normalize_title(&game.title),
-                    game.mra_path.as_ref(),
-                    game.preview_archive_path.as_ref(),
-                    game.preview_asset_key.as_ref(),
-                    if game.has_preview { 1 } else { 0 },
-                    game.system_id.as_ref(),
-                    row.discovered_at_unix
-                ])
-                .map_err(|e| format!("insert launcher catalog: {e}"))?;
-        }
+        let launcher_game_count =
+            catalog_projection::insert_console_launcher_catalog(&tx, launcher_rows)?;
         report_library_import_timing(
             "insert_launcher_console",
             launcher_console_t,
-            format!("rows={}", launcher_games.len()),
+            format!("rows={launcher_game_count}"),
         );
     }
     {
@@ -2733,6 +2522,49 @@ mod tests {
         assert_eq!(loaded.rows, 1);
         assert_eq!(loaded.catalog.games[0].title.as_ref(), "Moon Patrol (US)");
         assert!(loaded.catalog.games[0].has_preview);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_catalog_appends_console_rows_after_arcade_projection() {
+        let root = unique_temp_dir("sqlite-launcher-catalog-order");
+        let db = root.join("library.sqlite3");
+        let mut arcade = mra_discovery(1, "Zeta Arcade");
+        arcade.launch_ref = "/media/fat/_Arcade/Zeta Arcade.mra".to_string();
+        arcade.source_path = arcade.launch_ref.clone();
+        arcade.setname = Some("zeta".to_string());
+        let mut console = payload("/media/fat/games/SNES/Alpha Console.sfc");
+        console.platform_id = "snes".to_string();
+        console.core_id = "SNES".to_string();
+        console.hardware_id = "snes".to_string();
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![console, arcade]))
+            .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let mut stmt = conn
+            .prepare(
+                "SELECT ordinal,title,system_id
+                 FROM launcher_catalog
+                 ORDER BY ordinal",
+            )
+            .expect("prepare launcher catalog query");
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("query launcher catalog rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read launcher catalog rows");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], (0, "Zeta Arcade".to_string(), "arcade".to_string()));
+        assert_eq!(rows[1].0, 1);
+        assert_eq!(rows[1].1, "Alpha Console");
+        assert_eq!(rows[1].2, "snes");
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -2,9 +2,9 @@
 
 use crate::arcade_catalog::ArcadeGameEntry;
 use crate::catalog_config::SCHEMA_VERSION;
+use crate::catalog_projection::CatalogProjectionRow;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
 use crate::launch_profiles::{self, PayloadDisposition, PayloadRule};
-use crate::library_cli::CatalogRow;
 use crate::library_db::{title_from_path, unix_now_secs, LibraryPayloadFile, LibraryScan};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
@@ -68,8 +68,13 @@ pub(crate) fn saturn_payload(path: &str) -> GameDiscovery {
     }
 }
 
-pub(crate) fn catalog_row(title: &str, path: &str, setname: &str, parent: &str) -> CatalogRow {
-    CatalogRow {
+pub(crate) fn catalog_row(
+    title: &str,
+    path: &str,
+    setname: &str,
+    parent: &str,
+) -> CatalogProjectionRow {
+    CatalogProjectionRow {
         game: ArcadeGameEntry {
             title: title.into(),
             mra_path: path.into(),
@@ -87,8 +92,8 @@ pub(crate) fn catalog_row(title: &str, path: &str, setname: &str, parent: &str) 
     }
 }
 
-pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogRow {
-    CatalogRow {
+pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjectionRow {
+    CatalogProjectionRow {
         game: ArcadeGameEntry {
             title: title.into(),
             mra_path: path.into(),
@@ -106,8 +111,8 @@ pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogRow {
     }
 }
 
-pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogRow {
-    CatalogRow {
+pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogProjectionRow {
+    CatalogProjectionRow {
         game: ArcadeGameEntry {
             title: title.into(),
             mra_path: path.into(),
