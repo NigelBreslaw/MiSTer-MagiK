@@ -86,3 +86,5 @@ echo "wrote $local_tsv"
 echo "wrote $local_log"
 echo
 "$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv"
+echo
+"$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll

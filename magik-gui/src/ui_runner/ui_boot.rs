@@ -86,7 +86,7 @@ pub(crate) fn fb_mode_action(
 }
 
 pub(crate) fn boot_framebuffer_format() -> FramebufferFormat {
-    FramebufferFormat::production_default()
+    FramebufferFormat::production()
 }
 
 #[derive(Clone, Copy)]
@@ -99,15 +99,22 @@ pub(crate) struct FpgaFramebufferRoute {
 }
 
 impl FpgaFramebufferRoute {
-    pub(crate) fn for_ui(ui: &UiDisplay, format: FramebufferFormat) -> Self {
-        Self::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video(), format)
+    pub(crate) fn for_ui_rgb565(ui: &UiDisplay) -> Self {
+        Self::for_scan(
+            ui.scan_w(),
+            ui.scan_h(),
+            ui.direct_video(),
+            FramebufferFormat::production(),
+        )
     }
 
-    pub(crate) fn for_plan(
-        plan: crate::ui_display::UiDisplayPlan,
-        format: FramebufferFormat,
-    ) -> Self {
-        Self::for_scan(plan.scan_w, plan.scan_h, plan.direct_video, format)
+    pub(crate) fn for_plan_rgb565(plan: crate::ui_display::UiDisplayPlan) -> Self {
+        Self::for_scan(
+            plan.scan_w,
+            plan.scan_h,
+            plan.direct_video,
+            FramebufferFormat::production(),
+        )
     }
 
     pub(crate) fn for_scan(
@@ -233,8 +240,7 @@ impl UiBootFramebufferSession {
         };
 
         println!("display-open-path=temporary-fb-fpga-scale");
-        let mut disp = match Display::open_with_format(display_plan.fb_w, display_plan.fb_h, format)
-        {
+        let mut disp = match Display::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("failed to open display (/dev/fb0): {e}");
@@ -268,7 +274,7 @@ impl UiBootFramebufferSession {
             println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
-        let route = FpgaFramebufferRoute::for_ui(&ui, format);
+        let route = FpgaFramebufferRoute::for_ui_rgb565(&ui);
         boot_analytics::event(
             "initial_fb_enable_direct_attempt",
             format!(
@@ -518,12 +524,12 @@ mod tests {
     }
 
     #[test]
-    fn framebuffer_route_for_plan_uses_scan_dimensions_and_direct_video() {
+    fn framebuffer_route_for_plan_rgb565_uses_scan_dimensions_and_direct_video() {
         let plan =
             UiDisplayPlan::from_mister_ini_text("[Menu]\nvideo_mode=8\n[MiSTer]\ndirect_video=1\n")
                 .expect("plan");
 
-        let route = FpgaFramebufferRoute::for_plan(plan, FramebufferFormat::Rgb565);
+        let route = FpgaFramebufferRoute::for_plan_rgb565(plan);
 
         assert_eq!(route.mode().hact, plan.scan_w);
         assert_eq!(route.mode().vact, plan.scan_h);

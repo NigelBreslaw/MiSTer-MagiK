@@ -4,6 +4,8 @@ pub enum FramebufferFormat {
     Rgb565,
 }
 
+pub const PRODUCTION_FRAMEBUFFER_FORMAT: FramebufferFormat = FramebufferFormat::Rgb565;
+
 impl FramebufferFormat {
     pub const fn bytes_per_pixel(self) -> usize {
         match self {
@@ -47,12 +49,17 @@ impl FramebufferFormat {
         }
     }
 
-    pub const fn production_default() -> Self {
-        Self::Rgb565
+    pub const fn production() -> Self {
+        PRODUCTION_FRAMEBUFFER_FORMAT
     }
 
     pub const fn is_diagnostic_override(self) -> bool {
         matches!(self, Self::Xrgb8888)
+    }
+
+    #[cfg(any(test, feature = "diagnostics", mister_experiments))]
+    pub fn diagnostic_from_label(label: &str) -> Option<Self> {
+        Self::from_label(label)
     }
 
     pub fn from_label(label: &str) -> Option<Self> {
@@ -63,15 +70,29 @@ impl FramebufferFormat {
         }
     }
 
+    #[cfg(any(test, feature = "diagnostics", mister_experiments))]
     pub fn from_env() -> Self {
         std::env::var("MISTER_FB_FORMAT")
             .ok()
             .as_deref()
             .and_then(Self::from_label)
-            .unwrap_or_else(Self::production_default)
+            .unwrap_or_else(Self::production)
     }
 
-    pub fn rb_from_env(self) -> bool {
+    pub fn route_rb(self) -> bool {
+        #[cfg(any(test, feature = "diagnostics", mister_experiments))]
+        {
+            self.rb_from_env()
+        }
+
+        #[cfg(not(any(test, feature = "diagnostics", mister_experiments)))]
+        {
+            self.default_rb()
+        }
+    }
+
+    #[cfg(any(test, feature = "diagnostics", mister_experiments))]
+    fn rb_from_env(self) -> bool {
         std::env::var("MISTER_FB_RB")
             .ok()
             .and_then(|s| rb_from_label(&s))
@@ -107,6 +128,7 @@ pub const fn align16(bytes: usize) -> usize {
     (bytes + 15) & !15
 }
 
+#[cfg(any(test, feature = "diagnostics", mister_experiments))]
 fn rb_from_label(label: &str) -> Option<bool> {
     match label.trim().to_ascii_lowercase().as_str() {
         "0" | "false" | "off" => Some(false),
@@ -127,9 +149,13 @@ mod tests {
     }
 
     #[test]
-    fn production_default_is_rgb565() {
+    fn production_is_rgb565() {
         assert_eq!(
-            FramebufferFormat::production_default(),
+            PRODUCTION_FRAMEBUFFER_FORMAT,
+            FramebufferFormat::Rgb565
+        );
+        assert_eq!(
+            FramebufferFormat::production(),
             FramebufferFormat::Rgb565
         );
         assert_eq!(FramebufferFormat::Xrgb8888.bytes_per_pixel(), 4);

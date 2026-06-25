@@ -622,15 +622,14 @@ impl UiFrameTarget {
     pub(super) fn open(ui: &UiDisplay) -> Self {
         println!(
             "slint-render-target=cached fb-format={}",
-            FramebufferFormat::production_default().label()
+            FramebufferFormat::production().label()
         );
         Self::cached(ui)
     }
 
     pub(super) fn render(&mut self, renderer: &SoftwareRenderer, ui: &UiDisplay) -> PhysicalRegion {
-        match self {
-            Self::Rgb565 { cached } => renderer.render(cached, ui.render_w()),
-        }
+        let Self::Rgb565 { cached } = self;
+        renderer.render(cached, ui.render_w())
     }
 
     #[cfg(mister_bench_scenes)]
@@ -648,9 +647,8 @@ impl UiFrameTarget {
         rect: DirtyRect,
     ) -> u32 {
         let _ = f;
-        match self {
-            Self::Rgb565 { cached } => copy_cached_rect_565(disp, ui, cached, rect),
-        }
+        let Self::Rgb565 { cached } = self;
+        copy_cached_rect_565(disp, ui, cached, rect);
         rect.rows()
     }
 
@@ -665,9 +663,8 @@ impl UiFrameTarget {
         src: &[Rgb565Pixel],
     ) {
         let _ = ui;
-        match self {
-            Self::Rgb565 { .. } => disp.copy_rect_from_565(x, y, w, h, src),
-        }
+        let Self::Rgb565 { .. } = self;
+        disp.copy_rect_from_565(x, y, w, h, src);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -685,11 +682,8 @@ impl UiFrameTarget {
         src_y: usize,
     ) {
         let _ = ui;
-        match self {
-            Self::Rgb565 { .. } => {
-                disp.copy_rect_from_565_strided(x, y, w, h, src, src_stride, src_x, src_y)
-            }
-        }
+        let Self::Rgb565 { .. } = self;
+        disp.copy_rect_from_565_strided(x, y, w, h, src, src_stride, src_x, src_y);
     }
 
     pub(super) fn blit_raw_preview(
@@ -698,11 +692,8 @@ impl UiFrameTarget {
         frame: &PreviewRawFrame<'_>,
         clear_screen: bool,
     ) -> Option<DirtyRect> {
-        match self {
-            Self::Rgb565 { cached } => {
-                Raw565PreviewRenderer::compose_frame(cached, ui, frame, clear_screen)
-            }
-        }
+        let Self::Rgb565 { cached } = self;
+        Raw565PreviewRenderer::compose_frame(cached, ui, frame, clear_screen)
     }
 
     pub(super) fn blit_raw_preview_transition(
@@ -712,11 +703,8 @@ impl UiFrameTarget {
         effect: PreviewTransitionEffect,
         progress: f32,
     ) -> DirtyRect {
-        match self {
-            Self::Rgb565 { cached } => {
-                Raw565PreviewRenderer::compose_transition(cached, ui, frame, effect, progress)
-            }
-        }
+        let Self::Rgb565 { cached } = self;
+        Raw565PreviewRenderer::compose_transition(cached, ui, frame, effect, progress)
     }
 
     pub(super) fn blit_pixel_rect(
@@ -730,17 +718,14 @@ impl UiFrameTarget {
     ) -> DirtyRect {
         let w = w.min(ui.render_w().saturating_sub(x));
         let h = h.min(ui.render_h().saturating_sub(y));
-        match self {
-            Self::Rgb565 { cached } => {
-                for yy in 0..h {
-                    let dst = (y + yy) * ui.render_w() + x;
-                    let src_idx = yy * w;
-                    for xx in 0..w {
-                        let rgb = pixel_to_rgb(src[src_idx + xx]);
-                        cached[dst + xx] =
-                            <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
-                    }
-                }
+        let Self::Rgb565 { cached } = self;
+        for yy in 0..h {
+            let dst = (y + yy) * ui.render_w() + x;
+            let src_idx = yy * w;
+            for xx in 0..w {
+                let rgb = pixel_to_rgb(src[src_idx + xx]);
+                cached[dst + xx] =
+                    <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
             }
         }
         DirtyRect {
@@ -760,9 +745,8 @@ impl UiFrameTarget {
         y1: usize,
     ) -> u32 {
         let _ = f;
-        match self {
-            Self::Rgb565 { cached } => copy_cached_rows_565(disp, ui, cached, y0, y1),
-        }
+        let Self::Rgb565 { cached } = self;
+        copy_cached_rows_565(disp, ui, cached, y0, y1);
         y1.saturating_sub(y0) as u32
     }
 }

@@ -751,7 +751,7 @@ fn early_black_route(f: &mut Fpga) {
         std::process::exit(1);
     }
 
-    let mut disp = match Display::open_with_format(display_plan.fb_w, display_plan.fb_h, format) {
+    let mut disp = match Display::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("early-black: failed to open /dev/fb0: {e}");
@@ -770,7 +770,7 @@ fn early_black_route(f: &mut Fpga) {
         ),
     );
 
-    let route = FpgaFramebufferRoute::for_plan(display_plan, format);
+    let route = FpgaFramebufferRoute::for_plan_rgb565(display_plan);
     let flag = match route.enable(f, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
@@ -933,7 +933,7 @@ fn fb_format_smoke(f: &mut Fpga) {
         Ok(flag) => println!(
             "fb-format-smoke: format={} rb={} source={}x{} scan={}x{} stride={} route={} support_flag={flag}",
             format.label(),
-            if format.rb_from_env() { 1 } else { 0 },
+            if format.route_rb() { 1 } else { 0 },
             W,
             H,
             HDMI_W,

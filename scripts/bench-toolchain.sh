@@ -173,7 +173,8 @@ BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-
 mkdir -p "$BENCH_DIR"
 
 OLD_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	notes"
-TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
+SPLIT_TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	render_us	vsync_us	copy_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
+TSV_HEADER="label	scene	date	rustc	compile_sec	bytes	prepare_us	render_us	custom_draw_us	vsync_us	copy_us	cached_present_us	overlay_present_us	rows_avg	fps	cpu_mean	cpu_max	rss_kb	visual_ok	timing_ok	capture_ok	notes"
 
 normalize_results_tsv() {
   local tsv="$1"
@@ -186,20 +187,36 @@ normalize_results_tsv() {
   if [[ "$header" == "$TSV_HEADER" ]]; then
     return 0
   fi
-  if [[ "$header" != "$OLD_TSV_HEADER" ]]; then
-    echo "Unsupported $tsv header: $header" >&2
-    return 1
+  if [[ "$header" == "$OLD_TSV_HEADER" ]]; then
+    tmp_tsv="$(mktemp)"
+    awk -v new_header="$TSV_HEADER" 'BEGIN { FS = OFS = "\t" }
+      NR == 1 { print new_header; next }
+      NF == 0 { next }
+      {
+        notes = $16
+        if (notes == "") notes = "legacy-no-notes"
+        print $1, $2, $3, $4, $5, $6, "", $7, "", $8, $9, "", "", $10, $11, $12, $13, $14, $15, "", "", notes
+      }
+    ' "$tsv" >"$tmp_tsv"
+    mv "$tmp_tsv" "$tsv"
+    return 0
   fi
-  tmp_tsv="$(mktemp)"
-  awk -v new_header="$TSV_HEADER" 'BEGIN { FS = OFS = "\t" }
-    NR == 1 { print new_header; next }
-    NF == 0 { next }
-    {
-      notes = $16
-      print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, "", "", notes
-    }
-  ' "$tsv" >"$tmp_tsv"
-  mv "$tmp_tsv" "$tsv"
+  if [[ "$header" == "$SPLIT_TSV_HEADER" ]]; then
+    tmp_tsv="$(mktemp)"
+    awk -v new_header="$TSV_HEADER" 'BEGIN { FS = OFS = "\t" }
+      NR == 1 { print new_header; next }
+      NF == 0 { next }
+      {
+        notes = $18
+        if (notes == "") notes = "legacy-no-notes"
+        print $1, $2, $3, $4, $5, $6, "", $7, "", $8, $9, "", "", $10, $11, $12, $13, $14, $15, $16, $17, notes
+      }
+    ' "$tsv" >"$tmp_tsv"
+    mv "$tmp_tsv" "$tsv"
+    return 0
+  fi
+  echo "Unsupported $tsv header: $header" >&2
+  return 1
 }
 
 mister() {
@@ -380,16 +397,18 @@ detect_ini_mode_notes() {
 
 append_tsv_row() {
   local scene="$1" date_iso="$2"
-  local render_us="$3" vsync_us="$4" copy_us="$5" rows_avg="$6" fps_val="$7"
-  local cpu_mean="$8" cpu_max="$9" rss_kb="${10}" visual_ok="${11}" timing_ok="${12}" capture_ok="${13}" notes="${14}"
+  local prepare_us="$3" render_us="$4" custom_draw_us="$5" vsync_us="$6" copy_us="$7"
+  local cached_present_us="$8" overlay_present_us="$9" rows_avg="${10}" fps_val="${11}"
+  local cpu_mean="${12}" cpu_max="${13}" rss_kb="${14}" visual_ok="${15}" timing_ok="${16}" capture_ok="${17}" notes="${18}"
   if [[ -n "${HOST_NOTES:-}" ]]; then
     notes="${HOST_NOTES}${notes:+; }${notes}"
   fi
   notes="${notes:+$notes; }dirty_rect_broad_pct=$DIRTY_RECT_BROAD_PCT"
   notes="${notes//	/ }"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$LABEL" "$scene" "$date_iso" "$(rustc_version)" "${HOST_COMPILE_SEC:-}" "${HOST_BYTES:-}" \
-    "${render_us:-}" "${vsync_us:-}" "${copy_us:-}" "${rows_avg:-}" "${fps_val:-}" \
+    "${prepare_us:-}" "${render_us:-}" "${custom_draw_us:-}" "${vsync_us:-}" "${copy_us:-}" \
+    "${cached_present_us:-}" "${overlay_present_us:-}" "${rows_avg:-}" "${fps_val:-}" \
     "${cpu_mean:-}" "${cpu_max:-}" "${rss_kb:-}" "$visual_ok" "$timing_ok" "$capture_ok" "$notes" >>"$TSV"
 }
 
@@ -418,10 +437,22 @@ run_self_test() {
     return 1
   }
   awk 'BEGIN { FS = "\t" }
-    NR == 2 && NF == 18 && $16 == "" && $17 == "" && $18 == "old-notes" { ok = 1 }
+    NR == 2 && NF == 22 && $8 == "3" && $11 == "5" && $20 == "" && $21 == "" && $22 == "old-notes" { ok = 1 }
     END { exit ok ? 0 : 1 }
   ' "$TSV" || {
-    echo "self-test: old TSV row was not preserved with blank timing/capture columns" >&2
+    echo "self-test: old TSV row was not preserved with promoted timing columns" >&2
+    return 1
+  }
+
+  TSV="$tmp_dir/split-results.tsv"
+  printf '%s\n' "$SPLIT_TSV_HEADER" >"$TSV"
+  printf 'SPLIT\tdemo\t2026-06-21T00:00:00Z\t1.96.0\t1\t2\t3\t4\t5\t6\t60\t7\t8\t9\tyes\tyes\tno\tsplit-notes\n' >>"$TSV"
+  normalize_results_tsv "$TSV"
+  awk 'BEGIN { FS = "\t" }
+    NR == 2 && NF == 22 && $8 == "3" && $11 == "5" && $20 == "yes" && $21 == "no" && $22 == "split-notes" { ok = 1 }
+    END { exit ok ? 0 : 1 }
+  ' "$TSV" || {
+    echo "self-test: split TSV row was not preserved with promoted timing columns" >&2
     return 1
   }
 
@@ -429,14 +460,15 @@ run_self_test() {
   HOST_COMPILE_SEC="12"
   HOST_BYTES="34"
   LABEL="SELF"
+  TSV="$tmp_dir/results.tsv"
   append_tsv_row "demo" "2026-06-21T00:01:00Z" \
-    "10" "11" "12" "13" "60" "14" "15" "16" "no" "yes" "no" "capture-fail"
+    "9" "10" "11" "12" "13" "14" "15" "16" "60" "17" "18" "19" "no" "yes" "no" "capture-fail"
   row="$(tail -1 "$TSV")"
   printf '%s\n' "$row" | awk 'BEGIN { FS = "\t" }
-    NF == 18 && $15 == "no" && $16 == "yes" && $17 == "no" && $18 ~ /capture-fail/ { ok = 1 }
+    NF == 22 && $7 == "9" && $9 == "11" && $12 == "14" && $13 == "15" && $19 == "no" && $20 == "yes" && $21 == "no" && $22 ~ /capture-fail/ { ok = 1 }
     END { exit ok ? 0 : 1 }
   ' || {
-    echo "self-test: split visual/timing/capture row was not written correctly" >&2
+    echo "self-test: promoted timing row was not written correctly" >&2
     return 1
   }
 
@@ -696,7 +728,6 @@ cat /tmp/bench-ui.log
   parse_stats="$(parse_ui_log "$ui_log")" || true
   if [[ -n "$parse_stats" ]]; then
     read -r render_us vsync_us copy_us rows_avg fps_val _cnt prepare_us custom_draw_us cached_present_us overlay_present_us <<<"$parse_stats"
-    notes="${notes:+$notes; }prepare_us=${prepare_us:-0}; custom_draw_us=${custom_draw_us:-0}; cached_present_us=${cached_present_us:-0}; overlay_present_us=${overlay_present_us:-0}"
   else
     timing_ok="no"
     notes="no-fps-lines"
@@ -782,7 +813,8 @@ cat /tmp/bench-ui.log
   fi
 
   append_tsv_row "$scene" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    "$render_us" "$vsync_us" "$copy_us" "$rows_avg" "$fps_val" \
+    "$prepare_us" "$render_us" "$custom_draw_us" "$vsync_us" "$copy_us" \
+    "$cached_present_us" "$overlay_present_us" "$rows_avg" "$fps_val" \
     "$cpu_mean" "$cpu_max" "$rss_kb" "$visual_ok" "$timing_ok" "$capture_ok" "$notes"
 
   rm -f "$ui_log" "$ui_full"
@@ -845,7 +877,7 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
 else
   date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for scene in "${BENCH_SCENES[@]}"; do
-    append_tsv_row "$scene" "$date_iso" "" "" "" "" "" "" "" "" "n/a" "n/a" "n/a" "${HOST_NOTES:+$HOST_NOTES; }skip-device"
+    append_tsv_row "$scene" "$date_iso" "" "" "" "" "" "" "" "" "" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "${HOST_NOTES:+$HOST_NOTES; }skip-device"
   done
 fi
 

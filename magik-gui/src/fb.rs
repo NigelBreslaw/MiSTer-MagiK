@@ -521,7 +521,7 @@ impl Display {
         h: usize,
         stride_bytes: usize,
     ) -> io::Result<()> {
-        let rb = format.rb_from_env();
+        let rb = format.route_rb();
         let expected = format.stride_bytes(w);
         let stride_bytes = if stride_bytes == 0 {
             expected
@@ -604,7 +604,7 @@ impl Display {
                 format!("fb0 current size {w}x{h} exceeds MiSTer buffer"),
             ));
         }
-        Self::open(w, h)
+        Self::open_with_format(w, h, FramebufferFormat::from_bits_per_pixel(info.bits_per_pixel))
     }
 
     fn read_fb_info() -> io::Result<FbInfo> {
@@ -624,7 +624,12 @@ impl Display {
         Self::read_fb_info()
     }
 
-    pub fn open(w: usize, h: usize) -> io::Result<Self> {
+    pub fn open_rgb565(w: usize, h: usize) -> io::Result<Self> {
+        Self::open_with_format(w, h, FramebufferFormat::production())
+    }
+
+    #[cfg(any(test, feature = "diagnostics", mister_experiments))]
+    pub fn open_xrgb8888_diagnostic(w: usize, h: usize) -> io::Result<Self> {
         Self::open_with_format(w, h, FramebufferFormat::Xrgb8888)
     }
 
