@@ -934,3 +934,135 @@ ITEM14-AFTER-metadata-alloc	import_stage_total	4648											path=/tmp/mister-m
 ITEM14-AFTER-metadata-alloc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1319 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM14-AFTER-metadata-alloc	refresh_done	0											skipped=false bytes=18026496 scan_us=2617554 discover_us=2019650 classify_us=2493746 import_us=6207050 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
 ITEM14-AFTER-metadata-alloc	done	10											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	0	0	1	0	0	128651	407070	480276	6633	23472	3788	disk_io_ms=45827 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	1	26	97	6234112	0	128697	407253	480276	6634	23599	3788	disk_io_ms=46939 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	2	42	181	11140096	0	128736	407435	480276	6635	23790	3788	disk_io_ms=47981 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	3	56	265	14649856	0	128773	407623	480277	6635	24027	3788	disk_io_ms=49024 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	4	90	330	18114048	0	128829	407777	480281	6646	24645	3792	disk_io_ms=50135 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	5	115	348	22912512	0	128876	407894	480281	6696	25379	3792	disk_io_ms=51205 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	7	206	363	22943232	0	129000	407998	480281	6696	25379	3792	disk_io_ms=51205 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	8	311	369	22992384	0	129129	408097	480281	6696	25382	3792	disk_io_ms=51211 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	9	417	377	22992384	0	129259	408196	480281	6696	25382	3792	disk_io_ms=51211 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	10	524	382	22992384	0	129390	408297	480281	6696	25382	3792	disk_io_ms=51211 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	11	628	387	22992384	540672	129516	408389	480281	6697	25382	3795	disk_io_ms=51265 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	12	628	399	22992384	11026432	129536	408499	480281	6781	25382	3835	disk_io_ms=52253 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	13	628	407	22992384	17580032	129556	408601	480281	6871	25382	3860	disk_io_ms=53278 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	sample	14	708	422	22992384	18051072	129659	408711	480281	6879	25382	3869	disk_io_ms=53499 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-BEFORE	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ARCH-PROJECTION-BEFORE	scan_stage_first_candidate	69											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-PROJECTION-BEFORE	scan_stage_first_discovery	154											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	701											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	86											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	250											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	2											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	20											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	1575											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	43											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	1530											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	286											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	73											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	213											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	80											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	12											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCH-PROJECTION-BEFORE	scan_stage_walk_target	4											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCH-PROJECTION-BEFORE	scan_stage_walk	4185											candidates=7905
+ARCH-PROJECTION-BEFORE	scan_stage_profile_match	58											calls=7905
+ARCH-PROJECTION-BEFORE	scan_stage_installed_collection	73											calls=7513
+ARCH-PROJECTION-BEFORE	scan_stage_archive_toc	9											containers=154
+ARCH-PROJECTION-BEFORE	scan_stage_collection_listings	0											collections=0
+ARCH-PROJECTION-BEFORE	scan_stage_file_discovery	6041											files=7511
+ARCH-PROJECTION-BEFORE	scan_stage_classify_total	6393											discoveries=9354 normal_files=7897 containers=154 entries=281
+ARCH-PROJECTION-BEFORE	import_stage_schema	12											tables=14
+ARCH-PROJECTION-BEFORE	import_stage_metadata_load	1156											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ARCH-PROJECTION-BEFORE	import_stage_begin_tx	0
+ARCH-PROJECTION-BEFORE	import_stage_insert_profiles	1											rows=16
+ARCH-PROJECTION-BEFORE	import_stage_insert_payloads	484											normal_files=7897 entries=281
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	184											from=0 to=1000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	166											from=1000 to=2000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	183											from=2000 to=3000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	185											from=3000 to=4000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	199											from=4000 to=5000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	206											from=5000 to=6000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	239											from=6000 to=7000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	260											from=7000 to=8000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	254											from=8000 to=9000 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_chunk	65											from=9000 to=9229 total=9229
+ARCH-PROJECTION-BEFORE	import_stage_insert_games_total	1956											rows=9229 launcher_rows=6245
+ARCH-PROJECTION-BEFORE	import_stage_materialize_arcade_ui	467
+ARCH-PROJECTION-BEFORE	import_stage_insert_launcher_arcade	12
+ARCH-PROJECTION-BEFORE	import_stage_insert_launcher_console	218											rows=6185
+ARCH-PROJECTION-BEFORE	import_stage_insert_meta	136											rows=11
+ARCH-PROJECTION-BEFORE	import_stage_insert_catalog_stamp	0											rows=11
+ARCH-PROJECTION-BEFORE	import_stage_insert_software_hash_cache	0											rows=0
+ARCH-PROJECTION-BEFORE	import_stage_build_saved_catalog	120											rows=7256
+ARCH-PROJECTION-BEFORE	import_stage_commit	8
+ARCH-PROJECTION-BEFORE	import_stage_total	4588											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.6146
+ARCH-PROJECTION-BEFORE	sqlite_publish_progress	2											bytes=18026496 copy_ms=2273 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ARCH-PROJECTION-BEFORE	refresh_done	0											skipped=false bytes=18026496 scan_us=6514983 discover_us=4185031 classify_us=6392817 import_us=7121298 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ARCH-PROJECTION-BEFORE	done	15											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	0	0	1	0	0	150127	487578	572845	6940	25382	3931	disk_io_ms=54285 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	1	70	67	0	0	150218	487717	572845	6940	25382	3931	disk_io_ms=54285 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	2	128	106	1351680	0	150294	487840	572846	6960	25452	3931	disk_io_ms=54582 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	3	212	115	2679296	0	150405	487943	572846	6971	25501	3931	disk_io_ms=54746 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	4	317	123	2679296	0	150536	488040	572846	6971	25501	3938	disk_io_ms=54766 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	5	423	128	2679296	0	150666	488139	572846	6971	25501	3938	disk_io_ms=54766 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	6	526	134	2679296	0	150795	488237	572846	6971	25501	3938	disk_io_ms=54766 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	8	628	138	2679296	802816	150920	488329	572846	6973	25501	3942	disk_io_ms=54840 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	9	628	150	2679296	10788864	150943	488437	572846	7057	25501	3988	disk_io_ms=55806 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	sample	10	659	162	2679296	18083840	151004	488542	572846	7114	25501	4018	disk_io_ms=56477 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-PROJECTION-AFTER	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ARCH-PROJECTION-AFTER	scan_stage_first_candidate	67											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-PROJECTION-AFTER	scan_stage_first_discovery	71											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	612											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	81											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	179											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	36											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	421											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	33											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	320											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	286											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	102											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	341											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	90											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	18											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCH-PROJECTION-AFTER	scan_stage_walk_target	3											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCH-PROJECTION-AFTER	scan_stage_walk	1947											candidates=7905
+ARCH-PROJECTION-AFTER	scan_stage_profile_match	73											calls=7905
+ARCH-PROJECTION-AFTER	scan_stage_installed_collection	80											calls=7513
+ARCH-PROJECTION-AFTER	scan_stage_archive_toc	9											containers=154
+ARCH-PROJECTION-AFTER	scan_stage_collection_listings	0											collections=0
+ARCH-PROJECTION-AFTER	scan_stage_file_discovery	2561											files=7511
+ARCH-PROJECTION-AFTER	scan_stage_classify_total	2946											discoveries=9354 normal_files=7897 containers=154 entries=281
+ARCH-PROJECTION-AFTER	import_stage_schema	12											tables=14
+ARCH-PROJECTION-AFTER	import_stage_metadata_load	1169											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ARCH-PROJECTION-AFTER	import_stage_begin_tx	0
+ARCH-PROJECTION-AFTER	import_stage_insert_profiles	1											rows=16
+ARCH-PROJECTION-AFTER	import_stage_insert_payloads	485											normal_files=7897 entries=281
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	183											from=0 to=1000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	166											from=1000 to=2000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	183											from=2000 to=3000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	184											from=3000 to=4000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	183											from=4000 to=5000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	226											from=5000 to=6000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	228											from=6000 to=7000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	257											from=7000 to=8000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	244											from=8000 to=9000 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_chunk	64											from=9000 to=9229 total=9229
+ARCH-PROJECTION-AFTER	import_stage_insert_games_total	1933											rows=9229 launcher_rows=6245
+ARCH-PROJECTION-AFTER	import_stage_materialize_arcade_ui	484
+ARCH-PROJECTION-AFTER	import_stage_insert_launcher_arcade	12
+ARCH-PROJECTION-AFTER	import_stage_insert_launcher_console	231											rows=6185
+ARCH-PROJECTION-AFTER	import_stage_insert_meta	136											rows=11
+ARCH-PROJECTION-AFTER	import_stage_insert_catalog_stamp	0											rows=11
+ARCH-PROJECTION-AFTER	import_stage_insert_software_hash_cache	0											rows=0
+ARCH-PROJECTION-AFTER	import_stage_build_saved_catalog	120											rows=7256
+ARCH-PROJECTION-AFTER	import_stage_commit	8
+ARCH-PROJECTION-AFTER	import_stage_total	4592											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.6893
+ARCH-PROJECTION-AFTER	sqlite_publish_progress	2											bytes=18026496 copy_ms=1855 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ARCH-PROJECTION-AFTER	refresh_done	0											skipped=false bytes=18026496 scan_us=3068463 discover_us=1946703 classify_us=2945989 import_us=6686464 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ARCH-PROJECTION-AFTER	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none

@@ -3,12 +3,15 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
+use crate::arcade_catalog::{self, ArcadeCatalog};
 use crate::catalog_config;
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
 use crate::catalog_config::{DEFAULT_SQLITE_PATH, SCHEMA_VERSION};
+use crate::catalog_projection::{
+    self, CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
+};
 use crate::catalog_progress::report_catalog_progress;
 pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
@@ -25,9 +28,7 @@ use crate::game_discovery::{
 use crate::launch_profiles::{
     self, CollectionListing, PayloadDisposition, PayloadRule, ProfilePathClass,
 };
-pub(crate) use crate::library_cli::{
-    canonical_variant_title, collapse_catalog_variant_rows, collapse_catalog_variants, CatalogRow,
-};
+pub(crate) use crate::catalog_projection::canonical_variant_title;
 use crate::media_metadata;
 use crate::software_identity::{
     load_arcade_machine_metadata, mame_identity_for_discovery, mame_identity_projection,
@@ -666,7 +667,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
 ) -> ArcadeCatalog {
     let covered_payloads = covered_payload_paths(&scan.discoveries);
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
-    let mut rows = Vec::<CatalogRow>::new();
+    let mut rows = Vec::<CatalogProjectionRow>::new();
     for (key, discovery) in discoveries {
         let system_id = catalog_system_id_for_discovery(discovery);
         let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
@@ -674,27 +675,22 @@ fn build_arcade_catalog_from_scan_with_metadata(
             continue;
         }
         let (setname, parent) = catalog_family_fields_for_discovery(discovery, arcade_metadata);
-        rows.push(CatalogRow {
-            game: ArcadeGameEntry {
-                title: discovery.title.clone().into(),
-                mra_path: plan_launch_ref.into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: system_id.into(),
-                is_new: false,
+        rows.push(CatalogProjectionRow::new(
+            discovery.title.clone(),
+            plan_launch_ref,
+            system_id,
+            LauncherPreviewAsset::none(),
+            false,
+            CatalogProjectionSource {
+                discovered_at_unix: None,
+                source_kind: launch_kind_for_discovery(discovery).to_string(),
+                setname,
+                parent,
+                family_key: None,
             },
-            discovered_at_unix: None,
-            source_kind: launch_kind_for_discovery(discovery).to_string(),
-            setname,
-            parent,
-            family_key: None,
-        });
+        ));
     }
-    rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
-    let games = collapse_catalog_variants(rows);
-    let systems = arcade_catalog::systems_from_games(&games);
-    ArcadeCatalog::new(root.as_ref().to_path_buf(), games, systems)
+    catalog_projection::catalog_from_projection_rows(root, rows)
 }
 
 fn catalog_family_fields_for_discovery(
