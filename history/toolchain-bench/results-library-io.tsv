@@ -1066,3 +1066,187 @@ ARCH-PROJECTION-AFTER	import_stage_total	4592											path=/tmp/mister-magik/s
 ARCH-PROJECTION-AFTER	sqlite_publish_progress	2											bytes=18026496 copy_ms=1855 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ARCH-PROJECTION-AFTER	refresh_done	0											skipped=false bytes=18026496 scan_us=3068463 discover_us=1946703 classify_us=2945989 import_us=6686464 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
 ARCH-PROJECTION-AFTER	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	0	0	2	0	0	3824	8148	4820	1648	21823	106	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	1	75	57	0	0	3920	8273	4821	1648	21823	106	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	3	148	103	0	0	4017	8403	4823	1648	21823	106	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	4	249	113	0	0	4142	8506	4823	1648	21823	113	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	5	357	119	0	0	4272	8607	4823	1648	21823	113	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	6	464	124	0	0	4405	8705	4823	1648	21823	113	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	7	571	130	0	0	4533	8805	4823	1648	21823	113	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	8	631	139	0	6348800	4613	8910	4823	1683	21823	151	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	9	649	154	0	18104320	4656	9025	4823	1750	21823	198	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	11	709	201	958976	18104320	4736	9172	4823	1754	21824	198	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	12	710	313	958976	18104320	4760	9381	4823	1754	21824	198	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	13	711	425	958976	18104320	4784	9590	4823	1754	21824	198	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	14	712	528	958976	18104320	4810	9788	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	15	713	640	958976	18104320	4836	9994	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	16	715	751	958976	18104320	4860	10203	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	17	717	861	958976	18104320	4885	10408	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	19	718	971	958976	18104320	4909	10615	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	20	719	1081	958976	18104320	4936	10823	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	21	720	1193	958976	18104320	4960	11034	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	22	721	1305	958976	18104320	4984	11241	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	23	722	1416	958976	18104320	5008	11450	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	24	724	1528	958976	18104320	5033	11659	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	26	725	1642	958976	18104320	5057	11874	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	27	726	1758	958976	18104320	5081	12091	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	28	727	1873	958976	18104320	5103	12306	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	29	728	1988	958976	18104320	5128	12523	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	30	729	2103	958976	18104320	5154	12737	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	32	730	2219	958976	18104320	5177	12951	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	33	731	2335	958976	18104320	5203	13166	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	34	732	2451	958976	18104320	5227	13383	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	35	733	2568	958976	18104320	5252	13600	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	36	734	2684	958976	18104320	5278	13816	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	38	735	2803	958976	18104320	5303	14037	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	39	736	2920	958976	18104320	5327	14256	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	40	737	3035	958976	18104320	5354	14468	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	41	738	3147	958976	18104320	5379	14675	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	42	740	3258	958976	18104320	5405	14883	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	sample	44	743	3370	958976	18104320	5433	15087	4827	1754	21824	207	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-BEFORE	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ARCH-INDEXER-BEFORE	scan_stage_first_candidate	57											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-BEFORE	scan_stage_first_discovery	61											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	554											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	59											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	201											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	24											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	409											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	55											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	373											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	263											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	118											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	297											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	133											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	20											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCH-INDEXER-BEFORE	scan_stage_walk_target	2											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCH-INDEXER-BEFORE	scan_stage_walk	1997											candidates=7905
+ARCH-INDEXER-BEFORE	scan_stage_profile_match	68											calls=7905
+ARCH-INDEXER-BEFORE	scan_stage_installed_collection	91											calls=7513
+ARCH-INDEXER-BEFORE	scan_stage_archive_toc	9											containers=154
+ARCH-INDEXER-BEFORE	scan_stage_collection_listings	0											collections=0
+ARCH-INDEXER-BEFORE	scan_stage_file_discovery	2181											files=7511
+ARCH-INDEXER-BEFORE	scan_stage_classify_total	2572											discoveries=9354 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-BEFORE	import_stage_schema	12											tables=14
+ARCH-INDEXER-BEFORE	import_stage_metadata_load	1155											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ARCH-INDEXER-BEFORE	import_stage_begin_tx	0
+ARCH-INDEXER-BEFORE	import_stage_insert_profiles	1											rows=16
+ARCH-INDEXER-BEFORE	import_stage_insert_payloads	437											normal_files=7897 entries=281
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	190											from=0 to=1000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	199											from=1000 to=2000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	182											from=2000 to=3000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	183											from=3000 to=4000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	175											from=4000 to=5000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	184											from=5000 to=6000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	237											from=6000 to=7000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	290											from=7000 to=8000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	245											from=8000 to=9000 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_chunk	64											from=9000 to=9229 total=9229
+ARCH-INDEXER-BEFORE	import_stage_insert_games_total	1964											rows=9229 launcher_rows=6245
+ARCH-INDEXER-BEFORE	import_stage_materialize_arcade_ui	433
+ARCH-INDEXER-BEFORE	import_stage_insert_launcher_arcade	12
+ARCH-INDEXER-BEFORE	import_stage_insert_launcher_console	267											rows=6185
+ARCH-INDEXER-BEFORE	import_stage_insert_meta	136											rows=11
+ARCH-INDEXER-BEFORE	import_stage_insert_catalog_stamp	0											rows=11
+ARCH-INDEXER-BEFORE	import_stage_insert_software_hash_cache	0											rows=0
+ARCH-INDEXER-BEFORE	import_stage_build_saved_catalog	120											rows=7256
+ARCH-INDEXER-BEFORE	import_stage_commit	8
+ARCH-INDEXER-BEFORE	import_stage_total	4545											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1572
+ARCH-INDEXER-BEFORE	sqlite_publish_progress	1											bytes=18026496 copy_ms=1391 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ARCH-INDEXER-BEFORE	refresh_done	0											skipped=false bytes=18026496 scan_us=2709085 discover_us=1996888 classify_us=2571709 import_us=6169392 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ARCH-INDEXER-BEFORE	done	45											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	1	0	0	0	0	3912	8174	4055	1677	21891	109	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	2	74	56	0	0	4006	8308	4057	1677	21891	109	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	3	153	96	0	0	4107	8435	4058	1677	21891	116	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	4	251	105	0	0	4232	8535	4059	1677	21891	116	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	5	356	112	0	0	4362	8634	4059	1677	21891	116	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	6	463	118	0	0	4494	8731	4059	1677	21891	116	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	7	571	122	0	0	4627	8828	4059	1677	21891	116	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	8	636	132	0	6574080	4710	8932	4059	1708	21891	145	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	10	663	149	0	18055168	4767	9045	4059	1764	21891	190	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	11	713	208	958976	18055168	4836	9205	4059	1768	21892	190	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	12	715	319	958976	18055168	4863	9413	4059	1768	21892	190	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	13	715	429	958976	18055168	4888	9616	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	14	716	540	958976	18055168	4916	9816	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	15	718	652	958976	18055168	4943	10022	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	17	719	764	958976	18055168	4968	10232	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	18	720	876	958976	18055168	4993	10441	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	19	722	988	958976	18055168	5021	10647	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	20	723	1102	958976	18055168	5049	10858	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	21	724	1215	958976	18055168	5079	11067	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	22	725	1331	958976	18055168	5105	11278	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	24	726	1442	958976	18055168	5133	11487	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	25	728	1557	958976	18055168	5156	11702	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	26	729	1673	958976	18055168	5181	11917	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	27	730	1788	958976	18055168	5210	12127	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	28	732	1901	958976	18055168	5236	12336	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	30	733	2016	958976	18055168	5262	12549	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	31	735	2130	958976	18055168	5288	12763	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	32	736	2246	958976	18055168	5315	12974	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	33	737	2361	958976	18055168	5342	13189	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	34	738	2479	958976	18055168	5368	13405	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	36	738	2596	958976	18055168	5392	13624	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	37	739	2714	958976	18055168	5419	13834	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	38	740	2824	958976	18055168	5442	14041	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	39	741	2937	958976	18055168	5467	14249	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	40	741	3051	958976	18055168	5490	14460	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	41	744	3162	958976	18055168	5516	14664	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	43	745	3271	958976	18055168	5543	14869	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	sample	44	747	3381	958976	18055168	5567	15075	4060	1768	21892	197	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+ARCH-INDEXER-AFTER	scan_stage_walk_targets	0											roots=4 targets=16 extensions=29
+ARCH-INDEXER-AFTER	scan_stage_first_candidate	52											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-AFTER	scan_stage_first_discovery	56											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCH-INDEXER-AFTER	scan_stage_walk_target	496											path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+ARCH-INDEXER-AFTER	scan_stage_walk_target	81											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCH-INDEXER-AFTER	scan_stage_walk_target	11											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCH-INDEXER-AFTER	scan_stage_walk_target	170											path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+ARCH-INDEXER-AFTER	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCH-INDEXER-AFTER	scan_stage_walk_target	26											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCH-INDEXER-AFTER	scan_stage_walk_target	380											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCH-INDEXER-AFTER	scan_stage_walk_target	51											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCH-INDEXER-AFTER	scan_stage_walk_target	331											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCH-INDEXER-AFTER	scan_stage_walk_target	294											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCH-INDEXER-AFTER	scan_stage_walk_target	111											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCH-INDEXER-AFTER	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCH-INDEXER-AFTER	scan_stage_walk_target	327											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCH-INDEXER-AFTER	scan_stage_walk_target	133											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCH-INDEXER-AFTER	scan_stage_walk_target	16											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCH-INDEXER-AFTER	scan_stage_walk_target	2											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCH-INDEXER-AFTER	scan_stage_walk	1954											candidates=7905
+ARCH-INDEXER-AFTER	scan_stage_profile_match	81											calls=7905
+ARCH-INDEXER-AFTER	scan_stage_installed_collection	108											calls=7513
+ARCH-INDEXER-AFTER	scan_stage_archive_toc	10											containers=154
+ARCH-INDEXER-AFTER	scan_stage_collection_listings	0											collections=0
+ARCH-INDEXER-AFTER	scan_stage_file_discovery	2180											files=7511
+ARCH-INDEXER-AFTER	scan_stage_classify_total	2609											discoveries=9354 normal_files=7897 containers=154 entries=281
+ARCH-INDEXER-AFTER	import_stage_schema	12											tables=14
+ARCH-INDEXER-AFTER	import_stage_metadata_load	1175											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+ARCH-INDEXER-AFTER	import_stage_begin_tx	0
+ARCH-INDEXER-AFTER	import_stage_insert_profiles	1											rows=16
+ARCH-INDEXER-AFTER	import_stage_insert_payloads	438											normal_files=7897 entries=281
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	200											from=0 to=1000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	191											from=1000 to=2000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	183											from=2000 to=3000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	185											from=3000 to=4000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	177											from=4000 to=5000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	185											from=5000 to=6000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	254											from=6000 to=7000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	273											from=7000 to=8000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	246											from=8000 to=9000 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_chunk	64											from=9000 to=9229 total=9229
+ARCH-INDEXER-AFTER	import_stage_insert_games_total	1974											rows=9229 launcher_rows=6245
+ARCH-INDEXER-AFTER	import_stage_materialize_arcade_ui	445
+ARCH-INDEXER-AFTER	import_stage_insert_launcher_arcade	12
+ARCH-INDEXER-AFTER	import_stage_insert_launcher_console	267											rows=6185
+ARCH-INDEXER-AFTER	import_stage_insert_meta	136											rows=11
+ARCH-INDEXER-AFTER	import_stage_insert_catalog_stamp	0											rows=11
+ARCH-INDEXER-AFTER	import_stage_insert_software_hash_cache	0											rows=0
+ARCH-INDEXER-AFTER	import_stage_build_saved_catalog	118											rows=7256
+ARCH-INDEXER-AFTER	import_stage_commit	8
+ARCH-INDEXER-AFTER	import_stage_total	4585											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1572
+ARCH-INDEXER-AFTER	sqlite_publish_progress	1											bytes=18026496 copy_ms=1228 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+ARCH-INDEXER-AFTER	refresh_done	0											skipped=false bytes=18026496 scan_us=2731632 discover_us=1953717 classify_us=2609286 import_us=6055420 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
+ARCH-INDEXER-AFTER	done	45											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
