@@ -9,6 +9,11 @@ pub struct PadRawEvent {
     pub value: i16,
 }
 
+pub const JS_EVENT_BUTTON: u8 = 0x01;
+pub const JS_EVENT_AXIS: u8 = 0x02;
+const AXIS_MAX: f32 = 32767.0;
+const STICK_DEADZONE: f32 = 8000.0;
+
 /// Best-guess D-Input map for Retro-bit 2563:0575 (A2 receiver).
 /// D-pad on axes 4/5 confirmed on device; buttons from LEGACY16 manual.
 #[derive(Debug, Clone, Default)]
@@ -63,6 +68,108 @@ impl PadState {
             self.last_event_label = label();
         }
     }
+
+    pub fn rebuild_pressed_now(&mut self) {
+        let mut parts: Vec<&str> = Vec::new();
+        if self.dpad_up {
+            parts.push("D-Up");
+        }
+        if self.dpad_down {
+            parts.push("D-Down");
+        }
+        if self.dpad_left {
+            parts.push("D-Left");
+        }
+        if self.dpad_right {
+            parts.push("D-Right");
+        }
+        macro_rules! btn {
+            ($field:ident, $name:expr) => {
+                if self.$field {
+                    parts.push($name);
+                }
+            };
+        }
+        btn!(btn_y, "Y");
+        btn!(btn_b, "B");
+        btn!(btn_a, "A");
+        btn!(btn_x, "X");
+        btn!(btn_l, "L");
+        btn!(btn_r, "R");
+        btn!(btn_zl, "ZL");
+        btn!(btn_zr, "ZR");
+        btn!(btn_select, "Select");
+        btn!(btn_start, "Start");
+        btn!(btn_l3, "L3");
+        btn!(btn_r3, "R3");
+        btn!(btn_home, "Home");
+        btn!(btn_capture, "Capture");
+        if self.left_x.abs() > 0.01 || self.left_y.abs() > 0.01 {
+            parts.push("Left stick");
+        }
+        if self.right_x.abs() > 0.01 || self.right_y.abs() > 0.01 {
+            parts.push("Right stick");
+        }
+        self.pressed_now = if parts.is_empty() {
+            "—".into()
+        } else {
+            parts.join(", ")
+        };
+    }
+
+    fn apply_dpad_x(&mut self, v: f32, label: &'static str) -> &'static str {
+        if v < -STICK_DEADZONE {
+            self.dpad_left = true;
+            self.dpad_right = false;
+        } else if v > STICK_DEADZONE {
+            self.dpad_right = true;
+            self.dpad_left = false;
+        } else {
+            self.dpad_left = false;
+            self.dpad_right = false;
+        }
+        label
+    }
+
+    fn apply_dpad_y(&mut self, v: f32, label: &'static str) -> &'static str {
+        if v < -STICK_DEADZONE {
+            self.dpad_up = true;
+            self.dpad_down = false;
+        } else if v > STICK_DEADZONE {
+            self.dpad_down = true;
+            self.dpad_up = false;
+        } else {
+            self.dpad_up = false;
+            self.dpad_down = false;
+        }
+        label
+    }
+
+    fn apply_hat_x(&mut self, v: f32) {
+        if v < 0.0 {
+            self.dpad_left = true;
+            self.dpad_right = false;
+        } else if v > 0.0 {
+            self.dpad_right = true;
+            self.dpad_left = false;
+        } else {
+            self.dpad_left = false;
+            self.dpad_right = false;
+        }
+    }
+
+    fn apply_hat_y(&mut self, v: f32) {
+        if v < 0.0 {
+            self.dpad_up = true;
+            self.dpad_down = false;
+        } else if v > 0.0 {
+            self.dpad_down = true;
+            self.dpad_up = false;
+        } else {
+            self.dpad_up = false;
+            self.dpad_down = false;
+        }
+    }
 }
 
 /// How raw js button/axis indices map onto [`PadState`].
@@ -94,9 +201,303 @@ impl PadLayout {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputProfile {
+    layout: PadLayout,
+}
+
+impl InputProfile {
+    pub fn guess(info: &PadInfo) -> Self {
+        Self {
+            layout: PadLayout::guess(info),
+        }
+    }
+
+    pub fn generic() -> Self {
+        Self {
+            layout: PadLayout::Generic,
+        }
+    }
+
+    pub fn dpad_axes_45() -> Self {
+        Self {
+            layout: PadLayout::DpadAxes45,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        self.layout.profile_name()
+    }
+
+    pub fn apply_js_event(
+        self,
+        state: &mut PadState,
+        event: PadRawEvent,
+        debug_labels: bool,
+    ) -> bool {
+        state.record_raw_event(event.event_type, event.number, event.value, debug_labels);
+        match self.layout {
+            PadLayout::DpadAxes45 => self.apply_event_dpad_axes_45(state, event, debug_labels),
+            PadLayout::Generic => self.apply_event_generic(state, event, debug_labels),
+        }
+    }
+
+    fn apply_event_dpad_axes_45(
+        self,
+        state: &mut PadState,
+        event: PadRawEvent,
+        debug_labels: bool,
+    ) -> bool {
+        let changed = match event.event_type {
+            JS_EVENT_BUTTON => {
+                let pressed = event.value != 0;
+                let label = match event.number {
+                    0 => {
+                        state.btn_y = pressed;
+                        "Y"
+                    }
+                    1 => {
+                        state.btn_b = pressed;
+                        "B"
+                    }
+                    2 => {
+                        state.btn_a = pressed;
+                        "A"
+                    }
+                    3 => {
+                        state.btn_x = pressed;
+                        "X"
+                    }
+                    4 => {
+                        state.btn_l = pressed;
+                        "L"
+                    }
+                    5 => {
+                        state.btn_r = pressed;
+                        "R"
+                    }
+                    6 => {
+                        state.btn_zl = pressed;
+                        "ZL"
+                    }
+                    7 => {
+                        state.btn_zr = pressed;
+                        "ZR"
+                    }
+                    8 => {
+                        state.btn_select = pressed;
+                        "Select"
+                    }
+                    9 => {
+                        state.btn_start = pressed;
+                        "Start"
+                    }
+                    10 => {
+                        state.btn_l3 = pressed;
+                        "L3"
+                    }
+                    11 => {
+                        state.btn_r3 = pressed;
+                        "R3"
+                    }
+                    12 => {
+                        state.btn_home = pressed;
+                        "Home"
+                    }
+                    13 => {
+                        state.btn_capture = pressed;
+                        "Capture"
+                    }
+                    _ => {
+                        state.set_debug_event_label(debug_labels, || {
+                            format!(
+                                "unknown btn {} {}",
+                                event.number,
+                                if pressed { "down" } else { "up" }
+                            )
+                        });
+                        state.rebuild_pressed_now();
+                        return false;
+                    }
+                };
+                state.set_debug_event_label(debug_labels, || {
+                    format!(
+                        "{label} {} (js btn {})",
+                        if pressed { "down" } else { "up" },
+                        event.number
+                    )
+                });
+                true
+            }
+            JS_EVENT_AXIS => {
+                let v = event.value as f32;
+                let label = match event.number {
+                    0 => {
+                        state.left_x = normalize_stick(v);
+                        "Left X"
+                    }
+                    1 => {
+                        state.left_y = normalize_stick(v);
+                        "Left Y"
+                    }
+                    2 => {
+                        state.right_x = normalize_stick(v);
+                        "Right X"
+                    }
+                    3 => {
+                        state.right_y = normalize_stick(v);
+                        "Right Y"
+                    }
+                    4 => state.apply_dpad_x(v, "D-pad X"),
+                    5 => state.apply_dpad_y(v, "D-pad Y"),
+                    _ => {
+                        state.set_debug_event_label(debug_labels, || {
+                            format!("unknown axis {} val={}", event.number, event.value)
+                        });
+                        state.rebuild_pressed_now();
+                        return false;
+                    }
+                };
+                if event.number <= 3 {
+                    state.set_debug_event_label(debug_labels, || {
+                        format!("{label} axis {} = {}", event.number, event.value)
+                    });
+                }
+                true
+            }
+            _ => return false,
+        };
+        state.rebuild_pressed_now();
+        changed
+    }
+
+    fn apply_event_generic(
+        self,
+        state: &mut PadState,
+        event: PadRawEvent,
+        debug_labels: bool,
+    ) -> bool {
+        let changed = match event.event_type {
+            JS_EVENT_BUTTON => {
+                let pressed = event.value != 0;
+                let label = match event.number {
+                    0 => {
+                        state.btn_a = pressed;
+                        "A"
+                    }
+                    1 => {
+                        state.btn_b = pressed;
+                        "B"
+                    }
+                    2 => {
+                        state.btn_x = pressed;
+                        "X"
+                    }
+                    3 => {
+                        state.btn_y = pressed;
+                        "Y"
+                    }
+                    4 => {
+                        state.btn_l = pressed;
+                        "L"
+                    }
+                    5 => {
+                        state.btn_r = pressed;
+                        "R"
+                    }
+                    6 => {
+                        state.btn_select = pressed;
+                        "Select"
+                    }
+                    7 => {
+                        state.btn_start = pressed;
+                        "Start"
+                    }
+                    8 => {
+                        state.btn_l3 = pressed;
+                        "L3"
+                    }
+                    9 => {
+                        state.btn_r3 = pressed;
+                        "R3"
+                    }
+                    10 | 11 => {
+                        state.btn_home = pressed;
+                        "Home"
+                    }
+                    _ => {
+                        state.set_debug_event_label(debug_labels, || {
+                            format!(
+                                "unknown btn {} {}",
+                                event.number,
+                                if pressed { "down" } else { "up" }
+                            )
+                        });
+                        state.rebuild_pressed_now();
+                        return false;
+                    }
+                };
+                state.set_debug_event_label(debug_labels, || {
+                    format!(
+                        "{label} {} (js btn {})",
+                        if pressed { "down" } else { "up" },
+                        event.number
+                    )
+                });
+                true
+            }
+            JS_EVENT_AXIS => {
+                let v = event.value as f32;
+                match event.number {
+                    0 => {
+                        state.left_x = normalize_stick(v);
+                        state.apply_dpad_x(v, "Stick X");
+                    }
+                    1 => {
+                        state.left_y = normalize_stick(v);
+                        state.apply_dpad_y(v, "Stick Y");
+                    }
+                    2 => {
+                        state.right_x = normalize_stick(v);
+                    }
+                    3 => {
+                        state.right_y = normalize_stick(v);
+                    }
+                    4 => {
+                        state.apply_dpad_x(v, "D-pad X");
+                    }
+                    5 => {
+                        state.apply_dpad_y(v, "D-pad Y");
+                    }
+                    6 => {
+                        state.apply_hat_x(v);
+                    }
+                    7 => {
+                        state.apply_hat_y(v);
+                    }
+                    _ => {
+                        state.set_debug_event_label(debug_labels, || {
+                            format!("unknown axis {} val={}", event.number, event.value)
+                        });
+                        state.rebuild_pressed_now();
+                        return false;
+                    }
+                };
+                state.set_debug_event_label(debug_labels, || {
+                    format!("axis {} = {}", event.number, event.value)
+                });
+                true
+            }
+            _ => return false,
+        };
+        state.rebuild_pressed_now();
+        changed
+    }
+}
+
 /// Name of the input profile used to decode js events for this pad.
 pub fn layout_profile_name(info: &PadInfo) -> &'static str {
-    PadLayout::guess(info).profile_name()
+    InputProfile::guess(info).name()
 }
 
 fn strip_hex_prefix(raw: &str) -> String {
@@ -107,9 +508,32 @@ fn strip_hex_prefix(raw: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn normalize_stick(v: f32) -> f32 {
+    if v.abs() < STICK_DEADZONE {
+        return 0.0;
+    }
+    (v / AXIS_MAX).clamp(-1.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn js_button(number: u8, value: i16) -> PadRawEvent {
+        PadRawEvent {
+            event_type: JS_EVENT_BUTTON,
+            number,
+            value,
+        }
+    }
+
+    fn js_axis(number: u8, value: i16) -> PadRawEvent {
+        PadRawEvent {
+            event_type: JS_EVENT_AXIS,
+            number,
+            value,
+        }
+    }
 
     #[test]
     fn raw_event_without_debug_labels_keeps_compact_data_only() {
@@ -145,6 +569,77 @@ mod tests {
     }
 
     #[test]
+    fn generic_button_zero_maps_to_a_without_debug_strings() {
+        let mut state = PadState::default();
+
+        assert!(InputProfile::generic().apply_js_event(&mut state, js_button(0, 1), false));
+
+        assert!(state.btn_a);
+        assert_eq!(state.last_raw_event, Some(js_button(0, 1)));
+        assert!(state.last_raw.is_empty());
+        assert!(state.last_event_label.is_empty());
+        assert_eq!(state.pressed_now, "A");
+    }
+
+    #[test]
+    fn generic_axis_zero_updates_left_stick_and_stick_dpad() {
+        let mut state = PadState::default();
+
+        assert!(InputProfile::generic().apply_js_event(&mut state, js_axis(0, -32767), true));
+
+        assert!(state.dpad_left);
+        assert!(!state.dpad_right);
+        assert_eq!(state.left_x, -1.0);
+        assert_eq!(state.last_event_label, "axis 0 = -32767");
+        assert!(state.pressed_now.contains("D-Left"));
+        assert!(state.pressed_now.contains("Left stick"));
+    }
+
+    #[test]
+    fn dpad_axes_45_maps_js0_to_y_js2_to_a() {
+        let mut state = PadState::default();
+        let profile = InputProfile::dpad_axes_45();
+
+        assert!(profile.apply_js_event(&mut state, js_button(0, 1), true));
+        assert!(profile.apply_js_event(&mut state, js_button(2, 1), true));
+
+        assert!(state.btn_y);
+        assert!(state.btn_a);
+        assert!(!state.btn_b);
+        assert_eq!(state.last_event_label, "A down (js btn 2)");
+        assert_eq!(state.pressed_now, "Y, A");
+    }
+
+    #[test]
+    fn dpad_axes_45_axis_4_5_drive_dpad() {
+        let mut state = PadState::default();
+        let profile = InputProfile::dpad_axes_45();
+
+        assert!(profile.apply_js_event(&mut state, js_axis(4, 32767), true));
+        assert!(profile.apply_js_event(&mut state, js_axis(5, -32767), true));
+
+        assert!(state.dpad_right);
+        assert!(!state.dpad_left);
+        assert!(state.dpad_up);
+        assert!(!state.dpad_down);
+        assert_eq!(state.last_raw, "type=2 num=5 val=-32767");
+        assert!(state.last_event_label.is_empty());
+        assert_eq!(state.pressed_now, "D-Up, D-Right");
+    }
+
+    #[test]
+    fn unknown_button_records_raw_event_but_returns_false() {
+        let mut state = PadState::default();
+
+        assert!(!InputProfile::generic().apply_js_event(&mut state, js_button(99, 1), true));
+
+        assert_eq!(state.last_raw_event, Some(js_button(99, 1)));
+        assert_eq!(state.last_raw, "type=1 num=99 val=1");
+        assert_eq!(state.last_event_label, "unknown btn 99 down");
+        assert_eq!(state.pressed_now, "—");
+    }
+
+    #[test]
     fn layout_guess_strips_hex_prefixes_and_identifies_known_dpad_axis_pads() {
         let retrobit = PadInfo {
             vendor_id: "0x2563".to_string(),
@@ -162,9 +657,12 @@ mod tests {
             ..PadInfo::default()
         };
 
-        assert_eq!(PadLayout::guess(&retrobit), PadLayout::DpadAxes45);
+        assert_eq!(InputProfile::guess(&retrobit), InputProfile::dpad_axes_45());
         assert_eq!(layout_profile_name(&retrobit), "dpad_axes_4_5");
-        assert_eq!(PadLayout::guess(&dragonrise), PadLayout::DpadAxes45);
+        assert_eq!(
+            InputProfile::guess(&dragonrise),
+            InputProfile::dpad_axes_45()
+        );
         assert_eq!(layout_profile_name(&generic), "generic");
     }
 }

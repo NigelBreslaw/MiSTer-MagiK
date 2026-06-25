@@ -60,6 +60,7 @@ use std::sync::{mpsc, Mutex, OnceLock};
 mod camera_effects_loop;
 mod catalog_worker;
 mod controller_loop;
+mod controller_setup_input_session;
 #[cfg(mister_experiments)]
 mod effect_loop_support;
 mod launcher_bench;
@@ -94,6 +95,7 @@ mod video_loop;
 use camera_effects_loop::run_camera_effects_loop;
 use catalog_worker::*;
 use controller_loop::*;
+use controller_setup_input_session::*;
 use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_catalog_session::*;

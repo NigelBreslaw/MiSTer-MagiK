@@ -1099,9 +1099,6 @@ pub(super) fn run_launcher_loop(
         if !launching {
             let pad_changed = pad.poll_with_debug_labels(setup_active);
             let frame_now = Instant::now();
-            let state = pad.state();
-            let active_idx = pad.active_idx();
-            let info = pad.info();
 
             if setup_active && setup.target_pad_idx >= pad.len() {
                 eprintln!(
@@ -1112,10 +1109,16 @@ pub(super) fn run_launcher_loop(
                 full_bridge_dirty = true;
             }
 
+            let input_session = ControllerSetupInputSession::new(&pad, &setup);
+            let launcher_state = input_session.launcher_state().clone();
+            let setup_state = input_session.setup_state().clone();
+            let active_idx = pad.active_idx();
+            let info = pad.info();
+
             if launcher_bench_scenario.is_none() && setup.is_active() {
                 let setup_before = SetupBridgeKey::from_setup(&setup);
                 let setup_info = pad.info_at(setup.target_pad_idx);
-                match setup.handle_input(&state, frame_now, setup_info, pad.db()) {
+                match setup.handle_input(&setup_state, frame_now, setup_info, pad.db()) {
                     SetupAction::None => {}
                     SetupAction::RegisterNew => {
                         let idx = setup.target_pad_idx;
@@ -1157,8 +1160,8 @@ pub(super) fn run_launcher_loop(
                 if !setup.is_active() {
                     let nav_before = LauncherBridgeKey::from_nav(&nav);
                     if transition_picker_enabled && nav.screen == Screen::Arcade {
-                        let left = state.dpad_left && !transition_picker_prev_left;
-                        let right = state.dpad_right && !transition_picker_prev_right;
+                        let left = launcher_state.dpad_left && !transition_picker_prev_left;
+                        let right = launcher_state.dpad_right && !transition_picker_prev_right;
                         let changed = if left {
                             preview_transition.cycle_picker(-1)
                         } else if right {
@@ -1175,9 +1178,9 @@ pub(super) fn run_launcher_loop(
                             window.request_redraw();
                         }
                     }
-                    transition_picker_prev_left = state.dpad_left;
-                    transition_picker_prev_right = state.dpad_right;
-                    let mut nav_state = state.clone();
+                    transition_picker_prev_left = launcher_state.dpad_left;
+                    transition_picker_prev_right = launcher_state.dpad_right;
+                    let mut nav_state = launcher_state.clone();
                     if let Some(test_state) =
                         library_changed_dialog_test.input_for(&nav, loop_start, start)
                     {
