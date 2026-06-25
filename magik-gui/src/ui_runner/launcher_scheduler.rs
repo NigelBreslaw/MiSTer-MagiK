@@ -1,0 +1,258 @@
+use super::*;
+
+#[derive(Default)]
+pub(super) struct CatalogJobEventBuf {
+    events: Vec<CatalogWorkerMessage>,
+}
+
+impl CatalogJobEventBuf {
+    pub(super) fn new() -> Self {
+        Self {
+            events: Vec::with_capacity(8),
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    fn push(&mut self, event: CatalogWorkerMessage) {
+        self.events.push(event);
+    }
+
+    pub(super) fn drain(&mut self) -> impl Iterator<Item = CatalogWorkerMessage> + '_ {
+        self.events.drain(..)
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.events.capacity()
+    }
+}
+
+#[derive(Default)]
+pub(super) struct MediaJobEventBuf {
+    events: Vec<MediaWorkerMessage>,
+}
+
+impl MediaJobEventBuf {
+    pub(super) fn new() -> Self {
+        Self {
+            events: Vec::with_capacity(8),
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    fn push(&mut self, event: MediaWorkerMessage) {
+        self.events.push(event);
+    }
+
+    pub(super) fn drain(&mut self) -> impl Iterator<Item = MediaWorkerMessage> + '_ {
+        self.events.drain(..)
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.events.capacity()
+    }
+}
+
+pub(super) struct LauncherScheduler {
+    catalog_rx: Option<mpsc::Receiver<CatalogWorkerMessage>>,
+    media_handle: Option<MediaWorkerHandle>,
+    media_worker_unavailable: bool,
+    launch_handoff: LaunchHandoffSession,
+}
+
+impl LauncherScheduler {
+    pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
+        Self {
+            catalog_rx: None,
+            media_handle: None,
+            media_worker_unavailable: false,
+            launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
+        }
+    }
+
+    pub(super) fn catalog_worker_running(&self) -> bool {
+        self.catalog_rx.is_some()
+    }
+
+    pub(super) fn start_catalog_worker(
+        &mut self,
+        root: String,
+        request: CatalogWorkerRequest,
+        initial_cache: CatalogWorkerInitialCache,
+    ) {
+        self.catalog_rx = Some(start_library_catalog_worker(root, request, initial_cache));
+    }
+
+    pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) {
+        out.clear();
+        while let Some(message) = self.catalog_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            out.push(message);
+        }
+    }
+
+    pub(super) fn media_worker_running(&self) -> bool {
+        self.media_handle.is_some()
+    }
+
+    pub(super) fn media_worker_unavailable(&self) -> bool {
+        self.media_worker_unavailable
+    }
+
+    pub(super) fn ensure_media_worker_started(&mut self, start: Instant, mode: &str) {
+        if self.media_handle.is_some() || self.media_worker_unavailable {
+            return;
+        }
+        self.media_handle = start_screenshot_media_worker();
+        if self.media_handle.is_some() {
+            print_startup_event(
+                start,
+                "screenshot_media_worker_start",
+                format!("mode={mode}"),
+            );
+        } else {
+            self.media_worker_unavailable = true;
+            print_startup_event(
+                start,
+                "screenshot_media_worker_skip",
+                format!("mode={mode}"),
+            );
+        }
+    }
+
+    pub(super) fn ensure_media_system(&self, system_id: &str) {
+        if let Some(handle) = self.media_handle.as_ref() {
+            handle.ensure_system(system_id);
+        }
+    }
+
+    pub(super) fn finish_media_worker(&self) {
+        if let Some(handle) = self.media_handle.as_ref() {
+            handle.finish();
+        }
+    }
+
+    pub(super) fn drop_media_worker(&mut self) {
+        self.media_handle = None;
+    }
+
+    pub(super) fn mark_media_worker_unavailable(&mut self) {
+        self.media_worker_unavailable = true;
+    }
+
+    pub(super) fn set_media_interaction_active(&self, active: bool, reason: &str) {
+        if let Some(handle) = self.media_handle.as_ref() {
+            handle.set_interaction_active(active, reason);
+        }
+    }
+
+    pub(super) fn poll_media(&mut self, out: &mut MediaJobEventBuf) {
+        out.clear();
+        while let Some(message) = self
+            .media_handle
+            .as_ref()
+            .and_then(|handle| handle.try_recv())
+        {
+            out.push(message);
+        }
+    }
+
+    pub(super) fn record_loading_frame(&mut self, loop_start: Instant) {
+        self.launch_handoff.record_loading_frame(loop_start);
+    }
+
+    pub(super) fn launch_loading_title(&self) -> &str {
+        self.launch_handoff.loading_title()
+    }
+
+    pub(super) fn visible_loading_title<'a>(&'a self, fallback: &'a str) -> &'a str {
+        self.launch_handoff.visible_loading_title(fallback)
+    }
+
+    pub(super) fn launch_is_active(&self) -> bool {
+        self.launch_handoff.is_active()
+    }
+
+    pub(super) fn has_pending_launch(&self) -> bool {
+        self.launch_handoff.has_pending_launch()
+    }
+
+    pub(super) fn launch_benchmark_enabled(&self) -> bool {
+        self.launch_handoff.benchmark_enabled()
+    }
+
+    pub(super) fn should_request_benchmark_launch(&self) -> bool {
+        self.launch_handoff.should_request_benchmark_launch()
+    }
+
+    pub(super) fn begin_launch(
+        &mut self,
+        nav: &LauncherNav,
+        catalog: &ArcadeCatalog,
+        launch_ref: &str,
+        now: Instant,
+    ) -> bool {
+        self.launch_handoff
+            .begin_launch(nav, catalog, launch_ref, now)
+    }
+
+    pub(super) fn complete_loading_frame(&mut self, loading_presented: Instant) {
+        self.launch_handoff
+            .complete_loading_frame(loading_presented);
+    }
+
+    pub(super) fn poll_launch_completion(
+        &mut self,
+        result_received: Instant,
+    ) -> Option<LaunchHandoffCompletion> {
+        self.launch_handoff.poll_completion(result_received)
+    }
+
+    pub(super) fn recover_launcher_ui(&mut self, f: &mut Fpga, ui: &UiDisplay) {
+        self.launch_handoff.recover_launcher_ui(f, ui);
+    }
+
+    pub(super) fn finish_launch_failure_recovery(&mut self, recovery_presented: Instant) {
+        self.launch_handoff
+            .finish_failure_recovery(recovery_presented);
+    }
+
+    pub(super) fn launch_runtime_action(&self, now: Instant) -> Option<LaunchHandoffRuntimeAction> {
+        self.launch_handoff.runtime_action(now)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_buffers_are_reused_without_shrinking() {
+        let mut catalog = CatalogJobEventBuf::new();
+        let mut media = MediaJobEventBuf::new();
+        let catalog_capacity = catalog.capacity();
+        let media_capacity = media.capacity();
+
+        catalog.clear();
+        media.clear();
+
+        assert_eq!(catalog.capacity(), catalog_capacity);
+        assert_eq!(media.capacity(), media_capacity);
+    }
+
+    #[test]
+    fn scheduler_starts_without_background_workers() {
+        let scheduler = LauncherScheduler::new(false);
+
+        assert!(!scheduler.catalog_worker_running());
+        assert!(!scheduler.media_worker_running());
+        assert!(!scheduler.media_worker_unavailable());
+        assert!(!scheduler.launch_benchmark_enabled());
+    }
+}

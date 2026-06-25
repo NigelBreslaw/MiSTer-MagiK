@@ -1609,3 +1609,64 @@ ARCH-INDEXER-AFTER	c77413d2	library_db_saved	51348	bytes=18026496 scan_us=388807
 ARCH-INDEXER-AFTER	c77413d2	library_ready	51503	games=7256 load_us=215391
 ARCH-INDEXER-AFTER	c77413d2	catalog_bridge_sync_update	51504	games=7256 elapsed_us=90
 ARCH-INDEXER-AFTER	c77413d2	db_count	0	9229
+LIFECYCLE-20260625	49a4563e	first_frame	101	catalog_ready=false
+LIFECYCLE-20260625	49a4563e	bootstrap_counter_climb	414	target=50
+LIFECYCLE-20260625	49a4563e	bootstrap_counter_sustained_climb	948	target=900
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+LIFECYCLE-20260625	49a4563e	scan_stage_first_candidate	2581	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+LIFECYCLE-20260625	49a4563e	scan_stage_first_discovery	2756	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	12218	path=/media/fat/_Arcade dirs=509 files=2751 candidates=2747
+LIFECYCLE-20260625	49a4563e	full_scan_counter_climb	22631	target=1050
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	2580	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	101	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	7510	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	10	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	151	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	6315	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	460	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	5929	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	4148	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	992	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	5253	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	937	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	18	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+LIFECYCLE-20260625	49a4563e	scan_stage_walk_target	3	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+LIFECYCLE-20260625	49a4563e	scan_stage_walk	36992	candidates=7905
+LIFECYCLE-20260625	49a4563e	scan_stage_profile_match	90	calls=7905
+LIFECYCLE-20260625	49a4563e	scan_stage_installed_collection	152	calls=7513
+LIFECYCLE-20260625	49a4563e	scan_stage_archive_toc	716	containers=154
+LIFECYCLE-20260625	49a4563e	scan_stage_collection_listings	0	collections=0
+LIFECYCLE-20260625	49a4563e	scan_stage_file_discovery	34715	files=7511
+LIFECYCLE-20260625	49a4563e	scan_stage_classify_total	38828	discoveries=9354 normal_files=7897 containers=154 entries=281
+LIFECYCLE-20260625	49a4563e	library_scan_complete	40056	scan_us=38829075 discover_us=36992011 classify_us=38827958 discoveries=9229 normal_files=7897 containers=154 entries=281
+LIFECYCLE-20260625	49a4563e	import_stage_schema	28	tables=14
+LIFECYCLE-20260625	49a4563e	import_stage_metadata_load	2774	mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
+LIFECYCLE-20260625	49a4563e	import_stage_begin_tx	0	-
+LIFECYCLE-20260625	49a4563e	import_stage_insert_profiles	0	rows=16
+LIFECYCLE-20260625	49a4563e	import_stage_insert_payloads	887	normal_files=7897 entries=281
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	392	from=0 to=1000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	334	from=1000 to=2000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	359	from=2000 to=3000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	427	from=3000 to=4000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	379	from=4000 to=5000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	369	from=5000 to=6000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	465	from=6000 to=7000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	501	from=7000 to=8000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	502	from=8000 to=9000 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_chunk	244	from=9000 to=9229 total=9229
+LIFECYCLE-20260625	49a4563e	import_stage_insert_games_total	3998	rows=9229 launcher_rows=6245
+LIFECYCLE-20260625	49a4563e	import_stage_materialize_arcade_ui	858	-
+LIFECYCLE-20260625	49a4563e	import_stage_insert_launcher_arcade	14	-
+LIFECYCLE-20260625	49a4563e	import_stage_insert_launcher_console	445	rows=6185
+LIFECYCLE-20260625	49a4563e	import_stage_insert_meta	268	rows=11
+LIFECYCLE-20260625	49a4563e	import_stage_insert_catalog_stamp	0	rows=11
+LIFECYCLE-20260625	49a4563e	import_stage_insert_software_hash_cache	0	rows=0
+LIFECYCLE-20260625	49a4563e	import_stage_build_saved_catalog	240	rows=7256
+LIFECYCLE-20260625	49a4563e	import_stage_commit	12	-
+LIFECYCLE-20260625	49a4563e	import_stage_total	9533	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+LIFECYCLE-20260625	49a4563e	sqlite_publish_progress	1429	bytes=18026496 copy_ms=1409 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
+LIFECYCLE-20260625	49a4563e	library_db_saved	51528	bytes=18026496 scan_us=38829075 discover_us=36992011 classify_us=38827958 import_us=11405646 discoveries=9229 normal_files=7897 containers=154 entries=281
+LIFECYCLE-20260625	49a4563e	library_ready	51694	games=7256 load_us=240116
+LIFECYCLE-20260625	49a4563e	catalog_bridge_sync_update	51694	games=7256 elapsed_us=93
+LIFECYCLE-20260625	49a4563e	db_count	0	9229

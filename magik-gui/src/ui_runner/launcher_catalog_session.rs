@@ -13,6 +13,7 @@ pub(super) struct CatalogWorkerStart {
 struct DeferredCatalogWorker {
     root: String,
     request: CatalogWorkerRequest,
+    initial_cache: CatalogWorkerInitialCache,
     start_after: Option<Instant>,
 }
 
@@ -26,11 +27,13 @@ pub(super) enum CatalogSessionEffect {
     UseCatalog {
         catalog: ArcadeCatalog,
         load_us: u64,
+        source: CatalogSource,
     },
     SyncCatalogBridge,
     Ui(LauncherWorkerUiIntent),
     FinishMediaWorker,
     FinishMediaWorkerIfNoCatalogSeedPending,
+    CatalogValidationFinished,
     RequestMediaCatalogSeed,
     MediaSystemDiscovered {
         system_id: String,
@@ -122,10 +125,16 @@ impl LauncherCatalogSession {
         self.summary_only = false;
     }
 
-    pub(super) fn defer_catalog_worker(&mut self, root: String, request: CatalogWorkerRequest) {
+    pub(super) fn defer_catalog_worker(
+        &mut self,
+        root: String,
+        request: CatalogWorkerRequest,
+        initial_cache: CatalogWorkerInitialCache,
+    ) {
         self.deferred_worker = Some(DeferredCatalogWorker {
             root,
             request,
+            initial_cache,
             start_after: None,
         });
     }
@@ -154,7 +163,7 @@ impl LauncherCatalogSession {
         Some(CatalogWorkerStart {
             root: deferred.root,
             request: deferred.request,
-            initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
+            initial_cache: deferred.initial_cache,
         })
     }
 
@@ -204,6 +213,7 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = true;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
+                effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_save_failed", error);
                 effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
@@ -212,6 +222,7 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = false;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
+                effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event(
                     "library_db_unchanged",
                     format_library_refresh_summary(&summary),
@@ -224,6 +235,7 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = false;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
+                effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_changed_detected", detail);
                 effects.push(CatalogSessionEffect::Confirm(
                     launcher::ConfirmAction::LibraryChanged,
@@ -236,6 +248,7 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = false;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
+                effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 if context.catalog_ready {
                     effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                     self.games_found_counter.reset();
@@ -358,6 +371,11 @@ impl LauncherCatalogSession {
             effects.push(CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
                 load_us,
+                source: if cached_before_refresh {
+                    CatalogSource::FullSqlite
+                } else {
+                    CatalogSource::FreshBuild
+                },
             });
             effects.event(
                 "library_ready",
@@ -593,6 +611,7 @@ mod tests {
                 CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
                     "finish-media-if-no-seed"
                 }
+                CatalogSessionEffect::CatalogValidationFinished => "catalog-validation-finished",
                 CatalogSessionEffect::RequestMediaCatalogSeed => "request-media-seed",
                 CatalogSessionEffect::MediaSystemDiscovered { .. } => "media-system-discovered",
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => "request-rebuild-marker",
@@ -682,7 +701,13 @@ mod tests {
 
         assert_eq!(
             effect_names(effects),
-            vec!["finish-media", "event", "confirm", "ui"]
+            vec![
+                "finish-media",
+                "catalog-validation-finished",
+                "event",
+                "confirm",
+                "ui"
+            ]
         );
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
@@ -708,6 +733,37 @@ mod tests {
         assert_eq!(effect_names(effects), vec!["event", "start-worker", "ui"]);
         assert!(!session.refresh_done());
         assert!(session.foreground_update());
+    }
+
+    #[test]
+    fn deferred_catalog_worker_waits_for_first_visible_copy_and_delay() {
+        let mut session = LauncherCatalogSession::new(false);
+        let now = Instant::now();
+        let delay = Duration::from_millis(50);
+
+        session.defer_catalog_worker(
+            "/media/fat/_Arcade".to_string(),
+            CatalogWorkerRequest::CheckStamp,
+            CatalogWorkerInitialCache::ProbeSqlite,
+        );
+
+        assert!(session
+            .maybe_start_deferred_worker(false, false, now + delay, delay)
+            .is_none());
+        assert!(session
+            .maybe_start_deferred_worker(false, true, now + Duration::from_millis(20), delay)
+            .is_none());
+
+        let worker = session
+            .maybe_start_deferred_worker(false, true, now + Duration::from_millis(70), delay)
+            .expect("deferred worker");
+
+        assert_eq!(worker.root, "/media/fat/_Arcade");
+        assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
+        assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
+        assert!(session
+            .maybe_start_deferred_worker(false, true, now + Duration::from_millis(200), delay)
+            .is_none());
     }
 
     #[test]

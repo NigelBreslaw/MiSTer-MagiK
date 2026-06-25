@@ -24,8 +24,13 @@ APIs, progress states, and benchmark expectations.
 - `magik-gui/catalog/src/library_db.rs` remains the compatibility facade for
   scanning, classification, SQLite build/publish, and public read APIs while the
   catalog modules continue to split out.
-- `magik-gui/src/ui_runner/catalog_worker.rs` owns launcher worker scheduling
-  and progress messages.
+- `magik-gui/src/ui_runner/catalog_worker.rs` owns catalog worker execution and
+  progress messages.
+- `magik-gui/src/ui_runner/launcher_lifecycle.rs` owns the launcher catalog
+  readiness state (`SummaryProjection`, `FullSqlite`, or `FreshBuild`) and the
+  transition from validation back to idle.
+- `magik-gui/src/ui_runner/launcher_scheduler.rs` is the single launcher-side
+  adapter for starting and polling catalog, media, launch, and background jobs.
 - `magik-gui/src/launcher.rs` owns the library rebuild-on-next-boot marker plus
   virtual launch cache stamping and materialization.
 
@@ -63,17 +68,24 @@ files in the assets directory are left alone.
 
 Warm boot with a usable cache:
 
-1. Launcher loads the current-schema SQLite catalog and presents it.
-2. After the UI delay, worker runs `CheckStamp`.
-3. If the stored stamp matches the current root stamp, the worker reports
+1. Launcher may load `library.summary.json` as a `SummaryProjection` so Home and
+   system counts are usable immediately.
+2. After the first visible copy and configured warm-validation delay, the
+   scheduler starts the catalog worker. Summary-only boots use `ProbeSqlite` so
+   the full SQLite rows are hydrated; boots that already loaded the full SQLite
+   catalog use `AlreadyLoadedReady`.
+3. A matching current-schema SQLite catalog transitions through `FullSqlite`
+   readiness without forcing a rebuild.
+4. Worker runs `CheckStamp`.
+5. If the stored stamp matches the current root stamp, the worker reports
    `Unchanged` and does not rebuild.
-4. If the stamp is missing, stale, or cannot be checked, the worker reports
+6. If the stamp is missing, stale, or cannot be checked, the worker reports
    `Changed` and exits. It must not run the full builder automatically.
-5. The launcher shows a `Library changed` confirmation dialog. `Continue` keeps
+7. The launcher shows a `Library changed` confirmation dialog. `Continue` keeps
    the current catalog for this session and writes
    `/media/fat/mister-magik/rebuild-on-next-boot`. `Rebuild` immediately starts
    a foreground `ForceBuild`.
-6. On the next MagiK boot, the launcher consumes the rebuild marker as a
+8. On the next MagiK boot, the launcher consumes the rebuild marker as a
    one-shot request and starts the foreground `Updating Library` flow instead of
    delayed ready-cache validation.
 

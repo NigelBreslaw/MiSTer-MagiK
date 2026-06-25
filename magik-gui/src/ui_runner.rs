@@ -68,7 +68,9 @@ mod launcher_bridge;
 mod launcher_catalog_session;
 mod launcher_compositor;
 mod launcher_frame_accounting;
+mod launcher_lifecycle;
 mod launcher_loop;
+mod launcher_scheduler;
 mod launcher_worker_intents;
 mod media_worker;
 #[cfg(mister_experiments)]
@@ -102,7 +104,9 @@ use launcher_bridge::*;
 use launcher_catalog_session::*;
 use launcher_compositor::*;
 use launcher_frame_accounting::*;
+use launcher_lifecycle::*;
 use launcher_loop::*;
+use launcher_scheduler::*;
 use media_worker::*;
 #[cfg(mister_experiments)]
 use raster_effects_loop::run_raster_effects_loop;
@@ -407,9 +411,7 @@ pub fn run_ui(f: &mut Fpga) {
             });
         }
         "launcher" => {
-            let pad = open_pads();
             with_scene_app!(launcher::Launcher, &ui, &window, app, {
-                init_launcher_bridge(&app, &pad);
                 boot_analytics::event("app_show_attempt", "scene=launcher");
                 app.show().expect("show");
                 boot_analytics::event("app_show", "scene=launcher ok=1");
@@ -423,6 +425,8 @@ pub fn run_ui(f: &mut Fpga) {
                     &window,
                     &mut target,
                 );
+                let pad = open_pads();
+                init_launcher_bridge(&app, &pad);
                 run_launcher_loop(
                     secs,
                     &ui,
