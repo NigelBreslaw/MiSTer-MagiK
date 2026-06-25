@@ -63,6 +63,7 @@ mod controller_loop;
 mod controller_setup_input_session;
 #[cfg(mister_experiments)]
 mod effect_loop_support;
+mod launch_handoff_session;
 mod launcher_bench;
 mod launcher_bridge;
 mod launcher_catalog_session;
@@ -96,6 +97,7 @@ use camera_effects_loop::run_camera_effects_loop;
 use catalog_worker::*;
 use controller_loop::*;
 use controller_setup_input_session::*;
+use launch_handoff_session::*;
 use launcher_bench::*;
 use launcher_bridge::*;
 use launcher_catalog_session::*;
