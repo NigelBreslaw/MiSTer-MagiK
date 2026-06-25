@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Resolve or run commands in the private magik-cloud checkout.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<EOF
+Usage:
+  scripts/magik-cloud path
+  scripts/magik-cloud run -- COMMAND [ARG...]
+
+Resolution order:
+  1. MAGIK_CLOUD_DIR
+  2. private/magik-cloud submodule
+  3. ../magik-cloud legacy sibling checkout
+EOF
+}
+
+candidate_ok() {
+  [[ -n "${1:-}" && -d "$1" && ( -d "$1/.git" || -f "$1/.git" ) ]]
+}
+
+resolve_magik_cloud_dir() {
+  if candidate_ok "${MAGIK_CLOUD_DIR:-}"; then
+    (cd "$MAGIK_CLOUD_DIR" && pwd)
+    return 0
+  fi
+
+  local nested="$ROOT/private/magik-cloud"
+  if candidate_ok "$nested"; then
+    (cd "$nested" && pwd)
+    return 0
+  fi
+
+  local legacy="$ROOT/../magik-cloud"
+  if candidate_ok "$legacy"; then
+    (cd "$legacy" && pwd)
+    return 0
+  fi
+
+  cat >&2 <<EOF
+ERROR: magik-cloud checkout not found.
+
+Initialize the private submodule:
+  git submodule update --init private/magik-cloud
+
+Or point MAGIK_CLOUD_DIR at an existing checkout.
+EOF
+  return 1
+}
+
+case "${1:-}" in
+  path)
+    resolve_magik_cloud_dir
+    ;;
+  run)
+    shift
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    if [[ $# -eq 0 ]]; then
+      usage >&2
+      exit 2
+    fi
+    cloud_dir="$(resolve_magik_cloud_dir)"
+    (cd "$cloud_dir" && "$@")
+    ;;
+  -h|--help|"")
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

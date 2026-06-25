@@ -37,6 +37,9 @@ default. Override with `MISTER_MAIN_DIR`.
 - `magik-gui/BUILD.md` - ARM build profiles, FFmpeg, size, CI, toolchain notes.
 - `tools/mister/` - Rust host-side MiSTer SSH/status/cache tooling.
 - `scripts/` - approved build, deploy, profiling, and device wrappers.
+- `private/magik-cloud/` - private submodule for screenshot source data,
+  raw565 cache generation, `.mmlz4b` pack building, and Cloudflare R2 publish
+  tooling. Source is private; the public repo tracks only the gitlink.
 - `docs/architecture.md` - current architecture and handoff model.
 - `docs/catalog.md` - catalog lifecycle, stamp validation, build/publish model,
   and benchmark gates.
@@ -71,6 +74,16 @@ default. Override with `MISTER_MAIN_DIR`.
   `MISTER_ARM_BUILD_BACKEND=cross` is explicitly requested for a comparison.
 - Edit `MiSTer.ini` only through `scripts/mister` mutators or the provided
   install/restore scripts. Do not use ad hoc sed/awk/manual rewrites.
+- Use `scripts/magik-cloud path` or `scripts/magik-cloud run -- ...` for
+  magik-cloud commands. It resolves `MAGIK_CLOUD_DIR`, then the private
+  `private/magik-cloud` submodule, then legacy `../magik-cloud`.
+- Treat `private/magik-cloud` as its own private git repo. If you edit files
+  there, commit and push inside the submodule first, then stage the parent
+  submodule gitlink. Do not leave the parent pointing at an unpublished private
+  commit.
+- Never stage private source screenshots, generated caches, snapshot archives,
+  `.env`, `.wrangler/`, or Cloudflare credentials. The parent repo should see
+  only the submodule gitlink, not private file contents.
 - Treat `reference/` as read-only. Do not commit changes there.
 - Preserve user changes. Do not reset, checkout, or clean unrelated work.
 
@@ -147,8 +160,9 @@ Effect-scene and mega-transition work is experimental only; see
   contract is RGB565-only; do not reintroduce wider-color env overrides, smoke
   commands, or framebuffer color-route A/B paths.
 - Do not rebuild or write preview caches on the MiSTer hot path. Build source
-  screenshots, raw565 caches, and snapshot packs from the sibling
-  `../magik-cloud` repo.
+  screenshots, raw565 caches, and snapshot packs from the private
+  `private/magik-cloud` submodule. Use `scripts/magik-cloud path` to resolve
+  `MAGIK_CLOUD_DIR`, the submodule, or the legacy `../magik-cloud` checkout.
 - The library scanner must not walk screenshot/cache media directories, read
   `gamelist.xml`, or classify helper payloads as games.
 

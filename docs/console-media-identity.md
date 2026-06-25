@@ -105,12 +105,11 @@ Archive entries use filesystem-safe canonical keys:
 mame-software__megadriv__sonic.rgb565
 ```
 
-Build a pack from MagiK-owned source images in the sibling `../magik-cloud`
-repo:
+Build a pack from MagiK-owned source images in the private
+`private/magik-cloud` submodule:
 
 ```bash
-cd ../magik-cloud
-scripts/build-console-screenshot-pack.sh \
+scripts/magik-cloud run -- scripts/build-console-screenshot-pack.sh \
   --system megadrive \
   --input data/sources/megadrive/canonical
 ```
@@ -128,8 +127,7 @@ canonical names before building the pack.
 Stage scraper/title screenshots offline with the `magik-cloud` Rust tool:
 
 ```bash
-cd ../magik-cloud
-cargo run -- \
+scripts/magik-cloud run -- cargo run -- \
   console-screenshot-stage \
   --system saturn \
   --input data/sources/saturn/originals \

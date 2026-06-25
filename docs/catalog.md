@@ -251,9 +251,11 @@ Screenshot packs are fixed runtime artifacts, not catalog inputs. The runtime
 loads LZ4-block `.mmlz4b` packs from `/media/fat/mister-magik/assets`; the
 catalog stores only the pack path and asset key needed to request a preview.
 Raw preview archive formats and ad hoc on-device pack generation are retired.
-Build and publish packs from the sibling `../magik-cloud` repo; this repo keeps
-only runtime preview loading, catalog projection, and device acceptance checks.
-See `../magik-cloud/docs/media-build.md` for the media-build workflow.
+Build and publish packs from the private `private/magik-cloud` submodule; this
+repo keeps only runtime preview loading, catalog projection, and device
+acceptance checks. Use `scripts/magik-cloud path` to resolve `MAGIK_CLOUD_DIR`,
+the submodule, or the legacy `../magik-cloud` checkout. See
+`private/magik-cloud/docs/media-build.md` for the media-build workflow.
 
 Remote screenshot-pack updates are manifest-driven. On-device MagiK and the
 host commands `scripts/mister media-check` and `scripts/mister media-download`
