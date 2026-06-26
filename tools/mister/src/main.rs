@@ -1211,11 +1211,7 @@ impl MagikDeployTransaction {
 
     fn chmod_and_verify_size(&self, sess: &Session) -> Result<(u128, u64)> {
         let start = Instant::now();
-        let out = self.exec_phase(
-            sess,
-            "chmod-size-verify",
-            &self.chmod_size_verify_command(),
-        )?;
+        let out = self.exec_phase(sess, "chmod-size-verify", &self.chmod_size_verify_command())?;
         let remote_bytes = parse_wc_byte_count(&out.stdout)
             .ok_or_else(|| format!("unable to parse deployed size from: {}", out.stdout.trim()))?;
         if remote_bytes != self.local_bytes {
@@ -1229,7 +1225,11 @@ impl MagikDeployTransaction {
     }
 
     fn chmod_size_verify_command(&self) -> String {
-        format!("chmod +x {} && wc -c {}", sh(&self.remote), sh(&self.remote))
+        format!(
+            "chmod +x {} && wc -c {}",
+            sh(&self.remote),
+            sh(&self.remote)
+        )
     }
 
     fn cleanup(&self, sess: &Session) -> Result<u128> {
@@ -2270,14 +2270,14 @@ fn agent_token() -> Result<String> {
             return Ok(token);
         }
     }
-    let token = fs::read_to_string(AGENT_TOKEN_LOCAL).map_err(|err| {
-        format!("read {AGENT_TOKEN_LOCAL}: {err}; run scripts/mister-magik-agent.sh install")
-    })?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        Err(format!("{AGENT_TOKEN_LOCAL} is empty").into())
-    } else {
-        Ok(token)
+    match fs::read_to_string(AGENT_TOKEN_LOCAL) {
+        Ok(token) => Ok(token.trim().to_string()),
+        Err(err) => {
+            eprintln!(
+                "warning: agent token unavailable ({AGENT_TOKEN_LOCAL}: {err}); using unauthenticated agent request"
+            );
+            Ok(String::new())
+        }
     }
 }
 
