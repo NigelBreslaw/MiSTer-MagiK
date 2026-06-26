@@ -78,7 +78,7 @@ jobs:
 
       - name: Check HBMAME metadata database cache
         id: hbmame-db-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: build/hbmame.sqlite3
           key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('tools/mister/src/main.rs') }}
@@ -107,7 +107,7 @@ jobs:
 
       - name: Cache HBMAME listxml
         id: hbmame-listxml-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: build/hbmame-listxml.xml
           key: hbmame-listxml-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml') }}
@@ -187,7 +187,7 @@ jobs:
         run: rustup show
 
       - name: Cache cargo registry
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -198,7 +198,7 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Cache cross binary
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         id: cross-cache
         with:
           path: ~/.cargo/bin/cross
@@ -209,7 +209,7 @@ jobs:
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
       - name: Cache ARM frontend build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             magik-gui/target/release-device
@@ -227,7 +227,7 @@ jobs:
 
       - name: Cache Main_MiSTer build outputs
         id: main-build-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: Main_MiSTer/bin
           key: main-mister-bin-${{ runner.os }}-${{ steps.main-rev.outputs.sha }}
@@ -235,7 +235,7 @@ jobs:
       - name: Cache Main_MiSTer toolchain
         if: steps.main-build-cache.outputs.cache-hit != 'true'
         id: main-toolchain-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/mister-magik/${{ env.MAIN_TOOLCHAIN_VERSION }}
           key: main-toolchain-${{ runner.os }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
@@ -256,14 +256,14 @@ jobs:
 
       - name: Cache MAME metadata database
         id: mame-db-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: build/mame.sqlite3
           key: mame-sqlite-${{ runner.os }}-v2-${{ hashFiles('tools/mister/src/main.rs', '.github/workflows/distribution.yml') }}
 
       - name: Cache HBMAME metadata database
         id: hbmame-db-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: build/hbmame.sqlite3
           key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('tools/mister/src/main.rs') }}
@@ -328,7 +328,7 @@ jobs:
 
       - name: Save HBMAME metadata database cache
         if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: build/hbmame.sqlite3
           key: ${{ steps.hbmame-db-cache.outputs.cache-primary-key }}

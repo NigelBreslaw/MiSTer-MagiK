@@ -30,7 +30,7 @@ jobs:
         run: rustup show
 
       - name: Cache cargo registry
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -40,7 +40,7 @@ jobs:
             cargo-host-${{ runner.os }}-
 
       - name: Cache host build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             magik-gui/target/debug
@@ -93,7 +93,7 @@ jobs:
         run: rustup show
 
       - name: Cache cargo registry
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -104,7 +104,7 @@ jobs:
             cargo-host-${{ runner.os }}-
 
       - name: Cache Clippy build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: magik-gui/target/debug
           key: target-clippy-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock') }}
@@ -142,7 +142,7 @@ jobs:
         run: rustup show
 
       - name: Cache cargo registry
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -152,7 +152,7 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Cache cross binary
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         id: cross-cache
         with:
           path: ~/.cargo/bin/cross
@@ -164,13 +164,13 @@ jobs:
 
       - name: Cache minimal FFmpeg
         if: matrix.features == 'video'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: magik-gui/target/ffmpeg-minimal/armv7
           key: ffmpeg-minimal-${{ runner.os }}-8.1.1-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
 
       - name: Cache ARM build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             magik-gui/target/${{ matrix.profile }}
@@ -213,7 +213,7 @@ jobs:
         run: rustup show
 
       - name: Cache cargo registry
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -224,7 +224,7 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Cache cross binary
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         id: cross-cache
         with:
           path: ~/.cargo/bin/cross
@@ -235,7 +235,7 @@ jobs:
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
       - name: Cache ARM agent build outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
           key: target-agent-arm-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/main.rs', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
