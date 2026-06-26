@@ -28,6 +28,9 @@ const MAX_FRAMEBUFFER_PIXELS: usize = 1920 * 1080;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FramebufferPresentError {
+    AddressOverflow { context: &'static str },
+    DestinationTooShort { needed: usize, actual: usize },
+    InvalidFramebufferStride { stride: usize, width: usize },
     InvalidSourceStride { stride: usize, min_stride: usize },
     SourceTooShort { needed: usize, actual: usize },
 }
@@ -35,6 +38,16 @@ pub enum FramebufferPresentError {
 impl std::fmt::Display for FramebufferPresentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AddressOverflow { context } => write!(f, "{context} address overflow"),
+            Self::DestinationTooShort { needed, actual } => {
+                write!(f, "framebuffer has {actual} pixels, need {needed}")
+            }
+            Self::InvalidFramebufferStride { stride, width } => {
+                write!(
+                    f,
+                    "framebuffer stride {stride} is smaller than width {width}"
+                )
+            }
             Self::InvalidSourceStride { stride, min_stride } => {
                 write!(
                     f,
@@ -88,6 +101,7 @@ pub struct MappedRgb565Framebuffer {
     map_len: usize,
     w: usize,
     h: usize,
+    stride_pixels: usize,
     info: FbInfo,
     #[allow(dead_code)]
     fb0: std::fs::File,
@@ -258,6 +272,13 @@ fn fb_info_from(
     }
 }
 
+fn visible_pixels_exceed_limit(w: usize, h: usize) -> bool {
+    match w.checked_mul(h) {
+        Some(pixels) => pixels > MAX_FRAMEBUFFER_PIXELS,
+        None => true,
+    }
+}
+
 impl MappedRgb565Framebuffer {
     pub fn write_mister_mode_rgb565(w: usize, h: usize, stride_bytes: usize) -> io::Result<()> {
         let expected = rgb565_stride_bytes(w);
@@ -332,7 +353,7 @@ impl MappedRgb565Framebuffer {
                 format!("fb0 reported invalid current size {w}x{h}"),
             ));
         }
-        if w * h > MAX_FRAMEBUFFER_PIXELS {
+        if visible_pixels_exceed_limit(w, h) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("fb0 current size {w}x{h} exceeds MiSTer buffer"),
@@ -359,7 +380,20 @@ impl MappedRgb565Framebuffer {
     }
 
     pub fn open_rgb565(w: usize, h: usize) -> io::Result<Self> {
-        assert!(w * h <= MAX_FRAMEBUFFER_PIXELS);
+        if visible_pixels_exceed_limit(w, h) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fb0 requested size {w}x{h} exceeds MiSTer buffer"),
+            ));
+        }
+        let expected_stride_bytes = rgb565_stride_bytes(w);
+        let stride_pixels = expected_stride_bytes / std::mem::size_of::<Rgb565Pixel>();
+        let map_len = expected_stride_bytes.checked_mul(h).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fb0 requested map length overflows for {w}x{h}"),
+            )
+        })?;
         let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
         let mut var = FbVarScreeninfo::zeroed();
         let fd = fb0.as_raw_fd();
@@ -411,16 +445,17 @@ impl MappedRgb565Framebuffer {
         }
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
         if fix_ok {
-            let expected = rgb565_stride_bytes(w);
-            if fix.line_length != 0 && fix.line_length as usize != expected {
+            if fix.line_length != 0 && fix.line_length as usize != expected_stride_bytes {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("fb0 stride is {} bytes, need {expected}", fix.line_length),
+                    format!(
+                        "fb0 stride is {} bytes, need {expected_stride_bytes}",
+                        fix.line_length
+                    ),
                 ));
             }
         }
         let info = fb_info_from(var_ok, &var, fix_ok, &fix, w, h);
-        let map_len = rgb565_stride_bytes(w) * h;
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
         let mem = unsafe {
             libc::mmap(
@@ -440,6 +475,7 @@ impl MappedRgb565Framebuffer {
             map_len,
             w,
             h,
+            stride_pixels,
             info,
             fb0,
         })
@@ -458,7 +494,12 @@ impl MappedRgb565Framebuffer {
     }
 
     fn buffer_565_mut(&mut self) -> &mut [Rgb565Pixel] {
-        unsafe { std::slice::from_raw_parts_mut(self.mem.cast::<Rgb565Pixel>(), self.w * self.h) }
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.mem.cast::<Rgb565Pixel>(),
+                self.stride_pixels * self.h,
+            )
+        }
     }
 
     pub fn clear_black(&mut self) {
@@ -486,9 +527,8 @@ impl MappedRgb565Framebuffer {
         let mut nonzero = 0u32;
         let step = 16usize;
         for y in (0..self.h).step_by(step) {
-            let row = y * self.w;
             for x in (0..self.w).step_by(step) {
-                let p = self.pixel_rgb(row + x);
+                let p = self.pixel_rgb_at(x, y);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -515,9 +555,8 @@ impl MappedRgb565Framebuffer {
         let mut nonzero = 0u32;
 
         for yy in (y..y1).step_by(step) {
-            let row = yy * self.w;
             for xx in (x..x1).step_by(step) {
-                let p = self.pixel_rgb(row + xx);
+                let p = self.pixel_rgb_at(xx, yy);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -579,10 +618,11 @@ impl MappedRgb565Framebuffer {
         }
     }
 
-    fn pixel_rgb(&self, idx: usize) -> u32 {
-        let pixels =
-            unsafe { std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.w * self.h) };
-        rgb565_to_rgb888(pixels[idx])
+    fn pixel_rgb_at(&self, x: usize, y: usize) -> u32 {
+        let pixels = unsafe {
+            std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.stride_pixels * self.h)
+        };
+        rgb565_to_rgb888(pixels[y * self.stride_pixels + x])
     }
 
     fn vertical_edge_signature(&self, x0: usize, x1: usize, min_cols: usize) -> (u64, u32) {
@@ -590,9 +630,8 @@ impl MappedRgb565Framebuffer {
         let mut nonzero = 0u32;
         let x_end = x1.max(x0 + min_cols.min(self.w - x0)).min(self.w);
         for y in 0..self.h {
-            let row = y * self.w;
             for x in x0..x_end {
-                let p = self.pixel_rgb(row + x);
+                let p = self.pixel_rgb_at(x, y);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -608,9 +647,8 @@ impl MappedRgb565Framebuffer {
         let mut nonzero = 0u32;
         let y_end = y1.max(y0 + min_rows.min(self.h - y0)).min(self.h);
         for y in y0..y_end {
-            let row = y * self.w;
             for x in 0..self.w {
-                let p = self.pixel_rgb(row + x);
+                let p = self.pixel_rgb_at(x, y);
                 if p != 0 {
                     nonzero += 1;
                 }
@@ -632,9 +670,8 @@ impl MappedRgb565Framebuffer {
         let mut prev: Option<u32> = None;
         let step = 16usize;
         for y in (0..self.h).step_by(step) {
-            let row = y * self.w;
             for x in (0..self.w).step_by(step) {
-                let p = self.pixel_rgb(row + x);
+                let p = self.pixel_rgb_at(x, y);
                 samples += 1;
                 if p != 0 {
                     nonzero += 1;
@@ -689,18 +726,29 @@ impl MappedRgb565Framebuffer {
     ) -> Result<(), FramebufferPresentError> {
         let fb_w = self.w;
         let fb_h = self.h;
+        let dst_stride = self.stride_pixels;
         let dst = self.buffer_565_mut();
-        present_rows_565_to(dst, fb_w, fb_h, src, y0, y1)
+        present_rows_565_to(dst, fb_w, fb_h, dst_stride, src, y0, y1)
     }
 
     #[cfg(mister_experiments)]
     pub fn copy_rows_camera_565(&mut self, src: &[CameraPixel], y0: usize, y1: usize) {
         let w = self.w;
+        let dst_stride = self.stride_pixels;
+        let y0 = y0.min(self.h);
+        let y1 = y1.min(self.h);
         let dst = self.buffer_565_mut();
-        let a = y0 * w;
-        let b = (y1 * w).min(dst.len()).min(src.len());
-        if b > a {
-            for (dst, src) in dst[a..b].iter_mut().zip(src[a..b].iter()) {
+        for y in y0..y1 {
+            let src_a = y * w;
+            let dst_a = y * dst_stride;
+            let copy_w = w.min(src.len().saturating_sub(src_a));
+            if copy_w == 0 || dst_a + copy_w > dst.len() {
+                break;
+            }
+            for (dst, src) in dst[dst_a..dst_a + copy_w]
+                .iter_mut()
+                .zip(src[src_a..src_a + copy_w].iter())
+            {
                 *dst = Rgb565Pixel(src.0);
             }
         }
@@ -716,8 +764,9 @@ impl MappedRgb565Framebuffer {
     ) -> Result<(), FramebufferPresentError> {
         let fb_w = self.w;
         let fb_h = self.h;
+        let dst_stride = self.stride_pixels;
         let dst = self.buffer_565_mut();
-        present_rect_565_to(dst, fb_w, fb_h, x, y, w, h, src)
+        present_rect_565_to(dst, fb_w, fb_h, dst_stride, x, y, w, h, src)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -734,8 +783,11 @@ impl MappedRgb565Framebuffer {
     ) -> Result<(), FramebufferPresentError> {
         let fb_w = self.w;
         let fb_h = self.h;
+        let dst_stride = self.stride_pixels;
         let dst = self.buffer_565_mut();
-        present_rect_565_strided_to(dst, fb_w, fb_h, x, y, w, h, src, src_stride, src_x, src_y)
+        present_rect_565_strided_to(
+            dst, fb_w, fb_h, dst_stride, x, y, w, h, src, src_stride, src_x, src_y,
+        )
     }
 
     #[allow(dead_code)]
@@ -761,7 +813,7 @@ impl MappedRgb565Framebuffer {
         if w == 0 || h == 0 {
             return;
         }
-        let dst_w = self.w;
+        let dst_stride = self.stride_pixels;
         let x1 = (x + w).min(self.w);
         let y1 = (y + h).min(self.h);
         if x >= x1 || y >= y1 {
@@ -772,7 +824,7 @@ impl MappedRgb565Framebuffer {
         let dst = self.buffer_565_mut();
         for row in 0..copy_h {
             let src_a = row * w;
-            let dst_a = (y + row) * dst_w + x;
+            let dst_a = (y + row) * dst_stride + x;
             for (dst, src) in dst[dst_a..dst_a + copy_w]
                 .iter_mut()
                 .zip(&src[src_a..src_a + copy_w])
@@ -800,6 +852,7 @@ impl MappedRgb565Framebuffer {
         }
         let dst_w = self.w;
         let dst_h = self.h;
+        let dst_stride = self.stride_pixels;
         let dst = self.buffer_565_mut();
         for sy in 0..src_h {
             for yy in 0..scale {
@@ -812,7 +865,7 @@ impl MappedRgb565Framebuffer {
                     for xx in 0..scale {
                         let dx = dst_x + sx * scale + xx;
                         if dx < dst_w {
-                            dst[dy * dst_w + dx] = color;
+                            dst[dy * dst_stride + dx] = color;
                         }
                     }
                 }
@@ -835,6 +888,7 @@ impl MappedRgb565Framebuffer {
         }
         let dst_w = self.w;
         let dst_h = self.h;
+        let dst_stride = self.stride_pixels;
         let dst = self.buffer_565_mut();
         for sy in 0..src_h {
             for yy in 0..scale {
@@ -848,7 +902,7 @@ impl MappedRgb565Framebuffer {
                     for xx in 0..scale {
                         let dx = dst_x + sx * scale + xx;
                         if dx < dst_w {
-                            dst[dy * dst_w + dx] = color;
+                            dst[dy * dst_stride + dx] = color;
                         }
                     }
                 }
@@ -898,6 +952,7 @@ fn present_rows_565_to(
     dst: &mut [Rgb565Pixel],
     fb_w: usize,
     fb_h: usize,
+    dst_stride: usize,
     src: &[Rgb565Pixel],
     y0: usize,
     y1: usize,
@@ -908,10 +963,16 @@ fn present_rows_565_to(
         return Ok(());
     }
 
-    let a = y0 * fb_w;
-    let b = y1 * fb_w;
-    ensure_source_len(src, b)?;
-    dst[a..b].copy_from_slice(&src[a..b]);
+    ensure_framebuffer_stride(dst_stride, fb_w)?;
+    let src_needed = row_extent_len(y0, y1 - y0, fb_w, 0, fb_w, "source")?;
+    let dst_needed = row_extent_len(y0, y1 - y0, dst_stride, 0, fb_w, "framebuffer")?;
+    ensure_destination_len(dst, dst_needed)?;
+    ensure_source_len(src, src_needed)?;
+    for y in y0..y1 {
+        let src_a = y * fb_w;
+        let dst_a = y * dst_stride;
+        dst[dst_a..dst_a + fb_w].copy_from_slice(&src[src_a..src_a + fb_w]);
+    }
     Ok(())
 }
 
@@ -920,6 +981,7 @@ fn present_rect_565_to(
     dst: &mut [Rgb565Pixel],
     fb_w: usize,
     fb_h: usize,
+    dst_stride: usize,
     x: usize,
     y: usize,
     w: usize,
@@ -938,12 +1000,15 @@ fn present_rect_565_to(
 
     let copy_w = x1 - x;
     let copy_h = y1 - y;
-    let needed = (copy_h - 1) * w + copy_w;
-    ensure_source_len(src, needed)?;
+    ensure_framebuffer_stride(dst_stride, fb_w)?;
+    let src_needed = row_extent_len(0, copy_h, w, 0, copy_w, "source")?;
+    let dst_needed = row_extent_len(y, copy_h, dst_stride, x, copy_w, "framebuffer")?;
+    ensure_source_len(src, src_needed)?;
+    ensure_destination_len(dst, dst_needed)?;
 
     for row in 0..copy_h {
         let src_a = row * w;
-        let dst_a = (y + row) * fb_w + x;
+        let dst_a = (y + row) * dst_stride + x;
         dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
     }
     Ok(())
@@ -954,6 +1019,7 @@ fn present_rect_565_strided_to(
     dst: &mut [Rgb565Pixel],
     fb_w: usize,
     fb_h: usize,
+    dst_stride: usize,
     x: usize,
     y: usize,
     w: usize,
@@ -975,6 +1041,7 @@ fn present_rect_565_strided_to(
 
     let copy_w = x1 - x;
     let copy_h = y1 - y;
+    ensure_framebuffer_stride(dst_stride, fb_w)?;
     let min_stride = src_x.saturating_add(copy_w);
     if src_stride < min_stride {
         return Err(FramebufferPresentError::InvalidSourceStride {
@@ -983,15 +1050,60 @@ fn present_rect_565_strided_to(
         });
     }
 
-    let needed = (src_y + copy_h - 1) * src_stride + src_x + copy_w;
-    ensure_source_len(src, needed)?;
+    let src_needed = row_extent_len(src_y, copy_h, src_stride, src_x, copy_w, "source")?;
+    let dst_needed = row_extent_len(y, copy_h, dst_stride, x, copy_w, "framebuffer")?;
+    ensure_source_len(src, src_needed)?;
+    ensure_destination_len(dst, dst_needed)?;
 
     for row in 0..copy_h {
         let src_a = (src_y + row) * src_stride + src_x;
-        let dst_a = (y + row) * fb_w + x;
+        let dst_a = (y + row) * dst_stride + x;
         dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
     }
     Ok(())
+}
+
+fn row_extent_len(
+    y: usize,
+    rows: usize,
+    stride: usize,
+    x: usize,
+    width: usize,
+    context: &'static str,
+) -> Result<usize, FramebufferPresentError> {
+    if rows == 0 || width == 0 {
+        return Ok(0);
+    }
+    let last_y = y
+        .checked_add(rows - 1)
+        .ok_or(FramebufferPresentError::AddressOverflow { context })?;
+    last_y
+        .checked_mul(stride)
+        .and_then(|base| base.checked_add(x))
+        .and_then(|base| base.checked_add(width))
+        .ok_or(FramebufferPresentError::AddressOverflow { context })
+}
+
+fn ensure_framebuffer_stride(stride: usize, width: usize) -> Result<(), FramebufferPresentError> {
+    if stride < width {
+        Err(FramebufferPresentError::InvalidFramebufferStride { stride, width })
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_destination_len(
+    dst: &[Rgb565Pixel],
+    needed: usize,
+) -> Result<(), FramebufferPresentError> {
+    if dst.len() < needed {
+        Err(FramebufferPresentError::DestinationTooShort {
+            needed,
+            actual: dst.len(),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn ensure_source_len(src: &[Rgb565Pixel], needed: usize) -> Result<(), FramebufferPresentError> {
@@ -1078,7 +1190,7 @@ mod tests {
         let src = vec![Rgb565Pixel(1); 5];
 
         let err =
-            present_rect_565_strided_to(&mut dst, 4, 4, 1, 1, 3, 2, &src, 3, 0, 0).unwrap_err();
+            present_rect_565_strided_to(&mut dst, 4, 4, 4, 1, 1, 3, 2, &src, 3, 0, 0).unwrap_err();
 
         assert_eq!(
             err,
@@ -1095,7 +1207,7 @@ mod tests {
         let src = vec![Rgb565Pixel(1); 4];
 
         let err =
-            present_rect_565_strided_to(&mut dst, 4, 4, 0, 0, 2, 2, &src, 1, 0, 0).unwrap_err();
+            present_rect_565_strided_to(&mut dst, 4, 4, 4, 0, 0, 2, 2, &src, 1, 0, 0).unwrap_err();
 
         assert_eq!(
             err,
@@ -1118,7 +1230,7 @@ mod tests {
             Rgb565Pixel(6),
         ];
 
-        present_rect_565_strided_to(&mut dst, 4, 3, 2, 1, 4, 3, &src, 4, 0, 0).unwrap();
+        present_rect_565_strided_to(&mut dst, 4, 3, 4, 2, 1, 4, 3, &src, 4, 0, 0).unwrap();
 
         assert_eq!(
             dst,
@@ -1136,6 +1248,91 @@ mod tests {
                 Rgb565Pixel(5),
                 Rgb565Pixel(6),
             ]
+        );
+    }
+
+    #[test]
+    fn present_rows_565_uses_padded_framebuffer_stride() {
+        let fb_w = 961;
+        let fb_h = 2;
+        let dst_stride = rgb565_stride_bytes(fb_w) / std::mem::size_of::<Rgb565Pixel>();
+        assert_eq!(dst_stride, 968);
+
+        let sentinel = Rgb565Pixel(0xffff);
+        let mut dst = vec![sentinel; dst_stride * fb_h];
+        let src = (0..fb_w * fb_h)
+            .map(|i| Rgb565Pixel(i as u16))
+            .collect::<Vec<_>>();
+
+        present_rows_565_to(&mut dst, fb_w, fb_h, dst_stride, &src, 0, fb_h).unwrap();
+
+        assert_eq!(&dst[0..fb_w], &src[0..fb_w]);
+        assert!(dst[fb_w..dst_stride].iter().all(|p| *p == sentinel));
+        assert_eq!(&dst[dst_stride..dst_stride + fb_w], &src[fb_w..fb_w * fb_h]);
+        assert!(dst[dst_stride + fb_w..dst_stride * fb_h]
+            .iter()
+            .all(|p| *p == sentinel));
+    }
+
+    #[test]
+    fn present_rect_565_uses_padded_framebuffer_stride() {
+        let fb_w = 961;
+        let fb_h = 2;
+        let dst_stride = rgb565_stride_bytes(fb_w) / std::mem::size_of::<Rgb565Pixel>();
+        let sentinel = Rgb565Pixel(0xffff);
+        let mut dst = vec![sentinel; dst_stride * fb_h];
+        let src = vec![
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+            Rgb565Pixel(6),
+            Rgb565Pixel(7),
+            Rgb565Pixel(8),
+        ];
+
+        present_rect_565_to(&mut dst, fb_w, fb_h, dst_stride, 959, 0, 4, 2, &src).unwrap();
+
+        assert_eq!(dst[959], Rgb565Pixel(1));
+        assert_eq!(dst[960], Rgb565Pixel(2));
+        assert!(dst[961..dst_stride].iter().all(|p| *p == sentinel));
+        assert_eq!(dst[dst_stride + 959], Rgb565Pixel(5));
+        assert_eq!(dst[dst_stride + 960], Rgb565Pixel(6));
+        assert!(dst[dst_stride + 961..dst_stride * fb_h]
+            .iter()
+            .all(|p| *p == sentinel));
+    }
+
+    #[test]
+    fn present_rect_565_rejects_invalid_framebuffer_stride() {
+        let mut dst = vec![Rgb565Pixel(0); 4];
+        let src = vec![Rgb565Pixel(1); 4];
+
+        let err = present_rect_565_to(&mut dst, 4, 1, 3, 0, 0, 4, 1, &src).unwrap_err();
+
+        assert_eq!(
+            err,
+            FramebufferPresentError::InvalidFramebufferStride {
+                stride: 3,
+                width: 4
+            }
+        );
+    }
+
+    #[test]
+    fn present_rect_565_rejects_short_destination() {
+        let mut dst = vec![Rgb565Pixel(0); 15];
+        let src = vec![Rgb565Pixel(1); 1];
+
+        let err = present_rect_565_to(&mut dst, 4, 4, 4, 3, 3, 1, 1, &src).unwrap_err();
+
+        assert_eq!(
+            err,
+            FramebufferPresentError::DestinationTooShort {
+                needed: 16,
+                actual: 15
+            }
         );
     }
 }
