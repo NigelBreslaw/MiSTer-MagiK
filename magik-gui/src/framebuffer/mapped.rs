@@ -226,6 +226,92 @@ impl FbFixScreeninfo {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum FramebufferVarValidationError {
+    InvalidWidth {
+        actual: u32,
+        expected: usize,
+    },
+    InvalidHeight {
+        actual: usize,
+        expected: usize,
+    },
+    InvalidBitsPerPixel {
+        actual: u32,
+        expected: u32,
+    },
+    InvalidChannelOffsets {
+        red: u32,
+        green: u32,
+        blue: u32,
+        expected_red: u32,
+        expected_green: u32,
+        expected_blue: u32,
+    },
+    InvalidChannelLengths {
+        red: u32,
+        green: u32,
+        blue: u32,
+        expected_red: u32,
+        expected_green: u32,
+        expected_blue: u32,
+    },
+    InvalidMsbRight {
+        red: u32,
+        green: u32,
+        blue: u32,
+    },
+}
+
+impl std::fmt::Display for FramebufferVarValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidWidth { actual, expected } => {
+                write!(f, "fb0 width is {actual}, need {expected}")
+            }
+            Self::InvalidHeight { actual, expected } => {
+                write!(f, "fb0 is {actual}px tall, need {expected}")
+            }
+            Self::InvalidBitsPerPixel { actual, expected } => {
+                write!(
+                    f,
+                    "fb0 is {actual}bpp, need {expected}bpp for {}",
+                    production_label()
+                )
+            }
+            Self::InvalidChannelOffsets {
+                red,
+                green,
+                blue,
+                expected_red,
+                expected_green,
+                expected_blue,
+            } => write!(
+                f,
+                "fb0 channel offsets are r{red} g{green} b{blue}, expected r{expected_red} g{expected_green} b{expected_blue} for {}",
+                production_label()
+            ),
+            Self::InvalidChannelLengths {
+                red,
+                green,
+                blue,
+                expected_red,
+                expected_green,
+                expected_blue,
+            } => write!(
+                f,
+                "fb0 channel lengths are r{red} g{green} b{blue}, expected r{expected_red} g{expected_green} b{expected_blue} for {}",
+                production_label()
+            ),
+            Self::InvalidMsbRight { red, green, blue } => write!(
+                f,
+                "fb0 RGB bitfields use msb_right r{red} g{green} b{blue}, expected all 0 for {}",
+                production_label()
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum FramebufferMapValidationError {
     InvalidStride {
         actual_stride_bytes: usize,
@@ -305,6 +391,70 @@ fn visible_pixels_exceed_limit(w: usize, h: usize) -> bool {
         Some(pixels) => pixels > MAX_FRAMEBUFFER_PIXELS,
         None => true,
     }
+}
+
+fn validate_var_screeninfo_for_rgb565(
+    var: &FbVarScreeninfo,
+    w: usize,
+    h: usize,
+) -> Result<(), FramebufferVarValidationError> {
+    let virt_h = (var.yres_virtual as usize).max(var.yres as usize);
+    if var.xres > 0 && var.xres as usize != w {
+        return Err(FramebufferVarValidationError::InvalidWidth {
+            actual: var.xres,
+            expected: w,
+        });
+    }
+    if virt_h > 0 && virt_h != h {
+        return Err(FramebufferVarValidationError::InvalidHeight {
+            actual: virt_h,
+            expected: h,
+        });
+    }
+    if var.bits_per_pixel != 0 && var.bits_per_pixel != RGB565_BITS_PER_PIXEL {
+        return Err(FramebufferVarValidationError::InvalidBitsPerPixel {
+            actual: var.bits_per_pixel,
+            expected: RGB565_BITS_PER_PIXEL,
+        });
+    }
+
+    let expected_offsets = (11, 5, 0);
+    let reports_channel_lengths =
+        var.red.length != 0 || var.green.length != 0 || var.blue.length != 0;
+    if reports_channel_lengths {
+        if (var.red.offset, var.green.offset, var.blue.offset) != expected_offsets {
+            return Err(FramebufferVarValidationError::InvalidChannelOffsets {
+                red: var.red.offset,
+                green: var.green.offset,
+                blue: var.blue.offset,
+                expected_red: expected_offsets.0,
+                expected_green: expected_offsets.1,
+                expected_blue: expected_offsets.2,
+            });
+        }
+
+        let expected_lengths = (5, 6, 5);
+        if (var.red.length, var.green.length, var.blue.length) != expected_lengths {
+            return Err(FramebufferVarValidationError::InvalidChannelLengths {
+                red: var.red.length,
+                green: var.green.length,
+                blue: var.blue.length,
+                expected_red: expected_lengths.0,
+                expected_green: expected_lengths.1,
+                expected_blue: expected_lengths.2,
+            });
+        }
+    }
+
+    if var.red.msb_right != 0 || var.green.msb_right != 0 || var.blue.msb_right != 0 {
+        return Err(FramebufferVarValidationError::InvalidMsbRight {
+            red: var.red.msb_right,
+            green: var.green.msb_right,
+            blue: var.blue.msb_right,
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_fix_screeninfo_for_map(
@@ -452,47 +602,8 @@ impl MappedRgb565Framebuffer {
         let mut fix = FbFixScreeninfo::zeroed();
         let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
         if var_ok {
-            let virt = (var.yres_virtual as usize).max(var.yres as usize);
-            if var.xres > 0 && var.xres as usize != w {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("fb0 width is {}, need {w}", var.xres),
-                ));
-            }
-            if virt > 0 && virt != h {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("fb0 is {}px tall, need {h}", virt),
-                ));
-            }
-            if var.bits_per_pixel != 0 && var.bits_per_pixel != RGB565_BITS_PER_PIXEL {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "fb0 is {}bpp, need {}bpp for {}",
-                        var.bits_per_pixel,
-                        RGB565_BITS_PER_PIXEL,
-                        production_label()
-                    ),
-                ));
-            }
-            let expected_offsets = (11, 5, 0);
-            if var.red.length != 0
-                && (var.red.offset, var.green.offset, var.blue.offset) != expected_offsets
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "fb0 channel offsets are r{} g{} b{}, expected r{} g{} b{} for {}",
-                        var.red.offset,
-                        var.green.offset,
-                        var.blue.offset,
-                        expected_offsets.0,
-                        expected_offsets.1,
-                        expected_offsets.2,
-                        production_label()
-                    ),
-                ));
+            if let Err(e) = validate_var_screeninfo_for_rgb565(&var, w, h) {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
             }
         }
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
@@ -874,6 +985,32 @@ mod tests {
         }
     }
 
+    fn var_info() -> FbVarScreeninfo {
+        FbVarScreeninfo {
+            xres: 960,
+            yres: 540,
+            xres_virtual: 960,
+            yres_virtual: 540,
+            bits_per_pixel: RGB565_BITS_PER_PIXEL,
+            red: FbBitfield {
+                offset: 11,
+                length: 5,
+                msb_right: 0,
+            },
+            green: FbBitfield {
+                offset: 5,
+                length: 6,
+                msb_right: 0,
+            },
+            blue: FbBitfield {
+                offset: 0,
+                length: 5,
+                msb_right: 0,
+            },
+            ..FbVarScreeninfo::zeroed()
+        }
+    }
+
     #[test]
     fn mode_line_preserves_rgb565_framebuffer_mode() {
         assert_eq!(fb_info(16, 1920).mode_line(), "565 1 960 540 1920");
@@ -1033,6 +1170,46 @@ mod tests {
                 needed: 16,
                 actual: 15
             }
+        );
+    }
+
+    #[test]
+    fn var_info_validation_accepts_rgb565_layout() {
+        let var = var_info();
+
+        assert_eq!(validate_var_screeninfo_for_rgb565(&var, 960, 540), Ok(()));
+    }
+
+    #[test]
+    fn var_info_validation_rejects_wrong_channel_lengths() {
+        let mut var = var_info();
+        var.green.length = 5;
+
+        assert_eq!(
+            validate_var_screeninfo_for_rgb565(&var, 960, 540),
+            Err(FramebufferVarValidationError::InvalidChannelLengths {
+                red: 5,
+                green: 5,
+                blue: 5,
+                expected_red: 5,
+                expected_green: 6,
+                expected_blue: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn var_info_validation_rejects_nonzero_msb_right() {
+        let mut var = var_info();
+        var.blue.msb_right = 1;
+
+        assert_eq!(
+            validate_var_screeninfo_for_rgb565(&var, 960, 540),
+            Err(FramebufferVarValidationError::InvalidMsbRight {
+                red: 0,
+                green: 0,
+                blue: 1,
+            })
         );
     }
 
