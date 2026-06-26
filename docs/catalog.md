@@ -89,6 +89,15 @@ Warm boot with a usable cache:
    one-shot request and starts the foreground `Updating Library` flow instead of
    delayed ready-cache validation.
 
+The summary projection contains systems and counts, not per-game rows. Home may
+render from it immediately, and a user may enter Arcade from those tiles, but
+Arcade must treat the selected system as a loading state until the full SQLite
+rows hydrate. During that state the Rust-painted game list and preview requests
+stay paused, a Slint loading overlay covers the list viewport, and the overlay
+fades away when the hydrated rows are first presented. Arcade benchmarks that
+start or lock directly on Arcade must wait for hydrated rows before their timed
+movement begins.
+
 Explicit refresh and chosen rebuild:
 
 1. UI, marker boot, or CLI requests `ForceBuild`.

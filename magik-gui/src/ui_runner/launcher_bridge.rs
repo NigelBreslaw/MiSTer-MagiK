@@ -32,6 +32,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_selected(0);
     bridge.set_arcade_scroll_y(0);
     sync_launcher_arcade_geometry_bridge(&bridge);
+    bridge.set_arcade_games_loading(false);
     bridge.set_arcade_preview_placeholder_visible(true);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
@@ -250,21 +251,30 @@ pub(super) fn sync_bridge_launcher(
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     }
     let mut active_games_for_preview: Option<&[ArcadeGameEntry]> = None;
+    let mut active_games_loading = false;
     if let Some(catalog) = catalog {
         let games = active_system_game_slice(catalog, nav);
-        let title = active_system(catalog, nav)
+        let system = active_system(catalog, nav);
+        let title = system
             .map(|system| system.title.clone())
             .unwrap_or_else(|| "Games".to_string());
+        let count = system
+            .map(|system| system.count)
+            .unwrap_or_else(|| games.len());
+        active_games_loading = active_system_games_loading(catalog, nav);
         bridge.set_game_systems(models.game_systems(catalog, catalog_version));
         bridge.set_active_system_title(title.into());
-        bridge.set_active_system_count(games.len() as i32);
+        bridge.set_active_system_count(count as i32);
         active_games_for_preview = Some(games);
     }
+    bridge.set_arcade_games_loading(active_games_loading);
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
     LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
-    if nav.screen == Screen::Arcade {
+    if nav.screen == Screen::Arcade && active_games_loading {
+        preview.clear(&bridge);
+    } else if nav.screen == Screen::Arcade {
         let games = active_games_for_preview
             .or_else(|| catalog.map(|catalog| active_system_game_slice(catalog, nav)))
             .unwrap_or(&[]);
@@ -293,6 +303,7 @@ pub(super) fn sync_bridge_launcher_light(
     defer_selected_preview: bool,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let active_games_loading = active_system_games_loading(catalog, nav);
     bridge.set_screen_mode(match nav.screen {
         Screen::Home => 0,
         Screen::Controller => 1,
@@ -307,12 +318,15 @@ pub(super) fn sync_bridge_launcher_light(
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     }
+    bridge.set_arcade_games_loading(active_games_loading);
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
     status_presenter.sync_loading(loading_message, loading_detail);
-    if nav.screen == Screen::Arcade {
+    if nav.screen == Screen::Arcade && active_games_loading {
+        preview.clear(&bridge);
+    } else if nav.screen == Screen::Arcade {
         let games = active_arcade_games.unwrap_or_else(|| active_system_game_slice(catalog, nav));
         schedule_arcade_preview_window(
             &bridge,
@@ -374,6 +388,11 @@ pub(super) fn active_system_game_slice<'a>(
     active_system(catalog, nav)
         .map(|system| catalog.system_game_slice(&system.id))
         .unwrap_or(&[])
+}
+
+pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
+    active_system(catalog, nav)
+        .is_some_and(|system| system.count > 0 && catalog.system_game_slice(&system.id).is_empty())
 }
 
 pub(super) fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
