@@ -1,54 +1,9 @@
 use super::*;
 use mister_magik_fb::framebuffer::mode::{fb_mode_action, FbModeAction, FbModeGuard};
+use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 
 const DEFAULT_BOOT_BLACK_SETTLE_FRAMES: u32 = 4;
 const MAX_BOOT_BLACK_SETTLE_FRAMES: u32 = 60;
-
-#[derive(Clone, Copy)]
-pub(crate) struct LauncherFramebufferRoute {
-    mode: Mode,
-    set_vga_fb: bool,
-}
-
-impl LauncherFramebufferRoute {
-    pub(crate) fn for_ui(ui: &UiDisplay) -> Self {
-        Self::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video())
-    }
-
-    pub(crate) fn for_plan(plan: crate::ui_display::UiDisplayPlan) -> Self {
-        Self::for_scan(plan.scan_w, plan.scan_h, plan.direct_video)
-    }
-
-    fn for_scan(scan_w: u16, scan_h: u16, set_vga_fb: bool) -> Self {
-        Self {
-            mode: ui_fpga_scaled_mode(scan_w, scan_h),
-            set_vga_fb,
-        }
-    }
-
-    pub(crate) fn enable(
-        self,
-        f: &mut Fpga,
-        fb_width: usize,
-        fb_height: usize,
-    ) -> std::io::Result<u16> {
-        f.fb_enable_rgb565(
-            0,
-            fb_width as u16,
-            fb_height as u16,
-            self.mode,
-            self.set_vga_fb,
-        )
-    }
-
-    pub(crate) fn mode(self) -> Mode {
-        self.mode
-    }
-
-    pub(crate) fn set_vga_fb(self) -> bool {
-        self.set_vga_fb
-    }
-}
 
 pub(crate) struct UiBootFramebufferSession {
     pub(crate) ui: UiDisplay,
@@ -136,7 +91,7 @@ impl UiBootFramebufferSession {
             println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
-        let route = LauncherFramebufferRoute::for_ui(&ui);
+        let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
         boot_analytics::event(
             "initial_fb_enable_direct_attempt",
             format!(
@@ -148,13 +103,14 @@ impl UiBootFramebufferSession {
                 route.set_vga_fb()
             ),
         );
-        let support_flag = match route.enable(f, disp.width(), disp.height()) {
-            Ok(flag) => flag,
-            Err(e) => {
-                eprintln!("failed to route framebuffer for Slint UI: {e}");
-                std::process::exit(1);
-            }
-        };
+        let support_flag =
+            match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
+                Ok(flag) => flag,
+                Err(e) => {
+                    eprintln!("failed to route framebuffer for Slint UI: {e}");
+                    std::process::exit(1);
+                }
+            };
         boot_analytics::event(
             "initial_fb_enable_direct_done",
             format!("support_flag={support_flag}"),
@@ -188,15 +144,6 @@ impl UiBootFramebufferSession {
     }
 }
 
-pub(crate) fn ui_fpga_scaled_mode(scan_w: u16, scan_h: u16) -> Mode {
-    Mode {
-        hact: scan_w,
-        hbp: 3,
-        vact: scan_h,
-        vbp: 2,
-    }
-}
-
 pub(crate) fn settle_boot_black_frame(
     label: &str,
     disp: &mut MappedRgb565Framebuffer,
@@ -216,7 +163,7 @@ pub(crate) fn settle_boot_black_frame(
     let mut last_flag = 0u16;
     for _ in 0..frames {
         disp.clear_black();
-        match route.enable(f, disp.width(), disp.height()) {
+        match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
             Ok(flag) => {
                 routed += 1;
                 last_flag = flag;
@@ -308,7 +255,7 @@ mod tests {
             UiDisplayPlan::from_mister_ini_text("[Menu]\nvideo_mode=8\n[MiSTer]\ndirect_video=1\n")
                 .expect("plan");
 
-        let route = LauncherFramebufferRoute::for_plan(plan);
+        let route = LauncherFramebufferRoute::for_scan(plan.scan_w, plan.scan_h, plan.direct_video);
 
         assert_eq!(route.mode().hact, plan.scan_w);
         assert_eq!(route.mode().vact, plan.scan_h);

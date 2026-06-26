@@ -3,7 +3,7 @@
 
 use crate::fb::{MappedRgb565Framebuffer, Pixel, VsyncPacer};
 use crate::fb_format::production_label;
-use crate::fpga::{Fpga, Mode};
+use crate::fpga::Fpga;
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
 use slint::platform::software_renderer::{
@@ -49,6 +49,7 @@ use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
 #[cfg(mister_experiments)]
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
+use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;

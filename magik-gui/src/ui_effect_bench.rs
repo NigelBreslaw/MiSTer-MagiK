@@ -5,10 +5,10 @@ use crate::display_config::DisplayConfig;
 use crate::fb::{MappedRgb565Framebuffer, Pixel, VsyncPacer};
 use crate::fpga::Fpga;
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
-use crate::ui_runner::ui_boot::LauncherFramebufferRoute;
 use crate::ui_runner::ui_platform::{update_slint_animations, AnimationClock, MisterPlatform};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState};
+use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::{ComponentHandle, PhysicalSize};
 use std::rc::Rc;
@@ -283,8 +283,8 @@ pub fn run_effect_bench(f: &mut Fpga) {
         }
     };
     println!("{}", display_config.log_line());
-    let route = LauncherFramebufferRoute::for_ui(&ui);
-    let flag = match route.enable(f, disp.width(), disp.height()) {
+    let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
+    let flag = match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
             eprintln!("failed to route framebuffer for effect benchmark: {e}");
