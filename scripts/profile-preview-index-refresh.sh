@@ -54,9 +54,9 @@ awk -F '\t' '
   }
   END {
     printf "preview_index_refresh_summary_tsv\trows=%d\tok=%d\tmissing=%d\terrors=%d\ttotal_us=%d\n", rows, ok, missing, errors, total_us
-    for (system in systems) {
-      split(systems[system], parts, ":")
-      printf "preview_index_refresh_system_tsv\t%s\ttotal_us=%s\tresult=%s\n", system, parts[1], parts[2]
+    for (sys_id in systems) {
+      split(systems[sys_id], parts, ":")
+      printf "preview_index_refresh_system_tsv\t%s\ttotal_us=%s\tresult=%s\n", sys_id, parts[1], parts[2]
     }
   }
 ' "$local_tsv"
