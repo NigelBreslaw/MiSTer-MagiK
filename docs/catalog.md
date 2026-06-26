@@ -292,12 +292,14 @@ their size in the local filename.
 
 The downloader streams the raw manifest object directly into a hidden temporary
 file beside the final pack on `/media/fat` while feeding the same bytes to the
-SHA-256 verifier. When the manifest includes an `index` block, it also downloads
-and verifies the `.mmlz4b.idx` sidecar before marking the pack current. A local
-pack is current only when the raw pack and its advertised sidecar match the
-media state. If the raw pack is current but the sidecar is missing or stale, the
-worker repairs only the sidecar. Verified files are published atomically with
-file sync, rename, and parent-directory sync. The state file
+SHA-256 verifier. When the manifest includes an `index` block, it starts the
+small `.mmlz4b.idx` sidecar download alongside the raw pack, keeps sidecar work
+out of visible progress, and verifies the sidecar before marking the pack
+current. A local pack is current only when the raw pack and its advertised
+sidecar match the media state. If the raw pack is current but the sidecar is
+missing or stale, the worker repairs only the sidecar without showing a progress
+row unless the repair fails. Verified files are published atomically with file
+sync, rename, and parent-directory sync. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
 successful media update, preferred size, index metadata, and the latest
 HTTP/cache headers observed for each downloaded pack. It is not a catalog stamp
