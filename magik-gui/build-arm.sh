@@ -6,6 +6,7 @@
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
 #   ./build-arm.sh --experiments → release-device with experimental effect scenes
+#   ./build-arm.sh --diagnostics → release-device with diagnostics commands
 #
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
 # spot expensive crates and accidental target/feature creep.
@@ -77,6 +78,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
+    --diagnostics) add_feature diagnostics ;;
     --clean) CLEAN=1 ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;
@@ -92,6 +94,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     -h|--help)
       sed -n '4,9p' ./build-arm.sh | sed 's/^# \{0,1\}//'
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
+      echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
       exit 0

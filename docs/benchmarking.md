@@ -132,12 +132,39 @@ Preview transition policy:
   it runs `preview-idle` so the initial selected result can apply without being
   superseded by a scroll step.
 
+For screenshot pack codec experiments, recode the installed/device-derived
+packs. Do not build from the full source screenshot pool unless the experiment
+explicitly needs a publish-sized corpus; arcade decode conclusions should use
+the same roughly 800-900 entries visible to MiSTer MagiK on the device.
+
+```bash
+scripts/magik-cloud run -- cargo run --quiet -- pack-recode \
+  --variant mmlz4b-lz4-hc-9 \
+  --input /ABS/PATH/device-packs/arcade-screenshots-320x320.mmlz4b \
+  --output /ABS/PATH/variants/mmlz4b-lz4-hc-9/arcade-screenshots-320x320.mmlz4b
+scripts/mister put \
+  /ABS/PATH/variants/mmlz4b-lz4-hc-9/arcade-screenshots-320x320.mmlz4b \
+  /media/fat/mister-magik/bench/arcade-hc9.mmlz4b
+scripts/profile-preview-pack-decode.sh LABEL \
+  --variant mmlz4b-lz4-hc-9 \
+  --pack /media/fat/mister-magik/bench/arcade-hc9.mmlz4b
+scripts/profile-preview-scroll.sh 60 turbo-hold LABEL --skip-build --visual-captures 0
+```
+
+The decode benchmark reports per-entry `decode_us`, `total_us`,
+`encoded_bytes`, `decoded_bytes`, and pack-size rows for arcade, Neo Geo, and
+Saturn when the matching `--arcade-pack`, `--saturn-pack`, and `--neogeo-pack`
+paths are supplied. The turbo launcher benchmark now emits `warm_gate_tsv`;
+codec evidence is invalid unless `loaded=1` and `valid=1` show that the full
+screenshot archive was warmed before the 60 second timing window.
+
 Historical evidence:
 
 - `history/2026-6-8/arcade-band-copy-trial.md`
 - `history/2026-6-11/rgb565-raw-preview-bench.md`
 - `history/2026-6-13/preview-zstd-archive-bench.md`
 - `history/2026-6-14/arcade-preview-identity-regression.md`
+- `history/2026-6-26-screenshot-codec-bench.md`
 
 ## Preview Cache Policy
 

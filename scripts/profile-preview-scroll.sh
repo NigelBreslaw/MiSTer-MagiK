@@ -641,6 +641,34 @@ summarize_preview_timing() {
   ' "$log"
 }
 
+check_preview_warm_gate() {
+  local name="$1" log="$2"
+  awk -v name="$name" '
+    BEGIN {
+      loaded = "missing"
+      elapsed = 0
+      skipped = 0
+      failed = 0
+    }
+    /startup_timing[[:space:]]+preview_archive_warm[[:space:]]/ {
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        if (kv[1] == "loaded") loaded = kv[2]
+        else if (kv[1] == "elapsed_us") elapsed = kv[2] + 0
+      }
+    }
+    /startup_timing[[:space:]]+preview_archive_warm_skipped[[:space:]]/ { skipped = 1 }
+    /startup_timing[[:space:]]+preview_archive_warm_failed[[:space:]]/ { failed = 1 }
+    END {
+      valid = (loaded == "1" && skipped == 0 && failed == 0) ? 1 : 0
+      reason = valid ? "ok" : (failed ? "warm_failed" : (skipped ? "warm_skipped" : "warm_missing_or_not_loaded"))
+      printf "warm_gate_tsv\tcase=%s\tloaded=%s\telapsed_us=%d\tvalid=%d\treason=%s\n",
+        name, loaded, elapsed, valid, reason
+      exit(valid ? 0 : 11)
+    }
+  ' "$log"
+}
+
 summarize_preview_latency() {
   local name="$1" log="$2"
   awk -v name="$name" '
@@ -986,6 +1014,16 @@ echo "preview trace counts:"
 printf "arcade decoded=%s apply=%s\n" \
   "$(grep -c 'preview_trace decoded' "$arcade_log" 2>/dev/null || true)" \
   "$(grep -c 'preview_trace apply' "$arcade_log" 2>/dev/null || true)"
+
+echo
+if ! check_preview_warm_gate arcade "$arcade_log"; then
+  if [[ "$remote_scenario" == "turbo-hold" && "$skip_preview_warm" != "1" && "$skip_preview_warm" != "true" && "$skip_preview_warm" != "yes" && "$skip_preview_warm" != "on" ]]; then
+    emit_artifact_row "arcade-trace" "$arcade_tsv" "/tmp/${label}-arcade.tsv"
+    emit_artifact_row "arcade-log" "$arcade_log" "$REMOTE_LOG"
+    emit_validity_row "0" "preview_warm_gate" "scenario=$remote_scenario log=$arcade_log"
+    exit 12
+  fi
+fi
 
 echo
 echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tindex_pread\tselected_file_reads'

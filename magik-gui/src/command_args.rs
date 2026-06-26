@@ -33,6 +33,8 @@ pub const COMMANDS: &[&str] = &[
     "media-bench-download",
     "media-bench-save",
     #[cfg(feature = "diagnostics")]
+    "preview-pack-bench",
+    #[cfg(feature = "diagnostics")]
     "library-sql",
     #[cfg(feature = "diagnostics")]
     "hbmame-metadata-from-library",
@@ -118,6 +120,7 @@ mod tests {
             "library-sql",
             "hbmame-metadata-from-library",
             "library-scan-bench",
+            "preview-pack-bench",
             "audio-tone",
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");

@@ -15,6 +15,7 @@
 //!     media-bench-download
 //!                        benchmark screenshot pack downloads and variant decoding
 //!     media-bench-save   benchmark screenshot pack save/publish paths
+//!     preview-pack-bench benchmark screenshot pack entry access/decode timings
 //!     input              gamepad log / sniff / calibrate
 //!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
 //!   Benchmarks:
@@ -36,7 +37,7 @@
 //! See docs/architecture.md for display routing and boot handoff; see
 //! magik-gui/BUILD.md for toolchain details.
 
-#![cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+#![allow(dead_code)]
 
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -61,6 +62,8 @@ mod media_bench_download;
 mod media_bench_save;
 mod media_pack_save;
 mod mr_audio;
+#[cfg(feature = "diagnostics")]
+mod preview_pack_bench;
 mod preview_state;
 mod runtime_status;
 mod screenshot_transitions;
@@ -130,6 +133,12 @@ fn main() {
 
     if cmd == "media-bench-save" {
         media_bench_save::run();
+        return;
+    }
+
+    #[cfg(feature = "diagnostics")]
+    if cmd == "preview-pack-bench" {
+        preview_pack_bench::run();
         return;
     }
 
