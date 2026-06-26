@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -185,6 +187,7 @@ pub enum PreviewLoadSource {
     DecodedCache,
     #[default]
     ArchiveMem,
+    IndexPread,
 }
 
 impl PreviewLoadSource {
@@ -192,6 +195,7 @@ impl PreviewLoadSource {
         match self {
             Self::DecodedCache => "decoded_cache",
             Self::ArchiveMem => "archive_mem",
+            Self::IndexPread => "index_pread",
         }
     }
 }
@@ -376,7 +380,6 @@ fn preview_selected_thread(
     decoded_cache: SharedPreviewDecodedCache,
 ) {
     lower_thread_priority();
-    let _ = preview_archives();
     let mut scratch = PreviewArchiveScratch::default();
     while let Ok(mut req) = rx.recv() {
         while let Ok(next) = rx.try_recv() {
@@ -395,7 +398,6 @@ fn preview_prefetch_thread(
     decoded_cache: SharedPreviewDecodedCache,
 ) {
     lower_thread_priority();
-    let _ = preview_archives();
     let mut queue: Vec<PreviewRequest> = Vec::new();
     let mut scratch = PreviewArchiveScratch::default();
     loop {
@@ -681,6 +683,21 @@ fn load_raw565_preview_asset_timed(
         return Err("preview asset missing archive path or key".to_string());
     }
     let entry_name = format!("{asset_key}.rgb565");
+    if let Some(archives) = cached_preview_archives_for_paths(&[archive_path.to_string()]) {
+        for archive in archives.iter() {
+            if let Some(loaded) = archive.load_timed(&entry_name, scratch)? {
+                return Ok(loaded);
+            }
+        }
+    }
+    if let Some(loaded) = try_load_raw565_preview_asset_from_index(
+        Path::new(archive_path),
+        &entry_name,
+        scratch,
+    ) {
+        start_background_preview_archive_load(archive_path.to_string());
+        return Ok(loaded);
+    }
     let Some(archives) = preview_archives_for_paths(vec![archive_path.to_string()])? else {
         return Err(format!("preview archive not configured {archive_path}"));
     };
@@ -699,6 +716,18 @@ struct PreviewArchiveEntry {
     raw_len: usize,
     compressed_len: usize,
     offset: u64,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewArchiveSidecarIndex {
+    entries: HashMap<String, PreviewArchiveEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedPreviewArchiveSidecarIndex {
+    archive_fingerprint: PreviewArchiveFingerprint,
+    index_fingerprint: PreviewArchiveFingerprint,
+    index: Arc<PreviewArchiveSidecarIndex>,
 }
 
 struct PreviewArchive {
@@ -741,10 +770,7 @@ pub fn warm_preview_archives_from_env() -> Result<bool, String> {
 fn preview_archives_for_paths(
     paths: Vec<String>,
 ) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
-    static ARCHIVES: OnceLock<Mutex<Option<CachedPreviewArchives>>> = OnceLock::new();
-    static MISSING: OnceLock<Mutex<Vec<MissingPreviewArchive>>> = OnceLock::new();
-
-    let cache = ARCHIVES.get_or_init(|| Mutex::new(None));
+    let cache = preview_archive_cache();
     if paths.is_empty() {
         if let Ok(mut cached) = cache.lock() {
             *cached = None;
@@ -752,7 +778,7 @@ fn preview_archives_for_paths(
         return Ok(None);
     }
 
-    let missing_cache = MISSING.get_or_init(|| Mutex::new(Vec::new()));
+    let missing_cache = missing_preview_archive_cache();
     if let Some(error) = cached_missing_preview_archive_error(missing_cache, &paths) {
         return Err(error);
     }
@@ -790,6 +816,33 @@ fn preview_archives_for_paths(
         });
     }
     Ok(Some(archives))
+}
+
+fn preview_archive_cache() -> &'static Mutex<Option<CachedPreviewArchives>> {
+    static ARCHIVES: OnceLock<Mutex<Option<CachedPreviewArchives>>> = OnceLock::new();
+    ARCHIVES.get_or_init(|| Mutex::new(None))
+}
+
+fn missing_preview_archive_cache() -> &'static Mutex<Vec<MissingPreviewArchive>> {
+    static MISSING: OnceLock<Mutex<Vec<MissingPreviewArchive>>> = OnceLock::new();
+    MISSING.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<PreviewArchive>>> {
+    let cache = preview_archive_cache();
+    let cached = cache.lock().ok()?;
+    let cached = cached.as_ref()?;
+    if cached.fingerprints.len() != paths.len()
+        || cached
+            .fingerprints
+            .iter()
+            .zip(paths.iter())
+            .any(|(fingerprint, path)| fingerprint.path != *path)
+    {
+        return None;
+    }
+    let fingerprints = preview_archive_fingerprints_for_paths(paths.to_vec()).ok()?;
+    (cached.fingerprints == fingerprints).then(|| Arc::clone(&cached.archives))
 }
 
 fn cached_missing_preview_archive_error(
@@ -1200,6 +1253,239 @@ fn size_qualified_archive_path_for_system(
     size_qualified_screenshot_pack_path_in_root(root, system, image_size)
         .ok()
         .map(|path| path.display().to_string())
+}
+
+fn try_load_raw565_preview_asset_from_index(
+    archive_path: &Path,
+    entry_name: &str,
+    scratch: &mut PreviewArchiveScratch,
+) -> Option<LoadedPreviewPixels> {
+    match load_raw565_preview_asset_from_index(archive_path, entry_name, scratch) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace index_pread_failed archive_path={} asset_key={} error={}",
+                    archive_path.display(),
+                    entry_name,
+                    error
+                );
+            }
+            None
+        }
+    }
+}
+
+fn load_raw565_preview_asset_from_index(
+    archive_path: &Path,
+    entry_name: &str,
+    scratch: &mut PreviewArchiveScratch,
+) -> Result<Option<LoadedPreviewPixels>, String> {
+    let Some(index) = preview_archive_sidecar_index(archive_path)? else {
+        return Ok(None);
+    };
+    let key = entry_name.to_ascii_lowercase();
+    let Some(entry) = index.entries.get(&key).copied() else {
+        return Ok(None);
+    };
+    let total_t = Instant::now();
+    let read_t = Instant::now();
+    let mut payload = vec![0u8; entry.compressed_len];
+    let file = File::open(archive_path)
+        .map_err(|e| format!("open preview archive {}: {e}", archive_path.display()))?;
+    read_exact_at(&file, &mut payload, entry.offset)
+        .map_err(|e| format!("pread preview archive {}: {e}", archive_path.display()))?;
+    let read_us = read_t.elapsed().as_micros() as u64;
+
+    let decode_t = Instant::now();
+    let data = decode_lz4_block_entry_into(&payload, entry.raw_len, &mut scratch.raw)
+        .map_err(|e| format!("preview archive index decode {entry_name}: {e}"))?;
+    let image = decode_raw565_preview_bytes(data)?;
+    let decode_us = decode_t.elapsed().as_micros() as u64;
+    let total_us = total_t.elapsed().as_micros() as u64;
+    Ok(Some(LoadedPreviewPixels {
+        timing: ImageLoadTiming {
+            read_us,
+            decode_us,
+            resize_us: 0,
+            total_us,
+            encoded_bytes: entry.compressed_len,
+            source_width: image.width(),
+            source_height: image.height(),
+            load_source: PreviewLoadSource::IndexPread,
+        },
+        image,
+    }))
+}
+
+fn preview_archive_sidecar_index(
+    archive_path: &Path,
+) -> Result<Option<Arc<PreviewArchiveSidecarIndex>>, String> {
+    let index_path = preview_archive_sidecar_path(archive_path);
+    if !index_path.is_file() {
+        return Ok(None);
+    }
+    let archive_fingerprint = preview_archive_fingerprint(archive_path)?;
+    let index_fingerprint = preview_archive_fingerprint(&index_path)?;
+    let cache = preview_archive_sidecar_index_cache();
+    let cache_key = archive_path.display().to_string();
+    if let Ok(cache) = cache.lock() {
+        if let Some(cached) = cache.get(&cache_key) {
+            if cached.archive_fingerprint == archive_fingerprint
+                && cached.index_fingerprint == index_fingerprint
+            {
+                return Ok(Some(Arc::clone(&cached.index)));
+            }
+        }
+    }
+    let index = Arc::new(read_preview_archive_sidecar_index(
+        &index_path,
+        archive_fingerprint.size,
+    )?);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(
+            cache_key,
+            CachedPreviewArchiveSidecarIndex {
+                archive_fingerprint,
+                index_fingerprint,
+                index: Arc::clone(&index),
+            },
+        );
+    }
+    Ok(Some(index))
+}
+
+fn preview_archive_sidecar_index_cache(
+) -> &'static Mutex<HashMap<String, CachedPreviewArchiveSidecarIndex>> {
+    static INDEXES: OnceLock<Mutex<HashMap<String, CachedPreviewArchiveSidecarIndex>>> =
+        OnceLock::new();
+    INDEXES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn preview_archive_sidecar_path(archive_path: &Path) -> PathBuf {
+    let mut path = archive_path.as_os_str().to_os_string();
+    path.push(".idx");
+    PathBuf::from(path)
+}
+
+fn preview_archive_fingerprint(path: &Path) -> Result<PreviewArchiveFingerprint, String> {
+    let path_text = path.display().to_string();
+    let meta = preview_archive_metadata(&path_text)
+        .map_err(|e| format!("metadata preview archive {path_text}: {e}"))?;
+    let mtime_secs = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0);
+    Ok(PreviewArchiveFingerprint {
+        path: path_text,
+        size: meta.len(),
+        mtime_secs,
+    })
+}
+
+fn read_preview_archive_sidecar_index(
+    index_path: &Path,
+    archive_bytes: u64,
+) -> Result<PreviewArchiveSidecarIndex, String> {
+    let bytes = std::fs::read(index_path)
+        .map_err(|e| format!("read preview archive index {}: {e}", index_path.display()))?;
+    if bytes.len() < 84 {
+        return Err(format!("{}: preview archive index too short", index_path.display()));
+    }
+    if &bytes[..8] != b"MMIDX01\0" {
+        return Err(format!("{}: bad preview archive index magic", index_path.display()));
+    }
+    let indexed_archive_bytes = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    if indexed_archive_bytes != archive_bytes {
+        return Err(format!(
+            "{}: archive byte mismatch indexed={} actual={archive_bytes}",
+            index_path.display(),
+            indexed_archive_bytes
+        ));
+    }
+    let archive_sha = std::str::from_utf8(&bytes[16..80])
+        .map_err(|e| format!("preview archive index sha utf8: {e}"))?;
+    if archive_sha.len() != 64 || !archive_sha.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(format!("{}: bad preview archive index sha", index_path.display()));
+    }
+    let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+    let mut pos = 84usize;
+    let mut entries = HashMap::with_capacity(count);
+    for _ in 0..count {
+        if bytes.len().saturating_sub(pos) < 18 {
+            return Err(format!("{}: truncated preview archive index", index_path.display()));
+        }
+        let name_len = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+        pos += 2;
+        let raw_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        let compressed_len =
+            u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        let offset = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+        pos += 8;
+        let end = pos
+            .checked_add(name_len)
+            .ok_or_else(|| format!("{}: preview archive index name overflow", index_path.display()))?;
+        if end > bytes.len() {
+            return Err(format!("{}: truncated preview archive index name", index_path.display()));
+        }
+        let name = String::from_utf8(bytes[pos..end].to_vec())
+            .map_err(|e| format!("preview archive index name utf8: {e}"))?;
+        pos = end;
+        let payload_end = offset
+            .checked_add(compressed_len as u64)
+            .ok_or_else(|| format!("{}: preview archive index offset overflow", index_path.display()))?;
+        if payload_end > archive_bytes {
+            return Err(format!(
+                "{}: preview archive index payload outside archive",
+                index_path.display()
+            ));
+        }
+        entries.insert(
+            name.to_ascii_lowercase(),
+            PreviewArchiveEntry {
+                raw_len,
+                compressed_len,
+                offset,
+            },
+        );
+    }
+    Ok(PreviewArchiveSidecarIndex { entries })
+}
+
+#[cfg(unix)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    let mut done = 0usize;
+    while done < buf.len() {
+        let read = file.read_at(&mut buf[done..], offset + done as u64)?;
+        if read == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        done += read;
+    }
+    Ok(())
+}
+
+fn start_background_preview_archive_load(archive_path: String) {
+    static LOADING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let loading = LOADING.get_or_init(|| Mutex::new(HashSet::new()));
+    if let Ok(mut loading) = loading.lock() {
+        if !loading.insert(archive_path.clone()) {
+            return;
+        }
+    }
+    let loading = LOADING.get_or_init(|| Mutex::new(HashSet::new()));
+    let _ = std::thread::Builder::new()
+        .name("preview-archive-load".to_string())
+        .spawn(move || {
+            let _ = preview_archives_for_paths(vec![archive_path.clone()]);
+            if let Ok(mut loading) = loading.lock() {
+                loading.remove(&archive_path);
+            }
+        });
 }
 
 impl PreviewArchive {
@@ -1708,6 +1994,74 @@ mod tests {
     }
 
     #[test]
+    fn preview_load_uses_index_pread_before_archive_cache() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-pread-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_lz4_block_archive_with_index(
+            &path,
+            "tiny.rgb565",
+            &raw565_fixture(3, 1, &[0xf800, 0x07e0, 0x001f]),
+        );
+        let mut scratch = PreviewArchiveScratch::default();
+        let resize = PreviewResizeSpec {
+            filter: PreviewResizeFilter::Hybrid,
+            max_w: 320,
+            max_h: 320,
+        };
+
+        let first = load_preview_pixels(&path.display().to_string(), "tiny", &mut scratch, resize)
+            .expect("load via index pread");
+
+        assert_eq!(first.timing.load_source, PreviewLoadSource::IndexPread);
+        assert_eq!(first.timing.source_width, 3);
+        assert_eq!(first.timing.source_height, 1);
+
+        let _ = preview_archives_for_paths(vec![path.display().to_string()])
+            .expect("warm archive after index pread");
+        let second = load_preview_pixels(&path.display().to_string(), "tiny", &mut scratch, resize)
+            .expect("load via warmed archive");
+        assert_eq!(second.timing.load_source, PreviewLoadSource::ArchiveMem);
+
+        let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_preview_index_falls_back_to_archive_mem() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-fallback-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_lz4_block_archive(
+            &path,
+            "tiny.rgb565",
+            &raw565_fixture(1, 1, &[0xf800]),
+        );
+        std::fs::write(preview_archive_sidecar_path(&path), b"bad-index")
+            .expect("write bad index");
+        let mut scratch = PreviewArchiveScratch::default();
+
+        let loaded = load_preview_pixels(
+            &path.display().to_string(),
+            "tiny",
+            &mut scratch,
+            PreviewResizeSpec {
+                filter: PreviewResizeFilter::Hybrid,
+                max_w: 320,
+                max_h: 320,
+            },
+        )
+        .expect("fall back to full archive");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
+        let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+
+    #[test]
     fn auto_preview_archive_uses_assets_arcade_pack() {
         let root =
             std::env::temp_dir().join(format!("mister-magik-preview-auto-{}", std::process::id()));
@@ -2127,6 +2481,24 @@ mod tests {
 
     fn write_lz4_block_archive(path: &Path, name: &str, payload: &[u8]) {
         write_lz4_block_archive_with_lengths(path, name, payload, payload.len(), payload.len() + 1);
+    }
+
+    fn write_lz4_block_archive_with_index(path: &Path, name: &str, payload: &[u8]) {
+        write_lz4_block_archive(path, name, payload);
+        let archive_bytes = std::fs::metadata(path).unwrap().len();
+        let index_len = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX01\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        index.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        index.extend_from_slice(&((payload.len() + 1) as u32).to_le_bytes());
+        index.extend_from_slice(&(index_len as u64).to_le_bytes());
+        index.extend_from_slice(name.as_bytes());
+        std::fs::write(preview_archive_sidecar_path(path), index)
+            .expect("write lz4 block archive index fixture");
     }
 
     fn write_lz4_block_archive_with_lengths(

@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use mister_magik_catalog::media_identity::{
     DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
@@ -31,6 +31,7 @@ pub struct MediaPack {
     pub image_size: String,
     pub raw: MediaVariant,
     pub variants: Vec<MediaVariant>,
+    pub index: Option<MediaIndex>,
 }
 
 impl MediaPack {
@@ -59,6 +60,17 @@ pub struct MediaVariant {
     pub bytes: u64,
     pub sha256: String,
     pub url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaIndex {
+    pub codec: String,
+    pub object: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub url: String,
+    pub archive_bytes: u64,
+    pub archive_sha256: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +117,8 @@ pub enum LocalPackStatus {
     Current,
     Missing,
     Stale { reason: String },
+    IndexMissing,
+    IndexStale { reason: String },
 }
 
 impl LocalPackStatus {
@@ -112,8 +126,19 @@ impl LocalPackStatus {
         match self {
             Self::Current => "current",
             Self::Missing => "missing",
-            Self::Stale { .. } => "stale",
+            Self::Stale { .. } | Self::IndexMissing | Self::IndexStale { .. } => "stale",
         }
+    }
+
+    pub fn requires_pack_download(&self) -> bool {
+        matches!(self, Self::Missing | Self::Stale { .. })
+    }
+
+    pub fn requires_index_download(&self) -> bool {
+        matches!(
+            self,
+            Self::Missing | Self::Stale { .. } | Self::IndexMissing | Self::IndexStale { .. }
+        )
     }
 }
 
@@ -203,12 +228,17 @@ fn parse_pack(origin: &str, value: &Value) -> Result<MediaPack, String> {
             "pack {id} variants do not include compression=none"
         ));
     }
+    let index = value
+        .get("index")
+        .map(|index| parse_index(origin, id, &raw, index))
+        .transpose()?;
     Ok(MediaPack {
         id: id.to_string(),
         version,
         image_size,
         raw,
         variants,
+        index,
     })
 }
 
@@ -226,6 +256,40 @@ fn parse_variant(origin: &str, value: &Value) -> Result<MediaVariant, String> {
     .with_url(origin)
 }
 
+fn parse_index(
+    origin: &str,
+    pack_id: &str,
+    raw: &MediaVariant,
+    value: &Value,
+) -> Result<MediaIndex, String> {
+    let index = MediaIndex {
+        codec: required_string(value, "codec")?.to_string(),
+        object: required_string(value, "object")?.to_string(),
+        bytes: required_u64(value, "bytes")?,
+        sha256: required_string(value, "sha256")?.to_string(),
+        url: String::new(),
+        archive_bytes: required_u64(value, "archive_bytes")?,
+        archive_sha256: required_string(value, "archive_sha256")?.to_string(),
+    }
+    .with_url(origin)?;
+    if index.codec != "mmlz4b-index-v1" {
+        return Err(format!(
+            "pack {pack_id} uses unsupported index codec {}",
+            index.codec
+        ));
+    }
+    if index.archive_bytes != raw.bytes {
+        return Err(format!(
+            "pack {pack_id} index archive_bytes mismatch expected={} got={}",
+            raw.bytes, index.archive_bytes
+        ));
+    }
+    if index.archive_sha256 != raw.sha256 {
+        return Err(format!("pack {pack_id} index archive_sha256 mismatch"));
+    }
+    Ok(index)
+}
+
 fn normalize_compression(value: &str) -> Option<&'static str> {
     match value {
         "none" | "identity" => Some("none"),
@@ -241,6 +305,25 @@ impl MediaVariant {
         validate_sha256(&self.sha256)?;
         if self.bytes == 0 {
             return Err(format!("media object {} has zero bytes", self.object));
+        }
+        self.url = format!("{}/{}", origin.trim_end_matches('/'), self.object);
+        Ok(self)
+    }
+}
+
+impl MediaIndex {
+    fn with_url(mut self, origin: &str) -> Result<Self, String> {
+        validate_index_object_path(&self.object)?;
+        validate_sha256(&self.sha256)?;
+        validate_sha256(&self.archive_sha256)?;
+        if self.bytes == 0 {
+            return Err(format!("media index {} has zero bytes", self.object));
+        }
+        if self.archive_bytes == 0 {
+            return Err(format!(
+                "media index {} has zero archive bytes",
+                self.object
+            ));
         }
         self.url = format!("{}/{}", origin.trim_end_matches('/'), self.object);
         Ok(self)
@@ -293,6 +376,12 @@ pub fn state_path(asset_dir: &str) -> String {
     screenshot_media_state_path(asset_dir)
 }
 
+pub fn index_path_for_pack_path(pack_path: &Path) -> PathBuf {
+    let mut path = pack_path.as_os_str().to_os_string();
+    path.push(".idx");
+    PathBuf::from(path)
+}
+
 pub fn pack_status_from_state(
     pack: &MediaPack,
     local_path: &Path,
@@ -323,6 +412,55 @@ pub fn pack_status_from_state(
                 return LocalPackStatus::Stale {
                     reason: format!("{key}-missing"),
                 };
+            }
+        }
+    }
+    if let Some(index) = &pack.index {
+        let index_path = index_path_for_pack_path(local_path);
+        if !index_path.exists() {
+            return LocalPackStatus::IndexMissing;
+        }
+        let Some(index_state) = entry.get("index").and_then(Value::as_object) else {
+            return LocalPackStatus::IndexStale {
+                reason: "index-state-missing".to_string(),
+            };
+        };
+        for (key, expected) in [
+            ("codec", index.codec.as_str()),
+            ("object", index.object.as_str()),
+            ("sha256", index.sha256.as_str()),
+            ("archive_sha256", index.archive_sha256.as_str()),
+        ] {
+            match index_state.get(key).and_then(Value::as_str) {
+                Some(got) if got == expected => {}
+                Some(got) => {
+                    return LocalPackStatus::IndexStale {
+                        reason: format!("{key}-mismatch:{got}"),
+                    };
+                }
+                None => {
+                    return LocalPackStatus::IndexStale {
+                        reason: format!("{key}-missing"),
+                    };
+                }
+            }
+        }
+        for (key, expected) in [
+            ("bytes", index.bytes),
+            ("archive_bytes", index.archive_bytes),
+        ] {
+            match index_state.get(key).and_then(Value::as_u64) {
+                Some(got) if got == expected => {}
+                Some(got) => {
+                    return LocalPackStatus::IndexStale {
+                        reason: format!("{key}-mismatch:{got}"),
+                    };
+                }
+                None => {
+                    return LocalPackStatus::IndexStale {
+                        reason: format!("{key}-missing"),
+                    };
+                }
             }
         }
     }
@@ -374,6 +512,26 @@ fn validate_object_path(object: &str) -> Result<(), String> {
     validate_sha256(sha)
 }
 
+fn validate_index_object_path(object: &str) -> Result<(), String> {
+    if object.contains("..") || object.starts_with('/') {
+        return Err(format!("unsafe media index object path: {object}"));
+    }
+    let parts: Vec<_> = object.split('/').collect();
+    match parts.as_slice() {
+        ["mister-magik", "v1", "packs", system, "screenshots", size, version, _file]
+            if is_supported_pack_id(system)
+                && valid_image_size(size)
+                && valid_version_component(version) => {}
+        _ => return Err(format!("unexpected media index object path: {object}")),
+    }
+    let file = parts.last().copied().unwrap_or("");
+    if !file.ends_with(".mmlz4b.idx") {
+        return Err(format!("unexpected media index object extension: {object}"));
+    }
+    let sha = file.split('.').next().unwrap_or("");
+    validate_sha256(sha)
+}
+
 fn validate_sha256(value: &str) -> Result<(), String> {
     if value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
         Ok(())
@@ -409,6 +567,7 @@ mod tests {
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const GZ_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const IDX_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn raw_manifest(extra: &str) -> String {
         format!(
@@ -430,6 +589,19 @@ mod tests {
         )
     }
 
+    fn indexed_manifest() -> String {
+        raw_manifest(&format!(
+            r#""index": {{
+        "object": "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx",
+        "bytes": 456,
+        "sha256": "{IDX_SHA}",
+        "codec": "mmlz4b-index-v1",
+        "archive_bytes": 123,
+        "archive_sha256": "{SHA}"
+      }},"#
+        ))
+    }
+
     #[test]
     fn parses_raw_only_manifest_with_default_size() {
         let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &raw_manifest("")).unwrap();
@@ -449,6 +621,34 @@ mod tests {
         );
         assert_eq!(pack.variants.len(), 1);
         assert_eq!(pack.variants[0].compression, "none");
+    }
+
+    #[test]
+    fn parses_manifest_index_sidecar() {
+        let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &indexed_manifest()).unwrap();
+        let pack = &manifest.packs[0];
+        let index = pack.index.as_ref().expect("index sidecar");
+
+        assert_eq!(index.codec, "mmlz4b-index-v1");
+        assert_eq!(index.bytes, 456);
+        assert_eq!(index.archive_bytes, pack.raw.bytes);
+        assert_eq!(index.archive_sha256, pack.raw.sha256);
+        assert_eq!(
+            index.url,
+            format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx")
+        );
+    }
+
+    #[test]
+    fn rejects_index_sidecar_for_different_archive() {
+        let text = indexed_manifest().replace(
+            &format!(r#""archive_sha256": "{SHA}""#),
+            r#""archive_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc""#,
+        );
+
+        assert!(parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+            .unwrap_err()
+            .contains("archive_sha256"));
     }
 
     #[test]
@@ -592,6 +792,82 @@ mod tests {
             LocalPackStatus::Stale { .. }
         ));
         let _ = std::fs::remove_file(local_path);
+        let _ = std::fs::remove_dir(root);
+    }
+
+    #[test]
+    fn classifies_index_status_from_state_and_file() {
+        let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &indexed_manifest()).unwrap();
+        let pack = &manifest.packs[0];
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-media-index-state-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let local_path = root.join("arcade-screenshots-320x320.mmlz4b");
+        let index_path = index_path_for_pack_path(&local_path);
+        std::fs::write(&local_path, b"pack").unwrap();
+
+        let state = serde_json::json!({
+            "systems": {
+                "arcade": {
+                    "packs": {
+                        "320x320": {
+                            "version": "2026.06.22",
+                            "image_size": "320x320",
+                            "sha256": SHA,
+                            "index": {
+                                "codec": "mmlz4b-index-v1",
+                                "object": format!("mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx"),
+                                "bytes": 456,
+                                "sha256": IDX_SHA,
+                                "archive_bytes": 123,
+                                "archive_sha256": SHA
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            pack_status_from_state(pack, &local_path, Some(&state)),
+            LocalPackStatus::IndexMissing
+        );
+
+        std::fs::write(&index_path, b"idx").unwrap();
+        assert_eq!(
+            pack_status_from_state(pack, &local_path, Some(&state)),
+            LocalPackStatus::Current
+        );
+
+        let stale = serde_json::json!({
+            "systems": {
+                "arcade": {
+                    "packs": {
+                        "320x320": {
+                            "version": "2026.06.22",
+                            "image_size": "320x320",
+                            "sha256": SHA,
+                            "index": {
+                                "codec": "mmlz4b-index-v1",
+                                "object": format!("mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx"),
+                                "bytes": 1,
+                                "sha256": IDX_SHA,
+                                "archive_bytes": 123,
+                                "archive_sha256": SHA
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        assert!(matches!(
+            pack_status_from_state(pack, &local_path, Some(&stale)),
+            LocalPackStatus::IndexStale { .. }
+        ));
+        let _ = std::fs::remove_file(local_path);
+        let _ = std::fs::remove_file(index_path);
         let _ = std::fs::remove_dir(root);
     }
 

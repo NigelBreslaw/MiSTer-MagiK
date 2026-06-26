@@ -134,6 +134,7 @@ Benchmark entrypoints:
 ```bash
 scripts/profile-arcade-scroll.sh LABEL
 scripts/profile-preview-scroll.sh LABEL
+scripts/profile-first-preview.sh LABEL --skip-build
 scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
 scripts/bench-toolchain.sh LABEL --replace-label
 scripts/profile-first-scan.sh LABEL --deploy-device --replace-label

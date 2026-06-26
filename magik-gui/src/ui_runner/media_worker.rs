@@ -3,9 +3,9 @@ use crate::artifact_publish::{
     timestamped_temp_path_for, ArtifactPublishLabels,
 };
 use mister_magik_fb::media_update::{
-    pack_status_from_state, parse_manifest_json, size_qualified_pack_path, state_path,
-    valid_image_size, LocalPackStatus, MediaPack, MediaUpdatePolicy, MediaVariant,
-    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
+    index_path_for_pack_path, pack_status_from_state, parse_manifest_json,
+    size_qualified_pack_path, state_path, valid_image_size, LocalPackStatus, MediaIndex, MediaPack,
+    MediaUpdatePolicy, MediaVariant, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -365,6 +365,7 @@ fn start_ready_downloads(
             ),
         });
         cleanup_pack_publish_temps(&local_path);
+        cleanup_pack_publish_temps(&index_path_for_pack_path(&local_path));
         send_progress(
             tx,
             MediaProgressEvent::for_pack(
@@ -386,6 +387,20 @@ fn start_ready_downloads(
         let detail = match &status {
             LocalPackStatus::Stale { reason } => {
                 format!("local_path={} reason={reason}", local_path.display())
+            }
+            LocalPackStatus::IndexMissing => {
+                format!(
+                    "local_path={} index_path={} reason=index-missing",
+                    local_path.display(),
+                    index_path_for_pack_path(&local_path).display()
+                )
+            }
+            LocalPackStatus::IndexStale { reason } => {
+                format!(
+                    "local_path={} index_path={} reason={reason}",
+                    local_path.display(),
+                    index_path_for_pack_path(&local_path).display()
+                )
             }
             _ => format!("local_path={}", local_path.display()),
         };
@@ -427,14 +442,16 @@ fn start_ready_downloads(
         let download_config = config.clone();
         let download_pack = pack.clone();
         let download_local_path = local_path.clone();
+        let download_status = status.clone();
         let download_tx = tx.clone();
         std::thread::Builder::new()
             .name(format!("screenshot-media-{}", pack.id))
             .spawn(move || {
-                let result = download_raw_pack(
+                let result = download_pack_assets(
                     &download_config,
                     &download_pack,
                     &download_local_path,
+                    &download_status,
                     request.pack_index,
                     pack_count,
                     &download_tx,
@@ -531,7 +548,27 @@ fn poll_active_downloads(
     }
 }
 
-fn download_raw_pack(
+fn download_pack_assets(
+    config: &MediaWorkerConfig,
+    pack: &MediaPack,
+    local_path: &Path,
+    status: &LocalPackStatus,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(), String> {
+    if status.requires_pack_download() {
+        return download_raw_pack_and_index(config, pack, local_path, pack_index, pack_count, tx);
+    }
+    if status.requires_index_download() {
+        return download_index_for_current_pack(
+            config, pack, local_path, pack_index, pack_count, tx,
+        );
+    }
+    Ok(())
+}
+
+fn download_raw_pack_and_index(
     config: &MediaWorkerConfig,
     pack: &MediaPack,
     local_path: &Path,
@@ -561,6 +598,19 @@ fn download_raw_pack(
             parent: "pack destination parent",
         },
     )?;
+    let index_path = index_path_for_pack_path(local_path);
+    let index_publish = if pack.index.is_some() {
+        Some(prepare_artifact_publish(
+            &index_path,
+            hidden_timestamped_temp_path_for(&index_path, "screenshot-pack-index", unix_ms_now()),
+            ArtifactPublishLabels {
+                destination: "pack index destination",
+                parent: "pack index destination parent",
+            },
+        )?)
+    } else {
+        None
+    };
     let result = stream_variant_to_publish_temp(
         variant,
         pack,
@@ -585,8 +635,57 @@ fn download_raw_pack(
         Ok((streamed, metadata))
     })
     .and_then(|(streamed, metadata)| {
-        install_streamed_pack(&publish, &streamed, pack, pack_index, pack_count, tx)
-            .map(|()| metadata)
+        if let (Some(index), Some(index_publish)) = (&pack.index, index_publish.as_ref()) {
+            let index_headers_tmp = work_dir.join(format!(
+                "{}-{}-{}-index.headers",
+                pack.id,
+                pack.image_size,
+                unix_ms_now()
+            ));
+            let index_result = stream_index_to_publish_temp(
+                index,
+                pack,
+                index_publish,
+                &index_headers_tmp,
+                pack_index,
+                pack_count,
+                tx,
+            )
+            .and_then(|(index_streamed, index_metadata)| {
+                let _ = tx.send(MediaWorkerMessage::CacheMetadata {
+                    scope: format!("pack-index:{}", pack.id),
+                    metadata: index_metadata,
+                });
+                send_progress(
+                    tx,
+                    MediaProgressEvent::for_pack(pack, "index", "verify", pack_index, pack_count)
+                        .with_done_bytes(index.bytes),
+                );
+                verify_streamed_download(&index_streamed, index.bytes, &index.sha256)?;
+                Ok(index_streamed)
+            });
+            let _ = fs::remove_file(index_headers_tmp);
+            index_result.map(|index_streamed| (streamed, metadata, Some(index_streamed)))
+        } else {
+            Ok((streamed, metadata, None))
+        }
+    })
+    .and_then(|(streamed, metadata, index_streamed)| {
+        install_streamed_pack(&publish, &streamed, pack, pack_index, pack_count, tx)?;
+        if let (Some(index), Some(index_publish), Some(index_streamed)) =
+            (&pack.index, index_publish.as_ref(), index_streamed.as_ref())
+        {
+            install_streamed_index(
+                index_publish,
+                index_streamed,
+                index,
+                pack,
+                pack_index,
+                pack_count,
+                tx,
+            )?;
+        }
+        Ok(metadata)
     })
     .and_then(|metadata| {
         write_download_state(
@@ -596,6 +695,74 @@ fn download_raw_pack(
             variant,
             Some(&metadata),
         )
+    });
+    if result.is_err() {
+        publish.cleanup_temp();
+        if let Some(index_publish) = index_publish.as_ref() {
+            index_publish.cleanup_temp();
+        }
+    }
+    let _ = fs::remove_file(headers_tmp);
+    result
+}
+
+fn download_index_for_current_pack(
+    config: &MediaWorkerConfig,
+    pack: &MediaPack,
+    local_path: &Path,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(), String> {
+    let index = pack
+        .index
+        .as_ref()
+        .ok_or_else(|| format!("pack {} has no index sidecar", pack.id))?;
+    let variant = pack
+        .variant_for_compression("none")
+        .ok_or_else(|| format!("pack {} has no compression=none variant", pack.id))?;
+    fs::create_dir_all(&config.asset_dir)
+        .map_err(|e| format!("create asset dir {}: {e}", config.asset_dir.display()))?;
+    let work_dir = PathBuf::from("/tmp/mister-magik-media-download");
+    fs::create_dir_all(&work_dir)
+        .map_err(|e| format!("create media work dir {}: {e}", work_dir.display()))?;
+    let index_path = index_path_for_pack_path(local_path);
+    let headers_tmp = work_dir.join(format!(
+        "{}-{}-{}-index.headers",
+        pack.id,
+        pack.image_size,
+        unix_ms_now()
+    ));
+    let publish = prepare_artifact_publish(
+        &index_path,
+        hidden_timestamped_temp_path_for(&index_path, "screenshot-pack-index", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "pack index destination",
+            parent: "pack index destination parent",
+        },
+    )?;
+    let result = stream_index_to_publish_temp(
+        index,
+        pack,
+        &publish,
+        &headers_tmp,
+        pack_index,
+        pack_count,
+        tx,
+    )
+    .and_then(|(streamed, metadata)| {
+        let _ = tx.send(MediaWorkerMessage::CacheMetadata {
+            scope: format!("pack-index:{}", pack.id),
+            metadata,
+        });
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(pack, "index", "verify", pack_index, pack_count)
+                .with_done_bytes(index.bytes),
+        );
+        verify_streamed_download(&streamed, index.bytes, &index.sha256)?;
+        install_streamed_index(&publish, &streamed, index, pack, pack_index, pack_count, tx)?;
+        write_download_state(&config.asset_dir, pack, local_path, variant, None)
     });
     if result.is_err() {
         publish.cleanup_temp();
@@ -619,9 +786,64 @@ fn stream_variant_to_publish_temp(
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
+    stream_media_object_to_publish_temp(
+        &variant.url,
+        variant.bytes,
+        "identity",
+        "pack",
+        pack,
+        publish,
+        headers_path,
+        pack_index,
+        pack_count,
+        tx,
+    )
+}
+
+fn stream_index_to_publish_temp(
+    index: &MediaIndex,
+    pack: &MediaPack,
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    headers_path: &Path,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
+    stream_media_object_to_publish_temp(
+        &index.url,
+        index.bytes,
+        "index",
+        "pack index",
+        pack,
+        publish,
+        headers_path,
+        pack_index,
+        pack_count,
+        tx,
+    )
+}
+
+fn stream_media_object_to_publish_temp(
+    url: &str,
+    expected_bytes: u64,
+    progress_variant: &str,
+    object_label: &str,
+    pack: &MediaPack,
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    headers_path: &Path,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
     send_progress(
         tx,
-        MediaProgressEvent::for_pack(pack, "identity", "download_start", pack_index, pack_count),
+        MediaProgressEvent::for_pack(
+            pack,
+            progress_variant,
+            "download_start",
+            pack_index,
+            pack_count,
+        ),
     );
     let headers = File::create(headers_path)
         .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
@@ -635,7 +857,7 @@ fn stream_variant_to_publish_temp(
         .arg("Accept-Encoding: identity")
         .arg("-O")
         .arg("-")
-        .arg(&variant.url)
+        .arg(url)
         .stdout(Stdio::piped())
         .stderr(Stdio::from(headers))
         .spawn()
@@ -667,27 +889,37 @@ fn stream_variant_to_publish_temp(
                 break;
             }
             output.write_all(&buffer[..read]).map_err(|e| {
-                format!("write streamed pack {}: {e}", publish.temp_path().display())
+                format!(
+                    "write streamed {object_label} {}: {e}",
+                    publish.temp_path().display()
+                )
             })?;
             sha_stdin
                 .write_all(&buffer[..read])
                 .map_err(|e| format!("write sha256 stdin: {e}"))?;
             bytes += read as u64;
-            if last_emit.elapsed() >= Duration::from_millis(250) || bytes >= variant.bytes {
+            if last_emit.elapsed() >= Duration::from_millis(250) || bytes >= expected_bytes {
                 last_emit = Instant::now();
                 send_progress(
                     tx,
                     MediaProgressEvent::for_pack(
-                        pack, "identity", "download", pack_index, pack_count,
+                        pack,
+                        progress_variant,
+                        "download",
+                        pack_index,
+                        pack_count,
                     )
-                    .with_bytes(bytes, variant.bytes)
+                    .with_bytes(bytes, expected_bytes)
                     .with_download_mbps(mbps(bytes, started.elapsed())),
                 );
             }
         }
-        output
-            .flush()
-            .map_err(|e| format!("flush streamed pack {}: {e}", publish.temp_path().display()))
+        output.flush().map_err(|e| {
+            format!(
+                "flush streamed {object_label} {}: {e}",
+                publish.temp_path().display()
+            )
+        })
     })();
     drop(sha_stdin);
     drop(output);
@@ -706,16 +938,22 @@ fn stream_variant_to_publish_temp(
     let header_text = fs::read_to_string(headers_path).unwrap_or_default();
     send_progress(
         tx,
-        MediaProgressEvent::for_pack(pack, "identity", "download_done", pack_index, pack_count)
-            .with_bytes(bytes, variant.bytes)
-            .with_download_mbps(mbps(bytes, started.elapsed())),
+        MediaProgressEvent::for_pack(
+            pack,
+            progress_variant,
+            "download_done",
+            pack_index,
+            pack_count,
+        )
+        .with_bytes(bytes, expected_bytes)
+        .with_download_mbps(mbps(bytes, started.elapsed())),
     );
     Ok((
         StreamedPackDownload {
             bytes,
             sha256: actual_sha,
         },
-        parse_wget_headers(&header_text, &variant.url, "response"),
+        parse_wget_headers(&header_text, url, "response"),
     ))
 }
 
@@ -756,10 +994,64 @@ fn install_streamed_pack(
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) -> Result<(), String> {
+    install_streamed_object(
+        publish,
+        streamed,
+        pack,
+        "identity",
+        "screenshot pack",
+        pack_index,
+        pack_count,
+        tx,
+    )
+}
+
+fn install_streamed_index(
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    streamed: &StreamedPackDownload,
+    index: &MediaIndex,
+    pack: &MediaPack,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(), String> {
+    if streamed.bytes != index.bytes {
+        return Err(format!(
+            "streamed index size mismatch expected={} actual={}",
+            index.bytes, streamed.bytes
+        ));
+    }
+    install_streamed_object(
+        publish,
+        streamed,
+        pack,
+        "index",
+        "screenshot pack index",
+        pack_index,
+        pack_count,
+        tx,
+    )
+}
+
+fn install_streamed_object(
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    streamed: &StreamedPackDownload,
+    pack: &MediaPack,
+    progress_variant: &str,
+    install_label: &str,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<(), String> {
     let bytes = publish
         .temp_path()
         .metadata()
-        .map_err(|e| format!("stat streamed pack {}: {e}", publish.temp_path().display()))?
+        .map_err(|e| {
+            format!(
+                "stat streamed {install_label} {}: {e}",
+                publish.temp_path().display()
+            )
+        })?
         .len();
     if bytes != streamed.bytes {
         return Err(format!(
@@ -769,7 +1061,7 @@ fn install_streamed_pack(
     }
     send_progress(
         tx,
-        MediaProgressEvent::for_pack(pack, "identity", "save", pack_index, pack_count)
+        MediaProgressEvent::for_pack(pack, progress_variant, "save", pack_index, pack_count)
             .with_done_bytes(streamed.bytes),
     );
     let file = File::options()
@@ -778,21 +1070,31 @@ fn install_streamed_pack(
         .map_err(|e| format!("open streamed pack {}: {e}", publish.temp_path().display()))?;
     send_progress(
         tx,
-        MediaProgressEvent::for_pack(pack, "identity", "sync", pack_index, pack_count)
+        MediaProgressEvent::for_pack(pack, progress_variant, "sync", pack_index, pack_count)
             .with_done_bytes(streamed.bytes),
     );
-    file.sync_all()
-        .map_err(|e| format!("sync streamed pack {}: {e}", publish.temp_path().display()))?;
+    file.sync_all().map_err(|e| {
+        format!(
+            "sync streamed {install_label} {}: {e}",
+            publish.temp_path().display()
+        )
+    })?;
     send_progress(
         tx,
-        MediaProgressEvent::for_pack(pack, "identity", "rename", pack_index, pack_count)
+        MediaProgressEvent::for_pack(pack, progress_variant, "rename", pack_index, pack_count)
             .with_done_bytes(streamed.bytes),
     );
-    publish.install_temp(Some("screenshot pack"))?;
+    publish.install_temp(Some(install_label))?;
     send_progress(
         tx,
-        MediaProgressEvent::for_pack(pack, "identity", "parent-sync", pack_index, pack_count)
-            .with_done_bytes(streamed.bytes),
+        MediaProgressEvent::for_pack(
+            pack,
+            progress_variant,
+            "parent-sync",
+            pack_index,
+            pack_count,
+        )
+        .with_done_bytes(streamed.bytes),
     );
     sync_path_with_fallback(publish.parent());
     Ok(())
@@ -880,6 +1182,17 @@ fn write_download_state(
     });
     if let Some(metadata) = metadata {
         pack_state["cache"] = cache_metadata_json(metadata);
+    }
+    if let Some(index) = &pack.index {
+        pack_state["index"] = serde_json::json!({
+            "codec": index.codec,
+            "object": index.object,
+            "bytes": index.bytes,
+            "sha256": index.sha256,
+            "archive_bytes": index.archive_bytes,
+            "archive_sha256": index.archive_sha256,
+            "local_path": index_path_for_pack_path(local_path).display().to_string(),
+        });
     }
     packs.insert(pack.image_size.clone(), pack_state);
     root.insert("schema".to_string(), Value::from(1));
@@ -1310,6 +1623,37 @@ mod tests {
             .remove(0)
     }
 
+    fn indexed_pack_fixture() -> MediaPack {
+        let text = format!(
+            r#"{{
+  "schema": 1,
+  "generated_at": "2026-06-22T16:58:28Z",
+  "packs": [
+    {{
+      "id": "arcade",
+      "version": "2026.06.22",
+      "object": "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b",
+      "bytes": 4,
+      "sha256": "{SHA}",
+      "codec": "mmlz4b",
+      "index": {{
+        "object": "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mmlz4b.idx",
+        "bytes": 2,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "codec": "mmlz4b-index-v1",
+        "archive_bytes": 4,
+        "archive_sha256": "{SHA}"
+      }}
+    }}
+  ]
+}}"#
+        );
+        parse_manifest_json(DEFAULT_MANIFEST_URL, &text)
+            .unwrap()
+            .packs
+            .remove(0)
+    }
+
     fn pack_with_id(id: &str) -> MediaPack {
         let mut pack = pack_fixture();
         pack.id = id.to_string();
@@ -1617,6 +1961,30 @@ mod tests {
         assert_eq!(
             state["systems"]["arcade"]["packs"]["320x320"]["cache"]["content_length"],
             "4"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn write_download_state_records_pack_index() {
+        let dir = temp_dir("mister-magik-write-index-state");
+        let pack = indexed_pack_fixture();
+        let local_path = dir.join("arcade-screenshots-320x320.mmlz4b");
+        let variant = pack.variant_for_compression("none").unwrap();
+
+        write_download_state(&dir, &pack, &local_path, variant, None).unwrap();
+
+        let state: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(".screenshot-media-state.json")).unwrap(),
+        )
+        .unwrap();
+        let index_state = &state["systems"]["arcade"]["packs"]["320x320"]["index"];
+        assert_eq!(index_state["codec"], "mmlz4b-index-v1");
+        assert_eq!(index_state["bytes"], 2);
+        assert_eq!(index_state["archive_bytes"], 4);
+        assert_eq!(
+            index_state["local_path"],
+            index_path_for_pack_path(&local_path).display().to_string()
         );
         let _ = fs::remove_dir_all(dir);
     }

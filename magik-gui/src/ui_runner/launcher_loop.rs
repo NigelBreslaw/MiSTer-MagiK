@@ -318,6 +318,15 @@ fn launcher_return_reveal_enabled() -> bool {
     )
 }
 
+fn preview_archive_warm_skip_enabled() -> bool {
+    matches!(
+        std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("on") | Some("true") | Some("yes")
+    )
+}
+
 fn launcher_reveal_settle_frames() -> u32 {
     std::env::var("MISTER_LAUNCHER_REVEAL_SETTLE_FRAMES")
         .ok()
@@ -410,7 +419,7 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut pacer = VsyncPacer::from_env();
-    if launcher_bench_scenario.is_some() {
+    if launcher_bench_scenario.is_some() && !preview_archive_warm_skip_enabled() {
         let warm_t = Instant::now();
         match preview_worker::warm_preview_archives_from_env() {
             Ok(loaded) => print_startup_event(
@@ -428,6 +437,8 @@ pub(super) fn run_launcher_loop(
                 std::process::exit(13);
             }
         }
+    } else if launcher_bench_scenario.is_some() {
+        print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
     let mut preview = PreviewState::new();
     let mut launcher_bench_waiting_for_initial_preview =

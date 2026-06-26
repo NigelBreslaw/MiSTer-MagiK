@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use ssh2::{ExtendedData, Session};
 use std::collections::BTreeMap;
 use std::env;
@@ -13,6 +13,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const DEFAULT_REMOTE_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
 const DEFAULT_ARCADE_ARCHIVE_PATH: &str =
     "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b";
+const DEFAULT_IMAGE_SIZE: &str = "320x320";
 const DEFAULT_MANIFEST_URL: &str = "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
 const REMOTE_STATE_PATH: &str = "/media/fat/mister-magik/assets/.screenshot-media-state.json";
 const BENCH_TSV: &str = "history/toolchain-bench/results-screenshot-download.tsv";
@@ -29,9 +30,12 @@ struct MediaManifest {
 #[derive(Clone, Debug)]
 struct MediaPack {
     system: String,
+    version: String,
+    image_size: String,
     local_path: String,
     asset_count: Option<u64>,
     identity: MediaVariant,
+    index: Option<MediaIndex>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +44,16 @@ struct MediaVariant {
     decoded_bytes: u64,
     decoded_sha256: String,
     etag: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct MediaIndex {
+    object: String,
+    bytes: u64,
+    sha256: String,
+    codec: String,
+    archive_bytes: u64,
+    archive_sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -79,11 +93,12 @@ pub(crate) fn media_check(sess: &Session, args: &[String]) -> Result<()> {
     for pack in selected_packs(&manifest, &parsed.system)? {
         let status = remote_pack_status(sess, pack)?;
         println!(
-            "media_check\t{}\t{}\tlocal_path={}\tremote_url={}\tetag={}",
+            "media_check\t{}\t{}\tlocal_path={}\tremote_url={}\tindex_url={}\tetag={}",
             pack.system,
             status,
             pack.local_path,
             manifest_url_for_pack(&manifest, pack),
+            manifest_url_for_index(&manifest, pack).unwrap_or_default(),
             pack.identity.etag.as_deref().unwrap_or("")
         );
     }
@@ -95,22 +110,48 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
     let manifest = load_manifest(&parsed.manifest_url)?;
     let packs = selected_packs(&manifest, &parsed.system)?;
     for pack in packs {
-        if remote_pack_status(sess, pack)? == "current" {
+        let status = remote_pack_status(sess, pack)?;
+        if status == "current" {
             println!(
                 "media_download\t{}\tskipped-current\tlocal_path={}",
                 pack.system, pack.local_path
             );
             continue;
         }
+        let mut pack_row = None;
+        let mut index_row = None;
         let variant = resolve_variant(sess, pack, &parsed.variant)?;
-        let row = run_remote_media_download(sess, &manifest, pack, &parsed.label, &variant, true)?;
-        println!("{}", row.to_tsv());
-        if row.result != "downloaded" {
-            return Err(
-                format!("media download failed for {}: {}", pack.system, row.result).into(),
-            );
+        let index_only_repair = status == "index-missing" || status.starts_with("index-stale:");
+        if !index_only_repair {
+            let row =
+                run_remote_media_download(sess, &manifest, pack, &parsed.label, &variant, true)?;
+            println!("{}", row.to_tsv());
+            if row.result != "downloaded" {
+                return Err(
+                    format!("media download failed for {}: {}", pack.system, row.result).into(),
+                );
+            }
+            pack_row = Some(row);
         }
-        update_remote_state(sess, pack, &variant, &row)?;
+        if pack.index.is_some() {
+            let row = run_remote_index_download(sess, &manifest, pack, &parsed.label, true)?;
+            println!("{}", row.to_tsv());
+            if row.result != "downloaded" {
+                return Err(format!(
+                    "media index download failed for {}: {}",
+                    pack.system, row.result
+                )
+                .into());
+            }
+            index_row = Some(row);
+        }
+        update_remote_state_after_download(
+            sess,
+            pack,
+            &variant,
+            pack_row.as_ref(),
+            index_row.as_ref(),
+        )?;
     }
     Ok(())
 }
@@ -329,6 +370,13 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
             .map(str::to_string)
             .unwrap_or_else(|| default_local_path_for_pack(&system));
         let asset_count = pack.get("asset_count").and_then(Value::as_u64);
+        let version = pack
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or(&published_at)
+            .to_string();
+        let image_size =
+            image_size_from_pack(pack).unwrap_or_else(|| DEFAULT_IMAGE_SIZE.to_string());
         let identity_value = pack
             .get("variants")
             .and_then(|variants| variants.get("identity"))
@@ -368,11 +416,18 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
         if codec != "mmlz4b" {
             return Err(format!("pack {system} uses unsupported codec {codec}").into());
         }
+        let index = pack
+            .get("index")
+            .map(|value| parse_index(&system, &identity, value))
+            .transpose()?;
         packs.push(MediaPack {
             system,
+            version,
+            image_size,
             local_path,
             asset_count,
             identity,
+            index,
         });
     }
     Ok(MediaManifest {
@@ -429,11 +484,21 @@ fn print_manifest_summary(manifest: &MediaManifest) {
 }
 
 fn remote_pack_status(sess: &Session, pack: &MediaPack) -> Result<String> {
-    let cmd = format!(
-        "if [ -f {path} ]; then got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" = {sha} ]; then echo current; else echo stale:$got; fi; else echo missing; fi",
-        path = shell_quote(&pack.local_path),
-        sha = shell_quote(&pack.identity.decoded_sha256),
-    );
+    let cmd = if let Some(index) = &pack.index {
+        format!(
+            "if [ ! -f {path} ]; then echo missing; exit 0; fi; got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" != {sha} ]; then echo stale:$got; exit 0; fi; if [ ! -f {index_path} ]; then echo index-missing; exit 0; fi; idxgot=$(sha256sum {index_path} 2>/dev/null | awk '{{print $1}}'); if [ \"$idxgot\" != {index_sha} ]; then echo index-stale:$idxgot; exit 0; fi; echo current",
+            path = shell_quote(&pack.local_path),
+            sha = shell_quote(&pack.identity.decoded_sha256),
+            index_path = shell_quote(&local_index_path_for_pack(pack)),
+            index_sha = shell_quote(&index.sha256),
+        )
+    } else {
+        format!(
+            "if [ -f {path} ]; then got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" = {sha} ]; then echo current; else echo stale:$got; fi; else echo missing; fi",
+            path = shell_quote(&pack.local_path),
+            sha = shell_quote(&pack.identity.decoded_sha256),
+        )
+    };
     Ok(exec_stdout(sess, &cmd)?.trim().to_string())
 }
 
@@ -501,6 +566,53 @@ fn run_remote_media_download(
     Ok(row)
 }
 
+fn run_remote_index_download(
+    sess: &Session,
+    manifest: &MediaManifest,
+    pack: &MediaPack,
+    label: &str,
+    publish: bool,
+) -> Result<RemoteBenchRow> {
+    let Some(index) = &pack.index else {
+        return Err(format!("pack {} has no media index", pack.system).into());
+    };
+    let script = remote_script();
+    let remote_script = format!("/tmp/mister-magik-media-index-{}.sh", unix_ms_now());
+    sftp_write(sess, &remote_script, script.as_bytes())?;
+    let url = manifest_url_for_index(manifest, pack).ok_or("pack index URL missing")?;
+    let mode = if publish { "publish" } else { "bench" };
+    let cmd = format!(
+        "chmod +x {script}; {script} {mode} {label} {system} index identity {url} {local} {sha} {bytes}; rc=$?; rm -f {script}; exit $rc",
+        script = shell_quote(&remote_script),
+        mode = shell_quote(mode),
+        label = shell_quote(label),
+        system = shell_quote(&format!("{}-index", pack.system)),
+        url = shell_quote(&url),
+        local = shell_quote(&local_index_path_for_pack(pack)),
+        sha = shell_quote(&index.sha256),
+        bytes = shell_quote(&index.bytes.to_string()),
+    );
+    let out = exec(sess, &cmd)?;
+    if !out.stderr.trim().is_empty() {
+        eprint!("{}", out.stderr);
+    }
+    let row_line = out
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("screenshot_download_bench_tsv\t"))
+        .ok_or_else(|| {
+            format!(
+                "remote index media runner produced no benchmark row: {}",
+                out.stdout
+            )
+        })?;
+    let row = parse_remote_row(row_line)?;
+    if out.rc != 0 && row.result != "downloaded" && row.result != "bench-ok" {
+        return Ok(row);
+    }
+    Ok(row)
+}
+
 fn parse_remote_row(line: &str) -> Result<RemoteBenchRow> {
     let parts: Vec<_> = line.split('\t').collect();
     if parts.len() < 17 {
@@ -532,6 +644,16 @@ fn update_remote_state(
     variant: &str,
     row: &RemoteBenchRow,
 ) -> Result<()> {
+    update_remote_state_after_download(sess, pack, variant, Some(row), None)
+}
+
+fn update_remote_state_after_download(
+    sess: &Session,
+    pack: &MediaPack,
+    variant: &str,
+    row: Option<&RemoteBenchRow>,
+    index_row: Option<&RemoteBenchRow>,
+) -> Result<()> {
     let cmd = format!("cat {} 2>/dev/null || true", shell_quote(REMOTE_STATE_PATH));
     let current = exec_stdout(sess, &cmd)?;
     let mut root = serde_json::from_str::<Value>(&current)
@@ -544,23 +666,45 @@ fn update_remote_state(
         .remove("systems")
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
-    systems.insert(
-        pack.system.clone(),
-        json!({
-            "local_path": pack.local_path,
-            "sha256": pack.identity.decoded_sha256,
-            "bytes": pack.identity.decoded_bytes,
-            "asset_count": pack.asset_count,
-            "etag": pack.identity.etag,
-            "preferred_variant": variant,
-            "last_result": row.result,
-            "last_total_ms": row.total_ms,
-            "last_download_ms": row.download_ms,
-            "last_decompress_ms": row.decompress_ms,
-            "last_save_ms": row.save_ms,
-            "last_verify_ms": row.verify_ms,
-        }),
-    );
+    let mut entry = Map::new();
+    entry.insert("local_path".to_string(), json!(pack.local_path));
+    entry.insert("version".to_string(), json!(pack.version));
+    entry.insert("image_size".to_string(), json!(pack.image_size));
+    entry.insert("sha256".to_string(), json!(pack.identity.decoded_sha256));
+    entry.insert("bytes".to_string(), json!(pack.identity.decoded_bytes));
+    entry.insert("asset_count".to_string(), json!(pack.asset_count));
+    entry.insert("etag".to_string(), json!(pack.identity.etag));
+    entry.insert("preferred_variant".to_string(), json!(variant));
+    if let Some(row) = row {
+        entry.insert("last_result".to_string(), json!(row.result));
+        entry.insert("last_total_ms".to_string(), json!(row.total_ms));
+        entry.insert("last_download_ms".to_string(), json!(row.download_ms));
+        entry.insert("last_decompress_ms".to_string(), json!(row.decompress_ms));
+        entry.insert("last_save_ms".to_string(), json!(row.save_ms));
+        entry.insert("last_verify_ms".to_string(), json!(row.verify_ms));
+    }
+    if let Some(index) = &pack.index {
+        let mut index_entry = Map::new();
+        index_entry.insert("codec".to_string(), json!(index.codec));
+        index_entry.insert("object".to_string(), json!(index.object));
+        index_entry.insert("bytes".to_string(), json!(index.bytes));
+        index_entry.insert("sha256".to_string(), json!(index.sha256));
+        index_entry.insert("archive_bytes".to_string(), json!(index.archive_bytes));
+        index_entry.insert("archive_sha256".to_string(), json!(index.archive_sha256));
+        index_entry.insert(
+            "local_path".to_string(),
+            json!(local_index_path_for_pack(pack)),
+        );
+        if let Some(row) = index_row {
+            index_entry.insert("last_result".to_string(), json!(row.result));
+            index_entry.insert("last_total_ms".to_string(), json!(row.total_ms));
+            index_entry.insert("last_download_ms".to_string(), json!(row.download_ms));
+            index_entry.insert("last_save_ms".to_string(), json!(row.save_ms));
+            index_entry.insert("last_verify_ms".to_string(), json!(row.verify_ms));
+        }
+        entry.insert("index".to_string(), Value::Object(index_entry));
+    }
+    systems.insert(pack.system.clone(), Value::Object(entry));
     root.insert("systems".to_string(), Value::Object(systems));
     let bytes = serde_json::to_vec_pretty(&Value::Object(root))?;
     let tmp = format!("/tmp/mister-magik-media-state-{}.json", unix_ms_now());
@@ -578,18 +722,123 @@ fn update_remote_state(
     Ok(())
 }
 
+fn parse_index(system: &str, identity: &MediaVariant, value: &Value) -> Result<MediaIndex> {
+    let index = MediaIndex {
+        object: value
+            .get("object")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("pack {system} index missing object"))?
+            .to_string(),
+        bytes: value
+            .get("bytes")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("pack {system} index missing bytes"))?,
+        sha256: value
+            .get("sha256")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("pack {system} index missing sha256"))?
+            .to_ascii_lowercase(),
+        codec: value
+            .get("codec")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("pack {system} index missing codec"))?
+            .to_string(),
+        archive_bytes: value
+            .get("archive_bytes")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("pack {system} index missing archive_bytes"))?,
+        archive_sha256: value
+            .get("archive_sha256")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("pack {system} index missing archive_sha256"))?
+            .to_ascii_lowercase(),
+    };
+    if index.codec != "mmlz4b-index-v1" {
+        return Err(format!("pack {system} uses unsupported index codec {}", index.codec).into());
+    }
+    if index.bytes == 0 {
+        return Err(format!("pack {system} index has zero bytes").into());
+    }
+    if !index.object.ends_with(".mmlz4b.idx") {
+        return Err(format!("pack {system} index object must end with .mmlz4b.idx").into());
+    }
+    if index.archive_bytes != identity.decoded_bytes {
+        return Err(format!(
+            "pack {system} index archive_bytes mismatch expected={} got={}",
+            identity.decoded_bytes, index.archive_bytes
+        )
+        .into());
+    }
+    if index.archive_sha256 != identity.decoded_sha256 {
+        return Err(format!("pack {system} index archive_sha256 mismatch").into());
+    }
+    Ok(index)
+}
+
+fn image_size_from_pack(value: &Value) -> Option<String> {
+    for key in [
+        "image_size",
+        "preview_size",
+        "pack_size",
+        "size",
+        "resolution",
+    ] {
+        let Some(size) = value.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        if valid_image_size(size) {
+            return Some(size.to_string());
+        }
+    }
+    let width = value
+        .get("image_width")
+        .or_else(|| value.get("width"))
+        .and_then(Value::as_u64)?;
+    let height = value
+        .get("image_height")
+        .or_else(|| value.get("height"))
+        .and_then(Value::as_u64)?;
+    let size = format!("{width}x{height}");
+    valid_image_size(&size).then_some(size)
+}
+
+fn valid_image_size(value: &str) -> bool {
+    let Some((width, height)) = value.split_once('x') else {
+        return false;
+    };
+    let Ok(width) = width.parse::<u32>() else {
+        return false;
+    };
+    let Ok(height) = height.parse::<u32>() else {
+        return false;
+    };
+    width > 0 && height > 0
+}
+
 fn manifest_url_for_pack(manifest: &MediaManifest, pack: &MediaPack) -> String {
-    if pack.identity.remote_path.starts_with("http://")
-        || pack.identity.remote_path.starts_with("https://")
-    {
-        pack.identity.remote_path.clone()
+    manifest_url_for_object(manifest, &pack.identity.remote_path)
+}
+
+fn manifest_url_for_index(manifest: &MediaManifest, pack: &MediaPack) -> Option<String> {
+    pack.index
+        .as_ref()
+        .map(|index| manifest_url_for_object(manifest, &index.object))
+}
+
+fn manifest_url_for_object(manifest: &MediaManifest, object: &str) -> String {
+    if object.starts_with("http://") || object.starts_with("https://") {
+        object.to_string()
     } else {
         format!(
             "{}/{}",
             manifest.base_url.trim_end_matches('/'),
-            pack.identity.remote_path.trim_start_matches('/')
+            object.trim_start_matches('/')
         )
     }
+}
+
+fn local_index_path_for_pack(pack: &MediaPack) -> String {
+    format!("{}.idx", pack.local_path)
 }
 
 fn accept_encoding_for_variant(variant: &str) -> &'static str {
@@ -971,16 +1220,26 @@ mod tests {
     #[test]
     fn parses_magik_cloud_manifest_shape() {
         let sha = "c5fa5b54d2f2955e87e4d245a8942ce641a9cc84d320ce245b4a259a095c7b42";
+        let idx_sha = "e5fa5b54d2f2955e87e4d245a8942ce641a9cc84d320ce245b4a259a095c7b42";
         let value = json!({
             "schema": 1,
             "generated_at": "2026-06-22T16:52:03Z",
             "packs": [{
                 "id": "arcade",
+                "size": "320x320",
                 "version": "2026.06.22",
                 "object": format!("mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b"),
                 "bytes": 1234,
                 "sha256": sha,
-                "codec": "mmlz4b"
+                "codec": "mmlz4b",
+                "index": {
+                    "object": format!("mister-magik/v1/packs/arcade/2026.06.22/{idx_sha}.mmlz4b.idx"),
+                    "bytes": 321,
+                    "sha256": idx_sha.to_ascii_uppercase(),
+                    "codec": "mmlz4b-index-v1",
+                    "archive_bytes": 1234,
+                    "archive_sha256": sha.to_ascii_uppercase()
+                }
             }]
         });
 
@@ -993,10 +1252,26 @@ mod tests {
         assert_eq!(manifest.schema_version, 1);
         assert_eq!(manifest.published_at, "2026-06-22T16:52:03Z");
         assert_eq!(manifest.packs[0].system, "arcade");
+        assert_eq!(manifest.packs[0].version, "2026.06.22");
+        assert_eq!(manifest.packs[0].image_size, "320x320");
         assert_eq!(manifest.packs[0].local_path, DEFAULT_ARCADE_ARCHIVE_PATH);
         assert_eq!(
             manifest_url_for_pack(&manifest, &manifest.packs[0]),
             format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b")
+        );
+        let index = manifest.packs[0].index.as_ref().unwrap();
+        assert_eq!(index.bytes, 321);
+        assert_eq!(index.sha256, idx_sha);
+        assert_eq!(
+            local_index_path_for_pack(&manifest.packs[0]),
+            format!("{DEFAULT_ARCADE_ARCHIVE_PATH}.idx")
+        );
+        let expected_index_url = format!(
+            "https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{idx_sha}.mmlz4b.idx"
+        );
+        assert_eq!(
+            manifest_url_for_index(&manifest, &manifest.packs[0]).as_deref(),
+            Some(expected_index_url.as_str())
         );
     }
 
@@ -1113,5 +1388,27 @@ mod tests {
         let err =
             parse_manifest(&unsupported_codec, "https://example.test/manifest.json").unwrap_err();
         assert!(err.to_string().contains("unsupported codec zip"));
+
+        let index_mismatch = json!({
+            "schema_version": 1,
+            "packs": [{
+                "system": "nes",
+                "remote_path": "packs/nes.mmlz4b",
+                "bytes": 10,
+                "sha256": "aaaaaaaa",
+                "codec": "mmlz4b",
+                "index": {
+                    "object": "packs/nes.mmlz4b.idx",
+                    "bytes": 4,
+                    "sha256": "bbbbbbbb",
+                    "codec": "mmlz4b-index-v1",
+                    "archive_bytes": 11,
+                    "archive_sha256": "aaaaaaaa"
+                }
+            }]
+        });
+        let err =
+            parse_manifest(&index_mismatch, "https://example.test/manifest.json").unwrap_err();
+        assert!(err.to_string().contains("index archive_bytes mismatch"));
     }
 }

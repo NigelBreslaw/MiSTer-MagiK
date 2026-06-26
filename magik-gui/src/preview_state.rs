@@ -937,11 +937,15 @@ pub(crate) fn apply_ready_preview(
         if let Some(image) = result.image {
             if preview_trace_enabled() && is_selected_result {
                 eprintln!(
-                    "preview_trace apply generation={} priority={:?} selected={} age_us={} archive_path={} asset_key={}",
+                    "preview_trace apply generation={} priority={:?} selected={} age_us={} load_source={} total_us={} read_us={} decode_us={} archive_path={} asset_key={}",
                     result.generation,
                     result.priority,
                     is_selected_result,
                     result.request_age_us,
+                    result.load_source.label(),
+                    result.total_us,
+                    result.read_us,
+                    result.decode_us,
                     result.preview_archive_path,
                     result.preview_asset_key
                 );

@@ -12,9 +12,9 @@ ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--visual-captures N]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--visual-captures N] [--skip-preview-warm]
 
-Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold
+Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 /media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
 
@@ -22,6 +22,8 @@ Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
 non-empty CPU SVG artifact.
 --visual-captures captures fixed Arcade indices from the real launcher screen.
+--skip-preview-warm skips launcher benchmark archive preloading so first-preview
+measurement can exercise the .idx + pread fast lane.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for Arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -37,6 +39,7 @@ visual_captures="4"
 allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
+skip_preview_warm="${MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM:-0}"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -46,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --cpu-profile) cpu_profile="1"; shift ;;
     --self-test) self_test="1"; shift ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
+    --skip-preview-warm|--cold-preview-load) skip_preview_warm="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
@@ -58,9 +62,9 @@ if [[ "${#positionals[@]}" -ge 3 ]]; then label="${positionals[2]}"; fi
 if [[ "${#positionals[@]}" -gt 3 ]]; then usage >&2; exit 2; fi
 
 case "$scenario" in
-  velocity-scroll|held-scroll|turbo-hold|preview-step-hold) ;;
+  velocity-scroll|held-scroll|turbo-hold|preview-step-hold|preview-idle) ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview|preview-changes|screenshot-stress|preview-stress)
-    echo "row-step/jump scenario '$scenario' is not valid for preview benchmarking; use velocity-scroll, turbo-hold, or preview-step-hold" >&2
+    echo "row-step/jump scenario '$scenario' is not valid for preview benchmarking; use velocity-scroll, turbo-hold, preview-step-hold, or preview-idle" >&2
     exit 2
     ;;
   *) echo "unknown scenario: $scenario" >&2; usage >&2; exit 2 ;;
@@ -162,10 +166,10 @@ emit_run_context_row() {
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tstarted_at=%s\n' \
+  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\n' \
     "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
     "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-    "$cpu_profile" "$visual_captures" "$started_at"
+    "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at"
 }
 
 cleanup() {
@@ -204,6 +208,9 @@ write_launcher_env() {
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     if [[ -n "$trace_path" ]]; then printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$trace_path"; fi
     if [[ -n "$selected_index" ]]; then printf 'export MISTER_ARCADE_SELECTED_INDEX=%q\n' "$selected_index"; fi
+    if [[ "$skip_preview_warm" == "1" || "$skip_preview_warm" == "true" || "$skip_preview_warm" == "yes" || "$skip_preview_warm" == "on" ]]; then
+      printf 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1\n'
+    fi
     if [[ "$cpu_profile" == "1" ]]; then
       printf 'export MISTER_PPROF=1\n'
       printf 'export MISTER_PPROF_OUT=%q\n' "$cpu_profile_remote_svg"
@@ -616,17 +623,18 @@ summarize_preview_timing() {
       if (cache_hit == "true" || cache_hit == "1") cache_hits++
       if (load_source == "archive_mem") archive_mem++
       else if (load_source == "decoded_cache") decoded_cache++
+      else if (load_source == "index_pread") index_pread++
       else if (read > 0) unexpected_file_reads++
       if (read > 5000) slow_reads++
     }
     END {
       if (n == 0) {
-        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
+        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
       } else {
-        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
           name, n, total_sum / n, total_max, read_sum / n, read_max, decode_sum / n, decode_max,
           cache_hits + 0, unexpected_file_reads + 0, slow_reads + 0,
-          archive_mem + 0, decoded_cache + 0,
+          archive_mem + 0, decoded_cache + 0, index_pread + 0,
           selected_file_reads + 0
       }
     }
@@ -728,11 +736,12 @@ check_preview_hotpath_io_gate() {
         else if (kv[1] == "priority") priority = kv[2]
       }
       if (load_source == "archive_mem") archive_backed = 1
-      if (load_source != "archive_mem" && load_source != "decoded_cache" && read > 0) {
+      if (load_source == "index_pread") index_pread++
+      if (load_source != "archive_mem" && load_source != "decoded_cache" && load_source != "index_pread" && read > 0) {
         unexpected_file_reads++
         if (read > 5000) slow_reads++
       }
-      if (priority == "Selected" && load_source != "archive_mem" && load_source != "decoded_cache" && read > 0) {
+      if (priority == "Selected" && load_source != "archive_mem" && load_source != "decoded_cache" && load_source != "index_pread" && read > 0) {
         selected_file_reads++
         if (selected_file_reads <= 10) {
           printf "%s selected preview unexpected file read: source=%s read_us=%d line=%s\n", name, load_source, read, $0 > "/dev/stderr"
@@ -745,7 +754,7 @@ check_preview_hotpath_io_gate() {
         printf "%s preview hot-path io gate failed: archive_backed=1 unexpected_file_reads=%d slow_reads=%d selected_file_reads=%d\n", name, unexpected_file_reads + 0, slow_reads + 0, selected_file_reads + 0 > "/dev/stderr"
         exit 7
       }
-      printf "%s preview_hotpath_io_gate archive_backed=%d unexpected_file_reads=%d slow_reads=%d selected_file_reads=%d allow=%s\n", name, archive_backed + 0, unexpected_file_reads + 0, slow_reads + 0, selected_file_reads + 0, allow
+      printf "%s preview_hotpath_io_gate archive_backed=%d index_pread=%d unexpected_file_reads=%d slow_reads=%d selected_file_reads=%d allow=%s\n", name, archive_backed + 0, index_pread + 0, unexpected_file_reads + 0, slow_reads + 0, selected_file_reads + 0, allow
     }
   ' "$log"
 }
@@ -979,7 +988,7 @@ printf "arcade decoded=%s apply=%s\n" \
   "$(grep -c 'preview_trace apply' "$arcade_log" 2>/dev/null || true)"
 
 echo
-echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tselected_file_reads'
+echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tindex_pread\tselected_file_reads'
 summarize_preview_timing arcade "$arcade_log"
 
 echo

@@ -248,7 +248,8 @@ individual AmigaVision titles. The archive itself is not a direct launch ref.
 ## Preview And Metadata Artifacts
 
 Screenshot packs are fixed runtime artifacts, not catalog inputs. The runtime
-loads LZ4-block `.mmlz4b` packs from `/media/fat/mister-magik/assets`; the
+loads LZ4-block `.mmlz4b` packs from `/media/fat/mister-magik/assets`; matching
+`.mmlz4b.idx` sidecars are optional seek indexes for first-preview latency. The
 catalog stores only the pack path and asset key needed to request a preview.
 Raw preview archive formats and ad hoc on-device pack generation are retired.
 Build and publish packs from the private `private/magik-cloud` submodule; this
@@ -267,8 +268,11 @@ Runtime downloads save new packs with the image size in the filename:
 
 ```text
 /media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b.idx
 /media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b.idx
 /media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b.idx
 ```
 
 Legacy catalog paths such as `arcade-screenshots.mmlz4b` remain valid lookup
@@ -279,12 +283,16 @@ their size in the local filename.
 
 The downloader streams the raw manifest object directly into a hidden temporary
 file beside the final pack on `/media/fat` while feeding the same bytes to the
-SHA-256 verifier. It compares the streamed byte count and SHA-256 with both the
-selected raw variant and the raw pack manifest entry, then publishes verified
-packs atomically with file sync, rename, and parent-directory sync. The state file
+SHA-256 verifier. When the manifest includes an `index` block, it also downloads
+and verifies the `.mmlz4b.idx` sidecar before marking the pack current. A local
+pack is current only when the raw pack and its advertised sidecar match the
+media state. If the raw pack is current but the sidecar is missing or stale, the
+worker repairs only the sidecar. Verified files are published atomically with
+file sync, rename, and parent-directory sync. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
-successful media update, preferred size, and the latest HTTP/cache headers
-observed for each downloaded pack. It is not a catalog stamp input.
+successful media update, preferred size, index metadata, and the latest
+HTTP/cache headers observed for each downloaded pack. It is not a catalog stamp
+input.
 
 During catalog scans, the scanner emits the first discovery of each supported
 screenshot-pack system: `arcade`, `neogeo`, `nes`, `snes`, `n64`, `sms`,
@@ -308,8 +316,11 @@ finalization phases stay at 100%. The row omits byte labels and keeps completed
 packs visible briefly so users can see every requested pack finish.
 
 The production path is the canonical `.mmlz4b` object served with
-`Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"`.
-MagiK does not decode or benchmark gzip/Brotli screenshot objects on device.
+`Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"` for
+the raw pack plus optional `codec: "mmlz4b-index-v1"` sidecars. The preview
+loader uses the sidecar for `index_pread` only while the full archive is not yet
+loaded; steady state returns to `archive_mem`. MagiK does not decode or
+benchmark gzip/Brotli screenshot objects on device.
 Cloudflare compression behavior can still be inspected separately through
 header probes:
 
