@@ -1559,7 +1559,7 @@ pub(super) fn run_launcher_loop(
             };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let (raw_preview_rect, preview_transition_trace) = layer_target.blit_raw_preview_if_needed(
+        let (raw_preview, preview_transition_trace) = layer_target.blit_raw_preview_if_needed(
             &mut preview,
             &mut preview_transition,
             loop_start.duration_since(run_start),
@@ -1612,7 +1612,7 @@ pub(super) fn run_launcher_loop(
                 layer_target: &mut layer_target,
                 full_frame_present,
                 slint_dirty: this_rect,
-                raw_preview_rect,
+                raw_preview,
                 arcade_list_rect,
                 arcade_list_renderer: &mut arcade_list_renderer,
             });

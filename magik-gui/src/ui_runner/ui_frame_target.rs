@@ -18,6 +18,16 @@ pub(super) fn preview_run_label() -> String {
     std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
 }
 
+pub(super) fn preview_direct_present_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_PREVIEW_DIRECT_PRESENT").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CatalogRefreshPolicy {
     Default,
@@ -97,6 +107,21 @@ pub(super) trait UiFrameTargetPreviewExt {
         effect: PreviewTransitionEffect,
         progress: f32,
     ) -> DirtyRect;
+
+    fn blit_raw_preview_direct(
+        &mut self,
+        ui: &UiDisplay,
+        frame: &PreviewRawFrame<'_>,
+        clear_screen: bool,
+    ) -> Option<DirtyRect>;
+
+    fn blit_raw_preview_transition_direct(
+        &mut self,
+        ui: &UiDisplay,
+        frame: &PreviewRawTransitionFrame<'_>,
+        effect: PreviewTransitionEffect,
+        progress: f32,
+    ) -> DirtyRect;
 }
 
 impl UiFrameTargetPreviewExt for UiFrameTarget {
@@ -124,6 +149,58 @@ impl UiFrameTargetPreviewExt for UiFrameTarget {
             progress,
         )
     }
+
+    fn blit_raw_preview_direct(
+        &mut self,
+        ui: &UiDisplay,
+        frame: &PreviewRawFrame<'_>,
+        clear_screen: bool,
+    ) -> Option<DirtyRect> {
+        Raw565PreviewRenderer::compose_frame(
+            self.direct_preview_565_mut(frame_target_geometry(ui)),
+            ui,
+            frame,
+            clear_screen,
+        )
+    }
+
+    fn blit_raw_preview_transition_direct(
+        &mut self,
+        ui: &UiDisplay,
+        frame: &PreviewRawTransitionFrame<'_>,
+        effect: PreviewTransitionEffect,
+        progress: f32,
+    ) -> DirtyRect {
+        Raw565PreviewRenderer::compose_transition(
+            self.direct_preview_565_mut(frame_target_geometry(ui)),
+            ui,
+            frame,
+            effect,
+            progress,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RawPreviewPresent {
+    Cached(DirtyRect),
+    Direct(DirtyRect),
+}
+
+impl RawPreviewPresent {
+    pub(super) fn cached_rect(self) -> Option<DirtyRect> {
+        match self {
+            Self::Cached(rect) => Some(rect),
+            Self::Direct(_) => None,
+        }
+    }
+
+    pub(super) fn direct_rect(self) -> Option<DirtyRect> {
+        match self {
+            Self::Cached(_) => None,
+            Self::Direct(rect) => Some(rect),
+        }
+    }
 }
 
 pub(super) fn blit_raw_preview_if_needed(
@@ -133,7 +210,7 @@ pub(super) fn blit_raw_preview_if_needed(
     transition: &mut PreviewTransitionDemo,
     elapsed: Duration,
     slint_dirty: Option<DirtyRect>,
-) -> (Option<DirtyRect>, PreviewTransitionTrace) {
+) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
     let raw_dirty = preview.take_raw_dirty();
     let slint_touched_preview = slint_dirty
         .and_then(|rect| rect.intersection(preview_screen_rect(ui)))
@@ -147,19 +224,35 @@ pub(super) fn blit_raw_preview_if_needed(
     let Some(transition_frame) = transition_frame else {
         return (None, trace);
     };
+    let direct_present = preview_direct_present_enabled();
     let raw_rect = if trace.active {
-        target.blit_raw_preview_transition(ui, &transition_frame, trace.effect, trace.progress)
+        if direct_present {
+            target.blit_raw_preview_transition_direct(
+                ui,
+                &transition_frame,
+                trace.effect,
+                trace.progress,
+            )
+        } else {
+            target.blit_raw_preview_transition(ui, &transition_frame, trace.effect, trace.progress)
+        }
     } else {
-        let Some(raw_rect) = target.blit_raw_preview(ui, &transition_frame.current, raw_dirty)
-        else {
+        let raw_rect = if direct_present {
+            target.blit_raw_preview_direct(ui, &transition_frame.current, raw_dirty)
+        } else {
+            target.blit_raw_preview(ui, &transition_frame.current, raw_dirty)
+        };
+        let Some(raw_rect) = raw_rect else {
             return (None, trace);
         };
         raw_rect
     };
-    if slint_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
+    if direct_present {
+        (Some(RawPreviewPresent::Direct(raw_rect)), trace)
+    } else if slint_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
         (None, trace)
     } else {
-        (Some(raw_rect), trace)
+        (Some(RawPreviewPresent::Cached(raw_rect)), trace)
     }
 }
 

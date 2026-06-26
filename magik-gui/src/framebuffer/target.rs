@@ -372,12 +372,14 @@ pub fn brighten_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
 
 pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
+    direct_preview: Vec<Rgb565Pixel>,
 }
 
 impl UiFrameTarget {
     pub fn cached(geometry: FramebufferTargetGeometry) -> Self {
         Self {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
+            direct_preview: Vec::new(),
         }
     }
 
@@ -442,6 +444,38 @@ impl UiFrameTarget {
         if let Err(e) = disp.present_rect_565_strided(x, y, w, h, src, src_stride, src_x, src_y) {
             log_present_error("strided rect", &e);
         }
+    }
+
+    pub fn direct_preview_565_mut(
+        &mut self,
+        geometry: FramebufferTargetGeometry,
+    ) -> &mut [Rgb565Pixel] {
+        let len = geometry.render_w() * geometry.render_h();
+        if self.direct_preview.len() != len {
+            self.direct_preview.resize(len, Rgb565Pixel(0));
+        }
+        &mut self.direct_preview
+    }
+
+    pub fn present_direct_preview_rect(
+        &mut self,
+        disp: &mut MappedRgb565Framebuffer,
+        geometry: FramebufferTargetGeometry,
+        rect: DirtyRect,
+    ) -> u32 {
+        if let Err(e) = disp.present_rect_565_strided(
+            rect.x0,
+            rect.y0,
+            rect.x1 - rect.x0,
+            rect.y1 - rect.y0,
+            &self.direct_preview,
+            geometry.render_w(),
+            rect.x0,
+            rect.y0,
+        ) {
+            log_present_error("direct preview rect", &e);
+        }
+        rect.rows()
     }
 
     pub fn present_rows(
