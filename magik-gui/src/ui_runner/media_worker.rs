@@ -1640,7 +1640,7 @@ mod tests {
         "object": "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mmlz4b.idx",
         "bytes": 2,
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "codec": "mmlz4b-index-v1",
+        "codec": "mmlz4b-index-v2",
         "archive_bytes": 4,
         "archive_sha256": "{SHA}"
       }}
@@ -1979,7 +1979,7 @@ mod tests {
         )
         .unwrap();
         let index_state = &state["systems"]["arcade"]["packs"]["320x320"]["index"];
-        assert_eq!(index_state["codec"], "mmlz4b-index-v1");
+        assert_eq!(index_state["codec"], "mmlz4b-index-v2");
         assert_eq!(index_state["bytes"], 2);
         assert_eq!(index_state["archive_bytes"], 4);
         assert_eq!(

@@ -325,13 +325,13 @@ finalization phases stay at 100%. The row omits byte labels and keeps completed
 packs visible briefly so users can see every requested pack finish.
 
 The production path is the canonical `.mmlz4b` object served with
-`Accept-Encoding: identity`. Runtime v1 uses manifest `compression: "none"` for
-the raw pack plus optional `codec: "mmlz4b-index-v1"` sidecars. The preview
-loader uses the sidecar for `index_pread` only while the full archive is not yet
-loaded; steady state returns to `archive_mem`. Malformed sidecars, duplicate
-entries, archive-size mismatches, and out-of-bounds entry ranges are treated as
-fast-lane misses and fall back to the full archive path. MagiK does not decode
-or benchmark gzip/Brotli screenshot objects on device.
+`Accept-Encoding: identity`. Runtime uses manifest `compression: "none"` for the
+raw pack plus optional `codec: "mmlz4b-index-v2"` sidecars. The preview loader
+uses the sidecar for `index_pread` only while the full archive is not yet loaded;
+steady state returns to `archive_mem`. Malformed sidecars, duplicate entries,
+archive-size mismatches, and out-of-bounds entry ranges are treated as fast-lane
+misses and fall back to the full archive path. MagiK does not decode or
+benchmark gzip/Brotli screenshot objects on device.
 Cloudflare compression behavior can still be inspected separately through
 header probes:
 

@@ -56,12 +56,13 @@ C `liblz4` decode was tested and rejected:
 
 ## Decision
 
-Keep LZ4-HC-9 as the current benchmark winner. Do not keep ZXC reader/writer
-or C `liblz4` decoder code in the repo. Preserve the lesson as history only.
+Promote the positive result to production: screenshot packs use
+`mmlz4b-v2-lz4-hc-9-pixels`, which keeps LZ4-HC-9 and compresses only RGB565
+pixel bytes rather than the 20-byte `MM56501` wrapper. Do not keep ZXC
+reader/writer or C `liblz4` decoder code in the repo. Preserve those failed
+paths as history only.
 
 ## Next Bets
 
-1. Avoid hot-path scratch shrink/zero-fill before LZ4 decode.
-2. Prototype direct/fewer-copy raw565 decode, likely with a bench-only pack-v2.
-3. Build a per-entry Pareto packer that raw-stores or changes level only for
+1. Build a per-entry Pareto packer that raw-stores or changes level only for
    assets that buy p95/p99/max decode improvements.
