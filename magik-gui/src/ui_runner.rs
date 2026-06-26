@@ -1,11 +1,12 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
-use crate::fb::{MappedRgb565Framebuffer, VsyncPacer};
-use crate::fb_format::production_label;
 use crate::fpga::Fpga;
 use crate::vt::VtGraphicsGuard;
+use mister_magik_fb::framebuffer::format::production_label;
+use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
+use mister_magik_fb::framebuffer::vsync::VsyncPacer;
 use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
 };

@@ -7,13 +7,13 @@ use super::launcher_worker_intents::{
     catalog_background_scan_progress_visible, catalog_scan_progress_visible,
 };
 use super::*;
-use crate::fb::VsyncWaitStatus;
 use crate::input_state::PadState;
 use crate::preview_worker;
 use mister_magik_catalog::catalog_summary;
-use mister_magik_fb::framebuffer_ownership::{
+use mister_magik_fb::framebuffer::ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
+use mister_magik_fb::framebuffer::vsync::VsyncWaitStatus;
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::Path;

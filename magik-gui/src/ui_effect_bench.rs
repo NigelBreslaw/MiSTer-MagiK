@@ -2,13 +2,14 @@
 #![cfg_attr(not(mister_experiments), allow(unused_imports, dead_code))]
 
 use crate::display_config::DisplayConfig;
-use crate::fb::{MappedRgb565Framebuffer, Pixel, VsyncPacer};
 use crate::fpga::Fpga;
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
 use crate::ui_runner::ui_platform::{update_slint_animations, AnimationClock, MisterPlatform};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState};
+use mister_magik_fb::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
+use mister_magik_fb::framebuffer::vsync::VsyncPacer;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::{ComponentHandle, PhysicalSize};
 use std::rc::Rc;
