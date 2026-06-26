@@ -139,15 +139,15 @@ the same roughly 800-900 entries visible to MiSTer MagiK on the device.
 
 ```bash
 scripts/magik-cloud run -- cargo run --quiet -- pack-recode \
-  --variant mmlz4b-lz4-hc-9 \
+  --variant mmlz4b-v2-lz4-hc-9-pixels \
   --input /ABS/PATH/device-packs/arcade-screenshots-320x320.mmlz4b \
-  --output /ABS/PATH/variants/mmlz4b-lz4-hc-9/arcade-screenshots-320x320.mmlz4b
+  --output /ABS/PATH/variants/mmlz4b-v2-lz4-hc-9-pixels/arcade-screenshots-320x320.mmlz4b
 scripts/mister put \
-  /ABS/PATH/variants/mmlz4b-lz4-hc-9/arcade-screenshots-320x320.mmlz4b \
-  /media/fat/mister-magik/bench/arcade-hc9.mmlz4b
+  /ABS/PATH/variants/mmlz4b-v2-lz4-hc-9-pixels/arcade-screenshots-320x320.mmlz4b \
+  /media/fat/mister-magik/bench/arcade-v2-hc9-pixels.mmlz4b
 scripts/profile-preview-pack-decode.sh LABEL \
-  --variant mmlz4b-lz4-hc-9 \
-  --pack /media/fat/mister-magik/bench/arcade-hc9.mmlz4b
+  --variant mmlz4b-v2-lz4-hc-9-pixels \
+  --pack /media/fat/mister-magik/bench/arcade-v2-hc9-pixels.mmlz4b
 scripts/profile-preview-scroll.sh 60 turbo-hold LABEL --skip-build --visual-captures 0
 ```
 
@@ -194,18 +194,16 @@ scripts/magik-cloud run -- scripts/build-neogeo-screenshot-pack.sh
 scripts/magik-cloud run -- scripts/build-console-screenshot-pack.sh --system saturn --input data/sources/saturn/canonical
 ```
 
-`magik-cloud` writes resized PNGs, `.rgb565` files, and compressed LZ4 block
-archives into ignored local artifact roots. Runtime preview loading uses the
-archive path and asset key projected by the catalog; it must not derive cache
-paths from PNG/JPG screenshot locations.
+`magik-cloud` writes resized PNGs, `.rgb565` files, and production
+`mmlz4b-v2-lz4-hc-9-pixels` archives into ignored local artifact roots. Runtime
+preview loading uses the archive path and asset key projected by the catalog; it
+must not derive cache paths from PNG/JPG screenshot locations.
 
-The preview loader reads each configured archive into memory when it opens the
-archive. When a matching `.mmlz4b.idx` sidecar is present and the archive is not
-yet in RAM, selected and prefetch preview requests may use `index_pread` to
-seek directly to one compressed entry, then trigger background full-pack loading.
-Once the full pack is loaded, steady-state requests return to `archive_mem`.
-Invalid index data is ignored for correctness and reported as a fast-lane miss
-before falling back to the full archive loader.
+The preview loader reads each configured v2 pixel archive into memory when it
+opens the archive. Production screenshot packs also publish `.mmlz4b.idx`
+sidecars so cold selected and prefetch preview requests can `index_pread` one
+payload and show the first screenshot before full-pack warm finishes. Once the
+full pack is loaded, steady-state requests return to `archive_mem`.
 There is no runtime fallback to PNG/JPG sources or individual `.rgb565` files.
 The arcade pack measured on the MiSTer at 34,623,433 bytes takes multiple
 seconds to cold-read from `/media/fat` into RAM, so first-preview claims must

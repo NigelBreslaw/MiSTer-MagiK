@@ -730,6 +730,10 @@ struct PreviewArchiveEntry {
     raw_len: usize,
     compressed_len: usize,
     offset: u64,
+    width: u32,
+    height: u32,
+    stride_bytes: u32,
+    payload_flag: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -1058,15 +1062,21 @@ pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String>
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)
         .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-    if &magic != PreviewArchive::LZ4_BLOCK_MAGIC {
-        return Err(format!("{}: bad preview archive magic", path.display()));
+    if &magic != PreviewArchive::V2_PIXELS_MAGIC {
+        return Err(format!("{}: bad preview archive v2 magic", path.display()));
     }
     let count = read_u32(&mut file)? as usize;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         let name_len = read_u16(&mut file)? as usize;
+        let _width = read_u32(&mut file)?;
+        let _height = read_u32(&mut file)?;
+        let _stride_bytes = read_u32(&mut file)?;
         let _raw_len = read_u32(&mut file)?;
-        let _compressed_len = read_u32(&mut file)?;
+        let mut payload_flag = [0u8; 1];
+        file.read_exact(&mut payload_flag)
+            .map_err(|e| format!("read preview archive payload flag: {e}"))?;
+        let _payload_len = read_u32(&mut file)?;
         let _offset = read_u64(&mut file)?;
         let mut name = vec![0u8; name_len];
         file.read_exact(&mut name)
@@ -1313,13 +1323,13 @@ fn load_raw565_preview_asset_from_index(
 
     let decode_t = Instant::now();
     let decode_cpu_t = thread_cpu_us();
-    let data = decode_lz4_block_entry_into(&payload, entry.raw_len, &mut scratch.raw)
+    let data = decode_preview_archive_entry_into(&payload, entry, &mut scratch.raw)
         .map_err(|e| format!("preview archive index decode {entry_name}: {e}"))?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
     let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
     let parse_t = Instant::now();
     let parse_cpu_t = thread_cpu_us();
-    let image = decode_raw565_preview_bytes(data)?;
+    let image = decode_pixel_preview_bytes(entry, data)?;
     let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
     let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
     let total_us = total_t.elapsed().as_micros() as u64;
@@ -1417,7 +1427,7 @@ fn read_preview_archive_sidecar_index(
     if bytes.len() < 84 {
         return Err(format!("{}: preview archive index too short", index_path.display()));
     }
-    if &bytes[..8] != b"MMIDX01\0" {
+    if &bytes[..8] != b"MMIDX02\0" {
         return Err(format!("{}: bad preview archive index magic", index_path.display()));
     }
     let indexed_archive_bytes = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
@@ -1437,13 +1447,21 @@ fn read_preview_archive_sidecar_index(
     let mut pos = 84usize;
     let mut entries = HashMap::with_capacity(count);
     for _ in 0..count {
-        if bytes.len().saturating_sub(pos) < 18 {
+        if bytes.len().saturating_sub(pos) < 31 {
             return Err(format!("{}: truncated preview archive index", index_path.display()));
         }
         let name_len = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
         pos += 2;
+        let width = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+        pos += 4;
+        let height = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+        pos += 4;
+        let stride_bytes = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+        pos += 4;
         let raw_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
+        let payload_flag = bytes[pos];
+        pos += 1;
         let compressed_len =
             u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
@@ -1475,6 +1493,10 @@ fn read_preview_archive_sidecar_index(
                     raw_len,
                     compressed_len,
                     offset,
+                    width,
+                    height,
+                    stride_bytes,
+                    payload_flag,
                 },
             )
             .is_some()
@@ -1521,7 +1543,9 @@ fn start_background_preview_archive_load(archive_path: String) {
 }
 
 impl PreviewArchive {
+    #[cfg(test)]
     const LZ4_BLOCK_MAGIC: &'static [u8; 8] = b"MMLZ4B1\0";
+    const V2_PIXELS_MAGIC: &'static [u8; 8] = b"MMPX2B1\0";
 
     fn open(path: &Path) -> Result<Self, String> {
         let mut file = File::open(path)
@@ -1529,32 +1553,64 @@ impl PreviewArchive {
         let mut magic = [0u8; 8];
         file.read_exact(&mut magic)
             .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-        if &magic != Self::LZ4_BLOCK_MAGIC {
-            return Err(format!("{}: bad preview archive magic", path.display()));
+        if &magic != Self::V2_PIXELS_MAGIC {
+            return Err(format!("{}: bad preview archive v2 magic", path.display()));
         }
         let count = read_u32(&mut file)? as usize;
+        let entries = Self::read_v2_pixel_entries(&mut file, count)?;
+        let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
+        Ok(Self { bytes, entries })
+    }
+
+    fn read_v2_pixel_entries(
+        file: &mut File,
+        count: usize,
+    ) -> Result<HashMap<String, PreviewArchiveEntry>, String> {
         let mut entries = HashMap::with_capacity(count);
         for _ in 0..count {
-            let name_len = read_u16(&mut file)? as usize;
-            let raw_len = read_u32(&mut file)? as usize;
-            let compressed_len = read_u32(&mut file)? as usize;
-            let offset = read_u64(&mut file)?;
+            let name_len = read_u16(file)? as usize;
+            let width = read_u32(file)?;
+            let height = read_u32(file)?;
+            let stride_bytes = read_u32(file)?;
+            let raw_len = read_u32(file)? as usize;
+            let mut payload_flag = [0u8; 1];
+            file.read_exact(&mut payload_flag)
+                .map_err(|e| format!("read preview archive v2 payload flag: {e}"))?;
+            let compressed_len = read_u32(file)? as usize;
+            let offset = read_u64(file)?;
             let mut name = vec![0u8; name_len];
             file.read_exact(&mut name)
-                .map_err(|e| format!("read preview archive entry name: {e}"))?;
+                .map_err(|e| format!("read preview archive v2 entry name: {e}"))?;
             let name = String::from_utf8(name)
-                .map_err(|e| format!("preview archive entry name utf8: {e}"))?;
+                .map_err(|e| format!("preview archive v2 entry name utf8: {e}"))?;
+            let expected_raw_len = (stride_bytes as usize)
+                .checked_mul(height as usize)
+                .ok_or("preview archive v2 raw length overflow")?;
+            if stride_bytes < width.saturating_mul(2) || raw_len != expected_raw_len {
+                return Err(format!(
+                    "preview archive v2 bad geometry for {name}: width={width} height={height} stride={stride_bytes} raw_len={raw_len}"
+                ));
+            }
+            if !matches!(payload_flag[0], 0 | 1) {
+                return Err(format!(
+                    "preview archive v2 unsupported payload flag {} for {name}",
+                    payload_flag[0]
+                ));
+            }
             entries.insert(
                 name.to_ascii_lowercase(),
                 PreviewArchiveEntry {
                     raw_len,
                     compressed_len,
                     offset,
+                    width,
+                    height,
+                    stride_bytes,
+                    payload_flag: payload_flag[0],
                 },
             );
         }
-        let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
-        Ok(Self { bytes, entries })
+        Ok(entries)
     }
 
     fn load_timed(
@@ -1581,13 +1637,13 @@ impl PreviewArchive {
 
         let decode_t = Instant::now();
         let decode_cpu_t = thread_cpu_us();
-        let data = decode_lz4_block_entry_into(compressed_slice, entry.raw_len, raw)
+        let data = decode_preview_archive_entry_into(compressed_slice, entry, raw)
             .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
         let parse_t = Instant::now();
         let parse_cpu_t = thread_cpu_us();
-        let image = decode_raw565_preview_bytes(data)?;
+        let image = decode_pixel_preview_bytes(entry, data)?;
         let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
         let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
         let total_us = total_t.elapsed().as_micros() as u64;
@@ -1644,6 +1700,41 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
         .unwrap_or(0)
 }
 
+fn decode_preview_archive_entry_into<'a>(
+    payload: &'a [u8],
+    entry: PreviewArchiveEntry,
+    out: &'a mut Vec<u8>,
+) -> Result<&'a [u8], String> {
+    match entry.payload_flag {
+        0 => {
+            if out.len() < entry.raw_len {
+                out.resize(entry.raw_len, 0);
+            }
+            let len = lz4_flex::block::decompress_into(payload, &mut out[..entry.raw_len])
+                .map_err(|e| e.to_string())?;
+            if len != entry.raw_len {
+                return Err(format!(
+                    "lz4 pixel length mismatch got={len} expected={}",
+                    entry.raw_len
+                ));
+            }
+            Ok(&out[..len])
+        }
+        1 => {
+            if payload.len() != entry.raw_len {
+                return Err(format!(
+                    "raw pixel length mismatch got={} expected={}",
+                    payload.len(),
+                    entry.raw_len
+                ));
+            }
+            Ok(payload)
+        }
+        other => Err(format!("bad preview archive payload flag {other}")),
+    }
+}
+
+#[cfg(test)]
 fn decode_lz4_block_entry_into<'a>(
     data: &'a [u8],
     raw_len: usize,
@@ -1679,6 +1770,47 @@ fn decode_lz4_block_entry_into<'a>(
     }
 }
 
+fn decode_pixel_preview_bytes(
+    entry: PreviewArchiveEntry,
+    data: &[u8],
+) -> Result<PreviewPixels, String> {
+    let expected = (entry.stride_bytes as usize)
+        .checked_mul(entry.height as usize)
+        .ok_or("pixel preview length overflow")?;
+    if entry.stride_bytes < entry.width.saturating_mul(2) || data.len() != expected {
+        return Err(format!(
+            "pixel preview bad geometry width={} height={} stride={} got={} expected={}",
+            entry.width,
+            entry.height,
+            entry.stride_bytes,
+            data.len(),
+            expected
+        ));
+    }
+    #[cfg(target_endian = "little")]
+    let words = {
+        let mut words = vec![0; expected / 2];
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), words.as_mut_ptr() as *mut u8, expected);
+        }
+        words
+    };
+    #[cfg(not(target_endian = "little"))]
+    let mut words = Vec::with_capacity(expected / 2);
+    #[cfg(not(target_endian = "little"))]
+    {
+        for chunk in data.chunks_exact(2) {
+            words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+    }
+    Ok(PreviewPixels::Rgb565 {
+        width: entry.width,
+        height: entry.height,
+        stride_bytes: entry.stride_bytes,
+        words: Arc::from(words.into_boxed_slice()),
+    })
+}
+
 fn read_u16(file: &mut File) -> Result<u16, String> {
     let mut buf = [0u8; 2];
     file.read_exact(&mut buf).map_err(|e| e.to_string())?;
@@ -1697,6 +1829,7 @@ fn read_u64(file: &mut File) -> Result<u64, String> {
     Ok(u64::from_le_bytes(buf))
 }
 
+#[cfg(test)]
 fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
     if data.len() < 20 || &data[..8] != b"MM56501\0" {
         return Err("raw565 preview bad header".into());
@@ -2006,12 +2139,16 @@ mod tests {
         ));
         let name = b"mpatrol.rgb565";
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::LZ4_BLOCK_MAGIC);
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&20u32.to_le_bytes());
-        bytes.extend_from_slice(&20u32.to_le_bytes());
-        bytes.extend_from_slice(&128u64.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&64u64.to_le_bytes());
         bytes.extend_from_slice(name);
         std::fs::write(&path, bytes).expect("write lz4 block fixture");
 
@@ -2029,10 +2166,14 @@ mod tests {
         ));
         let name = b"1941u.rgb565";
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::LZ4_BLOCK_MAGIC);
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
         bytes.extend_from_slice(&8192u32.to_le_bytes());
+        bytes.push(1);
         bytes.extend_from_slice(&17u32.to_le_bytes());
         bytes.extend_from_slice(&4096u64.to_le_bytes());
         bytes.extend_from_slice(name);
@@ -2634,21 +2775,48 @@ mod tests {
     }
 
     fn write_lz4_block_archive(path: &Path, name: &str, payload: &[u8]) {
-        write_lz4_block_archive_with_lengths(path, name, payload, payload.len(), payload.len() + 1);
+        assert_eq!(&payload[..8], b"MM56501\0");
+        let width = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+        let height = u32::from_le_bytes(payload[12..16].try_into().unwrap());
+        let stride_bytes = u32::from_le_bytes(payload[16..20].try_into().unwrap());
+        let pixels = &payload[20..];
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&stride_bytes.to_le_bytes());
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(pixels);
+        std::fs::write(path, bytes).expect("write v2 pixel archive fixture");
     }
 
     fn write_lz4_block_archive_with_index(path: &Path, name: &str, payload: &[u8]) {
         write_lz4_block_archive(path, name, payload);
         let archive_bytes = std::fs::metadata(path).unwrap().len();
-        let index_len = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
+        let width = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+        let height = u32::from_le_bytes(payload[12..16].try_into().unwrap());
+        let stride_bytes = u32::from_le_bytes(payload[16..20].try_into().unwrap());
+        let pixel_len = payload.len() - 20;
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut index = Vec::new();
-        index.extend_from_slice(b"MMIDX01\0");
+        index.extend_from_slice(b"MMIDX02\0");
         index.extend_from_slice(&archive_bytes.to_le_bytes());
         index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
         index.extend_from_slice(&1u32.to_le_bytes());
         index.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        index.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        index.extend_from_slice(&((payload.len() + 1) as u32).to_le_bytes());
+        index.extend_from_slice(&width.to_le_bytes());
+        index.extend_from_slice(&height.to_le_bytes());
+        index.extend_from_slice(&stride_bytes.to_le_bytes());
+        index.extend_from_slice(&(pixel_len as u32).to_le_bytes());
+        index.push(1);
+        index.extend_from_slice(&(pixel_len as u32).to_le_bytes());
         index.extend_from_slice(&(index_len as u64).to_le_bytes());
         index.extend_from_slice(name.as_bytes());
         std::fs::write(preview_archive_sidecar_path(path), index)
@@ -2657,16 +2825,20 @@ mod tests {
 
     fn write_duplicate_lz4_block_archive_index(path: &Path, name: &str, payload_len: usize) {
         let archive_bytes = std::fs::metadata(path).unwrap().len();
-        let archive_payload_offset = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
+        let archive_payload_offset = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut index = Vec::new();
-        index.extend_from_slice(b"MMIDX01\0");
+        index.extend_from_slice(b"MMIDX02\0");
         index.extend_from_slice(&archive_bytes.to_le_bytes());
         index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
         index.extend_from_slice(&2u32.to_le_bytes());
         for _ in 0..2 {
             index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            index.extend_from_slice(&1u32.to_le_bytes());
+            index.extend_from_slice(&1u32.to_le_bytes());
+            index.extend_from_slice(&16u32.to_le_bytes());
             index.extend_from_slice(&(payload_len as u32).to_le_bytes());
-            index.extend_from_slice(&((payload_len + 1) as u32).to_le_bytes());
+            index.push(1);
+            index.extend_from_slice(&(payload_len as u32).to_le_bytes());
             index.extend_from_slice(&(archive_payload_offset as u64).to_le_bytes());
             index.extend_from_slice(name.as_bytes());
         }

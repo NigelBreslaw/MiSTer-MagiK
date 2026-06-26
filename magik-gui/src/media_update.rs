@@ -272,7 +272,7 @@ fn parse_index(
         archive_sha256: required_string(value, "archive_sha256")?.to_string(),
     }
     .with_url(origin)?;
-    if index.codec != "mmlz4b-index-v1" {
+    if index.codec != "mmlz4b-index-v2" {
         return Err(format!(
             "pack {pack_id} uses unsupported index codec {}",
             index.codec
@@ -595,7 +595,7 @@ mod tests {
         "object": "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx",
         "bytes": 456,
         "sha256": "{IDX_SHA}",
-        "codec": "mmlz4b-index-v1",
+        "codec": "mmlz4b-index-v2",
         "archive_bytes": 123,
         "archive_sha256": "{SHA}"
       }},"#
@@ -629,7 +629,7 @@ mod tests {
         let pack = &manifest.packs[0];
         let index = pack.index.as_ref().expect("index sidecar");
 
-        assert_eq!(index.codec, "mmlz4b-index-v1");
+        assert_eq!(index.codec, "mmlz4b-index-v2");
         assert_eq!(index.bytes, 456);
         assert_eq!(index.archive_bytes, pack.raw.bytes);
         assert_eq!(index.archive_sha256, pack.raw.sha256);
@@ -818,7 +818,7 @@ mod tests {
                             "image_size": "320x320",
                             "sha256": SHA,
                             "index": {
-                                "codec": "mmlz4b-index-v1",
+                                "codec": "mmlz4b-index-v2",
                                 "object": format!("mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx"),
                                 "bytes": 456,
                                 "sha256": IDX_SHA,
@@ -850,7 +850,7 @@ mod tests {
                             "image_size": "320x320",
                             "sha256": SHA,
                             "index": {
-                                "codec": "mmlz4b-index-v1",
+                                "codec": "mmlz4b-index-v2",
                                 "object": format!("mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx"),
                                 "bytes": 1,
                                 "sha256": IDX_SHA,
