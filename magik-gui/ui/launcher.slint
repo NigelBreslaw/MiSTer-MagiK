@@ -238,6 +238,17 @@ component CatalogScanPopup inherits Rectangle {
     property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
     property <bool> determinate: MisterBridge.catalog-scan-percent >= 0;
     property <int> scan-progress: Math.max(0, Math.min(100, MisterBridge.catalog-scan-percent));
+    property <length> scan-osd-width: 56px * s;
+    property <length> scan-horizontal-padding: 70px * s;
+    property <length> scan-column-width: root.width > scan-osd-width
+        ? root.width - scan-osd-width
+        : 0px;
+    property <length> scan-content-width: scan-column-width > scan-horizontal-padding * 2
+        ? scan-column-width - scan-horizontal-padding * 2
+        : 0px;
+    property <length> scan-progress-width: scan-content-width < 560px * s
+        ? scan-content-width
+        : 560px * s;
 
     background: #0b0d14;
 
@@ -245,16 +256,19 @@ component CatalogScanPopup inherits Rectangle {
         OsdSideLabel { }
 
         VerticalLayout {
-            padding-left: 70px * s;
-            padding-right: 70px * s;
+            horizontal-stretch: 1;
+            padding-left: root.scan-horizontal-padding;
+            padding-right: root.scan-horizontal-padding;
             padding-top: 82px * s;
             padding-bottom: 76px * s;
             spacing: 18px * s;
             alignment: center;
+            cross-axis-alignment: center;
 
             Rectangle { vertical-stretch: 1; background: transparent; }
 
             Text {
+                width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: #06d6a0;
                 font-size: 20px * s;
@@ -262,6 +276,7 @@ component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
+                width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: #e8e0f0;
                 font-size: 16px * s;
@@ -270,6 +285,7 @@ component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
+                width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
                 font-size: 10px * s;
@@ -277,6 +293,7 @@ component CatalogScanPopup inherits Rectangle {
             }
 
             Text {
+                width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: #9080a8;
                 font-size: 8px * s;
@@ -285,7 +302,7 @@ component CatalogScanPopup inherits Rectangle {
             }
 
             Rectangle {
-                width: 560px * s;
+                width: root.scan-progress-width;
                 height: 16px * s;
                 background: #0e0c14;
                 border-width: 1px;
@@ -317,7 +334,7 @@ component CatalogScanPopup inherits Rectangle {
             }
 
             if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
-                width: 560px * s;
+                width: root.scan-progress-width;
                 spacing: 5px * s;
 
                 Text {
