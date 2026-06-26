@@ -604,7 +604,7 @@ summarize_preview_timing() {
   local name="$1" log="$2"
   awk -v name="$name" '
     /preview_trace decoded / {
-      total = read = decode = 0
+      total = read = decode = decode_cpu = raw565_parse = raw565_parse_cpu = decode_plus_parse = decode_plus_parse_cpu = 0
       cache_hit = "unknown"
       load_source = "unknown"
       for (i = 1; i <= NF; i++) {
@@ -612,14 +612,29 @@ summarize_preview_timing() {
         if (kv[1] == "total_us") total = kv[2] + 0
         else if (kv[1] == "read_us") read = kv[2] + 0
         else if (kv[1] == "decode_us") decode = kv[2] + 0
+        else if (kv[1] == "decode_cpu_us") decode_cpu = kv[2] + 0
+        else if (kv[1] == "raw565_parse_us") raw565_parse = kv[2] + 0
+        else if (kv[1] == "raw565_parse_cpu_us") raw565_parse_cpu = kv[2] + 0
+        else if (kv[1] == "decode_plus_parse_us") decode_plus_parse = kv[2] + 0
+        else if (kv[1] == "decode_plus_parse_cpu_us") decode_plus_parse_cpu = kv[2] + 0
         else if (kv[1] == "cache_hit") cache_hit = kv[2]
         else if (kv[1] == "load_source") load_source = kv[2]
       }
+      if (decode_plus_parse == 0) decode_plus_parse = decode + raw565_parse
+      if (decode_plus_parse_cpu == 0) decode_plus_parse_cpu = decode_cpu + raw565_parse_cpu
       n++
       total_sum += total; read_sum += read; decode_sum += decode
+      decode_cpu_sum += decode_cpu
+      raw565_parse_sum += raw565_parse; decode_plus_parse_sum += decode_plus_parse
+      raw565_parse_cpu_sum += raw565_parse_cpu; decode_plus_parse_cpu_sum += decode_plus_parse_cpu
       if (total > total_max) total_max = total
       if (read > read_max) read_max = read
       if (decode > decode_max) decode_max = decode
+      if (decode_cpu > decode_cpu_max) decode_cpu_max = decode_cpu
+      if (raw565_parse > raw565_parse_max) raw565_parse_max = raw565_parse
+      if (raw565_parse_cpu > raw565_parse_cpu_max) raw565_parse_cpu_max = raw565_parse_cpu
+      if (decode_plus_parse > decode_plus_parse_max) decode_plus_parse_max = decode_plus_parse
+      if (decode_plus_parse_cpu > decode_plus_parse_cpu_max) decode_plus_parse_cpu_max = decode_plus_parse_cpu
       if (cache_hit == "true" || cache_hit == "1") cache_hits++
       if (load_source == "archive_mem") archive_mem++
       else if (load_source == "decoded_cache") decoded_cache++
@@ -629,10 +644,13 @@ summarize_preview_timing() {
     }
     END {
       if (n == 0) {
-        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
+        printf "%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n", name
       } else {
-        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+        printf "%s\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%.0f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
           name, n, total_sum / n, total_max, read_sum / n, read_max, decode_sum / n, decode_max,
+          decode_cpu_sum / n, decode_cpu_max,
+          raw565_parse_sum / n, raw565_parse_max, raw565_parse_cpu_sum / n, raw565_parse_cpu_max,
+          decode_plus_parse_sum / n, decode_plus_parse_max, decode_plus_parse_cpu_sum / n, decode_plus_parse_cpu_max,
           cache_hits + 0, unexpected_file_reads + 0, slow_reads + 0,
           archive_mem + 0, decoded_cache + 0, index_pread + 0,
           selected_file_reads + 0
@@ -1026,7 +1044,7 @@ if ! check_preview_warm_gate arcade "$arcade_log"; then
 fi
 
 echo
-echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tindex_pread\tselected_file_reads'
+echo $'preview_timing\trows\tavg_total_us\tmax_total_us\tavg_read_us\tmax_read_us\tavg_decode_us\tmax_decode_us\tavg_decode_cpu_us\tmax_decode_cpu_us\tavg_raw565_parse_us\tmax_raw565_parse_us\tavg_raw565_parse_cpu_us\tmax_raw565_parse_cpu_us\tavg_decode_plus_parse_us\tmax_decode_plus_parse_us\tavg_decode_plus_parse_cpu_us\tmax_decode_plus_parse_cpu_us\tcache_hits\tunexpected_file_reads\tslow_reads\tarchive_mem\tdecoded_cache\tindex_pread\tselected_file_reads'
 summarize_preview_timing arcade "$arcade_log"
 
 echo

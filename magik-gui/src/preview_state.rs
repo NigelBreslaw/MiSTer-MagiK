@@ -1433,6 +1433,7 @@ mod tests {
             request_age_us: 0,
             read_us: 0,
             decode_us: 0,
+            raw565_parse_us: 0,
             resize_us: 0,
             total_us: 0,
             encoded_bytes: 0,

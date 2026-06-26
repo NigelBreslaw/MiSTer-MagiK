@@ -42,15 +42,26 @@ ZXC was tested as a benchmark-only experiment and rejected:
   p50/p95/p99/max 1570 / 3041 / 4219 / 5479 us.
 - Conclusion: ZXC density did not offset Cortex-A9 decode cost.
 
+C `liblz4` decode was tested and rejected:
+
+- Best-looking measured C variant was the standalone GCC `-O3` build with
+  `LZ4_FAST_DEC_LOOP=1` and `LZ4_FORCE_MEMORY_ACCESS=2`.
+- Corrected thread-CPU timing on the same HC-9 arcade pack gave decode
+  p50/p95/p99/max 778 / 1494 / 1824 / 2264 us.
+- The Rust `lz4_flex` HC-9 path on the same corrected run gave thread-CPU
+  p50/p95/p99/max 749 / 1272 / 1509 / 1754 us.
+- Conclusion: C `liblz4` compile matrices and PGO are not worth pursuing for
+  this Cortex-A9 path. Stick with Rust `lz4_flex` and optimize the work around
+  decode instead.
+
 ## Decision
 
 Keep LZ4-HC-9 as the current benchmark winner. Do not keep ZXC reader/writer
-code in the repo. Preserve the lesson as history only.
+or C `liblz4` decoder code in the repo. Preserve the lesson as history only.
 
 ## Next Bets
 
 1. Avoid hot-path scratch shrink/zero-fill before LZ4 decode.
 2. Prototype direct/fewer-copy raw565 decode, likely with a bench-only pack-v2.
-3. Compare C `liblz4` decoder builds and PGO against `lz4_flex`.
-4. Build a per-entry Pareto packer that raw-stores or changes level only for
+3. Build a per-entry Pareto packer that raw-stores or changes level only for
    assets that buy p95/p99/max decode improvements.

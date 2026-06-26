@@ -2,8 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const MAGIC: &[u8; 8] = b"MMLZ4B1\0";
-const HEADER: &str = "preview_pack_bench_tsv\tlabel\tvariant\tcodec\titeration\tordinal\tasset_key\toffset\tentry_flag\tencoded_bytes\tdecoded_bytes\tcompression_ratio\twidth\theight\tload_source\tindex_lookup_us\tread_us\tdecode_us\traw565_parse_us\ttotal_us\tdecode_mb_s\ttotal_mb_s\tchecksum32\tresult\terror";
+const MAGIC_V1: &[u8; 8] = b"MMLZ4B1\0";
+const MAGIC_V2_PIXELS: &[u8; 8] = b"MMPX2B1\0";
+const HEADER: &str = "preview_pack_bench_tsv\tlabel\tvariant\tcodec\titeration\tordinal\tasset_key\toffset\tentry_flag\tencoded_bytes\tdecoded_bytes\tcompression_ratio\twidth\theight\tload_source\tindex_lookup_us\tread_us\tdecode_us\traw565_parse_us\ttotal_us\tdecode_mb_s\ttotal_mb_s\tchecksum32\tresult\terror\tdecode_cpu_us\traw565_parse_cpu_us";
 
 #[derive(Clone, Debug)]
 struct Config {
@@ -55,6 +56,18 @@ struct Entry {
     raw_len: usize,
     payload_len: usize,
     offset: usize,
+    format: EntryFormat,
+}
+
+#[derive(Clone, Debug)]
+enum EntryFormat {
+    V1Raw565,
+    V2Pixels {
+        width: u32,
+        height: u32,
+        stride_bytes: u32,
+        payload_flag: u8,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +90,8 @@ struct Row {
     read_us: u64,
     decode_us: u64,
     raw565_parse_us: u64,
+    decode_cpu_us: u64,
+    raw565_parse_cpu_us: u64,
     total_us: u64,
     decode_mb_s: f64,
     total_mb_s: f64,
@@ -117,6 +132,9 @@ where
 
     let order = ordered_indices(&archive.entries, config.order, config.sample);
     let mut scratch = Vec::new();
+    if let Some(max_raw_len) = archive.entries.iter().map(|entry| entry.raw_len).max() {
+        scratch.resize(max_raw_len, 0);
+    }
     for iteration in 1..=config.iterations {
         for (ordinal, entry_index) in order.iter().copied().enumerate() {
             let entry = &archive.entries[entry_index];
@@ -269,7 +287,7 @@ impl PackSizeSpec {
 impl Row {
     fn to_tsv(&self) -> String {
         format!(
-            "preview_pack_bench_tsv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{:08x}\t{}\t{}",
+            "preview_pack_bench_tsv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{:08x}\t{}\t{}\t{}\t{}",
             tsv(&self.label),
             tsv(&self.variant),
             tsv(&self.codec),
@@ -293,7 +311,9 @@ impl Row {
             self.total_mb_s,
             self.checksum32,
             self.result,
-            tsv(&self.error)
+            tsv(&self.error),
+            self.decode_cpu_us,
+            self.raw565_parse_cpu_us
         )
     }
 }
@@ -308,9 +328,16 @@ fn parse_entries(bytes: &[u8]) -> Result<Vec<Entry>, String> {
     if bytes.len() < 12 {
         return Err("preview archive is too short".to_string());
     }
-    if &bytes[..8] != MAGIC {
-        return Err("preview archive has bad magic".to_string());
+    if &bytes[..8] == MAGIC_V1 {
+        return parse_v1_entries(bytes);
     }
+    if &bytes[..8] == MAGIC_V2_PIXELS {
+        return parse_v2_pixels_entries(bytes);
+    }
+    Err("preview archive has bad magic".to_string())
+}
+
+fn parse_v1_entries(bytes: &[u8]) -> Result<Vec<Entry>, String> {
     let count = read_u32(bytes, 8)? as usize;
     let mut pos = 12usize;
     let mut entries = Vec::with_capacity(count);
@@ -343,6 +370,79 @@ fn parse_entries(bytes: &[u8]) -> Result<Vec<Entry>, String> {
             raw_len,
             payload_len,
             offset,
+            format: EntryFormat::V1Raw565,
+        });
+    }
+    Ok(entries)
+}
+
+fn parse_v2_pixels_entries(bytes: &[u8]) -> Result<Vec<Entry>, String> {
+    let count = read_u32(bytes, 8)? as usize;
+    let mut pos = 12usize;
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let name_len = read_u16(bytes, pos)? as usize;
+        pos += 2;
+        let width = read_u32(bytes, pos)?;
+        pos += 4;
+        let height = read_u32(bytes, pos)?;
+        pos += 4;
+        let stride_bytes = read_u32(bytes, pos)?;
+        pos += 4;
+        let decoded_pixel_bytes = read_u32(bytes, pos)? as usize;
+        pos += 4;
+        let payload_flag = *bytes
+            .get(pos)
+            .ok_or("preview archive v2 payload flag is truncated")?;
+        pos += 1;
+        let payload_len = read_u32(bytes, pos)? as usize;
+        pos += 4;
+        let offset = read_u64(bytes, pos)? as usize;
+        pos += 8;
+        let name_end = pos
+            .checked_add(name_len)
+            .ok_or("preview archive v2 name offset overflow")?;
+        let name = bytes
+            .get(pos..name_end)
+            .ok_or("preview archive v2 entry name is truncated")
+            .and_then(|name| std::str::from_utf8(name).map_err(|_| "entry name is not utf-8"))?
+            .to_string();
+        pos = name_end;
+        if stride_bytes < width.saturating_mul(2) {
+            return Err(format!(
+                "preview archive v2 bad stride for {name}: width={width} stride={stride_bytes}"
+            ));
+        }
+        let expected_pixel_bytes = (stride_bytes as usize)
+            .checked_mul(height as usize)
+            .ok_or("preview archive v2 decoded byte length overflow")?;
+        if decoded_pixel_bytes != expected_pixel_bytes {
+            return Err(format!(
+                "preview archive v2 decoded length got={decoded_pixel_bytes} expected={expected_pixel_bytes}: {name}"
+            ));
+        }
+        if !matches!(payload_flag, 0 | 1) {
+            return Err(format!(
+                "preview archive v2 unsupported payload flag {payload_flag}: {name}"
+            ));
+        }
+        let end = offset
+            .checked_add(payload_len)
+            .ok_or("preview archive v2 payload offset overflow")?;
+        if end > bytes.len() {
+            return Err(format!("preview archive v2 payload out of range: {name}"));
+        }
+        entries.push(Entry {
+            name,
+            raw_len: decoded_pixel_bytes,
+            payload_len,
+            offset,
+            format: EntryFormat::V2Pixels {
+                width,
+                height,
+                stride_bytes,
+                payload_flag,
+            },
         });
     }
     Ok(entries)
@@ -362,14 +462,27 @@ fn decode_row(
     let read_us = read_t.elapsed().as_micros() as u64;
 
     let decode_t = Instant::now();
-    let decoded = decode_payload(payload, entry.raw_len, scratch);
+    let decode_cpu_t = thread_cpu_us();
+    let decoded = decode_payload(payload, entry, scratch);
     let decode_us = decode_t.elapsed().as_micros() as u64;
+    let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
     match decoded {
         Ok((entry_flag, data)) => {
             let parse_t = Instant::now();
-            match parse_raw565(data) {
+            let parse_cpu_t = thread_cpu_us();
+            let parsed = match entry.format {
+                EntryFormat::V1Raw565 => parse_raw565(data),
+                EntryFormat::V2Pixels {
+                    width,
+                    height,
+                    stride_bytes,
+                    ..
+                } => parse_pixels(width, height, stride_bytes, data),
+            };
+            match parsed {
                 Ok((width, height, decoded_bytes, checksum32)) => {
                     let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
+                    let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
                     let total_us = total_t.elapsed().as_micros() as u64;
                     let decoded_mb = decoded_bytes as f64 / (1024.0 * 1024.0);
                     Row {
@@ -391,6 +504,8 @@ fn decode_row(
                         read_us,
                         decode_us,
                         raw565_parse_us,
+                        decode_cpu_us,
+                        raw565_parse_cpu_us,
                         total_us,
                         decode_mb_s: mb_per_sec(decoded_mb, decode_us),
                         total_mb_s: mb_per_sec(decoded_mb, total_us),
@@ -399,41 +514,77 @@ fn decode_row(
                         error: String::new(),
                     }
                 }
-                Err(error) => {
-                    error_row(config, entry, iteration, ordinal, read_us, decode_us, error)
-                }
+                Err(error) => error_row(
+                    config,
+                    entry,
+                    iteration,
+                    ordinal,
+                    read_us,
+                    decode_us,
+                    decode_cpu_us,
+                    error,
+                ),
             }
         }
-        Err(error) => error_row(config, entry, iteration, ordinal, read_us, decode_us, error),
+        Err(error) => error_row(
+            config,
+            entry,
+            iteration,
+            ordinal,
+            read_us,
+            decode_us,
+            decode_cpu_us,
+            error,
+        ),
     }
 }
 
 fn decode_payload<'a>(
     payload: &'a [u8],
-    raw_len: usize,
+    entry: &Entry,
     scratch: &'a mut Vec<u8>,
 ) -> Result<(&'static str, &'a [u8]), String> {
-    let (&flag, block) = payload
-        .split_first()
-        .ok_or_else(|| "empty preview archive payload".to_string())?;
+    let (flag, block) = match entry.format {
+        EntryFormat::V1Raw565 => {
+            let (&flag, block) = payload
+                .split_first()
+                .ok_or_else(|| "empty preview archive payload".to_string())?;
+            (flag, block)
+        }
+        EntryFormat::V2Pixels { payload_flag, .. } => (payload_flag, payload),
+    };
     match flag {
         0 => {
-            scratch.resize(raw_len, 0);
-            let len = lz4_flex::block::decompress_into(block, scratch)
-                .map_err(|e| format!("lz4 decode: {e}"))?;
-            if len != raw_len {
-                return Err(format!("lz4 decoded length got={len} expected={raw_len}"));
+            if scratch.len() < entry.raw_len {
+                scratch.resize(entry.raw_len, 0);
             }
-            Ok(("lz4_block", &scratch[..len]))
-        }
-        1 => {
-            if block.len() != raw_len {
+            let len = lz4_flex::block::decompress_into(block, &mut scratch[..entry.raw_len])
+                .map_err(|e| format!("lz4 decode: {e}"))?;
+            if len != entry.raw_len {
                 return Err(format!(
-                    "raw stored length got={} expected={raw_len}",
-                    block.len()
+                    "lz4 decoded length got={len} expected={}",
+                    entry.raw_len
                 ));
             }
-            Ok(("raw_stored", block))
+            let label = match entry.format {
+                EntryFormat::V1Raw565 => "lz4_block",
+                EntryFormat::V2Pixels { .. } => "lz4_pixels",
+            };
+            Ok((label, &scratch[..len]))
+        }
+        1 => {
+            if block.len() != entry.raw_len {
+                return Err(format!(
+                    "raw stored length got={} expected={}",
+                    block.len(),
+                    entry.raw_len
+                ));
+            }
+            let label = match entry.format {
+                EntryFormat::V1Raw565 => "raw_stored",
+                EntryFormat::V2Pixels { .. } => "raw_pixels",
+            };
+            Ok((label, block))
         }
         other => Err(format!("unsupported entry flag: {other}")),
     }
@@ -459,6 +610,29 @@ fn parse_raw565(data: &[u8]) -> Result<(u32, u32, usize, u32), String> {
     Ok((width, height, decoded_bytes, checksum32(data)))
 }
 
+fn parse_pixels(
+    width: u32,
+    height: u32,
+    stride_bytes: u32,
+    data: &[u8],
+) -> Result<(u32, u32, usize, u32), String> {
+    let decoded_bytes = (stride_bytes as usize)
+        .checked_mul(height as usize)
+        .ok_or("pixel decoded byte length overflow")?;
+    if stride_bytes < width.saturating_mul(2) {
+        return Err(format!(
+            "pixel stride too small width={width} stride={stride_bytes}"
+        ));
+    }
+    if data.len() != decoded_bytes {
+        return Err(format!(
+            "pixel length got={} expected={decoded_bytes}",
+            data.len()
+        ));
+    }
+    Ok((width, height, decoded_bytes, checksum32(data)))
+}
+
 fn error_row(
     config: &Config,
     entry: &Entry,
@@ -466,6 +640,7 @@ fn error_row(
     ordinal: usize,
     read_us: u64,
     decode_us: u64,
+    decode_cpu_us: u64,
     error: String,
 ) -> Row {
     Row {
@@ -491,6 +666,8 @@ fn error_row(
         read_us,
         decode_us,
         raw565_parse_us: 0,
+        decode_cpu_us,
+        raw565_parse_cpu_us: 0,
         total_us: read_us + decode_us,
         decode_mb_s: 0.0,
         total_mb_s: 0.0,
@@ -650,6 +827,31 @@ fn mb_per_sec(mb: f64, us: u64) -> f64 {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn thread_cpu_us() -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if rc == 0 {
+        Some(ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1_000)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    None
+}
+
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
+    start
+        .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
+        .unwrap_or(0)
+}
+
 fn default_label() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -672,7 +874,13 @@ mod tests {
         let mut payload = vec![1];
         payload.extend_from_slice(&raw);
         let mut scratch = Vec::new();
-        let (flag, decoded) = decode_payload(&payload, raw.len(), &mut scratch).unwrap();
+        let entry = test_entry(
+            "raw.rgb565",
+            raw.len(),
+            payload.len(),
+            EntryFormat::V1Raw565,
+        );
+        let (flag, decoded) = decode_payload(&payload, &entry, &mut scratch).unwrap();
         assert_eq!(flag, "raw_stored");
         assert_eq!(decoded, raw.as_slice());
         let (width, height, decoded_bytes, _) = parse_raw565(decoded).unwrap();
@@ -680,8 +888,93 @@ mod tests {
     }
 
     #[test]
+    fn lz4_decode_scratch_grows_without_shrinking() {
+        let large = raw565_fixture_with_pixels(
+            4,
+            2,
+            &[
+                0xf800, 0x07e0, 0x001f, 0xffff, 0x0000, 0x1111, 0x2222, 0x3333,
+            ],
+        );
+        let small = raw565_fixture_with_pixels(1, 1, &[0x07e0]);
+        let mut large_payload = vec![0];
+        large_payload.extend_from_slice(&lz4_flex::block::compress(&large));
+        let mut small_payload = vec![0];
+        small_payload.extend_from_slice(&lz4_flex::block::compress(&small));
+        let mut scratch = Vec::new();
+        let large_entry = test_entry(
+            "large.rgb565",
+            large.len(),
+            large_payload.len(),
+            EntryFormat::V1Raw565,
+        );
+        let small_entry = test_entry(
+            "small.rgb565",
+            small.len(),
+            small_payload.len(),
+            EntryFormat::V1Raw565,
+        );
+
+        let (large_flag, decoded_large) =
+            decode_payload(&large_payload, &large_entry, &mut scratch).unwrap();
+        assert_eq!(large_flag, "lz4_block");
+        assert_eq!(decoded_large, large.as_slice());
+        let grown_len = scratch.len();
+        assert_eq!(grown_len, large.len());
+
+        let (small_flag, decoded_small) =
+            decode_payload(&small_payload, &small_entry, &mut scratch).unwrap();
+        assert_eq!(small_flag, "lz4_block");
+        assert_eq!(decoded_small, small.as_slice());
+        assert_eq!(scratch.len(), grown_len);
+    }
+
+    #[test]
     fn rejects_bad_magic() {
         assert!(parse_entries(b"not-pack").is_err());
+    }
+
+    #[test]
+    fn decodes_v2_pixels_payload() {
+        let pixels = [0xf8, 0x00, 0x07, 0xe0, 0x00, 0x1f, 0xff, 0xff];
+        let compressed = lz4_flex::block::compress(&pixels);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC_V2_PIXELS);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&"tiny.rgb565".len().to_le_bytes()[..2]);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        let offset_pos = bytes.len();
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(b"tiny.rgb565");
+        let offset = bytes.len() as u64;
+        bytes[offset_pos..offset_pos + 8].copy_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&compressed);
+
+        let entries = parse_entries(&bytes).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.raw_len, pixels.len());
+        let mut scratch = Vec::new();
+        let payload = &bytes[entry.offset..entry.offset + entry.payload_len];
+        let (flag, decoded) = decode_payload(payload, entry, &mut scratch).unwrap();
+        assert_eq!(flag, "lz4_pixels");
+        assert_eq!(decoded, pixels.as_slice());
+        let (width, height, decoded_bytes, checksum) = match entry.format {
+            EntryFormat::V2Pixels {
+                width,
+                height,
+                stride_bytes,
+                ..
+            } => parse_pixels(width, height, stride_bytes, decoded).unwrap(),
+            EntryFormat::V1Raw565 => panic!("expected v2 pixels"),
+        };
+        assert_eq!((width, height, decoded_bytes), (2, 2, pixels.len()));
+        assert_eq!(checksum, checksum32(&pixels));
     }
 
     #[test]
@@ -693,12 +986,30 @@ mod tests {
     }
 
     fn raw565_fixture() -> Vec<u8> {
+        raw565_fixture_with_pixels(2, 2, &[0, 0, 0, 0])
+    }
+
+    fn test_entry(name: &str, raw_len: usize, payload_len: usize, format: EntryFormat) -> Entry {
+        Entry {
+            name: name.to_string(),
+            raw_len,
+            payload_len,
+            offset: 0,
+            format,
+        }
+    }
+
+    fn raw565_fixture_with_pixels(width: u32, height: u32, pixels: &[u16]) -> Vec<u8> {
+        assert_eq!(pixels.len(), width as usize * height as usize);
+        let stride = width * 2;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"MM56501\0");
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&4u32.to_le_bytes());
-        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&stride.to_le_bytes());
+        for pixel in pixels {
+            bytes.extend_from_slice(&pixel.to_le_bytes());
+        }
         bytes
     }
 }

@@ -151,12 +151,16 @@ scripts/profile-preview-pack-decode.sh LABEL \
 scripts/profile-preview-scroll.sh 60 turbo-hold LABEL --skip-build --visual-captures 0
 ```
 
-The decode benchmark reports per-entry `decode_us`, `total_us`,
-`encoded_bytes`, `decoded_bytes`, and pack-size rows for arcade, Neo Geo, and
-Saturn when the matching `--arcade-pack`, `--saturn-pack`, and `--neogeo-pack`
-paths are supplied. The turbo launcher benchmark now emits `warm_gate_tsv`;
-codec evidence is invalid unless `loaded=1` and `valid=1` show that the full
-screenshot archive was warmed before the 60 second timing window.
+The decode benchmark reports per-entry `decode_us`, `decode_cpu_us`,
+`raw565_parse_us`, `raw565_parse_cpu_us`, `total_us`, `encoded_bytes`,
+`decoded_bytes`, and pack-size rows for arcade, Neo Geo, and Saturn when the
+matching `--arcade-pack`, `--saturn-pack`, and `--neogeo-pack` paths are
+supplied. `decode_us` is monotonic wall time around only the decompressor call;
+`decode_cpu_us` is Linux thread CPU time around the same call. Treat large
+wall-only outliers as scheduler/device noise unless the CPU column moves with
+them. The turbo launcher benchmark emits `warm_gate_tsv`; codec evidence is
+invalid unless `loaded=1` and `valid=1` show that the full screenshot archive
+was warmed before the 60 second timing window.
 
 Historical evidence:
 
