@@ -769,8 +769,9 @@ pub(super) fn run_launcher_loop(
         if !launching {
             route_action = route_guard.tick(frames);
             if route_action.reassert_route {
-                let route = LauncherFramebufferRoute::for_ui(ui);
-                match route.enable(f, ui.fb_w(), ui.fb_h()) {
+                let route =
+                    LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
+                match f.enable_launcher_framebuffer_route(route, ui.fb_w(), ui.fb_h()) {
                     Ok(flag) => {
                         route_reassert_count = route_reassert_count.saturating_add(1);
                         last_route_reassert_frame = frames;

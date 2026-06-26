@@ -82,10 +82,9 @@ pub use mister_magik_fb::{
 use fb::{MappedRgb565Framebuffer, VsyncPacer, VsyncWaitStatus};
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::{production_label, rgb565_stride_bytes};
+use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use ui_display::UiDisplayPlan;
-use ui_runner::ui_boot::{
-    detect_runtime_display_geometry_for_plan, settle_boot_black_frame, LauncherFramebufferRoute,
-};
+use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 fn main() {
@@ -716,8 +715,12 @@ fn early_black_route(f: &mut Fpga) {
         ),
     );
 
-    let route = LauncherFramebufferRoute::for_plan(display_plan);
-    let flag = match route.enable(f, disp.width(), disp.height()) {
+    let route = LauncherFramebufferRoute::for_scan(
+        display_plan.scan_w,
+        display_plan.scan_h,
+        display_plan.direct_video,
+    );
+    let flag = match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
             eprintln!("early-black: failed to route framebuffer: {e}");

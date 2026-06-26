@@ -14,6 +14,8 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 use std::ptr::{read_volatile, write_volatile};
 
+use mister_magik_fb::framebuffer::route::{FramebufferRouteMode, LauncherFramebufferRoute};
+
 const MGR_BASE: i64 = 0xFF70_6000; // SOCFPGA FPGA-manager, page aligned
 const MGR_LEN: usize = 0x1000;
 const GPO_OFF: usize = 0x10;
@@ -108,27 +110,6 @@ impl FbParams {
             self.arxy,
             self.crc
         )
-    }
-}
-
-/// Timing of one MiSTer video mode (vmode_t.item[1..8]): hact, hfp, hs, hbp,
-/// vact, vfp, vs, vbp. We only need hact/hbp/vact/vbp for fb positioning.
-#[derive(Clone, Copy)]
-pub struct Mode {
-    pub hact: u16,
-    pub hbp: u16,
-    pub vact: u16,
-    pub vbp: u16,
-}
-
-impl Mode {
-    pub fn framebuffer_sized(width: u16, height: u16) -> Self {
-        Self {
-            hact: width,
-            hbp: FB_DV_LBRD as u16,
-            vact: height,
-            vbp: FB_DV_UBRD as u16,
-        }
     }
 }
 
@@ -375,7 +356,7 @@ impl Fpga {
         n: u32,
         fb_width: u16,
         fb_height: u16,
-        mode: Mode,
+        mode: FramebufferRouteMode,
         set_vga_fb: bool,
     ) -> io::Result<u16> {
         let fb_addr = FB_ADDR + (FB_SIZE_PX * 4 * n) + if n == 0 { 4096 } else { 0 };
@@ -431,6 +412,21 @@ impl Fpga {
         }
         Ok(flag)
     }
+
+    pub fn enable_launcher_framebuffer_route(
+        &mut self,
+        route: LauncherFramebufferRoute,
+        fb_width: usize,
+        fb_height: usize,
+    ) -> io::Result<u16> {
+        self.fb_enable_rgb565(
+            0,
+            fb_width as u16,
+            fb_height as u16,
+            route.mode(),
+            route.set_vga_fb(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -439,7 +435,7 @@ mod tests {
 
     #[test]
     fn framebuffer_sized_mode_uses_requested_active_area() {
-        let mode = Mode::framebuffer_sized(960, 540);
+        let mode = FramebufferRouteMode::framebuffer_sized(960, 540);
 
         assert_eq!(mode.hact, 960);
         assert_eq!(mode.vact, 540);

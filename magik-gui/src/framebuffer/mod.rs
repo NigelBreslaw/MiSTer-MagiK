@@ -5,4 +5,5 @@ pub mod mapped;
 #[cfg(feature = "ui")]
 pub mod mode;
 pub mod ownership;
+pub mod route;
 pub mod vsync;
