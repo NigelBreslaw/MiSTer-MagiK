@@ -1,0 +1,79 @@
+# MiSTer MagiK Desktop
+
+`mister-magik-desktop` is a macOS-first Slint companion dashboard for MiSTer
+MagiK. V1 is read-only: it shows agent, network, runtime, launcher, catalog, and
+input status without rebooting, deploying, editing `MiSTer.ini`, launching cores,
+or writing to `/dev/MiSTer_cmd`.
+
+## Run
+
+From this directory:
+
+```bash
+scripts/dev-live.sh
+```
+
+The script runs the app with:
+
+- `SLINT_BACKEND=winit-skia` for Skia rendering.
+- `SLINT_EMIT_DEBUG_INFO=1` for useful Slint debug metadata.
+- `SLINT_MCP_PORT=9315` for the embedded Slint MCP server.
+- Cargo features `slint/mcp,live-ui`.
+
+The default MiSTer host is `192.168.1.117`. Override it for development with:
+
+```bash
+MISTER_IP=192.168.1.50 scripts/dev-live.sh
+```
+
+## Agent Credentials
+
+The app talks to the MiSTer MagiK agent on TCP `7498` with one JSON request per
+line. It reads the agent token from:
+
+1. `MISTER_AGENT_TOKEN`
+2. `MISTER_AGENT_TOKEN_FILE`
+3. `build/mister-agent.token` in the worktree root
+
+Do not commit token files. OS keychain storage is intentionally left for a later
+milestone.
+
+The GUI uses the same token-protected line-delimited JSON protocol documented in
+`docs/magik-agent.md`, but connects directly instead of shelling out through
+`scripts/mister`. That keeps the desktop app cross-platform and avoids routing a
+long-running UI through a Unix shell wrapper. Device scripts and recovery work
+should still use `scripts/mister`.
+
+## Slint UI Workflow
+
+The default `live-ui` feature loads `ui/main.slint` at runtime via
+`slint-interpreter`. When `ui/main.slint` changes, the running component exits
+and reloads from disk, so UI edits do not require rebuilding the Rust side.
+
+Fast UI checks:
+
+```bash
+scripts/check-ui.sh
+slint-viewer --auto-reload ui/main.slint
+slint-viewer --screenshot /private/tmp/mister-magik-desktop.png ui/main.slint
+```
+
+The running app exposes Slint MCP at `http://127.0.0.1:9315/mcp`; see
+`.mcp.json` for the local server definition.
+
+## Verification
+
+Useful local checks:
+
+```bash
+scripts/verify.sh
+cargo test
+cargo check --no-default-features --features compiled-ui
+scripts/check-ui.sh
+```
+
+The `compiled-ui` feature keeps a build-time Slint path available for future
+packaging, but V1 defaults to runtime-loaded UI for iteration speed.
+
+For MCP smoke testing, run the app with `scripts/dev-live.sh` in one terminal and
+then run `scripts/mcp-smoke.sh` in another.

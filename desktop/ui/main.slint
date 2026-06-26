@@ -1,0 +1,234 @@
+import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+
+export global DeviceState {
+    in-out property <string> host: "192.168.1.117";
+    in-out property <string> connection-state: "Looking for MiSTer";
+    in-out property <string> agent-status: "Not checked yet";
+    in-out property <string> token-source: "Not checked yet";
+    in-out property <string> agent-version: "-";
+    in-out property <string> agent-uptime: "-";
+    in-out property <string> network-summary: "ip -; carrier -; state -";
+    in-out property <string> mac-address: "-";
+    in-out property <string> main-process: "-";
+    in-out property <string> launcher-process: "-";
+    in-out property <string> launcher-state: "-";
+    in-out property <string> visible-owner: "-";
+    in-out property <string> slint-status-freshness: "-";
+    in-out property <string> catalog-summary: "-";
+    in-out property <string> screen-summary: "-";
+    in-out property <string> input-summary: "-";
+    in-out property <string> last-error: "";
+}
+
+export global Actions {
+    callback refresh-status();
+}
+
+export global WindowActions {
+    callback start-window-drag();
+}
+
+component Metric inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    background: #f6f7f9;
+    border-color: #dde1e7;
+    border-width: 1px;
+    border-radius: 8px;
+    min-height: 70px;
+
+    VerticalBox {
+        padding: 12px;
+        spacing: 4px;
+        Text {
+            text: root.label;
+            color: #667085;
+            font-size: 12px;
+            overflow: elide;
+        }
+        Text {
+            text: root.value;
+            color: #111827;
+            font-size: 16px;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+    }
+}
+
+component Section inherits Rectangle {
+    in property <string> title;
+    in property <string> first-label;
+    in property <string> first-value;
+    in property <string> second-label;
+    in property <string> second-value;
+    in property <string> third-label;
+    in property <string> third-value;
+
+    background: #ffffff;
+    border-color: #d7dce3;
+    border-width: 1px;
+    border-radius: 8px;
+    min-height: 168px;
+
+    VerticalBox {
+        padding: 14px;
+        spacing: 10px;
+        Text {
+            text: root.title;
+            color: #111827;
+            font-size: 15px;
+            font-weight: 700;
+        }
+        HorizontalBox {
+            spacing: 10px;
+            Metric { label: root.first-label; value: root.first-value; }
+            Metric { label: root.second-label; value: root.second-value; }
+            Metric { label: root.third-label; value: root.third-value; }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "MiSTer MagiK";
+    no-frame: true;
+    resize-border-width: 8px;
+    background: transparent;
+    preferred-width: 980px;
+    preferred-height: 680px;
+    min-width: 760px;
+    min-height: 520px;
+    private property <length> chrome-left: max(24px, root.safe-area-insets.left + 16px);
+    private property <length> chrome-right: max(28px, root.safe-area-insets.right + 28px);
+    private property <length> chrome-top: max(16px, root.safe-area-insets.top + 8px);
+    private property <length> chrome-height: max(76px, root.safe-area-insets.top + 60px);
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #edf0f4;
+        border-radius: 14px;
+        clip: true;
+
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: root.chrome-height;
+            background: #101820;
+
+            TouchArea {
+                x: root.chrome-left + 180px;
+                y: 0;
+                width: parent.width - self.x - root.chrome-right - 132px;
+                height: parent.height;
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        WindowActions.start-window-drag();
+                    }
+                }
+            }
+
+            Text {
+                x: root.chrome-left;
+                y: root.chrome-top;
+                text: "MiSTer MagiK";
+                color: #ffffff;
+                font-size: 22px;
+                font-weight: 800;
+            }
+
+            Text {
+                x: root.chrome-left;
+                y: root.chrome-top + 29px;
+                text: DeviceState.connection-state;
+                color: #b8c7d9;
+                font-size: 13px;
+                overflow: elide;
+                width: parent.width - self.x - 180px;
+            }
+
+            Button {
+                x: parent.width - root.chrome-right - 104px;
+                y: root.chrome-top + 6px;
+                width: 104px;
+                height: 32px;
+                text: "Refresh";
+                clicked => { Actions.refresh-status(); }
+            }
+        }
+
+        ScrollView {
+            x: root.chrome-left;
+            y: root.chrome-height + 22px;
+            width: parent.width - self.x - root.chrome-right;
+            height: parent.height - self.y - 22px;
+            viewport-width: self.width;
+            viewport-height: 760px;
+
+            content := VerticalBox {
+                width: parent.width;
+                spacing: 14px;
+
+                Section {
+                    title: "Connection";
+                    first-label: "Host";
+                    first-value: DeviceState.host;
+                    second-label: "Agent";
+                    second-value: DeviceState.agent-status;
+                    third-label: "Token";
+                    third-value: DeviceState.token-source;
+                }
+
+                Section {
+                    title: "Device";
+                    first-label: "Agent version";
+                    first-value: DeviceState.agent-version;
+                    second-label: "Agent uptime";
+                    second-value: DeviceState.agent-uptime;
+                    third-label: "Network";
+                    third-value: DeviceState.network-summary + "; mac " + DeviceState.mac-address;
+                }
+
+                Section {
+                    title: "Runtime";
+                    first-label: "Main";
+                    first-value: DeviceState.main-process;
+                    second-label: "Launcher";
+                    second-value: DeviceState.launcher-process;
+                    third-label: "Status";
+                    third-value: "owner " + DeviceState.visible-owner + "; " + DeviceState.slint-status-freshness;
+                }
+
+                Section {
+                    title: "Library And Input";
+                    first-label: "Catalog";
+                    first-value: DeviceState.catalog-summary;
+                    second-label: "Screen";
+                    second-value: DeviceState.screen-summary;
+                    third-label: "Controller";
+                    third-value: DeviceState.input-summary;
+                }
+
+                if DeviceState.last-error != "" : Rectangle {
+                    background: #fff4ed;
+                    border-color: #fed7aa;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    min-height: 48px;
+                    Text {
+                        x: 12px;
+                        y: 12px;
+                        width: parent.width - 24px;
+                        text: DeviceState.last-error;
+                        color: #9a3412;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,281 @@
+use crate::app_state::{
+    catalog_summary, input_summary, process_summary, screen_summary, string_at, uptime_label,
+    ConnectionOutcome, DashboardSnapshot,
+};
+use serde_json::{json, Value};
+use std::env;
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const AGENT_PORT: u16 = 7498;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenSource {
+    Env,
+    LocalFile(PathBuf),
+    Missing(PathBuf),
+}
+
+impl TokenSource {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Env => "MISTER_AGENT_TOKEN".to_string(),
+            Self::LocalFile(path) => path.display().to_string(),
+            Self::Missing(path) => format!("missing ({})", path.display()),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum AgentError {
+    Unreachable(String),
+    Unauthorized,
+    Protocol(String),
+    Command(String),
+}
+
+pub fn read_token() -> (String, TokenSource) {
+    if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
+        let token = token.trim().to_string();
+        if !token.is_empty() {
+            return (token, TokenSource::Env);
+        }
+    }
+
+    let path = local_token_path();
+    match fs::read_to_string(&path) {
+        Ok(token) => (token.trim().to_string(), TokenSource::LocalFile(path)),
+        Err(_) => (String::new(), TokenSource::Missing(path)),
+    }
+}
+
+fn local_token_path() -> PathBuf {
+    if let Ok(path) = env::var("MISTER_AGENT_TOKEN_FILE") {
+        let path = path.trim();
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("build/mister-agent.token")
+}
+
+pub fn fetch_dashboard(host: &str) -> DashboardSnapshot {
+    let mut snapshot = DashboardSnapshot::initial(host);
+    let (token, source) = read_token();
+    snapshot.token_source = source.label();
+
+    let client = AgentClient::new(host.to_string(), token);
+    match client.request("ping", json!({})) {
+        Ok(_) => {
+            snapshot.connection_state = ConnectionOutcome::Ready.label().to_string();
+            snapshot.agent_status = "Authenticated TCP agent responded".to_string();
+        }
+        Err(AgentError::Unauthorized) => {
+            snapshot.connection_state = ConnectionOutcome::Unauthenticated.label().to_string();
+            snapshot.agent_status = "Agent rejected the token".to_string();
+            snapshot.last_error = "unauthorized".to_string();
+            return snapshot;
+        }
+        Err(AgentError::Unreachable(err)) => {
+            snapshot.connection_state = ConnectionOutcome::Unreachable.label().to_string();
+            snapshot.agent_status = "No TCP response".to_string();
+            snapshot.last_error = err;
+            return snapshot;
+        }
+        Err(err) => {
+            snapshot.connection_state = ConnectionOutcome::ProtocolError.label().to_string();
+            snapshot.agent_status = "Ping failed".to_string();
+            snapshot.last_error = err.to_string();
+            return snapshot;
+        }
+    }
+
+    match client.request("status", json!({})) {
+        Ok(status) => apply_agent_status(&mut snapshot, &status),
+        Err(err) => snapshot.last_error = err.to_string(),
+    }
+
+    match client.request("magik", json!({"action": "status"})) {
+        Ok(status) => apply_magik_status(&mut snapshot, &status),
+        Err(err) => snapshot.last_error = err.to_string(),
+    }
+
+    snapshot
+}
+
+struct AgentClient {
+    host: String,
+    token: String,
+}
+
+impl AgentClient {
+    fn new(host: String, token: String) -> Self {
+        Self { host, token }
+    }
+
+    fn request(&self, cmd: &str, args: Value) -> Result<Value, AgentError> {
+        let addr = format!("{}:{AGENT_PORT}", self.host)
+            .to_socket_addrs()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?
+            .next()
+            .ok_or_else(|| {
+                AgentError::Unreachable("could not resolve MiSTer agent host".to_string())
+            })?;
+
+        let start = Instant::now();
+        let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_read_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_write_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+
+        let request = json!({
+            "token": self.token,
+            "id": 1,
+            "cmd": cmd,
+            "args": args,
+        });
+        writeln!(stream, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .flush()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+
+        let mut line = String::new();
+        BufReader::new(stream)
+            .read_line(&mut line)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        parse_response(&line, start.elapsed())
+    }
+}
+
+fn parse_response(line: &str, _elapsed: Duration) -> Result<Value, AgentError> {
+    if line.trim().is_empty() {
+        return Err(AgentError::Protocol(
+            "empty response from agent".to_string(),
+        ));
+    }
+    let response: Value = serde_json::from_str(line.trim())
+        .map_err(|err| AgentError::Protocol(format!("invalid JSON response: {err}")))?;
+    if response.get("ok").and_then(Value::as_bool) == Some(true) {
+        Ok(response.get("result").cloned().unwrap_or(Value::Null))
+    } else {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("agent command failed");
+        if error == "unauthorized" {
+            Err(AgentError::Unauthorized)
+        } else {
+            Err(AgentError::Command(error.to_string()))
+        }
+    }
+}
+
+fn apply_agent_status(snapshot: &mut DashboardSnapshot, status: &Value) {
+    snapshot.agent_version = string_at(status, "/agent/version")
+        .unwrap_or("-")
+        .to_string();
+    snapshot.agent_uptime =
+        uptime_label(status.pointer("/agent/uptime_ms").and_then(Value::as_u64));
+    let ip = string_at(status, "/network/ip").unwrap_or("-");
+    let carrier = string_at(status, "/network/carrier").unwrap_or("-");
+    let operstate = string_at(status, "/network/operstate").unwrap_or("-");
+    snapshot.network_summary = format!("ip {ip}; carrier {carrier}; state {operstate}");
+    snapshot.mac_address = string_at(status, "/network/mac").unwrap_or("-").to_string();
+    snapshot.main_process = process_summary(status, "MiSTer_MagiK");
+    snapshot.launcher_process = process_summary(status, "mister-magik-fb");
+}
+
+fn apply_magik_status(snapshot: &mut DashboardSnapshot, status: &Value) {
+    snapshot.main_process = process_summary(status, "MiSTer_MagiK");
+    snapshot.launcher_process = process_summary(status, "mister-magik-fb");
+    snapshot.slint_status_freshness = status
+        .pointer("/files/slint_status_current")
+        .and_then(Value::as_bool)
+        .map(|fresh| if fresh { "current" } else { "stale" }.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let main_status = status.pointer("/files/main_status").unwrap_or(&Value::Null);
+    snapshot.visible_owner = string_at(main_status, "/visible_owner")
+        .unwrap_or("unknown")
+        .to_string();
+    snapshot.launcher_state = string_at(main_status, "/launcher_state")
+        .or_else(|| string_at(main_status, "/state"))
+        .unwrap_or("unknown")
+        .to_string();
+
+    let slint_status = status
+        .pointer("/files/slint_status")
+        .unwrap_or(&Value::Null);
+    snapshot.catalog_summary = catalog_summary(slint_status);
+    snapshot.screen_summary = screen_summary(slint_status);
+    snapshot.input_summary = input_summary(slint_status);
+}
+
+impl std::fmt::Display for AgentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreachable(err) => write!(f, "{err}"),
+            Self::Unauthorized => write!(f, "unauthorized"),
+            Self::Protocol(err) => write!(f, "{err}"),
+            Self::Command(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for AgentError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_response_returns_result() {
+        let value = parse_response(
+            r#"{"id":1,"ok":true,"result":{"pong":true}}"#,
+            Duration::ZERO,
+        )
+        .expect("response should parse");
+        assert_eq!(value["pong"], true);
+    }
+
+    #[test]
+    fn parse_response_detects_unauthorized() {
+        let err = parse_response(
+            r#"{"id":1,"ok":false,"error":"unauthorized"}"#,
+            Duration::ZERO,
+        )
+        .expect_err("response should fail");
+        assert!(matches!(err, AgentError::Unauthorized));
+    }
+
+    #[test]
+    fn apply_magik_status_extracts_runtime_fields() {
+        let mut snapshot = DashboardSnapshot::initial("host");
+        let status = json!({
+            "processes": {"MiSTer_MagiK": [10], "mister-magik-fb": [20]},
+            "files": {
+                "slint_status_current": true,
+                "main_status": {"visible_owner": "fb0", "launcher_state": "LauncherActive"},
+                "slint_status": {"screen": "Home", "scene": "launcher", "catalog_ready": true, "catalog_games": 5, "catalog_systems": 2, "input_pad_count": 1, "active_pad_name": "Pad"}
+            }
+        });
+        apply_magik_status(&mut snapshot, &status);
+        assert_eq!(snapshot.slint_status_freshness, "current");
+        assert_eq!(snapshot.visible_owner, "fb0");
+        assert_eq!(snapshot.launcher_state, "LauncherActive");
+        assert_eq!(snapshot.catalog_summary, "ready; 5 games; 2 systems");
+    }
+}
