@@ -447,6 +447,16 @@ plans hydrated into `ArcadeCatalog`.
 These APIs reject old-schema databases. Callers should treat a schema mismatch
 as "cache unusable" and let the worker rebuild.
 
+Runtime Arcade filters use metadata already hydrated into `ArcadeCatalog` rows:
+year, manufacturer, and category. Category comes from the offline MAME/HBMAME
+metadata DB when present, not from runtime XML or hot-path database queries.
+
+Catalog rebuild failures must leave the launcher in an explicit failure state,
+not an indefinite progress state. If persistence or post-save catalog loading
+fails after the UI has shown `Saving library`, the worker/session path should
+replace the progress overlay with a visible failure status such as
+`Library load failed` and include the underlying error in the detail text.
+
 ## Structured Launch Handoff
 
 Virtual `magik-plan:*` rows are not materialized as temporary `.mgl` files.

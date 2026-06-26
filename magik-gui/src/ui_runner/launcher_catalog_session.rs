@@ -1,6 +1,7 @@
 use super::launcher_worker_intents::{
-    cached_catalog_validation_intent, catalog_rebuild_started_intent, parse_games_found_detail,
-    CatalogCounterPhase, CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
+    cached_catalog_validation_intent, catalog_persistence_failed_intent,
+    catalog_rebuild_started_intent, parse_games_found_detail, CatalogCounterPhase,
+    CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
 };
 use super::*;
 
@@ -214,8 +215,9 @@ impl LauncherCatalogSession {
                 self.refresh_failed = true;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
-                effects.event("library_db_save_failed", error);
-                effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
+                effects.event("library_db_save_failed", error.clone());
+                effects.ui(catalog_persistence_failed_intent(error));
+                self.games_found_counter.reset();
             }
             CatalogWorkerMessage::Unchanged { summary } => {
                 self.refresh_done = true;
@@ -584,6 +586,9 @@ mod tests {
                 preview_asset_key: Arc::from(""),
                 has_preview: false,
                 system_id: Arc::from("arcade"),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             })
             .collect();
@@ -619,6 +624,49 @@ mod tests {
                 CatalogSessionEffect::StartCatalogWorker(_) => "start-worker",
             })
             .collect()
+    }
+
+    fn effect_and_ui_names(
+        effects: CatalogSessionEffects,
+    ) -> (Vec<&'static str>, Vec<&'static str>) {
+        let mut effect_names = Vec::new();
+        let mut ui_names = Vec::new();
+        for effect in effects.into_effects() {
+            match effect {
+                CatalogSessionEffect::StartupEvent(_) => effect_names.push("event"),
+                CatalogSessionEffect::UseCatalog { .. } => effect_names.push("catalog"),
+                CatalogSessionEffect::SyncCatalogBridge => effect_names.push("sync"),
+                CatalogSessionEffect::Ui(intent) => {
+                    effect_names.push("ui");
+                    ui_names.push(match intent {
+                        LauncherWorkerUiIntent::CatalogScan(_) => "catalog-scan",
+                        LauncherWorkerUiIntent::ClearCatalogScan => "clear-catalog-scan",
+                        LauncherWorkerUiIntent::HideCatalogBackgroundScan => "hide-background-scan",
+                        LauncherWorkerUiIntent::MediaProgress { .. } => "media-progress",
+                        LauncherWorkerUiIntent::None => "none",
+                    });
+                }
+                CatalogSessionEffect::FinishMediaWorker => effect_names.push("finish-media"),
+                CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
+                    effect_names.push("finish-media-if-no-seed")
+                }
+                CatalogSessionEffect::CatalogValidationFinished => {
+                    effect_names.push("catalog-validation-finished")
+                }
+                CatalogSessionEffect::RequestMediaCatalogSeed => {
+                    effect_names.push("request-media-seed")
+                }
+                CatalogSessionEffect::MediaSystemDiscovered { .. } => {
+                    effect_names.push("media-system-discovered")
+                }
+                CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => {
+                    effect_names.push("request-rebuild-marker")
+                }
+                CatalogSessionEffect::Confirm(_) => effect_names.push("confirm"),
+                CatalogSessionEffect::StartCatalogWorker(_) => effect_names.push("start-worker"),
+            }
+        }
+        (effect_names, ui_names)
     }
 
     #[test]
@@ -682,6 +730,31 @@ mod tests {
         assert_eq!(effect_names(effects), vec!["ui", "confirm", "event"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
+    }
+
+    #[test]
+    fn persistence_failure_replaces_finalizing_progress_with_error_state() {
+        let mut session = LauncherCatalogSession::new(true);
+        let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::PersistenceFailed {
+                error: "read launcher catalog row".to_string(),
+            },
+            Instant::now(),
+        ));
+
+        assert_eq!(
+            effects,
+            vec!["finish-media", "catalog-validation-finished", "event", "ui"]
+        );
+        assert_eq!(ui_effects, vec!["catalog-scan"]);
+        assert!(session.refresh_done());
+        assert!(!session.foreground_update());
+        assert!(session.refresh_failed);
     }
 
     #[test]

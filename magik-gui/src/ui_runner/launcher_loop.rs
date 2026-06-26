@@ -1117,7 +1117,11 @@ pub(super) fn run_launcher_loop(
                     {
                         active_system(&catalog, &nav)
                             .and_then(|system| {
-                                catalog.system_game_at(&system.id, nav.arcade.selected)
+                                catalog.filtered_game_at(
+                                    &system.id,
+                                    &nav.arcade_filter.active,
+                                    nav.arcade.selected,
+                                )
                             })
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
@@ -1131,7 +1135,11 @@ pub(super) fn run_launcher_loop(
                         auto_launch_selected_done = true;
                         active_system(&catalog, &nav)
                             .and_then(|system| {
-                                catalog.system_game_at(&system.id, nav.arcade.selected)
+                                catalog.filtered_game_at(
+                                    &system.id,
+                                    &nav.arcade_filter.active,
+                                    nav.arcade.selected,
+                                )
                             })
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
@@ -1565,7 +1573,7 @@ pub(super) fn run_launcher_loop(
         let full_frame_present = should_present_full_frame(launching, route_action);
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect =
-            if !launching && nav.screen == Screen::Arcade && !active_arcade_games_loading {
+            if should_draw_arcade_list(&nav, launching, active_arcade_games_loading) {
                 let force_arcade_redraw =
                     arcade_list_needs_forced_redraw(this_rect, full_frame_present);
                 arcade_list_renderer.draw(
@@ -2115,6 +2123,17 @@ fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool
     catalog_ready && arcade_catalog_rows_ready(catalog)
 }
 
+fn should_draw_arcade_list(
+    nav: &LauncherNav,
+    launching: bool,
+    active_arcade_games_loading: bool,
+) -> bool {
+    !launching
+        && nav.screen == Screen::Arcade
+        && !active_arcade_games_loading
+        && !nav.arcade_filter.drawer_open
+}
+
 fn effective_lock_screen(
     lock_screen: Option<Screen>,
     catalog_ready: bool,
@@ -2190,6 +2209,9 @@ mod tests {
                 preview_asset_key: Arc::from(format!("{system_id}.raw565")),
                 has_preview: true,
                 system_id: Arc::from(*system_id),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             });
             systems.push(arcade_catalog::GameSystemEntry {
@@ -2236,6 +2258,32 @@ mod tests {
             effective_lock_screen(Some(Screen::Arcade), true, &catalog),
             Some(Screen::Arcade)
         );
+    }
+
+    #[test]
+    pub(super) fn arcade_list_renderer_draws_for_closed_arcade_list() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+
+        assert!(should_draw_arcade_list(&nav, false, false));
+    }
+
+    #[test]
+    pub(super) fn arcade_list_renderer_is_hidden_while_filter_drawer_is_open() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade_filter.drawer_open = true;
+
+        assert!(!should_draw_arcade_list(&nav, false, false));
+    }
+
+    #[test]
+    pub(super) fn arcade_list_renderer_stays_hidden_while_loading_or_launching() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+
+        assert!(!should_draw_arcade_list(&nav, true, false));
+        assert!(!should_draw_arcade_list(&nav, false, true));
     }
 
     #[test]

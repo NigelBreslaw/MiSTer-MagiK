@@ -1,5 +1,5 @@
 // Rust ↔ Slint bridge for MiSTer input and app state.
-import { ArcadeGame, GameSystem } from "arcade_game.slint";
+import { ArcadeFilterItem, ArcadeGame, GameSystem } from "arcade_game.slint";
 
 export enum PreviewStatus {
     empty,
@@ -74,6 +74,12 @@ export global MisterBridge {
     in-out property <int> active-system-count;
     in-out property <[ArcadeGame]> arcade-games;
     in-out property <int> arcade-selected;
+    in-out property <bool> arcade-filter-open;
+    in-out property <string> arcade-filter-title;
+    in-out property <string> arcade-filter-active-label;
+    in-out property <[ArcadeFilterItem]> arcade-filter-items;
+    in-out property <int> arcade-filter-selected;
+    in-out property <int> arcade-filter-scroll-y;
     // Scroll offset in logical pixels (0 = top); drives ListView viewport-y.
     in-out property <int> arcade-scroll-y;
     // Rust-painted arcade list geometry, in logical pixels.

@@ -1,8 +1,8 @@
 //! Launcher navigation and arcade game launch.
 
 use crate::arcade_catalog::{
-    ArcadeCatalog, LaunchTarget, StructuredLaunchPlan, ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W,
-    HOME_TILE_GAP, HOME_TILE_WIDTH,
+    ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, LaunchTarget, StructuredLaunchPlan,
+    ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
 };
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
@@ -37,7 +37,8 @@ const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
-const LAUNCH_RETURN_STATE_SCHEMA: u32 = 1;
+const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
+const ARCADE_FILTER_ROW_HEIGHT: i32 = 40;
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
@@ -430,6 +431,7 @@ pub struct LauncherNav {
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
     pub arcade: ArcadeNav,
+    pub arcade_filter: ArcadeFilterState,
     game_list_memory: HashMap<String, GameListMemory>,
     repeat: RepeatNav,
     prev: PadState,
@@ -439,6 +441,77 @@ pub struct LauncherNav {
 struct GameListMemory {
     selected: usize,
     scroll_y: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArcadeFilterLevel {
+    Top,
+    Decades,
+    Manufacturers,
+    Categories,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArcadeFilterState {
+    pub drawer_open: bool,
+    pub level: ArcadeFilterLevel,
+    pub selected: usize,
+    pub scroll_y: i32,
+    pub active: ArcadeFilter,
+    game_list_memory: HashMap<String, GameListMemory>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArcadeDrawerItem {
+    pub label: String,
+    pub count: usize,
+    pub active: bool,
+}
+
+impl Default for ArcadeFilterState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ArcadeFilterState {
+    pub fn new() -> Self {
+        Self {
+            drawer_open: false,
+            level: ArcadeFilterLevel::Top,
+            selected: 0,
+            scroll_y: 0,
+            active: ArcadeFilter::All,
+            game_list_memory: HashMap::new(),
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self.level {
+            ArcadeFilterLevel::Top => "Filters",
+            ArcadeFilterLevel::Decades => "Decades",
+            ArcadeFilterLevel::Manufacturers => "Manufacturers",
+            ArcadeFilterLevel::Categories => "Categories",
+        }
+    }
+
+    pub fn active_label(&self) -> String {
+        match &self.active {
+            ArcadeFilter::All => "Games A-Z".to_string(),
+            ArcadeFilter::Decade(decade) => format!("{decade}'s"),
+            ArcadeFilter::Manufacturer(manufacturer) => manufacturer.clone(),
+            ArcadeFilter::Category(category) => category.clone(),
+        }
+    }
+
+    fn active_group_index(&self) -> usize {
+        match self.active {
+            ArcadeFilter::All => 0,
+            ArcadeFilter::Decade(_) => 1,
+            ArcadeFilter::Manufacturer(_) => 2,
+            ArcadeFilter::Category(_) => 3,
+        }
+    }
 }
 
 impl Default for LauncherNav {
@@ -458,6 +531,7 @@ impl LauncherNav {
             confirm_action: None,
             confirm_selected: 0,
             arcade: ArcadeNav::new(),
+            arcade_filter: ArcadeFilterState::new(),
             game_list_memory: HashMap::new(),
             repeat: RepeatNav::default(),
             prev: PadState::default(),
@@ -531,6 +605,7 @@ impl LauncherNav {
         }
 
         if rising(now.btn_a, self.prev.btn_a) {
+            self.arcade_filter.active = ArcadeFilter::All;
             if let Some(system) = catalog.systems.get(self.selected) {
                 let count = catalog.system_game_count(&system.id);
                 self.restore_game_list_state(&system.id, count);
@@ -554,7 +629,11 @@ impl LauncherNav {
             .get(self.selected)
             .map(|system| system.id.as_str())
             .unwrap_or("");
-        let count = catalog.system_game_count(system_id);
+        let count = self.active_arcade_game_count(catalog, system_id);
+
+        if self.arcade_filter.drawer_open {
+            return self.handle_arcade_filter(now, frame_now, catalog, system_id);
+        }
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
             if !system_id.is_empty() {
@@ -565,6 +644,14 @@ impl LauncherNav {
         }
 
         if count == 0 {
+            if rising(now.dpad_left, self.prev.dpad_left) {
+                self.open_arcade_filter(catalog, system_id);
+            }
+            return None;
+        }
+
+        if rising(now.dpad_left, self.prev.dpad_left) {
+            self.open_arcade_filter(catalog, system_id);
             return None;
         }
 
@@ -581,13 +668,57 @@ impl LauncherNav {
 
         if rising(now.btn_a, self.prev.btn_a) {
             return catalog
-                .system_game_at(system_id, self.arcade.selected)
+                .filtered_game_at(system_id, &self.arcade_filter.active, self.arcade.selected)
                 .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
                     path: Some(game.mra_path.to_string()),
                 });
         }
 
+        None
+    }
+
+    fn handle_arcade_filter(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Option<LauncherEvent> {
+        let items = self.arcade_filter_items(catalog, system_id);
+        if rising(now.dpad_right, self.prev.dpad_right) {
+            self.close_arcade_filter();
+            return None;
+        }
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.close_arcade_filter();
+            return None;
+        }
+        if rising(now.btn_b, self.prev.btn_b) {
+            if self.arcade_filter.level == ArcadeFilterLevel::Top {
+                self.close_arcade_filter();
+            } else {
+                self.arcade_filter.level = ArcadeFilterLevel::Top;
+                self.arcade_filter.selected = self.arcade_filter.active_group_index();
+                self.sync_arcade_filter_scroll(items.len());
+            }
+            return None;
+        }
+        if !items.is_empty() {
+            if self.repeat.tick_up(now.dpad_up, frame_now) && self.arcade_filter.selected > 0 {
+                self.arcade_filter.selected -= 1;
+                self.sync_arcade_filter_scroll(items.len());
+            }
+            if self.repeat.tick_down(now.dpad_down, frame_now)
+                && self.arcade_filter.selected + 1 < items.len()
+            {
+                self.arcade_filter.selected += 1;
+                self.sync_arcade_filter_scroll(items.len());
+            }
+        }
+        if rising(now.btn_a, self.prev.btn_a) {
+            self.activate_arcade_filter_selection(catalog, system_id, &items);
+        }
         None
     }
 
@@ -679,22 +810,225 @@ impl LauncherNav {
     }
 
     fn save_game_list_state(&mut self, system_id: &str) {
-        self.game_list_memory.insert(
-            system_id.to_string(),
-            GameListMemory {
-                selected: self.arcade.selected,
-                scroll_y: self.arcade.scroll_y,
-            },
-        );
+        let memory = GameListMemory {
+            selected: self.arcade.selected,
+            scroll_y: self.arcade.scroll_y,
+        };
+        self.game_list_memory.insert(system_id.to_string(), memory);
+        self.arcade_filter
+            .game_list_memory
+            .insert(filter_memory_key(&self.arcade_filter.active), memory);
     }
 
     fn restore_game_list_state(&mut self, system_id: &str, count: usize) {
+        self.arcade_filter.drawer_open = false;
+        self.arcade_filter.level = ArcadeFilterLevel::Top;
         if let Some(memory) = self.game_list_memory.get(system_id).copied() {
             self.arcade
                 .restore_position(memory.selected, memory.scroll_y, count);
         } else {
             self.arcade.reset();
         }
+    }
+
+    pub fn active_arcade_game_count(&self, catalog: &ArcadeCatalog, system_id: &str) -> usize {
+        catalog.filtered_game_count(system_id, &self.arcade_filter.active)
+    }
+
+    pub fn arcade_filter_items(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Vec<ArcadeDrawerItem> {
+        match self.arcade_filter.level {
+            ArcadeFilterLevel::Top => self.arcade_filter_top_items(catalog, system_id),
+            ArcadeFilterLevel::Decades => filter_option_items(
+                catalog.decade_options(system_id),
+                |label| decade_from_label(label).map(ArcadeFilter::Decade),
+                &self.arcade_filter.active,
+            ),
+            ArcadeFilterLevel::Manufacturers => filter_option_items(
+                catalog.manufacturer_options(system_id),
+                |label| Some(ArcadeFilter::Manufacturer(label.to_string())),
+                &self.arcade_filter.active,
+            ),
+            ArcadeFilterLevel::Categories => filter_option_items(
+                catalog.category_options(system_id),
+                |label| Some(ArcadeFilter::Category(label.to_string())),
+                &self.arcade_filter.active,
+            ),
+        }
+    }
+
+    fn arcade_filter_top_items(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Vec<ArcadeDrawerItem> {
+        vec![
+            ArcadeDrawerItem {
+                label: "Games A-Z".to_string(),
+                count: catalog.system_game_count(system_id),
+                active: self.arcade_filter.active == ArcadeFilter::All,
+            },
+            ArcadeDrawerItem {
+                label: "Decades".to_string(),
+                count: catalog.decade_options(system_id).len(),
+                active: matches!(self.arcade_filter.active, ArcadeFilter::Decade(_)),
+            },
+            ArcadeDrawerItem {
+                label: "Manufacturer".to_string(),
+                count: catalog.manufacturer_options(system_id).len(),
+                active: matches!(self.arcade_filter.active, ArcadeFilter::Manufacturer(_)),
+            },
+            ArcadeDrawerItem {
+                label: "Categories".to_string(),
+                count: catalog.category_options(system_id).len(),
+                active: matches!(self.arcade_filter.active, ArcadeFilter::Category(_)),
+            },
+        ]
+    }
+
+    fn open_arcade_filter(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+        self.save_game_list_state(system_id);
+        self.arcade_filter.drawer_open = true;
+        self.arcade_filter.level = ArcadeFilterLevel::Top;
+        self.arcade_filter.selected = self.arcade_filter.active_group_index();
+        self.sync_arcade_filter_scroll(self.arcade_filter_items(catalog, system_id).len());
+    }
+
+    fn close_arcade_filter(&mut self) {
+        self.arcade_filter.drawer_open = false;
+        self.arcade_filter.level = ArcadeFilterLevel::Top;
+    }
+
+    fn activate_arcade_filter_selection(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+        items: &[ArcadeDrawerItem],
+    ) {
+        if items.is_empty() || self.arcade_filter.selected >= items.len() {
+            return;
+        }
+        match self.arcade_filter.level {
+            ArcadeFilterLevel::Top => match self.arcade_filter.selected {
+                0 => self.apply_arcade_filter(catalog, system_id, ArcadeFilter::All),
+                1 => self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Decades),
+                2 => self.enter_arcade_filter_level(
+                    catalog,
+                    system_id,
+                    ArcadeFilterLevel::Manufacturers,
+                ),
+                3 => self.enter_arcade_filter_level(
+                    catalog,
+                    system_id,
+                    ArcadeFilterLevel::Categories,
+                ),
+                _ => {}
+            },
+            ArcadeFilterLevel::Decades => {
+                if let Some(decade) = decade_from_label(&items[self.arcade_filter.selected].label) {
+                    self.apply_arcade_filter(catalog, system_id, ArcadeFilter::Decade(decade));
+                }
+            }
+            ArcadeFilterLevel::Manufacturers => {
+                self.apply_arcade_filter(
+                    catalog,
+                    system_id,
+                    ArcadeFilter::Manufacturer(items[self.arcade_filter.selected].label.clone()),
+                );
+            }
+            ArcadeFilterLevel::Categories => {
+                self.apply_arcade_filter(
+                    catalog,
+                    system_id,
+                    ArcadeFilter::Category(items[self.arcade_filter.selected].label.clone()),
+                );
+            }
+        }
+    }
+
+    fn enter_arcade_filter_level(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+        level: ArcadeFilterLevel,
+    ) {
+        self.arcade_filter.level = level;
+        self.arcade_filter.selected = 0;
+        let items = self.arcade_filter_items(catalog, system_id);
+        if let Some(active_idx) = items.iter().position(|item| item.active) {
+            self.arcade_filter.selected = active_idx;
+        }
+        self.sync_arcade_filter_scroll(items.len());
+    }
+
+    fn apply_arcade_filter(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+        filter: ArcadeFilter,
+    ) {
+        self.save_game_list_state(system_id);
+        self.arcade_filter.active = filter;
+        let count = catalog.filtered_game_count(system_id, &self.arcade_filter.active);
+        if let Some(memory) = self
+            .arcade_filter
+            .game_list_memory
+            .get(&filter_memory_key(&self.arcade_filter.active))
+            .copied()
+        {
+            self.arcade
+                .restore_position(memory.selected, memory.scroll_y, count);
+        } else {
+            self.arcade.reset();
+        }
+        self.close_arcade_filter();
+    }
+
+    fn sync_arcade_filter_scroll(&mut self, count: usize) {
+        let selected_y = self.arcade_filter.selected as i32 * ARCADE_FILTER_ROW_HEIGHT;
+        let visible_h = crate::arcade_catalog::ARCADE_LIST_VISIBLE_H;
+        if selected_y < self.arcade_filter.scroll_y {
+            self.arcade_filter.scroll_y = selected_y;
+        }
+        if selected_y + ARCADE_FILTER_ROW_HEIGHT > self.arcade_filter.scroll_y + visible_h {
+            self.arcade_filter.scroll_y = selected_y + ARCADE_FILTER_ROW_HEIGHT - visible_h;
+        }
+        let max_scroll = (count as i32 * ARCADE_FILTER_ROW_HEIGHT - visible_h).max(0);
+        self.arcade_filter.scroll_y = self.arcade_filter.scroll_y.clamp(0, max_scroll);
+    }
+}
+
+fn filter_option_items(
+    options: Vec<ArcadeFilterOption>,
+    filter_for_label: impl Fn(&str) -> Option<ArcadeFilter>,
+    active_filter: &ArcadeFilter,
+) -> Vec<ArcadeDrawerItem> {
+    options
+        .into_iter()
+        .map(|option| {
+            let active = filter_for_label(&option.label).as_ref() == Some(active_filter);
+            ArcadeDrawerItem {
+                label: option.label,
+                count: option.count,
+                active,
+            }
+        })
+        .collect()
+}
+
+fn decade_from_label(label: &str) -> Option<u16> {
+    label.strip_suffix("'s")?.parse::<u16>().ok()
+}
+
+fn filter_memory_key(filter: &ArcadeFilter) -> String {
+    match filter {
+        ArcadeFilter::All => "all".to_string(),
+        ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
+        ArcadeFilter::Manufacturer(manufacturer) => format!("manufacturer:{manufacturer}"),
+        ArcadeFilter::Category(category) => format!("category:{category}"),
     }
 }
 
@@ -706,6 +1040,8 @@ pub struct LaunchReturnState {
     system_index: usize,
     game_path: String,
     game_index: usize,
+    filter_kind: Option<String>,
+    filter_value: Option<String>,
 }
 
 pub fn capture_launch_return_state(
@@ -717,11 +1053,12 @@ pub fn capture_launch_return_state(
         return None;
     }
     let system = catalog.systems.get(nav.selected)?;
-    let games = catalog.system_game_slice(&system.id);
+    let games = catalog.filtered_game_slice(&system.id, &nav.arcade_filter.active);
     let game_index = games
         .iter()
         .position(|game| game.mra_path.as_ref() == game_path)
         .unwrap_or(nav.arcade.selected.min(games.len().saturating_sub(1)));
+    let (filter_kind, filter_value) = serialize_arcade_filter(&nav.arcade_filter.active);
     Some(LaunchReturnState {
         schema_version: LAUNCH_RETURN_STATE_SCHEMA,
         screen: "arcade".to_string(),
@@ -729,6 +1066,8 @@ pub fn capture_launch_return_state(
         system_index: nav.selected,
         game_path: game_path.to_string(),
         game_index,
+        filter_kind: Some(filter_kind),
+        filter_value,
     })
 }
 
@@ -773,7 +1112,9 @@ fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
     remove_launch_return_state_at(path);
     match serde_json::from_str::<LaunchReturnState>(&text) {
         Ok(state)
-            if state.schema_version == LAUNCH_RETURN_STATE_SCHEMA && state.screen == "arcade" =>
+            if (state.schema_version == LAUNCH_RETURN_STATE_SCHEMA
+                || state.schema_version == 1)
+                && state.screen == "arcade" =>
         {
             Some(state)
         }
@@ -794,7 +1135,13 @@ pub fn apply_launch_return_state(
         return false;
     };
     let system_id = &catalog.systems[system_index].id;
-    let games = catalog.system_game_slice(system_id);
+    let filter = state
+        .filter_kind
+        .as_deref()
+        .and_then(|kind| deserialize_arcade_filter(kind, state.filter_value.as_deref()))
+        .filter(|filter| !catalog.filtered_game_slice(system_id, filter).is_empty())
+        .unwrap_or(ArcadeFilter::All);
+    let games = catalog.filtered_game_slice(system_id, &filter);
     if games.is_empty() {
         return false;
     }
@@ -805,12 +1152,38 @@ pub fn apply_launch_return_state(
 
     nav.selected = system_index;
     nav.screen = Screen::Arcade;
+    nav.arcade_filter.active = filter;
+    nav.arcade_filter.drawer_open = false;
+    nav.arcade_filter.level = ArcadeFilterLevel::Top;
     nav.arcade.restore_position(
         game_index,
         game_index as i32 * ARCADE_ROW_HEIGHT,
         games.len(),
     );
     true
+}
+
+fn serialize_arcade_filter(filter: &ArcadeFilter) -> (String, Option<String>) {
+    match filter {
+        ArcadeFilter::All => ("all".to_string(), None),
+        ArcadeFilter::Decade(decade) => ("decade".to_string(), Some(decade.to_string())),
+        ArcadeFilter::Manufacturer(manufacturer) => {
+            ("manufacturer".to_string(), Some(manufacturer.clone()))
+        }
+        ArcadeFilter::Category(category) => ("category".to_string(), Some(category.clone())),
+    }
+}
+
+fn deserialize_arcade_filter(kind: &str, value: Option<&str>) -> Option<ArcadeFilter> {
+    match kind {
+        "all" => Some(ArcadeFilter::All),
+        "decade" => value
+            .and_then(|value| value.parse::<u16>().ok())
+            .map(ArcadeFilter::Decade),
+        "manufacturer" => value.map(|value| ArcadeFilter::Manufacturer(value.to_string())),
+        "category" => value.map(|value| ArcadeFilter::Category(value.to_string())),
+        _ => None,
+    }
 }
 
 fn resolve_system_index(catalog: &ArcadeCatalog, state: &LaunchReturnState) -> Option<usize> {
@@ -1451,6 +1824,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "amiga".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             }],
             vec![GameSystemEntry {
@@ -1473,6 +1849,9 @@ mod tests {
                     preview_asset_key: "1942".into(),
                     has_preview: true,
                     system_id: "arcade".into(),
+                    year: None,
+                    manufacturer: "".into(),
+                    category: "".into(),
                     is_new: false,
                 },
                 ArcadeGameEntry {
@@ -1482,6 +1861,9 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "amiga".into(),
+                    year: None,
+                    manufacturer: "".into(),
+                    category: "".into(),
                     is_new: false,
                 },
             ],
@@ -1510,6 +1892,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             });
         }
@@ -1521,6 +1906,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "amiga".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             });
         }
@@ -1553,6 +1941,9 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "arcade".into(),
+                    year: None,
+                    manufacturer: "".into(),
+                    category: "".into(),
                     is_new: false,
                 },
                 ArcadeGameEntry {
@@ -1562,6 +1953,9 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "arcade".into(),
+                    year: None,
+                    manufacturer: "".into(),
+                    category: "".into(),
                     is_new: false,
                 },
                 ArcadeGameEntry {
@@ -1571,9 +1965,62 @@ mod tests {
                     preview_asset_key: "".into(),
                     has_preview: false,
                     system_id: "arcade".into(),
+                    year: None,
+                    manufacturer: "".into(),
+                    category: "".into(),
                     is_new: false,
                 },
             ],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 3,
+            }],
+        )
+    }
+
+    fn filter_catalog() -> ArcadeCatalog {
+        let games = vec![
+            ArcadeGameEntry {
+                title: "Astro 1978".into(),
+                mra_path: "/media/fat/_Arcade/astro-1978.mra".into(),
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
+                system_id: "arcade".into(),
+                year: Some(1978),
+                manufacturer: "Atari".into(),
+                category: "Shooter / Gallery".into(),
+                is_new: false,
+            },
+            ArcadeGameEntry {
+                title: "Battle 1981".into(),
+                mra_path: "/media/fat/_Arcade/battle-1981.mra".into(),
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
+                system_id: "arcade".into(),
+                year: Some(1981),
+                manufacturer: "Capcom".into(),
+                category: "Shooter / Vertical".into(),
+                is_new: false,
+            },
+            ArcadeGameEntry {
+                title: "Brawl 1988".into(),
+                mra_path: "/media/fat/_Arcade/brawl-1988.mra".into(),
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
+                system_id: "arcade".into(),
+                year: Some(1988),
+                manufacturer: "Capcom".into(),
+                category: "Fighter / 2D".into(),
+                is_new: false,
+            },
+        ];
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            games,
             vec![GameSystemEntry {
                 id: "arcade".into(),
                 title: "Arcade".into(),
@@ -1586,6 +2033,10 @@ mod tests {
         let mut pad = PadState::default();
         set(&mut pad);
         pad
+    }
+
+    fn release(nav: &mut LauncherNav, catalog: &ArcadeCatalog, t: Instant, ms: u64) {
+        let _ = nav.handle_input(&PadState::default(), t + Duration::from_millis(ms), catalog);
     }
 
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
@@ -1642,6 +2093,99 @@ mod tests {
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.arcade.selected, 0);
+    }
+
+    #[test]
+    fn arcade_filter_left_opens_and_right_closes_drawer() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let press_left = pad_with(|pad| pad.dpad_left = true);
+        let press_right = pad_with(|pad| pad.dpad_right = true);
+
+        let _ = nav.handle_input(&press_a, t0, &catalog);
+        release(&mut nav, &catalog, t0, 16);
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
+
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
+        release(&mut nav, &catalog, t0, 48);
+        assert!(nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
+        assert_eq!(nav.arcade_filter.selected, 0);
+
+        let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(64), &catalog);
+        assert!(!nav.arcade_filter.drawer_open);
+    }
+
+    #[test]
+    fn arcade_filter_applies_decade_and_launches_filtered_game() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let press_left = pad_with(|pad| pad.dpad_left = true);
+        let press_down = pad_with(|pad| pad.dpad_down = true);
+
+        let _ = nav.handle_input(&press_a, t0, &catalog);
+        release(&mut nav, &catalog, t0, 16);
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
+        release(&mut nav, &catalog, t0, 48);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
+        release(&mut nav, &catalog, t0, 80);
+        assert_eq!(nav.arcade_filter.selected, 1);
+        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(96), &catalog);
+        release(&mut nav, &catalog, t0, 112);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
+        release(&mut nav, &catalog, t0, 144);
+        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(160), &catalog);
+        release(&mut nav, &catalog, t0, 176);
+
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::Decade(1980));
+        assert!(!nav.arcade_filter.drawer_open);
+        assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 2);
+        assert_eq!(nav.arcade.selected, 0);
+
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(192), &catalog)
+            .expect("filtered launch");
+        assert_eq!(event.action, LauncherAction::LaunchGame);
+        assert_eq!(
+            event.path.as_deref(),
+            Some("/media/fat/_Arcade/battle-1981.mra")
+        );
+    }
+
+    #[test]
+    fn arcade_filter_b_backs_out_of_submenu() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let press_left = pad_with(|pad| pad.dpad_left = true);
+        let press_down = pad_with(|pad| pad.dpad_down = true);
+        let press_b = pad_with(|pad| pad.btn_b = true);
+
+        let _ = nav.handle_input(&press_a, t0, &catalog);
+        release(&mut nav, &catalog, t0, 16);
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
+        release(&mut nav, &catalog, t0, 48);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
+        release(&mut nav, &catalog, t0, 80);
+        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(96), &catalog);
+        release(&mut nav, &catalog, t0, 112);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
+
+        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(128), &catalog);
+        release(&mut nav, &catalog, t0, 144);
+        assert!(nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
+        assert_eq!(nav.arcade_filter.selected, 0);
+
+        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(160), &catalog);
+        assert!(!nav.arcade_filter.drawer_open);
     }
 
     #[test]
@@ -1845,6 +2389,8 @@ mod tests {
             system_index: 99,
             game_path: "/missing.mra".into(),
             game_index: 99,
+            filter_kind: Some("all".into()),
+            filter_value: None,
         };
         let catalog = reordered_arcade_catalog();
         let mut restored = LauncherNav::new();
@@ -1868,6 +2414,8 @@ mod tests {
             system_index: 0,
             game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
             game_index: 2,
+            filter_kind: Some("all".into()),
+            filter_value: None,
         };
 
         save_launch_return_state_at(&path, &state).expect("save return state");
@@ -1891,6 +2439,8 @@ mod tests {
             system_index: 0,
             game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
             game_index: 2,
+            filter_kind: Some("all".into()),
+            filter_value: None,
         };
 
         save_launch_return_state_at(&path, &state).expect("save return state");

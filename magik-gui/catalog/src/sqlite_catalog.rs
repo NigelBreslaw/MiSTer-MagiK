@@ -1,6 +1,6 @@
 //! SQLite catalog import, publish, and loading.
 
-use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
+use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
@@ -32,6 +32,7 @@ use crate::software_identity::{
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
     PreviewArchivePaths, SoftwareHashCache,
 };
+use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -330,6 +331,9 @@ pub(crate) fn load_materialized_ui_catalog(
                 preview_asset_key,
                 has_preview,
                 system_id,
+                year,
+                manufacturer,
+                category,
                 discovered_at_unix
          FROM ui_arcade_preferred
          ORDER BY ordinal",
@@ -344,6 +348,9 @@ pub(crate) fn load_materialized_ui_catalog(
                     preview_asset_key,
                     has_preview,
                     system_id,
+                    year,
+                    manufacturer,
+                    category,
                     discovered_at_unix
              FROM launcher_catalog
              WHERE system_id NOT IN ('arcade','neogeo')
@@ -368,6 +375,9 @@ pub(crate) fn load_materialized_launcher_catalog(
                 preview_asset_key,
                 has_preview,
                 system_id,
+                year,
+                manufacturer,
+                category,
                 discovered_at_unix
          FROM launcher_catalog
          ORDER BY ordinal",
@@ -386,7 +396,7 @@ pub(crate) fn query_game_entries(
         .map_err(|e| format!("prepare {label} query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            let discovered_at_unix = row.get::<_, Option<i64>>(6)?;
+            let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
             Ok(ArcadeGameEntry {
                 title: row.get::<_, String>(0)?.into(),
                 mra_path: row.get::<_, String>(1)?.into(),
@@ -394,6 +404,9 @@ pub(crate) fn query_game_entries(
                 preview_asset_key: row.get::<_, String>(3)?.into(),
                 has_preview: row.get::<_, i64>(4)? != 0,
                 system_id: row.get::<_, String>(5)?.into(),
+                year: optional_year_from_row(row, 6)?,
+                manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default().into(),
+                category: row.get::<_, Option<String>>(8)?.unwrap_or_default().into(),
                 is_new: is_new_discovery(discovered_at_unix, now),
             })
         })
@@ -413,6 +426,29 @@ pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool
     )
     .map(|exists| exists != 0)
     .map_err(|e| format!("check sqlite table {table}: {e}"))
+}
+
+fn optional_year_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<u16>> {
+    match row.get_ref(index)? {
+        ValueRef::Null => Ok(None),
+        ValueRef::Integer(year) => Ok(u16::try_from(year).ok()),
+        ValueRef::Real(year) if year.fract() == 0.0 => Ok(u16::try_from(year as i64).ok()),
+        ValueRef::Real(_) | ValueRef::Blob(_) => Ok(None),
+        ValueRef::Text(bytes) => {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return Ok(None);
+            };
+            Ok(parse_catalog_year(text))
+        }
+    }
+}
+
+fn parse_catalog_year(text: &str) -> Option<u16> {
+    let trimmed = text.trim();
+    if trimmed.len() != 4 || !trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    trimmed.parse().ok()
 }
 
 pub(crate) fn sqlite_column_exists(
@@ -474,6 +510,9 @@ pub(crate) fn load_joined_launcher_catalog(
                     '',
                     0,
                     COALESCE(games.system_id,'unknown'),
+                    games.year,
+                    games.manufacturer,
+                    games.genre,
                     games.discovered_at_unix,
                     launch_plans.launch_kind,
                     COALESCE(launch_plans.setname,''),
@@ -493,7 +532,7 @@ pub(crate) fn load_joined_launcher_catalog(
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            let discovered_at_unix = row.get::<_, Option<i64>>(6)?;
+            let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
             let preview = LauncherPreviewAsset::new(
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
@@ -503,12 +542,17 @@ pub(crate) fn load_joined_launcher_catalog(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(5)?,
                 preview,
+                ArcadeGameMetadataKey {
+                    year: optional_year_from_row(row, 6)?,
+                    manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                    category: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                },
                 is_new_discovery(discovered_at_unix, now),
                 CatalogProjectionSource {
                     discovered_at_unix,
-                    source_kind: row.get::<_, String>(7)?,
-                    setname: row.get::<_, String>(8)?,
-                    parent: row.get::<_, String>(9)?,
+                    source_kind: row.get::<_, String>(10)?,
+                    setname: row.get::<_, String>(11)?,
+                    parent: row.get::<_, String>(12)?,
                     family_key: None,
                 },
             ))
@@ -1185,6 +1229,7 @@ fn write_sqlite_scan_with_sources(
             metadata_title TEXT,
             year TEXT,
             manufacturer TEXT,
+            category TEXT,
             source TEXT NOT NULL,
             PRIMARY KEY(launchable_id, namespace, identity_id)
         ) WITHOUT ROWID;
@@ -1198,6 +1243,9 @@ fn write_sqlite_scan_with_sources(
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
+            year INTEGER,
+            manufacturer TEXT,
+            category TEXT,
             discovered_at_unix INTEGER,
             identity_id TEXT,
             family_id TEXT NOT NULL,
@@ -1218,6 +1266,9 @@ fn write_sqlite_scan_with_sources(
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
+            year INTEGER,
+            manufacturer TEXT,
+            category TEXT,
             discovered_at_unix INTEGER,
             identity_id TEXT,
             parent_setname TEXT,
@@ -1237,6 +1288,9 @@ fn write_sqlite_scan_with_sources(
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
+            year INTEGER,
+            manufacturer TEXT,
+            category TEXT,
             discovered_at_unix INTEGER
         );
         CREATE TABLE launcher_launch_plans (
@@ -1422,8 +1476,8 @@ fn write_sqlite_scan_with_sources(
             .map_err(|e| format!("prepare launchable insert: {e}"))?;
         let mut identity_stmt = tx
             .prepare(
-                "INSERT INTO launchable_identities(launchable_id,namespace,identity_id,family_id,metadata_title,year,manufacturer,source)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO launchable_identities(launchable_id,namespace,identity_id,family_id,metadata_title,year,manufacturer,category,source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             )
             .map_err(|e| format!("prepare launchable identity insert: {e}"))?;
         let mut region_stmt = tx
@@ -1510,6 +1564,11 @@ fn write_sqlite_scan_with_sources(
                     plan_launch_ref.clone(),
                     system_id.clone(),
                     LauncherPreviewAsset::from_console_asset(preview_asset.as_ref()),
+                    ArcadeGameMetadataKey {
+                        year: discovery.year,
+                        manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                        category: discovery.genre.clone().unwrap_or_default(),
+                    },
                     false,
                     CatalogProjectionSource {
                         discovered_at_unix,
@@ -1553,7 +1612,7 @@ fn write_sqlite_scan_with_sources(
                 ])
                 .map_err(|e| format!("insert launchable: {e}"))?;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-                let (family_id, title, year, manufacturer, source) = mame_identity_projection(
+                let (family_id, title, year, manufacturer, category, source) = mame_identity_projection(
                     &identity_id,
                     &arcade_metadata,
                     discovery.parent.as_deref(),
@@ -1567,6 +1626,7 @@ fn write_sqlite_scan_with_sources(
                         title,
                         year,
                         manufacturer,
+                        category,
                         source
                     ])
                     .map_err(|e| format!("insert launchable identity: {e}"))?;
@@ -1582,6 +1642,7 @@ fn write_sqlite_scan_with_sources(
                         identity.metadata_title.as_deref(),
                         identity.year.as_deref(),
                         identity.manufacturer.as_deref(),
+                        Option::<&str>::None,
                         identity.source
                     ])
                     .map_err(|e| format!("insert software launchable identity: {e}"))?;
@@ -2905,6 +2966,101 @@ mod tests {
         assert_eq!(loaded.rows, 1);
         assert_eq!(loaded.catalog.games[0].title.as_ref(), "Moon Patrol (US)");
         assert!(loaded.catalog.games[0].has_preview);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_loads_runtime_filter_metadata_from_mame_identity() {
+        let root = unique_temp_dir("sqlite-filter-metadata");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        let conn = Connection::open(&mame_db).expect("open mame db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE mame_machines (
+                setname TEXT PRIMARY KEY,
+                parent_setname TEXT,
+                title TEXT NOT NULL,
+                year TEXT,
+                manufacturer TEXT,
+                category TEXT
+            ) WITHOUT ROWID;
+            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
+            VALUES ('filtergame',NULL,'Filter Game','1986','Capcom','Shooter / Vertical');
+            "#,
+        )
+        .expect("write mame metadata");
+        drop(conn);
+        let mut discovery = mra_discovery(1, "Filter Game");
+        discovery.launch_ref = "/media/fat/_Arcade/Filter Game.mra".to_string();
+        discovery.source_path = discovery.launch_ref.clone();
+        discovery.setname = Some("filtergame".to_string());
+        discovery.year = Some(1979);
+        discovery.manufacturer = Some("Fallback Maker".to_string());
+        discovery.genre = Some("Fallback Genre".to_string());
+
+        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
+            .expect("write sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        let game = &loaded.catalog.games[0];
+
+        assert_eq!(game.year, Some(1986));
+        assert_eq!(game.manufacturer.as_ref(), "Capcom");
+        assert_eq!(game.category.as_ref(), "Shooter / Vertical");
+        assert_eq!(loaded.catalog.decade_options("arcade")[0].label, "1980's");
+        assert_eq!(
+            loaded
+                .catalog
+                .filtered_game_slice(
+                    "arcade",
+                    &crate::arcade_catalog::ArcadeFilter::Category(
+                        "Shooter / Vertical".to_string()
+                    )
+                )
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_omits_malformed_text_year_from_mame_identity() {
+        let root = unique_temp_dir("sqlite-filter-bad-year");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        let conn = Connection::open(&mame_db).expect("open mame db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE mame_machines (
+                setname TEXT PRIMARY KEY,
+                parent_setname TEXT,
+                title TEXT NOT NULL,
+                year TEXT,
+                manufacturer TEXT,
+                category TEXT
+            ) WITHOUT ROWID;
+            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
+            VALUES ('badyear',NULL,'Bad Year','19??','Capcom','Shooter / Vertical');
+            "#,
+        )
+        .expect("write mame metadata");
+        drop(conn);
+        let mut discovery = mra_discovery(1, "Bad Year");
+        discovery.launch_ref = "/media/fat/_Arcade/Bad Year.mra".to_string();
+        discovery.source_path = discovery.launch_ref.clone();
+        discovery.setname = Some("badyear".to_string());
+
+        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
+            .expect("write sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        let game = &loaded.catalog.games[0];
+
+        assert_eq!(game.year, None);
+        assert_eq!(game.manufacturer.as_ref(), "Capcom");
+        assert_eq!(game.category.as_ref(), "Shooter / Vertical");
+        assert!(loaded.catalog.decade_options("arcade").is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 

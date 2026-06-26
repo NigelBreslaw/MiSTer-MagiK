@@ -23,6 +23,14 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_game_systems(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::GameSystem,
     >::new())));
+    bridge.set_arcade_filter_items(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::ArcadeFilterItem,
+    >::new())));
+    bridge.set_arcade_filter_open(false);
+    bridge.set_arcade_filter_title("Filters".into());
+    bridge.set_arcade_filter_active_label("Games A-Z".into());
+    bridge.set_arcade_filter_selected(0);
+    bridge.set_arcade_filter_scroll_y(0);
     bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
     bridge.set_active_system_count(0);
@@ -255,16 +263,23 @@ pub(super) fn sync_bridge_launcher(
     if let Some(catalog) = catalog {
         let games = active_system_game_slice(catalog, nav);
         let system = active_system(catalog, nav);
-        let title = system
+        let base_title = system
             .map(|system| system.title.clone())
             .unwrap_or_else(|| "Games".to_string());
+        let filter_label = nav.arcade_filter.active_label();
+        let title = if filter_label == "Games A-Z" {
+            base_title
+        } else {
+            format!("{base_title} - {filter_label}")
+        };
         let count = system
-            .map(|system| system.count)
+            .map(|system| nav.active_arcade_game_count(catalog, &system.id))
             .unwrap_or_else(|| games.len());
         active_games_loading = active_system_games_loading(catalog, nav);
         bridge.set_game_systems(models.game_systems(catalog, catalog_version));
         bridge.set_active_system_title(title.into());
         bridge.set_active_system_count(count as i32);
+        sync_arcade_filter_bridge(&bridge, catalog, nav);
         active_games_for_preview = Some(games);
     }
     bridge.set_arcade_games_loading(active_games_loading);
@@ -341,6 +356,31 @@ pub(super) fn sync_bridge_launcher_light(
     status_presenter.sync_setup_visible(setup.is_active());
 }
 
+fn sync_arcade_filter_bridge(
+    bridge: &slint_ui::launcher::MisterBridge<'_>,
+    catalog: &ArcadeCatalog,
+    nav: &LauncherNav,
+) {
+    let system_id = active_system(catalog, nav)
+        .map(|system| system.id.as_str())
+        .unwrap_or("");
+    let items = nav
+        .arcade_filter_items(catalog, system_id)
+        .into_iter()
+        .map(|item| slint_ui::launcher::ArcadeFilterItem {
+            label: item.label.into(),
+            count: item.count as i32,
+            active: item.active,
+        })
+        .collect::<Vec<_>>();
+    bridge.set_arcade_filter_open(nav.arcade_filter.drawer_open);
+    bridge.set_arcade_filter_title(nav.arcade_filter.title().into());
+    bridge.set_arcade_filter_active_label(nav.arcade_filter.active_label().into());
+    bridge.set_arcade_filter_items(ModelRc::new(VecModel::from(items)));
+    bridge.set_arcade_filter_selected(nav.arcade_filter.selected as i32);
+    bridge.set_arcade_filter_scroll_y(nav.arcade_filter.scroll_y);
+}
+
 pub(super) fn launcher_clock_text() -> String {
     unsafe {
         let mut now: libc::time_t = 0;
@@ -386,7 +426,7 @@ pub(super) fn active_system_game_slice<'a>(
     nav: &LauncherNav,
 ) -> &'a [ArcadeGameEntry] {
     active_system(catalog, nav)
-        .map(|system| catalog.system_game_slice(&system.id))
+        .map(|system| catalog.filtered_game_slice(&system.id, &nav.arcade_filter.active))
         .unwrap_or(&[])
 }
 
@@ -436,6 +476,10 @@ pub(super) struct LauncherBridgeKey {
     confirm_action: Option<launcher::ConfirmAction>,
     confirm_selected: usize,
     arcade_selected: usize,
+    arcade_filter_open: bool,
+    arcade_filter_level: launcher::ArcadeFilterLevel,
+    arcade_filter_selected: usize,
+    arcade_filter_active: arcade_catalog::ArcadeFilter,
 }
 
 impl LauncherBridgeKey {
@@ -449,6 +493,10 @@ impl LauncherBridgeKey {
             confirm_action: nav.confirm_action,
             confirm_selected: nav.confirm_selected,
             arcade_selected: nav.arcade.selected,
+            arcade_filter_open: nav.arcade_filter.drawer_open,
+            arcade_filter_level: nav.arcade_filter.level,
+            arcade_filter_selected: nav.arcade_filter.selected,
+            arcade_filter_active: nav.arcade_filter.active.clone(),
         }
     }
 }

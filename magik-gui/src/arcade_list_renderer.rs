@@ -985,6 +985,9 @@ mod tests {
             preview_asset_key: "".into(),
             has_preview: false,
             system_id: system_id.into(),
+            year: None,
+            manufacturer: "".into(),
+            category: "".into(),
             is_new: false,
         }
     }
