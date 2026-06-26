@@ -599,6 +599,37 @@ mod tests {
     }
 
     #[test]
+    fn launch_during_catalog_validation_is_rejected() {
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.after_boot_splash_presented(
+            StartupCatalogState::Ready {
+                source: CatalogSource::SummaryProjection,
+                validation_scheduled: true,
+            },
+            &mut effects,
+        );
+        effects.clear();
+
+        lifecycle.handle(
+            LauncherLifecycleInput::LaunchRequested {
+                launch_ref: "validating.mra".to_string(),
+            },
+            &mut effects,
+        );
+
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::CatalogReady {
+                source: CatalogSource::SummaryProjection,
+                validating: true,
+            }
+        );
+        assert!(effects.as_slice().is_empty());
+    }
+
+    #[test]
     fn launch_handoff_waits_for_loading_frame() {
         let (mut lifecycle, mut effects) = idle_lifecycle();
 

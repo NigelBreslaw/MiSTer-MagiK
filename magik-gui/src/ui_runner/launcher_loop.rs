@@ -1302,15 +1302,34 @@ pub(super) fn run_launcher_loop(
                         let Some(mra) = event.path else {
                             continue;
                         };
-                        if !scheduler.begin_launch(&nav, &catalog, &mra, Instant::now()) {
+                        if scheduler.launch_is_active() {
                             continue;
                         }
-                        lifecycle.handle(
+                        let lifecycle_step = lifecycle.handle(
                             LauncherLifecycleInput::LaunchRequested {
                                 launch_ref: mra.clone(),
                             },
                             &mut lifecycle_effects,
                         );
+                        if !matches!(
+                            lifecycle_step.state,
+                            LauncherLifecycleState::Launching {
+                                phase: LaunchingPhase::LoadingFramePending { ref launch_ref },
+                            } if launch_ref == &mra
+                        ) {
+                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                            continue;
+                        }
+                        if !scheduler.begin_launch(&nav, &catalog, &mra, Instant::now()) {
+                            lifecycle.handle(
+                                LauncherLifecycleInput::LaunchFailed {
+                                    message: "launch scheduler rejected request".to_string(),
+                                },
+                                &mut lifecycle_effects,
+                            );
+                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                            continue;
+                        }
                         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                         sync_bridge_launcher(
                             &app,
