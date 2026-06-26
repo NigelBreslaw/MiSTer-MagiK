@@ -7,10 +7,12 @@ use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
 use crate::ui_runner::ui_platform::{update_slint_animations, AnimationClock, MisterPlatform};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState};
-use mister_magik_fb::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel};
+use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::VsyncPacer;
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+use slint::platform::software_renderer::{
+    MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
+};
 use slint::{ComponentHandle, PhysicalSize};
 use std::rc::Rc;
 use std::time::Instant;
@@ -63,10 +65,6 @@ impl EffectFill {
             _ => None,
         }
     }
-
-    fn uses_fpga_scaler(self) -> bool {
-        false
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,7 +92,7 @@ impl EffectTarget {
             EffectFill::Double => (size.w.checked_mul(2)?, size.h.checked_mul(2)?, 2),
             EffectFill::Native => (size.w, size.h, 1),
         };
-        if !fill.uses_fpga_scaler() && (physical_w > ui.fb_w() || physical_h > ui.fb_h()) {
+        if physical_w > ui.fb_w() || physical_h > ui.fb_h() {
             return None;
         }
         Some(Self {
@@ -102,16 +100,8 @@ impl EffectTarget {
             physical_y: (ui.fb_h() - physical_h) / 2,
             physical_w,
             physical_h,
-            render_w: if fill.uses_fpga_scaler() {
-                size.w
-            } else {
-                physical_w / ui.fb_scale()
-            },
-            render_h: if fill.uses_fpga_scaler() {
-                size.h
-            } else {
-                physical_h / ui.fb_scale()
-            },
+            render_w: physical_w,
+            render_h: physical_h,
             scale,
         })
     }
@@ -160,7 +150,7 @@ fn parse_effect_bench_args() -> (
     };
     let fill = match args.get(4).map(String::as_str) {
         Some(s) => EffectFill::parse(s).unwrap_or_else(|| {
-            eprintln!("unknown effect fill '{s}' (use full|half|native|fpga-half)");
+            eprintln!("unknown effect fill '{s}' (use full|half|2x|native)");
             std::process::exit(2);
         }),
         None => EffectFill::Full,
@@ -211,13 +201,19 @@ impl EffectBenchTotals {
 }
 
 #[cfg_attr(not(mister_experiments), allow(dead_code))]
-fn scale_effect_to_pixels_fit(
+fn rgb565_from_rgb888_word(pixel: u32) -> Rgb565Pixel {
+    let p = pixel & 0x00ff_ffff;
+    <Rgb565Pixel as TargetPixel>::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8)
+}
+
+#[cfg_attr(not(mister_experiments), allow(dead_code))]
+fn scale_effect_to_rgb565_fit(
     src: &[u32],
     src_w: usize,
     src_h: usize,
     dst_w: usize,
     dst_h: usize,
-    dst: &mut [Pixel],
+    dst: &mut [Rgb565Pixel],
 ) {
     assert!(dst.len() >= dst_w * dst_h);
     if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
@@ -229,8 +225,25 @@ fn scale_effect_to_pixels_fit(
         let dst_row = &mut dst[y * dst_w..(y + 1) * dst_w];
         for (x, p) in dst_row.iter_mut().enumerate() {
             let sx = (x * src_w / dst_w).min(src_w - 1);
-            *p = Pixel(src_row[sx]);
+            *p = rgb565_from_rgb888_word(src_row[sx]);
         }
+    }
+}
+
+#[cfg(mister_experiments)]
+fn present_effect_target(
+    disp: &mut MappedRgb565Framebuffer,
+    target: EffectTarget,
+    pixels: &[Rgb565Pixel],
+) {
+    if let Err(e) = disp.present_rect_565(
+        target.physical_x,
+        target.physical_y,
+        target.render_w,
+        target.render_h,
+        pixels,
+    ) {
+        eprintln!("effect-bench present failed: {e}");
     }
 }
 
@@ -296,8 +309,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
         eprintln!("warning: failed to set FPGA audio volume: {e}");
     }
     println!(
-        "fb routed (support_flag={flag}); native retro effect benchmark fpga_scale={}",
-        fill.uses_fpga_scaler()
+        "fb routed (support_flag={flag}); native retro effect benchmark checked_rgb565_present=true"
     );
 
     let needs_overlay = modes.contains(&EffectBenchMode::Overlay);
@@ -324,7 +336,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
             window,
             app,
             animation_clock,
-            vec![Pixel(0); target.render_w * target.render_h],
+            vec![Rgb565Pixel(0); target.render_w * target.render_h],
         ))
     } else {
         None
@@ -361,7 +373,7 @@ fn run_one_effect_bench(
         Rc<MinimalSoftwareWindow>,
         slint_ui::effect_hud::EffectHud,
         AnimationClock,
-        Vec<Pixel>,
+        Vec<Rgb565Pixel>,
     )>,
     kind: EffectKind,
     mode: EffectBenchMode,
@@ -379,6 +391,7 @@ fn run_one_effect_bench(
     let mut live_start = Instant::now();
     let mut live_frames = 0u64;
     let mut pacer = VsyncPacer::from_env();
+    let mut raw_pixels = vec![Rgb565Pixel(0); target.render_w * target.render_h];
 
     println!(
         "effect bench running {} mode={} fill={} internal={}x{} target={}x{}+{},{} scale={} secs={}...",
@@ -409,14 +422,15 @@ fn run_one_effect_bench(
         match mode {
             EffectBenchMode::Raw => {
                 let c0 = Instant::now();
-                disp.copy_u32_rect_scaled_at(
-                    target.physical_x,
-                    target.physical_y,
-                    target.scale,
+                scale_effect_to_rgb565_fit(
                     low,
                     size.w,
                     size.h,
+                    target.render_w,
+                    target.render_h,
+                    &mut raw_pixels,
                 );
+                present_effect_target(disp, target, &raw_pixels);
                 scale_copy_us = c0.elapsed().as_micros() as u64;
             }
             EffectBenchMode::Overlay => {
@@ -425,7 +439,7 @@ fn run_one_effect_bench(
                     std::process::exit(1);
                 };
                 let c0 = Instant::now();
-                scale_effect_to_pixels_fit(
+                scale_effect_to_rgb565_fit(
                     low,
                     size.w,
                     size.h,
@@ -447,14 +461,7 @@ fn run_one_effect_bench(
                 });
                 slint_us = s0.elapsed().as_micros() as u64;
                 let c1 = Instant::now();
-                disp.copy_rect_scaled_at(
-                    target.physical_x,
-                    target.physical_y,
-                    UiDisplay::for_framebuffer(disp.width(), disp.height()).fb_scale(),
-                    full,
-                    target.render_w,
-                    target.render_h,
-                );
+                present_effect_target(disp, target, full);
                 copy_acc += c1.elapsed().as_micros() as u64;
                 scale_copy_us = copy_acc;
             }
@@ -518,4 +525,94 @@ fn run_one_effect_bench(
         pacer.max_miss_streak(),
         1_000_000.0 / pacer.period_us() as f64
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ui() -> UiDisplay {
+        UiDisplay::for_framebuffer(1920, 1080)
+    }
+
+    #[test]
+    fn effect_target_sizes_cover_supported_fills() {
+        let size = EffectSize { w: 480, h: 270 };
+
+        let full = EffectTarget::new(EffectFill::Full, size, &ui()).expect("full target");
+        assert_eq!(
+            (
+                full.physical_x,
+                full.physical_y,
+                full.physical_w,
+                full.physical_h
+            ),
+            (0, 0, 1920, 1080)
+        );
+        assert_eq!((full.render_w, full.render_h, full.scale), (1920, 1080, 4));
+
+        let half = EffectTarget::new(EffectFill::Half, size, &ui()).expect("half target");
+        assert_eq!(
+            (
+                half.physical_x,
+                half.physical_y,
+                half.physical_w,
+                half.physical_h
+            ),
+            (480, 270, 960, 540)
+        );
+        assert_eq!((half.render_w, half.render_h, half.scale), (960, 540, 2));
+
+        let double = EffectTarget::new(EffectFill::Double, size, &ui()).expect("2x target");
+        assert_eq!(
+            (
+                double.physical_x,
+                double.physical_y,
+                double.physical_w,
+                double.physical_h
+            ),
+            (480, 270, 960, 540)
+        );
+        assert_eq!(
+            (double.render_w, double.render_h, double.scale),
+            (960, 540, 2)
+        );
+
+        let native = EffectTarget::new(EffectFill::Native, size, &ui()).expect("native target");
+        assert_eq!(
+            (
+                native.physical_x,
+                native.physical_y,
+                native.physical_w,
+                native.physical_h
+            ),
+            (720, 405, 480, 270)
+        );
+        assert_eq!(
+            (native.render_w, native.render_h, native.scale),
+            (480, 270, 1)
+        );
+    }
+
+    #[test]
+    fn scale_effect_to_rgb565_fit_converts_and_scales_pixels() {
+        let src = [0x00ff0000, 0x0000ff00, 0x000000ff, 0x00ffffff];
+        let mut dst = [Rgb565Pixel(0); 8];
+
+        scale_effect_to_rgb565_fit(&src, 2, 2, 4, 2, &mut dst);
+
+        assert_eq!(
+            dst,
+            [
+                rgb565_from_rgb888_word(0x00ff0000),
+                rgb565_from_rgb888_word(0x00ff0000),
+                rgb565_from_rgb888_word(0x0000ff00),
+                rgb565_from_rgb888_word(0x0000ff00),
+                rgb565_from_rgb888_word(0x000000ff),
+                rgb565_from_rgb888_word(0x000000ff),
+                rgb565_from_rgb888_word(0x00ffffff),
+                rgb565_from_rgb888_word(0x00ffffff),
+            ]
+        );
+    }
 }

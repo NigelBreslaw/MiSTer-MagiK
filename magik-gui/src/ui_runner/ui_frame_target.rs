@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn frame_target_geometry(ui: &UiDisplay) -> FramebufferTargetGeometry {
-    FramebufferTargetGeometry::new(ui.render_w(), ui.render_h(), ui.fb_scale())
+    FramebufferTargetGeometry::new(ui.render_w(), ui.render_h())
 }
 
 pub(super) fn launcher_dirty_opt_enabled() -> bool {

@@ -291,7 +291,7 @@ pub(super) fn present_launcher_startup_frame(
     }
 
     let copy_t = Instant::now();
-    target.present_rows(disp, frame_target_geometry(ui), 0, ui.render_h());
+    target.present_rows(disp, 0, ui.render_h());
     print_startup_event(
         start,
         "startup_splash_presented",
@@ -940,7 +940,7 @@ pub(super) fn run_launcher_loop(
                     if let Some(rect) = recovery_rect {
                         let _ = target.present_rect(disp, frame_target_geometry(ui), rect);
                     } else {
-                        target.present_rows(disp, frame_target_geometry(ui), 0, ui.render_h());
+                        target.present_rows(disp, 0, ui.render_h());
                     }
                     let recovery_presented = Instant::now();
                     window.request_redraw();
@@ -1147,12 +1147,7 @@ pub(super) fn run_launcher_loop(
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(
-                                    disp,
-                                    frame_target_geometry(ui),
-                                    0,
-                                    ui.render_h(),
-                                );
+                                target.present_rows(disp, 0, ui.render_h());
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
                                     Err(e) => {
@@ -1191,12 +1186,7 @@ pub(super) fn run_launcher_loop(
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(
-                                    disp,
-                                    frame_target_geometry(ui),
-                                    0,
-                                    ui.render_h(),
-                                );
+                                target.present_rows(disp, 0, ui.render_h());
                                 std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
@@ -1228,12 +1218,7 @@ pub(super) fn run_launcher_loop(
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(
-                                    disp,
-                                    frame_target_geometry(ui),
-                                    0,
-                                    ui.render_h(),
-                                );
+                                target.present_rows(disp, 0, ui.render_h());
                                 std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
@@ -1328,7 +1313,7 @@ pub(super) fn run_launcher_loop(
                             let _ = region;
                         });
                         let _pace = pacer.wait();
-                        target.present_rows(disp, frame_target_geometry(ui), 0, ui.render_h());
+                        target.present_rows(disp, 0, ui.render_h());
                         let loading_presented = Instant::now();
                         lifecycle
                             .loading_frame_presented(loading_presented, &mut lifecycle_effects);

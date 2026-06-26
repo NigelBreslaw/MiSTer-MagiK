@@ -1,8 +1,6 @@
 use crate::framebuffer::format::production_label;
-use crate::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel};
-use slint::platform::software_renderer::{
-    PhysicalRegion, Rgb565Pixel, SoftwareRenderer, TargetPixel,
-};
+use crate::framebuffer::mapped::MappedRgb565Framebuffer;
+use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
 
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
@@ -282,16 +280,11 @@ pub fn dirty_rect_from_bounds(
 pub struct FramebufferTargetGeometry {
     render_w: usize,
     render_h: usize,
-    fb_scale: usize,
 }
 
 impl FramebufferTargetGeometry {
-    pub fn new(render_w: usize, render_h: usize, fb_scale: usize) -> Self {
-        Self {
-            render_w,
-            render_h,
-            fb_scale,
-        }
+    pub fn new(render_w: usize, render_h: usize) -> Self {
+        Self { render_w, render_h }
     }
 
     pub fn render_w(self) -> usize {
@@ -300,10 +293,6 @@ impl FramebufferTargetGeometry {
 
     pub fn render_h(self) -> usize {
         self.render_h
-    }
-
-    pub fn fb_scale(self) -> usize {
-        self.fb_scale
     }
 
     pub fn full_rect(self) -> DirtyRect {
@@ -324,12 +313,10 @@ fn log_present_error(context: &str, err: &dyn std::fmt::Display) {
 
 pub fn copy_cached_rows_565(
     disp: &mut MappedRgb565Framebuffer,
-    geometry: FramebufferTargetGeometry,
     cached: &[Rgb565Pixel],
     y0: usize,
     y1: usize,
 ) {
-    debug_assert_eq!(geometry.fb_scale(), 1);
     if let Err(e) = disp.present_rows_565(cached, y0, y1) {
         log_present_error("rows", &e);
     }
@@ -342,10 +329,9 @@ pub fn copy_cached_rect_565(
     rect: DirtyRect,
 ) {
     if rect.is_full_width(geometry.render_w()) || dirty_rect_is_broad(rect, geometry.render_w()) {
-        copy_cached_rows_565(disp, geometry, cached, rect.y0, rect.y1);
+        copy_cached_rows_565(disp, cached, rect.y0, rect.y1);
         return;
     }
-    debug_assert_eq!(geometry.fb_scale(), 1);
     if let Err(e) = disp.present_rect_565_strided(
         rect.x0,
         rect.y0,
@@ -358,14 +344,6 @@ pub fn copy_cached_rect_565(
     ) {
         log_present_error("rect", &e);
     }
-}
-
-pub fn pixel_to_rgb(pixel: Pixel) -> (u8, u8, u8) {
-    (
-        ((pixel.0 >> 16) & 0xff) as u8,
-        ((pixel.0 >> 8) & 0xff) as u8,
-        (pixel.0 & 0xff) as u8,
-    )
 }
 
 pub fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
@@ -466,41 +444,13 @@ impl UiFrameTarget {
         }
     }
 
-    pub fn blit_pixel_rect(
-        &mut self,
-        geometry: FramebufferTargetGeometry,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Pixel],
-    ) -> DirtyRect {
-        let w = w.min(geometry.render_w().saturating_sub(x));
-        let h = h.min(geometry.render_h().saturating_sub(y));
-        for yy in 0..h {
-            let dst = (y + yy) * geometry.render_w() + x;
-            let src_idx = yy * w;
-            for xx in 0..w {
-                let rgb = pixel_to_rgb(src[src_idx + xx]);
-                self.cached[dst + xx] = <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
-            }
-        }
-        DirtyRect {
-            x0: x,
-            y0: y,
-            x1: x + w,
-            y1: y + h,
-        }
-    }
-
     pub fn present_rows(
         &mut self,
         disp: &mut MappedRgb565Framebuffer,
-        geometry: FramebufferTargetGeometry,
         y0: usize,
         y1: usize,
     ) -> u32 {
-        copy_cached_rows_565(disp, geometry, &self.cached, y0, y1);
+        copy_cached_rows_565(disp, &self.cached, y0, y1);
         y1.saturating_sub(y0) as u32
     }
 

@@ -10,7 +10,6 @@ pub struct DisplayConfig {
     pub fpga_fb: FbParams,
     pub render_w: usize,
     pub render_h: usize,
-    pub fb_scale: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -40,25 +39,23 @@ impl DisplayConfig {
             fpga_fb: f.read_fb_params()?,
             render_w: ui.render_w(),
             render_h: ui.render_h(),
-            fb_scale: ui.fb_scale(),
         })
     }
 
     pub fn log_line(self) -> String {
         format!(
-            "display-config: {}; {}; {}; render={}x{} fb_scale={}",
+            "display-config: {}; {}; {}; render={}x{}",
             self.fb.log_line(),
             self.video.log_line(),
             self.fpga_fb.log_line(),
             self.render_w,
-            self.render_h,
-            self.fb_scale
+            self.render_h
         )
     }
 
     pub fn boot_analytics_detail(self) -> String {
         format!(
-            "fb_visible={}x{} fb_virtual={}x{} fb_stride={} fb_bpp={} uio_vres={}x{} uio_pixrep={} uio_de={}x{} uio_fb={}x{} uio_fb_enabled={} render={}x{} fb_scale={}",
+            "fb_visible={}x{} fb_virtual={}x{} fb_stride={} fb_bpp={} uio_vres={}x{} uio_pixrep={} uio_de={}x{} uio_fb={}x{} uio_fb_enabled={} render={}x{}",
             self.fb.visible_w,
             self.fb.visible_h,
             self.fb.virtual_w,
@@ -74,8 +71,7 @@ impl DisplayConfig {
             self.fpga_fb.fb_height,
             self.fpga_fb.fb_enabled,
             self.render_w,
-            self.render_h,
-            self.fb_scale
+            self.render_h
         )
     }
 }

@@ -40,7 +40,7 @@ usage() {
   echo ""
   echo "Options: --device  --skip-build  --skip-device  --replace-label"
   echo "         --scene-secs N  --effect NAME|all  --mode raw|overlay|both"
-  echo "         --size WIDTHxHEIGHT  --fill native|2x|half|full|fpga-half  --matrix default|scale-sweep|full  -h"
+  echo "         --size WIDTHxHEIGHT  --fill native|2x|half|full  --matrix default|scale-sweep|full  -h"
   exit "${1:-0}"
 }
 
@@ -227,9 +227,6 @@ cat /tmp/effect-bench-ui.log
   if [[ -n "$result" ]]; then
     local _tag result_label result_effect result_mode result_fill internal scale frames fps effect_us slint_us scale_copy_us vsync_us wall_us
     IFS=$'\t' read -r _tag result_label result_effect result_mode result_fill internal scale frames fps effect_us slint_us scale_copy_us vsync_us wall_us <<<"$result"
-    if [[ "$result_fill" == "fpga-half" ]]; then
-      notes="${notes:+$notes; }fpga-scale; capture=${capture_w}x${capture_h}"
-    fi
     append_row "$result_effect" "$result_mode" "$result_fill" "$internal" "$scale" "$frames" "$fps" \
       "$effect_us" "$slint_us" "$scale_copy_us" "$vsync_us" "$wall_us" \
       "${cpu_mean:-}" "${cpu_max:-}" "${rss_kb:-}" "$visual_ok" "$notes"

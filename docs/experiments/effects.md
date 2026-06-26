@@ -18,6 +18,11 @@ transition, and the minimal runtime command surface. Experiment builds add:
 - expanded preview transition variants under
   `scripts/experiments/preview/profile-preview-transition-mega.sh`
 
+`effect-bench` supports `native`, `2x`, `half`, and `full` fill modes. All
+modes now prepare RGB565 scratch pixels and present through the checked
+framebuffer APIs; there is no direct raw/scaled framebuffer copy path or FPGA
+scaler fill mode to preserve.
+
 Build and deploy an experiment-enabled binary before running these tools:
 
 ```bash
