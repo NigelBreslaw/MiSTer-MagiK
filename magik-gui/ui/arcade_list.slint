@@ -66,13 +66,6 @@ export component ArcadeListScreen inherits Rectangle {
                     alignment: center;
                     spacing: 10px * root.s;
 
-                    Text {
-                        text: "Loading games...";
-                        color: #e8e0f0;
-                        font-size: 12px * root.s;
-                        horizontal-alignment: center;
-                    }
-
                     Rectangle {
                         width: 180px * root.s;
                         height: 4px * root.s;
@@ -119,19 +112,6 @@ export component ArcadeListScreen inherits Rectangle {
                     height: root.cabinet-screen-height;
                     clip: true;
                 }
-            }
-
-            Text {
-                x: 8px * s;
-                y: parent.height - 22px * s;
-                width: parent.width - 16px * s;
-                height: 14px * s;
-                visible: MisterBridge.arcade-preview-run-label != "";
-                text: MisterBridge.arcade-preview-run-label;
-                color: #d8d0e8;
-                font-size: 8px * s;
-                horizontal-alignment: center;
-                vertical-alignment: center;
             }
         }
     }
