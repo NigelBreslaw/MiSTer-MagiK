@@ -173,6 +173,8 @@ archive. When a matching `.mmlz4b.idx` sidecar is present and the archive is not
 yet in RAM, selected and prefetch preview requests may use `index_pread` to
 seek directly to one compressed entry, then trigger background full-pack loading.
 Once the full pack is loaded, steady-state requests return to `archive_mem`.
+Invalid index data is ignored for correctness and reported as a fast-lane miss
+before falling back to the full archive loader.
 There is no runtime fallback to PNG/JPG sources or individual `.rgb565` files.
 The arcade pack measured on the MiSTer at 34,623,433 bytes takes multiple
 seconds to cold-read from `/media/fat` into RAM, so first-preview claims must

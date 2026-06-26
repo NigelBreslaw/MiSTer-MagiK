@@ -1444,14 +1444,23 @@ fn read_preview_archive_sidecar_index(
                 index_path.display()
             ));
         }
-        entries.insert(
-            name.to_ascii_lowercase(),
-            PreviewArchiveEntry {
-                raw_len,
-                compressed_len,
-                offset,
-            },
-        );
+        let key = name.to_ascii_lowercase();
+        if entries
+            .insert(
+                key.clone(),
+                PreviewArchiveEntry {
+                    raw_len,
+                    compressed_len,
+                    offset,
+                },
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "{}: duplicate preview archive index entry {key}",
+                index_path.display()
+            ));
+        }
     }
     Ok(PreviewArchiveSidecarIndex { entries })
 }
@@ -2060,6 +2069,33 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    #[test]
+    fn duplicate_preview_index_entries_fall_back_to_archive_mem() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-duplicate-{}.mmlz4b",
+            std::process::id()
+        ));
+        let payload = raw565_fixture(1, 1, &[0xf800]);
+        write_lz4_block_archive(&path, "tiny.rgb565", &payload);
+        write_duplicate_lz4_block_archive_index(&path, "tiny.rgb565", payload.len());
+        let mut scratch = PreviewArchiveScratch::default();
+
+        let loaded = load_preview_pixels(
+            &path.display().to_string(),
+            "tiny",
+            &mut scratch,
+            PreviewResizeSpec {
+                filter: PreviewResizeFilter::Hybrid,
+                max_w: 320,
+                max_h: 320,
+            },
+        )
+        .expect("fall back to full archive for duplicate index entries");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
+        let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn auto_preview_archive_uses_assets_arcade_pack() {
@@ -2499,6 +2535,25 @@ mod tests {
         index.extend_from_slice(name.as_bytes());
         std::fs::write(preview_archive_sidecar_path(path), index)
             .expect("write lz4 block archive index fixture");
+    }
+
+    fn write_duplicate_lz4_block_archive_index(path: &Path, name: &str, payload_len: usize) {
+        let archive_bytes = std::fs::metadata(path).unwrap().len();
+        let archive_payload_offset = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX01\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&2u32.to_le_bytes());
+        for _ in 0..2 {
+            index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            index.extend_from_slice(&(payload_len as u32).to_le_bytes());
+            index.extend_from_slice(&((payload_len + 1) as u32).to_le_bytes());
+            index.extend_from_slice(&(archive_payload_offset as u64).to_le_bytes());
+            index.extend_from_slice(name.as_bytes());
+        }
+        std::fs::write(preview_archive_sidecar_path(path), index)
+            .expect("write duplicate lz4 block archive index fixture");
     }
 
     fn write_lz4_block_archive_with_lengths(
