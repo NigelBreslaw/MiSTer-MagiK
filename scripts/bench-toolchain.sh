@@ -357,7 +357,6 @@ function value_after(line, key, rest) {
 /^slint-scale=/ {
   render = value_after($0, "render=")
   fb = value_after($0, "fb=")
-  fb_scale = value_after($0, "fb_scale=")
 }
 /^slint-render-mode=/ {
   render_mode = value_after($0, "slint-render-mode=")
@@ -387,7 +386,6 @@ END {
   add_note("physical_mode", physical)
   add_note("fb_size", fb0 != "" ? fb0 : fb)
   add_note("render_size", render)
-  add_note("fb_scale", fb_scale)
   add_note("ui_render_mode", render_mode)
   add_note("frame_order", frame_order)
   add_note("pixel_repetition", pixel_repetition)

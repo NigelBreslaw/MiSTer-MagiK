@@ -274,13 +274,9 @@ impl UiDisplay {
         self.direct_video
     }
 
-    pub fn fb_scale(&self) -> usize {
-        1
-    }
-
     pub fn log_line(&self) -> String {
         format!(
-            "slint-scale={SLINT_UI_SCALE} render={}x{} fb={}x{} output={}x{} scan={}x{} fb_scale={} direct_video={}",
+            "slint-scale={SLINT_UI_SCALE} render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={}",
             self.render_w(),
             self.render_h(),
             self.fb_w,
@@ -289,7 +285,6 @@ impl UiDisplay {
             self.output_h,
             self.scan_w,
             self.scan_h,
-            self.fb_scale(),
             self.direct_video
         )
     }
@@ -423,7 +418,6 @@ mod tests {
         let ui = UiDisplay::for_plan(plan);
         assert_eq!(ui.render_w(), 960);
         assert_eq!(ui.render_h(), 540);
-        assert_eq!(ui.fb_scale(), 1);
     }
 
     #[test]

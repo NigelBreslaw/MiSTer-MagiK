@@ -9,8 +9,6 @@
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
 use crate::boot_analytics;
-#[cfg(mister_experiments)]
-use crate::camera_effects::CameraPixel;
 use crate::framebuffer::format::{
     fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line, rgb565_mode_line,
     rgb565_stride_bytes, RGB565_BITS_PER_PIXEL,
@@ -227,6 +225,35 @@ impl FbFixScreeninfo {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FramebufferMapValidationError {
+    InvalidStride {
+        actual_stride_bytes: usize,
+        expected_stride_bytes: usize,
+    },
+    MapTooShort {
+        smem_len: usize,
+        map_len: usize,
+    },
+}
+
+impl std::fmt::Display for FramebufferMapValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidStride {
+                actual_stride_bytes,
+                expected_stride_bytes,
+            } => write!(
+                f,
+                "fb0 stride is {actual_stride_bytes} bytes, need {expected_stride_bytes}"
+            ),
+            Self::MapTooShort { smem_len, map_len } => {
+                write!(f, "fb0 memory length is {smem_len} bytes, need {map_len}")
+            }
+        }
+    }
+}
+
 fn fb_info_from(
     var_ok: bool,
     var: &FbVarScreeninfo,
@@ -278,6 +305,30 @@ fn visible_pixels_exceed_limit(w: usize, h: usize) -> bool {
         Some(pixels) => pixels > MAX_FRAMEBUFFER_PIXELS,
         None => true,
     }
+}
+
+fn validate_fix_screeninfo_for_map(
+    fix_ok: bool,
+    fix: &FbFixScreeninfo,
+    expected_stride_bytes: usize,
+    map_len: usize,
+) -> Result<(), FramebufferMapValidationError> {
+    if !fix_ok {
+        return Ok(());
+    }
+    if fix.line_length != 0 && fix.line_length as usize != expected_stride_bytes {
+        return Err(FramebufferMapValidationError::InvalidStride {
+            actual_stride_bytes: fix.line_length as usize,
+            expected_stride_bytes,
+        });
+    }
+    if fix.smem_len != 0 && (fix.smem_len as usize) < map_len {
+        return Err(FramebufferMapValidationError::MapTooShort {
+            smem_len: fix.smem_len as usize,
+            map_len,
+        });
+    }
+    Ok(())
 }
 
 impl MappedRgb565Framebuffer {
@@ -445,16 +496,10 @@ impl MappedRgb565Framebuffer {
             }
         }
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
-        if fix_ok {
-            if fix.line_length != 0 && fix.line_length as usize != expected_stride_bytes {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "fb0 stride is {} bytes, need {expected_stride_bytes}",
-                        fix.line_length
-                    ),
-                ));
-            }
+        if let Err(e) =
+            validate_fix_screeninfo_for_map(fix_ok, &fix, expected_stride_bytes, map_len)
+        {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
         }
         let info = fb_info_from(var_ok, &var, fix_ok, &fix, w, h);
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
@@ -566,29 +611,6 @@ impl MappedRgb565Framebuffer {
         present_rows_565_to(dst, fb_w, fb_h, dst_stride, src, y0, y1)
     }
 
-    #[cfg(mister_experiments)]
-    pub fn copy_rows_camera_565(&mut self, src: &[CameraPixel], y0: usize, y1: usize) {
-        let w = self.w;
-        let dst_stride = self.stride_pixels;
-        let y0 = y0.min(self.h);
-        let y1 = y1.min(self.h);
-        let dst = self.buffer_565_mut();
-        for y in y0..y1 {
-            let src_a = y * w;
-            let dst_a = y * dst_stride;
-            let copy_w = w.min(src.len().saturating_sub(src_a));
-            if copy_w == 0 || dst_a + copy_w > dst.len() {
-                break;
-            }
-            for (dst, src) in dst[dst_a..dst_a + copy_w]
-                .iter_mut()
-                .zip(src[src_a..src_a + copy_w].iter())
-            {
-                *dst = Rgb565Pixel(src.0);
-            }
-        }
-    }
-
     pub fn present_rect_565(
         &mut self,
         x: usize,
@@ -640,109 +662,6 @@ impl MappedRgb565Framebuffer {
             }
         }
         status
-    }
-
-    /// Copy a dense source rectangle into the framebuffer at (x,y).
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
-    pub fn copy_rect_from(&mut self, x: usize, y: usize, w: usize, h: usize, src: &[Pixel]) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        let dst_stride = self.stride_pixels;
-        let x1 = (x + w).min(self.w);
-        let y1 = (y + h).min(self.h);
-        if x >= x1 || y >= y1 {
-            return;
-        }
-        let copy_w = x1 - x;
-        let copy_h = y1 - y;
-        let dst = self.buffer_565_mut();
-        for row in 0..copy_h {
-            let src_a = row * w;
-            let dst_a = (y + row) * dst_stride + x;
-            for (dst, src) in dst[dst_a..dst_a + copy_w]
-                .iter_mut()
-                .zip(&src[src_a..src_a + copy_w])
-            {
-                *dst = pixel_to_rgb565(*src);
-            }
-        }
-    }
-
-    /// Copy a logical source rectangle into an arbitrary framebuffer location,
-    /// nearest-neighbour scaled by `scale`.
-    #[allow(dead_code)]
-    pub fn copy_rect_scaled_at(
-        &mut self,
-        dst_x: usize,
-        dst_y: usize,
-        scale: usize,
-        src: &[Pixel],
-        src_w: usize,
-        src_h: usize,
-    ) {
-        if scale <= 1 {
-            self.copy_rect_from(dst_x, dst_y, src_w, src_h, src);
-            return;
-        }
-        let dst_w = self.w;
-        let dst_h = self.h;
-        let dst_stride = self.stride_pixels;
-        let dst = self.buffer_565_mut();
-        for sy in 0..src_h {
-            for yy in 0..scale {
-                let dy = dst_y + sy * scale + yy;
-                if dy >= dst_h {
-                    continue;
-                }
-                for sx in 0..src_w {
-                    let color = pixel_to_rgb565(src[sy * src_w + sx]);
-                    for xx in 0..scale {
-                        let dx = dst_x + sx * scale + xx;
-                        if dx < dst_w {
-                            dst[dy * dst_stride + dx] = color;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn copy_u32_rect_scaled_at(
-        &mut self,
-        dst_x: usize,
-        dst_y: usize,
-        scale: usize,
-        src: &[u32],
-        src_w: usize,
-        src_h: usize,
-    ) {
-        if scale == 0 || src_w == 0 || src_h == 0 {
-            return;
-        }
-        let dst_w = self.w;
-        let dst_h = self.h;
-        let dst_stride = self.stride_pixels;
-        let dst = self.buffer_565_mut();
-        for sy in 0..src_h {
-            for yy in 0..scale {
-                let dy = dst_y + sy * scale + yy;
-                if dy >= dst_h {
-                    continue;
-                }
-                for sx in 0..src_w {
-                    let pixel = Pixel(src[sy * src_w + sx]);
-                    let color = pixel_to_rgb565(pixel);
-                    for xx in 0..scale {
-                        let dx = dst_x + sx * scale + xx;
-                        if dx < dst_w {
-                            dst[dy * dst_stride + dx] = color;
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -947,6 +866,14 @@ mod tests {
         }
     }
 
+    fn fix_info(line_length: u32, smem_len: u32) -> FbFixScreeninfo {
+        FbFixScreeninfo {
+            line_length,
+            smem_len,
+            ..FbFixScreeninfo::zeroed()
+        }
+    }
+
     #[test]
     fn mode_line_preserves_rgb565_framebuffer_mode() {
         assert_eq!(fb_info(16, 1920).mode_line(), "565 1 960 540 1920");
@@ -1106,6 +1033,52 @@ mod tests {
                 needed: 16,
                 actual: 15
             }
+        );
+    }
+
+    #[test]
+    fn fix_info_validation_accepts_unreported_memory_length() {
+        let fix = fix_info(1920, 0);
+
+        assert_eq!(
+            validate_fix_screeninfo_for_map(true, &fix, 1920, 1920 * 540),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn fix_info_validation_accepts_sufficient_memory_length() {
+        let fix = fix_info(1920, 1920 * 540);
+
+        assert_eq!(
+            validate_fix_screeninfo_for_map(true, &fix, 1920, 1920 * 540),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn fix_info_validation_rejects_short_memory_length() {
+        let fix = fix_info(1920, 1024);
+
+        assert_eq!(
+            validate_fix_screeninfo_for_map(true, &fix, 1920, 1920 * 540),
+            Err(FramebufferMapValidationError::MapTooShort {
+                smem_len: 1024,
+                map_len: 1920 * 540,
+            })
+        );
+    }
+
+    #[test]
+    fn fix_info_validation_rejects_stride_mismatch() {
+        let fix = fix_info(3840, 3840 * 540);
+
+        assert_eq!(
+            validate_fix_screeninfo_for_map(true, &fix, 1920, 1920 * 540),
+            Err(FramebufferMapValidationError::InvalidStride {
+                actual_stride_bytes: 3840,
+                expected_stride_bytes: 1920,
+            })
         );
     }
 }

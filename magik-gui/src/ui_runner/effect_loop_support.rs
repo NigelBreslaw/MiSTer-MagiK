@@ -1,6 +1,8 @@
 use super::*;
 use crate::preview_worker;
 use mister_magik_fb::camera_effects::{CameraImage, CameraPixel};
+use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
+use slint::platform::software_renderer::Rgb565Pixel;
 use std::fs::File;
 use std::io::Write;
 
@@ -78,6 +80,22 @@ pub(super) fn env_truthy(name: &str) -> bool {
             .as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+pub(super) fn present_camera_pixels_565(
+    disp: &mut MappedRgb565Framebuffer,
+    src: &[CameraPixel],
+    scratch: &mut [Rgb565Pixel],
+    y0: usize,
+    y1: usize,
+) {
+    debug_assert!(scratch.len() >= src.len());
+    for (dst, src) in scratch.iter_mut().zip(src.iter()) {
+        *dst = Rgb565Pixel(src.0);
+    }
+    if let Err(e) = disp.present_rows_565(scratch, y0, y1) {
+        eprintln!("effect present failed: {e}");
+    }
 }
 
 pub(super) fn create_trace(

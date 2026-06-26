@@ -1,6 +1,7 @@
 use super::effect_loop_support::{
     arcade_root_from_env, cache_cap_from_env, create_trace, env_truthy, load_effect_images,
-    parse_effects_env, process_cpu_us, segment_from_env, selected_effect,
+    parse_effects_env, present_camera_pixels_565, process_cpu_us, segment_from_env,
+    selected_effect,
 };
 use super::*;
 use crate::input::PadPool;
@@ -104,6 +105,7 @@ pub(super) fn run_transition_effects_loop(
     let mut repeat = RepeatNav::default();
     let mut selected_idx = 0usize;
     let mut backbuffer = vec![CameraPixel(0); ui.render_w() * ui.render_h()];
+    let mut present_buffer = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
     let mut render_state = TransitionEffectRenderState::new(ui.render_w(), ui.render_h());
     let mut pacer = VsyncPacer::from_env();
     let start = Instant::now();
@@ -178,7 +180,7 @@ pub(super) fn run_transition_effects_loop(
 
         let vsync = pacer.wait();
         let present_start = Instant::now();
-        disp.copy_rows_camera_565(&backbuffer, 0, ui.render_h());
+        present_camera_pixels_565(disp, &backbuffer, &mut present_buffer, 0, ui.render_h());
         let present_us = present_start.elapsed().as_micros() as u64;
         let wall_us = frame_start.elapsed().as_micros() as u64;
         let cpu_us = process_cpu_us().saturating_sub(cpu_start);
