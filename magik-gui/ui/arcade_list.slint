@@ -4,6 +4,7 @@ import { MisterBridge } from "mister_bridge.slint";
 export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
     property <int> count: MisterBridge.active-system-count;
+    property <bool> games-loading: MisterBridge.arcade-games-loading;
     property <length> cabinet-width: 336px * s;
     property <length> cabinet-height: 520px * s;
     property <length> cabinet-screen-x: 8px * s;
@@ -47,6 +48,39 @@ export component ArcadeListScreen inherits Rectangle {
                 border-width: 1px;
                 border-color: #352848;
                 clip: true;
+            }
+
+            Rectangle {
+                x: MisterBridge.arcade-list-x * 1px * s;
+                y: MisterBridge.arcade-list-y * 1px * s;
+                width: MisterBridge.arcade-list-width * 1px * s;
+                height: MisterBridge.arcade-list-height * 1px * s;
+                visible: root.games-loading || self.opacity > 0;
+                opacity: root.games-loading ? 1 : 0;
+                background: #120d1a;
+                border-width: 1px;
+                border-color: #352848;
+                animate opacity { duration: 180ms; }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 10px * root.s;
+
+                    Text {
+                        text: "Loading games...";
+                        color: #e8e0f0;
+                        font-size: 12px * root.s;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 180px * root.s;
+                        height: 4px * root.s;
+                        background: #1a1424;
+                        border-width: 1px;
+                        border-color: #5c4a72;
+                    }
+                }
             }
 
             Rectangle {

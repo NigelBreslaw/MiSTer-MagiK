@@ -637,6 +637,8 @@ pub(super) fn run_launcher_loop(
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let bridge_systems_t = Instant::now();
+    let mut arcade_screen_pending =
+        arcade_catalog_required_at_start && !arcade_navigation_ready(catalog_ready, &catalog);
     bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version));
     print_startup_event(
         start,
@@ -725,11 +727,12 @@ pub(super) fn run_launcher_loop(
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
-    let run_start = if arcade_catalog_required_at_start && catalog_ready {
-        Instant::now()
-    } else {
-        start
-    };
+    let run_start =
+        if arcade_catalog_required_at_start && arcade_navigation_ready(catalog_ready, &catalog) {
+            Instant::now()
+        } else {
+            start
+        };
     launcher_bench_next_step = run_start;
     let preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
     let mut first_render_logged = false;
@@ -954,8 +957,24 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        if arcade_screen_pending && arcade_navigation_ready(catalog_ready, &catalog) {
+            let before = LauncherBridgeKey::from_nav(&nav);
+            nav.screen = Screen::Arcade;
+            arcade_screen_pending = false;
+            full_bridge_dirty = true;
+            let after = LauncherBridgeKey::from_nav(&nav);
+            if before != after {
+                media_session.note_nav_change(&before, &after, Instant::now());
+            }
+        }
+
         if let Some(scenario) = launcher_bench_scenario {
-            if catalog_ready && launcher_bench_waiting_for_initial_preview {
+            let catalog_ready_for_bench = if scenario.starts_on_arcade() {
+                arcade_navigation_ready(catalog_ready, &catalog)
+            } else {
+                catalog_ready
+            };
+            if catalog_ready_for_bench && launcher_bench_waiting_for_initial_preview {
                 let cache_state = preview.trace_cache_state();
                 if launcher_bench_initial_preview_ready(scenario, cache_state) {
                     launcher_bench_waiting_for_initial_preview = false;
@@ -967,7 +986,7 @@ pub(super) fn run_launcher_loop(
                     );
                 }
             }
-            if catalog_ready
+            if catalog_ready_for_bench
                 && !launcher_bench_waiting_for_initial_preview
                 && launcher_bench_next_step.elapsed() >= scenario.period()
             {
@@ -997,7 +1016,7 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        if let Some(screen) = lock_screen {
+        if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
             nav.screen = screen;
         }
 
@@ -1339,7 +1358,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
 
-            if let Some(screen) = lock_screen {
+            if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
                 nav.screen = screen;
             }
 
@@ -1484,8 +1503,16 @@ pub(super) fn run_launcher_loop(
         } else {
             &[]
         };
+        let active_arcade_games_loading = !launching
+            && nav.screen == Screen::Arcade
+            && active_system_games_loading(&catalog, &nav);
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
-        if dirty_opt && !preview_scheduled_this_loop && !launching && nav.screen == Screen::Arcade {
+        if dirty_opt
+            && !preview_scheduled_this_loop
+            && !launching
+            && nav.screen == Screen::Arcade
+            && !active_arcade_games_loading
+        {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if schedule_arcade_preview_window(
                 &bridge,
@@ -1518,17 +1545,18 @@ pub(super) fn run_launcher_loop(
         let custom_draw_start = Instant::now();
         let full_frame_present = should_present_full_frame(launching, route_action);
         let arcade_list_update_start = Instant::now();
-        let arcade_list_rect = if !launching && nav.screen == Screen::Arcade {
-            let force_arcade_redraw =
-                arcade_list_needs_forced_redraw(this_rect, full_frame_present);
-            arcade_list_renderer.draw(
-                active_arcade_games,
-                nav.arcade.visual_index,
-                force_arcade_redraw,
-            )
-        } else {
-            None
-        };
+        let arcade_list_rect =
+            if !launching && nav.screen == Screen::Arcade && !active_arcade_games_loading {
+                let force_arcade_redraw =
+                    arcade_list_needs_forced_redraw(this_rect, full_frame_present);
+                arcade_list_renderer.draw(
+                    active_arcade_games,
+                    nav.arcade.visual_index,
+                    force_arcade_redraw,
+                )
+            } else {
+                None
+            };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
         let (raw_preview_rect, preview_transition_trace) = layer_target.blit_raw_preview_if_needed(
@@ -2060,6 +2088,25 @@ fn initial_catalog_scan_visible(
     catalog_worker_enabled && (foreground_update || !catalog_ready)
 }
 
+fn arcade_catalog_rows_ready(catalog: &ArcadeCatalog) -> bool {
+    !catalog.games.is_empty() || catalog.systems.iter().all(|system| system.count == 0)
+}
+
+fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool {
+    catalog_ready && arcade_catalog_rows_ready(catalog)
+}
+
+fn effective_lock_screen(
+    lock_screen: Option<Screen>,
+    catalog_ready: bool,
+    catalog: &ArcadeCatalog,
+) -> Option<Screen> {
+    match lock_screen {
+        Some(Screen::Arcade) if !arcade_navigation_ready(catalog_ready, catalog) => None,
+        other => other,
+    }
+}
+
 fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> CatalogWorkerRequest {
     if refresh_policy == CatalogRefreshPolicy::Off {
         CatalogWorkerRequest::LoadOnly
@@ -2145,6 +2192,40 @@ mod tests {
             })
             .collect();
         ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), systems)
+    }
+
+    #[test]
+    pub(super) fn summary_projection_is_not_ready_for_arcade_navigation() {
+        let catalog = summary_catalog_for_media_systems(&["arcade", "amiga"]);
+
+        assert!(active_system_games_loading(&catalog, &LauncherNav::new()));
+        assert!(!arcade_catalog_rows_ready(&catalog));
+        assert!(!arcade_navigation_ready(true, &catalog));
+        assert_eq!(
+            effective_lock_screen(Some(Screen::Arcade), true, &catalog),
+            None
+        );
+    }
+
+    #[test]
+    pub(super) fn full_catalog_is_ready_for_arcade_navigation() {
+        let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
+
+        assert!(arcade_catalog_rows_ready(&catalog));
+        assert!(arcade_navigation_ready(true, &catalog));
+        assert_eq!(
+            effective_lock_screen(Some(Screen::Arcade), true, &catalog),
+            Some(Screen::Arcade)
+        );
+    }
+
+    #[test]
+    pub(super) fn genuinely_empty_catalog_rows_are_not_pending_summary_rows() {
+        let catalog = empty_arcade_catalog("/media/fat/_Arcade");
+
+        assert!(!active_system_games_loading(&catalog, &LauncherNav::new()));
+        assert!(arcade_catalog_rows_ready(&catalog));
+        assert!(!arcade_navigation_ready(false, &catalog));
     }
 
     #[test]
