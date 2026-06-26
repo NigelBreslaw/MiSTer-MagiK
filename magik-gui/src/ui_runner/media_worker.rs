@@ -14,6 +14,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
@@ -301,6 +302,7 @@ struct ActiveDownload {
     local_path: PathBuf,
     pack_index: usize,
     pack_count: usize,
+    show_completion_progress: bool,
     rx: mpsc::Receiver<Result<(), String>>,
 }
 
@@ -366,17 +368,20 @@ fn start_ready_downloads(
         });
         cleanup_pack_publish_temps(&local_path);
         cleanup_pack_publish_temps(&index_path_for_pack_path(&local_path));
-        send_progress(
-            tx,
-            MediaProgressEvent::for_pack(
-                &pack,
-                "identity",
-                "check",
-                request.pack_index,
-                pack_count,
-            ),
-        );
         let status = pack_status_from_state(&pack, &local_path, state);
+        let show_download_progress = media_status_shows_download_progress(&status);
+        if show_download_progress || matches!(status, LocalPackStatus::Current) {
+            send_progress(
+                tx,
+                MediaProgressEvent::for_pack(
+                    &pack,
+                    "identity",
+                    "check",
+                    request.pack_index,
+                    pack_count,
+                ),
+            );
+        }
         counts.checked += 1;
         match status.label() {
             "current" => counts.current += 1,
@@ -425,17 +430,19 @@ fn start_ready_downloads(
             continue;
         }
         if config.policy != MediaUpdatePolicy::Download {
-            send_progress(
-                tx,
-                MediaProgressEvent::for_pack(
-                    &pack,
-                    "identity",
-                    "check-only",
-                    request.pack_index,
-                    pack_count,
-                )
-                .with_done_bytes(pack.raw.bytes),
-            );
+            if show_download_progress {
+                send_progress(
+                    tx,
+                    MediaProgressEvent::for_pack(
+                        &pack,
+                        "identity",
+                        "check-only",
+                        request.pack_index,
+                        pack_count,
+                    )
+                    .with_done_bytes(pack.raw.bytes),
+                );
+            }
             continue;
         }
         let (result_tx, result_rx) = mpsc::channel();
@@ -464,9 +471,14 @@ fn start_ready_downloads(
             local_path,
             pack_index: request.pack_index,
             pack_count,
+            show_completion_progress: show_download_progress,
             rx: result_rx,
         });
     }
+}
+
+fn media_status_shows_download_progress(status: &LocalPackStatus) -> bool {
+    status.requires_pack_download()
 }
 
 fn poll_active_downloads(
@@ -480,17 +492,19 @@ fn poll_active_downloads(
             Ok(Ok(())) => {
                 let done = active.remove(idx);
                 counts.downloaded += 1;
-                send_progress(
-                    tx,
-                    MediaProgressEvent::for_pack(
-                        &done.pack,
-                        "identity",
-                        "done",
-                        done.pack_index,
-                        done.pack_count,
-                    )
-                    .with_done_bytes(done.pack.raw.bytes),
-                );
+                if done.show_completion_progress {
+                    send_progress(
+                        tx,
+                        MediaProgressEvent::for_pack(
+                            &done.pack,
+                            "identity",
+                            "done",
+                            done.pack_index,
+                            done.pack_count,
+                        )
+                        .with_done_bytes(done.pack.raw.bytes),
+                    );
+                }
                 let _ = tx.send(MediaWorkerMessage::PackStatus {
                     system: done.pack.id,
                     image_size: done.pack.image_size,
@@ -611,16 +625,33 @@ fn download_raw_pack_and_index(
     } else {
         None
     };
-    let result = stream_variant_to_publish_temp(
-        variant,
-        pack,
-        &publish,
-        &headers_tmp,
-        pack_index,
-        pack_count,
-        tx,
-    )
-    .and_then(|(streamed, metadata)| {
+    let result = (|| {
+        let pending_index = match (&pack.index, index_publish.as_ref()) {
+            (Some(index), Some(index_publish)) => Some(start_silent_index_download(
+                index,
+                pack,
+                index_publish,
+                &work_dir,
+                pack_index,
+                pack_count,
+                tx,
+            )?),
+            _ => None,
+        };
+        let pack_stream_result = stream_variant_to_publish_temp(
+            variant,
+            pack,
+            &publish,
+            &headers_tmp,
+            pack_index,
+            pack_count,
+            tx,
+        );
+        let index_stream_result = pending_index
+            .map(join_silent_index_download)
+            .transpose()
+            .map_err(|error| format!("pack index download failed: {error}"))?;
+        let (streamed, metadata) = pack_stream_result?;
         let _ = tx.send(MediaWorkerMessage::CacheMetadata {
             scope: format!("pack:{}", pack.id),
             metadata: metadata.clone(),
@@ -632,50 +663,24 @@ fn download_raw_pack_and_index(
         );
         verify_streamed_download(&streamed, variant.bytes, &variant.sha256)?;
         verify_streamed_download(&streamed, pack.raw.bytes, &pack.raw.sha256)?;
-        Ok((streamed, metadata))
-    })
-    .and_then(|(streamed, metadata)| {
-        if let (Some(index), Some(index_publish)) = (&pack.index, index_publish.as_ref()) {
-            let index_headers_tmp = work_dir.join(format!(
-                "{}-{}-{}-index.headers",
-                pack.id,
-                pack.image_size,
-                unix_ms_now()
-            ));
-            let index_result = stream_index_to_publish_temp(
-                index,
-                pack,
-                index_publish,
-                &index_headers_tmp,
-                pack_index,
-                pack_count,
-                tx,
-            )
-            .and_then(|(index_streamed, index_metadata)| {
+        let index_streamed = if let Some((index_streamed, index_metadata)) = index_stream_result {
+            if let Some(index) = pack.index.as_ref() {
                 let _ = tx.send(MediaWorkerMessage::CacheMetadata {
                     scope: format!("pack-index:{}", pack.id),
                     metadata: index_metadata,
                 });
-                send_progress(
-                    tx,
-                    MediaProgressEvent::for_pack(pack, "index", "verify", pack_index, pack_count)
-                        .with_done_bytes(index.bytes),
-                );
-                verify_streamed_download(&index_streamed, index.bytes, &index.sha256)?;
-                Ok(index_streamed)
-            });
-            let _ = fs::remove_file(index_headers_tmp);
-            index_result.map(|index_streamed| (streamed, metadata, Some(index_streamed)))
+                verify_streamed_download(&index_streamed, index.bytes, &index.sha256)
+                    .map_err(|error| format!("pack index verify failed: {error}"))?;
+            }
+            Some(index_streamed)
         } else {
-            Ok((streamed, metadata, None))
-        }
-    })
-    .and_then(|(streamed, metadata, index_streamed)| {
+            None
+        };
         install_streamed_pack(&publish, &streamed, pack, pack_index, pack_count, tx)?;
         if let (Some(index), Some(index_publish), Some(index_streamed)) =
             (&pack.index, index_publish.as_ref(), index_streamed.as_ref())
         {
-            install_streamed_index(
+            install_streamed_index_silent(
                 index_publish,
                 index_streamed,
                 index,
@@ -683,11 +688,9 @@ fn download_raw_pack_and_index(
                 pack_index,
                 pack_count,
                 tx,
-            )?;
+            )
+            .map_err(|error| format!("pack index install failed: {error}"))?;
         }
-        Ok(metadata)
-    })
-    .and_then(|metadata| {
         write_download_state(
             &config.asset_dir,
             pack,
@@ -695,7 +698,7 @@ fn download_raw_pack_and_index(
             variant,
             Some(&metadata),
         )
-    });
+    })();
     if result.is_err() {
         publish.cleanup_temp();
         if let Some(index_publish) = index_publish.as_ref() {
@@ -749,19 +752,17 @@ fn download_index_for_current_pack(
         pack_index,
         pack_count,
         tx,
+        false,
     )
     .and_then(|(streamed, metadata)| {
         let _ = tx.send(MediaWorkerMessage::CacheMetadata {
             scope: format!("pack-index:{}", pack.id),
             metadata,
         });
-        send_progress(
-            tx,
-            MediaProgressEvent::for_pack(pack, "index", "verify", pack_index, pack_count)
-                .with_done_bytes(index.bytes),
-        );
-        verify_streamed_download(&streamed, index.bytes, &index.sha256)?;
-        install_streamed_index(&publish, &streamed, index, pack, pack_index, pack_count, tx)?;
+        verify_streamed_download(&streamed, index.bytes, &index.sha256)
+            .map_err(|error| format!("pack index verify failed: {error}"))?;
+        install_streamed_index_silent(&publish, &streamed, index, pack, pack_index, pack_count, tx)
+            .map_err(|error| format!("pack index install failed: {error}"))?;
         write_download_state(&config.asset_dir, pack, local_path, variant, None)
     });
     if result.is_err() {
@@ -775,6 +776,11 @@ fn download_index_for_current_pack(
 struct StreamedPackDownload {
     bytes: u64,
     sha256: String,
+}
+
+struct PendingIndexDownload {
+    handle: JoinHandle<Result<(StreamedPackDownload, HttpCacheMetadata), String>>,
+    headers_tmp: PathBuf,
 }
 
 fn stream_variant_to_publish_temp(
@@ -797,6 +803,7 @@ fn stream_variant_to_publish_temp(
         pack_index,
         pack_count,
         tx,
+        true,
     )
 }
 
@@ -808,6 +815,7 @@ fn stream_index_to_publish_temp(
     pack_index: usize,
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
+    emit_progress: bool,
 ) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
     stream_media_object_to_publish_temp(
         &index.url,
@@ -820,7 +828,61 @@ fn stream_index_to_publish_temp(
         pack_index,
         pack_count,
         tx,
+        emit_progress,
     )
+}
+
+fn start_silent_index_download(
+    index: &MediaIndex,
+    pack: &MediaPack,
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    work_dir: &Path,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+) -> Result<PendingIndexDownload, String> {
+    let headers_tmp = work_dir.join(format!(
+        "{}-{}-{}-index.headers",
+        pack.id,
+        pack.image_size,
+        unix_ms_now()
+    ));
+    let index = index.clone();
+    let pack = pack.clone();
+    let publish = publish.clone();
+    let thread_headers_tmp = headers_tmp.clone();
+    let tx = tx.clone();
+    let handle = std::thread::Builder::new()
+        .name(format!("screenshot-media-{}-index", pack.id))
+        .spawn(move || {
+            stream_index_to_publish_temp(
+                &index,
+                &pack,
+                &publish,
+                &thread_headers_tmp,
+                pack_index,
+                pack_count,
+                &tx,
+                false,
+            )
+        })
+        .map_err(|e| format!("spawn pack index download: {e}"))?;
+    Ok(PendingIndexDownload {
+        handle,
+        headers_tmp,
+    })
+}
+
+fn join_silent_index_download(
+    pending: PendingIndexDownload,
+) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
+    let result = pending
+        .handle
+        .join()
+        .map_err(|_| "pack index download worker panicked".to_string())
+        .and_then(|result| result);
+    let _ = fs::remove_file(pending.headers_tmp);
+    result
 }
 
 fn stream_media_object_to_publish_temp(
@@ -834,17 +896,20 @@ fn stream_media_object_to_publish_temp(
     pack_index: usize,
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
+    emit_progress: bool,
 ) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
-    send_progress(
-        tx,
-        MediaProgressEvent::for_pack(
-            pack,
-            progress_variant,
-            "download_start",
-            pack_index,
-            pack_count,
-        ),
-    );
+    if emit_progress {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(
+                pack,
+                progress_variant,
+                "download_start",
+                pack_index,
+                pack_count,
+            ),
+        );
+    }
     let headers = File::create(headers_path)
         .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
     let mut output = File::create(publish.temp_path())
@@ -898,7 +963,9 @@ fn stream_media_object_to_publish_temp(
                 .write_all(&buffer[..read])
                 .map_err(|e| format!("write sha256 stdin: {e}"))?;
             bytes += read as u64;
-            if last_emit.elapsed() >= Duration::from_millis(250) || bytes >= expected_bytes {
+            if emit_progress
+                && (last_emit.elapsed() >= Duration::from_millis(250) || bytes >= expected_bytes)
+            {
                 last_emit = Instant::now();
                 send_progress(
                     tx,
@@ -936,18 +1003,20 @@ fn stream_media_object_to_publish_temp(
     }
     let actual_sha = parse_sha256_output(&sha_output.stdout)?;
     let header_text = fs::read_to_string(headers_path).unwrap_or_default();
-    send_progress(
-        tx,
-        MediaProgressEvent::for_pack(
-            pack,
-            progress_variant,
-            "download_done",
-            pack_index,
-            pack_count,
-        )
-        .with_bytes(bytes, expected_bytes)
-        .with_download_mbps(mbps(bytes, started.elapsed())),
-    );
+    if emit_progress {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(
+                pack,
+                progress_variant,
+                "download_done",
+                pack_index,
+                pack_count,
+            )
+            .with_bytes(bytes, expected_bytes)
+            .with_download_mbps(mbps(bytes, started.elapsed())),
+        );
+    }
     Ok((
         StreamedPackDownload {
             bytes,
@@ -1003,10 +1072,11 @@ fn install_streamed_pack(
         pack_index,
         pack_count,
         tx,
+        true,
     )
 }
 
-fn install_streamed_index(
+fn install_streamed_index_silent(
     publish: &crate::artifact_publish::ArtifactPublishPlan,
     streamed: &StreamedPackDownload,
     index: &MediaIndex,
@@ -1030,6 +1100,7 @@ fn install_streamed_index(
         pack_index,
         pack_count,
         tx,
+        false,
     )
 }
 
@@ -1042,6 +1113,7 @@ fn install_streamed_object(
     pack_index: usize,
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
+    emit_progress: bool,
 ) -> Result<(), String> {
     let bytes = publish
         .temp_path()
@@ -1059,43 +1131,51 @@ fn install_streamed_object(
             streamed.bytes
         ));
     }
-    send_progress(
-        tx,
-        MediaProgressEvent::for_pack(pack, progress_variant, "save", pack_index, pack_count)
-            .with_done_bytes(streamed.bytes),
-    );
+    if emit_progress {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(pack, progress_variant, "save", pack_index, pack_count)
+                .with_done_bytes(streamed.bytes),
+        );
+    }
     let file = File::options()
         .read(true)
         .open(publish.temp_path())
         .map_err(|e| format!("open streamed pack {}: {e}", publish.temp_path().display()))?;
-    send_progress(
-        tx,
-        MediaProgressEvent::for_pack(pack, progress_variant, "sync", pack_index, pack_count)
-            .with_done_bytes(streamed.bytes),
-    );
+    if emit_progress {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(pack, progress_variant, "sync", pack_index, pack_count)
+                .with_done_bytes(streamed.bytes),
+        );
+    }
     file.sync_all().map_err(|e| {
         format!(
             "sync streamed {install_label} {}: {e}",
             publish.temp_path().display()
         )
     })?;
-    send_progress(
-        tx,
-        MediaProgressEvent::for_pack(pack, progress_variant, "rename", pack_index, pack_count)
-            .with_done_bytes(streamed.bytes),
-    );
+    if emit_progress {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(pack, progress_variant, "rename", pack_index, pack_count)
+                .with_done_bytes(streamed.bytes),
+        );
+    }
     publish.install_temp(Some(install_label))?;
-    send_progress(
-        tx,
-        MediaProgressEvent::for_pack(
-            pack,
-            progress_variant,
-            "parent-sync",
-            pack_index,
-            pack_count,
-        )
-        .with_done_bytes(streamed.bytes),
-    );
+    if emit_progress {
+        send_progress(
+            tx,
+            MediaProgressEvent::for_pack(
+                pack,
+                progress_variant,
+                "parent-sync",
+                pack_index,
+                pack_count,
+            )
+            .with_done_bytes(streamed.bytes),
+        );
+    }
     sync_path_with_fallback(publish.parent());
     Ok(())
 }
@@ -1757,6 +1837,29 @@ mod tests {
     }
 
     #[test]
+    fn index_only_repairs_do_not_request_visible_download_progress() {
+        assert!(media_status_shows_download_progress(
+            &LocalPackStatus::Missing
+        ));
+        assert!(media_status_shows_download_progress(
+            &LocalPackStatus::Stale {
+                reason: "sha-mismatch".to_string()
+            }
+        ));
+        assert!(!media_status_shows_download_progress(
+            &LocalPackStatus::IndexMissing
+        ));
+        assert!(!media_status_shows_download_progress(
+            &LocalPackStatus::IndexStale {
+                reason: "index-sha-mismatch".to_string()
+            }
+        ));
+        assert!(!media_status_shows_download_progress(
+            &LocalPackStatus::Current
+        ));
+    }
+
+    #[test]
     fn mbps_uses_wire_megabits_per_second() {
         assert_eq!(mbps(1_000_000, Duration::from_millis(1000)), 8.0);
     }
@@ -1872,6 +1975,40 @@ mod tests {
             })
             .collect();
         assert_eq!(phases, ["save", "sync", "rename", "parent-sync"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn streamed_index_publish_is_silent_on_success() {
+        let dir = temp_dir("mister-magik-stream-publish-index");
+        let final_path = dir.join("arcade-screenshots-320x320.mmlz4b.idx");
+        let temp_path =
+            hidden_timestamped_temp_path_for(&final_path, "screenshot-pack-index", "test");
+        let publish = prepare_artifact_publish(
+            &final_path,
+            temp_path.clone(),
+            ArtifactPublishLabels {
+                destination: "test pack index destination",
+                parent: "test pack index parent",
+            },
+        )
+        .unwrap();
+        fs::write(publish.temp_path(), b"ix").unwrap();
+        let pack = indexed_pack_fixture();
+        let index = pack.index.as_ref().unwrap();
+        let streamed = StreamedPackDownload {
+            bytes: index.bytes,
+            sha256: index.sha256.clone(),
+        };
+        let (tx, rx) = mpsc::channel();
+
+        install_streamed_index_silent(&publish, &streamed, index, &pack, 1, 1, &tx).unwrap();
+
+        assert_eq!(fs::read(&final_path).unwrap(), b"ix");
+        assert!(!temp_path.exists());
+        assert!(rx
+            .try_iter()
+            .all(|message| !matches!(message, MediaWorkerMessage::Progress(_))));
         let _ = fs::remove_dir_all(dir);
     }
 

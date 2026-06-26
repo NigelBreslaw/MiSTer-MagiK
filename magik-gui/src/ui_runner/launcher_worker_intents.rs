@@ -299,19 +299,27 @@ impl MediaProgressDisplay {
         }
         if event.phase == "failed" {
             self.failed.insert(event.system.clone());
-            self.active
-                .insert(event.system.clone(), media_progress_display_row(event));
+            let row = self.media_progress_display_row(event);
+            self.active.insert(event.system.clone(), row);
             return true;
         }
         if media_progress_terminal_phase(&event.phase) {
             self.done.insert(event.system.clone());
-            self.active
-                .insert(event.system.clone(), media_progress_display_row(event));
+            let row = self.media_progress_display_row(event);
+            self.active.insert(event.system.clone(), row);
             return true;
         }
-        self.active
-            .insert(event.system.clone(), media_progress_display_row(event));
+        let row = self.media_progress_display_row(event);
+        self.active.insert(event.system.clone(), row);
         true
+    }
+
+    fn media_progress_display_row(&self, event: &MediaProgressEvent) -> MediaProgressDisplayRow {
+        let mut row = media_progress_display_row(event);
+        if let Some(previous) = self.active.get(&event.system) {
+            row.percent = row.percent.max(previous.percent);
+        }
+        row
     }
 
     fn clear(&mut self) {
@@ -462,6 +470,28 @@ mod tests {
             pack_count,
             download_mbps: None,
             detail: String::new(),
+        }
+    }
+
+    fn media_progress_variant_event(
+        system: &str,
+        variant: &str,
+        phase: &str,
+        bytes_done: u64,
+        bytes_total: u64,
+        pack_index: usize,
+        pack_count: usize,
+    ) -> MediaProgressEvent {
+        MediaProgressEvent {
+            variant: variant.to_string(),
+            ..media_progress_event(
+                system,
+                phase,
+                bytes_done,
+                bytes_total,
+                pack_index,
+                pack_count,
+            )
         }
     }
 
@@ -617,5 +647,42 @@ mod tests {
         assert_eq!(media_progress_percent("save", 512, 1024), 100);
         assert_eq!(media_progress_percent("sync", 1024, 1024), 100);
         assert_eq!(media_progress_percent("done", 1024, 1024), 100);
+    }
+
+    #[test]
+    fn media_progress_display_does_not_reset_for_index_sidecar_after_pack_download() {
+        let mut display = MediaProgressDisplay::default();
+
+        let _ = display.progress_intent(&media_progress_variant_event(
+            "arcade", "identity", "download", 512, 1024, 1, 1,
+        ));
+        assert_eq!(display.active["arcade"].percent, 50);
+
+        let _ = display.progress_intent(&media_progress_variant_event(
+            "arcade",
+            "identity",
+            "download_done",
+            1024,
+            1024,
+            1,
+            1,
+        ));
+        assert_eq!(display.active["arcade"].percent, 100);
+
+        let _ = display.progress_intent(&media_progress_variant_event(
+            "arcade",
+            "index",
+            "download_start",
+            0,
+            1024,
+            1,
+            1,
+        ));
+        assert_eq!(display.active["arcade"].percent, 100);
+
+        let _ = display.progress_intent(&media_progress_variant_event(
+            "arcade", "index", "download", 64, 128, 1, 1,
+        ));
+        assert_eq!(display.active["arcade"].percent, 100);
     }
 }
