@@ -5,7 +5,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/preview-pack-decode"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 
 usage() {
   cat <<'USAGE'
@@ -76,19 +75,28 @@ path = sys.argv[1]
 rows = []
 packs = []
 with open(path, newline="") as f:
+    header = None
     for line in f:
         line = line.rstrip("\n")
         if line.startswith("pack_size_tsv\t"):
             packs.append(line)
-        elif line.startswith("preview_pack_bench_tsv\t") and not line.startswith("preview_pack_bench_tsv\tlabel\t"):
+        elif line.startswith("preview_pack_bench_tsv\tlabel\t"):
+            header = line.split("\t")
+        elif line.startswith("preview_pack_bench_tsv\t"):
             parts = line.split("\t")
-            if len(parts) >= 24 and parts[23] == "ok":
+            if not header:
+                continue
+            row = dict(zip(header, parts))
+            if row.get("result") == "ok":
                 rows.append({
-                    "asset": parts[6],
-                    "encoded": int(parts[9]),
-                    "decoded": int(parts[10]),
-                    "decode": int(parts[17]),
-                    "total": int(parts[19]),
+                    "asset": row["asset_key"],
+                    "encoded": int(row["encoded_bytes"]),
+                    "decoded": int(row["decoded_bytes"]),
+                    "decode": int(row["decode_us"]),
+                    "decode_cpu": int(row.get("decode_cpu_us") or 0),
+                    "parse": int(row["raw565_parse_us"]),
+                    "parse_cpu": int(row.get("raw565_parse_cpu_us") or 0),
+                    "total": int(row["total_us"]),
                 })
 print("pack sizes:")
 for row in packs:
@@ -101,21 +109,39 @@ def pct(values, p):
     idx = math.ceil((p / 100.0) * len(values)) - 1
     return values[max(0, min(idx, len(values) - 1))]
 decode = [r["decode"] for r in rows]
+decode_cpu = [r["decode_cpu"] for r in rows if r["decode_cpu"]]
+parse = [r["parse"] for r in rows]
+parse_cpu = [r["parse_cpu"] for r in rows if r["parse_cpu"]]
 total = [r["total"] for r in rows]
 encoded = [r["encoded"] for r in rows]
 decoded = [r["decoded"] for r in rows]
-print(
+summary = (
     "preview_pack_summary_tsv"
     f"\trows={len(rows)}"
     f"\tdecode_p50_us={pct(decode,50)}"
     f"\tdecode_p95_us={pct(decode,95)}"
     f"\tdecode_p99_us={pct(decode,99)}"
     f"\tdecode_max_us={max(decode)}"
+)
+if decode_cpu:
+    summary += (
+        f"\tdecode_cpu_p50_us={pct(decode_cpu,50)}"
+        f"\tdecode_cpu_p95_us={pct(decode_cpu,95)}"
+        f"\tdecode_cpu_p99_us={pct(decode_cpu,99)}"
+        f"\tdecode_cpu_max_us={max(decode_cpu)}"
+    )
+summary += (
+    f"\traw565_parse_p99_us={pct(parse,99)}"
+)
+if parse_cpu:
+    summary += f"\traw565_parse_cpu_p99_us={pct(parse_cpu,99)}"
+summary += (
     f"\ttotal_p99_us={pct(total,99)}"
     f"\tavg_encoded_bytes={sum(encoded)//len(encoded)}"
     f"\tavg_decoded_bytes={sum(decoded)//len(decoded)}"
     "\tvalid=1"
 )
+print(summary)
 print("slowest_preview_pack_entries_tsv\tasset_key\tdecode_us\tencoded_bytes\tdecoded_bytes")
 for row in sorted(rows, key=lambda r: r["decode"], reverse=True)[:20]:
     print(f"slowest_preview_pack_entries_tsv\t{row['asset']}\t{row['decode']}\t{row['encoded']}\t{row['decoded']}")
@@ -142,7 +168,7 @@ remote_tsv="/tmp/${label}-preview-pack.tsv"
 remote_log="/tmp/${label}-preview-pack.log"
 
 remote_cmd=(
-  "$REMOTE_BIN" preview-pack-bench
+  /media/fat/mister-magik/mister-magik-fb preview-pack-bench
   --label "$label"
   --variant "$variant"
   --codec "$codec"

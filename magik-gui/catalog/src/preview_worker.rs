@@ -65,6 +65,7 @@ pub struct PreviewResult {
     pub request_age_us: u64,
     pub read_us: u64,
     pub decode_us: u64,
+    pub raw565_parse_us: u64,
     pub resize_us: u64,
     pub total_us: u64,
     pub encoded_bytes: usize,
@@ -238,6 +239,9 @@ impl PreviewPixels {
 struct ImageLoadTiming {
     read_us: u64,
     decode_us: u64,
+    decode_cpu_us: u64,
+    raw565_parse_us: u64,
+    raw565_parse_cpu_us: u64,
     resize_us: u64,
     total_us: u64,
     encoded_bytes: usize,
@@ -442,6 +446,9 @@ impl PreviewDecodedCache {
         let mut out = loaded.clone();
         out.timing.read_us = 0;
         out.timing.decode_us = 0;
+        out.timing.decode_cpu_us = 0;
+        out.timing.raw565_parse_us = 0;
+        out.timing.raw565_parse_cpu_us = 0;
         out.timing.resize_us = 0;
         out.timing.encoded_bytes = 0;
         out.timing.total_us = clone_t.elapsed().as_micros() as u64;
@@ -550,7 +557,7 @@ fn load_preview(
         Ok(loaded) => {
             if preview_trace_enabled() {
                 eprintln!(
-                    "preview_trace decoded generation={} priority={:?} queue_age_us={} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
+                    "preview_trace decoded generation={} priority={:?} queue_age_us={} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} decode_cpu_us={} raw565_parse_us={} raw565_parse_cpu_us={} decode_plus_parse_us={} decode_plus_parse_cpu_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
                     req.generation,
                     req.priority,
                     queue_age_us,
@@ -565,6 +572,11 @@ fn load_preview(
                     loaded.timing.total_us,
                     loaded.timing.read_us,
                     loaded.timing.decode_us,
+                    loaded.timing.decode_cpu_us,
+                    loaded.timing.raw565_parse_us,
+                    loaded.timing.raw565_parse_cpu_us,
+                    loaded.timing.decode_us + loaded.timing.raw565_parse_us,
+                    loaded.timing.decode_cpu_us + loaded.timing.raw565_parse_cpu_us,
                     loaded.timing.resize_us,
                     loaded.timing.encoded_bytes,
                     loaded.image.decoded_bytes(),
@@ -582,6 +594,7 @@ fn load_preview(
                 request_age_us: req.requested_at.elapsed().as_micros() as u64,
                 read_us: loaded.timing.read_us,
                 decode_us: loaded.timing.decode_us,
+                raw565_parse_us: loaded.timing.raw565_parse_us,
                 resize_us: loaded.timing.resize_us,
                 total_us: loaded.timing.total_us,
                 encoded_bytes: loaded.timing.encoded_bytes,
@@ -615,6 +628,7 @@ fn load_preview(
                 request_age_us: req.requested_at.elapsed().as_micros() as u64,
                 read_us: 0,
                 decode_us: 0,
+                raw565_parse_us: 0,
                 resize_us: 0,
                 total_us: 0,
                 encoded_bytes: 0,
@@ -1298,15 +1312,24 @@ fn load_raw565_preview_asset_from_index(
     let read_us = read_t.elapsed().as_micros() as u64;
 
     let decode_t = Instant::now();
+    let decode_cpu_t = thread_cpu_us();
     let data = decode_lz4_block_entry_into(&payload, entry.raw_len, &mut scratch.raw)
         .map_err(|e| format!("preview archive index decode {entry_name}: {e}"))?;
-    let image = decode_raw565_preview_bytes(data)?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
+    let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
+    let parse_t = Instant::now();
+    let parse_cpu_t = thread_cpu_us();
+    let image = decode_raw565_preview_bytes(data)?;
+    let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
+    let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
     let total_us = total_t.elapsed().as_micros() as u64;
     Ok(Some(LoadedPreviewPixels {
         timing: ImageLoadTiming {
             read_us,
             decode_us,
+            decode_cpu_us,
+            raw565_parse_us,
+            raw565_parse_cpu_us,
             resize_us: 0,
             total_us,
             encoded_bytes: entry.compressed_len,
@@ -1557,15 +1580,24 @@ impl PreviewArchive {
         let read_us = read_t.elapsed().as_micros() as u64;
 
         let decode_t = Instant::now();
+        let decode_cpu_t = thread_cpu_us();
         let data = decode_lz4_block_entry_into(compressed_slice, entry.raw_len, raw)
             .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
-        let image = decode_raw565_preview_bytes(data)?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
+        let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
+        let parse_t = Instant::now();
+        let parse_cpu_t = thread_cpu_us();
+        let image = decode_raw565_preview_bytes(data)?;
+        let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
+        let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
         let total_us = total_t.elapsed().as_micros() as u64;
         Ok(Some(LoadedPreviewPixels {
             timing: ImageLoadTiming {
                 read_us,
                 decode_us,
+                decode_cpu_us,
+                raw565_parse_us,
+                raw565_parse_cpu_us,
                 resize_us: 0,
                 total_us,
                 encoded_bytes: entry.compressed_len,
@@ -1587,6 +1619,31 @@ fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+#[cfg(target_os = "linux")]
+fn thread_cpu_us() -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if rc == 0 {
+        Some(ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1_000)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    None
+}
+
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
+    start
+        .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
+        .unwrap_or(0)
+}
+
 fn decode_lz4_block_entry_into<'a>(
     data: &'a [u8],
     raw_len: usize,
@@ -1597,8 +1654,11 @@ fn decode_lz4_block_entry_into<'a>(
         .ok_or_else(|| "empty lz4 block entry".to_string())?;
     match flag {
         0 => {
-            out.resize(raw_len, 0);
-            let len = lz4_flex::block::decompress_into(block, out).map_err(|e| e.to_string())?;
+            if out.len() < raw_len {
+                out.resize(raw_len, 0);
+            }
+            let len = lz4_flex::block::decompress_into(block, &mut out[..raw_len])
+                .map_err(|e| e.to_string())?;
             if len != raw_len {
                 return Err(format!(
                     "lz4 block length mismatch got={len} expected={raw_len}"
@@ -1843,6 +1903,9 @@ mod tests {
             timing: ImageLoadTiming {
                 read_us: 11,
                 decode_us: 22,
+                decode_cpu_us: 12,
+                raw565_parse_us: 33,
+                raw565_parse_cpu_us: 13,
                 resize_us: 33,
                 total_us: 66,
                 encoded_bytes: 44,
@@ -1875,6 +1938,9 @@ mod tests {
         let hit = cache.get("a").expect("cache hit");
         assert_eq!(hit.timing.read_us, 0);
         assert_eq!(hit.timing.decode_us, 0);
+        assert_eq!(hit.timing.decode_cpu_us, 0);
+        assert_eq!(hit.timing.raw565_parse_us, 0);
+        assert_eq!(hit.timing.raw565_parse_cpu_us, 0);
         assert_eq!(hit.timing.resize_us, 0);
         assert_eq!(hit.timing.encoded_bytes, 0);
         assert_eq!(hit.timing.load_source, PreviewLoadSource::DecodedCache);
@@ -2000,6 +2066,58 @@ mod tests {
         assert_eq!(loaded.image.decoded_bytes(), 16);
         assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn archive_mem_timing_splits_lz4_decode_from_raw565_parse() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-timing-split-{}.mmlz4b",
+            std::process::id()
+        ));
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_lz4_block_archive(&path, "timing.rgb565", &payload);
+
+        let archive = PreviewArchive::open(&path).expect("open lz4 block archive");
+        let mut scratch = PreviewArchiveScratch::default();
+        let loaded = archive
+            .load_timed("timing.rgb565", &mut scratch)
+            .expect("load timing fixture")
+            .expect("archive entry");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
+        assert!(loaded.timing.total_us >= loaded.timing.decode_us);
+        assert!(loaded.timing.total_us >= loaded.timing.raw565_parse_us);
+        assert_eq!(loaded.image.width(), 2);
+        assert_eq!(loaded.image.height(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn lz4_block_decode_scratch_grows_without_shrinking() {
+        let large = raw565_fixture(
+            4,
+            2,
+            &[0xf800, 0x07e0, 0x001f, 0xffff, 0x0000, 0x1111, 0x2222, 0x3333],
+        );
+        let small = raw565_fixture(1, 1, &[0x07e0]);
+        let mut large_payload = vec![0];
+        large_payload.extend_from_slice(&lz4_flex::block::compress(&large));
+        let mut small_payload = vec![0];
+        small_payload.extend_from_slice(&lz4_flex::block::compress(&small));
+        let mut scratch = Vec::new();
+
+        let decoded_large =
+            decode_lz4_block_entry_into(&large_payload, large.len(), &mut scratch)
+                .expect("decode large lz4 block");
+        assert_eq!(decoded_large, large.as_slice());
+        let grown_len = scratch.len();
+        assert_eq!(grown_len, large.len());
+
+        let decoded_small =
+            decode_lz4_block_entry_into(&small_payload, small.len(), &mut scratch)
+                .expect("decode small lz4 block");
+        assert_eq!(decoded_small, small.as_slice());
+        assert_eq!(scratch.len(), grown_len);
     }
 
     #[test]
