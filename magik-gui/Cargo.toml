@@ -33,10 +33,10 @@ mister-magik-ui = { path = "ui-generated", optional = true }
 ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-scaling", "static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-slint = { version = "1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
+slint = { version = "1.17", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-slint = { version = "1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
+slint = { version = "1.17", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 
 [features]
 default = []
@@ -46,11 +46,6 @@ bench-scenes = ["mister-magik-ui?/bench-scenes"]
 experiments = ["bench-scenes"]
 diagnostics = []
 video = ["dep:ffmpeg-next", "bench-scenes", "mister-magik-ui?/video"]
-
-# Slint from git master (1.17.x); bench vs 1.16 in history/toolchain-bench/slint-master.md.
-[patch.crates-io]
-slint = { git = "https://github.com/slint-ui/slint", branch = "master" }
-slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
 
 [profile.release]
 # Base optimized Cargo profile. MiSTer builds use release-device by default.
