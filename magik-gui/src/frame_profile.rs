@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::Write;
 use std::time::Instant;
 
-use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
+use mister_magik_fb::framebuffer::{format::RGB565_BYTES_PER_PIXEL, vsync::VsyncPaceSource};
 
 const FRAME_BUDGET_US: u64 = 16_667; // 60 Hz
 
@@ -83,6 +83,10 @@ impl FrameSample {
             "prepare"
         }
     }
+}
+
+fn present_bytes_for_pixels(pixels: u64) -> u64 {
+    pixels * RGB565_BYTES_PER_PIXEL as u64
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,7 +375,7 @@ impl FrameProfiler {
                 x1,
                 y1,
                 pixels,
-                pixels * 4,
+                present_bytes_for_pixels(pixels),
                 s.vsync_source.label(),
                 s.vsync_period_us,
                 s.vsync_miss_streak,
@@ -566,7 +570,7 @@ impl FrameProfiler {
             let Some(rect) = s.present_rect else {
                 continue;
             };
-            let bytes = rect.pixels() * 4;
+            let bytes = present_bytes_for_pixels(rect.pixels());
             if bytes == 0 {
                 continue;
             }
@@ -612,7 +616,7 @@ fn write_trace_event(
     *first = false;
     let (pixels, bytes) = sample
         .and_then(|s| s.present_rect.map(|rect| rect.pixels()))
-        .map(|pixels| (pixels, pixels * 4))
+        .map(|pixels| (pixels, present_bytes_for_pixels(pixels)))
         .unwrap_or((0, 0));
     let (rows, dominant) = sample
         .map(|s| (s.rows, s.dominant_phase()))
@@ -676,4 +680,22 @@ fn print_histogram(label: &str, sorted: &[u64], buckets: &[(u64, u64, &str)]) {
         }
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn present_bytes_use_rgb565_pixel_width() {
+        let rect = FrameRect {
+            x0: 10,
+            y0: 20,
+            x1: 14,
+            y1: 23,
+        };
+
+        assert_eq!(rect.pixels(), 12);
+        assert_eq!(present_bytes_for_pixels(rect.pixels()), 24);
+    }
 }
