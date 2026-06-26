@@ -263,6 +263,14 @@ pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
     crate::library_cli::run_sqlite_inspect_cli(args)
 }
 
+pub use sqlite_catalog::{PreviewIndexRefreshRow, PREVIEW_INDEX_REFRESH_TSV_HEADER};
+
+pub fn refresh_default_preview_index_flags(
+    label: &str,
+) -> Result<Vec<PreviewIndexRefreshRow>, String> {
+    sqlite_catalog::refresh_preview_index_flags(label)
+}
+
 pub fn remove_default_sqlite_database() -> Result<(), String> {
     sqlite_catalog::remove_default_sqlite_database()
 }

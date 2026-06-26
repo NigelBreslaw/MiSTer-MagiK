@@ -262,11 +262,13 @@ paced while losing CPU or SD-card headroom.
 For screenshot-pack index work, run both:
 
 ```bash
+scripts/profile-preview-index-refresh.sh PREVIEW-IDX-DB-YYYYMMDD
 scripts/profile-first-preview.sh FIRST-IDX-YYYYMMDD --skip-build
 scripts/profile-preview-scroll.sh 30 held-scroll SCROLL-IDX-YYYYMMDD --skip-build --skip-preview-warm --visual-captures 0
 ```
 
-Acceptance evidence should show the first selected decode using
+Acceptance evidence should show per-system DB refresh timing from
+`preview_index_refresh_tsv`, the first selected decode using
 `load_source=index_pread` in the sub-250ms target range, scrolling previews
 visible before the full pack load completes, and later steady-state preview
 decodes returning to `archive_mem`.

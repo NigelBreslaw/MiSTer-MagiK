@@ -24,6 +24,7 @@ use crate::library_db::{
     self, BenchConfig, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
     LibraryRefreshSummary, LibraryScan, ProgressCallback, VirtualLaunchPlan,
 };
+use crate::media_identity;
 use crate::media_metadata;
 use crate::preview_worker;
 use crate::software_identity::{
@@ -71,6 +72,44 @@ pub(crate) struct SqliteSavedCatalog {
     pub(crate) bytes: u64,
     pub(crate) catalog: LibraryCatalogLoad,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewIndexRefreshRow {
+    pub label: String,
+    pub system_id: String,
+    pub pack_path: String,
+    pub index_path: String,
+    pub index_entries: usize,
+    pub candidate_rows: usize,
+    pub updated_rows: usize,
+    pub index_read_us: u64,
+    pub sql_update_us: u64,
+    pub total_us: u64,
+    pub result: String,
+    pub error: String,
+}
+
+impl PreviewIndexRefreshRow {
+    pub fn to_tsv(&self) -> String {
+        format!(
+            "preview_index_refresh_tsv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv_field(&self.label),
+            tsv_field(&self.system_id),
+            tsv_field(&self.pack_path),
+            tsv_field(&self.index_path),
+            self.index_entries,
+            self.candidate_rows,
+            self.updated_rows,
+            self.index_read_us,
+            self.sql_update_us,
+            self.total_us,
+            tsv_field(&self.result),
+            tsv_field(&self.error)
+        )
+    }
+}
+
+pub const PREVIEW_INDEX_REFRESH_TSV_HEADER: &str = "preview_index_refresh_tsv\tlabel\tsystem_id\tpack_path\tindex_path\tindex_entries\tcandidate_rows\tupdated_rows\tindex_read_us\tsql_update_us\ttotal_us\tresult\terror";
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DiscoveryHistory {
@@ -1726,6 +1765,14 @@ pub(crate) fn report_library_import_timing(
     );
 }
 
+fn tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 fn report_sqlite_import_progress(
     progress: &mut ProgressCallback<'_>,
     written: usize,
@@ -1762,6 +1809,257 @@ pub(crate) fn sqlite_cached_summary(
         entries: sqlite_meta_usize(&conn, "entries").unwrap_or(0),
         discoveries: sqlite_meta_usize(&conn, "discoveries").unwrap_or(0),
     })
+}
+
+pub(crate) fn refresh_preview_index_flags(
+    label: &str,
+) -> Result<Vec<PreviewIndexRefreshRow>, String> {
+    refresh_preview_index_flags_at(&default_sqlite_path(), label)
+}
+
+pub(crate) fn refresh_preview_index_flags_at(
+    path: &Path,
+    label: &str,
+) -> Result<Vec<PreviewIndexRefreshRow>, String> {
+    let mut conn = Connection::open(path).map_err(|e| format!("open library db: {e}"))?;
+    ensure_sqlite_schema_current(&conn)?;
+    let packs = preview_index_refresh_packs();
+    let mut rows = Vec::with_capacity(packs.len());
+    for (system_id, pack_path) in packs {
+        rows.push(refresh_preview_index_flags_for_system(
+            &mut conn, label, &system_id, &pack_path,
+        ));
+    }
+    Ok(rows)
+}
+
+fn preview_index_refresh_packs() -> Vec<(String, String)> {
+    let preview_paths = PreviewArchivePaths::from_paths(
+        preview_worker::preview_archive_paths_for_catalog_projection(),
+    );
+    media_identity::supported_screenshot_pack_ids()
+        .map(|system_id| {
+            let pack_path = preview_paths
+                .archive_for_platform(system_id)
+                .map(preview_worker::resolved_preview_archive_path)
+                .unwrap_or_default();
+            (system_id.to_string(), pack_path)
+        })
+        .collect()
+}
+
+fn refresh_preview_index_flags_for_system(
+    conn: &mut Connection,
+    label: &str,
+    system_id: &str,
+    pack_path: &str,
+) -> PreviewIndexRefreshRow {
+    let total_t = Instant::now();
+    let archive_path = Path::new(pack_path);
+    let index_path = if pack_path.is_empty() {
+        String::new()
+    } else {
+        preview_worker::preview_archive_sidecar_path_for_archive(archive_path)
+            .display()
+            .to_string()
+    };
+    let base_row = |result: &str,
+                    error: String,
+                    index_entries: usize,
+                    candidate_rows: usize,
+                    updated_rows: usize,
+                    index_read_us: u64,
+                    sql_update_us: u64| {
+        PreviewIndexRefreshRow {
+            label: label.to_string(),
+            system_id: system_id.to_string(),
+            pack_path: pack_path.to_string(),
+            index_path: index_path.clone(),
+            index_entries,
+            candidate_rows,
+            updated_rows,
+            index_read_us,
+            sql_update_us,
+            total_us: total_t.elapsed().as_micros() as u64,
+            result: result.to_string(),
+            error,
+        }
+    };
+    if pack_path.is_empty() || !archive_path.is_file() {
+        let sql_t = Instant::now();
+        return match set_preview_flags_for_system(conn, system_id, None) {
+            Ok((candidate_rows, updated_rows)) => base_row(
+                "missing-pack",
+                String::new(),
+                0,
+                candidate_rows,
+                updated_rows,
+                0,
+                sql_t.elapsed().as_micros() as u64,
+            ),
+            Err(error) => base_row(
+                "error",
+                error,
+                0,
+                0,
+                0,
+                0,
+                sql_t.elapsed().as_micros() as u64,
+            ),
+        };
+    }
+    let index_t = Instant::now();
+    let stems = match preview_worker::preview_archive_sidecar_entry_stems(archive_path) {
+        Ok(Some(stems)) => stems,
+        Ok(None) => {
+            let index_read_us = index_t.elapsed().as_micros() as u64;
+            let sql_t = Instant::now();
+            return match set_preview_flags_for_system(conn, system_id, None) {
+                Ok((candidate_rows, updated_rows)) => base_row(
+                    "missing-index",
+                    String::new(),
+                    0,
+                    candidate_rows,
+                    updated_rows,
+                    index_read_us,
+                    sql_t.elapsed().as_micros() as u64,
+                ),
+                Err(error) => base_row(
+                    "error",
+                    error,
+                    0,
+                    0,
+                    0,
+                    index_read_us,
+                    sql_t.elapsed().as_micros() as u64,
+                ),
+            };
+        }
+        Err(error) => {
+            return base_row(
+                "error",
+                error,
+                0,
+                0,
+                0,
+                index_t.elapsed().as_micros() as u64,
+                0,
+            );
+        }
+    };
+    let index_read_us = index_t.elapsed().as_micros() as u64;
+    let sql_t = Instant::now();
+    match set_preview_flags_for_system(conn, system_id, Some(&stems.entries)) {
+        Ok((candidate_rows, updated_rows)) => base_row(
+            "ok",
+            String::new(),
+            stems.entries.len(),
+            candidate_rows,
+            updated_rows,
+            index_read_us,
+            sql_t.elapsed().as_micros() as u64,
+        ),
+        Err(error) => base_row(
+            "error",
+            error,
+            stems.entries.len(),
+            0,
+            0,
+            index_read_us,
+            sql_t.elapsed().as_micros() as u64,
+        ),
+    }
+}
+
+fn set_preview_flags_for_system(
+    conn: &mut Connection,
+    system_id: &str,
+    entries: Option<&[String]>,
+) -> Result<(usize, usize), String> {
+    const TABLES: &[&str] = &[
+        "launcher_catalog",
+        "ui_arcade_preferred",
+        "ui_arcade_variants",
+    ];
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("begin preview index refresh tx: {e}"))?;
+    tx.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS preview_index_keys(asset_key TEXT PRIMARY KEY) WITHOUT ROWID;
+         DELETE FROM preview_index_keys;",
+    )
+    .map_err(|e| format!("prepare preview index keys: {e}"))?;
+    if let Some(entries) = entries {
+        let mut stmt = tx
+            .prepare("INSERT OR IGNORE INTO preview_index_keys(asset_key) VALUES (?1)")
+            .map_err(|e| format!("prepare preview index key insert: {e}"))?;
+        for entry in entries {
+            stmt.execute([entry.as_str()])
+                .map_err(|e| format!("insert preview index key: {e}"))?;
+        }
+    }
+    let mut candidate_rows = 0usize;
+    let mut updated_rows = 0usize;
+    for table in TABLES {
+        candidate_rows += count_preview_candidates(&tx, table, system_id)?;
+        updated_rows += update_preview_candidates(&tx, table, system_id, entries.is_some())?;
+    }
+    tx.commit()
+        .map_err(|e| format!("commit preview index refresh tx: {e}"))?;
+    Ok((candidate_rows, updated_rows))
+}
+
+fn count_preview_candidates(
+    conn: &Connection,
+    table: &str,
+    system_id: &str,
+) -> Result<usize, String> {
+    conn.query_row(
+        &format!(
+            "SELECT count(*)
+             FROM {table}
+             WHERE system_id=?1
+               AND preview_archive_path != ''
+               AND preview_asset_key != ''"
+        ),
+        [system_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count.max(0) as usize)
+    .map_err(|e| format!("count preview candidates in {table}: {e}"))
+}
+
+fn update_preview_candidates(
+    conn: &Connection,
+    table: &str,
+    system_id: &str,
+    has_index: bool,
+) -> Result<usize, String> {
+    let sql = if has_index {
+        format!(
+            "UPDATE {table}
+             SET has_preview = CASE
+                 WHEN EXISTS (
+                     SELECT 1
+                     FROM preview_index_keys k
+                     WHERE k.asset_key = lower({table}.preview_asset_key)
+                 )
+                 THEN 1 ELSE 0 END
+             WHERE system_id=?1
+               AND preview_archive_path != ''
+               AND preview_asset_key != ''"
+        )
+    } else {
+        format!(
+            "UPDATE {table}
+             SET has_preview = 0
+             WHERE system_id=?1
+               AND preview_archive_path != ''
+               AND preview_asset_key != ''"
+        )
+    };
+    conn.execute(&sql, [system_id])
+        .map_err(|e| format!("update preview candidates in {table}: {e}"))
 }
 
 fn ensure_sqlite_schema_current(conn: &Connection) -> Result<(), String> {
@@ -1871,6 +2169,171 @@ mod tests {
             stmt.execute(params![*game_id, discovered_at_unix])
                 .expect("insert schema32 game");
         }
+    }
+
+    fn write_preview_refresh_fixture(db: &Path, rows: &[(&str, &str, &str, bool)]) {
+        let conn = Connection::open(db).expect("open preview refresh fixture");
+        conn.execute_batch(&format!(
+            "
+            CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
+            INSERT INTO meta(key,value) VALUES ('version', {SCHEMA_VERSION});
+            CREATE TABLE launcher_catalog(
+                system_id TEXT NOT NULL,
+                preview_archive_path TEXT NOT NULL,
+                preview_asset_key TEXT NOT NULL,
+                has_preview INTEGER NOT NULL
+            );
+            CREATE TABLE ui_arcade_preferred(
+                system_id TEXT NOT NULL,
+                preview_archive_path TEXT NOT NULL,
+                preview_asset_key TEXT NOT NULL,
+                has_preview INTEGER NOT NULL
+            );
+            CREATE TABLE ui_arcade_variants(
+                system_id TEXT NOT NULL,
+                preview_archive_path TEXT NOT NULL,
+                preview_asset_key TEXT NOT NULL,
+                has_preview INTEGER NOT NULL
+            );
+            "
+        ))
+        .expect("create preview refresh fixture");
+        for table in [
+            "launcher_catalog",
+            "ui_arcade_preferred",
+            "ui_arcade_variants",
+        ] {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "INSERT INTO {table}(system_id,preview_archive_path,preview_asset_key,has_preview)
+                     VALUES (?1,?2,?3,?4)"
+                ))
+                .expect("prepare preview refresh row");
+            for (system_id, archive_path, asset_key, has_preview) in rows {
+                stmt.execute(params![
+                    *system_id,
+                    *archive_path,
+                    *asset_key,
+                    if *has_preview { 1 } else { 0 }
+                ])
+                .expect("insert preview refresh row");
+            }
+        }
+    }
+
+    fn write_preview_sidecar_index(pack: &Path, names: &[&str]) {
+        std::fs::write(pack, vec![0u8; 1024]).expect("write preview pack placeholder");
+        let archive_bytes = std::fs::metadata(pack).expect("stat preview pack").len();
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for name in names {
+            index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            index.extend_from_slice(&1u32.to_le_bytes());
+            index.extend_from_slice(&1u32.to_le_bytes());
+            index.extend_from_slice(&16u32.to_le_bytes());
+            index.extend_from_slice(&16u32.to_le_bytes());
+            index.push(1);
+            index.extend_from_slice(&0u32.to_le_bytes());
+            index.extend_from_slice(&0u64.to_le_bytes());
+            index.extend_from_slice(name.as_bytes());
+        }
+        std::fs::write(
+            preview_worker::preview_archive_sidecar_path_for_archive(pack),
+            index,
+        )
+        .expect("write preview sidecar index");
+    }
+
+    fn preview_flag_counts(db: &Path, table: &str, system_id: &str) -> (i64, i64) {
+        let conn = Connection::open(db).expect("open preview refresh db");
+        conn.query_row(
+            &format!(
+                "SELECT count(*), COALESCE(sum(has_preview), 0)
+                 FROM {table}
+                 WHERE system_id=?1"
+            ),
+            [system_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("query preview flags")
+    }
+
+    #[test]
+    fn preview_index_refresh_updates_only_members_in_system() {
+        let root = unique_temp_dir("preview-index-refresh");
+        let db = root.join("library.sqlite3");
+        let pack = root.join("nes-screenshots-320x320.mmlz4b");
+        let pack_text = pack.display().to_string();
+        write_preview_sidecar_index(&pack, &["present.rgb565"]);
+        write_preview_refresh_fixture(
+            &db,
+            &[
+                ("nes", &pack_text, "present", false),
+                ("nes", &pack_text, "missing", true),
+                ("snes", &pack_text, "missing", true),
+            ],
+        );
+        let mut conn = Connection::open(&db).expect("open preview refresh db");
+
+        let row = refresh_preview_index_flags_for_system(&mut conn, "TEST", "nes", &pack_text);
+
+        assert_eq!(row.result, "ok");
+        assert_eq!(row.system_id, "nes");
+        assert_eq!(row.index_entries, 1);
+        assert_eq!(row.candidate_rows, 6);
+        assert_eq!(preview_flag_counts(&db, "launcher_catalog", "nes"), (2, 1));
+        assert_eq!(preview_flag_counts(&db, "ui_arcade_preferred", "nes"), (2, 1));
+        assert_eq!(preview_flag_counts(&db, "ui_arcade_variants", "nes"), (2, 1));
+        assert_eq!(preview_flag_counts(&db, "launcher_catalog", "snes"), (1, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_index_refresh_missing_index_clears_system_without_error() {
+        let root = unique_temp_dir("preview-index-missing");
+        let db = root.join("library.sqlite3");
+        let pack = root.join("nes-screenshots-320x320.mmlz4b");
+        std::fs::write(&pack, vec![0u8; 16]).expect("write pack without index");
+        let pack_text = pack.display().to_string();
+        write_preview_refresh_fixture(&db, &[("nes", &pack_text, "present", true)]);
+        let mut conn = Connection::open(&db).expect("open preview refresh db");
+
+        let row = refresh_preview_index_flags_for_system(&mut conn, "TEST", "nes", &pack_text);
+
+        assert_eq!(row.result, "missing-index");
+        assert!(row.error.is_empty());
+        assert_eq!(row.candidate_rows, 3);
+        assert_eq!(preview_flag_counts(&db, "launcher_catalog", "nes"), (1, 0));
+        assert_eq!(preview_flag_counts(&db, "ui_arcade_preferred", "nes"), (1, 0));
+        assert_eq!(preview_flag_counts(&db, "ui_arcade_variants", "nes"), (1, 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_index_refresh_tsv_has_stable_shape() {
+        let row = PreviewIndexRefreshRow {
+            label: "LABEL".to_string(),
+            system_id: "nes".to_string(),
+            pack_path: "/tmp/nes pack.mmlz4b".to_string(),
+            index_path: "/tmp/nes pack.mmlz4b.idx".to_string(),
+            index_entries: 10,
+            candidate_rows: 3,
+            updated_rows: 2,
+            index_read_us: 4,
+            sql_update_us: 5,
+            total_us: 9,
+            result: "ok".to_string(),
+            error: String::new(),
+        };
+
+        assert_eq!(
+            PREVIEW_INDEX_REFRESH_TSV_HEADER,
+            "preview_index_refresh_tsv\tlabel\tsystem_id\tpack_path\tindex_path\tindex_entries\tcandidate_rows\tupdated_rows\tindex_read_us\tsql_update_us\ttotal_us\tresult\terror"
+        );
+        assert_eq!(row.to_tsv().split('\t').count(), 13);
     }
 
     #[test]
