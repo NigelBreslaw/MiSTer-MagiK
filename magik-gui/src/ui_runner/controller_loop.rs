@@ -35,7 +35,7 @@ pub(super) fn run_controller_loop(
         });
         let _pace = pacer.wait();
         if let Some(rect) = this_rect {
-            copy_cached_rect_565(disp, ui, &cached, rect);
+            copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
         }
         frames += 1;
     }

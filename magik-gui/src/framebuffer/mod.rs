@@ -8,4 +8,6 @@ pub mod ownership;
 pub mod route;
 #[cfg(feature = "ui")]
 pub mod sample;
+#[cfg(feature = "ui")]
+pub mod target;
 pub mod vsync;

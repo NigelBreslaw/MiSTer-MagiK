@@ -4,8 +4,7 @@ use std::sync::Arc;
 use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
 use crate::fb::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
-use crate::ui_display::UiDisplay;
-use crate::ui_runner::ui_frame_target::{DirtyRect, UiFrameTarget};
+use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub(crate) const ARCADE_LIST_X: usize = 8;
@@ -394,21 +393,13 @@ impl ArcadeListRenderer {
         &mut self,
         target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
-        ui: &UiDisplay,
         redraw_selection_frame: bool,
     ) {
         for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.copy_viewport_band_to_target(
-                target,
-                disp,
-                ui,
-                viewport_y,
-                h,
-                !redraw_selection_frame,
-            );
+            self.copy_viewport_band_to_target(target, disp, viewport_y, h, !redraw_selection_frame);
         }
         if redraw_selection_frame {
-            self.copy_selection_frame_to_target(target, disp, ui);
+            self.copy_selection_frame_to_target(target, disp);
         }
     }
 
@@ -416,7 +407,6 @@ impl ArcadeListRenderer {
         &mut self,
         target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
-        ui: &UiDisplay,
         viewport_y: usize,
         h: usize,
         preserve_selection_frame: bool,
@@ -426,7 +416,7 @@ impl ArcadeListRenderer {
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
         for_each_arcade_list_copy_segment(viewport_y, h, preserve_selection_frame, |x, y, w, h| {
-            self.copy_surface_rect_to_target(target, disp, ui, x, y, w, h);
+            self.copy_surface_rect_to_target(target, disp, x, y, w, h);
         });
     }
 
@@ -434,7 +424,6 @@ impl ArcadeListRenderer {
         &mut self,
         target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
-        ui: &UiDisplay,
         x: usize,
         viewport_y: usize,
         w: usize,
@@ -444,7 +433,7 @@ impl ArcadeListRenderer {
         while copied < h {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
-            self.copy_surface_chunk_to_target(target, disp, ui, x, viewport_y + copied, w, copy_h);
+            self.copy_surface_chunk_to_target(target, disp, x, viewport_y + copied, w, copy_h);
             copied += copy_h;
         }
     }
@@ -453,7 +442,6 @@ impl ArcadeListRenderer {
         &mut self,
         target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
-        ui: &UiDisplay,
         x: usize,
         viewport_y: usize,
         w: usize,
@@ -467,7 +455,6 @@ impl ArcadeListRenderer {
             let src = src_y * ARCADE_LIST_W;
             target.present_rect_565(
                 disp,
-                ui,
                 ARCADE_LIST_X,
                 ARCADE_LIST_Y + viewport_y,
                 ARCADE_LIST_W,
@@ -478,7 +465,6 @@ impl ArcadeListRenderer {
         }
         target.present_rect_565_strided(
             disp,
-            ui,
             ARCADE_LIST_X + x,
             ARCADE_LIST_Y + viewport_y,
             w,
@@ -494,7 +480,6 @@ impl ArcadeListRenderer {
         &mut self,
         target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
-        ui: &UiDisplay,
     ) {
         let rect = Self::selection_rect();
         let color = ARCADE_SELECTION_FRAME_COLOR;
@@ -505,7 +490,6 @@ impl ArcadeListRenderer {
         self.selection_horizontal.fill(color);
         target.present_rect_565(
             disp,
-            ui,
             rect.x0,
             rect.y0,
             ARCADE_LIST_W,
@@ -514,7 +498,6 @@ impl ArcadeListRenderer {
         );
         target.present_rect_565(
             disp,
-            ui,
             rect.x0,
             rect.y1.saturating_sub(thickness),
             ARCADE_LIST_W,
@@ -525,7 +508,6 @@ impl ArcadeListRenderer {
         self.selection_vertical.fill(color);
         target.present_rect_565(
             disp,
-            ui,
             rect.x0,
             rect.y0,
             thickness,
@@ -534,7 +516,6 @@ impl ArcadeListRenderer {
         );
         target.present_rect_565(
             disp,
-            ui,
             rect.x1.saturating_sub(thickness),
             rect.y0,
             thickness,

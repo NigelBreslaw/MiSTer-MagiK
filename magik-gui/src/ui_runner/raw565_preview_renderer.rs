@@ -1,9 +1,9 @@
-#[cfg(any(test, mister_experiments))]
-use super::ui_frame_target::blend_565;
-#[cfg(mister_experiments)]
-use super::ui_frame_target::brighten_565;
-use super::ui_frame_target::DirtyRect;
 use super::*;
+#[cfg(any(test, mister_experiments))]
+use mister_magik_fb::framebuffer::target::blend_565;
+#[cfg(mister_experiments)]
+use mister_magik_fb::framebuffer::target::brighten_565;
+use mister_magik_fb::framebuffer::target::DirtyRect;
 
 pub(super) struct Raw565PreviewRenderer;
 
