@@ -4,6 +4,7 @@
 //! target behind the `ui` feature. This library keeps pure logic available for
 //! fast macOS host tests without compiling Slint/AppKit.
 
+pub mod boot_analytics;
 pub mod camera_effects;
 pub mod command_args;
 pub mod controller_db;
@@ -23,11 +24,11 @@ pub mod setup_nav;
 pub mod sprite_effects;
 pub mod text_effects;
 pub mod transition_effects;
-pub mod vsync_pacer;
 
 pub use framebuffer::copy as framebuffer_copy;
 pub use framebuffer::format as fb_format;
 pub use framebuffer::ownership as framebuffer_ownership;
+pub use framebuffer::vsync as vsync_pacer;
 
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,

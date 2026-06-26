@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::Write;
 use std::time::Instant;
 
-use mister_magik_fb::vsync_pacer::VsyncPaceSource;
+use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
 
 const FRAME_BUDGET_US: u64 = 16_667; // 60 Hz
 

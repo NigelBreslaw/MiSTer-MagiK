@@ -91,6 +91,7 @@ impl LauncherFrameWriter {
         frame < self.limit
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record(
         &mut self,
         frame: u64,

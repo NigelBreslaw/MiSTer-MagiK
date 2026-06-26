@@ -5,7 +5,7 @@ use crate::fb::{Display, Pixel, VsyncPacer};
 use crate::fb_format::production_label;
 use crate::fpga::{Fpga, Mode};
 use crate::vt::VtGraphicsGuard;
-use mister_magik_fb::vsync_pacer::VsyncPaceSource;
+use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
 use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, SoftwareRenderer, TargetPixel,
 };
