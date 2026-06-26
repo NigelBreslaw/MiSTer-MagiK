@@ -51,6 +51,8 @@ mod linux {
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
     const AGENT_PORT: u16 = 7498;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
+    // Temporary while the host/device file-transfer auth flow is being reworked.
+    const CONTROL_AUTH_DISABLED: bool = true;
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
@@ -300,17 +302,25 @@ mod linux {
     }
 
     fn start_control_server(boot_id: u64) {
-        let token = match fs::read_to_string(TOKEN_PATH) {
-            Ok(token) => token.trim().to_string(),
-            Err(err) => {
-                append_log_line(format!("control_token_missing path={TOKEN_PATH} err={err}"));
+        let token = if CONTROL_AUTH_DISABLED {
+            append_log_line(
+                "control_auth_disabled accepting unauthenticated TCP commands".to_string(),
+            );
+            String::new()
+        } else {
+            let token = match fs::read_to_string(TOKEN_PATH) {
+                Ok(token) => token.trim().to_string(),
+                Err(err) => {
+                    append_log_line(format!("control_token_missing path={TOKEN_PATH} err={err}"));
+                    return;
+                }
+            };
+            if token.is_empty() {
+                append_log_line(format!("control_token_empty path={TOKEN_PATH}"));
                 return;
             }
+            token
         };
-        if token.is_empty() {
-            append_log_line(format!("control_token_empty path={TOKEN_PATH}"));
-            return;
-        }
 
         thread::spawn(move || {
             let started = Instant::now();
@@ -384,7 +394,7 @@ mod linux {
             Err(err) => return response(None, false, None, Some(&format!("invalid json: {err}"))),
         };
         let id = parsed.get("id").cloned();
-        if parsed.get("token").and_then(Value::as_str) != Some(token) {
+        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
             return response(id, false, None, Some("unauthorized"));
         }
