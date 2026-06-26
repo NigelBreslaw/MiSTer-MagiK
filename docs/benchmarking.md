@@ -189,10 +189,14 @@ loading is raw565-oriented; build caches and publish-ready packs from the Mac in
 the private `private/magik-cloud` submodule with:
 
 ```bash
-scripts/magik-cloud run -- scripts/build-arcade-screenshot-pack.sh
+scripts/magik-cloud run -- scripts/build-arcade-screenshot-pack.sh --launcher-db /ABS/PATH/library.sqlite3
 scripts/magik-cloud run -- scripts/build-neogeo-screenshot-pack.sh
 scripts/magik-cloud run -- scripts/build-console-screenshot-pack.sh --system saturn --input data/sources/saturn/canonical
 ```
+
+The Arcade pack must be built from the deployed launcher catalog keys. Do not
+publish `--all-mame-families` output; that mode is only for diagnostic
+full-source experiments and does not match the normal MiSTer MagiK arcade list.
 
 `magik-cloud` writes resized PNGs, `.rgb565` files, and production
 `mmlz4b-v2-lz4-hc-9-pixels` archives into ignored local artifact roots. Runtime
