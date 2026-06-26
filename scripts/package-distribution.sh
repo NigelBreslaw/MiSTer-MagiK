@@ -110,7 +110,7 @@ if [[ ! -f "$BIN" ]]; then
 fi
 if [[ ! -f "$MAME_SQLITE" ]]; then
   echo "ERROR: MAME metadata DB not found: $MAME_SQLITE" >&2
-  echo "       Build it with: scripts/mister mame-metadata-build --out '$MAME_SQLITE'" >&2
+  echo "       Build it with: scripts/mister mame-metadata-build --out '$MAME_SQLITE' [--category-ini /path/to/catver.ini]" >&2
   exit 1
 fi
 if [[ ! -f "$INSTALLER" ]]; then
@@ -123,7 +123,7 @@ if [[ -n "$ASSET_PACK" && ! -f "$ASSET_PACK" ]]; then
 fi
 if [[ -n "$HBMAME_SQLITE" && ! -f "$HBMAME_SQLITE" ]]; then
   echo "ERROR: HBMame metadata DB not found: $HBMAME_SQLITE" >&2
-  echo "       Build it with: scripts/mister mame-metadata-build --out '$HBMAME_SQLITE' --mame /path/to/hbmame" >&2
+  echo "       Build it with: scripts/mister mame-metadata-build --out '$HBMAME_SQLITE' --mame /path/to/hbmame [--category-ini /path/to/catver.ini]" >&2
   exit 1
 fi
 if [[ -n "$MAIN_BIN" && ! -f "$MAIN_BIN" ]]; then

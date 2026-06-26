@@ -304,6 +304,14 @@ pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool
     sqlite_catalog::sqlite_table_exists(conn, table)
 }
 
+pub(crate) fn sqlite_column_exists(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, String> {
+    sqlite_catalog::sqlite_column_exists(conn, table, column)
+}
+
 pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection> {
     sqlite_catalog::open_sqlite_read_only(path)
 }
@@ -442,6 +450,7 @@ pub(crate) fn write_hbmame_metadata_from_library(
                 title,
                 year.map(|value| value.to_string()),
                 manufacturer,
+                None,
             )
         });
     }
@@ -579,6 +588,11 @@ fn build_arcade_catalog_from_scan_with_metadata(
             plan_launch_ref,
             system_id,
             LauncherPreviewAsset::none(),
+            crate::arcade_catalog::ArcadeGameMetadataKey {
+                year: discovery.year,
+                manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                category: discovery.genre.clone().unwrap_or_default(),
+            },
             false,
             CatalogProjectionSource {
                 discovered_at_unix: None,
@@ -597,7 +611,7 @@ fn catalog_family_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-        let (family_id, _, _, _, _) =
+        let (family_id, _, _, _, _, _) =
             mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
         let parent = if family_id == identity_id {
             String::new()

@@ -426,6 +426,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             }],
             vec![arcade_catalog::GameSystemEntry {

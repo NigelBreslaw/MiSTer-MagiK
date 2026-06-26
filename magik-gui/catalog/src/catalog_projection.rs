@@ -4,7 +4,7 @@
 //! product row rules: what is launchable, how variants collapse, how preview
 //! assets attach, and how rows become launcher entries.
 
-use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry};
+use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
 use crate::game_discovery::variant_score_from_haystack;
 use crate::library_db;
 use crate::software_identity::ConsolePreviewAsset;
@@ -68,6 +68,7 @@ impl CatalogProjectionRow {
         launch_ref: impl Into<String>,
         system_id: impl Into<String>,
         preview: LauncherPreviewAsset,
+        metadata: ArcadeGameMetadataKey,
         is_new: bool,
         source: CatalogProjectionSource,
     ) -> Self {
@@ -76,7 +77,9 @@ impl CatalogProjectionRow {
         let system_id = system_id.into();
         let has_preview = preview.has_preview();
         Self {
-            game: launcher_entry(title, launch_ref, system_id, preview, has_preview, is_new),
+            game: launcher_entry(
+                title, launch_ref, system_id, preview, metadata, has_preview, is_new,
+            ),
             discovered_at_unix: source.discovered_at_unix,
             source_kind: source.source_kind,
             setname: source.setname,
@@ -91,6 +94,7 @@ pub(crate) fn launcher_entry(
     launch_ref: impl Into<String>,
     system_id: impl Into<String>,
     preview: LauncherPreviewAsset,
+    metadata: ArcadeGameMetadataKey,
     has_preview: bool,
     is_new: bool,
 ) -> ArcadeGameEntry {
@@ -101,6 +105,9 @@ pub(crate) fn launcher_entry(
         preview_asset_key: preview.asset_key.into(),
         has_preview,
         system_id: system_id.into().into(),
+        year: metadata.year,
+        manufacturer: metadata.manufacturer.into(),
+        category: metadata.category.into(),
         is_new,
     }
 }
@@ -259,6 +266,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_asset_key,
             has_preview,
             system_id,
+            year,
+            manufacturer,
+            category,
             discovered_at_unix,
             identity_id,
             parent_setname,
@@ -276,6 +286,9 @@ pub(crate) fn materialize_arcade_ui_projections(
                 lower(l.title) AS sort_title,
                 l.launch_ref AS launch_ref,
                 l.system_id AS system_id,
+                COALESCE(i.year, g.year) AS year,
+                COALESCE(i.manufacturer, g.manufacturer) AS manufacturer,
+                COALESCE(i.category, g.genre) AS category,
                 g.discovered_at_unix AS discovered_at_unix,
                 l.setname AS setname,
                 i.identity_id AS identity_id,
@@ -347,6 +360,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_key,
             preview_available,
             system_id,
+            year,
+            manufacturer,
+            category,
             discovered_at_unix,
             identity_id,
             parent_setname,
@@ -380,6 +396,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_asset_key,
             has_preview,
             system_id,
+            year,
+            manufacturer,
+            category,
             discovered_at_unix,
             identity_id,
             family_id,
@@ -399,6 +418,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             preview_asset_key,
             has_preview,
             system_id,
+            year,
+            manufacturer,
+            category,
             discovered_at_unix,
             identity_id,
             family_id,
@@ -419,8 +441,8 @@ pub(crate) fn materialize_arcade_ui_projections(
 
 pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute(
-        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix)
-         SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix
+        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
+         SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
          FROM ui_arcade_preferred
          ORDER BY ordinal",
         [],
@@ -442,8 +464,8 @@ pub(crate) fn insert_console_launcher_catalog(
     let launcher_games = collapse_catalog_variant_rows(rows);
     let mut launcher_stmt = tx
         .prepare(
-            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,discovered_at_unix)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )
         .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
     for (idx, row) in launcher_games.iter().enumerate() {
@@ -458,11 +480,22 @@ pub(crate) fn insert_console_launcher_catalog(
                 game.preview_asset_key.as_ref(),
                 if game.has_preview { 1 } else { 0 },
                 game.system_id.as_ref(),
+                game.year.map(i64::from),
+                non_empty_arc_str(&game.manufacturer),
+                non_empty_arc_str(&game.category),
                 row.discovered_at_unix
             ])
             .map_err(|e| format!("insert launcher catalog: {e}"))?;
     }
     Ok(launcher_games.len())
+}
+
+fn non_empty_arc_str(value: &std::sync::Arc<str>) -> Option<&str> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.as_ref())
+    }
 }
 
 pub(crate) fn materialize_launcher_launch_plans(tx: &Transaction<'_>) -> Result<usize, String> {

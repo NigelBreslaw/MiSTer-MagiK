@@ -161,6 +161,19 @@ pub(super) fn catalog_rebuild_started_intent(foreground_update: bool) -> Launche
     ))
 }
 
+pub(super) fn catalog_persistence_failed_intent(
+    error: impl Into<String>,
+) -> LauncherWorkerUiIntent {
+    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
+        true,
+        false,
+        FIRST_LIBRARY_SCAN_MESSAGE,
+        "Library load failed",
+        error.into(),
+        -1,
+    ))
+}
+
 pub(super) fn catalog_scan_message(foreground_update: bool) -> &'static str {
     if foreground_update {
         UPDATING_LIBRARY_SCAN_MESSAGE

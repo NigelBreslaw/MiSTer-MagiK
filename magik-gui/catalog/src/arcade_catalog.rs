@@ -28,7 +28,27 @@ pub struct ArcadeGameEntry {
     pub preview_asset_key: Arc<str>,
     pub has_preview: bool,
     pub system_id: Arc<str>,
+    pub year: Option<u16>,
+    pub manufacturer: Arc<str>,
+    pub category: Arc<str>,
     pub is_new: bool,
+}
+
+impl ArcadeGameEntry {
+    pub fn metadata_key(&self) -> ArcadeGameMetadataKey {
+        ArcadeGameMetadataKey {
+            year: self.year,
+            manufacturer: self.manufacturer.to_string(),
+            category: self.category.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArcadeGameMetadataKey {
+    pub year: Option<u16>,
+    pub manufacturer: String,
+    pub category: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,12 +58,27 @@ pub struct GameSystemEntry {
     pub count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ArcadeFilter {
+    All,
+    Decade(u16),
+    Manufacturer(String),
+    Category(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArcadeFilterOption {
+    pub label: String,
+    pub count: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Vec<ArcadeGameEntry>,
     pub systems: Vec<GameSystemEntry>,
     games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
+    games_by_filter: HashMap<String, Vec<ArcadeGameEntry>>,
     preview_games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
@@ -80,6 +115,7 @@ impl ArcadeCatalog {
         launch_plans: Vec<StructuredLaunchPlan>,
     ) -> Self {
         let games_by_system = games_by_system(&games);
+        let games_by_filter = games_by_filter(&games);
         let preview_games_by_system = preview_games_by_system(&games);
         let games_by_ref: HashMap<Arc<str>, usize> = games
             .iter()
@@ -95,6 +131,7 @@ impl ArcadeCatalog {
             games,
             systems,
             games_by_system,
+            games_by_filter,
             preview_games_by_system,
             games_by_ref,
             launch_plans_by_ref,
@@ -153,6 +190,65 @@ impl ArcadeCatalog {
             .get(system_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
+        self.filtered_game_slice(system_id, filter).len()
+    }
+
+    pub fn filtered_game_at(
+        &self,
+        system_id: &str,
+        filter: &ArcadeFilter,
+        index: usize,
+    ) -> Option<&ArcadeGameEntry> {
+        self.filtered_game_slice(system_id, filter).get(index)
+    }
+
+    pub fn filtered_game_slice(&self, system_id: &str, filter: &ArcadeFilter) -> &[ArcadeGameEntry] {
+        match filter {
+            ArcadeFilter::All => self.system_game_slice(system_id),
+            ArcadeFilter::Decade(decade) => self
+                .games_by_filter
+                .get(&filter_key(system_id, "decade", &decade.to_string()))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            ArcadeFilter::Manufacturer(manufacturer) => self
+                .games_by_filter
+                .get(&filter_key(system_id, "manufacturer", manufacturer))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            ArcadeFilter::Category(category) => self
+                .games_by_filter
+                .get(&filter_key(system_id, "category", category))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        }
+    }
+
+    pub fn decade_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
+        let mut counts = BTreeMap::<u16, usize>::new();
+        for game in self.system_game_slice(system_id) {
+            if let Some(year) = game.year {
+                let decade = (year / 10) * 10;
+                *counts.entry(decade).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .map(|(decade, count)| ArcadeFilterOption {
+                label: format!("{decade}'s"),
+                count,
+            })
+            .collect()
+    }
+
+    pub fn manufacturer_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
+        string_filter_options(self.system_game_slice(system_id), |game| &game.manufacturer)
+    }
+
+    pub fn category_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
+        string_filter_options(self.system_game_slice(system_id), |game| &game.category)
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
@@ -249,6 +345,54 @@ fn games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameE
             .push(game.clone());
     }
     by_system
+}
+
+fn games_by_filter(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
+    let mut by_filter: HashMap<String, Vec<ArcadeGameEntry>> = HashMap::new();
+    for game in games {
+        let system_id = game.system_id.as_ref();
+        if let Some(year) = game.year {
+            let decade = (year / 10) * 10;
+            by_filter
+                .entry(filter_key(system_id, "decade", &decade.to_string()))
+                .or_default()
+                .push(game.clone());
+        }
+        if !game.manufacturer.is_empty() {
+            by_filter
+                .entry(filter_key(system_id, "manufacturer", &game.manufacturer))
+                .or_default()
+                .push(game.clone());
+        }
+        if !game.category.is_empty() {
+            by_filter
+                .entry(filter_key(system_id, "category", &game.category))
+                .or_default()
+                .push(game.clone());
+        }
+    }
+    by_filter
+}
+
+fn filter_key(system_id: &str, kind: &str, value: &str) -> String {
+    format!("{system_id}\n{kind}\n{value}")
+}
+
+fn string_filter_options(
+    games: &[ArcadeGameEntry],
+    value: impl Fn(&ArcadeGameEntry) -> &Arc<str>,
+) -> Vec<ArcadeFilterOption> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for game in games {
+        let value = value(game).trim();
+        if !value.is_empty() {
+            *counts.entry(value.to_string()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(label, count)| ArcadeFilterOption { label, count })
+        .collect()
 }
 
 fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
@@ -417,6 +561,9 @@ mod tests {
             preview_asset_key: preview_asset_key.into(),
             has_preview,
             system_id: system_id.into(),
+            year: None,
+            manufacturer: "".into(),
+            category: "".into(),
             is_new: false,
         }
     }
@@ -438,6 +585,9 @@ mod tests {
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -448,6 +598,9 @@ mod tests {
                 preview_asset_key: "1941u".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -457,6 +610,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -467,6 +623,9 @@ mod tests {
                 preview_asset_key: "1943".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -477,6 +636,9 @@ mod tests {
                 preview_asset_key: "astrass".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
         ];
@@ -511,6 +673,9 @@ mod tests {
             preview_asset_key: "".into(),
             has_preview: false,
             system_id: "amiga".into(),
+            year: None,
+            manufacturer: "".into(),
+            category: "".into(),
             is_new: false,
         }];
         let catalog = ArcadeCatalog::new(root, games, systems);
@@ -532,6 +697,9 @@ mod tests {
                 preview_asset_key: "1942".into(),
                 has_preview: true,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             }],
             vec![GameSystemEntry {
@@ -605,6 +773,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "unknown".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -614,6 +785,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "megadrive".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -623,6 +797,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -632,6 +809,9 @@ mod tests {
                 preview_asset_key: "".into(),
                 has_preview: false,
                 system_id: "megadrive".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
                 is_new: false,
             },
         ];

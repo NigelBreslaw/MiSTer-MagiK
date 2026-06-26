@@ -9,7 +9,13 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) type MachineMetadataRow = (String, String, Option<String>, Option<String>);
+pub(crate) type MachineMetadataRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 pub(crate) type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
 
 const ARCADE_PARENT_OVERRIDES: &[(&str, &str)] = &[
@@ -81,6 +87,7 @@ pub(crate) struct MameMachineMetadata {
     pub(crate) title: String,
     pub(crate) year: Option<String>,
     pub(crate) manufacturer: Option<String>,
+    pub(crate) category: Option<String>,
 }
 
 #[derive(Default)]
@@ -123,9 +130,14 @@ pub(crate) fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMac
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return HashMap::new();
     };
-    let Ok(mut stmt) =
-        conn.prepare("SELECT setname,parent_setname,title,year,manufacturer FROM mame_machines")
-    else {
+    let has_category = library_db::sqlite_column_exists(&conn, "mame_machines", "category")
+        .unwrap_or(false);
+    let sql = if has_category {
+        "SELECT setname,parent_setname,title,year,manufacturer,category FROM mame_machines"
+    } else {
+        "SELECT setname,parent_setname,title,year,manufacturer,NULL FROM mame_machines"
+    };
+    let Ok(mut stmt) = conn.prepare(sql) else {
         return HashMap::new();
     };
     let Ok(rows) = stmt.query_map([], |row| {
@@ -136,6 +148,7 @@ pub(crate) fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMac
                 title: row.get(2)?,
                 year: row.get(3)?,
                 manufacturer: row.get(4)?,
+                category: row.get(5)?,
             },
         ))
     }) else {
@@ -154,14 +167,17 @@ pub(crate) fn load_mame_machine_metadata_for_setnames(
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return HashMap::new();
     };
+    let has_category = library_db::sqlite_column_exists(&conn, "mame_machines", "category")
+        .unwrap_or(false);
     let mut out = HashMap::with_capacity(setnames.len());
     let setnames = setnames.iter().map(String::as_str).collect::<Vec<_>>();
     for chunk in setnames.chunks(400) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
+        let category_expr = if has_category { "category" } else { "NULL" };
         let sql = format!(
-            "SELECT setname,parent_setname,title,year,manufacturer
+            "SELECT setname,parent_setname,title,year,manufacturer,{category_expr}
              FROM mame_machines
              WHERE setname IN ({placeholders})"
         );
@@ -176,6 +192,7 @@ pub(crate) fn load_mame_machine_metadata_for_setnames(
                     title: row.get(2)?,
                     year: row.get(3)?,
                     manufacturer: row.get(4)?,
+                    category: row.get(5)?,
                 },
             ))
         }) else {
@@ -339,7 +356,8 @@ pub(crate) fn write_simple_mame_metadata_db(
             parent_setname TEXT,
             title TEXT NOT NULL,
             year TEXT,
-            manufacturer TEXT
+            manufacturer TEXT,
+            category TEXT
         ) WITHOUT ROWID;
         "#,
     )
@@ -350,17 +368,18 @@ pub(crate) fn write_simple_mame_metadata_db(
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer)
-                 VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
             )
             .map_err(|e| format!("prepare metadata insert: {e}"))?;
-        for (setname, (parent, title, year, manufacturer)) in rows {
+        for (setname, (parent, title, year, manufacturer, category)) in rows {
             stmt.execute(params![
                 setname.as_str(),
                 parent.as_str(),
                 title.as_str(),
                 year.as_deref(),
-                manufacturer.as_deref()
+                manufacturer.as_deref(),
+                category.as_deref()
             ])
             .map_err(|e| format!("insert metadata row {setname}: {e}"))?;
         }
@@ -708,6 +727,7 @@ pub(crate) fn mame_identity_projection<'a>(
     Option<&'a str>,
     Option<&'a str>,
     Option<&'a str>,
+    Option<&'a str>,
     &'static str,
 ) {
     if let Some(machine) = metadata.mame.get(identity_id) {
@@ -722,6 +742,7 @@ pub(crate) fn mame_identity_projection<'a>(
             Some(machine.title.as_str()),
             machine.year.as_deref(),
             machine.manufacturer.as_deref(),
+            machine.category.as_deref(),
             "mame",
         )
     } else if let Some(machine) = metadata.hbmame.get(identity_id) {
@@ -736,20 +757,22 @@ pub(crate) fn mame_identity_projection<'a>(
             Some(machine.title.as_str()),
             machine.year.as_deref(),
             machine.manufacturer.as_deref(),
+            machine.category.as_deref(),
             "hbmame",
         )
     } else if let Some(family_id) = normalized_parent_family(mra_parent, identity_id) {
-        (family_id, None, None, None, "mra-parent")
+        (family_id, None, None, None, None, "mra-parent")
     } else if let Some(parent) = arcade_parent_override(identity_id) {
         (
             parent.to_string(),
             None,
             None,
             None,
+            None,
             "arcade-parent-override",
         )
     } else {
-        (identity_id.to_string(), None, None, None, "setname")
+        (identity_id.to_string(), None, None, None, None, "setname")
     }
 }
 
