@@ -353,7 +353,7 @@ pub(super) fn dirty_rect_from_bounds(
 }
 
 pub(super) fn copy_cached_rows_565(
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
     cached: &[Rgb565Pixel],
     y0: usize,
@@ -364,7 +364,7 @@ pub(super) fn copy_cached_rows_565(
 }
 
 pub(super) fn copy_cached_rect_565(
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
     cached: &[Rgb565Pixel],
     rect: DirtyRect,
@@ -443,7 +443,7 @@ impl UiFrameTarget {
     pub(super) fn present_rect(
         &mut self,
         f: &mut Fpga,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         rect: DirtyRect,
     ) -> u32 {
@@ -455,7 +455,7 @@ impl UiFrameTarget {
 
     pub(crate) fn copy_rect_from_565(
         &mut self,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         x: usize,
         y: usize,
@@ -471,7 +471,7 @@ impl UiFrameTarget {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn copy_rect_from_565_strided(
         &mut self,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         x: usize,
         y: usize,
@@ -539,7 +539,7 @@ impl UiFrameTarget {
     pub(super) fn present_rows(
         &mut self,
         f: &mut Fpga,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         y0: usize,
         y1: usize,
@@ -590,7 +590,7 @@ pub(super) fn blit_raw_preview_if_needed(
 
 pub(super) fn copy_arcade_list_update(
     target: &mut UiFrameTarget,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
     renderer: &mut ArcadeListRenderer,
     update: ArcadeListUpdate,

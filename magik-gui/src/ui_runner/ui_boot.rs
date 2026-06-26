@@ -27,8 +27,8 @@ pub(crate) struct FbModeGuard {
 impl FbModeGuard {
     #[allow(dead_code)]
     pub(crate) fn set_temporary(w: usize, h: usize) -> std::io::Result<Self> {
-        let previous = Display::current_info()?;
-        Display::write_mister_mode_rgb565(w, h, rgb565_stride_bytes(w))?;
+        let previous = MappedRgb565Framebuffer::current_info()?;
+        MappedRgb565Framebuffer::write_mister_mode_rgb565(w, h, rgb565_stride_bytes(w))?;
         remember_fb_mode_for_exit(previous);
         Ok(Self {
             previous,
@@ -40,7 +40,7 @@ impl FbModeGuard {
         if !self.active {
             return;
         }
-        match Display::restore_mister_mode(self.previous) {
+        match MappedRgb565Framebuffer::restore_mister_mode(self.previous) {
             Ok(()) => {
                 clear_fb_mode_for_exit();
                 self.active = false;
@@ -125,7 +125,7 @@ impl LauncherFramebufferRoute {
 
 pub(crate) struct UiBootFramebufferSession {
     pub(crate) ui: UiDisplay,
-    pub(crate) disp: Display,
+    pub(crate) disp: MappedRgb565Framebuffer,
     pub(crate) _fb_mode_guard: Option<FbModeGuard>,
 }
 
@@ -148,7 +148,7 @@ impl UiBootFramebufferSession {
             display_plan.scan_h
         );
 
-        let current_fb = match Display::current_info() {
+        let current_fb = match MappedRgb565Framebuffer::current_info() {
             Ok(info) => info,
             Err(e) => {
                 eprintln!("failed to read current framebuffer mode for FPGA-scaled UI: {e}");
@@ -174,13 +174,14 @@ impl UiBootFramebufferSession {
         };
 
         println!("display-open-path=temporary-fb-fpga-scale");
-        let mut disp = match Display::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("failed to open display (/dev/fb0): {e}");
-                std::process::exit(1);
-            }
-        };
+        let mut disp =
+            match MappedRgb565Framebuffer::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("failed to open display (/dev/fb0): {e}");
+                    std::process::exit(1);
+                }
+            };
         let ui = UiDisplay::for_plan(display_plan);
         println!("{}", ui.log_line());
         disp.clear_black();
@@ -281,7 +282,7 @@ fn clear_fb_mode_for_exit() {
 extern "C" fn restore_fb_mode_at_exit() {
     let previous = FB_MODE_RESTORE.lock().ok().and_then(|mut slot| slot.take());
     if let Some(previous) = previous {
-        let _ = Display::restore_mister_mode(previous);
+        let _ = MappedRgb565Framebuffer::restore_mister_mode(previous);
     }
 }
 
@@ -296,7 +297,7 @@ pub(crate) fn ui_fpga_scaled_mode(scan_w: u16, scan_h: u16) -> Mode {
 
 pub(crate) fn settle_boot_black_frame(
     label: &str,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
     route: LauncherFramebufferRoute,
 ) {

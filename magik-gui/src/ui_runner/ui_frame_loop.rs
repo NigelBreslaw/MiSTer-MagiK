@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn run_bench_frame(
     ui: &UiDisplay,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
     target: &mut UiFrameTarget,
     window: &Rc<MinimalSoftwareWindow>,
@@ -99,7 +99,7 @@ pub(super) fn run_bench_frame(
 pub(super) fn run_frame_loop(
     secs: u64,
     ui: &UiDisplay,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     target: &mut UiFrameTarget,

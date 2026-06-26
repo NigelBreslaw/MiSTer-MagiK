@@ -65,7 +65,11 @@ impl CameraEffectsConfig {
     }
 }
 
-pub(super) fn run_camera_effects_loop(secs: u64, ui: &UiDisplay, disp: &mut Display) {
+pub(super) fn run_camera_effects_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut MappedRgb565Framebuffer,
+) {
     let mut cfg = CameraEffectsConfig::from_env();
     let arcade_root = arcade_root_from_env();
     let images = load_camera_effect_images(&arcade_root, cfg.cache_cap);

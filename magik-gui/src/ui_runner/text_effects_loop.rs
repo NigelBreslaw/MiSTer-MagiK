@@ -67,7 +67,7 @@ impl TextEffectsConfig {
     }
 }
 
-pub(super) fn run_text_effects_loop(secs: u64, ui: &UiDisplay, disp: &mut Display) {
+pub(super) fn run_text_effects_loop(secs: u64, ui: &UiDisplay, disp: &mut MappedRgb565Framebuffer) {
     let mut cfg = TextEffectsConfig::from_env();
     let arcade_root = arcade_root_from_env();
     let images = load_text_effect_images(&arcade_root, cfg.cache_cap);

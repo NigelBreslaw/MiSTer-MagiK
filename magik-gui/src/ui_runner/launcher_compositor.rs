@@ -3,7 +3,7 @@ use super::*;
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
     f: &'a mut Fpga,
-    disp: &'a mut Display,
+    disp: &'a mut MappedRgb565Framebuffer,
     ui: &'a UiDisplay,
 }
 
@@ -11,7 +11,7 @@ impl<'a> LayerTarget<'a> {
     pub(super) fn new(
         target: &'a mut UiFrameTarget,
         f: &'a mut Fpga,
-        disp: &'a mut Display,
+        disp: &'a mut MappedRgb565Framebuffer,
         ui: &'a UiDisplay,
     ) -> Self {
         Self {

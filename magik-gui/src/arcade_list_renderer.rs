@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
-use crate::fb::{pixel_to_rgb565, Display, Pixel};
+use crate::fb::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use crate::ui_display::UiDisplay;
 use crate::ui_runner::ui_frame_target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -393,7 +393,7 @@ impl ArcadeListRenderer {
     pub(crate) fn copy_layer_to_target(
         &mut self,
         target: &mut UiFrameTarget,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         redraw_selection_frame: bool,
     ) {
@@ -415,7 +415,7 @@ impl ArcadeListRenderer {
     fn copy_viewport_band_to_target(
         &mut self,
         target: &mut UiFrameTarget,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         viewport_y: usize,
         h: usize,
@@ -433,7 +433,7 @@ impl ArcadeListRenderer {
     fn copy_surface_rect_to_target(
         &mut self,
         target: &mut UiFrameTarget,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         x: usize,
         viewport_y: usize,
@@ -452,7 +452,7 @@ impl ArcadeListRenderer {
     fn copy_surface_chunk_to_target(
         &mut self,
         target: &mut UiFrameTarget,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
         x: usize,
         viewport_y: usize,
@@ -493,7 +493,7 @@ impl ArcadeListRenderer {
     fn copy_selection_frame_to_target(
         &mut self,
         target: &mut UiFrameTarget,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
     ) {
         let rect = Self::selection_rect();
