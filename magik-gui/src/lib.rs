@@ -9,9 +9,7 @@ pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;
 pub mod effects;
-pub mod fb_format;
-pub mod framebuffer_copy;
-pub mod framebuffer_ownership;
+pub mod framebuffer;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
@@ -26,6 +24,10 @@ pub mod sprite_effects;
 pub mod text_effects;
 pub mod transition_effects;
 pub mod vsync_pacer;
+
+pub use framebuffer::copy as framebuffer_copy;
+pub use framebuffer::format as fb_format;
+pub use framebuffer::ownership as framebuffer_ownership;
 
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,
