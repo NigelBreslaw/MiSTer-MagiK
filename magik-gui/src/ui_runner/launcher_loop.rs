@@ -254,7 +254,7 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
 pub(super) fn present_launcher_startup_frame(
     start: Instant,
     ui: &UiDisplay,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     target: &mut UiFrameTarget,
@@ -338,7 +338,7 @@ fn launcher_reveal_settle_frames() -> u32 {
 pub(super) fn run_launcher_loop(
     secs: u64,
     ui: &UiDisplay,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     target: &mut UiFrameTarget,

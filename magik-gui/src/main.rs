@@ -79,7 +79,7 @@ pub use mister_magik_fb::{
     media_update, preview_worker, setup_nav,
 };
 
-use fb::{Display, VsyncPacer, VsyncWaitStatus};
+use fb::{MappedRgb565Framebuffer, VsyncPacer, VsyncWaitStatus};
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::fb_format::{production_label, rgb565_stride_bytes};
 use ui_display::UiDisplayPlan;
@@ -583,7 +583,7 @@ fn run_vsync_probe() {
 }
 
 fn run_direct_vsync_probe(frames: u64, work_us: u64) {
-    let disp = match Display::open_current_rgb565() {
+    let disp = match MappedRgb565Framebuffer::open_current_rgb565() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("vsync-probe direct: failed to open current RGB565 display: {e}");
@@ -687,7 +687,7 @@ fn early_black_route(f: &mut Fpga) {
     if display_plan.fallback {
         boot_analytics::event("display_plan_fallback", display_plan.log_line());
     }
-    if let Err(e) = Display::write_mister_mode_rgb565(
+    if let Err(e) = MappedRgb565Framebuffer::write_mister_mode_rgb565(
         display_plan.fb_w,
         display_plan.fb_h,
         rgb565_stride_bytes(display_plan.fb_w),
@@ -696,7 +696,8 @@ fn early_black_route(f: &mut Fpga) {
         std::process::exit(1);
     }
 
-    let mut disp = match Display::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
+    let mut disp = match MappedRgb565Framebuffer::open_rgb565(display_plan.fb_w, display_plan.fb_h)
+    {
         Ok(d) => d,
         Err(e) => {
             eprintln!("early-black: failed to open /dev/fb0: {e}");

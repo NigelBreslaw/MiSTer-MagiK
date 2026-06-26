@@ -2,7 +2,7 @@
 #![cfg_attr(not(mister_experiments), allow(unused_imports, dead_code))]
 
 use crate::display_config::DisplayConfig;
-use crate::fb::{Display, Pixel, VsyncPacer};
+use crate::fb::{MappedRgb565Framebuffer, Pixel, VsyncPacer};
 use crate::fpga::Fpga;
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
 use crate::ui_runner::ui_boot::LauncherFramebufferRoute;
@@ -255,7 +255,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
     );
 
     let _vt = VtGraphicsGuard::enter_or_warn();
-    let mut disp = match Display::open_current_boot() {
+    let mut disp = match MappedRgb565Framebuffer::open_current_boot() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to open display (/dev/fb0): {e}");
@@ -355,7 +355,7 @@ pub fn run_effect_bench(_f: &mut Fpga) {
 
 #[cfg(mister_experiments)]
 fn run_one_effect_bench(
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     overlay_ctx: &mut Option<(
         Rc<MinimalSoftwareWindow>,
         slint_ui::effect_hud::EffectHud,

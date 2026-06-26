@@ -174,7 +174,7 @@ pub(super) fn blit_video_frame_to_cached(
 pub(super) fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     window: &Rc<MinimalSoftwareWindow>,
     app: slint_ui::video_playback::VideoPlayback,
     animation_clock: &AnimationClock,

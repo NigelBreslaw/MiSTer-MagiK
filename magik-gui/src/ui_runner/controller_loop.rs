@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn run_controller_loop(
     secs: u64,
     ui: &UiDisplay,
-    disp: &mut Display,
+    disp: &mut MappedRgb565Framebuffer,
     window: &Rc<MinimalSoftwareWindow>,
     mut pad: PadPool,
     app: slint_ui::controller::ControllerTest,

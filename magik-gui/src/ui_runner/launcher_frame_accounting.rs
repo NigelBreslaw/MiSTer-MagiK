@@ -266,7 +266,7 @@ impl LauncherFrameAccounting {
         &mut self,
         frame: LauncherPresentedFrame,
         start: Instant,
-        disp: &mut Display,
+        disp: &mut MappedRgb565Framebuffer,
         nav: &LauncherNav,
         pad: &PadPool,
         catalog: &ArcadeCatalog,
@@ -418,7 +418,11 @@ impl LauncherFrameAccounting {
         }
     }
 
-    fn record_first_copy(&mut self, frame: &LauncherPresentedFrame, disp: &mut Display) {
+    fn record_first_copy(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        disp: &mut MappedRgb565Framebuffer,
+    ) {
         if frame.copied_rows > 0 && !self.first_copy_logged {
             self.first_copy_logged = true;
             boot_analytics::event(
@@ -490,7 +494,7 @@ impl LauncherFrameAccounting {
         }
     }
 
-    fn record_stable_samples(&mut self, frames: u64, disp: &mut Display) {
+    fn record_stable_samples(&mut self, frames: u64, disp: &mut MappedRgb565Framebuffer) {
         if frames == 30 && !self.stable_frame_logged {
             self.stable_frame_logged = true;
             boot_analytics::event("stable_frame", "frame=30");
@@ -502,7 +506,11 @@ impl LauncherFrameAccounting {
         }
     }
 
-    fn record_boot_frame_profile(&mut self, frame: &LauncherPresentedFrame, disp: &Display) {
+    fn record_boot_frame_profile(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        disp: &MappedRgb565Framebuffer,
+    ) {
         let reasserted = false;
         if self
             .boot_frame_profile
