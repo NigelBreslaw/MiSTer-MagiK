@@ -42,6 +42,7 @@ Use these entrypoints:
 ```bash
 scripts/profile-arcade-scroll.sh LABEL
 scripts/profile-preview-scroll.sh LABEL
+scripts/profile-first-preview.sh LABEL --skip-build
 ```
 
 For the "perfect 60fps Arcade preview" work, each single-commit PR must record
@@ -60,10 +61,12 @@ window so the profiler can flush, and pulls
 `build/preview-scroll-profiles/LABEL-CPU-FADE-VEL-arcade-cpu.svg`.
 
 Preview-scroll benchmarks synchronously warm the screenshot archive cache before
-the benchmark timing window and first launcher step. Production preview evidence
-uses the built-in 200ms fade; transition selection flags were removed from the
-release benchmark script. `mega` transition coverage is experimental only and is
-not release benchmark evidence.
+the benchmark timing window and first launcher step unless
+`--skip-preview-warm` is passed. Use warm runs for steady 60fps preview evidence
+and cold no-warm runs for screenshot-pack index fast-lane work. Production
+preview evidence uses the built-in 200ms fade; transition selection flags were
+removed from the release benchmark script. `mega` transition coverage is
+experimental only and is not release benchmark evidence.
 `turbo-hold` ping-pongs between the Arcade list edges so long traces keep
 exercising preview selection changes after reaching the bottom.
 
@@ -104,8 +107,9 @@ These scripts write `/media/fat/mister-magik/launcher.env`, send
 ```text
 MISTER_LAUNCHER_START_SCREEN=arcade
 MISTER_LAUNCHER_LOCK_SCREEN=arcade
-MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll|turbo-hold|preview-step-hold|idle
+MISTER_LAUNCHER_BENCH_SCENARIO=held-scroll|turbo-hold|preview-step-hold|preview-idle|idle
 MISTER_PREVIEW_SCROLL_TRACE_SECS=N
+MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1  # only for cold fast-lane benchmarks
 MISTER_CATALOG_REFRESH=default
 ```
 
@@ -124,6 +128,9 @@ Preview transition policy:
 - Add new transition experiments under `scripts/experiments/preview/` and
   experiment builds rather than replacing the production `fade` effect.
 - For visual review, use `MISTER_LAUNCHER_BENCH_SCENARIO=preview-step-hold`.
+- For first selected screenshot latency, use `scripts/profile-first-preview.sh`;
+  it runs `preview-idle` so the initial selected result can apply without being
+  superseded by a scroll step.
 
 Historical evidence:
 
@@ -162,10 +169,14 @@ archive path and asset key projected by the catalog; it must not derive cache
 paths from PNG/JPG screenshot locations.
 
 The preview loader reads each configured archive into memory when it opens the
-archive. There is no runtime fallback to PNG/JPG sources, individual `.rgb565`
-files, or per-entry archive file reads. The arcade pack measured on the MiSTer
-at 34,623,433 bytes takes about 1.75s to cold-read from `/media/fat` into RAM
-and about 0.24s once the filesystem cache is warm.
+archive. When a matching `.mmlz4b.idx` sidecar is present and the archive is not
+yet in RAM, selected and prefetch preview requests may use `index_pread` to
+seek directly to one compressed entry, then trigger background full-pack loading.
+Once the full pack is loaded, steady-state requests return to `archive_mem`.
+There is no runtime fallback to PNG/JPG sources or individual `.rgb565` files.
+The arcade pack measured on the MiSTer at 34,623,433 bytes takes multiple
+seconds to cold-read from `/media/fat` into RAM, so first-preview claims must
+state whether `load_source` was `index_pread` or `archive_mem`.
 
 The library scanner must not walk screenshot/cache media directories, read
 `gamelist.xml`, or probe normal PNG/JPG screenshots for metadata.
@@ -216,6 +227,18 @@ trace while media requests are pending. Use `frame_pacing` p95/p99 work,
 `work_gt_16_7ms`, `preview_latency selected_*_age_us`, and RSS HWM from the log
 or status rows. Do not use "still 60fps" as proof; the app can remain vsync
 paced while losing CPU or SD-card headroom.
+
+For screenshot-pack index work, run both:
+
+```bash
+scripts/profile-first-preview.sh FIRST-IDX-YYYYMMDD --skip-build
+scripts/profile-preview-scroll.sh 30 held-scroll SCROLL-IDX-YYYYMMDD --skip-build --skip-preview-warm --visual-captures 0
+```
+
+Acceptance evidence should show the first selected decode using
+`load_source=index_pread` in the sub-250ms target range, scrolling previews
+visible before the full pack load completes, and later steady-state preview
+decodes returning to `archive_mem`.
 
 Relevant docs:
 

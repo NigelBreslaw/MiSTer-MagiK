@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LauncherBenchScenario {
     Idle,
+    PreviewIdle,
     HomeNav,
     QuickTap,
     RapidTaps,
@@ -21,6 +22,7 @@ impl LauncherBenchScenario {
             .as_str()
         {
             "idle" => Some(Self::Idle),
+            "preview-idle" | "preview_idle" => Some(Self::PreviewIdle),
             "home-nav" | "home_nav" => Some(Self::HomeNav),
             "velocity-scroll" | "velocity_scroll" => Some(Self::HeldScroll),
             "quick-tap" | "quick_tap" => Some(Self::QuickTap),
@@ -39,6 +41,7 @@ impl LauncherBenchScenario {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Idle => "idle",
+            Self::PreviewIdle => "preview-idle",
             Self::HomeNav => "home-nav",
             Self::QuickTap => "quick-tap",
             Self::RapidTaps => "rapid-taps",
@@ -52,7 +55,7 @@ impl LauncherBenchScenario {
 
     pub(super) fn period(self) -> Duration {
         match self {
-            Self::Idle | Self::LaunchHandoff => Duration::MAX,
+            Self::Idle | Self::PreviewIdle | Self::LaunchHandoff => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
             Self::ModelSync => Duration::from_millis(300),
             Self::QuickTap
@@ -70,6 +73,7 @@ impl LauncherBenchScenario {
                 | Self::RapidTaps
                 | Self::HeldScroll
                 | Self::TurboHold
+                | Self::PreviewIdle
                 | Self::PreviewStepHold
                 | Self::LaunchHandoff
         )
@@ -115,7 +119,9 @@ pub(super) fn launcher_bench_step(
     now: Instant,
 ) -> bool {
     match scenario {
-        LauncherBenchScenario::Idle | LauncherBenchScenario::LaunchHandoff => false,
+        LauncherBenchScenario::Idle
+        | LauncherBenchScenario::PreviewIdle
+        | LauncherBenchScenario::LaunchHandoff => false,
         LauncherBenchScenario::HomeNav => {
             let count = catalog.systems.len();
             if count == 0 {
@@ -527,5 +533,25 @@ mod tests {
         assert_eq!(step, 1);
         assert_eq!(nav.arcade.selected, 1);
         assert!(nav.arcade.is_scroll_active());
+    }
+
+    #[test]
+    fn preview_idle_starts_on_arcade_without_running_steps() {
+        let catalog = empty_catalog();
+        let mut nav = LauncherNav::new();
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::PreviewIdle,
+            &mut nav,
+            &catalog,
+            Some(10),
+            0,
+            Instant::now(),
+        );
+
+        assert!(LauncherBenchScenario::PreviewIdle.starts_on_arcade());
+        assert_eq!(LauncherBenchScenario::PreviewIdle.period(), Duration::MAX);
+        assert!(!ran);
+        assert_eq!(nav.arcade.selected, 0);
+        assert!(!nav.arcade.is_scroll_active());
     }
 }

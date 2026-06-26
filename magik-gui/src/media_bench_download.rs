@@ -973,6 +973,7 @@ mod tests {
             image_size: "320x320".to_string(),
             raw: test_variant(),
             variants: vec![test_variant()],
+            index: None,
         }
     }
 
