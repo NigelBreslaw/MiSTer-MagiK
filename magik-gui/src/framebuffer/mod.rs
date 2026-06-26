@@ -6,4 +6,6 @@ pub mod mapped;
 pub mod mode;
 pub mod ownership;
 pub mod route;
+#[cfg(feature = "ui")]
+pub mod sample;
 pub mod vsync;

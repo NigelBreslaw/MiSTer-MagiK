@@ -8,18 +8,19 @@
 //!
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
+use crate::boot_analytics;
 #[cfg(mister_experiments)]
 use crate::camera_effects::CameraPixel;
 use crate::framebuffer::format::{
     fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line, rgb565_mode_line,
     rgb565_stride_bytes, RGB565_BITS_PER_PIXEL,
 };
+use crate::framebuffer::sample::Rgb565SampleView;
 use crate::framebuffer::vsync::{wait_vsync_fd, VsyncWaitStatus};
 
-use crate::boot_analytics;
 use slint::platform::software_renderer::{PremultipliedRgbaColor, Rgb565Pixel, TargetPixel};
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -502,41 +503,38 @@ impl MappedRgb565Framebuffer {
         }
     }
 
+    fn buffer_565(&self) -> &[Rgb565Pixel] {
+        unsafe {
+            std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.stride_pixels * self.h)
+        }
+    }
+
+    fn sample_view(&self) -> Rgb565SampleView<'_> {
+        Rgb565SampleView::new(self.buffer_565(), self.w, self.h, self.stride_pixels)
+    }
+
     pub fn clear_black(&mut self) {
         self.buffer_565_mut().fill(Rgb565Pixel(0));
     }
 
     pub fn right_edge_signature(&self, cols: usize) -> (u64, u32) {
-        self.vertical_edge_signature(self.w.saturating_sub(cols), self.w, cols)
+        self.sample_view().right_edge_signature(cols)
     }
 
     pub fn left_edge_signature(&self, cols: usize) -> (u64, u32) {
-        self.vertical_edge_signature(0, cols.min(self.w), cols)
+        self.sample_view().left_edge_signature(cols)
     }
 
     pub fn top_edge_signature(&self, rows: usize) -> (u64, u32) {
-        self.horizontal_edge_signature(0, rows.min(self.h), rows)
+        self.sample_view().top_edge_signature(rows)
     }
 
     pub fn bottom_edge_signature(&self, rows: usize) -> (u64, u32) {
-        self.horizontal_edge_signature(self.h.saturating_sub(rows), self.h, rows)
+        self.sample_view().bottom_edge_signature(rows)
     }
 
     pub fn sampled_signature(&self) -> (u64, u32) {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut nonzero = 0u32;
-        let step = 16usize;
-        for y in (0..self.h).step_by(step) {
-            for x in (0..self.w).step_by(step) {
-                let p = self.pixel_rgb_at(x, y);
-                if p != 0 {
-                    nonzero += 1;
-                }
-                hash ^= p as u64;
-                hash = hash.wrapping_mul(0x1000_0000_01b3);
-            }
-        }
-        (hash, nonzero)
+        self.sample_view().sampled_signature()
     }
 
     #[allow(dead_code)]
@@ -548,174 +546,11 @@ impl MappedRgb565Framebuffer {
         h: usize,
         step: usize,
     ) -> (u64, u32) {
-        let x1 = x.saturating_add(w).min(self.w);
-        let y1 = y.saturating_add(h).min(self.h);
-        let step = step.max(1);
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut nonzero = 0u32;
-
-        for yy in (y..y1).step_by(step) {
-            for xx in (x..x1).step_by(step) {
-                let p = self.pixel_rgb_at(xx, yy);
-                if p != 0 {
-                    nonzero += 1;
-                }
-                hash ^= p as u64;
-                hash = hash.wrapping_mul(0x1000_0000_01b3);
-            }
-        }
-
-        (hash, nonzero)
+        self.sample_view().rect_sampled_signature(x, y, w, h, step)
     }
 
     pub fn record_visual_sample(&self, label: &str) {
-        if !boot_analytics::enabled() {
-            return;
-        }
-
-        let sample = self.visual_sample();
-        boot_analytics::event(
-            "fb_visual_sample",
-            format!(
-                "label={} class={} samples={} nonzero={} blackish={} color_min={:06x} color_max={:06x} transitions={} hash={:016x}",
-                label,
-                sample.classification,
-                sample.samples,
-                sample.nonzero,
-                sample.blackish,
-                sample.color_min,
-                sample.color_max,
-                sample.transitions,
-                sample.hash
-            ),
-        );
-
-        let path = "/tmp/mister-magik-visual-samples.tsv";
-        let needs_header = std::fs::metadata(path)
-            .map(|m| m.len() == 0)
-            .unwrap_or(true);
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-            if needs_header {
-                let _ = writeln!(
-                    f,
-                    "boot_ms\tlabel\tclass\tsamples\tnonzero\tblackish\tcolor_min\tcolor_max\ttransitions\thash"
-                );
-            }
-            let _ = writeln!(
-                f,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{:06x}\t{:06x}\t{}\t{:016x}",
-                boot_ms(),
-                sanitize_tsv(label),
-                sample.classification,
-                sample.samples,
-                sample.nonzero,
-                sample.blackish,
-                sample.color_min,
-                sample.color_max,
-                sample.transitions,
-                sample.hash
-            );
-        }
-    }
-
-    fn pixel_rgb_at(&self, x: usize, y: usize) -> u32 {
-        let pixels = unsafe {
-            std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.stride_pixels * self.h)
-        };
-        rgb565_to_rgb888(pixels[y * self.stride_pixels + x])
-    }
-
-    fn vertical_edge_signature(&self, x0: usize, x1: usize, min_cols: usize) -> (u64, u32) {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut nonzero = 0u32;
-        let x_end = x1.max(x0 + min_cols.min(self.w - x0)).min(self.w);
-        for y in 0..self.h {
-            for x in x0..x_end {
-                let p = self.pixel_rgb_at(x, y);
-                if p != 0 {
-                    nonzero += 1;
-                }
-                hash ^= p as u64;
-                hash = hash.wrapping_mul(0x1000_0000_01b3);
-            }
-        }
-        (hash, nonzero)
-    }
-
-    fn horizontal_edge_signature(&self, y0: usize, y1: usize, min_rows: usize) -> (u64, u32) {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut nonzero = 0u32;
-        let y_end = y1.max(y0 + min_rows.min(self.h - y0)).min(self.h);
-        for y in y0..y_end {
-            for x in 0..self.w {
-                let p = self.pixel_rgb_at(x, y);
-                if p != 0 {
-                    nonzero += 1;
-                }
-                hash ^= p as u64;
-                hash = hash.wrapping_mul(0x1000_0000_01b3);
-            }
-        }
-        (hash, nonzero)
-    }
-
-    fn visual_sample(&self) -> VisualSample {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut samples = 0u32;
-        let mut nonzero = 0u32;
-        let mut blackish = 0u32;
-        let mut transitions = 0u32;
-        let mut color_min = 0x00ff_ffffu32;
-        let mut color_max = 0u32;
-        let mut prev: Option<u32> = None;
-        let step = 16usize;
-        for y in (0..self.h).step_by(step) {
-            for x in (0..self.w).step_by(step) {
-                let p = self.pixel_rgb_at(x, y);
-                samples += 1;
-                if p != 0 {
-                    nonzero += 1;
-                }
-                let r = (p >> 16) & 0xff;
-                let g = (p >> 8) & 0xff;
-                let b = p & 0xff;
-                if r < 8 && g < 8 && b < 8 {
-                    blackish += 1;
-                }
-                color_min = color_min.min(p);
-                color_max = color_max.max(p);
-                if let Some(prev) = prev {
-                    if color_distance(prev, p) > 96 {
-                        transitions += 1;
-                    }
-                }
-                prev = Some(p);
-                hash ^= p as u64;
-                hash = hash.wrapping_mul(0x1000_0000_01b3);
-            }
-        }
-        let nonzero_pct = pct(nonzero, samples);
-        let blackish_pct = pct(blackish, samples);
-        let transition_pct = pct(transitions, samples.saturating_sub(1).max(1));
-        let classification = if blackish_pct >= 95 {
-            "mostly_black"
-        } else if nonzero_pct >= 20 && transition_pct >= 35 {
-            "static_like"
-        } else if nonzero_pct >= 5 {
-            "slint_like"
-        } else {
-            "unknown"
-        };
-        VisualSample {
-            hash,
-            samples,
-            nonzero,
-            blackish,
-            color_min,
-            color_max,
-            transitions,
-            classification,
-        }
+        self.sample_view().record_visual_sample(label);
     }
 
     pub fn present_rows_565(
@@ -919,35 +754,6 @@ impl Drop for MappedRgb565Framebuffer {
     }
 }
 
-struct VisualSample {
-    hash: u64,
-    samples: u32,
-    nonzero: u32,
-    blackish: u32,
-    color_min: u32,
-    color_max: u32,
-    transitions: u32,
-    classification: &'static str,
-}
-
-fn pct(n: u32, d: u32) -> u32 {
-    if d == 0 {
-        0
-    } else {
-        n.saturating_mul(100) / d
-    }
-}
-
-fn color_distance(a: u32, b: u32) -> u32 {
-    let ar = (a >> 16) & 0xff;
-    let ag = (a >> 8) & 0xff;
-    let ab = a & 0xff;
-    let br = (b >> 16) & 0xff;
-    let bg = (b >> 8) & 0xff;
-    let bb = b & 0xff;
-    ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)
-}
-
 fn present_rows_565_to(
     dst: &mut [Rgb565Pixel],
     fb_w: usize,
@@ -1120,39 +926,6 @@ fn ensure_source_len(src: &[Rgb565Pixel], needed: usize) -> Result<(), Framebuff
 pub fn pixel_to_rgb565(pixel: Pixel) -> Rgb565Pixel {
     let p = pixel.0 & 0x00ff_ffff;
     <Rgb565Pixel as TargetPixel>::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8)
-}
-
-fn rgb565_to_rgb888(pixel: Rgb565Pixel) -> u32 {
-    let v = pixel.0;
-    let r5 = (v >> 11) & 0x1f;
-    let g6 = (v >> 5) & 0x3f;
-    let b5 = v & 0x1f;
-    let r = ((r5 << 3) | (r5 >> 2)) as u32;
-    let g = ((g6 << 2) | (g6 >> 4)) as u32;
-    let b = ((b5 << 3) | (b5 >> 2)) as u32;
-    (r << 16) | (g << 8) | b
-}
-
-fn sanitize_tsv(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '\t' | '\n' | '\r' => ' ',
-            _ => c,
-        })
-        .collect()
-}
-
-fn boot_ms() -> u64 {
-    let Ok(s) = std::fs::read_to_string("/proc/uptime") else {
-        return 0;
-    };
-    let Some(first) = s.split_whitespace().next() else {
-        return 0;
-    };
-    let Ok(secs) = first.parse::<f64>() else {
-        return 0;
-    };
-    (secs * 1000.0).round() as u64
 }
 
 #[cfg(test)]
