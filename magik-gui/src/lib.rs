@@ -25,11 +25,6 @@ pub mod sprite_effects;
 pub mod text_effects;
 pub mod transition_effects;
 
-pub use framebuffer::copy as framebuffer_copy;
-pub use framebuffer::format as fb_format;
-pub use framebuffer::ownership as framebuffer_ownership;
-pub use framebuffer::vsync as vsync_pacer;
-
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,
 };

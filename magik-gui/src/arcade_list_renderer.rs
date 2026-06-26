@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
-use crate::fb::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
+use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
 

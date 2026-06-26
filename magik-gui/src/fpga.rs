@@ -38,7 +38,7 @@ pub const CONF_VGA_SCALER: u16 = 0x0004;
 pub const CONF_DIRECT_VIDEO: u16 = 0x0400;
 pub const CONF_VGA_FB: u16 = 0x1000;
 
-use crate::fb_format::{rgb565_stride_bytes, FB_FMT_565, FB_FMT_RXB};
+use mister_magik_fb::framebuffer::format::{rgb565_stride_bytes, FB_FMT_565, FB_FMT_RXB};
 
 // HPS framebuffer constants (video.cpp).
 pub const FB_ADDR: u32 = 0x2000_0000 + (32 * 1024 * 1024); // 0x22000000

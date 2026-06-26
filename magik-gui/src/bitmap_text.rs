@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::fb::Pixel;
+use mister_magik_fb::framebuffer::mapped::Pixel;
 
 struct ConsoleGlyph {
     left: i32,

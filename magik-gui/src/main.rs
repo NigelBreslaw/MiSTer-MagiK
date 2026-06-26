@@ -51,7 +51,6 @@ mod cpu_profile;
 mod display_config;
 #[cfg(mister_experiments)]
 mod experiments;
-mod fb;
 mod fpga;
 #[cfg(mister_bench_scenes)]
 mod frame_profile;
@@ -73,16 +72,16 @@ mod ui_runner;
 mod video_player;
 mod vt;
 
-pub use mister_magik_fb::fb_format;
 pub use mister_magik_fb::{
     arcade_catalog, command_args, controller_db, input_repeat, input_state, library_db,
     media_update, preview_worker, setup_nav,
 };
 
-use fb::{MappedRgb565Framebuffer, VsyncPacer, VsyncWaitStatus};
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
-use mister_magik_fb::fb_format::{production_label, rgb565_stride_bytes};
+use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
+use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
+use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::UiDisplayPlan;
 use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
 

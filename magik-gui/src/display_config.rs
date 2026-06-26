@@ -1,6 +1,6 @@
-use crate::fb::FbInfo;
 use crate::fpga::{FbParams, Fpga, VideoInfo};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay};
+use mister_magik_fb::framebuffer::mapped::FbInfo;
 use std::io;
 
 #[derive(Clone, Copy, Debug)]
