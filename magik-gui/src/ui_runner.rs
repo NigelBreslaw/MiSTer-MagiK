@@ -53,7 +53,7 @@ use slint::platform::software_renderer::PhysicalRegion;
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, OnceLock};
 
 #[cfg(mister_experiments)]
 mod camera_effects_loop;
