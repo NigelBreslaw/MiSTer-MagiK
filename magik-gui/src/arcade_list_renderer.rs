@@ -465,7 +465,7 @@ impl ArcadeListRenderer {
         let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         if x == 0 && w == ARCADE_LIST_W {
             let src = src_y * ARCADE_LIST_W;
-            target.copy_rect_from_565(
+            target.present_rect_565(
                 disp,
                 ui,
                 ARCADE_LIST_X,
@@ -476,7 +476,7 @@ impl ArcadeListRenderer {
             );
             return;
         }
-        target.copy_rect_from_565_strided(
+        target.present_rect_565_strided(
             disp,
             ui,
             ARCADE_LIST_X + x,
@@ -503,7 +503,7 @@ impl ArcadeListRenderer {
         self.selection_horizontal
             .resize(ARCADE_LIST_W * thickness, color);
         self.selection_horizontal.fill(color);
-        target.copy_rect_from_565(
+        target.present_rect_565(
             disp,
             ui,
             rect.x0,
@@ -512,7 +512,7 @@ impl ArcadeListRenderer {
             thickness,
             &self.selection_horizontal,
         );
-        target.copy_rect_from_565(
+        target.present_rect_565(
             disp,
             ui,
             rect.x0,
@@ -523,7 +523,7 @@ impl ArcadeListRenderer {
         );
         self.selection_vertical.resize(thickness * h, color);
         self.selection_vertical.fill(color);
-        target.copy_rect_from_565(
+        target.present_rect_565(
             disp,
             ui,
             rect.x0,
@@ -532,7 +532,7 @@ impl ArcadeListRenderer {
             h,
             &self.selection_vertical,
         );
-        target.copy_rect_from_565(
+        target.present_rect_565(
             disp,
             ui,
             rect.x1.saturating_sub(thickness),

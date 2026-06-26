@@ -251,7 +251,9 @@ pub(super) fn run_screensaver_loop(secs: u64, ui: &UiDisplay, disp: &mut MappedR
         let draw_us = draw_start.elapsed().as_micros() as u64;
         let vsync = pacer.wait();
         let present_start = Instant::now();
-        disp.copy_rows_565(&backbuffer, 0, ui.render_h());
+        if let Err(e) = disp.present_rows_565(&backbuffer, 0, ui.render_h()) {
+            eprintln!("framebuffer present screensaver rows failed: {e}");
+        }
         let present_us = present_start.elapsed().as_micros() as u64;
         let wall_us = frame_start.elapsed().as_micros() as u64;
         if let Some(trace) = cfg.trace.as_mut() {

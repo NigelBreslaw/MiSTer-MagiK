@@ -352,6 +352,12 @@ pub(super) fn dirty_rect_from_bounds(
     }
 }
 
+#[cold]
+#[inline(never)]
+fn log_present_error(context: &str, err: &dyn std::fmt::Display) {
+    eprintln!("framebuffer present {context} failed: {err}");
+}
+
 pub(super) fn copy_cached_rows_565(
     disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
@@ -360,7 +366,9 @@ pub(super) fn copy_cached_rows_565(
     y1: usize,
 ) {
     debug_assert_eq!(ui.fb_scale(), 1);
-    disp.copy_rows_565(cached, y0, y1);
+    if let Err(e) = disp.present_rows_565(cached, y0, y1) {
+        log_present_error("rows", &e);
+    }
 }
 
 pub(super) fn copy_cached_rect_565(
@@ -374,7 +382,18 @@ pub(super) fn copy_cached_rect_565(
         return;
     }
     debug_assert_eq!(ui.fb_scale(), 1);
-    disp.copy_rect_565(cached, ui.render_w(), rect.x0, rect.y0, rect.x1, rect.y1);
+    if let Err(e) = disp.present_rect_565_strided(
+        rect.x0,
+        rect.y0,
+        rect.x1 - rect.x0,
+        rect.y1 - rect.y0,
+        cached,
+        ui.render_w(),
+        rect.x0,
+        rect.y0,
+    ) {
+        log_present_error("rect", &e);
+    }
 }
 
 pub(super) fn pixel_to_rgb(pixel: Pixel) -> (u8, u8, u8) {
@@ -453,7 +472,7 @@ impl UiFrameTarget {
         rect.rows()
     }
 
-    pub(crate) fn copy_rect_from_565(
+    pub(crate) fn present_rect_565(
         &mut self,
         disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
@@ -465,11 +484,13 @@ impl UiFrameTarget {
     ) {
         let _ = ui;
         let Self::Rgb565 { .. } = self;
-        disp.copy_rect_from_565(x, y, w, h, src);
+        if let Err(e) = disp.present_rect_565(x, y, w, h, src) {
+            log_present_error("dense rect", &e);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn copy_rect_from_565_strided(
+    pub(crate) fn present_rect_565_strided(
         &mut self,
         disp: &mut MappedRgb565Framebuffer,
         ui: &UiDisplay,
@@ -484,7 +505,9 @@ impl UiFrameTarget {
     ) {
         let _ = ui;
         let Self::Rgb565 { .. } = self;
-        disp.copy_rect_from_565_strided(x, y, w, h, src, src_stride, src_x, src_y);
+        if let Err(e) = disp.present_rect_565_strided(x, y, w, h, src, src_stride, src_x, src_y) {
+            log_present_error("strided rect", &e);
+        }
     }
 
     pub(super) fn blit_raw_preview(

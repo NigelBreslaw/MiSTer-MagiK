@@ -26,6 +26,30 @@ use std::sync::OnceLock;
 
 const MAX_FRAMEBUFFER_PIXELS: usize = 1920 * 1080;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FramebufferPresentError {
+    InvalidSourceStride { stride: usize, min_stride: usize },
+    SourceTooShort { needed: usize, actual: usize },
+}
+
+impl std::fmt::Display for FramebufferPresentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSourceStride { stride, min_stride } => {
+                write!(
+                    f,
+                    "source stride {stride} is smaller than required {min_stride}"
+                )
+            }
+            Self::SourceTooShort { needed, actual } => {
+                write!(f, "source has {actual} pixels, need {needed}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FramebufferPresentError {}
+
 /// Cutoff for glyph/text edges: coverage below this is transparent, at/above is
 /// fully opaque (crisp pixel font after 2× upscale). Tune via `MISTER_GLYPH_ALPHA_THRESHOLD`.
 fn glyph_alpha_threshold() -> u8 {
@@ -433,7 +457,7 @@ impl MappedRgb565Framebuffer {
         self.h
     }
 
-    pub fn buffer_565_mut(&mut self) -> &mut [Rgb565Pixel] {
+    fn buffer_565_mut(&mut self) -> &mut [Rgb565Pixel] {
         unsafe { std::slice::from_raw_parts_mut(self.mem.cast::<Rgb565Pixel>(), self.w * self.h) }
     }
 
@@ -657,14 +681,16 @@ impl MappedRgb565Framebuffer {
         }
     }
 
-    pub fn copy_rows_565(&mut self, src: &[Rgb565Pixel], y0: usize, y1: usize) {
-        let w = self.w;
+    pub fn present_rows_565(
+        &mut self,
+        src: &[Rgb565Pixel],
+        y0: usize,
+        y1: usize,
+    ) -> Result<(), FramebufferPresentError> {
+        let fb_w = self.w;
+        let fb_h = self.h;
         let dst = self.buffer_565_mut();
-        let a = y0 * w;
-        let b = (y1 * w).min(dst.len());
-        if b > a {
-            dst[a..b].copy_from_slice(&src[a..b]);
-        }
+        present_rows_565_to(dst, fb_w, fb_h, src, y0, y1)
     }
 
     #[cfg(mister_experiments)]
@@ -680,30 +706,36 @@ impl MappedRgb565Framebuffer {
         }
     }
 
-    pub fn copy_rect_565(
+    pub fn present_rect_565(
         &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
         src: &[Rgb565Pixel],
-        src_w: usize,
-        src_x0: usize,
-        src_y0: usize,
-        src_x1: usize,
-        src_y1: usize,
-    ) {
-        if src_x1 <= src_x0 || src_y1 <= src_y0 {
-            return;
-        }
-        if src_x0 == 0 && src_x1 == self.w && src_w == self.w {
-            self.copy_rows_565(src, src_y0, src_y1);
-            return;
-        }
-        debug_assert_eq!(src_w, self.w);
-        let dst_w = self.w;
+    ) -> Result<(), FramebufferPresentError> {
+        let fb_w = self.w;
+        let fb_h = self.h;
         let dst = self.buffer_565_mut();
-        for sy in src_y0..src_y1 {
-            let a = sy * dst_w + src_x0;
-            let b = sy * dst_w + src_x1;
-            dst[a..b].copy_from_slice(&src[a..b]);
-        }
+        present_rect_565_to(dst, fb_w, fb_h, x, y, w, h, src)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn present_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride: usize,
+        src_x: usize,
+        src_y: usize,
+    ) -> Result<(), FramebufferPresentError> {
+        let fb_w = self.w;
+        let fb_h = self.h;
+        let dst = self.buffer_565_mut();
+        present_rect_565_strided_to(dst, fb_w, fb_h, x, y, w, h, src, src_stride, src_x, src_y)
     }
 
     #[allow(dead_code)]
@@ -747,68 +779,6 @@ impl MappedRgb565Framebuffer {
             {
                 *dst = pixel_to_rgb565(*src);
             }
-        }
-    }
-
-    /// Copy a dense RGB565 source rectangle into an RGB565 framebuffer at (x,y).
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
-    pub fn copy_rect_from_565(
-        &mut self,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Rgb565Pixel],
-    ) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        let dst_w = self.w;
-        let x1 = (x + w).min(self.w);
-        let y1 = (y + h).min(self.h);
-        if x >= x1 || y >= y1 {
-            return;
-        }
-        let copy_w = x1 - x;
-        let copy_h = y1 - y;
-        let dst = self.buffer_565_mut();
-        for row in 0..copy_h {
-            let src_a = row * w;
-            let dst_a = (y + row) * dst_w + x;
-            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
-        }
-    }
-
-    /// Copy an RGB565 source rectangle with a wider source stride into the framebuffer.
-    #[cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn copy_rect_from_565_strided(
-        &mut self,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Rgb565Pixel],
-        src_stride: usize,
-        src_x: usize,
-        src_y: usize,
-    ) {
-        if w == 0 || h == 0 || src_stride == 0 {
-            return;
-        }
-        let dst_w = self.w;
-        let x1 = (x + w).min(self.w);
-        let y1 = (y + h).min(self.h);
-        if x >= x1 || y >= y1 {
-            return;
-        }
-        let copy_w = x1 - x;
-        let copy_h = y1 - y;
-        let dst = self.buffer_565_mut();
-        for row in 0..copy_h {
-            let src_a = (src_y + row) * src_stride + src_x;
-            let dst_a = (y + row) * dst_w + x;
-            dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
         }
     }
 
@@ -924,6 +894,117 @@ fn color_distance(a: u32, b: u32) -> u32 {
     ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)
 }
 
+fn present_rows_565_to(
+    dst: &mut [Rgb565Pixel],
+    fb_w: usize,
+    fb_h: usize,
+    src: &[Rgb565Pixel],
+    y0: usize,
+    y1: usize,
+) -> Result<(), FramebufferPresentError> {
+    let y0 = y0.min(fb_h);
+    let y1 = y1.min(fb_h);
+    if y1 <= y0 || fb_w == 0 {
+        return Ok(());
+    }
+
+    let a = y0 * fb_w;
+    let b = y1 * fb_w;
+    ensure_source_len(src, b)?;
+    dst[a..b].copy_from_slice(&src[a..b]);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn present_rect_565_to(
+    dst: &mut [Rgb565Pixel],
+    fb_w: usize,
+    fb_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    src: &[Rgb565Pixel],
+) -> Result<(), FramebufferPresentError> {
+    if w == 0 || h == 0 || fb_w == 0 || fb_h == 0 {
+        return Ok(());
+    }
+
+    let x1 = x.saturating_add(w).min(fb_w);
+    let y1 = y.saturating_add(h).min(fb_h);
+    if x >= x1 || y >= y1 {
+        return Ok(());
+    }
+
+    let copy_w = x1 - x;
+    let copy_h = y1 - y;
+    let needed = (copy_h - 1) * w + copy_w;
+    ensure_source_len(src, needed)?;
+
+    for row in 0..copy_h {
+        let src_a = row * w;
+        let dst_a = (y + row) * fb_w + x;
+        dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn present_rect_565_strided_to(
+    dst: &mut [Rgb565Pixel],
+    fb_w: usize,
+    fb_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    src: &[Rgb565Pixel],
+    src_stride: usize,
+    src_x: usize,
+    src_y: usize,
+) -> Result<(), FramebufferPresentError> {
+    if w == 0 || h == 0 || fb_w == 0 || fb_h == 0 {
+        return Ok(());
+    }
+
+    let x1 = x.saturating_add(w).min(fb_w);
+    let y1 = y.saturating_add(h).min(fb_h);
+    if x >= x1 || y >= y1 {
+        return Ok(());
+    }
+
+    let copy_w = x1 - x;
+    let copy_h = y1 - y;
+    let min_stride = src_x.saturating_add(copy_w);
+    if src_stride < min_stride {
+        return Err(FramebufferPresentError::InvalidSourceStride {
+            stride: src_stride,
+            min_stride,
+        });
+    }
+
+    let needed = (src_y + copy_h - 1) * src_stride + src_x + copy_w;
+    ensure_source_len(src, needed)?;
+
+    for row in 0..copy_h {
+        let src_a = (src_y + row) * src_stride + src_x;
+        let dst_a = (y + row) * fb_w + x;
+        dst[dst_a..dst_a + copy_w].copy_from_slice(&src[src_a..src_a + copy_w]);
+    }
+    Ok(())
+}
+
+fn ensure_source_len(src: &[Rgb565Pixel], needed: usize) -> Result<(), FramebufferPresentError> {
+    if src.len() < needed {
+        Err(FramebufferPresentError::SourceTooShort {
+            needed,
+            actual: src.len(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 pub fn pixel_to_rgb565(pixel: Pixel) -> Rgb565Pixel {
     let p = pixel.0 & 0x00ff_ffff;
     <Rgb565Pixel as TargetPixel>::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8)
@@ -989,5 +1070,72 @@ mod tests {
     #[test]
     fn mode_line_preserves_non_rgb565_framebuffer_mode_numerically() {
         assert_eq!(fb_info(32, 3840).mode_line(), "32 1 960 540 3840");
+    }
+
+    #[test]
+    fn present_rect_565_rejects_short_source() {
+        let mut dst = vec![Rgb565Pixel(0); 4 * 4];
+        let src = vec![Rgb565Pixel(1); 5];
+
+        let err =
+            present_rect_565_strided_to(&mut dst, 4, 4, 1, 1, 3, 2, &src, 3, 0, 0).unwrap_err();
+
+        assert_eq!(
+            err,
+            FramebufferPresentError::SourceTooShort {
+                needed: 6,
+                actual: 5
+            }
+        );
+    }
+
+    #[test]
+    fn present_rect_565_rejects_invalid_stride() {
+        let mut dst = vec![Rgb565Pixel(0); 4 * 4];
+        let src = vec![Rgb565Pixel(1); 4];
+
+        let err =
+            present_rect_565_strided_to(&mut dst, 4, 4, 0, 0, 2, 2, &src, 1, 0, 0).unwrap_err();
+
+        assert_eq!(
+            err,
+            FramebufferPresentError::InvalidSourceStride {
+                stride: 1,
+                min_stride: 2
+            }
+        );
+    }
+
+    #[test]
+    fn present_rect_565_clips_right_and_bottom_edges() {
+        let mut dst = vec![Rgb565Pixel(0); 4 * 3];
+        let src = vec![
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+            Rgb565Pixel(6),
+        ];
+
+        present_rect_565_strided_to(&mut dst, 4, 3, 2, 1, 4, 3, &src, 4, 0, 0).unwrap();
+
+        assert_eq!(
+            dst,
+            vec![
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+            ]
+        );
     }
 }
