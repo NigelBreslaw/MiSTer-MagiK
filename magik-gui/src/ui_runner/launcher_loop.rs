@@ -255,7 +255,6 @@ pub(super) fn present_launcher_startup_frame(
     start: Instant,
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
-    f: &mut Fpga,
     window: &Rc<MinimalSoftwareWindow>,
     target: &mut UiFrameTarget,
 ) {
@@ -279,7 +278,7 @@ pub(super) fn present_launcher_startup_frame(
         let draw_t = Instant::now();
         window.request_redraw();
         window.draw_if_needed(|renderer| {
-            let _ = target.render(renderer, ui);
+            let _ = target.render(renderer, frame_target_geometry(ui));
         });
         render_us += draw_t.elapsed().as_micros();
         if frame < settle_frames {
@@ -292,7 +291,7 @@ pub(super) fn present_launcher_startup_frame(
     }
 
     let copy_t = Instant::now();
-    target.present_rows(f, disp, ui, 0, ui.render_h());
+    target.present_rows(disp, frame_target_geometry(ui), 0, ui.render_h());
     print_startup_event(
         start,
         "startup_splash_presented",
@@ -935,13 +934,13 @@ pub(super) fn run_launcher_loop(
                     update_slint_animations(animation_clock);
                     let mut recovery_rect = None;
                     window.draw_if_needed(|renderer| {
-                        let region = target.render(renderer, ui);
+                        let region = target.render(renderer, frame_target_geometry(ui));
                         recovery_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
                     });
                     if let Some(rect) = recovery_rect {
-                        let _ = target.present_rect(f, disp, ui, rect);
+                        let _ = target.present_rect(disp, frame_target_geometry(ui), rect);
                     } else {
-                        target.present_rows(f, disp, ui, 0, ui.render_h());
+                        target.present_rows(disp, frame_target_geometry(ui), 0, ui.render_h());
                     }
                     let recovery_presented = Instant::now();
                     window.request_redraw();
@@ -1144,11 +1143,16 @@ pub(super) fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region = target.render(renderer, ui);
+                                    let region = target.render(renderer, frame_target_geometry(ui));
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(f, disp, ui, 0, ui.render_h());
+                                target.present_rows(
+                                    disp,
+                                    frame_target_geometry(ui),
+                                    0,
+                                    ui.render_h(),
+                                );
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
                                     Err(e) => {
@@ -1183,11 +1187,16 @@ pub(super) fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region = target.render(renderer, ui);
+                                    let region = target.render(renderer, frame_target_geometry(ui));
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(f, disp, ui, 0, ui.render_h());
+                                target.present_rows(
+                                    disp,
+                                    frame_target_geometry(ui),
+                                    0,
+                                    ui.render_h(),
+                                );
                                 std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
@@ -1215,11 +1224,16 @@ pub(super) fn run_launcher_loop(
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
                                 window.draw_if_needed(|renderer| {
-                                    let region = target.render(renderer, ui);
+                                    let region = target.render(renderer, frame_target_geometry(ui));
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(f, disp, ui, 0, ui.render_h());
+                                target.present_rows(
+                                    disp,
+                                    frame_target_geometry(ui),
+                                    0,
+                                    ui.render_h(),
+                                );
                                 std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
@@ -1310,11 +1324,11 @@ pub(super) fn run_launcher_loop(
                         window.request_redraw();
                         update_slint_animations(animation_clock);
                         window.draw_if_needed(|renderer| {
-                            let region = target.render(renderer, ui);
+                            let region = target.render(renderer, frame_target_geometry(ui));
                             let _ = region;
                         });
                         let _pace = pacer.wait();
-                        target.present_rows(f, disp, ui, 0, ui.render_h());
+                        target.present_rows(disp, frame_target_geometry(ui), 0, ui.render_h());
                         let loading_presented = Instant::now();
                         lifecycle
                             .loading_frame_presented(loading_presented, &mut lifecycle_effects);
@@ -1512,7 +1526,7 @@ pub(super) fn run_launcher_loop(
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
         update_slint_animations(animation_clock);
-        let mut layer_target = LayerTarget::new(target, f, disp, ui);
+        let mut layer_target = LayerTarget::new(target, disp, ui);
         let frame_t1 = Instant::now();
         let this_rect = layer_target.render_slint_base(&window);
         let frame_t2 = Instant::now();
@@ -2110,44 +2124,6 @@ mod tests {
         assert_eq!(target.render_w, 640);
         assert_eq!(target.render_h, 448);
         assert_eq!(target.scale, 1);
-    }
-
-    #[test]
-    pub(super) fn dirty_rect_ignores_fully_negative_bounds() {
-        assert_eq!(dirty_rect_from_bounds(-40, 10, 20, 20, 960, 540), None);
-        assert_eq!(dirty_rect_from_bounds(10, -40, 20, 20, 960, 540), None);
-    }
-
-    #[test]
-    pub(super) fn dirty_rect_clips_partially_negative_bounds() {
-        assert_eq!(
-            dirty_rect_from_bounds(-10, -5, 30, 20, 960, 540),
-            Some(DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: 20,
-                y1: 15
-            })
-        );
-    }
-
-    #[test]
-    pub(super) fn dirty_rect_ignores_zero_area_bounds() {
-        assert_eq!(dirty_rect_from_bounds(10, 10, 0, 20, 960, 540), None);
-        assert_eq!(dirty_rect_from_bounds(10, 10, 20, 0, 960, 540), None);
-    }
-
-    #[test]
-    pub(super) fn dirty_rect_keeps_in_bounds_rect() {
-        assert_eq!(
-            dirty_rect_from_bounds(10, 20, 30, 40, 960, 540),
-            Some(DirtyRect {
-                x0: 10,
-                y0: 20,
-                x1: 40,
-                y1: 60
-            })
-        );
     }
 
     fn catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {

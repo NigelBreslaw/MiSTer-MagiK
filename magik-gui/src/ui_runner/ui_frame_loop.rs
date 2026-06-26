@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn run_bench_frame(
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
-    f: &mut Fpga,
+    _f: &mut Fpga,
     target: &mut UiFrameTarget,
     window: &Rc<MinimalSoftwareWindow>,
     frame_order: FrameOrder,
@@ -19,7 +19,7 @@ pub(super) fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t1 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = target.render(renderer, ui);
+                let region = target.render(renderer, frame_target_geometry(ui));
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t2 = Instant::now();
@@ -30,7 +30,7 @@ pub(super) fn run_bench_frame(
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
-                    let rows = target.present_rect(f, disp, ui, rect);
+                    let rows = target.present_rect(disp, frame_target_geometry(ui), rect);
                     copy_us += c0.elapsed().as_micros() as u64;
                     present_rect = Some(frame_rect(rect));
                     rows
@@ -60,7 +60,7 @@ pub(super) fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = target.render(renderer, ui);
+                let region = target.render(renderer, frame_target_geometry(ui));
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t3 = Instant::now();
@@ -69,7 +69,7 @@ pub(super) fn run_bench_frame(
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
-                    let rows = target.present_rect(f, disp, ui, rect);
+                    let rows = target.present_rect(disp, frame_target_geometry(ui), rect);
                     copy_us += c0.elapsed().as_micros() as u64;
                     present_rect = Some(frame_rect(rect));
                     rows

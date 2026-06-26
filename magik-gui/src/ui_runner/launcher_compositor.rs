@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
-    f: &'a mut Fpga,
     disp: &'a mut MappedRgb565Framebuffer,
     ui: &'a UiDisplay,
 }
@@ -10,16 +9,10 @@ pub(super) struct LayerTarget<'a> {
 impl<'a> LayerTarget<'a> {
     pub(super) fn new(
         target: &'a mut UiFrameTarget,
-        f: &'a mut Fpga,
         disp: &'a mut MappedRgb565Framebuffer,
         ui: &'a UiDisplay,
     ) -> Self {
-        Self {
-            target,
-            f,
-            disp,
-            ui,
-        }
+        Self { target, disp, ui }
     }
 
     pub(super) fn render_slint_base(
@@ -28,7 +21,7 @@ impl<'a> LayerTarget<'a> {
     ) -> Option<DirtyRect> {
         let mut slint_dirty = None;
         window.draw_if_needed(|renderer| {
-            let region = self.target.render(renderer, self.ui);
+            let region = self.target.render(renderer, frame_target_geometry(self.ui));
             slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
         });
         slint_dirty
@@ -61,7 +54,8 @@ impl<'a> LayerTarget<'a> {
     }
 
     fn present_cached_rect(&mut self, rect: DirtyRect) -> u32 {
-        self.target.present_rect(self.f, self.disp, self.ui, rect)
+        self.target
+            .present_rect(self.disp, frame_target_geometry(self.ui), rect)
     }
 
     fn present_arcade_list_update(
@@ -69,7 +63,7 @@ impl<'a> LayerTarget<'a> {
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
     ) -> u32 {
-        copy_arcade_list_update(self.target, self.disp, self.ui, renderer, update)
+        copy_arcade_list_update(self.target, self.disp, renderer, update)
     }
 }
 

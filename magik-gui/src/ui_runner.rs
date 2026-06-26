@@ -1,13 +1,13 @@
 //! Shared vsync render loop and Slint bench scene dispatch.
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
-use crate::fb::{MappedRgb565Framebuffer, Pixel, VsyncPacer};
+use crate::fb::{MappedRgb565Framebuffer, VsyncPacer};
 use crate::fb_format::production_label;
 use crate::fpga::Fpga;
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::framebuffer::vsync::VsyncPaceSource;
 use slint::platform::software_renderer::{
-    MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, SoftwareRenderer, TargetPixel,
+    MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
@@ -50,7 +50,12 @@ use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_
 #[cfg(mister_experiments)]
 use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
-use slint::platform::software_renderer::PhysicalRegion;
+#[cfg(mister_experiments)]
+use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
+use mister_magik_fb::framebuffer::target::{
+    build_launcher_present_plan, copy_cached_rect_565, dirty_rect, format_dirty_rect, DirtyRect,
+    DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
+};
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -130,7 +135,6 @@ use ui_platform::*;
 use video_loop::*;
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
-const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
 const FIRST_LIBRARY_SCAN_MESSAGE: &str =
     "Scanning for games. This only happens the first time you start MiSTer MagiK";
 const UPDATING_LIBRARY_SCAN_MESSAGE: &str = "Updating Library";
@@ -334,7 +338,7 @@ pub fn run_ui(f: &mut Fpga) {
         "demo" => {
             with_scene_app!(app::AppWindow, &ui, &window, app, {
                 app.show().expect("show");
-                let mut target = UiFrameTarget::open(&ui);
+                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 run_frame_loop(
                     secs,
                     &ui,
@@ -350,7 +354,7 @@ pub fn run_ui(f: &mut Fpga) {
         "full_motion" => {
             with_scene_app!(full_motion::FullMotion, &ui, &window, app, {
                 app.show().expect("show");
-                let mut target = UiFrameTarget::open(&ui);
+                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 run_frame_loop(
                     secs,
                     &ui,
@@ -366,7 +370,7 @@ pub fn run_ui(f: &mut Fpga) {
         "static_ui" => {
             with_scene_app!(static_ui::StaticUi, &ui, &window, app, {
                 app.show().expect("show");
-                let mut target = UiFrameTarget::open(&ui);
+                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 run_frame_loop(
                     secs,
                     &ui,
@@ -382,7 +386,7 @@ pub fn run_ui(f: &mut Fpga) {
         "local_motion" => {
             with_scene_app!(local_motion::LocalMotion, &ui, &window, app, {
                 app.show().expect("show");
-                let mut target = UiFrameTarget::open(&ui);
+                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 run_frame_loop(
                     secs,
                     &ui,
@@ -417,12 +421,11 @@ pub fn run_ui(f: &mut Fpga) {
                 app.show().expect("show");
                 boot_analytics::event("app_show", "scene=launcher ok=1");
                 window.request_redraw();
-                let mut target = UiFrameTarget::open(&ui);
+                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 present_launcher_startup_frame(
                     Instant::now(),
                     &ui,
                     &mut disp,
-                    f,
                     &window,
                     &mut target,
                 );
