@@ -258,13 +258,14 @@ individual AmigaVision titles. The archive itself is not a direct launch ref.
 
 Screenshot packs are fixed runtime artifacts, not catalog inputs. The runtime
 loads LZ4-block `.mmlz4b` packs from `/media/fat/mister-magik/assets`; matching
-`.mmlz4b.idx` sidecars are optional seek indexes for first-preview latency. The
-catalog stores only the pack path and asset key needed to request a preview.
-Raw preview archive formats and ad hoc on-device pack generation are retired.
-Build and publish packs from the private `private/magik-cloud` submodule; this
-repo keeps only runtime preview loading, catalog projection, and device
-acceptance checks. Use `scripts/magik-cloud path` to resolve `MAGIK_CLOUD_DIR`,
-the submodule, or the legacy `../magik-cloud` checkout. See
+`.mmlz4b.idx` sidecars are seek indexes for first-preview latency and the
+source of truth for fast preview-availability refresh. The catalog stores only
+the pack path, asset key, and current availability bit needed to request a
+preview. Raw preview archive formats and ad hoc on-device pack generation are
+retired. Build and publish packs from the private `private/magik-cloud`
+submodule; this repo keeps only runtime preview loading, catalog projection,
+and device acceptance checks. Use `scripts/magik-cloud path` to resolve
+`MAGIK_CLOUD_DIR`, the submodule, or the legacy `../magik-cloud` checkout. See
 `private/magik-cloud/docs/media-build.md` for the media-build workflow.
 
 Remote screenshot-pack updates are manifest-driven. On-device MagiK and the
@@ -289,6 +290,16 @@ keys. The preview worker resolves those legacy paths through the media state to
 the preferred size-qualified pack and falls back to legacy fixed-name files when
 needed. Current public packs are `320x320`; future smaller packs must preserve
 their size in the local filename.
+
+`mister-magik-fb preview-index-refresh-bench LABEL` refreshes preview
+availability in the existing SQLite catalog from installed `.mmlz4b.idx`
+sidecars. It does not rescan game directories or decode screenshot payloads.
+For each supported screenshot-pack system, it resolves the active pack, reads
+only the sidecar membership, and updates `has_preview` in `launcher_catalog`,
+`ui_arcade_preferred`, and `ui_arcade_variants` for that system. Missing packs
+or missing sidecars clear availability for that system and emit timing rows
+instead of failing the command; malformed sidecars emit error rows and leave the
+system untouched.
 
 The downloader streams the raw manifest object directly into a hidden temporary
 file beside the final pack on `/media/fat` while feeding the same bytes to the

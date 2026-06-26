@@ -16,6 +16,8 @@
 //!                        benchmark screenshot pack downloads and variant decoding
 //!     media-bench-save   benchmark screenshot pack save/publish paths
 //!     preview-pack-bench benchmark screenshot pack entry access/decode timings
+//!     preview-index-refresh-bench
+//!                        update DB preview flags from screenshot pack indexes
 //!     input              gamepad log / sniff / calibrate
 //!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
 //!   Benchmarks:
@@ -139,6 +141,12 @@ fn main() {
     #[cfg(feature = "diagnostics")]
     if cmd == "preview-pack-bench" {
         preview_pack_bench::run();
+        return;
+    }
+
+    #[cfg(feature = "diagnostics")]
+    if cmd == "preview-index-refresh-bench" {
+        run_preview_index_refresh_bench();
         return;
     }
 
@@ -477,6 +485,26 @@ fn run_hbmame_metadata_from_library() {
         }
         Err(e) => {
             eprintln!("hbmame_metadata_from_library\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_preview_index_refresh_bench() {
+    let label = std::env::args()
+        .nth(2)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "PREVIEW-INDEX-REFRESH".to_string());
+    println!("{}", library_db::PREVIEW_INDEX_REFRESH_TSV_HEADER);
+    match library_db::refresh_default_preview_index_flags(&label) {
+        Ok(rows) => {
+            for row in rows {
+                println!("{}", row.to_tsv());
+            }
+        }
+        Err(e) => {
+            eprintln!("preview_index_refresh\tfailed\t{e}");
             std::process::exit(1);
         }
     }

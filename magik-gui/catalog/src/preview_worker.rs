@@ -257,6 +257,13 @@ pub struct PreviewArchiveIndex {
     pub entries: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewArchiveSidecarStems {
+    pub archive_path: String,
+    pub index_path: String,
+    pub entries: Vec<String>,
+}
+
 pub struct PreviewWorker {
     selected_tx: mpsc::Sender<PreviewRequest>,
     prefetch_tx: mpsc::Sender<PreviewRequest>,
@@ -1096,6 +1103,35 @@ pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String>
     })
 }
 
+pub fn resolved_preview_archive_path(preview_archive_path: &str) -> String {
+    resolve_preview_archive_path(preview_archive_path)
+}
+
+pub fn preview_archive_sidecar_entry_stems(
+    path: &Path,
+) -> Result<Option<PreviewArchiveSidecarStems>, String> {
+    let Some(index) = preview_archive_sidecar_index(path)? else {
+        return Ok(None);
+    };
+    let mut entries = index
+        .entries
+        .keys()
+        .filter_map(|name| Path::new(name).file_stem().and_then(|stem| stem.to_str()))
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries.dedup();
+    Ok(Some(PreviewArchiveSidecarStems {
+        archive_path: path.display().to_string(),
+        index_path: preview_archive_sidecar_path(path).display().to_string(),
+        entries,
+    }))
+}
+
+pub fn preview_archive_sidecar_path_for_archive(archive_path: &Path) -> PathBuf {
+    preview_archive_sidecar_path(archive_path)
+}
+
 fn auto_preview_archive_path() -> Option<String> {
     if preview_archive_auto_disabled() {
         return None;
@@ -1543,8 +1579,6 @@ fn start_background_preview_archive_load(archive_path: String) {
 }
 
 impl PreviewArchive {
-    #[cfg(test)]
-    const LZ4_BLOCK_MAGIC: &'static [u8; 8] = b"MMLZ4B1\0";
     const V2_PIXELS_MAGIC: &'static [u8; 8] = b"MMPX2B1\0";
 
     fn open(path: &Path) -> Result<Self, String> {
@@ -2187,6 +2221,29 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_entry_stems_reads_idx_membership() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-sidecar-stems-{}.mmlz4b",
+            std::process::id()
+        ));
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_lz4_block_archive_with_index(&path, "Tiny.Game.rgb565", &payload);
+
+        let stems = preview_archive_sidecar_entry_stems(&path)
+            .expect("read sidecar")
+            .expect("sidecar exists");
+
+        assert_eq!(stems.archive_path, path.display().to_string());
+        assert_eq!(
+            stems.index_path,
+            preview_archive_sidecar_path(&path).display().to_string()
+        );
+        assert_eq!(stems.entries, vec!["tiny.game"]);
+        let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn archive_lookup_matches_mixed_case_cache_names() {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-preview-case-{}.mmlz4b",
@@ -2699,18 +2756,18 @@ mod tests {
             &path,
             "bad.rgb565",
             &payload,
-            payload.len() + 1,
-            payload.len() + 1,
+            payload.len() - 20,
+            payload.len() - 21,
         );
-        let archive = PreviewArchive::open(&path).expect("open corrupt lz4 block archive fixture");
+        let archive = PreviewArchive::open(&path).expect("open corrupt v2 pixel archive fixture");
         let mut scratch = PreviewArchiveScratch::default();
 
         let err = archive
             .load_timed("bad.rgb565", &mut scratch)
-            .expect_err("lz4 raw block length mismatch should fail");
+            .expect_err("raw pixel length mismatch should fail");
 
         assert!(
-            err.contains("raw lz4 block length mismatch"),
+            err.contains("raw pixel length mismatch"),
             "unexpected error: {err}"
         );
         let _ = std::fs::remove_file(path);
@@ -2853,17 +2910,25 @@ mod tests {
         raw_len: usize,
         compressed_len: usize,
     ) {
-        let index_len = 8 + 4 + 2 + 4 + 4 + 8 + name.len();
+        assert_eq!(&payload[..8], b"MM56501\0");
+        let width = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+        let height = u32::from_le_bytes(payload[12..16].try_into().unwrap());
+        let stride_bytes = u32::from_le_bytes(payload[16..20].try_into().unwrap());
+        let pixels = &payload[20..];
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::LZ4_BLOCK_MAGIC);
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&stride_bytes.to_le_bytes());
         bytes.extend_from_slice(&(raw_len as u32).to_le_bytes());
+        bytes.push(1);
         bytes.extend_from_slice(&(compressed_len as u32).to_le_bytes());
         bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
         bytes.extend_from_slice(name.as_bytes());
-        bytes.push(1);
-        bytes.extend_from_slice(payload);
+        bytes.extend_from_slice(pixels);
         std::fs::write(path, bytes).expect("write lz4 block archive fixture");
     }
 }
