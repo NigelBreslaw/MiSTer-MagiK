@@ -48,6 +48,7 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
   ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
+  ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
   ./build-arm64-apple-container.sh --rebuild-image → rebuild the cross image
@@ -73,6 +74,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
+    --diagnostics) add_feature diagnostics ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;

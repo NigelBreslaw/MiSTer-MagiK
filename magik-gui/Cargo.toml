@@ -17,6 +17,7 @@ required-features = ["ui"]
 
 [dependencies]
 libc = "0.2"
+lz4_flex = "0.13.1"
 # No "std" feature on purpose: that pulls system font loading (fontconfig), which
 # we don't have/want on the MiSTer. Instead we embed a font for the software
 # renderer (see build.rs) and provide time/etc. ourselves via the Platform trait.

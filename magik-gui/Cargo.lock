@@ -2600,6 +2600,7 @@ version = "0.1.0"
 dependencies = [
  "ffmpeg-next",
  "libc",
+ "lz4_flex",
  "mister-magik-catalog",
  "mister-magik-ui",
  "pprof",
