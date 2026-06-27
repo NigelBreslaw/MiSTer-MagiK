@@ -54,6 +54,7 @@ target/
 .env
 .env.*
 !.env.example
+/private/test-fixtures/
 
 # OS junk
 .DS_Store

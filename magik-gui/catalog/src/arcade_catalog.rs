@@ -5,6 +5,7 @@
 
 use crate::launch_profiles::{self, MountKind, PayloadRule};
 use crate::catalog_navigation::CatalogNavigationProjection;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::path::PathBuf;
@@ -86,6 +87,7 @@ pub struct ArcadeCatalog {
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
     search_keys: Vec<ArcadeSearchKey>,
+    autocomplete: ArcadeAutocompleteIndex,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -215,6 +217,7 @@ impl ArcadeCatalog {
             games_by_ref: indexes.games_by_ref,
             launch_plans_by_ref: indexes.launch_plans_by_ref,
             search_keys: indexes.search_keys,
+            autocomplete: indexes.autocomplete,
         }
     }
 
@@ -290,22 +293,30 @@ impl ArcadeCatalog {
     pub fn search_game_indexes(&self, system_id: &str, query: &str) -> Vec<usize> {
         let needle = search_match_key(query);
         let compact_needle = compact_search_match_key(query);
+        let tokens = search_query_tokens(&needle);
         if needle.is_empty() && compact_needle.is_empty() {
             return self.system_game_indexes(system_id).to_vec();
         }
-        self.system_game_indexes(system_id)
+        let mut scored: Vec<SearchMatch> = self
+            .system_game_indexes(system_id)
             .iter()
             .copied()
-            .filter(|index| {
-                self.search_keys.get(*index).is_some_and(|key| {
-                    key.title.contains(&needle)
-                        || key.path.contains(&needle)
-                        || (!compact_needle.is_empty()
-                            && (key.compact_title.contains(&compact_needle)
-                                || key.compact_path.contains(&compact_needle)))
-                })
+            .filter_map(|index| {
+                self.search_keys
+                    .get(index)
+                    .and_then(|key| key.score(&tokens, &compact_needle))
+                    .map(|score| SearchMatch { index, score })
             })
-            .collect()
+            .collect();
+        scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.index.cmp(&b.index)));
+        scored.into_iter().map(|entry| entry.index).collect()
+    }
+
+    pub fn autocomplete_search_word(&self, system_id: &str, query: &str) -> String {
+        let fragment = current_search_word(query);
+        self.autocomplete
+            .suggest(system_id, fragment)
+            .unwrap_or_default()
     }
 
     pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
@@ -423,14 +434,27 @@ struct ArcadeCatalogIndexes {
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
     search_keys: Vec<ArcadeSearchKey>,
+    autocomplete: ArcadeAutocompleteIndex,
 }
 
 #[derive(Clone, Debug)]
 struct ArcadeSearchKey {
     title: String,
     path: String,
+    manufacturer: String,
+    category: String,
+    year: String,
+    decade: String,
     compact_title: String,
     compact_path: String,
+    compact_manufacturer: String,
+    compact_category: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SearchMatch {
+    index: usize,
+    score: u16,
 }
 
 fn build_arcade_catalog_indexes(
@@ -444,11 +468,13 @@ fn build_arcade_catalog_indexes(
     let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
     let mut games_by_ref: HashMap<Arc<str>, usize> = HashMap::with_capacity(games.len());
     let mut search_keys = Vec::with_capacity(games.len());
+    let mut autocomplete = ArcadeAutocompleteIndex::default();
 
     for (idx, game) in games.iter().enumerate() {
         search_keys.push(ArcadeSearchKey::from_game(game));
         let system_id_string = game.system_id.to_string();
         let system_id_arc = game.system_id.clone();
+        autocomplete.add_game(game);
         games_by_ref.insert(game.mra_path.clone(), idx);
         games_by_system
             .entry(system_id_string.clone())
@@ -553,6 +579,7 @@ fn build_arcade_catalog_indexes(
         games_by_ref,
         launch_plans_by_ref,
         search_keys,
+        autocomplete,
     }
 }
 
@@ -560,12 +587,199 @@ impl ArcadeSearchKey {
     fn from_game(game: &ArcadeGameEntry) -> Self {
         let title = search_match_key(&game.title);
         let path = search_match_key(mra_basename(&game.mra_path));
+        let manufacturer = search_match_key(&game.manufacturer);
+        let category = search_match_key(&game.category);
+        let year = game.year.map(|year| year.to_string()).unwrap_or_default();
+        let decade = game
+            .year
+            .map(|year| format!("{}0s", year / 10))
+            .unwrap_or_default();
         Self {
             compact_title: title.replace(' ', ""),
             compact_path: path.replace(' ', ""),
+            compact_manufacturer: manufacturer.replace(' ', ""),
+            compact_category: category.replace(' ', ""),
             title,
             path,
+            manufacturer,
+            category,
+            year,
+            decade,
         }
+    }
+
+    fn score(&self, tokens: &[&str], compact_needle: &str) -> Option<u16> {
+        let mut score = 0;
+        for token in tokens {
+            let token_score = self.score_token(token);
+            if token_score == 0 {
+                return None;
+            }
+            score += token_score;
+        }
+        if !compact_needle.is_empty() {
+            score = score.max(search_field_score(&self.compact_title, compact_needle, 92));
+            score = score.max(search_field_score(
+                &self.compact_manufacturer,
+                compact_needle,
+                74,
+            ));
+            score = score.max(search_field_score(&self.compact_category, compact_needle, 64));
+            score = score.max(search_field_score(&self.compact_path, compact_needle, 35));
+        }
+        (score > 0).then_some(score)
+    }
+
+    fn score_token(&self, token: &str) -> u16 {
+        search_field_score(&self.title, token, 100)
+            .max(search_field_score(&self.manufacturer, token, 80))
+            .max(search_field_score(&self.category, token, 70))
+            .max(search_field_score(&self.year, token, 65))
+            .max(search_field_score(&self.decade, token, 60))
+            .max(search_field_score(&self.path, token, 40))
+    }
+}
+
+fn search_field_score(field: &str, needle: &str, base: u16) -> u16 {
+    if needle.is_empty() || field.is_empty() {
+        return 0;
+    }
+    if field == needle {
+        base + 20
+    } else if field.starts_with(needle) {
+        base + 12
+    } else if field
+        .split_whitespace()
+        .any(|word| word == needle || word.starts_with(needle))
+    {
+        base + 8
+    } else if field.contains(needle) {
+        base
+    } else {
+        0
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ArcadeAutocompleteIndex {
+    words: HashMap<String, AutocompleteWordStats>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AutocompleteWordStats {
+    total_score: u32,
+    source_rank: u8,
+    system_scores: HashMap<String, u32>,
+    system_source_ranks: HashMap<String, u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutocompleteSource {
+    Title,
+    Metadata,
+    Path,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AutocompleteCandidate {
+    word: String,
+    current_system: bool,
+    source_rank: u8,
+    system_score: u32,
+    total_score: u32,
+}
+
+impl Ord for AutocompleteCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.current_system
+            .cmp(&other.current_system)
+            .then_with(|| self.source_rank.cmp(&other.source_rank))
+            .then_with(|| self.system_score.cmp(&other.system_score))
+            .then_with(|| self.total_score.cmp(&other.total_score))
+            .then_with(|| other.word.cmp(&self.word))
+    }
+}
+
+impl PartialOrd for AutocompleteCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl ArcadeAutocompleteIndex {
+    fn add_game(&mut self, game: &ArcadeGameEntry) {
+        self.add_words(&game.system_id, &game.title, AutocompleteSource::Title);
+        self.add_words(&game.system_id, &game.manufacturer, AutocompleteSource::Metadata);
+        self.add_words(&game.system_id, &game.category, AutocompleteSource::Metadata);
+        self.add_words(
+            &game.system_id,
+            mra_basename(&game.mra_path),
+            AutocompleteSource::Path,
+        );
+        if let Some(year) = game.year {
+            self.add_word(&game.system_id, &year.to_string(), AutocompleteSource::Metadata);
+            self.add_word(
+                &game.system_id,
+                &format!("{}0s", year / 10),
+                AutocompleteSource::Metadata,
+            );
+        }
+    }
+
+    fn add_words(&mut self, system_id: &str, value: &str, source: AutocompleteSource) {
+        for word in autocomplete_words(value) {
+            self.add_word(system_id, &word, source);
+        }
+    }
+
+    fn add_word(&mut self, system_id: &str, word: &str, source: AutocompleteSource) {
+        if word.len() < 2 || is_noisy_autocomplete_word(word) {
+            return;
+        }
+        let score = match source {
+            AutocompleteSource::Title => 5,
+            AutocompleteSource::Metadata => 4,
+            AutocompleteSource::Path => 1,
+        };
+        let source_rank = match source {
+            AutocompleteSource::Title | AutocompleteSource::Metadata => 2,
+            AutocompleteSource::Path => 1,
+        };
+        let stats = self.words.entry(word.to_string()).or_default();
+        stats.total_score += score;
+        stats.source_rank = stats.source_rank.max(source_rank);
+        *stats
+            .system_scores
+            .entry(system_id.to_string())
+            .or_default() += score;
+        let system_source_rank = stats
+            .system_source_ranks
+            .entry(system_id.to_string())
+            .or_default();
+        *system_source_rank = (*system_source_rank).max(source_rank);
+    }
+
+    fn suggest(&self, system_id: &str, fragment: &str) -> Option<String> {
+        let prefix = search_match_key(fragment);
+        if prefix.is_empty() {
+            return None;
+        }
+        self.words
+            .iter()
+            .filter(|(word, _)| word.starts_with(&prefix))
+            .map(|(word, stats)| AutocompleteCandidate {
+                word: word.clone(),
+                current_system: stats.system_scores.contains_key(system_id),
+                source_rank: stats
+                    .system_source_ranks
+                    .get(system_id)
+                    .copied()
+                    .unwrap_or(stats.source_rank),
+                system_score: stats.system_scores.get(system_id).copied().unwrap_or_default(),
+                total_score: stats.total_score,
+            })
+            .max()
+            .map(|candidate| candidate.word)
     }
 }
 
@@ -675,6 +889,56 @@ fn search_match_key(value: &str) -> String {
 
 fn compact_search_match_key(value: &str) -> String {
     search_match_key(value).replace(' ', "")
+}
+
+fn search_query_tokens(query: &str) -> Vec<&str> {
+    query.split_whitespace().collect()
+}
+
+fn current_search_word(query: &str) -> &str {
+    query
+        .rsplit_once(char::is_whitespace)
+        .map(|(_, word)| word)
+        .unwrap_or(query)
+}
+
+fn autocomplete_words(value: &str) -> Vec<String> {
+    search_match_key(value)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_noisy_autocomplete_word(word: &str) -> bool {
+    matches!(
+        word,
+        "a" | "an"
+            | "and"
+            | "the"
+            | "of"
+            | "in"
+            | "on"
+            | "to"
+            | "for"
+            | "with"
+            | "world"
+            | "usa"
+            | "us"
+            | "europe"
+            | "japan"
+            | "rev"
+            | "revision"
+            | "version"
+            | "ver"
+            | "set"
+            | "en"
+            | "fr"
+            | "es"
+            | "it"
+            | "de"
+            | "ocs"
+            | "aga"
+    )
 }
 
 #[derive(Default)]
@@ -1068,6 +1332,151 @@ mod tests {
         assert_eq!(catalog.manufacturer_option_count("amiga"), 1);
         assert!(catalog.decade_options("missing").is_empty());
         assert_eq!(catalog.category_option_count("missing"), 0);
+    }
+
+    #[test]
+    fn arcade_search_matches_metadata_and_ranks_titles_first() {
+        let mut capcom_shooter = game("1942", "/games/1942.mra", "", "arcade");
+        capcom_shooter.year = Some(1984);
+        capcom_shooter.manufacturer = "Capcom".into();
+        capcom_shooter.category = "Shooter / Vertical".into();
+        let mut capcom_fighter = game("Final Fight", "/games/ffight.mra", "", "arcade");
+        capcom_fighter.year = Some(1989);
+        capcom_fighter.manufacturer = "Capcom".into();
+        capcom_fighter.category = "Fighter / 2D".into();
+        let mut title_match = game("Capcom Sports Club", "/games/csclub.mra", "", "arcade");
+        title_match.manufacturer = "Mitchell".into();
+        title_match.category = "Sports".into();
+        let mut other_system = game("Capcom Quiz", "/games/capquiz.mgl", "", "amiga");
+        other_system.manufacturer = "Capcom".into();
+
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![capcom_shooter, capcom_fighter, title_match, other_system],
+            Vec::new(),
+        );
+
+        let capcom = catalog.search_game_indexes("arcade", "capcom");
+        assert_eq!(capcom, vec![2, 0, 1]);
+
+        let capcom_fighters = catalog.search_game_indexes("arcade", "capcom fighter");
+        assert_eq!(capcom_fighters, vec![1]);
+
+        let vertical = catalog.search_game_indexes("arcade", "shooter vertical");
+        assert_eq!(vertical, vec![0]);
+
+        let year = catalog.search_game_indexes("arcade", "1984");
+        assert_eq!(year, vec![0]);
+    }
+
+    #[test]
+    fn arcade_search_autocomplete_prefers_current_system_metadata_and_titles() {
+        let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
+        street.manufacturer = "Capcom".into();
+        street.category = "Fighter / 2D".into();
+        let mut pac = game("Pac-Man", "/games/pacman.mra", "", "arcade");
+        pac.manufacturer = "Namco".into();
+        pac.category = "Maze / Pac-Man".into();
+        let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
+        shooter.year = Some(1984);
+        shooter.manufacturer = "Capcom".into();
+        shooter.category = "Shooter / Vertical".into();
+        let mut other_system = game("Street Racer", "/games/street-racer.mgl", "", "amiga");
+        other_system.manufacturer = "Psygnosis".into();
+
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![street, pac, shooter, other_system],
+            Vec::new(),
+        );
+
+        assert_eq!(catalog.autocomplete_search_word("arcade", "str"), "street");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "fig"), "fighter");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "pac"), "pac");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "cap"), "capcom");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "sho"), "shooter");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "194"), "1942");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "x"), "");
+    }
+
+    #[test]
+    fn arcade_search_autocomplete_prefers_current_system_visible_words_before_path_noise() {
+        let mut path_noise = Vec::new();
+        for index in 0..20 {
+            path_noise.push(game(
+                &format!("Other Game {index}"),
+                &format!("/games/cap-path-noise-{index}.mgl"),
+                "",
+                "amiga",
+            ));
+        }
+        let mut capcom = game("1942", "/games/1942.mra", "", "arcade");
+        capcom.manufacturer = "Capcom".into();
+        let mut catalog_games = vec![capcom];
+        catalog_games.extend(path_noise);
+
+        let catalog = ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), catalog_games, Vec::new());
+
+        assert_eq!(catalog.autocomplete_search_word("arcade", "cap"), "capcom");
+    }
+
+    #[test]
+    fn arcade_search_real_fixture_expectations_when_available() {
+        let Some(catalog) = optional_real_fixture_catalog() else {
+            return;
+        };
+
+        assert!(catalog.search_game_indexes("arcade", "capcom").len() >= 50);
+        assert!(catalog.search_game_indexes("arcade", "maze").len() >= 10);
+        assert!(!catalog.search_game_indexes("arcade", "street fighter").is_empty());
+        assert!(!catalog.search_game_indexes("arcade", "pac man").is_empty());
+        assert!(!catalog.search_game_indexes("arcade", "194").is_empty());
+
+        assert_eq!(catalog.autocomplete_search_word("arcade", "cap"), "capcom");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "seg"), "sega");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "kon"), "konami");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "str"), "street");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "fig"), "fighter");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "pac"), "pac");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "maz"), "maze");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "sho"), "shooter");
+    }
+
+    #[cfg(test)]
+    fn optional_real_fixture_catalog() -> Option<ArcadeCatalog> {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("private/test-fixtures/autocomplete-launcher-catalog.tsv");
+        let contents = std::fs::read_to_string(fixture).ok()?;
+        let mut games = Vec::new();
+        for line in contents.lines() {
+            if line.starts_with("system_id\t") || line.starts_with("library_sql_timing_tsv") {
+                continue;
+            }
+            let columns = line.split('\t').collect::<Vec<_>>();
+            if columns.len() < 6 {
+                continue;
+            }
+            let year = columns[3].trim().parse::<u16>().ok();
+            games.push(ArcadeGameEntry {
+                system_id: columns[0].into(),
+                title: columns[1].into(),
+                mra_path: columns[2].into(),
+                year,
+                manufacturer: columns[4].into(),
+                category: columns[5].into(),
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
+                is_new: false,
+            });
+        }
+        let systems = systems_from_games(&games);
+        Some(ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            systems,
+        ))
     }
 
     #[test]
