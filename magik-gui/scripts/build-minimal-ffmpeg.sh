@@ -3,11 +3,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$HERE/scripts/apple-container-resources.sh"
-VERSION="${MISTER_FFMPEG_VERSION:-8.1.1}"
+VERSION="${MISTER_FFMPEG_VERSION:-8.1.2}"
 WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
-STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-pcm-s16le-cortex-a9-o3"
+STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-aac-s16le-swresample-cortex-a9-o3"
 DOCKER_IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 BACKEND="${MISTER_FFMPEG_BUILD_BACKEND:-auto}"
@@ -18,12 +18,15 @@ REQUIRED_DIST_FILES=(
   "$DIST/include/libavcodec/version_major.h"
   "$DIST/include/libavformat/avformat.h"
   "$DIST/include/libavutil/avutil.h"
+  "$DIST/include/libswresample/swresample.h"
   "$DIST/include/libswscale/swscale.h"
   "$DIST/lib/libavcodec.a"
   "$DIST/lib/libavformat.a"
   "$DIST/lib/libavutil.a"
+  "$DIST/lib/libswresample.a"
   "$DIST/lib/libswscale.a"
   "$DIST/lib/pkgconfig/libavcodec.pc"
+  "$DIST/lib/pkgconfig/libswresample.pc"
 )
 
 dist_is_complete() {
@@ -130,13 +133,15 @@ rm -rf ../dist
   --disable-everything \
   --disable-avdevice \
   --disable-avfilter \
-  --disable-swresample \
+  --enable-swresample \
   --enable-avcodec \
   --enable-avformat \
   --enable-avutil \
   --enable-swscale \
   --enable-decoder=h264 \
+  --enable-decoder=aac \
   --enable-decoder=pcm_s16le \
+  --enable-parser=aac \
   --enable-parser=h264 \
   --enable-demuxer=mov \
   --enable-protocol=file
