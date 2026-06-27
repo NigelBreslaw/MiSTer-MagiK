@@ -8,6 +8,7 @@ REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-warm-catalog.tsv"
+TSV_HEADER="label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	catalog_load_open_us	catalog_load_schema_check_us	catalog_load_query_us	catalog_load_query_prepare_us	catalog_load_query_first_row_us	catalog_load_query_row_read_us	catalog_load_query_row_hydrate_us	catalog_load_launch_plans_us	catalog_load_systems_us	catalog_load_catalog_us	result"
 
 LABEL=""
 ITERATIONS=1
@@ -57,8 +58,49 @@ fi
 
 mkdir -p "$BENCH_DIR" "$HERE/build/warm-catalog"
 if [[ ! -f "$TSV" ]]; then
-  echo "label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	result" >"$TSV"
-elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
+  printf '%s\n' "$TSV_HEADER" >"$TSV"
+else
+  tmp="$(mktemp)"
+  python3 - "$TSV" "$TSV_HEADER" >"$tmp" <<'PY'
+import csv
+import sys
+
+path = sys.argv[1]
+header = sys.argv[2].split("\t")
+old_header = [
+    "label",
+    "iteration",
+    "first_frame_ms",
+    "first_frame_catalog_ready",
+    "catalog_cache_load_sync_ms",
+    "catalog_cache_load_sync_total_us",
+    "catalog_summary_load_ms",
+    "catalog_summary_load_us",
+    "catalog_bridge_systems_us",
+    "catalog_bridge_sync_us",
+    "full_catalog_ready_ms",
+    "full_catalog_ready_load_us",
+    "result",
+]
+with open(path, newline="") as f:
+    rows = list(csv.reader(f, delimiter="\t"))
+if not rows:
+    print("\t".join(header))
+    raise SystemExit(0)
+source_header = rows[0]
+print("\t".join(header))
+for raw in rows[1:]:
+    if len(source_header) == len(header):
+        row = dict(zip(source_header, raw))
+    elif len(source_header) == len(old_header):
+        row = dict(zip(old_header, raw))
+    else:
+        row = dict(zip(source_header, raw))
+    print("\t".join(row.get(column, "") for column in header))
+PY
+  mv "$tmp" "$TSV"
+fi
+if [[ "$REPLACE_LABEL" -eq 1 ]]; then
   tmp="$(mktemp)"
   { head -1 "$TSV"; grep -v "^${LABEL}	" "$TSV" | tail -n +2; } >"$tmp" || true
   mv "$tmp" "$TSV"
@@ -133,8 +175,20 @@ for ((iteration = 1; iteration <= ITERATIONS; iteration++)); do
       ready_ms = ms_for("library_ready")
       ready_detail = detail_for("library_ready")
       ready_load_us = field(ready_detail, "load_us")
+      load_detail = detail_for("catalog_worker_cache_load")
+      if (load_detail == "") load_detail = detail_for("catalog_worker_navigation_load")
+      load_open = field(load_detail, "open_us")
+      load_schema = field(load_detail, "schema_check_us")
+      load_query = field(load_detail, "query_us")
+      load_prepare = field(load_detail, "query_prepare_us")
+      load_first_row = field(load_detail, "query_first_row_us")
+      load_row_read = field(load_detail, "query_row_read_us")
+      load_row_hydrate = field(load_detail, "query_row_hydrate_us")
+      load_launch_plans = field(load_detail, "launch_plans_us")
+      load_systems = field(load_detail, "systems_us")
+      load_catalog = field(load_detail, "catalog_us")
       result = first >= 0 ? "ok" : "missing_first_frame"
-      print label, iteration, first, first_ready, sync_ms, sync_total, summary_ms, summary_us, bridge_systems, bridge_sync, ready_ms, ready_load_us, result
+      print label, iteration, first, first_ready, sync_ms, sync_total, summary_ms, summary_us, bridge_systems, bridge_sync, ready_ms, ready_load_us, load_open, load_schema, load_query, load_prepare, load_first_row, load_row_read, load_row_hydrate, load_launch_plans, load_systems, load_catalog, result
     }
   ' "$local_log" >>"$TSV"
   tail -n 1 "$TSV"
