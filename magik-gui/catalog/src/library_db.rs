@@ -711,8 +711,12 @@ fn build_catalog_from_scan_with_sources(
         );
         let (preview, setname, parent, family_key, metadata) =
             if system_id == "arcade" || system_id == "neogeo" {
-                let (identity_id, family_id, metadata) =
-                    catalog_arcade_projection_fields_for_discovery(discovery, &arcade_metadata);
+                let (identity_id, family_id, arcade_family_key, metadata) =
+                    catalog_arcade_projection_fields_for_discovery(
+                        &key,
+                        discovery,
+                        &arcade_metadata,
+                    );
                 let preview_key = if family_id.is_empty() {
                     identity_id.clone()
                 } else {
@@ -728,7 +732,7 @@ fn build_catalog_from_scan_with_sources(
                         preview_key,
                     )
                 };
-                (preview, identity_id, family_id, None, metadata)
+                (preview, identity_id, family_id, Some(arcade_family_key), metadata)
             } else {
                 let preview = software_identity
                     .as_ref()
@@ -842,20 +846,27 @@ fn arcade_metadata_setnames<'a>(
 }
 
 fn catalog_arcade_projection_fields_for_discovery(
+    game_id: &str,
     discovery: &GameDiscovery,
     arcade_metadata: &ArcadeMachineMetadata,
-) -> (String, String, ArcadeGameMetadataKey) {
+) -> (String, String, String, ArcadeGameMetadataKey) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
         let (family_id, _, year, manufacturer, category, _) =
             mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
         let parent = if family_id == identity_id {
             String::new()
         } else {
+            family_id.clone()
+        };
+        let family_key = if family_id.is_empty() {
+            identity_id.clone()
+        } else {
             family_id
         };
         return (
             identity_id,
             parent,
+            family_key,
             ArcadeGameMetadataKey {
                 year: optional_year_from_metadata(year),
                 manufacturer: manufacturer.unwrap_or_default().to_string(),
@@ -866,6 +877,7 @@ fn catalog_arcade_projection_fields_for_discovery(
     (
         discovery.setname.clone().unwrap_or_default(),
         discovery.parent.clone().unwrap_or_default(),
+        game_id.to_string(),
         ArcadeGameMetadataKey {
             year: discovery.year,
             manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
@@ -893,7 +905,8 @@ fn build_arcade_catalog_from_scan_with_metadata(
         if !is_launcher_launch_ref(&plan_launch_ref) {
             continue;
         }
-        let (setname, parent) = catalog_family_fields_for_discovery(discovery, arcade_metadata);
+        let (setname, parent, family_key) =
+            catalog_family_fields_for_discovery(&key, discovery, arcade_metadata);
         rows.push(CatalogProjectionRow::new(
             discovery.title.clone(),
             plan_launch_ref,
@@ -910,7 +923,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
                 source_kind: launch_kind_for_discovery(discovery).to_string(),
                 setname,
                 parent,
-                family_key: None,
+                family_key: Some(family_key),
             },
         ));
     }
@@ -919,22 +932,29 @@ fn build_arcade_catalog_from_scan_with_metadata(
 
 #[cfg(test)]
 fn catalog_family_fields_for_discovery(
+    game_id: &str,
     discovery: &GameDiscovery,
     arcade_metadata: &ArcadeMachineMetadata,
-) -> (String, String) {
+) -> (String, String, String) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
         let (family_id, _, _, _, _, _) =
             mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
         let parent = if family_id == identity_id {
             String::new()
         } else {
+            family_id.clone()
+        };
+        let family_key = if family_id.is_empty() {
+            identity_id.clone()
+        } else {
             family_id
         };
-        return (identity_id, parent);
+        return (identity_id, parent, family_key);
     }
     (
         discovery.setname.clone().unwrap_or_default(),
         discovery.parent.clone().unwrap_or_default(),
+        game_id.to_string(),
     )
 }
 
@@ -1200,6 +1220,21 @@ mod tests {
             )],
             &[],
         );
+        {
+            let conn = Connection::open(&mame_db).expect("open mame fixture");
+            conn.execute(
+                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer)
+                 VALUES ('mslug',NULL,'Metal Slug','1996','SNK')",
+                [],
+            )
+            .expect("insert neogeo parent metadata");
+            conn.execute(
+                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer)
+                 VALUES ('mslugh','mslug','Metal Slug (Hack)','1996','SNK')",
+                [],
+            )
+            .expect("insert neogeo clone metadata");
+        }
         let pack = preview_worker::PreviewArchiveIndex {
             path: root.join("nes-screenshots.mmlz4b").display().to_string(),
             codec: "mmlz4b",
@@ -1229,6 +1264,28 @@ mod tests {
         dos_launcher.platform_id = "dos".to_string();
         dos_launcher.core_id = "AO486".to_string();
         dos_launcher.hardware_id = "ao486".to_string();
+
+        let mut neogeo_parent = mgl(
+            "/media/fat/_Games/_Neo Geo MVS & AES/Metal Slug.mgl",
+            "/media/fat/_Games/_Neo Geo MVS & AES/Metal Slug.mgl",
+        );
+        neogeo_parent.title = "Metal Slug".to_string();
+        neogeo_parent.category = "Arcade".to_string();
+        neogeo_parent.platform_id = "neogeo".to_string();
+        neogeo_parent.core_id = "NeoGeo".to_string();
+        neogeo_parent.hardware_id = "neogeo".to_string();
+        neogeo_parent.setname = Some("mslug".to_string());
+
+        let mut neogeo_clone = mgl(
+            "/media/fat/_Games/_Neo Geo MVS & AES/Metal Slug Hack.mgl",
+            "/media/fat/_Games/_Neo Geo MVS & AES/Metal Slug Hack.mgl",
+        );
+        neogeo_clone.title = "Metal Slug (Hack)".to_string();
+        neogeo_clone.category = "Arcade".to_string();
+        neogeo_clone.platform_id = "neogeo".to_string();
+        neogeo_clone.core_id = "NeoGeo".to_string();
+        neogeo_clone.hardware_id = "neogeo".to_string();
+        neogeo_clone.setname = Some("mslugh".to_string());
 
         let archive_launch_ref =
             "/media/fat/games/NES/Collection.zip/Collection/Legend of Zelda.nes";
@@ -1275,6 +1332,8 @@ mod tests {
             arcade_clone,
             nes_payload,
             dos_launcher,
+            neogeo_parent,
+            neogeo_clone,
             archive_entry,
             amigavision_game,
         ]);
@@ -1297,6 +1356,7 @@ mod tests {
             catalog_game_snapshots(&sqlite_catalog.catalog)
         );
         assert_eq!(ram_catalog.system_game_count("arcade"), 1);
+        assert_eq!(ram_catalog.system_game_count("neogeo"), 1);
         assert!(ram_catalog
             .games
             .iter()

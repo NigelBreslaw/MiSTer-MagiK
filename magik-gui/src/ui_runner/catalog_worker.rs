@@ -48,6 +48,7 @@ pub(super) fn start_library_catalog_worker(
                                 summary: None,
                                 load_us: loaded.us,
                                 source: CatalogSource::NavigationProjection,
+                                durable_save_pending: false,
                             });
                         }
                         Ok(None) => {
@@ -81,6 +82,7 @@ pub(super) fn start_library_catalog_worker(
                                         summary: None,
                                         load_us: loaded.us,
                                         source: CatalogSource::FullSqlite,
+                                        durable_save_pending: false,
                                     });
                                 }
                             }
@@ -108,6 +110,7 @@ pub(super) fn start_library_catalog_worker(
                                     summary: None,
                                     load_us: loaded.us,
                                     source: CatalogSource::FullSqlite,
+                                    durable_save_pending: false,
                                 });
                             }
                         }
@@ -197,6 +200,21 @@ pub(super) fn start_library_catalog_worker(
                         stats.entries
                     ),
                 });
+                let catalog_t = Instant::now();
+                let catalog = artifact.catalog(&root);
+                let load_us = catalog_t.elapsed().as_micros() as u64;
+                let catalog_len = catalog.len();
+                let _ = tx.send(CatalogWorkerMessage::Ready {
+                    catalog,
+                    summary: None,
+                    load_us,
+                    source: CatalogSource::FreshBuild,
+                    durable_save_pending: true,
+                });
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "catalog_worker_ram_catalog".to_string(),
+                    detail: format!("games={catalog_len} catalog_us={load_us}"),
+                });
                 send_catalog_progress(
                     &tx,
                     library_db::CatalogProgress::saving_before_opening_launcher(),
@@ -209,12 +227,6 @@ pub(super) fn start_library_catalog_worker(
                             summary: summary.clone(),
                         });
                         send_catalog_load_timing(&tx, "catalog_worker_saved_catalog", &loaded);
-                        let _ = tx.send(CatalogWorkerMessage::Ready {
-                            catalog: loaded.catalog,
-                            summary: Some(summary),
-                            load_us: loaded.us,
-                            source: CatalogSource::FreshBuild,
-                        });
                     }
                     Err(e) => {
                         eprintln!("library persistence failed after RAM catalog ready: {e}");
@@ -309,6 +321,7 @@ pub(super) fn start_library_catalog_worker(
                         summary: Some(summary),
                         load_us: loaded.us,
                         source: CatalogSource::FreshBuild,
+                        durable_save_pending: false,
                     });
                 }
                 None => {
@@ -426,6 +439,7 @@ pub(super) enum CatalogWorkerMessage {
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
         source: CatalogSource,
+        durable_save_pending: bool,
     },
     Persisted {
         summary: library_db::LibraryRefreshSummary,
