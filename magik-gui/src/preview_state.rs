@@ -7,7 +7,7 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use slint::ComponentHandle;
 use slint_ui::launcher::PreviewStatus;
 
-use crate::arcade_catalog::ArcadeGameEntry;
+use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
     preview_asset_cache_key, preview_window_indices, PreviewPixels, PreviewPriority, PreviewResult,
     PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
@@ -512,11 +512,11 @@ fn game_preview_key(game: &ArcadeGameEntry) -> Option<String> {
     .then(|| preview_asset_cache_key(&game.preview_archive_path, &game.preview_asset_key))
 }
 
-fn preview_window_keys(games: &[ArcadeGameEntry], selected: usize, radius: usize) -> Vec<String> {
+fn preview_window_keys(games: ArcadeGameView<'_>, selected: usize, radius: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for idx in preview_window_indices(games.len(), selected, radius) {
-        if let Some(key) = game_preview_key(&games[idx]) {
+        if let Some(key) = games.get(idx).and_then(game_preview_key) {
             if seen.insert(key.clone()) {
                 out.push(key);
             }
@@ -565,7 +565,7 @@ fn next_ready_result_index(
 
 pub(crate) fn request_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
-    games: &[ArcadeGameEntry],
+    games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
     defer_selected_application: bool,
@@ -693,7 +693,7 @@ pub(crate) fn request_arcade_preview_window(
 }
 
 fn request_preview_prefetches(
-    games: &[ArcadeGameEntry],
+    games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
 ) {
@@ -761,7 +761,7 @@ fn request_preview_prefetches(
 }
 
 fn prefetch_window_is_covered(
-    games: &[ArcadeGameEntry],
+    games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
 ) -> bool {
@@ -851,7 +851,7 @@ fn same_selected_preview_needs_request(
 
 pub(crate) fn schedule_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
-    games: &[ArcadeGameEntry],
+    games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
     defer_selected_application: bool,

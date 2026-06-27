@@ -647,6 +647,7 @@ pub(super) fn run_launcher_loop(
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let mut arcade_filter_items_cache = ArcadeFilterListItemCache::default();
     let cpu = cpu_profile::start();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
@@ -1651,7 +1652,7 @@ pub(super) fn run_launcher_loop(
                 window.request_redraw();
             } else if light_bridge_dirty {
                 let active_games = if nav.screen == Screen::Arcade {
-                    Some(active_system_game_slice(&catalog, &nav))
+                    Some(active_system_game_view(&catalog, &nav))
                 } else {
                     None
                 };
@@ -1770,9 +1771,9 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
         }
         let active_arcade_games = if !launching && nav.screen == Screen::Arcade {
-            active_system_game_slice(&catalog, &nav)
+            active_system_game_view(&catalog, &nav)
         } else {
-            &[]
+            ArcadeGameView::empty()
         };
         let active_arcade_games_loading = !launching
             && nav.screen == Screen::Arcade
@@ -1821,9 +1822,9 @@ pub(super) fn run_launcher_loop(
                 let force_arcade_redraw =
                     arcade_list_needs_forced_redraw(this_rect, full_frame_present);
                 if nav.arcade_filter.drawer_open {
-                    let items = arcade_filter_list_items(&catalog, &nav);
+                    let items = arcade_filter_items_cache.items(&catalog, &nav, catalog_version);
                     arcade_list_renderer.draw_filter_items(
-                        &items,
+                        items,
                         nav.arcade_filter.selected,
                         force_arcade_redraw,
                     )
@@ -2384,10 +2385,62 @@ fn should_draw_arcade_overlay(
     !launching && nav.screen == Screen::Arcade && !active_arcade_games_loading
 }
 
-fn arcade_filter_list_items(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<ArcadeListItem> {
-    let system_id = active_system(catalog, nav)
-        .map(|system| system.id.as_str())
-        .unwrap_or("");
+#[derive(Default)]
+struct ArcadeFilterListItemCache {
+    key: Option<ArcadeFilterListItemCacheKey>,
+    items: Vec<ArcadeListItem>,
+    rebuilds: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArcadeFilterListItemCacheKey {
+    catalog_version: usize,
+    system_id: String,
+    level: launcher::ArcadeFilterLevel,
+    active_filter: String,
+}
+
+impl ArcadeFilterListItemCache {
+    fn items(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+        catalog_version: usize,
+    ) -> &[ArcadeListItem] {
+        let system_id = active_system(catalog, nav)
+            .map(|system| system.id.as_str())
+            .unwrap_or("");
+        let key = ArcadeFilterListItemCacheKey {
+            catalog_version,
+            system_id: system_id.to_string(),
+            level: nav.arcade_filter.level,
+            active_filter: arcade_filter_cache_token(&nav.arcade_filter.active),
+        };
+        if self.key.as_ref() != Some(&key) {
+            self.items = arcade_filter_list_items_for_system(catalog, nav, system_id);
+            self.key = Some(key);
+            self.rebuilds = self.rebuilds.wrapping_add(1);
+        }
+        &self.items
+    }
+}
+
+fn arcade_filter_cache_token(filter: &arcade_catalog::ArcadeFilter) -> String {
+    match filter {
+        arcade_catalog::ArcadeFilter::All => "all".to_string(),
+        arcade_catalog::ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
+        arcade_catalog::ArcadeFilter::Manufacturer(manufacturer) => {
+            format!("manufacturer:{manufacturer}")
+        }
+        arcade_catalog::ArcadeFilter::Category(category) => format!("category:{category}"),
+    }
+}
+
+fn arcade_filter_list_items_for_system(
+    catalog: &ArcadeCatalog,
+    nav: &LauncherNav,
+    system_id: &str,
+) -> Vec<ArcadeListItem> {
     nav.arcade_filter_items(catalog, system_id)
         .into_iter()
         .map(|item| ArcadeListItem {
@@ -2579,6 +2632,74 @@ mod tests {
 
         assert!(!should_draw_arcade_overlay(&nav, true, false));
         assert!(!should_draw_arcade_overlay(&nav, false, true));
+    }
+
+    #[test]
+    pub(super) fn arcade_filter_list_item_cache_reuses_rows_until_menu_key_changes() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![
+                ArcadeGameEntry {
+                    title: "Alpha".into(),
+                    mra_path: "/media/fat/_Arcade/alpha.mra".into(),
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
+                    system_id: "arcade".into(),
+                    year: Some(1986),
+                    manufacturer: "Capcom".into(),
+                    category: "Shooter".into(),
+                    is_new: false,
+                },
+                ArcadeGameEntry {
+                    title: "Beta".into(),
+                    mra_path: "/media/fat/_Arcade/beta.mra".into(),
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
+                    system_id: "arcade".into(),
+                    year: Some(1991),
+                    manufacturer: "Namco".into(),
+                    category: "Maze".into(),
+                    is_new: false,
+                },
+            ],
+            vec![arcade_catalog::GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 2,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade_filter.drawer_open = true;
+        let mut cache = ArcadeFilterListItemCache::default();
+
+        let top_items = cache.items(&catalog, &nav, 7).to_vec();
+        assert_eq!(cache.rebuilds, 1);
+        assert_eq!(cache.items(&catalog, &nav, 7), top_items.as_slice());
+        assert_eq!(cache.rebuilds, 1);
+
+        nav.arcade_filter.level = launcher::ArcadeFilterLevel::Manufacturers;
+        let manufacturer_items = cache.items(&catalog, &nav, 7).to_vec();
+        assert_eq!(cache.rebuilds, 2);
+        assert_eq!(
+            manufacturer_items
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Capcom", "Namco"]
+        );
+        assert_eq!(
+            cache.items(&catalog, &nav, 7),
+            manufacturer_items.as_slice()
+        );
+        assert_eq!(cache.rebuilds, 2);
+
+        nav.arcade_filter.active = arcade_catalog::ArcadeFilter::Manufacturer("Capcom".into());
+        let first_item_active = cache.items(&catalog, &nav, 7)[0].active;
+        assert_eq!(cache.rebuilds, 3);
+        assert!(first_item_active);
     }
 
     #[test]

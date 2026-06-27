@@ -78,12 +78,77 @@ pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Vec<ArcadeGameEntry>,
     pub systems: Vec<GameSystemEntry>,
-    games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
-    games_by_filter: HashMap<String, Vec<ArcadeGameEntry>>,
+    games_by_system: HashMap<String, Vec<usize>>,
+    games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
     filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
-    preview_games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
+    preview_games_by_system: HashMap<String, Vec<usize>>,
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ArcadeGameView<'a> {
+    Contiguous(&'a [ArcadeGameEntry]),
+    Indexed {
+        games: &'a [ArcadeGameEntry],
+        indexes: &'a [usize],
+    },
+}
+
+impl<'a> ArcadeGameView<'a> {
+    pub fn empty() -> Self {
+        Self::Contiguous(&[])
+    }
+
+    pub fn contiguous(games: &'a [ArcadeGameEntry]) -> Self {
+        Self::Contiguous(games)
+    }
+
+    fn indexed(games: &'a [ArcadeGameEntry], indexes: &'a [usize]) -> Self {
+        Self::Indexed { games, indexes }
+    }
+
+    pub fn len(self) -> usize {
+        match self {
+            Self::Contiguous(games) => games.len(),
+            Self::Indexed { indexes, .. } => indexes.len(),
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(self, index: usize) -> Option<&'a ArcadeGameEntry> {
+        match self {
+            Self::Contiguous(games) => games.get(index),
+            Self::Indexed { games, indexes } => {
+                indexes.get(index).and_then(|game_index| games.get(*game_index))
+            }
+        }
+    }
+
+    pub fn iter(self) -> ArcadeGameViewIter<'a> {
+        ArcadeGameViewIter {
+            view: self,
+            index: 0,
+        }
+    }
+}
+
+pub struct ArcadeGameViewIter<'a> {
+    view: ArcadeGameView<'a>,
+    index: usize,
+}
+
+impl<'a> Iterator for ArcadeGameViewIter<'a> {
+    type Item = &'a ArcadeGameEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let game = self.view.get(self.index);
+        self.index += 1;
+        game
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -91,6 +156,19 @@ struct ArcadeSystemFilterOptions {
     decades: Vec<ArcadeFilterOption>,
     manufacturers: Vec<ArcadeFilterOption>,
     categories: Vec<ArcadeFilterOption>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ArcadeFilterKey {
+    system_id: Arc<str>,
+    kind: ArcadeFilterKindKey,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+enum ArcadeFilterKindKey {
+    Decade(u16),
+    Manufacturer(Arc<str>),
+    Category(Arc<str>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,26 +281,26 @@ impl ArcadeCatalog {
     }
 
     pub fn system_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
-        self.system_game_slice(system_id).to_vec()
+        self.system_game_view(system_id).iter().cloned().collect()
     }
 
     pub fn system_game_count(&self, system_id: &str) -> usize {
-        self.system_game_slice(system_id).len()
+        self.system_game_indexes(system_id).len()
     }
 
     pub fn system_game_at(&self, system_id: &str, index: usize) -> Option<&ArcadeGameEntry> {
-        self.system_game_slice(system_id).get(index)
+        self.system_game_view(system_id).get(index)
     }
 
-    pub fn system_game_slice(&self, system_id: &str) -> &[ArcadeGameEntry] {
-        self.games_by_system
-            .get(system_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    pub fn system_game_view(&self, system_id: &str) -> ArcadeGameView<'_> {
+        ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id))
     }
 
     pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
-        self.filtered_game_slice(system_id, filter).len()
+        match filter {
+            ArcadeFilter::All => self.system_game_count(system_id),
+            _ => self.filtered_game_indexes(system_id, filter).len(),
+        }
     }
 
     pub fn filtered_game_at(
@@ -231,31 +309,23 @@ impl ArcadeCatalog {
         filter: &ArcadeFilter,
         index: usize,
     ) -> Option<&ArcadeGameEntry> {
-        self.filtered_game_slice(system_id, filter).get(index)
+        match filter {
+            ArcadeFilter::All => self.system_game_at(system_id, index),
+            _ => self
+                .filtered_game_indexes(system_id, filter)
+                .get(index)
+                .and_then(|game_index| self.games.get(*game_index)),
+        }
     }
 
-    pub fn filtered_game_slice(
+    pub fn filtered_game_view(
         &self,
         system_id: &str,
         filter: &ArcadeFilter,
-    ) -> &[ArcadeGameEntry] {
+    ) -> ArcadeGameView<'_> {
         match filter {
-            ArcadeFilter::All => self.system_game_slice(system_id),
-            ArcadeFilter::Decade(decade) => self
-                .games_by_filter
-                .get(&filter_key(system_id, "decade", &decade.to_string()))
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            ArcadeFilter::Manufacturer(manufacturer) => self
-                .games_by_filter
-                .get(&filter_key(system_id, "manufacturer", manufacturer))
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            ArcadeFilter::Category(category) => self
-                .games_by_filter
-                .get(&filter_key(system_id, "category", category))
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
+            ArcadeFilter::All => self.system_game_view(system_id),
+            _ => ArcadeGameView::indexed(&self.games, self.filtered_game_indexes(system_id, filter)),
         }
     }
 
@@ -284,21 +354,39 @@ impl ArcadeCatalog {
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
-        self.system_preview_game_slice(system_id).to_vec()
+        self.preview_game_indexes(system_id)
+            .iter()
+            .filter_map(|index| self.games.get(*index).cloned())
+            .collect()
     }
 
     pub fn system_preview_game_count(&self, system_id: &str) -> usize {
-        self.system_preview_game_slice(system_id).len()
+        self.preview_game_indexes(system_id).len()
     }
 
     pub fn system_preview_game_at(&self, system_id: &str, index: usize) -> Option<ArcadeGameEntry> {
-        self.system_preview_game_slice(system_id)
+        self.preview_game_indexes(system_id)
             .get(index)
+            .and_then(|game_index| self.games.get(*game_index))
             .cloned()
     }
 
-    pub fn system_preview_game_slice(&self, system_id: &str) -> &[ArcadeGameEntry] {
+    fn preview_game_indexes(&self, system_id: &str) -> &[usize] {
         self.preview_games_by_system
+            .get(system_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn filtered_game_indexes(&self, system_id: &str, filter: &ArcadeFilter) -> &[usize] {
+        filter_key(system_id, filter)
+            .and_then(|key| self.games_by_filter.get(&key))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn system_game_indexes(&self, system_id: &str) -> &[usize] {
+        self.games_by_system
             .get(system_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
@@ -375,46 +463,69 @@ fn mount_kind_label(kind: MountKind) -> &'static str {
     }
 }
 
-fn games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
-    let mut by_system: HashMap<String, Vec<ArcadeGameEntry>> = HashMap::new();
-    for game in games {
+fn games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<usize>> {
+    let mut by_system: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, game) in games.iter().enumerate() {
         by_system
             .entry(game.system_id.to_string())
             .or_default()
-            .push(game.clone());
+            .push(idx);
     }
     by_system
 }
 
-fn games_by_filter(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
-    let mut by_filter: HashMap<String, Vec<ArcadeGameEntry>> = HashMap::new();
-    for game in games {
+fn games_by_filter(games: &[ArcadeGameEntry]) -> HashMap<ArcadeFilterKey, Vec<usize>> {
+    let mut by_filter: HashMap<ArcadeFilterKey, Vec<usize>> = HashMap::new();
+    for (idx, game) in games.iter().enumerate() {
         let system_id = game.system_id.as_ref();
         if let Some(year) = game.year {
             let decade = (year / 10) * 10;
             by_filter
-                .entry(filter_key(system_id, "decade", &decade.to_string()))
+                .entry(ArcadeFilterKey {
+                    system_id: Arc::from(system_id),
+                    kind: ArcadeFilterKindKey::Decade(decade),
+                })
                 .or_default()
-                .push(game.clone());
+                .push(idx);
         }
         if !game.manufacturer.is_empty() {
             by_filter
-                .entry(filter_key(system_id, "manufacturer", &game.manufacturer))
+                .entry(ArcadeFilterKey {
+                    system_id: Arc::from(system_id),
+                    kind: ArcadeFilterKindKey::Manufacturer(game.manufacturer.clone()),
+                })
                 .or_default()
-                .push(game.clone());
+                .push(idx);
         }
         if !game.category.is_empty() {
             by_filter
-                .entry(filter_key(system_id, "category", &game.category))
+                .entry(ArcadeFilterKey {
+                    system_id: Arc::from(system_id),
+                    kind: ArcadeFilterKindKey::Category(game.category.clone()),
+                })
                 .or_default()
-                .push(game.clone());
+                .push(idx);
         }
     }
     by_filter
 }
 
-fn filter_key(system_id: &str, kind: &str, value: &str) -> String {
-    format!("{system_id}\n{kind}\n{value}")
+fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey> {
+    match filter {
+        ArcadeFilter::All => None,
+        ArcadeFilter::Decade(decade) => Some(ArcadeFilterKey {
+            system_id: Arc::from(system_id),
+            kind: ArcadeFilterKindKey::Decade(*decade),
+        }),
+        ArcadeFilter::Manufacturer(manufacturer) => Some(ArcadeFilterKey {
+            system_id: Arc::from(system_id),
+            kind: ArcadeFilterKindKey::Manufacturer(Arc::from(manufacturer.as_str())),
+        }),
+        ArcadeFilter::Category(category) => Some(ArcadeFilterKey {
+            system_id: Arc::from(system_id),
+            kind: ArcadeFilterKindKey::Category(Arc::from(category.as_str())),
+        }),
+    }
 }
 
 #[derive(Default)]
@@ -477,36 +588,39 @@ fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<Arc
         .collect()
 }
 
-fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<ArcadeGameEntry>> {
-    let mut by_system: HashMap<String, Vec<&ArcadeGameEntry>> = HashMap::new();
-    for game in games {
+fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<usize>> {
+    let mut by_system: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, game) in games.iter().enumerate() {
         by_system
             .entry(game.system_id.to_string())
             .or_default()
-            .push(game);
+            .push(idx);
     }
     by_system
         .into_iter()
-        .map(|(system_id, games)| (system_id, preview_games(games.into_iter())))
+        .map(|(system_id, indexes)| (system_id, preview_games(games, indexes.into_iter())))
         .collect()
 }
 
-fn preview_games<'a>(games: impl Iterator<Item = &'a ArcadeGameEntry>) -> Vec<ArcadeGameEntry> {
+fn preview_games(games: &[ArcadeGameEntry], indexes: impl Iterator<Item = usize>) -> Vec<usize> {
     let mut best_idx: HashMap<String, usize> = HashMap::new();
-    let mut out: Vec<ArcadeGameEntry> = Vec::new();
+    let mut out: Vec<usize> = Vec::new();
 
-    for game in games {
+    for index in indexes {
+        let Some(game) = games.get(index) else {
+            continue;
+        };
         if !has_preview_image(game) {
             continue;
         }
         let key = preview_dedupe_key(&game.title);
         if let Some(&idx) = best_idx.get(&key) {
-            if prefer_preview_game(game, &out[idx]) {
-                out[idx] = game.clone();
+            if prefer_preview_game(game, &games[out[idx]]) {
+                out[idx] = index;
             }
         } else {
             best_idx.insert(key, out.len());
-            out.push(game.clone());
+            out.push(index);
         }
     }
 
@@ -763,7 +877,7 @@ mod tests {
         let catalog = ArcadeCatalog::new(root, games, systems);
 
         assert_eq!(catalog.system_game_count("amiga"), 1);
-        assert_eq!(catalog.system_game_slice("amiga").len(), 1);
+        assert_eq!(catalog.system_game_view("amiga").len(), 1);
         assert_eq!(catalog.system_preview_game_count("amiga"), 0);
     }
 
@@ -885,12 +999,12 @@ mod tests {
             game("Space Duel Alpha", "/games/space.mra", "space", "arcade"),
         ];
 
-        let previews = preview_games(games.iter());
+        let previews = preview_games(&games, 0..games.len());
 
         assert_eq!(
             previews
                 .iter()
-                .map(|game| game.title.as_ref())
+                .map(|index| games[*index].title.as_ref())
                 .collect::<Vec<_>>(),
             vec!["Puzzle Star", "Space Duel Alpha"]
         );
@@ -903,10 +1017,10 @@ mod tests {
             game("Photo", "/games/photo.mra", "photo", "arcade"),
         ];
 
-        let previews = preview_games(games.iter());
+        let previews = preview_games(&games, 0..games.len());
 
         assert_eq!(previews.len(), 1);
-        assert_eq!(previews[0].title.as_ref(), "Photo");
+        assert_eq!(games[previews[0]].title.as_ref(), "Photo");
     }
 
     #[test]
