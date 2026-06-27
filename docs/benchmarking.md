@@ -333,7 +333,10 @@ performance.
 `library.summary.json` and reboots with `scripts/mister reboot-wait`, which uses
 the supervised `mister_magik_reboot` path when the Main fork is available. It
 records first-frame/catalog-ready timings in
-`history/toolchain-bench/results-first-scan.tsv`. For cold catalog UX, prefer
+`history/toolchain-bench/results-first-scan.tsv`. The hard first-scan gates are
+`library_ready <= 41000ms` for RAM catalog usability and
+`library_db_saved <= 55000ms` for durable SQLite save completion. Anything above
+either threshold fails the script. For cold catalog UX, prefer
 `bootstrap_counter_sustained_climb` over the first
 `bootstrap_counter_climb`: the latter is only the first meaningful target
 (`Games found: 50`), while the sustained metric marks the point where enough
@@ -341,6 +344,20 @@ real bootstrap count has reached the UI to keep the visible counter moving.
 `full_scan_counter_climb` should mean the classifier count has overtaken the
 currently displayed bootstrap count, not merely that classification reported its
 first small batch.
+`counter_plateau` is derived as
+`full_scan_counter_climb - bootstrap_counter_sustained_climb`; use it as the
+first-scan "felt stuck" metric when changing bootstrap progress or scanner
+progress reporting. `catalog_worker_ram_catalog` records the staged in-memory
+catalog projection cost and must be reported separately from scan time and
+SQLite save time.
+
+For cold-scan retention decisions, judge scanner optimizations against
+`library_scan_complete`, `scan_stage_walk`, `scan_stage_file_discovery`, and
+`scan_stage_classify_total`. Do not count `library_db_saved`,
+`import_stage_total`, SQLite publish, or saved-catalog hydration toward scanner
+speedup claims. Non-UX scanner changes should save at least 8s on cold
+`profile-first-scan.sh` runs against the relevant baseline before they earn
+their complexity.
 
 `device-catalog-destruction.sh` is the manual recovery integration check for
 missing, empty, corrupt, and marker-forced catalog states. Its missing-DB case
