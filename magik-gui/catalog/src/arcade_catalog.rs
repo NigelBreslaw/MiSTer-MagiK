@@ -4,6 +4,7 @@
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
 use crate::launch_profiles::{self, MountKind, PayloadRule};
+use crate::catalog_navigation::CatalogNavigationProjection;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::path::PathBuf;
@@ -146,6 +147,24 @@ impl ArcadeCatalog {
             games_by_ref,
             launch_plans_by_ref,
         }
+    }
+
+    pub fn from_navigation_projection(
+        root: impl Into<PathBuf>,
+        projection: CatalogNavigationProjection,
+    ) -> Self {
+        let games = projection.games.into_iter().map(ArcadeGameEntry::from).collect();
+        let systems = projection
+            .systems
+            .into_iter()
+            .map(GameSystemEntry::from)
+            .collect();
+        let launch_plans = projection
+            .launch_plans
+            .into_iter()
+            .map(StructuredLaunchPlan::from)
+            .collect();
+        Self::new_with_launch_plans(root.into(), games, systems, launch_plans)
     }
 
     pub fn len(&self) -> usize {
