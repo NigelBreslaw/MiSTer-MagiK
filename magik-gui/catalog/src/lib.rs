@@ -4,6 +4,7 @@ pub mod arcade_catalog;
 pub mod catalog_build;
 pub mod catalog_classify;
 pub mod catalog_config;
+pub mod catalog_navigation;
 mod catalog_projection;
 mod catalog_load_metrics;
 mod catalog_progress;

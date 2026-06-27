@@ -2,6 +2,7 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
 use crate::catalog_load_metrics;
+use crate::catalog_navigation;
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
@@ -165,7 +166,9 @@ pub(crate) fn remove_default_sqlite_database() -> Result<(), String> {
 fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
     remove_file_if_exists(path, "database")?;
     let summary_path = catalog_summary::summary_path_for_sqlite(path);
-    remove_file_if_exists(&summary_path, "catalog summary")
+    remove_file_if_exists(&summary_path, "catalog summary")?;
+    let navigation_path = catalog_navigation::navigation_path_for_sqlite(path);
+    remove_file_if_exists(&navigation_path, "catalog navigation")
 }
 
 fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
@@ -708,6 +711,11 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog(
     let catalog = saved_catalog.ok_or_else(|| "saved catalog was not returned".to_string())?;
     if let Some(stamp) = stamp {
         catalog_summary::write_catalog_summary_for_catalog(path, &catalog.catalog, stamp)?;
+        catalog_navigation::write_catalog_navigation_projection_for_catalog(
+            path,
+            &catalog.catalog,
+            stamp,
+        )?;
     }
     Ok(SqliteSavedCatalog { bytes, catalog })
 }
@@ -2735,7 +2743,9 @@ mod tests {
         .expect("write catalog and summary");
 
         let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
         assert!(summary_path.exists(), "summary should be published");
+        assert!(navigation_path.exists(), "navigation should be published");
         assert!(
             !root.join(".library.summary.json.tmp").exists(),
             "summary temp should not remain after successful publish"
@@ -2744,12 +2754,23 @@ mod tests {
         let summary = catalog_summary::read_catalog_summary(&summary_path)
             .expect("read summary")
             .expect("current summary");
+        let navigation =
+            catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
+                .expect("read navigation")
+                .expect("current navigation");
+        let navigation_catalog = ArcadeCatalog::from_navigation_projection(
+            "/media/fat/_Arcade",
+            navigation.clone(),
+        );
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load sqlite catalog");
 
         assert_eq!(saved.catalog.rows, loaded.rows);
         assert_eq!(saved.catalog.catalog.len(), loaded.catalog.len());
         assert_eq!(saved.catalog.catalog.systems, loaded.catalog.systems);
+        assert_eq!(navigation.games.len(), loaded.catalog.games.len());
+        assert_eq!(navigation_catalog.games.len(), loaded.catalog.games.len());
+        assert_eq!(navigation_catalog.systems, loaded.catalog.systems);
         assert_eq!(summary.catalog_stamp_fingerprint, stamp.fingerprint_hex());
         assert_eq!(summary.catalog_generation, stamp.fingerprint_hex());
         assert_eq!(summary.catalog_stamp_lines, stamp.lines());
@@ -2786,13 +2807,16 @@ mod tests {
         .expect("write catalog and summary");
 
         let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
         assert!(db.exists(), "database should be published");
         assert!(summary_path.exists(), "summary should be published");
+        assert!(navigation_path.exists(), "navigation should be published");
 
         remove_sqlite_database_at(&db).expect("remove database and summary");
 
         assert!(!db.exists(), "database should be removed");
         assert!(!summary_path.exists(), "summary should be removed");
+        assert!(!navigation_path.exists(), "navigation should be removed");
         let _ = std::fs::remove_dir_all(root);
     }
 

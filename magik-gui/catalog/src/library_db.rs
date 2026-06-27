@@ -8,6 +8,10 @@ use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_config;
 use crate::catalog_config::DEFAULT_SQLITE_PATH;
 use crate::catalog_load_metrics;
+pub use crate::catalog_navigation::{
+    navigation_path_for_sqlite, read_catalog_navigation_projection,
+    CatalogNavigationProjection,
+};
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
@@ -234,6 +238,13 @@ pub fn record_catalog_ui_load() {
 
 pub fn record_catalog_nav_projection_load() {
     catalog_load_metrics::record_nav_projection_read();
+}
+
+pub fn load_arcade_catalog_from_navigation_projection(
+    root: impl AsRef<Path>,
+    projection: CatalogNavigationProjection,
+) -> ArcadeCatalog {
+    ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
