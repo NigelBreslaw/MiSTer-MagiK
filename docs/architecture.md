@@ -115,6 +115,14 @@ avoid scanning media during hot launcher paths.
 See `docs/catalog.md` for the current catalog lifecycle, worker request modes,
 root stamp semantics, SQLite publish model, and benchmark gates.
 
+## Launcher Navigation Model
+
+Arcade filter navigation is hierarchical. D-pad right descends into a filter
+group or applies the highlighted value; `A` is the same action. D-pad left backs
+out one filter level; `B` is the same action except at the filter top level,
+where left is a no-op and `B` returns to the Home launcher. `Home` always jumps
+back to the Home launcher from Arcade or any open filter level.
+
 Current rules:
 
 - Production `mister-magik-fb` exposes the minimal command surface:
