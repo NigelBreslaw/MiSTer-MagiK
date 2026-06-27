@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::arcade_catalog::{ArcadeGameEntry, ARCADE_ROW_HEIGHT};
+use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
@@ -137,7 +137,7 @@ impl ArcadeListRenderer {
 
     pub(crate) fn draw(
         &mut self,
-        games: &[ArcadeGameEntry],
+        games: ArcadeGameView<'_>,
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
@@ -260,7 +260,7 @@ impl ArcadeListRenderer {
 
     fn draw_content_band(
         &mut self,
-        games: &[ArcadeGameEntry],
+        games: ArcadeGameView<'_>,
         visual_index: f32,
         band_y: usize,
         band_h: usize,
@@ -302,7 +302,10 @@ impl ArcadeListRenderer {
             if clip_y1 <= clip_y0 {
                 continue;
             }
-            self.blit_cached_row_to_surface(band_h, band_y, &games[idx], idx, y);
+            let Some(game) = games.get(idx) else {
+                continue;
+            };
+            self.blit_cached_row_to_surface(band_h, band_y, game, idx, y);
         }
     }
 
@@ -433,7 +436,7 @@ impl ArcadeListRenderer {
         self.row_fingerprint_epoch
     }
 
-    fn arcade_visible_window_hash(&mut self, games: &[ArcadeGameEntry], visual_index: f32) -> u64 {
+    fn arcade_visible_window_hash(&mut self, games: ArcadeGameView<'_>, visual_index: f32) -> u64 {
         let mut hash = ARCADE_LIST_HASH_OFFSET;
         let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
             return hash;
@@ -442,7 +445,10 @@ impl ArcadeListRenderer {
         arcade_hash_usize(&mut hash, end);
         for idx in first..=end {
             arcade_hash_usize(&mut hash, idx);
-            let row_hash = self.arcade_cached_game_hash(idx, &games[idx]);
+            let row_hash = games
+                .get(idx)
+                .map(|game| self.arcade_cached_game_hash(idx, game))
+                .unwrap_or(ARCADE_LIST_HASH_OFFSET);
             arcade_hash_u64(&mut hash, row_hash);
         }
         hash
@@ -810,7 +816,7 @@ fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
 }
 
 #[cfg(test)]
-fn arcade_visible_window_hash(games: &[ArcadeGameEntry], visual_index: f32) -> u64 {
+fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
     let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
         return hash;
@@ -819,7 +825,9 @@ fn arcade_visible_window_hash(games: &[ArcadeGameEntry], visual_index: f32) -> u
     arcade_hash_usize(&mut hash, end);
     for idx in first..=end {
         arcade_hash_usize(&mut hash, idx);
-        arcade_hash_game(&mut hash, &games[idx]);
+        if let Some(game) = games.get(idx) {
+            arcade_hash_game(&mut hash, game);
+        }
     }
     hash
 }
@@ -973,15 +981,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(matches!(
-            renderer.draw(&games, 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
-        assert!(renderer.draw(&games, 7.0, false).is_none());
+        assert!(renderer
+            .draw(ArcadeGameView::contiguous(&games), 7.0, false)
+            .is_none());
 
         games[3].title = "Changed visible row".into();
 
         assert!(matches!(
-            renderer.draw(&games, 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
     }
@@ -1000,13 +1010,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(matches!(
-            renderer.draw(&games, 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
         let before = renderer.surface.clone();
 
         assert!(matches!(
-            renderer.draw(&games, 7.0, true),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, true),
             Some(ArcadeListUpdate::Full(_))
         ));
 
@@ -1116,15 +1126,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(matches!(
-            renderer.draw(&games, 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
-        assert!(renderer.draw(&games, 7.0, false).is_none());
+        assert!(renderer
+            .draw(ArcadeGameView::contiguous(&games), 7.0, false)
+            .is_none());
 
         games[3].is_new = true;
 
         assert!(matches!(
-            renderer.draw(&games, 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
     }

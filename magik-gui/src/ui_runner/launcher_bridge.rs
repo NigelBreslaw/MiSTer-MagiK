@@ -250,10 +250,10 @@ pub(super) fn sync_bridge_launcher(
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     }
-    let mut active_games_for_preview: Option<&[ArcadeGameEntry]> = None;
+    let mut active_games_for_preview: Option<ArcadeGameView<'_>> = None;
     let mut active_games_loading = false;
     if let Some(catalog) = catalog {
-        let games = active_system_game_slice(catalog, nav);
+        let games = active_system_game_view(catalog, nav);
         let system = active_system(catalog, nav);
         let base_title = system
             .map(|system| system.title.clone())
@@ -282,8 +282,8 @@ pub(super) fn sync_bridge_launcher(
         preview.clear(&bridge);
     } else if nav.screen == Screen::Arcade {
         let games = active_games_for_preview
-            .or_else(|| catalog.map(|catalog| active_system_game_slice(catalog, nav)))
-            .unwrap_or(&[]);
+            .or_else(|| catalog.map(|catalog| active_system_game_view(catalog, nav)))
+            .unwrap_or_else(ArcadeGameView::empty);
         let _ = request_arcade_preview_window(
             &bridge,
             games,
@@ -304,7 +304,7 @@ pub(super) fn sync_bridge_launcher_light(
     loading_message: &str,
     loading_detail: &str,
     catalog: &ArcadeCatalog,
-    active_arcade_games: Option<&[ArcadeGameEntry]>,
+    active_arcade_games: Option<ArcadeGameView<'_>>,
     preview: &mut PreviewState,
     defer_selected_preview: bool,
 ) {
@@ -333,7 +333,7 @@ pub(super) fn sync_bridge_launcher_light(
     if nav.screen == Screen::Arcade && active_games_loading {
         preview.clear(&bridge);
     } else if nav.screen == Screen::Arcade {
-        let games = active_arcade_games.unwrap_or_else(|| active_system_game_slice(catalog, nav));
+        let games = active_arcade_games.unwrap_or_else(|| active_system_game_view(catalog, nav));
         schedule_arcade_preview_window(
             &bridge,
             games,
@@ -387,18 +387,18 @@ pub(super) fn active_system<'a>(
     catalog.systems.get(nav.selected)
 }
 
-pub(super) fn active_system_game_slice<'a>(
+pub(super) fn active_system_game_view<'a>(
     catalog: &'a ArcadeCatalog,
     nav: &LauncherNav,
-) -> &'a [ArcadeGameEntry] {
+) -> ArcadeGameView<'a> {
     active_system(catalog, nav)
-        .map(|system| catalog.filtered_game_slice(&system.id, &nav.arcade_filter.active))
-        .unwrap_or(&[])
+        .map(|system| catalog.filtered_game_view(&system.id, &nav.arcade_filter.active))
+        .unwrap_or_else(ArcadeGameView::empty)
 }
 
 pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     active_system(catalog, nav)
-        .is_some_and(|system| system.count > 0 && catalog.system_game_slice(&system.id).is_empty())
+        .is_some_and(|system| system.count > 0 && catalog.system_game_count(&system.id) == 0)
 }
 
 pub(super) fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {

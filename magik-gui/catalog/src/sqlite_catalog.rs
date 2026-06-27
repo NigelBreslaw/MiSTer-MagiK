@@ -3039,13 +3039,12 @@ mod tests {
         assert_eq!(
             loaded
                 .catalog
-                .filtered_game_slice(
+                .filtered_game_count(
                     "arcade",
                     &crate::arcade_catalog::ArcadeFilter::Category(
                         "Shooter / Vertical".to_string()
                     )
-                )
-                .len(),
+                ),
             1
         );
         let _ = std::fs::remove_dir_all(root);

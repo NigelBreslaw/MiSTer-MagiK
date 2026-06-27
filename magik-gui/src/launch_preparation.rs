@@ -359,7 +359,7 @@ fn load_default_launch_prep_bench_refs(
         .filter(|value| !value.is_empty())
     {
         for game in catalog
-            .system_game_slice(system_id)
+            .system_game_view(system_id)
             .iter()
             .filter(|game| game.mra_path.starts_with(VIRTUAL_LAUNCH_PREFIX))
             .take(virtual_limit)

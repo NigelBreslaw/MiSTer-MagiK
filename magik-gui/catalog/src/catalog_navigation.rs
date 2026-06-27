@@ -293,7 +293,7 @@ fn navigation_filter_memberships(
             continue;
         };
         let game_indexes = catalog
-            .filtered_game_slice(&option.system_id, &filter)
+            .filtered_game_view(&option.system_id, &filter)
             .iter()
             .filter_map(|game| game_index_by_ref.get(game.mra_path.as_ref()).copied())
             .collect();

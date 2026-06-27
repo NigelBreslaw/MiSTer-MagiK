@@ -82,7 +82,7 @@ pub(super) fn apply_forced_arcade_selected(nav: &mut LauncherNav, catalog: &Arca
     let Some(index) = forced_arcade_selected_index() else {
         return;
     };
-    let count = active_system_game_slice(catalog, nav).len();
+    let count = active_system_game_view(catalog, nav).len();
     if count == 0 {
         return;
     }

@@ -1053,7 +1053,7 @@ pub fn capture_launch_return_state(
         return None;
     }
     let system = catalog.systems.get(nav.selected)?;
-    let games = catalog.filtered_game_slice(&system.id, &nav.arcade_filter.active);
+    let games = catalog.filtered_game_view(&system.id, &nav.arcade_filter.active);
     let game_index = games
         .iter()
         .position(|game| game.mra_path.as_ref() == game_path)
@@ -1139,9 +1139,9 @@ pub fn apply_launch_return_state(
         .filter_kind
         .as_deref()
         .and_then(|kind| deserialize_arcade_filter(kind, state.filter_value.as_deref()))
-        .filter(|filter| !catalog.filtered_game_slice(system_id, filter).is_empty())
+        .filter(|filter| catalog.filtered_game_count(system_id, filter) > 0)
         .unwrap_or(ArcadeFilter::All);
-    let games = catalog.filtered_game_slice(system_id, &filter);
+    let games = catalog.filtered_game_view(system_id, &filter);
     if games.is_empty() {
         return false;
     }
