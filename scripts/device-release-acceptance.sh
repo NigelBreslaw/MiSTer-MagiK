@@ -530,11 +530,13 @@ run_controller_acceptance() {
 }
 
 run_audio_probe() {
-  if remote "'$REMOTE_BIN' audio-tone 0.1 >/tmp/mister-magik-audio-tone.log 2>&1; grep -E 'audio-tone wrote|audio-tone failed' /tmp/mister-magik-audio-tone.log"; then
+  local remote_log="/tmp/mister-magik-audio-tone.log"
+  if remote "rm -f '$remote_log'; for attempt in 1 2 3; do '$REMOTE_BIN' audio-tone 0.1 >'$remote_log' 2>&1 && break; sleep 1; done; cat '$remote_log'; grep -q 'audio-tone wrote' '$remote_log'"; then
     record_ok "audio-tone /dev/MrAudio probe"
   else
     record_fail "audio-tone /dev/MrAudio probe"
   fi
+  remote_get_optional "$remote_log" "audio-tone.log"
 }
 
 run_first_boot_visible_scan() {
@@ -543,7 +545,7 @@ run_first_boot_visible_scan() {
     return
   fi
   local backup="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
-  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$backup'; fi; rm -f '$REMOTE_DB' /tmp/mister-magik/events.jsonl /tmp/mister-magik-slint.log; sync"
+  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$backup'; fi; rm -f '$REMOTE_DB' '$REMOTE_ENV' /media/fat/mister-magik/bench-boot /tmp/mister-magik/events.jsonl /tmp/mister-magik-slint.log; sync"
   run_capture "first-boot-reboot" "$MISTER" reboot-wait
   wait_remote_event "first-boot first frame event" "first_frame" 60
   wait_status_expr "first-boot scan screen visible" 60 \
@@ -557,21 +559,28 @@ run_first_boot_visible_scan() {
 }
 
 run_catalog_mutation_acceptance() {
-  local fixture="/media/fat/mister-magik/acceptance-fixture"
+  local fixture_root="/tmp/mister-magik-acceptance-library"
+  local fixture="$fixture_root/_Arcade"
   local sqlite="/tmp/mister-magik-acceptance-fixture.sqlite3"
-  remote "rm -rf '$fixture' '$sqlite'; mkdir -p '$fixture'; printf '<misterromdescription><setname>acceptance_one</setname></misterromdescription>\n' > '$fixture/Acceptance One.mra'"
-  remote "MISTER_ARCADE_ROOT='$fixture' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-a.log 2>&1"
+  local count_sql="SELECT count(*) FROM games WHERE title IN ('Acceptance One','Acceptance Two');"
+  local dump_sql="SELECT games.title, launch_plans.launch_ref, games.system_id FROM games JOIN launch_plans USING(game_id) WHERE games.title IN ('Acceptance One','Acceptance Two') ORDER BY games.title;"
+  remote "rm -rf '$fixture_root' '$sqlite'; mkdir -p '$fixture'; printf '<misterromdescription><setname>acceptance_one</setname></misterromdescription>\n' > '$fixture/Acceptance One.mra'"
+  remote "MISTER_LIBRARY_ROOTS='$fixture_root' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-a.log 2>&1"
   local first_count
-  first_count="$(remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql 'SELECT count(*) FROM games;' 2>/dev/null || echo 0" | last_number || true)"
-  remote "printf '<misterromdescription><setname>acceptance_two</setname></misterromdescription>\n' > '$fixture/Acceptance Two.mra'; MISTER_ARCADE_ROOT='$fixture' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-b.log 2>&1"
+  first_count="$(remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql \"$count_sql\" 2>/dev/null || echo 0" | first_result_number || true)"
+  remote "printf '<misterromdescription><setname>acceptance_two</setname></misterromdescription>\n' > '$fixture/Acceptance Two.mra'; MISTER_LIBRARY_ROOTS='$fixture_root' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-b.log 2>&1"
   local second_count
-  second_count="$(remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql 'SELECT count(*) FROM games;' 2>/dev/null || echo 0" | last_number || true)"
-  if [ "${first_count:-0}" -gt 0 ] && [ "${second_count:-0}" -gt "$first_count" ]; then
+  second_count="$(remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql \"$count_sql\" 2>/dev/null || echo 0" | first_result_number || true)"
+  remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql \"$dump_sql\" >/tmp/mister-magik-catalog-mutation-games.tsv 2>&1 || true"
+  remote_get_optional "/tmp/mister-magik-catalog-mutation-a.log" "catalog-mutation-a.log"
+  remote_get_optional "/tmp/mister-magik-catalog-mutation-b.log" "catalog-mutation-b.log"
+  remote_get_optional "/tmp/mister-magik-catalog-mutation-games.tsv" "catalog-mutation-games.tsv"
+  if [ "${first_count:-0}" = "1" ] && [ "${second_count:-0}" = "2" ]; then
     record_ok "catalog mutation fixture count $first_count -> $second_count"
   else
-    record_fail "catalog mutation fixture count expected growth first=${first_count:-empty} second=${second_count:-empty}"
+    record_fail "catalog mutation fixture count expected 1 -> 2 first=${first_count:-empty} second=${second_count:-empty}"
   fi
-  remote "rm -rf '$fixture' '$sqlite'"
+  remote "rm -rf '$fixture_root' '$sqlite' /tmp/mister-magik-catalog-mutation-a.log /tmp/mister-magik-catalog-mutation-b.log /tmp/mister-magik-catalog-mutation-games.tsv"
 }
 
 run_launch_matrix() {

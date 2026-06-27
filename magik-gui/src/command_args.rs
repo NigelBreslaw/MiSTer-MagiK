@@ -42,7 +42,6 @@ pub const COMMANDS: &[&str] = &[
     #[cfg(feature = "diagnostics")]
     "library-scan-bench",
     "launch-prep-bench",
-    #[cfg(feature = "diagnostics")]
     "audio-tone",
 ];
 
@@ -123,10 +122,10 @@ mod tests {
             "library-scan-bench",
             "preview-pack-bench",
             "preview-index-refresh-bench",
-            "audio-tone",
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");
         }
+        assert!(COMMANDS.contains(&"audio-tone"));
     }
 
     #[test]
