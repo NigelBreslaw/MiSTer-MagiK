@@ -279,10 +279,12 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     let open_t = Instant::now();
     catalog_load_metrics::record_sqlite_open();
     let conn = open_sqlite_read_only(path).map_err(|e| format!("open library db: {e}"))?;
+    let open_us = open_t.elapsed().as_micros() as u64;
+    let schema_t = Instant::now();
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     ensure_sqlite_schema_current(&conn)?;
-    let open_us = open_t.elapsed().as_micros() as u64;
-    load_arcade_catalog_from_connection(root, &conn, t, open_us)
+    let schema_check_us = schema_t.elapsed().as_micros() as u64;
+    load_arcade_catalog_from_connection(root, &conn, t, open_us, schema_check_us)
 }
 
 fn load_arcade_catalog_from_connection(
@@ -290,11 +292,16 @@ fn load_arcade_catalog_from_connection(
     conn: &Connection,
     started: Instant,
     open_us: u64,
+    schema_check_us: u64,
 ) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let query_t = Instant::now();
+    let mut query_timing = CatalogSqlQueryTiming::default();
     let games = match load_materialized_launcher_catalog(conn) {
-        Ok(Some(games)) => games,
+        Ok(Some(result)) => {
+            query_timing = result.timing;
+            result.games
+        }
         Ok(None) => match load_materialized_ui_catalog(conn) {
             Ok(Some(games)) => games,
             Ok(None) => load_joined_launcher_catalog(conn)?,
@@ -304,7 +311,9 @@ fn load_arcade_catalog_from_connection(
     };
     let query_us = query_t.elapsed().as_micros() as u64;
     let rows = games.len();
+    let launch_plans_t = Instant::now();
     let launch_plans = Vec::new();
+    let launch_plans_us = launch_plans_t.elapsed().as_micros() as u64;
     let systems_t = Instant::now();
     let systems = arcade_catalog::systems_from_games(&games);
     let systems_us = systems_t.elapsed().as_micros() as u64;
@@ -315,11 +324,30 @@ fn load_arcade_catalog_from_connection(
         catalog,
         us: started.elapsed().as_micros() as u64,
         open_us,
+        schema_check_us,
         query_us,
+        query_prepare_us: query_timing.prepare_us,
+        query_first_row_us: query_timing.first_row_us,
+        query_row_read_us: query_timing.row_read_us,
+        query_row_hydrate_us: query_timing.row_hydrate_us,
+        launch_plans_us,
         systems_us,
         catalog_us,
         rows,
     })
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CatalogSqlQueryTiming {
+    prepare_us: u64,
+    first_row_us: u64,
+    row_read_us: u64,
+    row_hydrate_us: u64,
+}
+
+struct CatalogSqlQueryResult {
+    games: Vec<ArcadeGameEntry>,
+    timing: CatalogSqlQueryTiming,
 }
 
 pub(crate) fn load_materialized_ui_catalog(
@@ -366,13 +394,11 @@ pub(crate) fn load_materialized_ui_catalog(
     Ok(Some(games))
 }
 
-pub(crate) fn load_materialized_launcher_catalog(
-    conn: &Connection,
-) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
+fn load_materialized_launcher_catalog(conn: &Connection) -> Result<Option<CatalogSqlQueryResult>, String> {
     if !sqlite_table_exists(conn, "launcher_catalog")? {
         return Ok(None);
     }
-    Ok(Some(query_game_entries(
+    Ok(Some(query_game_entries_with_timing(
         conn,
         "SELECT title,
                 launch_ref,
@@ -395,32 +421,68 @@ pub(crate) fn query_game_entries(
     sql: &str,
     label: &str,
 ) -> Result<Vec<ArcadeGameEntry>, String> {
+    query_game_entries_with_timing(conn, sql, label).map(|result| result.games)
+}
+
+fn query_game_entries_with_timing(
+    conn: &Connection,
+    sql: &str,
+    label: &str,
+) -> Result<CatalogSqlQueryResult, String> {
     let now = library_db::unix_now_secs();
+    let prepare_t = Instant::now();
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| format!("prepare {label} query: {e}"))?;
-    let rows = stmt
-        .query_map([], |row| {
-            let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
-            Ok(ArcadeGameEntry {
-                title: row.get::<_, String>(0)?.into(),
-                mra_path: row.get::<_, String>(1)?.into(),
-                preview_archive_path: row.get::<_, String>(2)?.into(),
-                preview_asset_key: row.get::<_, String>(3)?.into(),
-                has_preview: row.get::<_, i64>(4)? != 0,
-                system_id: row.get::<_, String>(5)?.into(),
-                year: optional_year_from_row(row, 6)?,
-                manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default().into(),
-                category: row.get::<_, Option<String>>(8)?.unwrap_or_default().into(),
-                is_new: is_new_discovery(discovered_at_unix, now),
-            })
-        })
-        .map_err(|e| format!("query {label}: {e}"))?;
+    let prepare_us = prepare_t.elapsed().as_micros() as u64;
+    let mut rows = stmt.query([]).map_err(|e| format!("query {label}: {e}"))?;
+    let row_read_t = Instant::now();
+    let mut first_row_us = 0;
+    let mut row_hydrate_us = 0;
     let mut games = Vec::new();
-    for row in rows {
-        games.push(row.map_err(|e| format!("read {label} row: {e}"))?);
+    let mut first_row_seen = false;
+    loop {
+        let next_t = Instant::now();
+        let row = rows
+            .next()
+            .map_err(|e| format!("read {label} row: {e}"))?;
+        if !first_row_seen {
+            first_row_us = next_t.elapsed().as_micros() as u64;
+            first_row_seen = true;
+        }
+        let Some(row) = row else {
+            break;
+        };
+        let hydrate_t = Instant::now();
+        let game = game_entry_from_row(row, now).map_err(|e| format!("hydrate {label} row: {e}"))?;
+        row_hydrate_us += hydrate_t.elapsed().as_micros() as u64;
+        games.push(game);
     }
-    Ok(games)
+    Ok(CatalogSqlQueryResult {
+        games,
+        timing: CatalogSqlQueryTiming {
+            prepare_us,
+            first_row_us,
+            row_read_us: row_read_t.elapsed().as_micros() as u64,
+            row_hydrate_us,
+        },
+    })
+}
+
+fn game_entry_from_row(row: &rusqlite::Row<'_>, now_unix: i64) -> rusqlite::Result<ArcadeGameEntry> {
+    let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
+    Ok(ArcadeGameEntry {
+        title: row.get::<_, String>(0)?.into(),
+        mra_path: row.get::<_, String>(1)?.into(),
+        preview_archive_path: row.get::<_, String>(2)?.into(),
+        preview_asset_key: row.get::<_, String>(3)?.into(),
+        has_preview: row.get::<_, i64>(4)? != 0,
+        system_id: row.get::<_, String>(5)?.into(),
+        year: optional_year_from_row(row, 6)?,
+        manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default().into(),
+        category: row.get::<_, Option<String>>(8)?.unwrap_or_default().into(),
+        is_new: is_new_discovery(discovered_at_unix, now_unix),
+    })
 }
 
 pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -1812,7 +1874,7 @@ fn write_sqlite_scan_with_sources(
         );
     }
     let saved_catalog_t = Instant::now();
-    let saved_catalog = load_arcade_catalog_from_connection(root, &tx, saved_catalog_t, 0)?;
+    let saved_catalog = load_arcade_catalog_from_connection(root, &tx, saved_catalog_t, 0, 0)?;
     report_library_import_timing(
         "build_saved_catalog",
         saved_catalog_t,
