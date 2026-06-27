@@ -687,7 +687,7 @@ impl LauncherNav {
     ) -> Option<LauncherEvent> {
         let items = self.arcade_filter_items(catalog, system_id);
         if rising(now.dpad_right, self.prev.dpad_right) {
-            self.close_arcade_filter();
+            self.activate_arcade_filter_selection(catalog, system_id, &items);
             return None;
         }
         if rising(now.btn_home, self.prev.btn_home) {
@@ -2096,7 +2096,7 @@ mod tests {
     }
 
     #[test]
-    fn arcade_filter_left_opens_and_right_closes_drawer() {
+    fn arcade_filter_left_opens_and_right_selects_highlighted_item() {
         let catalog = filter_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
@@ -2116,7 +2116,30 @@ mod tests {
         assert_eq!(nav.arcade_filter.selected, 0);
 
         let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(64), &catalog);
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
         assert!(!nav.arcade_filter.drawer_open);
+    }
+
+    #[test]
+    fn arcade_filter_right_enters_submenu() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let press_left = pad_with(|pad| pad.dpad_left = true);
+        let press_down = pad_with(|pad| pad.dpad_down = true);
+        let press_right = pad_with(|pad| pad.dpad_right = true);
+
+        let _ = nav.handle_input(&press_a, t0, &catalog);
+        release(&mut nav, &catalog, t0, 16);
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
+        release(&mut nav, &catalog, t0, 48);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
+        release(&mut nav, &catalog, t0, 80);
+        let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(96), &catalog);
+
+        assert!(nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
     }
 
     #[test]

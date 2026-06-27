@@ -22,6 +22,9 @@ const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
+const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
+const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
+const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 struct LauncherStatusTextSnapshot {
@@ -129,6 +132,136 @@ impl LibraryChangedDialogTestDriver {
                 LibraryChangedDialogTestPhase::Done => None,
             },
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LauncherInputScriptButton {
+    Up,
+    Down,
+    Left,
+    Right,
+    A,
+    B,
+}
+
+impl LauncherInputScriptButton {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "a" => Some(Self::A),
+            "b" | "back" => Some(Self::B),
+            _ => None,
+        }
+    }
+
+    fn apply(self, state: &mut PadState) {
+        match self {
+            Self::Up => state.dpad_up = true,
+            Self::Down => state.dpad_down = true,
+            Self::Left => state.dpad_left = true,
+            Self::Right => state.dpad_right = true,
+            Self::A => state.btn_a = true,
+            Self::B => state.btn_b = true,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::A => "a",
+            Self::B => "b",
+        }
+    }
+}
+
+struct LauncherInputScriptDriver {
+    buttons: Vec<LauncherInputScriptButton>,
+    button_idx: usize,
+    frame_in_button: usize,
+    wait_frames: usize,
+}
+
+impl LauncherInputScriptDriver {
+    fn from_env(start: Instant) -> Self {
+        match std::env::var("MISTER_LAUNCHER_INPUT_SCRIPT") {
+            Ok(value) => Self::from_script(&value, start),
+            Err(_) => Self::empty(),
+        }
+    }
+
+    fn from_script(value: &str, start: Instant) -> Self {
+        let mut buttons = Vec::new();
+        for token in value.split([',', ';', ' ']) {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+            match LauncherInputScriptButton::parse(token) {
+                Some(button) => buttons.push(button),
+                None => print_startup_event(
+                    start,
+                    "launcher_input_script_invalid_token",
+                    format!("token={token}"),
+                ),
+            }
+        }
+        if !buttons.is_empty() {
+            let labels = buttons
+                .iter()
+                .map(|button| button.label())
+                .collect::<Vec<_>>()
+                .join(",");
+            print_startup_event(
+                start,
+                "launcher_input_script_loaded",
+                format!("buttons={labels}"),
+            );
+        }
+        Self {
+            buttons,
+            button_idx: 0,
+            frame_in_button: 0,
+            wait_frames: LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES,
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            buttons: Vec::new(),
+            button_idx: 0,
+            frame_in_button: 0,
+            wait_frames: 0,
+        }
+    }
+
+    fn input_for(&mut self) -> Option<PadState> {
+        let button = *self.buttons.get(self.button_idx)?;
+        if self.frame_in_button < self.wait_frames {
+            self.frame_in_button += 1;
+            return None;
+        }
+
+        let local_frame = self.frame_in_button - self.wait_frames;
+        self.frame_in_button += 1;
+        if local_frame < LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
+            let mut state = PadState::default();
+            button.apply(&mut state);
+            return Some(state);
+        }
+        if local_frame < LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES + LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES {
+            return Some(PadState::default());
+        }
+
+        self.button_idx += 1;
+        self.frame_in_button = 0;
+        Some(PadState::default())
     }
 }
 
@@ -478,6 +611,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_session = LauncherCatalogSession::new(deferred_library_rebuild);
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
+    let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
@@ -1110,6 +1244,9 @@ pub(super) fn run_launcher_loop(
                     {
                         nav_state = test_state;
                     }
+                    if let Some(script_state) = launcher_input_script.input_for() {
+                        nav_state = script_state;
+                    }
                     let event = if scheduler.should_request_benchmark_launch()
                         && catalog_ready
                         && !launcher_bench_waiting_for_initial_preview
@@ -1573,14 +1710,23 @@ pub(super) fn run_launcher_loop(
         let full_frame_present = should_present_full_frame(launching, route_action);
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect =
-            if should_draw_arcade_list(&nav, launching, active_arcade_games_loading) {
+            if should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading) {
                 let force_arcade_redraw =
                     arcade_list_needs_forced_redraw(this_rect, full_frame_present);
-                arcade_list_renderer.draw(
-                    active_arcade_games,
-                    nav.arcade.visual_index,
-                    force_arcade_redraw,
-                )
+                if nav.arcade_filter.drawer_open {
+                    let items = arcade_filter_list_items(&catalog, &nav);
+                    arcade_list_renderer.draw_filter_items(
+                        &items,
+                        nav.arcade_filter.selected,
+                        force_arcade_redraw,
+                    )
+                } else {
+                    arcade_list_renderer.draw(
+                        active_arcade_games,
+                        nav.arcade.visual_index,
+                        force_arcade_redraw,
+                    )
+                }
             } else {
                 None
             };
@@ -2123,15 +2269,26 @@ fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool
     catalog_ready && arcade_catalog_rows_ready(catalog)
 }
 
-fn should_draw_arcade_list(
+fn should_draw_arcade_overlay(
     nav: &LauncherNav,
     launching: bool,
     active_arcade_games_loading: bool,
 ) -> bool {
-    !launching
-        && nav.screen == Screen::Arcade
-        && !active_arcade_games_loading
-        && !nav.arcade_filter.drawer_open
+    !launching && nav.screen == Screen::Arcade && !active_arcade_games_loading
+}
+
+fn arcade_filter_list_items(catalog: &ArcadeCatalog, nav: &LauncherNav) -> Vec<ArcadeListItem> {
+    let system_id = active_system(catalog, nav)
+        .map(|system| system.id.as_str())
+        .unwrap_or("");
+    nav.arcade_filter_items(catalog, system_id)
+        .into_iter()
+        .map(|item| ArcadeListItem {
+            title: item.label,
+            count: Some(item.count),
+            active: item.active,
+        })
+        .collect()
 }
 
 fn effective_lock_screen(
@@ -2261,29 +2418,29 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn arcade_list_renderer_draws_for_closed_arcade_list() {
+    pub(super) fn arcade_overlay_draws_for_closed_arcade_list() {
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
 
-        assert!(should_draw_arcade_list(&nav, false, false));
+        assert!(should_draw_arcade_overlay(&nav, false, false));
     }
 
     #[test]
-    pub(super) fn arcade_list_renderer_is_hidden_while_filter_drawer_is_open() {
+    pub(super) fn arcade_overlay_draws_filter_list_while_filter_view_is_open() {
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
         nav.arcade_filter.drawer_open = true;
 
-        assert!(!should_draw_arcade_list(&nav, false, false));
+        assert!(should_draw_arcade_overlay(&nav, false, false));
     }
 
     #[test]
-    pub(super) fn arcade_list_renderer_stays_hidden_while_loading_or_launching() {
+    pub(super) fn arcade_overlay_stays_hidden_while_loading_or_launching() {
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
 
-        assert!(!should_draw_arcade_list(&nav, true, false));
-        assert!(!should_draw_arcade_list(&nav, false, true));
+        assert!(!should_draw_arcade_overlay(&nav, true, false));
+        assert!(!should_draw_arcade_overlay(&nav, false, true));
     }
 
     #[test]
@@ -2448,6 +2605,37 @@ mod tests {
             .expect("A should confirm rebuild");
         assert_eq!(event.action, LauncherAction::RebuildLibrary);
         assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    pub(super) fn launcher_input_script_presses_and_releases_each_button() {
+        let start = Instant::now();
+        let mut driver = LauncherInputScriptDriver::from_script("left,down,right", start);
+        driver.wait_frames = 0;
+
+        let left = driver.input_for().expect("left press");
+        assert!(left.dpad_left);
+        assert!(!left.dpad_down);
+        assert!(!left.dpad_right);
+
+        for _ in 1..LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
+            assert!(driver.input_for().expect("left hold").dpad_left);
+        }
+        for _ in 0..LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES {
+            let release = driver.input_for().expect("left release");
+            assert!(!release.dpad_left);
+            assert!(!release.dpad_down);
+            assert!(!release.dpad_right);
+        }
+        let gap = driver.input_for().expect("between buttons");
+        assert!(!gap.dpad_left);
+        assert!(!gap.dpad_down);
+        assert!(!gap.dpad_right);
+
+        let down = driver.input_for().expect("down press");
+        assert!(!down.dpad_left);
+        assert!(down.dpad_down);
+        assert!(!down.dpad_right);
     }
 
     #[test]
