@@ -113,7 +113,11 @@ printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
-  if grep -q $'^startup_timing\tlibrary_ready\t' "$local_log" || grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+  if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+    break
+  fi
+  if grep -q $'^startup_timing\tlibrary_ready\t' "$local_log" &&
+     grep -q $'^startup_timing\tlibrary_db_saved\t' "$local_log"; then
     break
   fi
   sleep 2
@@ -126,8 +130,9 @@ if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
   exit 1
 fi
 ready_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_ready" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
-if [[ -z "$ready_ms" ]]; then
-  echo "first scan did not complete within ${TIMEOUT_SECS}s; latest log follows" >&2
+saved_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_db_saved" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
+if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
+  echo "first scan did not complete both gates within ${TIMEOUT_SECS}s (library_ready=${ready_ms:-missing}, library_db_saved=${saved_ms:-missing}); latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
@@ -155,7 +160,7 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   }
 ' "$local_log" >>"$TSV"
 
-db_count="$("$MISTER" db "SELECT count(*) FROM games" 2>/dev/null | tail -1 | tr -d '\r' || true)"
+db_count="$("$MISTER" db "SELECT count(*) FROM games" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
 status="$("$MISTER" status 2>/dev/null || true)"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "db_count" "0" "$db_count" >>"$TSV"
 
