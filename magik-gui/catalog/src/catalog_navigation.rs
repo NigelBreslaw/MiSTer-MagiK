@@ -1,20 +1,19 @@
 //! Runtime navigation projection for fast launcher catalog hydration.
 
 use crate::arcade_catalog::{
-    ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, ArcadeFilterOption, GameSystemEntry,
-    LaunchTarget, StructuredLaunchPlan,
+    ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, LaunchTarget, StructuredLaunchPlan,
 };
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::sqlite_catalog;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogNavigationProjection {
@@ -27,8 +26,6 @@ pub struct CatalogNavigationProjection {
     pub systems: Vec<NavigationSystem>,
     pub games: Vec<NavigationGame>,
     pub launch_plans: Vec<NavigationLaunchPlan>,
-    pub filter_options: Vec<NavigationFilterOption>,
-    pub filter_memberships: Vec<NavigationFilterMembership>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,22 +59,6 @@ pub struct NavigationLaunchPlan {
     pub mount_kind: String,
     pub mount_index: u8,
     pub delay_secs: u8,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NavigationFilterOption {
-    pub system_id: String,
-    pub kind: String,
-    pub label: String,
-    pub count: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NavigationFilterMembership {
-    pub system_id: String,
-    pub kind: String,
-    pub label: String,
-    pub game_indexes: Vec<usize>,
 }
 
 pub fn navigation_path_for_sqlite(sqlite_path: &Path) -> PathBuf {
@@ -116,12 +97,6 @@ pub fn read_catalog_navigation_projection(
 impl CatalogNavigationProjection {
     pub fn from_catalog(catalog: &ArcadeCatalog, stamp: &CatalogStamp) -> Self {
         let catalog_stamp_fingerprint = stamp.fingerprint_hex();
-        let game_index_by_ref = catalog
-            .games
-            .iter()
-            .enumerate()
-            .map(|(index, game)| (game.mra_path.to_string(), index))
-            .collect::<HashMap<_, _>>();
         Self {
             schema: CATALOG_NAVIGATION_SCHEMA_VERSION,
             catalog_schema_version: SCHEMA_VERSION,
@@ -132,8 +107,6 @@ impl CatalogNavigationProjection {
             systems: catalog.systems.iter().map(NavigationSystem::from).collect(),
             games: catalog.games.iter().map(NavigationGame::from).collect(),
             launch_plans: structured_launch_plans(catalog),
-            filter_options: navigation_filter_options(catalog),
-            filter_memberships: navigation_filter_memberships(catalog, &game_index_by_ref),
         }
     }
 
@@ -242,82 +215,6 @@ fn structured_launch_plans(catalog: &ArcadeCatalog) -> Vec<NavigationLaunchPlan>
         }
     }
     plans
-}
-
-fn navigation_filter_options(catalog: &ArcadeCatalog) -> Vec<NavigationFilterOption> {
-    let mut options = Vec::new();
-    for system in &catalog.systems {
-        append_filter_options(
-            &mut options,
-            &system.id,
-            "decade",
-            catalog.decade_options(&system.id),
-        );
-        append_filter_options(
-            &mut options,
-            &system.id,
-            "manufacturer",
-            catalog.manufacturer_options(&system.id),
-        );
-        append_filter_options(
-            &mut options,
-            &system.id,
-            "category",
-            catalog.category_options(&system.id),
-        );
-    }
-    options
-}
-
-fn append_filter_options(
-    out: &mut Vec<NavigationFilterOption>,
-    system_id: &str,
-    kind: &str,
-    options: Vec<ArcadeFilterOption>,
-) {
-    out.extend(options.into_iter().map(|option| NavigationFilterOption {
-        system_id: system_id.to_string(),
-        kind: kind.to_string(),
-        label: option.label,
-        count: option.count,
-    }));
-}
-
-fn navigation_filter_memberships(
-    catalog: &ArcadeCatalog,
-    game_index_by_ref: &HashMap<String, usize>,
-) -> Vec<NavigationFilterMembership> {
-    let mut memberships = Vec::new();
-    for option in navigation_filter_options(catalog) {
-        let Some(filter) = filter_from_option(&option) else {
-            continue;
-        };
-        let game_indexes = catalog
-            .filtered_game_view(&option.system_id, &filter)
-            .iter()
-            .filter_map(|game| game_index_by_ref.get(game.mra_path.as_ref()).copied())
-            .collect();
-        memberships.push(NavigationFilterMembership {
-            system_id: option.system_id,
-            kind: option.kind,
-            label: option.label,
-            game_indexes,
-        });
-    }
-    memberships
-}
-
-fn filter_from_option(option: &NavigationFilterOption) -> Option<ArcadeFilter> {
-    match option.kind.as_str() {
-        "decade" => option
-            .label
-            .strip_suffix("'s")
-            .and_then(|label| label.parse::<u16>().ok())
-            .map(ArcadeFilter::Decade),
-        "manufacturer" => Some(ArcadeFilter::Manufacturer(option.label.clone())),
-        "category" => Some(ArcadeFilter::Category(option.label.clone())),
-        _ => None,
-    }
 }
 
 fn write_catalog_navigation_projection(
@@ -454,10 +351,11 @@ mod tests {
         assert_eq!(loaded.games.len(), catalog.games.len());
         assert_eq!(loaded.systems.len(), catalog.systems.len());
         assert_eq!(loaded.launch_plans.len(), 1);
-        assert_eq!(loaded.filter_options.len(), 6);
-        assert_eq!(loaded.filter_memberships.len(), 6);
         assert_eq!(hydrated.games.len(), catalog.games.len());
         assert_eq!(hydrated.systems, catalog.systems);
+        assert_eq!(hydrated.decade_option_count("arcade"), 1);
+        assert_eq!(hydrated.manufacturer_option_count("arcade"), 1);
+        assert_eq!(hydrated.category_option_count("arcade"), 1);
         assert!(matches!(
             hydrated.launch_target_for_ref("magik-plan:saturn:nights"),
             LaunchTarget::Structured(_)
