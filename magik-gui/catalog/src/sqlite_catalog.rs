@@ -284,7 +284,12 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     ensure_sqlite_schema_current(&conn)?;
     let schema_check_us = schema_t.elapsed().as_micros() as u64;
-    load_arcade_catalog_from_connection(root, &conn, t, open_us, schema_check_us)
+    let stamp = catalog_store::read_catalog_stamp(&conn)?;
+    let loaded = load_arcade_catalog_from_connection(root, &conn, t, open_us, schema_check_us)?;
+    if let Some(stamp) = stamp.as_ref() {
+        repair_navigation_projection_after_sqlite_load(path, &loaded.catalog, stamp)?;
+    }
+    Ok(loaded)
 }
 
 fn load_arcade_catalog_from_connection(
@@ -483,6 +488,27 @@ fn game_entry_from_row(row: &rusqlite::Row<'_>, now_unix: i64) -> rusqlite::Resu
         category: row.get::<_, Option<String>>(8)?.unwrap_or_default().into(),
         is_new: is_new_discovery(discovered_at_unix, now_unix),
     })
+}
+
+fn repair_navigation_projection_after_sqlite_load(
+    sqlite_path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<(), String> {
+    let navigation_path = catalog_navigation::navigation_path_for_sqlite(sqlite_path);
+    match catalog_navigation::read_catalog_navigation_projection(&navigation_path, stamp) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => catalog_navigation::write_catalog_navigation_projection_for_catalog(
+            sqlite_path,
+            catalog,
+            stamp,
+        ),
+        Err(_) => catalog_navigation::write_catalog_navigation_projection_for_catalog(
+            sqlite_path,
+            catalog,
+            stamp,
+        ),
+    }
 }
 
 pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -2849,6 +2875,48 @@ mod tests {
             .find(|system| system.id == "arcade")
             .expect("arcade summary system");
         assert_eq!(arcade.supported_media, vec!["screenshots".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_load_repairs_missing_navigation_projection() {
+        let root = unique_temp_dir("sqlite-navigation-repair");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp_and_catalog(
+            &db,
+            &sqlite_scan_with_discoveries(vec![
+                mra_discovery(1, "Repair Alpha"),
+                mra_discovery(2, "Repair Beta"),
+            ]),
+            Some(&stamp),
+            "/media/fat/_Arcade",
+            None,
+        )
+        .expect("write catalog and projection");
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
+        std::fs::remove_file(&navigation_path).expect("remove projection");
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load sqlite fallback");
+
+        assert!(navigation_path.exists(), "fallback load should repair projection");
+        let repaired =
+            catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
+                .expect("read repaired projection")
+                .expect("current repaired projection");
+        let repaired_catalog =
+            ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", repaired);
+        assert_eq!(repaired_catalog.games.len(), loaded.catalog.games.len());
+        assert_eq!(repaired_catalog.systems, loaded.catalog.systems);
+        assert_eq!(
+            repaired_catalog.decade_options("arcade"),
+            loaded.catalog.decade_options("arcade")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
