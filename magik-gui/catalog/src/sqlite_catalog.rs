@@ -1,17 +1,17 @@
 //! SQLite catalog import, publish, and loading.
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
-use crate::catalog_load_metrics;
-use crate::catalog_navigation;
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
 };
+use crate::catalog_load_metrics;
+use crate::catalog_navigation;
+use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_projection::{
     self, ArcadePreviewProjection, CatalogProjectionRow, CatalogProjectionSource,
     LauncherPreviewAsset,
 };
-use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::catalog_summary;
@@ -120,7 +120,7 @@ pub(crate) struct DiscoveryHistory {
 }
 
 impl DiscoveryHistory {
-    fn load(path: &Path) -> Option<Self> {
+    pub(crate) fn load(path: &Path) -> Option<Self> {
         let conn = open_sqlite_read_only(path).ok()?;
         if !sqlite_table_exists(&conn, "games").ok()? {
             return None;
@@ -150,7 +150,7 @@ impl DiscoveryHistory {
         Some(Self { by_game_id })
     }
 
-    fn discovered_at_for(&self, game_id: &str, scan: &LibraryScan) -> Option<i64> {
+    pub(crate) fn discovered_at_for(&self, game_id: &str, scan: &LibraryScan) -> Option<i64> {
         self.by_game_id
             .get(game_id)
             .copied()
@@ -399,7 +399,9 @@ pub(crate) fn load_materialized_ui_catalog(
     Ok(Some(games))
 }
 
-fn load_materialized_launcher_catalog(conn: &Connection) -> Result<Option<CatalogSqlQueryResult>, String> {
+fn load_materialized_launcher_catalog(
+    conn: &Connection,
+) -> Result<Option<CatalogSqlQueryResult>, String> {
     if !sqlite_table_exists(conn, "launcher_catalog")? {
         return Ok(None);
     }
@@ -448,9 +450,7 @@ fn query_game_entries_with_timing(
     let mut first_row_seen = false;
     loop {
         let next_t = Instant::now();
-        let row = rows
-            .next()
-            .map_err(|e| format!("read {label} row: {e}"))?;
+        let row = rows.next().map_err(|e| format!("read {label} row: {e}"))?;
         if !first_row_seen {
             first_row_us = next_t.elapsed().as_micros() as u64;
             first_row_seen = true;
@@ -459,7 +459,8 @@ fn query_game_entries_with_timing(
             break;
         };
         let hydrate_t = Instant::now();
-        let game = game_entry_from_row(row, now).map_err(|e| format!("hydrate {label} row: {e}"))?;
+        let game =
+            game_entry_from_row(row, now).map_err(|e| format!("hydrate {label} row: {e}"))?;
         row_hydrate_us += hydrate_t.elapsed().as_micros() as u64;
         games.push(game);
     }
@@ -474,7 +475,10 @@ fn query_game_entries_with_timing(
     })
 }
 
-fn game_entry_from_row(row: &rusqlite::Row<'_>, now_unix: i64) -> rusqlite::Result<ArcadeGameEntry> {
+fn game_entry_from_row(
+    row: &rusqlite::Row<'_>,
+    now_unix: i64,
+) -> rusqlite::Result<ArcadeGameEntry> {
     let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
     Ok(ArcadeGameEntry {
         title: row.get::<_, String>(0)?.into(),
@@ -626,10 +630,8 @@ pub(crate) fn load_joined_launcher_catalog(
     let rows = stmt
         .query_map([], |row| {
             let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
-            let preview = LauncherPreviewAsset::new(
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            );
+            let preview =
+                LauncherPreviewAsset::new(row.get::<_, String>(2)?, row.get::<_, String>(3)?);
             Ok(CatalogProjectionRow::new(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1710,11 +1712,12 @@ fn write_sqlite_scan_with_sources(
                 ])
                 .map_err(|e| format!("insert launchable: {e}"))?;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-                let (family_id, title, year, manufacturer, category, source) = mame_identity_projection(
-                    &identity_id,
-                    &arcade_metadata,
-                    discovery.parent.as_deref(),
-                );
+                let (family_id, title, year, manufacturer, category, source) =
+                    mame_identity_projection(
+                        &identity_id,
+                        &arcade_metadata,
+                        discovery.parent.as_deref(),
+                    );
                 identity_stmt
                     .execute(params![
                         key.as_str(),
@@ -2387,7 +2390,8 @@ mod tests {
         let mut index = Vec::new();
         index.extend_from_slice(b"MMIDX02\0");
         index.extend_from_slice(&archive_bytes.to_le_bytes());
-        index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
         index.extend_from_slice(&(names.len() as u32).to_le_bytes());
         for name in names {
             index.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -2445,8 +2449,14 @@ mod tests {
         assert_eq!(row.index_entries, 1);
         assert_eq!(row.candidate_rows, 6);
         assert_eq!(preview_flag_counts(&db, "launcher_catalog", "nes"), (2, 1));
-        assert_eq!(preview_flag_counts(&db, "ui_arcade_preferred", "nes"), (2, 1));
-        assert_eq!(preview_flag_counts(&db, "ui_arcade_variants", "nes"), (2, 1));
+        assert_eq!(
+            preview_flag_counts(&db, "ui_arcade_preferred", "nes"),
+            (2, 1)
+        );
+        assert_eq!(
+            preview_flag_counts(&db, "ui_arcade_variants", "nes"),
+            (2, 1)
+        );
         assert_eq!(preview_flag_counts(&db, "launcher_catalog", "snes"), (1, 1));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2467,8 +2477,14 @@ mod tests {
         assert!(row.error.is_empty());
         assert_eq!(row.candidate_rows, 3);
         assert_eq!(preview_flag_counts(&db, "launcher_catalog", "nes"), (1, 0));
-        assert_eq!(preview_flag_counts(&db, "ui_arcade_preferred", "nes"), (1, 0));
-        assert_eq!(preview_flag_counts(&db, "ui_arcade_variants", "nes"), (1, 0));
+        assert_eq!(
+            preview_flag_counts(&db, "ui_arcade_preferred", "nes"),
+            (1, 0)
+        );
+        assert_eq!(
+            preview_flag_counts(&db, "ui_arcade_variants", "nes"),
+            (1, 0)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2846,10 +2862,8 @@ mod tests {
             catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
                 .expect("read navigation")
                 .expect("current navigation");
-        let navigation_catalog = ArcadeCatalog::from_navigation_projection(
-            "/media/fat/_Arcade",
-            navigation.clone(),
-        );
+        let navigation_catalog =
+            ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", navigation.clone());
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load sqlite catalog");
 
@@ -2904,7 +2918,10 @@ mod tests {
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load sqlite fallback");
 
-        assert!(navigation_path.exists(), "fallback load should repair projection");
+        assert!(
+            navigation_path.exists(),
+            "fallback load should repair projection"
+        );
         let repaired =
             catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
                 .expect("read repaired projection")
@@ -3156,8 +3173,12 @@ mod tests {
         discovery.manufacturer = Some("Fallback Maker".to_string());
         discovery.genre = Some("Fallback Genre".to_string());
 
-        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
-            .expect("write sqlite");
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+        )
+        .expect("write sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
         let game = &loaded.catalog.games[0];
@@ -3167,14 +3188,10 @@ mod tests {
         assert_eq!(game.category.as_ref(), "Shooter / Vertical");
         assert_eq!(loaded.catalog.decade_options("arcade")[0].label, "1980's");
         assert_eq!(
-            loaded
-                .catalog
-                .filtered_game_count(
-                    "arcade",
-                    &crate::arcade_catalog::ArcadeFilter::Category(
-                        "Shooter / Vertical".to_string()
-                    )
-                ),
+            loaded.catalog.filtered_game_count(
+                "arcade",
+                &crate::arcade_catalog::ArcadeFilter::Category("Shooter / Vertical".to_string())
+            ),
             1
         );
         let _ = std::fs::remove_dir_all(root);
@@ -3207,8 +3224,12 @@ mod tests {
         discovery.source_path = discovery.launch_ref.clone();
         discovery.setname = Some("badyear".to_string());
 
-        write_sqlite_scan_with_mame(&db, &sqlite_scan_with_discoveries(vec![discovery]), &mame_db)
-            .expect("write sqlite");
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+        )
+        .expect("write sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
         let game = &loaded.catalog.games[0];
@@ -3256,7 +3277,10 @@ mod tests {
             .expect("read launcher catalog rows");
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], (0, "Zeta Arcade".to_string(), "arcade".to_string()));
+        assert_eq!(
+            rows[0],
+            (0, "Zeta Arcade".to_string(), "arcade".to_string())
+        );
         assert_eq!(rows[1].0, 1);
         assert_eq!(rows[1].1, "Alpha Console");
         assert_eq!(rows[1].2, "snes");
@@ -3269,8 +3293,7 @@ mod tests {
         let db = root.join("library.sqlite3");
         let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
 
-        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn]))
-            .expect("write sqlite");
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn])).expect("write sqlite");
         let conn = Connection::open(&db).expect("open sqlite");
         let materialized_plans: i64 = conn
             .query_row("SELECT count(*) FROM launcher_launch_plans", [], |row| {
@@ -3289,7 +3312,10 @@ mod tests {
                 assert_eq!(plan.launch_ref.as_ref(), launch_ref);
                 assert_eq!(plan.system_id.as_ref(), "saturn");
                 assert_eq!(plan.core_path.as_ref(), "_Console/Saturn");
-                assert_eq!(plan.payload_path.as_ref(), "/media/fat/games/Saturn/Nights.chd");
+                assert_eq!(
+                    plan.payload_path.as_ref(),
+                    "/media/fat/games/Saturn/Nights.chd"
+                );
                 assert_eq!(plan.mount_kind.as_ref(), "mount-image");
                 assert_eq!(plan.mount_index, 0);
                 assert_eq!(plan.delay_secs, 1);

@@ -4,12 +4,15 @@
 //! product row rules: what is launchable, how variants collapse, how preview
 //! assets attach, and how rows become launcher entries.
 
-use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
+#[cfg(test)]
+use crate::arcade_catalog::{self, ArcadeCatalog};
+use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameMetadataKey};
 use crate::game_discovery::variant_score_from_haystack;
 use crate::library_db;
 use crate::software_identity::ConsolePreviewAsset;
 use rusqlite::{params, Transaction};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::path::Path;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -78,7 +81,13 @@ impl CatalogProjectionRow {
         let has_preview = preview.has_preview();
         Self {
             game: launcher_entry(
-                title, launch_ref, system_id, preview, metadata, has_preview, is_new,
+                title,
+                launch_ref,
+                system_id,
+                preview,
+                metadata,
+                has_preview,
+                is_new,
             ),
             discovered_at_unix: source.discovered_at_unix,
             source_kind: source.source_kind,
@@ -112,6 +121,7 @@ pub(crate) fn launcher_entry(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn catalog_from_projection_rows(
     root: impl AsRef<Path>,
     mut rows: Vec<CatalogProjectionRow>,
@@ -122,9 +132,7 @@ pub(crate) fn catalog_from_projection_rows(
     ArcadeCatalog::new(root.as_ref().to_path_buf(), games, systems)
 }
 
-pub(crate) fn collapse_catalog_variants(
-    rows: Vec<CatalogProjectionRow>,
-) -> Vec<ArcadeGameEntry> {
+pub(crate) fn collapse_catalog_variants(rows: Vec<CatalogProjectionRow>) -> Vec<ArcadeGameEntry> {
     collapse_catalog_variant_rows(rows)
         .into_iter()
         .map(|row| row.game)
@@ -605,7 +613,13 @@ mod tests {
     fn arcade_preview_projection_selects_neogeo_archive_by_system() {
         let projection = ArcadePreviewProjection::new("arcade-pack.raw565", "neogeo-pack.raw565");
 
-        assert_eq!(projection.archive_for_system("arcade"), "arcade-pack.raw565");
-        assert_eq!(projection.archive_for_system("neogeo"), "neogeo-pack.raw565");
+        assert_eq!(
+            projection.archive_for_system("arcade"),
+            "arcade-pack.raw565"
+        );
+        assert_eq!(
+            projection.archive_for_system("neogeo"),
+            "neogeo-pack.raw565"
+        );
     }
 }
