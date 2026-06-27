@@ -9,6 +9,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_state::PadState;
 use crate::preview_worker;
+use mister_magik_catalog::catalog_stamp;
 use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::framebuffer::ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
@@ -381,6 +382,65 @@ fn read_catalog_summary_seed(
     }
 }
 
+fn load_catalog_for_arcade_navigation_request(
+    root: &str,
+    sqlite_path: &Path,
+    stamp: &catalog_stamp::CatalogStamp,
+    start: Instant,
+) -> Option<(library_db::LibraryCatalogLoad, CatalogSource)> {
+    match library_db::load_arcade_catalog_from_navigation_projection(root, sqlite_path, stamp) {
+        Ok(Some(loaded)) => {
+            print_startup_event(
+                start,
+                "catalog_navigation_load",
+                format!("status=ready {}", catalog_load_timing_detail(&loaded)),
+            );
+            return Some((loaded, CatalogSource::NavigationProjection));
+        }
+        Ok(None) => {
+            print_startup_event(
+                start,
+                "catalog_navigation_load",
+                format!(
+                    "status=missing_or_stale {}",
+                    library_db::catalog_load_counter_detail()
+                ),
+            );
+        }
+        Err(e) => {
+            print_startup_event(
+                start,
+                "catalog_navigation_load_failed",
+                format!("{e} {}", library_db::catalog_load_counter_detail()),
+            );
+        }
+    }
+
+    library_db::record_catalog_ui_load();
+    match library_db::load_arcade_catalog_from_sqlite(root) {
+        Ok(loaded) if !loaded.catalog.games.is_empty() => {
+            print_startup_event(
+                start,
+                "catalog_navigation_sqlite_fallback",
+                catalog_load_timing_detail(&loaded),
+            );
+            Some((loaded, CatalogSource::FullSqlite))
+        }
+        Ok(loaded) => {
+            print_startup_event(
+                start,
+                "catalog_navigation_sqlite_fallback_empty",
+                catalog_load_timing_detail(&loaded),
+            );
+            None
+        }
+        Err(e) => {
+            print_startup_event(start, "catalog_navigation_sqlite_fallback_failed", e);
+            None
+        }
+    }
+}
+
 fn sqlite_file_has_valid_header(path: &Path) -> bool {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -621,8 +681,12 @@ pub(super) fn run_launcher_loop(
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
+    let summary_seed_stamp = summary_seed.as_ref().map(|summary| {
+        catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines.clone())
+    });
+    let mut navigation_projection_attempted = false;
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
-    if let Some(summary) = summary_seed {
+    if let Some(summary) = summary_seed.as_ref() {
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
         startup_ready_catalog_source = CatalogSource::SummaryProjection;
@@ -649,7 +713,7 @@ pub(super) fn run_launcher_loop(
             scheduler.start_catalog_worker(
                 arcade_root.clone(),
                 request,
-                CatalogWorkerInitialCache::ProbeSqlite,
+                CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
             );
         } else {
             let delay = catalog_background_validation_delay();
@@ -666,7 +730,7 @@ pub(super) fn run_launcher_loop(
             catalog_session.defer_catalog_worker(
                 arcade_root.clone(),
                 request,
-                CatalogWorkerInitialCache::ProbeSqlite,
+                CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
             );
         }
     } else {
@@ -1531,6 +1595,42 @@ pub(super) fn run_launcher_loop(
 
             if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
                 nav.screen = screen;
+            }
+
+            if nav.screen == Screen::Arcade
+                && !navigation_projection_attempted
+                && !arcade_navigation_ready(catalog_ready, &catalog)
+            {
+                navigation_projection_attempted = true;
+                if let Some(stamp) = summary_seed_stamp.as_ref() {
+                    if let Some((loaded, source)) = load_catalog_for_arcade_navigation_request(
+                        &arcade_root,
+                        &sqlite_path,
+                        stamp,
+                        start,
+                    ) {
+                        catalog = loaded.catalog;
+                        catalog_ready = true;
+                        catalog_session.note_cached_catalog_ready();
+                        media_session.request_catalog_seed();
+                        catalog_version = catalog_version.wrapping_add(1);
+                        apply_forced_arcade_selected(&mut nav, &catalog);
+                        apply_pending_launch_return_state(
+                            &mut nav,
+                            &catalog,
+                            &mut pending_launch_return_state,
+                        );
+                        lifecycle.handle(
+                            LauncherLifecycleInput::CatalogReady {
+                                source,
+                                validating: false,
+                            },
+                            &mut lifecycle_effects,
+                        );
+                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                        full_bridge_dirty = true;
+                    }
+                }
             }
 
             if full_bridge_dirty {
@@ -2422,6 +2522,37 @@ mod tests {
             effective_lock_screen(Some(Screen::Arcade), true, &catalog),
             Some(Screen::Arcade)
         );
+    }
+
+    #[test]
+    pub(super) fn arcade_navigation_request_prefers_navigation_projection() {
+        let dir = unique_temp_dir("navigation-request");
+        let db = dir.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            "schema\ttest".to_string(),
+            "catalog-build\ttest".to_string(),
+        ]);
+        let catalog = catalog_for_media_systems(&["arcade", "neogeo"]);
+        library_db::write_catalog_navigation_projection_for_catalog(&db, &catalog, &stamp)
+            .expect("write navigation projection");
+        library_db::reset_catalog_load_counters();
+
+        let (loaded, source) = load_catalog_for_arcade_navigation_request(
+            "/media/fat/_Arcade",
+            &db,
+            &stamp,
+            Instant::now(),
+        )
+        .expect("projection-loaded catalog");
+
+        assert_eq!(source, CatalogSource::NavigationProjection);
+        assert_eq!(loaded.catalog.games.len(), catalog.games.len());
+        assert_eq!(loaded.catalog.systems, catalog.systems);
+        let counters = library_db::catalog_load_counters();
+        assert_eq!(counters.nav_projection_reads, 1);
+        assert_eq!(counters.sqlite_opens, 0);
+        assert_eq!(counters.ui_catalog_loads, 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

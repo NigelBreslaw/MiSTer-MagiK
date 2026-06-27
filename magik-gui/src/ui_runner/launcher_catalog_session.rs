@@ -196,12 +196,14 @@ impl LauncherCatalogSession {
                 catalog,
                 summary,
                 load_us,
+                source,
             } => {
                 self.handle_ready(
                     context.catalog_ready,
                     catalog,
                     summary,
                     load_us,
+                    source,
                     &mut effects,
                 );
             }
@@ -360,6 +362,7 @@ impl LauncherCatalogSession {
         ready_catalog: ArcadeCatalog,
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
+        source: CatalogSource,
         effects: &mut CatalogSessionEffects,
     ) {
         let cached_before_refresh = summary.is_none();
@@ -373,11 +376,7 @@ impl LauncherCatalogSession {
             effects.push(CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
                 load_us,
-                source: if cached_before_refresh {
-                    CatalogSource::FullSqlite
-                } else {
-                    CatalogSource::FreshBuild
-                },
+                source,
             });
             effects.event(
                 "library_ready",
@@ -683,6 +682,7 @@ mod tests {
                 catalog: catalog_with_games(3),
                 summary: None,
                 load_us: 42,
+                source: CatalogSource::FullSqlite,
             },
             now,
         );
@@ -723,6 +723,7 @@ mod tests {
                 catalog: catalog_with_games(3),
                 summary: None,
                 load_us: 42,
+                source: CatalogSource::FullSqlite,
             },
             now,
         );

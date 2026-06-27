@@ -1,4 +1,5 @@
 use super::*;
+use mister_magik_catalog::{catalog_stamp, catalog_summary};
 
 pub(super) fn start_library_catalog_worker(
     root: String,
@@ -33,6 +34,66 @@ pub(super) fn start_library_catalog_worker(
             };
             let mut cache_state = CatalogCacheState::Missing;
             match initial_cache {
+                CatalogWorkerInitialCache::ProbeNavigationThenSqlite => {
+                    match load_navigation_projection_cache(&root) {
+                        Ok(Some(loaded)) => {
+                            send_catalog_load_timing(
+                                &tx,
+                                "catalog_worker_navigation_load",
+                                &loaded,
+                            );
+                            cache_state = CatalogCacheState::Ready;
+                            let _ = tx.send(CatalogWorkerMessage::Ready {
+                                catalog: loaded.catalog,
+                                summary: None,
+                                load_us: loaded.us,
+                                source: CatalogSource::NavigationProjection,
+                            });
+                        }
+                        Ok(None) => {
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_worker_navigation_load".to_string(),
+                                detail: format!(
+                                    "status=missing_or_stale {}",
+                                    library_db::catalog_load_counter_detail()
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("library navigation projection load failed: {e}");
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_worker_navigation_load_failed".to_string(),
+                                detail: format!("{e} {}", library_db::catalog_load_counter_detail()),
+                            });
+                        }
+                    }
+                    if !cache_state.has_usable_catalog() {
+                        library_db::record_catalog_worker_cache_load();
+                        match library_db::load_arcade_catalog_from_sqlite(&root) {
+                            Ok(loaded) => {
+                                send_catalog_load_timing(&tx, "catalog_worker_cache_load", &loaded);
+                                if loaded.catalog.games.is_empty() {
+                                    cache_state = CatalogCacheState::Empty;
+                                } else {
+                                    cache_state = CatalogCacheState::Ready;
+                                    let _ = tx.send(CatalogWorkerMessage::Ready {
+                                        catalog: loaded.catalog,
+                                        summary: None,
+                                        load_us: loaded.us,
+                                        source: CatalogSource::FullSqlite,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("library catalog cache load failed: {e}");
+                                let _ = tx.send(CatalogWorkerMessage::Timing {
+                                    name: "catalog_worker_cache_load_failed".to_string(),
+                                    detail: e,
+                                });
+                            }
+                        }
+                    }
+                }
                 CatalogWorkerInitialCache::ProbeSqlite => {
                     library_db::record_catalog_worker_cache_load();
                     match library_db::load_arcade_catalog_from_sqlite(&root) {
@@ -46,6 +107,7 @@ pub(super) fn start_library_catalog_worker(
                                     catalog: loaded.catalog,
                                     summary: None,
                                     load_us: loaded.us,
+                                    source: CatalogSource::FullSqlite,
                                 });
                             }
                         }
@@ -151,6 +213,7 @@ pub(super) fn start_library_catalog_worker(
                             catalog: loaded.catalog,
                             summary: Some(summary),
                             load_us: loaded.us,
+                            source: CatalogSource::FreshBuild,
                         });
                     }
                     Err(e) => {
@@ -245,6 +308,7 @@ pub(super) fn start_library_catalog_worker(
                         catalog: loaded.catalog,
                         summary: Some(summary),
                         load_us: loaded.us,
+                        source: CatalogSource::FreshBuild,
                     });
                 }
                 None => {
@@ -270,6 +334,7 @@ pub(super) enum CatalogWorkerRequest {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogWorkerInitialCache {
+    ProbeNavigationThenSqlite,
     ProbeSqlite,
     AlreadyLoadedReady,
 }
@@ -360,6 +425,7 @@ pub(super) enum CatalogWorkerMessage {
         catalog: ArcadeCatalog,
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
+        source: CatalogSource,
     },
     Persisted {
         summary: library_db::LibraryRefreshSummary,
@@ -449,6 +515,18 @@ fn send_catalog_load_timing(
         name: name.to_string(),
         detail: catalog_load_timing_detail(loaded),
     });
+}
+
+fn load_navigation_projection_cache(
+    root: &str,
+) -> Result<Option<library_db::LibraryCatalogLoad>, String> {
+    let sqlite_path = library_db::default_sqlite_path();
+    let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
+    let Some(summary) = catalog_summary::read_catalog_summary(&summary_path)? else {
+        return Ok(None);
+    };
+    let stamp = catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines);
+    library_db::load_arcade_catalog_from_navigation_projection(root, &sqlite_path, &stamp)
 }
 
 pub(super) fn lower_background_priority() {
