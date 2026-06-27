@@ -1,9 +1,10 @@
-# Slint bench scenes (toolchain / device)
+# Video bench scene (toolchain / device)
 
-Benchmark scenes use the detected MiSTer framebuffer size at runtime. The Slint
-surface is the framebuffer size and copies 1:1 in every verified mode, including
-1080p, 960x540, 720p, 640x480, and CRT/direct-video smoke modes. The old
-960x540-to-1080p pixel-doubling path has been removed.
+`video_playback` is the maintained Slint bench scene. It uses the detected
+MiSTer framebuffer size at runtime and copies 1:1 in every verified mode,
+including 1080p, 960x540, 720p, 640x480, and CRT/direct-video smoke modes.
+The retired synthetic Slint scenes are archived under
+`history/bench-scenes/2026-06-retired-slint-scenes/`.
 
 **Before a manual run**, stop only the Rust UI process. Leave `MiSTer_MagiK`
 running so the launcher keeps its OSD/input suppression state. If display
@@ -12,13 +13,13 @@ ownership looks confused, reboot through the supervised
 
 ```bash
 kill -9 $(pidof mister-magik-fb) 2>/dev/null
-/media/fat/mister-magik/mister-magik-fb ui full_motion 20
+/media/fat/mister-magik/mister-magik-fb ui video_playback 20
 ```
 
-Scenes: `demo`, `full_motion`, `static_ui`, and `local_motion`. With a
-`--video` build, `video_playback` is also available. It expects
-`/media/fat/mister-magik/mslug3.mov` by default: H.264 baseline video plus
-48 kHz stereo `pcm_s16le` audio. Override with `MISTER_VIDEO_PATH`.
+With a `--video` build, run `video_playback`. It accepts a single file through
+`MISTER_VIDEO_PATH` and, after the playlist work, a folder through
+`MISTER_VIDEO_DIR`. The current compatibility default is
+`/media/fat/mister-magik/mslug3.mov`.
 
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
 production benchmark scenes. Build them with `scripts/deploy-rust.sh
@@ -37,7 +38,7 @@ MISTER_PROFILE_FILE=/tmp/frames.tsv \
 MISTER_TRACE_FILE=/tmp/frames.json \
 MISTER_PPROF=1 \
 MISTER_PPROF_OUT=/tmp/cpu.svg \
-/media/fat/mister-magik/mister-magik-fb ui full_motion 30
+/media/fat/mister-magik/mister-magik-fb ui video_playback 30
 ```
 
 | Env | Effect |

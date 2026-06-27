@@ -1,8 +1,8 @@
-import { MisterWindow, MisterUi } from "mister_window.slint";
+import { MisterWindow, MisterUi } from "../../../magik-gui/ui/mister_window.slint";
 export { MisterUi }
-import "fonts/PressStart2P-Regular.ttf";
+import "../../../magik-gui/ui/fonts/PressStart2P-Regular.ttf";
 
-export component AppWindow inherits MisterWindow {
+export component FullMotion inherits MisterWindow {
     background: #0b1020;
     default-font-family: "Press Start 2P";
 
@@ -15,7 +15,7 @@ export component AppWindow inherits MisterWindow {
     Text {
         x: 32px * s;
         y: 24px * s;
-        text: "MiSTer · Slint · software renderer";
+        text: "bench: full_motion";
         font-size: 24px * s;
         color: #e8ecff;
     }
@@ -55,13 +55,5 @@ export component AppWindow inherits MisterWindow {
             background: #4cc9f0;
             opacity: 0.4 + 0.6 * (i / 12.0);
         }
-    }
-
-    Text {
-        x: 32px * s;
-        y: parent.height - 48px * s;
-        text: "vsync-locked 60fps · fork-free framebuffer";
-        font-size: 16px * s;
-        color: #8b93b8;
     }
 }

@@ -11,7 +11,7 @@ usage() {
 Usage: scripts/profile-scene-report.sh SCENE [SECS] [LABEL]
 
 Example:
-  scripts/profile-scene-report.sh full_motion 5 FM-SMOKE
+  scripts/profile-scene-report.sh video_playback 5 VIDEO-SMOKE
 
 Outputs:
   build/frame-profiles/<label>-frames.tsv

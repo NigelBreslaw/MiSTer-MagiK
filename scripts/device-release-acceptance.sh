@@ -687,7 +687,7 @@ run_display_mode_smoke() {
   fi
   local mode
   for mode in 1080p 720p low; do
-    if "$ROOT/scripts/mister-video-mode-test.sh" sweep-mode "$mode" static_ui >"$OUT/display-${mode}.out" 2>"$OUT/display-${mode}.err"; then
+    if "$ROOT/scripts/mister-video-mode-test.sh" sweep-mode "$mode" launcher >"$OUT/display-${mode}.out" 2>"$OUT/display-${mode}.err"; then
       record_ok "display mode smoke $mode"
     else
       record_fail "display mode smoke $mode"
