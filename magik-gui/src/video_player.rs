@@ -5,22 +5,146 @@ use ffmpeg::format;
 use ffmpeg::media;
 use ffmpeg::software::resampling::Context as ResamplingContext;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
-use ffmpeg::util::format::sample::{Sample, Type as SampleType};
 use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
+use ffmpeg::util::format::sample::{Sample, Type as SampleType};
 use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
 use ffmpeg::ChannelLayout;
 use ffmpeg_next as ffmpeg;
 use slint::{Rgb8Pixel, SharedPixelBuffer};
-use std::path::Path;
-use std::sync::mpsc;
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    mpsc, Arc,
+};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
+pub const DEFAULT_VIDEO_DIR: &str = "/media/fat/mister-magik/video-snaps/neogeo";
+const DEFAULT_VIDEO_MAX_W: u32 = 640;
+const DEFAULT_VIDEO_MAX_H: u32 = 480;
 const AUDIO_RATE: u32 = 48_000;
 const OUTPUT_AUDIO_CHANNELS: usize = 2;
 
+pub fn video_paths_from_env() -> Result<Vec<String>, String> {
+    if let Some(path) = std::env::var("MISTER_VIDEO_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(vec![path]);
+    }
+    if let Some(dir) = std::env::var("MISTER_VIDEO_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return sorted_mp4_files(PathBuf::from(dir));
+    }
+    let default_dir = PathBuf::from(DEFAULT_VIDEO_DIR);
+    if default_dir.is_dir() {
+        let paths = sorted_mp4_files(default_dir)?;
+        if !paths.is_empty() {
+            return Ok(paths);
+        }
+    }
+    Ok(vec![DEFAULT_VIDEO_PATH.to_string()])
+}
+
+fn sorted_mp4_files(dir: PathBuf) -> Result<Vec<String>, String> {
+    let mut paths: Vec<String> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read video dir {}: {e}", dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("mp4"))
+                .unwrap_or(false)
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    paths.sort_by_key(|path| path.to_ascii_lowercase());
+    if paths.is_empty() {
+        return Err(format!("{}: no .mp4 files", dir.display()));
+    }
+    Ok(paths)
+}
+
+fn video_queue_depth_from_env() -> usize {
+    std::env::var("MISTER_VIDEO_QUEUE_DEPTH")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 8))
+        .unwrap_or(2)
+}
+
+fn video_threads_from_env() -> Option<usize> {
+    std::env::var("MISTER_VIDEO_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoScaleMode {
+    Source,
+    FitHeight,
+    FitWidth,
+    Native,
+}
+
+impl VideoScaleMode {
+    fn from_env() -> Self {
+        match std::env::var("MISTER_VIDEO_SCALE")
+            .unwrap_or_else(|_| "source".to_string())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "fit-height" | "fit_height" => Self::FitHeight,
+            "fit-width" | "fit_width" => Self::FitWidth,
+            "native" => Self::Native,
+            "source" => Self::Source,
+            other => {
+                eprintln!(
+                    "video: unknown MISTER_VIDEO_SCALE={other:?}; use source|fit-height|fit-width|native"
+                );
+                Self::Source
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::FitHeight => "fit-height",
+            Self::FitWidth => "fit-width",
+            Self::Native => "native",
+        }
+    }
+
+    fn output_dimensions(self, src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+        match self {
+            Self::Source | Self::Native => (src_w.min(max_w), src_h.min(max_h)),
+            Self::FitHeight => {
+                let out_h = src_h.min(max_h).max(1);
+                let out_w = ((src_w as u64 * out_h as u64) / src_h.max(1) as u64)
+                    .min(max_w as u64)
+                    .max(1) as u32;
+                (out_w, out_h)
+            }
+            Self::FitWidth => {
+                let out_w = src_w.min(max_w).max(1);
+                let out_h = ((src_h as u64 * out_w as u64) / src_w.max(1) as u64)
+                    .min(max_h as u64)
+                    .max(1) as u32;
+                (out_w, out_h)
+            }
+        }
+    }
+}
+
 pub struct VideoPlayer {
+    playlist: Vec<String>,
+    playlist_index: usize,
     path: String,
     input: format::context::Input,
     video_stream_index: usize,
@@ -34,7 +158,12 @@ pub struct VideoPlayer {
     audio_channels: u16,
     queued_audio: Vec<i16>,
     audio_start: usize,
+    pending_audio_decode_us: u64,
+    pending_audio_resample_us: u64,
     loop_count: u64,
+    video_codec: String,
+    audio_codec: String,
+    scale_mode: VideoScaleMode,
 }
 
 pub struct PlaybackFrame {
@@ -43,6 +172,33 @@ pub struct PlaybackFrame {
     pub audio_requested_frames: usize,
     pub loop_count: u64,
     pub decode_us: u64,
+    pub metrics: PlaybackMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PlaybackMetrics {
+    pub video_decode_us: u64,
+    pub video_scale_us: u64,
+    pub audio_decode_us: u64,
+    pub audio_resample_us: u64,
+    pub audio_buffer_frames: u32,
+    pub video_file: String,
+    pub video_width: u32,
+    pub video_height: u32,
+    pub video_codec: String,
+    pub audio_codec: String,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct VideoDecodeMetrics {
+    decode_us: u64,
+    scale_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AudioDecodeMetrics {
+    decode_us: u64,
+    resample_us: u64,
 }
 
 #[derive(Default)]
@@ -54,18 +210,22 @@ pub struct VideoFrameWorker {
     rx: mpsc::Receiver<Result<PlaybackFrame, String>>,
     recycle_tx: mpsc::SyncSender<RecycledFrame>,
     frame_interval: Duration,
+    pending_frames: Arc<AtomicU32>,
 }
 
 impl VideoFrameWorker {
-    pub fn start(path: String) -> Result<Self, String> {
-        let (tx, rx) = mpsc::sync_channel(2);
-        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<RecycledFrame>(2);
+    pub fn start(paths: Vec<String>) -> Result<Self, String> {
+        let queue_depth = video_queue_depth_from_env();
+        let (tx, rx) = mpsc::sync_channel(queue_depth);
+        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<RecycledFrame>(queue_depth);
         let (init_tx, init_rx) = mpsc::sync_channel(1);
+        let pending_frames = Arc::new(AtomicU32::new(0));
+        let decode_pending_frames = Arc::clone(&pending_frames);
         std::thread::Builder::new()
             .name("video-decode".to_string())
             .spawn(move || {
                 lower_decode_thread_priority();
-                let mut player = match VideoPlayer::open(&path) {
+                let mut player = match VideoPlayer::open(paths) {
                     Ok(player) => {
                         let _ = init_tx.send(Ok(player.frame_interval()));
                         player
@@ -89,7 +249,9 @@ impl VideoFrameWorker {
                                 frame
                             });
                     let failed = frame.is_err();
+                    decode_pending_frames.fetch_add(1, Ordering::Relaxed);
                     if tx.send(frame).is_err() || failed {
+                        decode_pending_frames.fetch_sub(1, Ordering::Relaxed);
                         break;
                     }
                 }
@@ -102,6 +264,7 @@ impl VideoFrameWorker {
             rx,
             recycle_tx,
             frame_interval,
+            pending_frames,
         })
     }
 
@@ -111,11 +274,21 @@ impl VideoFrameWorker {
 
     pub fn try_recv(&self) -> Result<Option<PlaybackFrame>, String> {
         match self.rx.try_recv() {
-            Ok(Ok(frame)) => Ok(Some(frame)),
-            Ok(Err(e)) => Err(e),
+            Ok(Ok(frame)) => {
+                self.pending_frames.fetch_sub(1, Ordering::Relaxed);
+                Ok(Some(frame))
+            }
+            Ok(Err(e)) => {
+                self.pending_frames.fetch_sub(1, Ordering::Relaxed);
+                Err(e)
+            }
             Err(mpsc::TryRecvError::Empty) => Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => Err("video decode worker stopped".into()),
         }
+    }
+
+    pub fn queue_depth(&self) -> u32 {
+        self.pending_frames.load(Ordering::Relaxed)
     }
 
     pub fn recycle_audio(&self, mut audio: Vec<i16>) {
@@ -149,19 +322,25 @@ impl AudioFramePacer {
 }
 
 impl VideoPlayer {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub fn open(paths: Vec<String>) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| format!("ffmpeg init failed: {e}"))?;
-        let path = path.as_ref().display().to_string();
-        let player = Self::open_inner(path)?;
+        if paths.is_empty() {
+            return Err("video playlist is empty".into());
+        }
+        let player = Self::open_inner(paths, 0, 0)?;
         println!(
-            "video: opened {} ({}x{}, frame_interval={}us; audio={}Hz {}ch {} -> 48000Hz stereo s16)",
+            "video: opened {} (playlist={} file=1; {}x{}, video={}, frame_interval={}us; audio={} {}Hz {}ch {} -> 48000Hz stereo s16; scale={})",
             player.path,
+            player.playlist.len(),
             player.video_decoder.width(),
             player.video_decoder.height(),
+            player.video_codec,
             player.frame_interval.as_micros(),
+            player.audio_codec,
             player.audio_rate,
             player.audio_channels,
-            player.audio_decoder.format().name()
+            player.audio_decoder.format().name(),
+            player.scale_mode.label()
         );
         Ok(player)
     }
@@ -170,7 +349,15 @@ impl VideoPlayer {
         self.frame_interval
     }
 
-    fn open_inner(path: String) -> Result<Self, String> {
+    fn open_inner(
+        playlist: Vec<String>,
+        playlist_index: usize,
+        loop_count: u64,
+    ) -> Result<Self, String> {
+        let path = playlist
+            .get(playlist_index)
+            .ok_or_else(|| format!("playlist index {playlist_index} out of range"))?
+            .clone();
         let input = format::input(&path).map_err(|e| format!("open {path}: {e}"))?;
         let video_stream = input
             .streams()
@@ -184,9 +371,16 @@ impl VideoPlayer {
         let video_stream_index = video_stream.index();
         let audio_stream_index = audio_stream.index();
         let frame_interval = stream_frame_interval(&video_stream);
+        let video_codec = video_stream.parameters().id().name().to_string();
+        let audio_codec = audio_stream.parameters().id().name().to_string();
 
-        let video_context = codec::context::Context::from_parameters(video_stream.parameters())
+        let mut video_context = codec::context::Context::from_parameters(video_stream.parameters())
             .map_err(|e| format!("decoder parameters: {e}"))?;
+        if let Some(threads) = video_threads_from_env() {
+            let mut threading = codec::threading::Config::count(threads);
+            threading.kind = codec::threading::Type::Frame;
+            video_context.set_threading(threading);
+        }
         let video_decoder = video_context
             .decoder()
             .video()
@@ -211,18 +405,27 @@ impl VideoPlayer {
         )
         .map_err(|e| format!("create audio resampler: {e}"))?;
 
+        let scale_mode = VideoScaleMode::from_env();
+        let (output_w, output_h) = scale_mode.output_dimensions(
+            video_decoder.width(),
+            video_decoder.height(),
+            DEFAULT_VIDEO_MAX_W,
+            DEFAULT_VIDEO_MAX_H,
+        );
         let scaler = ScalingContext::get(
             video_decoder.format(),
             video_decoder.width(),
             video_decoder.height(),
             FfmpegPixel::RGB24,
-            video_decoder.width(),
-            video_decoder.height(),
+            output_w,
+            output_h,
             Flags::BILINEAR,
         )
         .map_err(|e| format!("create RGB scaler: {e}"))?;
 
         Ok(Self {
+            playlist,
+            playlist_index,
             path,
             input,
             video_stream_index,
@@ -236,14 +439,27 @@ impl VideoPlayer {
             audio_channels,
             queued_audio: Vec::new(),
             audio_start: 0,
-            loop_count: 0,
+            pending_audio_decode_us: 0,
+            pending_audio_resample_us: 0,
+            loop_count,
+            video_codec,
+            audio_codec,
+            scale_mode,
         })
     }
 
     fn rewind(&mut self) -> Result<(), String> {
-        let path = self.path.clone();
+        let playlist = self.playlist.clone();
+        let playlist_index = (self.playlist_index + 1) % playlist.len();
         let loop_count = self.loop_count + 1;
-        *self = Self::open_inner(path)?;
+        *self = Self::open_inner(playlist, playlist_index, loop_count)?;
+        println!(
+            "video: advanced to {} (file={} playlist={} loops={})",
+            self.path,
+            self.playlist_index + 1,
+            self.playlist.len(),
+            self.loop_count
+        );
         self.loop_count = loop_count;
         Ok(())
     }
@@ -268,7 +484,7 @@ impl VideoPlayer {
         audio_frames: usize,
         mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some(pixel_buffer) =
+        if let Some((pixel_buffer, video_metrics)) =
             receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
         {
             self.ensure_audio(audio_frames)?;
@@ -279,6 +495,7 @@ impl VideoPlayer {
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
                 decode_us: 0,
+                metrics: self.take_playback_metrics(video_metrics),
             }));
         }
 
@@ -289,7 +506,7 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some(pixel_buffer) =
+                if let Some((pixel_buffer, video_metrics)) =
                     receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
                 {
                     self.ensure_audio(audio_frames)?;
@@ -300,26 +517,38 @@ impl VideoPlayer {
                         audio_requested_frames: audio_frames,
                         loop_count: self.loop_count,
                         decode_us: 0,
+                        metrics: self.take_playback_metrics(video_metrics),
                     }));
                 }
             } else if stream_index == self.audio_stream_index {
+                let mut metrics = AudioDecodeMetrics::default();
                 append_decoded_audio_packet(
                     &packet,
                     &mut self.audio_decoder,
                     &mut self.audio_resampler,
                     &mut self.queued_audio,
+                    &mut metrics,
                 )?;
+                self.pending_audio_decode_us = self
+                    .pending_audio_decode_us
+                    .saturating_add(metrics.decode_us);
+                self.pending_audio_resample_us = self
+                    .pending_audio_resample_us
+                    .saturating_add(metrics.resample_us);
             }
         }
 
         let _ = self.video_decoder.send_eof();
         let _ = self.audio_decoder.send_eof();
+        let mut metrics = AudioDecodeMetrics::default();
         drain_decoded_audio(
             &mut self.audio_decoder,
             &mut self.audio_resampler,
             &mut self.queued_audio,
+            &mut metrics,
         )?;
-        if let Some(pixel_buffer) =
+        self.add_pending_audio_metrics(metrics);
+        if let Some((pixel_buffer, video_metrics)) =
             receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
         {
             self.ensure_audio(audio_frames)?;
@@ -330,6 +559,7 @@ impl VideoPlayer {
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
                 decode_us: 0,
+                metrics: self.take_playback_metrics(video_metrics),
             }));
         }
         Ok(None)
@@ -345,12 +575,20 @@ impl VideoPlayer {
             let (stream, packet) = item;
             let stream_index = stream.index();
             if stream_index == self.audio_stream_index {
+                let mut metrics = AudioDecodeMetrics::default();
                 append_decoded_audio_packet(
                     &packet,
                     &mut self.audio_decoder,
                     &mut self.audio_resampler,
                     &mut self.queued_audio,
+                    &mut metrics,
                 )?;
+                self.pending_audio_decode_us = self
+                    .pending_audio_decode_us
+                    .saturating_add(metrics.decode_us);
+                self.pending_audio_resample_us = self
+                    .pending_audio_resample_us
+                    .saturating_add(metrics.resample_us);
                 if self.queued_audio.len().saturating_sub(self.audio_start) >= target_samples {
                     return Ok(());
                 }
@@ -375,20 +613,56 @@ impl VideoPlayer {
             self.audio_start = 0;
         }
     }
+
+    fn add_pending_audio_metrics(&mut self, metrics: AudioDecodeMetrics) {
+        self.pending_audio_decode_us = self
+            .pending_audio_decode_us
+            .saturating_add(metrics.decode_us);
+        self.pending_audio_resample_us = self
+            .pending_audio_resample_us
+            .saturating_add(metrics.resample_us);
+    }
+
+    fn take_playback_metrics(&mut self, video: VideoDecodeMetrics) -> PlaybackMetrics {
+        let audio_decode_us = std::mem::take(&mut self.pending_audio_decode_us);
+        let audio_resample_us = std::mem::take(&mut self.pending_audio_resample_us);
+        PlaybackMetrics {
+            video_decode_us: video.decode_us,
+            video_scale_us: video.scale_us,
+            audio_decode_us,
+            audio_resample_us,
+            audio_buffer_frames: (self.queued_audio.len().saturating_sub(self.audio_start)
+                / OUTPUT_AUDIO_CHANNELS) as u32,
+            video_file: self.path.clone(),
+            video_width: self.video_decoder.width(),
+            video_height: self.video_decoder.height(),
+            video_codec: self.video_codec.clone(),
+            audio_codec: self.audio_codec.clone(),
+        }
+    }
 }
 
 fn receive_rgb_pixel_buffer(
     decoder: &mut ffmpeg::decoder::Video,
     scaler: &mut ScalingContext,
-) -> Result<Option<SharedPixelBuffer<Rgb8Pixel>>, String> {
+) -> Result<Option<(SharedPixelBuffer<Rgb8Pixel>, VideoDecodeMetrics)>, String> {
     let mut decoded = Video::empty();
+    let decode_t0 = Instant::now();
     match decoder.receive_frame(&mut decoded) {
         Ok(()) => {
+            let decode_us = decode_t0.elapsed().as_micros() as u64;
             let mut rgb = Video::empty();
+            let scale_t0 = Instant::now();
             scaler
                 .run(&decoded, &mut rgb)
                 .map_err(|e| format!("scale video frame: {e}"))?;
-            Ok(Some(rgb_frame_to_pixel_buffer(&rgb)))
+            Ok(Some((
+                rgb_frame_to_pixel_buffer(&rgb),
+                VideoDecodeMetrics {
+                    decode_us,
+                    scale_us: scale_t0.elapsed().as_micros() as u64,
+                },
+            )))
         }
         Err(_) => Ok(None),
     }
@@ -399,24 +673,42 @@ fn append_decoded_audio_packet(
     decoder: &mut ffmpeg::decoder::Audio,
     resampler: &mut ResamplingContext,
     queued_audio: &mut Vec<i16>,
+    metrics: &mut AudioDecodeMetrics,
 ) -> Result<(), String> {
+    let decode_t0 = Instant::now();
     decoder
         .send_packet(packet)
         .map_err(|e| format!("send audio packet: {e}"))?;
-    drain_decoded_audio(decoder, resampler, queued_audio)
+    metrics.decode_us = metrics
+        .decode_us
+        .saturating_add(decode_t0.elapsed().as_micros() as u64);
+    drain_decoded_audio(decoder, resampler, queued_audio, metrics)
 }
 
 fn drain_decoded_audio(
     decoder: &mut ffmpeg::decoder::Audio,
     resampler: &mut ResamplingContext,
     queued_audio: &mut Vec<i16>,
+    metrics: &mut AudioDecodeMetrics,
 ) -> Result<(), String> {
     let mut decoded = Audio::empty();
-    while decoder.receive_frame(&mut decoded).is_ok() {
+    loop {
+        let decode_t0 = Instant::now();
+        let received = decoder.receive_frame(&mut decoded);
+        metrics.decode_us = metrics
+            .decode_us
+            .saturating_add(decode_t0.elapsed().as_micros() as u64);
+        if received.is_err() {
+            break;
+        }
         let mut resampled = Audio::empty();
+        let resample_t0 = Instant::now();
         resampler
             .run(&decoded, &mut resampled)
             .map_err(|e| format!("resample audio frame: {e}"))?;
+        metrics.resample_us = metrics
+            .resample_us
+            .saturating_add(resample_t0.elapsed().as_micros() as u64);
         append_resampled_stereo_i16(&resampled, queued_audio)?;
     }
     Ok(())

@@ -33,7 +33,46 @@ impl FrameRect {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Default)]
+pub struct VideoFrameProfile {
+    pub video_decode_us: u64,
+    pub video_scale_us: u64,
+    pub video_recv_us: u64,
+    pub video_image_us: u64,
+    pub video_blit_us: u64,
+    pub audio_decode_us: u64,
+    pub audio_resample_us: u64,
+    pub audio_write_us: u64,
+    pub video_frame_updated: bool,
+    pub video_queue_depth: u32,
+    pub audio_buffer_frames: u32,
+    pub audio_underrun: bool,
+    pub video_file: String,
+    pub video_width: u32,
+    pub video_height: u32,
+    pub video_codec: String,
+    pub audio_codec: String,
+}
+
+impl VideoFrameProfile {
+    fn dominant_phase(&self) -> Option<(&'static str, u64)> {
+        [
+            ("video-decode", self.video_decode_us),
+            ("video-scale", self.video_scale_us),
+            ("video-recv", self.video_recv_us),
+            ("video-image", self.video_image_us),
+            ("video-blit", self.video_blit_us),
+            ("audio-decode", self.audio_decode_us),
+            ("audio-resample", self.audio_resample_us),
+            ("audio-write", self.audio_write_us),
+        ]
+        .into_iter()
+        .max_by_key(|&(_, value)| value)
+        .filter(|&(_, value)| value > 0)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct FrameSample {
     pub prepare_us: u64,
     pub anim_us: u64,
@@ -49,10 +88,11 @@ pub struct FrameSample {
     pub vsync_source: VsyncPaceSource,
     pub vsync_period_us: u64,
     pub vsync_miss_streak: u32,
+    pub video: VideoFrameProfile,
 }
 
 impl FrameSample {
-    pub fn phases_us(self) -> u64 {
+    pub fn phases_us(&self) -> u64 {
         self.prepare_us
             + self.anim_us
             + self.slint_render_us
@@ -61,7 +101,7 @@ impl FrameSample {
             + self.fb_present_us
     }
 
-    fn dominant_phase(self) -> &'static str {
+    fn dominant_phase(&self) -> &'static str {
         let m = self
             .prepare_us
             .max(self.anim_us)
@@ -69,6 +109,12 @@ impl FrameSample {
             .max(self.custom_draw_us)
             .max(self.vsync_us)
             .max(self.fb_present_us);
+        let video_dominant = self.video.dominant_phase();
+        if let Some((phase, value)) = video_dominant {
+            if value > m {
+                return phase;
+            }
+        }
         if m == self.fb_present_us {
             "fb-present"
         } else if m == self.slint_render_us {
@@ -102,6 +148,7 @@ impl ProfileMode {
     pub fn from_env() -> Self {
         match std::env::var("MISTER_PROFILE")
             .ok()
+            .or_else(|| std::env::var("MISTER_VIDEO_PROFILE").ok())
             .map(|s| s.to_ascii_lowercase())
             .as_deref()
         {
@@ -142,6 +189,16 @@ pub struct FrameProfiler {
     window_vsync_timeouts: u64,
     window_fallback_frames: u64,
     window_vsync_errors: u64,
+    window_video_decode: u128,
+    window_video_scale: u128,
+    window_video_recv: u128,
+    window_video_image: u128,
+    window_video_blit: u128,
+    window_audio_decode: u128,
+    window_audio_resample: u128,
+    window_audio_write: u128,
+    window_video_updates: u64,
+    window_audio_underruns: u64,
 }
 
 impl FrameProfiler {
@@ -195,6 +252,16 @@ impl FrameProfiler {
             window_vsync_timeouts: 0,
             window_fallback_frames: 0,
             window_vsync_errors: 0,
+            window_video_decode: 0,
+            window_video_scale: 0,
+            window_video_recv: 0,
+            window_video_image: 0,
+            window_video_blit: 0,
+            window_audio_decode: 0,
+            window_audio_resample: 0,
+            window_audio_write: 0,
+            window_video_updates: 0,
+            window_audio_underruns: 0,
         }
     }
 
@@ -246,7 +313,6 @@ impl FrameProfiler {
             _ => {}
         }
 
-        self.frames.push(sample);
         self.window_frames += 1;
         self.window_prepare += sample.prepare_us as u128;
         self.window_anim += sample.anim_us as u128;
@@ -257,6 +323,20 @@ impl FrameProfiler {
         self.window_cached_present += sample.cached_present_us as u128;
         self.window_overlay_present += sample.arcade_list_present_us as u128;
         self.window_rows += sample.rows as u128;
+        self.window_video_decode += sample.video.video_decode_us as u128;
+        self.window_video_scale += sample.video.video_scale_us as u128;
+        self.window_video_recv += sample.video.video_recv_us as u128;
+        self.window_video_image += sample.video.video_image_us as u128;
+        self.window_video_blit += sample.video.video_blit_us as u128;
+        self.window_audio_decode += sample.video.audio_decode_us as u128;
+        self.window_audio_resample += sample.video.audio_resample_us as u128;
+        self.window_audio_write += sample.video.audio_write_us as u128;
+        if sample.video.video_frame_updated {
+            self.window_video_updates += 1;
+        }
+        if sample.video.audio_underrun {
+            self.window_audio_underruns += 1;
+        }
         match sample.vsync_source {
             VsyncPaceSource::Vsync => self.window_vsync_hits += 1,
             VsyncPaceSource::Timeout => {
@@ -273,6 +353,7 @@ impl FrameProfiler {
         if self.window_start.elapsed().as_millis() >= 1000 {
             self.flush_window();
         }
+        self.frames.push(sample);
     }
 
     fn flush_window(&mut self) {
@@ -294,6 +375,30 @@ impl FrameProfiler {
             self.window_fallback_frames,
             self.window_vsync_errors
         );
+        if self.window_video_decode
+            + self.window_video_scale
+            + self.window_video_recv
+            + self.window_video_image
+            + self.window_video_blit
+            + self.window_audio_decode
+            + self.window_audio_resample
+            + self.window_audio_write
+            > 0
+        {
+            println!(
+                "  video-profile | updates {} decode {}us scale {}us recv {}us image {}us blit {}us audio-decode {}us audio-resample {}us audio-write {}us underruns {}",
+                self.window_video_updates,
+                self.window_video_decode / nn,
+                self.window_video_scale / nn,
+                self.window_video_recv / nn,
+                self.window_video_image / nn,
+                self.window_video_blit / nn,
+                self.window_audio_decode / nn,
+                self.window_audio_resample / nn,
+                self.window_audio_write / nn,
+                self.window_audio_underruns
+            );
+        }
         self.window_frames = 0;
         self.window_prepare = 0;
         self.window_anim = 0;
@@ -308,6 +413,16 @@ impl FrameProfiler {
         self.window_vsync_timeouts = 0;
         self.window_fallback_frames = 0;
         self.window_vsync_errors = 0;
+        self.window_video_decode = 0;
+        self.window_video_scale = 0;
+        self.window_video_recv = 0;
+        self.window_video_image = 0;
+        self.window_video_blit = 0;
+        self.window_audio_decode = 0;
+        self.window_audio_resample = 0;
+        self.window_audio_write = 0;
+        self.window_video_updates = 0;
+        self.window_audio_underruns = 0;
         self.window_start = Instant::now();
     }
 
@@ -349,7 +464,7 @@ impl FrameProfiler {
         let mut f = File::create(path)?;
         writeln!(
             f,
-            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tdominant"
+            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvideo_decode_us\tvideo_scale_us\tvideo_recv_us\tvideo_image_us\tvideo_blit_us\taudio_decode_us\taudio_resample_us\taudio_write_us\tvideo_frame_updated\tvideo_queue_depth\taudio_buffer_frames\taudio_underrun\tvideo_file\tvideo_width\tvideo_height\tvideo_codec\taudio_codec\tdominant"
         )?;
         for (i, s) in self.frames.iter().enumerate() {
             let (x0, y0, x1, y1, pixels) = s
@@ -358,7 +473,7 @@ impl FrameProfiler {
                 .unwrap_or((0, 0, 0, 0, 0));
             writeln!(
                 f,
-                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 s.prepare_us,
                 s.anim_us,
                 s.slint_render_us,
@@ -379,6 +494,23 @@ impl FrameProfiler {
                 s.vsync_source.label(),
                 s.vsync_period_us,
                 s.vsync_miss_streak,
+                s.video.video_decode_us,
+                s.video.video_scale_us,
+                s.video.video_recv_us,
+                s.video.video_image_us,
+                s.video.video_blit_us,
+                s.video.audio_decode_us,
+                s.video.audio_resample_us,
+                s.video.audio_write_us,
+                s.video.video_frame_updated as u8,
+                s.video.video_queue_depth,
+                s.video.audio_buffer_frames,
+                s.video.audio_underrun as u8,
+                tsv_escape(&s.video.video_file),
+                s.video.video_width,
+                s.video.video_height,
+                tsv_escape(&s.video.video_codec),
+                tsv_escape(&s.video.audio_codec),
                 s.dominant_phase()
             )?;
         }
@@ -465,6 +597,7 @@ impl FrameProfiler {
             "arcade-list-present",
             &col(&self.frames, |s| s.arcade_list_present_us),
         );
+        self.print_video_profile_summary();
         self.print_present_bandwidth();
         let hits = self
             .frames
@@ -509,7 +642,7 @@ impl FrameProfiler {
             1_000_000 / FRAME_BUDGET_US
         );
 
-        let mut slow_by_phase = [0usize; 5];
+        let mut slow_by_phase = [0usize; 6];
         for s in &self.frames {
             if s.wall_us >= self.slow_threshold_us {
                 match s.dominant_phase() {
@@ -518,13 +651,16 @@ impl FrameProfiler {
                     "slint-render" => slow_by_phase[2] += 1,
                     "custom-draw" => slow_by_phase[3] += 1,
                     "vsync" | "fb-present" => slow_by_phase[4] += 1,
+                    phase if phase.starts_with("video-") || phase.starts_with("audio-") => {
+                        slow_by_phase[5] += 1
+                    }
                     _ => {}
                 }
             }
         }
         println!(
-            "slow-frame dominant phase: prepare={} anim={} slint-render={} custom-draw={} vsync-or-fb-present={}",
-            slow_by_phase[0], slow_by_phase[1], slow_by_phase[2], slow_by_phase[3], slow_by_phase[4]
+            "slow-frame dominant phase: prepare={} anim={} slint-render={} custom-draw={} vsync-or-fb-present={} video-or-audio={}",
+            slow_by_phase[0], slow_by_phase[1], slow_by_phase[2], slow_by_phase[3], slow_by_phase[4], slow_by_phase[5]
         );
 
         print_histogram("wall_ms", &totals, MS_BUCKETS);
@@ -543,7 +679,7 @@ impl FrameProfiler {
             .collect();
         indexed.sort_by_key(|&(_, t)| std::cmp::Reverse(t));
         for (i, total) in indexed.into_iter().take(10) {
-            let s = self.frames[i];
+            let s = &self.frames[i];
             println!(
                 "  #{i} wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={} dominant={}",
                 s.phases_us(),
@@ -559,6 +695,50 @@ impl FrameProfiler {
                 s.dominant_phase()
             );
         }
+    }
+
+    fn print_video_profile_summary(&self) {
+        if !self.frames.iter().any(|s| s.video.video_frame_updated) {
+            return;
+        }
+        println!("video profile summary:");
+        print_phase_stats(
+            "video-decode",
+            &col(&self.frames, |s| s.video.video_decode_us),
+        );
+        print_phase_stats(
+            "video-scale",
+            &col(&self.frames, |s| s.video.video_scale_us),
+        );
+        print_phase_stats("video-recv", &col(&self.frames, |s| s.video.video_recv_us));
+        print_phase_stats(
+            "video-image",
+            &col(&self.frames, |s| s.video.video_image_us),
+        );
+        print_phase_stats("video-blit", &col(&self.frames, |s| s.video.video_blit_us));
+        print_phase_stats(
+            "audio-decode",
+            &col(&self.frames, |s| s.video.audio_decode_us),
+        );
+        print_phase_stats(
+            "audio-resample",
+            &col(&self.frames, |s| s.video.audio_resample_us),
+        );
+        print_phase_stats(
+            "audio-write",
+            &col(&self.frames, |s| s.video.audio_write_us),
+        );
+        let updates = self
+            .frames
+            .iter()
+            .filter(|s| s.video.video_frame_updated)
+            .count();
+        let underruns = self
+            .frames
+            .iter()
+            .filter(|s| s.video.audio_underrun)
+            .count();
+        println!("video-updates={updates} audio-underrun-frames={underruns}");
     }
 
     fn print_present_bandwidth(&self) {
@@ -601,6 +781,10 @@ fn col<F: Fn(&FrameSample) -> u64>(frames: &[FrameSample], f: F) -> Vec<u64> {
     v
 }
 
+fn tsv_escape(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], " ")
+}
+
 fn write_trace_event(
     f: &mut File,
     first: &mut bool,
@@ -618,13 +802,37 @@ fn write_trace_event(
         .and_then(|s| s.present_rect.map(|rect| rect.pixels()))
         .map(|pixels| (pixels, present_bytes_for_pixels(pixels)))
         .unwrap_or((0, 0));
-    let (rows, dominant) = sample
-        .map(|s| (s.rows, s.dominant_phase()))
-        .unwrap_or((0, ""));
+    let (rows, dominant, video_decode, video_scale, audio_decode, audio_resample, audio_write) =
+        sample
+            .map(|s| {
+                (
+                    s.rows,
+                    s.dominant_phase(),
+                    s.video.video_decode_us,
+                    s.video.video_scale_us,
+                    s.video.audio_decode_us,
+                    s.video.audio_resample_us,
+                    s.video.audio_write_us,
+                )
+            })
+            .unwrap_or((0, "", 0, 0, 0, 0, 0));
     write!(
         f,
-        "{{\"name\":\"{}\",\"cat\":\"frame\",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"pid\":1,\"tid\":{},\"args\":{{\"frame\":{},\"rows\":{},\"present_pixels\":{},\"present_bytes\":{},\"dominant\":\"{}\"}}}}",
-        name, ts, dur, frame, frame, rows, pixels, bytes, dominant
+        "{{\"name\":\"{}\",\"cat\":\"frame\",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"pid\":1,\"tid\":{},\"args\":{{\"frame\":{},\"rows\":{},\"present_pixels\":{},\"present_bytes\":{},\"dominant\":\"{}\",\"video_decode_us\":{},\"video_scale_us\":{},\"audio_decode_us\":{},\"audio_resample_us\":{},\"audio_write_us\":{}}}}}",
+        name,
+        ts,
+        dur,
+        frame,
+        frame,
+        rows,
+        pixels,
+        bytes,
+        dominant,
+        video_decode,
+        video_scale,
+        audio_decode,
+        audio_resample,
+        audio_write
     )
 }
 

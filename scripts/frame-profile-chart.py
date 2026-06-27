@@ -22,6 +22,14 @@ PHASES = [
     ("slint_render_us", "slint-render", "#2563eb"),
     ("custom_draw_us", "custom-draw", "#a855f7"),
     ("vsync_us", "vsync-wait", "#f59e0b"),
+    ("video_recv_us", "video-recv", "#64748b"),
+    ("video_decode_us", "video-decode", "#10b981"),
+    ("video_scale_us", "video-scale", "#84cc16"),
+    ("video_image_us", "video-image", "#6366f1"),
+    ("video_blit_us", "video-blit", "#0ea5e9"),
+    ("audio_decode_us", "audio-decode", "#f97316"),
+    ("audio_resample_us", "audio-resample", "#fb7185"),
+    ("audio_write_us", "audio-write", "#b45309"),
     ("cached_present_us", "cached-present", "#06b6d4"),
     ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
 ]
@@ -35,6 +43,14 @@ DETAIL_PHASES = [
     ("effect_label_us", "effect-label", "#db2777"),
     ("custom_draw_other_us", "custom-other", "#c084fc"),
     ("vsync_us", "vsync-wait", "#f59e0b"),
+    ("video_recv_us", "video-recv", "#64748b"),
+    ("video_decode_us", "video-decode", "#10b981"),
+    ("video_scale_us", "video-scale", "#84cc16"),
+    ("video_image_us", "video-image", "#6366f1"),
+    ("video_blit_us", "video-blit", "#0ea5e9"),
+    ("audio_decode_us", "audio-decode", "#f97316"),
+    ("audio_resample_us", "audio-resample", "#fb7185"),
+    ("audio_write_us", "audio-write", "#b45309"),
     ("cached_present_us", "cached-present", "#06b6d4"),
     ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
     ("fb_present_other_us", "present-other", "#94a3b8"),
@@ -63,7 +79,10 @@ def has_detail_phases(rows: list[dict[str, str]]) -> bool:
     if not rows:
         return False
     keys = rows[0].keys()
-    return {"arcade_list_update_us", "preview_blit_us", "effect_label_us"}.issubset(keys)
+    return (
+        {"arcade_list_update_us", "preview_blit_us", "effect_label_us"}.issubset(keys)
+        or {"video_decode_us", "audio_write_us"}.issubset(keys)
+    )
 
 
 def phase_value(row: dict[str, str], key: str) -> int:

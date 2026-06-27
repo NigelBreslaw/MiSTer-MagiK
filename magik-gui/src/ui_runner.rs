@@ -36,7 +36,7 @@ use crate::display_config::{detect_runtime_display_geometry, DisplayConfig};
 #[cfg(mister_bench_scenes)]
 use crate::frame_profile::FrameRect;
 #[cfg(all(feature = "video", mister_bench_scenes))]
-use crate::frame_profile::{FrameProfiler, FrameSample};
+use crate::frame_profile::{FrameProfiler, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
