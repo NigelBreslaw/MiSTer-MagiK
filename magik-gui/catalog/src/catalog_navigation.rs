@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 3;
 const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB3\0";
@@ -37,26 +38,26 @@ pub struct NavigationSystem {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavigationGame {
-    pub title: String,
-    pub launch_ref: String,
-    pub preview_archive_path: String,
-    pub preview_asset_key: String,
+    pub title: Arc<str>,
+    pub launch_ref: Arc<str>,
+    pub preview_archive_path: Arc<str>,
+    pub preview_asset_key: Arc<str>,
     pub has_preview: bool,
-    pub system_id: String,
+    pub system_id: Arc<str>,
     pub year: Option<u16>,
-    pub manufacturer: String,
-    pub category: String,
+    pub manufacturer: Arc<str>,
+    pub category: Arc<str>,
     pub is_new: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavigationLaunchPlan {
-    pub launch_ref: String,
-    pub title: String,
-    pub system_id: String,
-    pub core_path: String,
-    pub payload_path: String,
-    pub mount_kind: String,
+    pub launch_ref: Arc<str>,
+    pub title: Arc<str>,
+    pub system_id: Arc<str>,
+    pub core_path: Arc<str>,
+    pub payload_path: Arc<str>,
+    pub mount_kind: Arc<str>,
     pub mount_index: u8,
     pub delay_secs: u8,
 }
@@ -142,15 +143,15 @@ impl From<NavigationSystem> for GameSystemEntry {
 impl From<&ArcadeGameEntry> for NavigationGame {
     fn from(game: &ArcadeGameEntry) -> Self {
         Self {
-            title: game.title.to_string(),
-            launch_ref: game.mra_path.to_string(),
-            preview_archive_path: game.preview_archive_path.to_string(),
-            preview_asset_key: game.preview_asset_key.to_string(),
+            title: game.title.clone(),
+            launch_ref: game.mra_path.clone(),
+            preview_archive_path: game.preview_archive_path.clone(),
+            preview_asset_key: game.preview_asset_key.clone(),
             has_preview: game.has_preview,
-            system_id: game.system_id.to_string(),
+            system_id: game.system_id.clone(),
             year: game.year,
-            manufacturer: game.manufacturer.to_string(),
-            category: game.category.to_string(),
+            manufacturer: game.manufacturer.clone(),
+            category: game.category.clone(),
             is_new: game.is_new,
         }
     }
@@ -159,15 +160,15 @@ impl From<&ArcadeGameEntry> for NavigationGame {
 impl From<NavigationGame> for ArcadeGameEntry {
     fn from(game: NavigationGame) -> Self {
         Self {
-            title: game.title.into(),
-            mra_path: game.launch_ref.into(),
-            preview_archive_path: game.preview_archive_path.into(),
-            preview_asset_key: game.preview_asset_key.into(),
+            title: game.title,
+            mra_path: game.launch_ref,
+            preview_archive_path: game.preview_archive_path,
+            preview_asset_key: game.preview_asset_key,
             has_preview: game.has_preview,
-            system_id: game.system_id.into(),
+            system_id: game.system_id,
             year: game.year,
-            manufacturer: game.manufacturer.into(),
-            category: game.category.into(),
+            manufacturer: game.manufacturer,
+            category: game.category,
             is_new: game.is_new,
         }
     }
@@ -176,12 +177,12 @@ impl From<NavigationGame> for ArcadeGameEntry {
 impl From<&StructuredLaunchPlan> for NavigationLaunchPlan {
     fn from(plan: &StructuredLaunchPlan) -> Self {
         Self {
-            launch_ref: plan.launch_ref.to_string(),
-            title: plan.title.to_string(),
-            system_id: plan.system_id.to_string(),
-            core_path: plan.core_path.to_string(),
-            payload_path: plan.payload_path.to_string(),
-            mount_kind: plan.mount_kind.to_string(),
+            launch_ref: plan.launch_ref.clone(),
+            title: plan.title.clone(),
+            system_id: plan.system_id.clone(),
+            core_path: plan.core_path.clone(),
+            payload_path: plan.payload_path.clone(),
+            mount_kind: plan.mount_kind.clone(),
             mount_index: plan.mount_index,
             delay_secs: plan.delay_secs,
         }
@@ -191,12 +192,12 @@ impl From<&StructuredLaunchPlan> for NavigationLaunchPlan {
 impl From<NavigationLaunchPlan> for StructuredLaunchPlan {
     fn from(plan: NavigationLaunchPlan) -> Self {
         Self {
-            launch_ref: plan.launch_ref.into(),
-            title: plan.title.into(),
-            system_id: plan.system_id.into(),
-            core_path: plan.core_path.into(),
-            payload_path: plan.payload_path.into(),
-            mount_kind: plan.mount_kind.into(),
+            launch_ref: plan.launch_ref,
+            title: plan.title,
+            system_id: plan.system_id,
+            core_path: plan.core_path,
+            payload_path: plan.payload_path,
+            mount_kind: plan.mount_kind,
             mount_index: plan.mount_index,
             delay_secs: plan.delay_secs,
         }
@@ -302,19 +303,19 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     let game_count = reader.read_len()?;
     let mut games = Vec::with_capacity(game_count);
     for _ in 0..game_count {
-        let title = reader.read_string()?;
-        let launch_ref = reader.read_string()?;
-        let preview_archive_path = reader.read_string()?;
-        let preview_asset_key = reader.read_string()?;
+        let title = reader.read_arc_string()?;
+        let launch_ref = reader.read_arc_string()?;
+        let preview_archive_path = reader.read_arc_string()?;
+        let preview_asset_key = reader.read_arc_string()?;
         let has_preview = reader.read_bool()?;
-        let system_id = reader.read_string()?;
+        let system_id = reader.read_arc_string()?;
         let year = if reader.read_bool()? {
             Some(reader.read_u16()?)
         } else {
             None
         };
-        let manufacturer = reader.read_string()?;
-        let category = reader.read_string()?;
+        let manufacturer = reader.read_arc_string()?;
+        let category = reader.read_arc_string()?;
         let is_new = reader.read_bool()?;
         games.push(NavigationGame {
             title,
@@ -333,12 +334,12 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     let mut launch_plans = Vec::with_capacity(launch_plan_count);
     for _ in 0..launch_plan_count {
         launch_plans.push(NavigationLaunchPlan {
-            launch_ref: reader.read_string()?,
-            title: reader.read_string()?,
-            system_id: reader.read_string()?,
-            core_path: reader.read_string()?,
-            payload_path: reader.read_string()?,
-            mount_kind: reader.read_string()?,
+            launch_ref: reader.read_arc_string()?,
+            title: reader.read_arc_string()?,
+            system_id: reader.read_arc_string()?,
+            core_path: reader.read_arc_string()?,
+            payload_path: reader.read_arc_string()?,
+            mount_kind: reader.read_arc_string()?,
             mount_index: reader.read_u8()?,
             delay_secs: reader.read_u8()?,
         });
@@ -417,6 +418,14 @@ impl<'a> NavigationBinaryReader<'a> {
         let bytes = self.take(len)?;
         std::str::from_utf8(bytes)
             .map(str::to_string)
+            .map_err(|e| format!("navigation projection string is not utf-8: {e}"))
+    }
+
+    fn read_arc_string(&mut self) -> Result<Arc<str>, String> {
+        let len = self.read_len()?;
+        let bytes = self.take(len)?;
+        std::str::from_utf8(bytes)
+            .map(Arc::from)
             .map_err(|e| format!("navigation projection string is not utf-8: {e}"))
     }
 
