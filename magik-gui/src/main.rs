@@ -235,7 +235,6 @@ fn main() {
         "input" => run_input(),
         #[cfg(feature = "diagnostics")]
         "library-scan-bench" => library_db::run_scan_bench(),
-        #[cfg(feature = "diagnostics")]
         "audio-tone" => run_audio_tone(&mut f),
         other => unknown_command(other),
     }

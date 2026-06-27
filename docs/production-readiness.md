@@ -73,6 +73,9 @@ scripts/device-release-acceptance.sh --skip-deploy --soak
 The script uses only `scripts/mister` for device access and writes artifacts to
 `build/device-release/<timestamp>/`, including status JSON, doctor output,
 snapshots, logs, optional frame/profile files, and `report.md`.
+Health and catalog probe logs are captured as artifacts when those tiers run,
+including the `/dev/MrAudio` `audio-tone` probe and catalog mutation refresh
+logs.
 
 The device gate is telemetry-first: it waits on `scripts/mister status --json`,
 launcher status fields, Main status fields, `/tmp/mister-magik/events.jsonl`,
@@ -102,7 +105,15 @@ scripts/device-release-acceptance.sh --skip-deploy --allow-reset-catalog
 ```
 
 When enabled, the script backs up `/media/fat/mister-magik/library.sqlite3`
-before removing it and records the backup path in the report.
+before removing it and records the backup path in the report. The catalog tier
+also clears `/media/fat/mister-magik/launcher.env` and the display benchmark
+boot request before this reset so benchmark-only launcher state cannot suppress
+the first-boot worker.
+
+The non-destructive catalog mutation check uses an isolated temporary library
+root shaped like `_Arcade` and `MISTER_LIBRARY_ROOTS`; it expects the fixture
+database to grow from one synthetic MRA to two and does not scan the production
+library.
 
 The gate verifies supervised reboot while the launcher is active. It uses raw
 reboot only as recovery after the exit-to-menu and game-handoff smokes, because

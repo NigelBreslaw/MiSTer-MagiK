@@ -232,7 +232,7 @@ write_crt_no_reboot() {
 
 restore_mode() {
   mkdir -p "$WORK"
-  mister run "rm -f '$REMOTE_BENCH_REQUEST'; kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true"
+  mister run "rm -f '$REMOTE_BENCH_REQUEST'"
   local backup
   backup="$(latest_local_backup || true)"
   if mister run "test -f '$REMOTE_BACKUP'" >/dev/null 2>&1; then
@@ -245,8 +245,14 @@ restore_mode() {
     echo "==> No backup found to restore" >&2
     mister run "test -f '$REMOTE_BACKUP'"
   fi
+  echo "==> Re-applying MiSTer MagiK boot/video INI policy"
+  mister ini-repair-boot
+  mister ini-repair-arcade-video
   echo "==> Rebooting after restore"
-  mister reboot-wait
+  if ! mister reboot-wait; then
+    echo "==> Supervised reboot did not complete; falling back to raw reboot recovery" >&2
+    mister reboot-wait --raw
+  fi
 }
 
 safe_scene() {
