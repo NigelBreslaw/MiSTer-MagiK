@@ -17,6 +17,8 @@ pub(crate) const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
 pub(crate) const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
 pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
+pub(crate) const ARCADE_FILTER_ACTIVE_GRADIENT: TextGradient =
+    TextGradient::new(Pixel(0x0006d6a0), Pixel(0x0005b98a), Pixel(0x00047764));
 pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
 const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
 const ARCADE_ROW_FINGERPRINT_CACHE_MAX: usize = 512;
@@ -40,6 +42,7 @@ pub(crate) struct ArcadeListRenderer {
     row_fingerprint_cache: HashMap<usize, CachedArcadeRowFingerprint>,
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
+    last_filter_draw: Option<ArcadeFilterListDrawKey>,
 }
 
 pub(crate) struct CachedArcadeRow {
@@ -79,6 +82,20 @@ struct ArcadeListDrawKey {
     visible_hash: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ArcadeListItem {
+    pub(crate) title: String,
+    pub(crate) count: Option<usize>,
+    pub(crate) active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ArcadeFilterListDrawKey {
+    len: usize,
+    visual_px: i32,
+    visible_hash: u64,
+}
+
 pub(crate) enum ArcadeListUpdate {
     Full(DirtyRect),
     /// The cached RAM list surface was advanced by scrolling and patching only
@@ -105,6 +122,7 @@ impl ArcadeListRenderer {
             row_fingerprint_cache: HashMap::new(),
             surface_y: 0,
             last_draw: None,
+            last_filter_draw: None,
         }
     }
 
@@ -123,6 +141,7 @@ impl ArcadeListRenderer {
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
+        self.last_filter_draw = None;
         let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
         let anchor = visual_index
             .round()
@@ -201,6 +220,28 @@ impl ArcadeListRenderer {
         })
     }
 
+    pub(crate) fn draw_filter_items(
+        &mut self,
+        items: &[ArcadeListItem],
+        selected: usize,
+        force: bool,
+    ) -> Option<ArcadeListUpdate> {
+        self.last_draw = None;
+        let visual_index = selected.min(items.len().saturating_sub(1)) as f32;
+        let key = ArcadeFilterListDrawKey {
+            len: items.len(),
+            visual_px: (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32,
+            visible_hash: arcade_filter_visible_window_hash(items, visual_index),
+        };
+        if !force && self.last_filter_draw.as_ref() == Some(&key) {
+            return None;
+        }
+        self.last_filter_draw = Some(key);
+        self.surface_y = 0;
+        self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
+        Some(ArcadeListUpdate::Full(Self::dirty_rect()))
+    }
+
     pub(crate) fn selection_rect() -> DirtyRect {
         let y = Self::selection_y();
         DirtyRect {
@@ -262,6 +303,64 @@ impl ArcadeListRenderer {
                 continue;
             }
             self.blit_cached_row_to_surface(band_h, band_y, &games[idx], idx, y);
+        }
+    }
+
+    fn draw_filter_content_band(
+        &mut self,
+        items: &[ArcadeListItem],
+        visual_index: f32,
+        band_y: usize,
+        band_h: usize,
+    ) {
+        if band_h == 0 || band_y >= ARCADE_LIST_H {
+            return;
+        }
+        let band_h = band_h.min(ARCADE_LIST_H - band_y);
+        self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
+        if items.is_empty() {
+            let mut band = std::mem::take(&mut self.band_scratch);
+            band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_BG_COLOR);
+            band.fill(ARCADE_LIST_BG_COLOR);
+            self.meta_font.draw_text_clipped(
+                &mut band,
+                ARCADE_LIST_W,
+                ARCADE_LIST_W,
+                0,
+                band_h,
+                96,
+                (ARCADE_LIST_H / 2).saturating_sub(band_y) as isize,
+                "NO FILTERS",
+                Pixel(0x00706080),
+            );
+            self.copy_band_to_surface(&band, band_y, band_h);
+            self.band_scratch = band;
+            return;
+        }
+        let row_h = ARCADE_ROW_HEIGHT as isize;
+        let local_anchor_y = Self::selection_y() as isize;
+        let Some((first, end)) = arcade_visible_window_range(items.len(), visual_index) else {
+            return;
+        };
+        for idx in first..=end {
+            let y =
+                local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
+            let clip_y0 = y.max(band_y as isize);
+            let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
+            if clip_y1 <= clip_y0 {
+                continue;
+            }
+            let row = self.render_filter_row(&items[idx], idx);
+            let copy_h = (clip_y1 - clip_y0) as usize;
+            let src_y = (clip_y0 - y) as usize;
+            for row_y in 0..copy_h {
+                let src = (src_y + row_y) * ARCADE_LIST_W;
+                let viewport_y = clip_y0 as usize + row_y;
+                let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+                let dst = dst_y * ARCADE_LIST_W;
+                self.surface[dst..dst + ARCADE_LIST_W]
+                    .copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+            }
         }
     }
 
@@ -544,6 +643,43 @@ impl ArcadeListRenderer {
         }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
+
+    fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
+        let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
+        draw_arcade_row_background(&mut row, idx);
+        let title = clipped_title(&item.title, if item.count.is_some() { 26 } else { 30 });
+        let gradient = if item.active {
+            ARCADE_FILTER_ACTIVE_GRADIENT
+        } else {
+            ARCADE_TITLE_GRADIENT
+        };
+        self.title_font.draw_text_clipped_gradient(
+            &mut row,
+            ARCADE_LIST_W,
+            ARCADE_LIST_W,
+            0,
+            ARCADE_ROW_HEIGHT as usize,
+            12,
+            30,
+            &title,
+            gradient,
+        );
+        if let Some(count) = item.count {
+            let count = count.to_string();
+            self.meta_font.draw_text_clipped(
+                &mut row,
+                ARCADE_LIST_W,
+                ARCADE_LIST_W,
+                0,
+                ARCADE_ROW_HEIGHT as usize,
+                (ARCADE_LIST_W - 60) as isize,
+                29,
+                &count,
+                Pixel(0x00706080),
+            );
+        }
+        row.into_iter().map(pixel_to_rgb565).collect()
+    }
 }
 
 fn draw_new_badge(row: &mut [Pixel], font: &mut ConsoleFont) {
@@ -684,6 +820,22 @@ fn arcade_visible_window_hash(games: &[ArcadeGameEntry], visual_index: f32) -> u
     for idx in first..=end {
         arcade_hash_usize(&mut hash, idx);
         arcade_hash_game(&mut hash, &games[idx]);
+    }
+    hash
+}
+
+fn arcade_filter_visible_window_hash(items: &[ArcadeListItem], visual_index: f32) -> u64 {
+    let mut hash = ARCADE_LIST_HASH_OFFSET;
+    let Some((first, end)) = arcade_visible_window_range(items.len(), visual_index) else {
+        return hash;
+    };
+    arcade_hash_usize(&mut hash, first);
+    arcade_hash_usize(&mut hash, end);
+    for idx in first..=end {
+        arcade_hash_usize(&mut hash, idx);
+        arcade_hash_bytes(&mut hash, items[idx].title.as_bytes());
+        arcade_hash_usize(&mut hash, items[idx].count.unwrap_or(usize::MAX));
+        arcade_hash_bytes(&mut hash, &[items[idx].active as u8]);
     }
     hash
 }

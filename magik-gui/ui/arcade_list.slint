@@ -11,9 +11,6 @@ export component ArcadeListScreen inherits Rectangle {
     property <length> cabinet-screen-y: 92px * s;
     property <length> cabinet-screen-width: 320px * s;
     property <length> cabinet-screen-height: 320px * s;
-    property <length> drawer-width: 248px * s;
-    property <length> drawer-x: MisterBridge.arcade-filter-open ? 0px : -drawer-width;
-
     background: #1a1424;
 
     HorizontalLayout {
@@ -86,75 +83,6 @@ export component ArcadeListScreen inherits Rectangle {
                 background: #131018;
                 border-width: 1px;
                 border-color: #352848;
-            }
-
-            Rectangle {
-                x: root.drawer-x;
-                y: 0px;
-                width: root.drawer-width;
-                height: parent.height;
-                background: #17121f;
-                border-width: 1px;
-                border-color: #5c4a72;
-                clip: true;
-                animate x { duration: 140ms; }
-
-                Text {
-                    x: 16px * root.s;
-                    y: 16px * root.s;
-                    text: MisterBridge.arcade-filter-title;
-                    color: #fff6ff;
-                    font-size: 22px * root.s;
-                }
-
-                Text {
-                    x: 16px * root.s;
-                    y: 44px * root.s;
-                    text: MisterBridge.arcade-filter-active-label;
-                    color: #06d6a0;
-                    font-size: 8px * root.s;
-                }
-
-                Rectangle {
-                    x: 8px * root.s;
-                    y: 56px * root.s;
-                    width: parent.width - 16px * root.s;
-                    height: 384px * root.s;
-                    background: #120d1a;
-                    border-width: 1px;
-                    border-color: #352848;
-                    clip: true;
-
-                    for item[i] in MisterBridge.arcade-filter-items: Rectangle {
-                        x: 0px;
-                        y: (i * 40 - MisterBridge.arcade-filter-scroll-y) * 1px * root.s;
-                        width: parent.width;
-                        height: 40px * root.s;
-                        background: MisterBridge.arcade-filter-selected == i ? #2a2236 : #120d1a;
-                        border-width: MisterBridge.arcade-filter-selected == i ? 2px : 0px;
-                        border-color: #06d6a0;
-
-                        Text {
-                            x: 10px * root.s;
-                            y: 8px * root.s;
-                            width: parent.width - 64px * root.s;
-                            text: item.label;
-                            color: item.active ? #06d6a0 : #e8e0f0;
-                            font-size: 13px * root.s;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            x: parent.width - 48px * root.s;
-                            y: 10px * root.s;
-                            width: 38px * root.s;
-                            text: item.count;
-                            color: #706080;
-                            horizontal-alignment: right;
-                            font-size: 9px * root.s;
-                        }
-                    }
-                }
             }
         }
 

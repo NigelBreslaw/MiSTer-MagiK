@@ -23,14 +23,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_game_systems(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::GameSystem,
     >::new())));
-    bridge.set_arcade_filter_items(ModelRc::new(VecModel::from(Vec::<
-        slint_ui::launcher::ArcadeFilterItem,
-    >::new())));
-    bridge.set_arcade_filter_open(false);
-    bridge.set_arcade_filter_title("Filters".into());
-    bridge.set_arcade_filter_active_label("Games A-Z".into());
-    bridge.set_arcade_filter_selected(0);
-    bridge.set_arcade_filter_scroll_y(0);
     bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
     bridge.set_active_system_count(0);
@@ -279,7 +271,6 @@ pub(super) fn sync_bridge_launcher(
         bridge.set_game_systems(models.game_systems(catalog, catalog_version));
         bridge.set_active_system_title(title.into());
         bridge.set_active_system_count(count as i32);
-        sync_arcade_filter_bridge(&bridge, catalog, nav);
         active_games_for_preview = Some(games);
     }
     bridge.set_arcade_games_loading(active_games_loading);
@@ -354,31 +345,6 @@ pub(super) fn sync_bridge_launcher_light(
         preview.clear(&bridge);
     }
     status_presenter.sync_setup_visible(setup.is_active());
-}
-
-fn sync_arcade_filter_bridge(
-    bridge: &slint_ui::launcher::MisterBridge<'_>,
-    catalog: &ArcadeCatalog,
-    nav: &LauncherNav,
-) {
-    let system_id = active_system(catalog, nav)
-        .map(|system| system.id.as_str())
-        .unwrap_or("");
-    let items = nav
-        .arcade_filter_items(catalog, system_id)
-        .into_iter()
-        .map(|item| slint_ui::launcher::ArcadeFilterItem {
-            label: item.label.into(),
-            count: item.count as i32,
-            active: item.active,
-        })
-        .collect::<Vec<_>>();
-    bridge.set_arcade_filter_open(nav.arcade_filter.drawer_open);
-    bridge.set_arcade_filter_title(nav.arcade_filter.title().into());
-    bridge.set_arcade_filter_active_label(nav.arcade_filter.active_label().into());
-    bridge.set_arcade_filter_items(ModelRc::new(VecModel::from(items)));
-    bridge.set_arcade_filter_selected(nav.arcade_filter.selected as i32);
-    bridge.set_arcade_filter_scroll_y(nav.arcade_filter.scroll_y);
 }
 
 pub(super) fn launcher_clock_text() -> String {
