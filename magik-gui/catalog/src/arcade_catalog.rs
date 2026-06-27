@@ -62,6 +62,7 @@ pub struct GameSystemEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArcadeFilter {
     All,
+    Search,
     Decade(u16),
     Manufacturer(String),
     Category(String),
@@ -84,6 +85,7 @@ pub struct ArcadeCatalog {
     preview_games_by_system: HashMap<String, Vec<usize>>,
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+    search_keys: Vec<ArcadeSearchKey>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -104,7 +106,7 @@ impl<'a> ArcadeGameView<'a> {
         Self::Contiguous(games)
     }
 
-    fn indexed(games: &'a [ArcadeGameEntry], indexes: &'a [usize]) -> Self {
+    pub fn indexed(games: &'a [ArcadeGameEntry], indexes: &'a [usize]) -> Self {
         Self::Indexed { games, indexes }
     }
 
@@ -212,6 +214,7 @@ impl ArcadeCatalog {
             preview_games_by_system: indexes.preview_games_by_system,
             games_by_ref: indexes.games_by_ref,
             launch_plans_by_ref: indexes.launch_plans_by_ref,
+            search_keys: indexes.search_keys,
         }
     }
 
@@ -284,9 +287,31 @@ impl ArcadeCatalog {
         ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id))
     }
 
+    pub fn search_game_indexes(&self, system_id: &str, query: &str) -> Vec<usize> {
+        let needle = search_match_key(query);
+        let compact_needle = compact_search_match_key(query);
+        if needle.is_empty() && compact_needle.is_empty() {
+            return self.system_game_indexes(system_id).to_vec();
+        }
+        self.system_game_indexes(system_id)
+            .iter()
+            .copied()
+            .filter(|index| {
+                self.search_keys.get(*index).is_some_and(|key| {
+                    key.title.contains(&needle)
+                        || key.path.contains(&needle)
+                        || (!compact_needle.is_empty()
+                            && (key.compact_title.contains(&compact_needle)
+                                || key.compact_path.contains(&compact_needle)))
+                })
+            })
+            .collect()
+    }
+
     pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
         match filter {
             ArcadeFilter::All => self.system_game_count(system_id),
+            ArcadeFilter::Search => self.system_game_count(system_id),
             _ => self.filtered_game_indexes(system_id, filter).len(),
         }
     }
@@ -299,6 +324,7 @@ impl ArcadeCatalog {
     ) -> Option<&ArcadeGameEntry> {
         match filter {
             ArcadeFilter::All => self.system_game_at(system_id, index),
+            ArcadeFilter::Search => self.system_game_at(system_id, index),
             _ => self
                 .filtered_game_indexes(system_id, filter)
                 .get(index)
@@ -313,6 +339,7 @@ impl ArcadeCatalog {
     ) -> ArcadeGameView<'_> {
         match filter {
             ArcadeFilter::All => self.system_game_view(system_id),
+            ArcadeFilter::Search => self.system_game_view(system_id),
             _ => ArcadeGameView::indexed(&self.games, self.filtered_game_indexes(system_id, filter)),
         }
     }
@@ -395,6 +422,15 @@ struct ArcadeCatalogIndexes {
     preview_games_by_system: HashMap<String, Vec<usize>>,
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+    search_keys: Vec<ArcadeSearchKey>,
+}
+
+#[derive(Clone, Debug)]
+struct ArcadeSearchKey {
+    title: String,
+    path: String,
+    compact_title: String,
+    compact_path: String,
 }
 
 fn build_arcade_catalog_indexes(
@@ -407,8 +443,10 @@ fn build_arcade_catalog_indexes(
     let mut preview_games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
     let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
     let mut games_by_ref: HashMap<Arc<str>, usize> = HashMap::with_capacity(games.len());
+    let mut search_keys = Vec::with_capacity(games.len());
 
     for (idx, game) in games.iter().enumerate() {
+        search_keys.push(ArcadeSearchKey::from_game(game));
         let system_id_string = game.system_id.to_string();
         let system_id_arc = game.system_id.clone();
         games_by_ref.insert(game.mra_path.clone(), idx);
@@ -514,6 +552,20 @@ fn build_arcade_catalog_indexes(
         preview_games_by_system,
         games_by_ref,
         launch_plans_by_ref,
+        search_keys,
+    }
+}
+
+impl ArcadeSearchKey {
+    fn from_game(game: &ArcadeGameEntry) -> Self {
+        let title = search_match_key(&game.title);
+        let path = search_match_key(mra_basename(&game.mra_path));
+        Self {
+            compact_title: title.replace(' ', ""),
+            compact_path: path.replace(' ', ""),
+            title,
+            path,
+        }
     }
 }
 
@@ -582,7 +634,7 @@ fn mount_kind_label(kind: MountKind) -> &'static str {
 
 fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey> {
     match filter {
-        ArcadeFilter::All => None,
+        ArcadeFilter::All | ArcadeFilter::Search => None,
         ArcadeFilter::Decade(decade) => Some(ArcadeFilterKey {
             system_id: Arc::from(system_id),
             kind: ArcadeFilterKindKey::Decade(*decade),
@@ -596,6 +648,33 @@ fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey>
             kind: ArcadeFilterKindKey::Category(Arc::from(category.as_str())),
         }),
     }
+}
+
+fn mra_basename(path: &str) -> &str {
+    path.rsplit('/')
+        .next()
+        .and_then(|name| name.strip_suffix(".mra").or(Some(name)))
+        .unwrap_or(path)
+}
+
+fn search_match_key(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn compact_search_match_key(value: &str) -> String {
+    search_match_key(value).replace(' ', "")
 }
 
 #[derive(Default)]

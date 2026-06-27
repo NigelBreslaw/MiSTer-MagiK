@@ -201,7 +201,7 @@ impl ArcadeUpdateTrace {
     pub(super) fn from_update(update: Option<&ArcadeListUpdate>) -> Self {
         match update {
             Some(ArcadeListUpdate::Full(_)) => Self::Full,
-            Some(ArcadeListUpdate::Scroll { delta_y }) => Self::Scroll { delta_y: *delta_y },
+            Some(ArcadeListUpdate::Scroll { delta_y, .. }) => Self::Scroll { delta_y: *delta_y },
             None => Self::None,
         }
     }

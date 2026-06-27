@@ -1326,11 +1326,7 @@ pub(super) fn run_launcher_loop(
                     {
                         active_system(&catalog, &nav)
                             .and_then(|system| {
-                                catalog.filtered_game_at(
-                                    &system.id,
-                                    &nav.arcade_filter.active,
-                                    nav.arcade.selected,
-                                )
+                                nav.active_arcade_game_at(&catalog, &system.id, nav.arcade.selected)
                             })
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
@@ -1344,11 +1340,7 @@ pub(super) fn run_launcher_loop(
                         auto_launch_selected_done = true;
                         active_system(&catalog, &nav)
                             .and_then(|system| {
-                                catalog.filtered_game_at(
-                                    &system.id,
-                                    &nav.arcade_filter.active,
-                                    nav.arcade.selected,
-                                )
+                                nav.active_arcade_game_at(&catalog, &system.id, nav.arcade.selected)
                             })
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
@@ -1778,12 +1770,14 @@ pub(super) fn run_launcher_loop(
         let active_arcade_games_loading = !launching
             && nav.screen == Screen::Arcade
             && active_system_games_loading(&catalog, &nav);
+        let arcade_search_active = nav.arcade_search.is_active(&nav.arcade_filter.active);
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
         if dirty_opt
             && !preview_scheduled_this_loop
             && !launching
             && nav.screen == Screen::Arcade
             && !active_arcade_games_loading
+            && !arcade_search_active
         {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if schedule_arcade_preview_window(
@@ -1800,7 +1794,10 @@ pub(super) fn run_launcher_loop(
             prepare_trace.preview_schedule_us = trace_start.elapsed().as_micros();
         }
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
-        if !launching && apply_ready_preview(&app, &mut preview, defer_selected_preview) {
+        if !launching
+            && !arcade_search_active
+            && apply_ready_preview(&app, &mut preview, defer_selected_preview)
+        {
             window.request_redraw();
         }
         if let Some(trace_start) = preview_apply_trace_start {
@@ -1819,8 +1816,16 @@ pub(super) fn run_launcher_loop(
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect =
             if should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading) {
-                let force_arcade_redraw =
-                    arcade_list_needs_forced_redraw(this_rect, full_frame_present);
+                arcade_list_renderer.set_geometry(if arcade_search_active {
+                    ArcadeListGeometry::SEARCH
+                } else {
+                    ArcadeListGeometry::NORMAL
+                });
+                let force_arcade_redraw = arcade_list_needs_forced_redraw(
+                    &arcade_list_renderer,
+                    this_rect,
+                    full_frame_present,
+                );
                 if nav.arcade_filter.drawer_open {
                     let items = arcade_filter_items_cache.items(&catalog, &nav, catalog_version);
                     arcade_list_renderer.draw_filter_items(
@@ -2428,6 +2433,7 @@ impl ArcadeFilterListItemCache {
 fn arcade_filter_cache_token(filter: &arcade_catalog::ArcadeFilter) -> String {
     match filter {
         arcade_catalog::ArcadeFilter::All => "all".to_string(),
+        arcade_catalog::ArcadeFilter::Search => "search".to_string(),
         arcade_catalog::ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
         arcade_catalog::ArcadeFilter::Manufacturer(manufacturer) => {
             format!("manufacturer:{manufacturer}")
