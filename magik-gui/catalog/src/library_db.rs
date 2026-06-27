@@ -10,6 +10,7 @@ use crate::catalog_config::DEFAULT_SQLITE_PATH;
 use crate::catalog_load_metrics;
 pub use crate::catalog_navigation::{
     navigation_path_for_sqlite, read_catalog_navigation_projection,
+    write_catalog_navigation_projection_for_catalog,
     CatalogNavigationProjection,
 };
 pub use crate::catalog_config::{
@@ -242,9 +243,30 @@ pub fn record_catalog_nav_projection_load() {
 
 pub fn load_arcade_catalog_from_navigation_projection(
     root: impl AsRef<Path>,
-    projection: CatalogNavigationProjection,
-) -> ArcadeCatalog {
-    ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection)
+    sqlite_path: &Path,
+    expected_stamp: &catalog_stamp::CatalogStamp,
+) -> Result<Option<LibraryCatalogLoad>, String> {
+    let started = std::time::Instant::now();
+    let read_t = std::time::Instant::now();
+    let Some(projection) =
+        read_catalog_navigation_projection(&navigation_path_for_sqlite(sqlite_path), expected_stamp)?
+    else {
+        return Ok(None);
+    };
+    let read_us = read_t.elapsed().as_micros() as u64;
+    let rows = projection.games.len();
+    let catalog_t = std::time::Instant::now();
+    let catalog = ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
+    let catalog_us = catalog_t.elapsed().as_micros() as u64;
+    Ok(Some(LibraryCatalogLoad {
+        catalog,
+        us: started.elapsed().as_micros() as u64,
+        open_us: read_us,
+        query_us: 0,
+        systems_us: 0,
+        catalog_us,
+        rows,
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

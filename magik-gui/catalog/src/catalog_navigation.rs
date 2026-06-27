@@ -84,7 +84,7 @@ pub fn navigation_path_for_sqlite(sqlite_path: &Path) -> PathBuf {
     sqlite_path.with_extension("nav.lz4b")
 }
 
-pub(crate) fn write_catalog_navigation_projection_for_catalog(
+pub fn write_catalog_navigation_projection_for_catalog(
     sqlite_path: &Path,
     catalog: &ArcadeCatalog,
     stamp: &CatalogStamp,
