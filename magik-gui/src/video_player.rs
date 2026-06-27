@@ -11,7 +11,6 @@ use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
 use ffmpeg::ChannelLayout;
 use ffmpeg_next as ffmpeg;
-use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -167,12 +166,19 @@ pub struct VideoPlayer {
 }
 
 pub struct PlaybackFrame {
-    pub pixel_buffer: SharedPixelBuffer<Rgb8Pixel>,
+    pub frame: VideoRgb565Frame,
     pub audio: Vec<i16>,
     pub audio_requested_frames: usize,
     pub loop_count: u64,
     pub decode_us: u64,
     pub metrics: PlaybackMetrics,
+}
+
+#[derive(Clone, Debug)]
+pub struct VideoRgb565Frame {
+    pub pixels: Vec<u16>,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -416,7 +422,7 @@ impl VideoPlayer {
             video_decoder.format(),
             video_decoder.width(),
             video_decoder.height(),
-            FfmpegPixel::RGB24,
+            FfmpegPixel::RGB565LE,
             output_w,
             output_h,
             Flags::BILINEAR,
@@ -484,13 +490,13 @@ impl VideoPlayer {
         audio_frames: usize,
         mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some((pixel_buffer, video_metrics)) =
-            receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
+        if let Some((frame, video_metrics)) =
+            receive_rgb565_frame(&mut self.video_decoder, &mut self.scaler)?
         {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
-                pixel_buffer,
+                frame,
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
@@ -506,13 +512,13 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((pixel_buffer, video_metrics)) =
-                    receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
+                if let Some((frame, video_metrics)) =
+                    receive_rgb565_frame(&mut self.video_decoder, &mut self.scaler)?
                 {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
-                        pixel_buffer,
+                        frame,
                         audio,
                         audio_requested_frames: audio_frames,
                         loop_count: self.loop_count,
@@ -548,13 +554,13 @@ impl VideoPlayer {
             &mut metrics,
         )?;
         self.add_pending_audio_metrics(metrics);
-        if let Some((pixel_buffer, video_metrics)) =
-            receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
+        if let Some((frame, video_metrics)) =
+            receive_rgb565_frame(&mut self.video_decoder, &mut self.scaler)?
         {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
-                pixel_buffer,
+                frame,
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
@@ -642,10 +648,10 @@ impl VideoPlayer {
     }
 }
 
-fn receive_rgb_pixel_buffer(
+fn receive_rgb565_frame(
     decoder: &mut ffmpeg::decoder::Video,
     scaler: &mut ScalingContext,
-) -> Result<Option<(SharedPixelBuffer<Rgb8Pixel>, VideoDecodeMetrics)>, String> {
+) -> Result<Option<(VideoRgb565Frame, VideoDecodeMetrics)>, String> {
     let mut decoded = Video::empty();
     let decode_t0 = Instant::now();
     match decoder.receive_frame(&mut decoded) {
@@ -657,7 +663,7 @@ fn receive_rgb_pixel_buffer(
                 .run(&decoded, &mut rgb)
                 .map_err(|e| format!("scale video frame: {e}"))?;
             Ok(Some((
-                rgb_frame_to_pixel_buffer(&rgb),
+                rgb565_frame_to_words(&rgb)?,
                 VideoDecodeMetrics {
                     decode_us,
                     scale_us: scale_t0.elapsed().as_micros() as u64,
@@ -756,17 +762,29 @@ fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {
     }
 }
 
-fn rgb_frame_to_pixel_buffer(frame: &Video) -> SharedPixelBuffer<Rgb8Pixel> {
+fn rgb565_frame_to_words(frame: &Video) -> Result<VideoRgb565Frame, String> {
+    if frame.format() != FfmpegPixel::RGB565LE {
+        return Err(format!(
+            "scaler produced {:?}, expected RGB565LE",
+            frame.format()
+        ));
+    }
     let width = frame.width();
     let height = frame.height();
     let stride = frame.stride(0);
-    let row_len = width as usize * 3;
+    let row_len = width as usize * 2;
     let data = frame.data(0);
-    let mut buffer = SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
-    let dst = buffer.make_mut_bytes();
+    let mut pixels = vec![0u16; width as usize * height as usize];
     for y in 0..height as usize {
         let src = &data[y * stride..y * stride + row_len];
-        dst[y * row_len..(y + 1) * row_len].copy_from_slice(src);
+        let dst = &mut pixels[y * width as usize..(y + 1) * width as usize];
+        for (word, bytes) in dst.iter_mut().zip(src.chunks_exact(2)) {
+            *word = u16::from_le_bytes([bytes[0], bytes[1]]);
+        }
     }
-    buffer
+    Ok(VideoRgb565Frame {
+        pixels,
+        width,
+        height,
+    })
 }
