@@ -208,8 +208,11 @@ H.264-in-MOV/MP4 playback plus audio decode/resampling for MiSTer video snaps:
 `avcodec`, `avformat`, `avutil`, `swscale`, `swresample`, H.264 decoder/parser,
 AAC decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
 `video_playback` decodes audio and converts it to 48 kHz stereo signed 16-bit
-PCM for `/dev/MrAudio`. avfilter, avdevice, programs, and autodetected
-libraries are disabled.
+PCM for `/dev/MrAudio`. On ARM video builds, source-size YUV420P frames can use
+the project C/NEON RGB565 converter (`MISTER_VIDEO_CONVERT=custom-neon`), with
+FFmpeg swscale retained as the fallback for non-source scaling modes and
+comparison runs. avfilter, avdevice, programs, and autodetected libraries are
+disabled.
 The checked-in ARMv7 image includes both C and C++ cross toolchains so FFmpeg and
 any C++-probing native crates see the same compiler family locally and in CI.
 
