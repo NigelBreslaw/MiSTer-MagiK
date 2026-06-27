@@ -1,6 +1,6 @@
 //! Library walking and archive candidate discovery.
 
-use crate::launch_profiles::{self, LaunchProfile, ProfilePathClass};
+use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition, ProfilePathClass};
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
@@ -396,6 +396,9 @@ fn push_profile_game_dirs(
     profiles: &[LaunchProfile],
 ) {
     for profile in profiles {
+        if !profile_has_initial_catalog_candidates(profile) {
+            continue;
+        }
         for dir in &profile.game_dirs {
             if dir.starts_with('_') {
                 continue;
@@ -428,11 +431,21 @@ fn is_direct_scan_root(path: &Path, profiles: &[LaunchProfile]) -> bool {
         .iter()
         .any(|name| path_name_eq(path, name))
         || profiles.iter().any(|profile| {
-            profile
-                .game_dirs
-                .iter()
-                .any(|dir| !dir.starts_with('_') && path_name_eq(path, dir))
+            profile_has_initial_catalog_candidates(profile)
+                && profile
+                    .game_dirs
+                    .iter()
+                    .any(|dir| !dir.starts_with('_') && path_name_eq(path, dir))
         })
+}
+
+fn profile_has_initial_catalog_candidates(profile: &LaunchProfile) -> bool {
+    profile
+        .payload_rules
+        .iter()
+        .any(|rule| rule.disposition == PayloadDisposition::Playable)
+        || !profile.archive_entry_rules.is_empty()
+        || !profile.collection_rules.is_empty()
 }
 
 fn path_name_eq(path: &Path, expected: &str) -> bool {
@@ -1034,6 +1047,56 @@ mod tests {
             .discoveries
             .iter()
             .all(|discovery| !discovery.launch_ref.contains("Ghost.nes")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_skips_attached_media_only_targets_but_keeps_dos_mgl_launchers() {
+        let root = unique_temp_dir("skip-attached-media-target");
+        let dos_dir = root.join("_DOS Games");
+        let ao486_dir = root.join("games/AO486");
+        let nes_dir = root.join("games/NES");
+        std::fs::create_dir_all(&dos_dir).expect("create dos dir");
+        std::fs::create_dir_all(&ao486_dir).expect("create ao486 dir");
+        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
+        let dos_mgl = dos_dir.join("Doom.mgl");
+        std::fs::write(
+            &dos_mgl,
+            r#"<mistergamelist><rbf>AO486</rbf><file delay="1" type="s">../games/AO486/Doom.vhd</file></mistergamelist>"#,
+        )
+        .expect("write dos mgl");
+        let raw_media = ao486_dir.join("Doom.vhd");
+        std::fs::write(&raw_media, "disk").expect("write raw ao486 media");
+        let nes_rom = nes_dir.join("Mario.nes");
+        std::fs::write(&nes_rom, "rom").expect("write nes rom");
+        let profiles = launch_profiles::builtin_profiles();
+        let targets = scan_targets_for_roots(&[root.display().to_string()], &profiles);
+
+        assert!(targets.iter().any(|target| target == &dos_dir));
+        assert!(targets.iter().any(|target| target == &nes_dir));
+        assert!(!targets.iter().any(|target| target == &ao486_dir));
+
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+        let scan = scan_library(&cfg);
+
+        assert!(scan.discoveries.iter().any(|discovery| discovery.launch_ref
+            == dos_mgl.display().to_string()
+            && discovery.platform_id == "dos"));
+        assert!(scan
+            .discoveries
+            .iter()
+            .any(|discovery| discovery.launch_ref == nes_rom.display().to_string()));
+        assert!(!scan
+            .discoveries
+            .iter()
+            .any(|discovery| discovery.launch_ref == raw_media.display().to_string()));
+        assert!(!scan
+            .normal_files
+            .iter()
+            .any(|file| file.path == raw_media.display().to_string()));
         let _ = std::fs::remove_dir_all(root);
     }
 

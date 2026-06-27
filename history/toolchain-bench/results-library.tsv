@@ -861,3 +861,336 @@ CAT10-C04-AFTER-20260627-LIB	3	sqlite_publish_progress	1999	bytes=19615744 copy_
 CAT10-C04-AFTER-20260627-LIB	3	refresh_scan	2535381	skipped=false bytes=19615744 scan_us=2535381 discover_us=1357278 classify_us=2410710 import_us=7716396 discoveries=9237 normal_files=7905 containers=154 entries=281
 CAT10-C04-AFTER-20260627-LIB	3	refresh_import	7716396	skipped=false bytes=19615744 scan_us=2535381 discover_us=1357278 classify_us=2410710 import_us=7716396 discoveries=9237 normal_files=7905 containers=154 entries=281
 CAT10-C04-AFTER-20260627-LIB	3	refresh_done	0	bytes=19615744 skipped=false bytes=19615744 scan_us=2535381 discover_us=1357278 classify_us=2410710 import_us=7716396 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_first_candidate	30	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_first_discovery	35	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	694	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	106	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	248	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	20	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	536	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	79	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	490	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	325	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	131	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	1	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	368	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	160	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	18	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk_target	4	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_walk	1353	candidates=7913
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_profile_match	70	calls=7913
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_installed_collection	72	calls=7521
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_archive_toc	10	containers=154
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_collection_listings	0	collections=0
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_file_discovery	1964	files=7519
+CAT10-C05-BEFORE-20260627-LIB	1	scan_stage_classify_total	2416	discoveries=9362 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_schema	13	tables=14
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_metadata_load	1118	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_begin_tx	0	-
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_profiles	1	rows=16
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_payloads	452	normal_files=7905 entries=281
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	189	from=0 to=1000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	172	from=1000 to=2000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	188	from=2000 to=3000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	189	from=3000 to=4000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	182	from=4000 to=5000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	201	from=5000 to=6000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	235	from=6000 to=7000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	268	from=7000 to=8000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	257	from=8000 to=9000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_chunk	67	from=9000 to=9237 total=9237
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_games_total	1967	rows=9237 launcher_rows=6245
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_materialize_arcade_ui	493	-
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_launcher_arcade	13	-
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_launcher_console	248	rows=6185
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_launcher_launch_plans	688	rows=4497
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_meta	126	rows=11
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_catalog_stamp	0	rows=11
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_insert_software_hash_cache	0	rows=0
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_build_saved_catalog	204	rows=7259
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_commit	8	-
+CAT10-C05-BEFORE-20260627-LIB	1	import_stage_total	5336	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.1589
+CAT10-C05-BEFORE-20260627-LIB	1	sqlite_publish_progress	1333	bytes=19615744 copy_ms=1320 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+CAT10-C05-BEFORE-20260627-LIB	1	refresh_scan	2541096	skipped=false bytes=19615744 scan_us=2541096 discover_us=1353420 classify_us=2416257 import_us=7094025 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	1	refresh_import	7094025	skipped=false bytes=19615744 scan_us=2541096 discover_us=1353420 classify_us=2416257 import_us=7094025 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	1	refresh_done	0	bytes=19615744 skipped=false bytes=19615744 scan_us=2541096 discover_us=1353420 classify_us=2416257 import_us=7094025 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_first_candidate	32	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_first_discovery	36	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	685	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	74	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	278	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	10	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	16	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	606	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	56	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	505	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	358	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	144	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	381	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	160	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	21	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk_target	7	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_walk	1387	candidates=7913
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_profile_match	68	calls=7913
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_installed_collection	79	calls=7521
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_archive_toc	10	containers=154
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_collection_listings	0	collections=0
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_file_discovery	2012	files=7519
+CAT10-C05-BEFORE-20260627-LIB	2	scan_stage_classify_total	2444	discoveries=9362 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_schema	13	tables=14
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_metadata_load	1121	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_begin_tx	0	-
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_profiles	1	rows=16
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_payloads	452	normal_files=7905 entries=281
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	189	from=0 to=1000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	170	from=1000 to=2000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	184	from=2000 to=3000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	186	from=3000 to=4000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	180	from=4000 to=5000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	189	from=5000 to=6000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	232	from=6000 to=7000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	264	from=7000 to=8000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	253	from=8000 to=9000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_chunk	66	from=9000 to=9237 total=9237
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_games_total	1930	rows=9237 launcher_rows=6245
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_materialize_arcade_ui	466	-
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_launcher_arcade	13	-
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_launcher_console	248	rows=6185
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_launcher_launch_plans	689	rows=4497
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_meta	126	rows=11
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_catalog_stamp	0	rows=11
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_insert_software_hash_cache	0	rows=0
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_build_saved_catalog	203	rows=7259
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_commit	9	-
+CAT10-C05-BEFORE-20260627-LIB	2	import_stage_total	5275	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.1626
+CAT10-C05-BEFORE-20260627-LIB	2	sqlite_publish_progress	1368	bytes=19615744 copy_ms=1355 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+CAT10-C05-BEFORE-20260627-LIB	2	refresh_scan	2569074	skipped=false bytes=19615744 scan_us=2569074 discover_us=1386965 classify_us=2444262 import_us=7070172 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	2	refresh_import	7070172	skipped=false bytes=19615744 scan_us=2569074 discover_us=1386965 classify_us=2444262 import_us=7070172 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	2	refresh_done	0	bytes=19615744 skipped=false bytes=19615744 scan_us=2569074 discover_us=1386965 classify_us=2444262 import_us=7070172 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_targets	0	roots=4 targets=16 extensions=29
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_first_candidate	32	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_first_discovery	36	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	615	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	84	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	231	path=/media/fat/games/AO486 dirs=297 files=404 candidates=386
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	16	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	564	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	73	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	472	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	353	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	148	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	380	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	160	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	16	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk_target	9	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_walk	1328	candidates=7913
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_profile_match	56	calls=7913
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_installed_collection	89	calls=7521
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_archive_toc	9	containers=154
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_collection_listings	0	collections=0
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_file_discovery	1959	files=7519
+CAT10-C05-BEFORE-20260627-LIB	3	scan_stage_classify_total	2388	discoveries=9362 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_schema	13	tables=14
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_metadata_load	1126	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_begin_tx	0	-
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_profiles	1	rows=16
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_payloads	439	normal_files=7905 entries=281
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	189	from=0 to=1000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	171	from=1000 to=2000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	185	from=2000 to=3000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	187	from=3000 to=4000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	181	from=4000 to=5000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	190	from=5000 to=6000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	233	from=6000 to=7000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	264	from=7000 to=8000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	254	from=8000 to=9000 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_chunk	66	from=9000 to=9237 total=9237
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_games_total	1938	rows=9237 launcher_rows=6245
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_materialize_arcade_ui	465	-
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_launcher_arcade	13	-
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_launcher_console	248	rows=6185
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_launcher_launch_plans	688	rows=4497
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_meta	125	rows=11
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_catalog_stamp	0	rows=11
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_insert_software_hash_cache	0	rows=0
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_build_saved_catalog	204	rows=7259
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_commit	8	-
+CAT10-C05-BEFORE-20260627-LIB	3	import_stage_total	5272	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.1661
+CAT10-C05-BEFORE-20260627-LIB	3	sqlite_publish_progress	1298	bytes=19615744 copy_ms=1285 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+CAT10-C05-BEFORE-20260627-LIB	3	refresh_scan	2512183	skipped=false bytes=19615744 scan_us=2512183 discover_us=1327961 classify_us=2387795 import_us=7011207 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	3	refresh_import	7011207	skipped=false bytes=19615744 scan_us=2512183 discover_us=1327961 classify_us=2387795 import_us=7011207 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-BEFORE-20260627-LIB	3	refresh_done	0	bytes=19615744 skipped=false bytes=19615744 scan_us=2512183 discover_us=1327961 classify_us=2387795 import_us=7011207 discoveries=9237 normal_files=7905 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_first_candidate	32	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_first_discovery	36	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	659	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	91	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	20	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	602	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	52	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	508	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	322	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	125	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	403	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	157	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	25	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk_target	2	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_walk	1193	candidates=7527
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_profile_match	53	calls=7527
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_installed_collection	89	calls=7521
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_archive_toc	10	containers=154
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_collection_listings	0	collections=0
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_file_discovery	1932	files=7519
+CAT10-C05-AFTER-20260627-LIB	1	scan_stage_classify_total	2340	discoveries=9362 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_schema	13	tables=14
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_metadata_load	1111	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_begin_tx	0	-
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_profiles	1	rows=16
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_payloads	438	normal_files=7519 entries=281
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	192	from=0 to=1000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	174	from=1000 to=2000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	191	from=2000 to=3000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	192	from=3000 to=4000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	184	from=4000 to=5000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	193	from=5000 to=6000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	237	from=6000 to=7000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	267	from=7000 to=8000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	257	from=8000 to=9000 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_chunk	67	from=9000 to=9237 total=9237
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_games_total	1972	rows=9237 launcher_rows=6245
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_materialize_arcade_ui	468	-
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_launcher_arcade	14	-
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_launcher_console	250	rows=6185
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_launcher_launch_plans	680	rows=4497
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_meta	126	rows=11
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_catalog_stamp	0	rows=11
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_insert_software_hash_cache	0	rows=0
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_build_saved_catalog	200	rows=7259
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_commit	8	-
+CAT10-C05-AFTER-20260627-LIB	1	import_stage_total	5287	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.1588
+CAT10-C05-AFTER-20260627-LIB	1	sqlite_publish_progress	1478	bytes=19431424 copy_ms=1465 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+CAT10-C05-AFTER-20260627-LIB	1	refresh_scan	2465087	skipped=false bytes=19431424 scan_us=2465087 discover_us=1193112 classify_us=2340008 import_us=7189957 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	1	refresh_import	7189957	skipped=false bytes=19431424 scan_us=2465087 discover_us=1193112 classify_us=2340008 import_us=7189957 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	1	refresh_done	0	bytes=19431424 skipped=false bytes=19431424 scan_us=2465087 discover_us=1193112 classify_us=2340008 import_us=7189957 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_first_candidate	47	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_first_discovery	51	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	637	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	87	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	10	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	577	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	62	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	511	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	373	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	140	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	388	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	134	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	16	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk_target	2	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_walk	1213	candidates=7527
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_profile_match	66	calls=7527
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_installed_collection	73	calls=7521
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_archive_toc	10	containers=154
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_collection_listings	0	collections=0
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_file_discovery	1945	files=7519
+CAT10-C05-AFTER-20260627-LIB	2	scan_stage_classify_total	2347	discoveries=9362 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_schema	13	tables=14
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_metadata_load	1125	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_begin_tx	0	-
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_profiles	1	rows=16
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_payloads	421	normal_files=7519 entries=281
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	188	from=0 to=1000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	172	from=1000 to=2000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	187	from=2000 to=3000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	190	from=3000 to=4000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	183	from=4000 to=5000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	189	from=5000 to=6000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	234	from=6000 to=7000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	265	from=7000 to=8000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	257	from=8000 to=9000 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_chunk	67	from=9000 to=9237 total=9237
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_games_total	1951	rows=9237 launcher_rows=6245
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_materialize_arcade_ui	471	-
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_launcher_arcade	13	-
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_launcher_console	251	rows=6185
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_launcher_launch_plans	679	rows=4497
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_meta	125	rows=11
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_catalog_stamp	0	rows=11
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_insert_software_hash_cache	0	rows=0
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_build_saved_catalog	201	rows=7259
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_commit	8	-
+CAT10-C05-AFTER-20260627-LIB	2	import_stage_total	5266	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.1623
+CAT10-C05-AFTER-20260627-LIB	2	sqlite_publish_progress	1815	bytes=19431424 copy_ms=1802 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+CAT10-C05-AFTER-20260627-LIB	2	refresh_scan	2472291	skipped=false bytes=19431424 scan_us=2472291 discover_us=1212996 classify_us=2347428 import_us=7552820 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	2	refresh_import	7552820	skipped=false bytes=19431424 scan_us=2472291 discover_us=1212996 classify_us=2347428 import_us=7552820 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	2	refresh_done	0	bytes=19431424 skipped=false bytes=19431424 scan_us=2472291 discover_us=1212996 classify_us=2347428 import_us=7552820 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_first_candidate	32	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_first_discovery	36	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	704	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	88	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	20	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	574	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	91	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	548	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	337	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	125	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	373	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	170	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	9	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk_target	2	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_walk	1245	candidates=7527
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_profile_match	54	calls=7527
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_installed_collection	84	calls=7521
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_archive_toc	10	containers=154
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_collection_listings	0	collections=0
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_file_discovery	1987	files=7519
+CAT10-C05-AFTER-20260627-LIB	3	scan_stage_classify_total	2413	discoveries=9362 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_schema	13	tables=14
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_metadata_load	1113	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_begin_tx	0	-
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_profiles	1	rows=16
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_payloads	425	normal_files=7519 entries=281
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	190	from=0 to=1000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	172	from=1000 to=2000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	186	from=2000 to=3000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	190	from=3000 to=4000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	183	from=4000 to=5000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	190	from=5000 to=6000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	233	from=6000 to=7000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	264	from=7000 to=8000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	256	from=8000 to=9000 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_chunk	66	from=9000 to=9237 total=9237
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_games_total	1950	rows=9237 launcher_rows=6245
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_materialize_arcade_ui	472	-
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_launcher_arcade	13	-
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_launcher_console	251	rows=6185
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_launcher_launch_plans	680	rows=4497
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_meta	126	rows=11
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_catalog_stamp	0	rows=11
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_insert_software_hash_cache	0	rows=0
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_build_saved_catalog	202	rows=7259
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_commit	8	-
+CAT10-C05-AFTER-20260627-LIB	3	import_stage_total	5259	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.1658
+CAT10-C05-AFTER-20260627-LIB	3	sqlite_publish_progress	1626	bytes=19431424 copy_ms=1613 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+CAT10-C05-AFTER-20260627-LIB	3	refresh_scan	2538970	skipped=false bytes=19431424 scan_us=2538970 discover_us=1245293 classify_us=2413542 import_us=7332460 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	3	refresh_import	7332460	skipped=false bytes=19431424 scan_us=2538970 discover_us=1245293 classify_us=2413542 import_us=7332460 discoveries=9237 normal_files=7519 containers=154 entries=281
+CAT10-C05-AFTER-20260627-LIB	3	refresh_done	0	bytes=19431424 skipped=false bytes=19431424 scan_us=2538970 discover_us=1245293 classify_us=2413542 import_us=7332460 discoveries=9237 normal_files=7519 containers=154 entries=281
