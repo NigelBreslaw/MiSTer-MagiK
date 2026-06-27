@@ -7,6 +7,7 @@ use crate::arcade_catalog::ArcadeCatalog;
 use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_config;
 use crate::catalog_config::DEFAULT_SQLITE_PATH;
+use crate::catalog_load_metrics;
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
@@ -207,6 +208,32 @@ pub struct LibraryRefreshSummary {
 pub struct LibraryRefreshCatalog {
     pub summary: LibraryRefreshSummary,
     pub catalog: LibraryCatalogLoad,
+}
+
+pub use catalog_load_metrics::CatalogLoadCounters;
+
+pub fn reset_catalog_load_counters() {
+    catalog_load_metrics::reset();
+}
+
+pub fn catalog_load_counters() -> CatalogLoadCounters {
+    catalog_load_metrics::snapshot()
+}
+
+pub fn catalog_load_counter_detail() -> String {
+    catalog_load_metrics::format_snapshot(catalog_load_metrics::snapshot())
+}
+
+pub fn record_catalog_worker_cache_load() {
+    catalog_load_metrics::record_worker_cache_load();
+}
+
+pub fn record_catalog_ui_load() {
+    catalog_load_metrics::record_ui_catalog_load();
+}
+
+pub fn record_catalog_nav_projection_load() {
+    catalog_load_metrics::record_nav_projection_read();
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

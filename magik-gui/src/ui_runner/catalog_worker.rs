@@ -34,6 +34,7 @@ pub(super) fn start_library_catalog_worker(
             let mut cache_state = CatalogCacheState::Missing;
             match initial_cache {
                 CatalogWorkerInitialCache::ProbeSqlite => {
+                    library_db::record_catalog_worker_cache_load();
                     match library_db::load_arcade_catalog_from_sqlite(&root) {
                         Ok(loaded) => {
                             send_catalog_load_timing(&tx, "catalog_worker_cache_load", &loaded);
@@ -427,14 +428,15 @@ fn send_catalog_progress(
 
 pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad) -> String {
     format!(
-        "games={} rows={} total_us={} open_us={} query_us={} systems_us={} catalog_us={}",
+        "games={} rows={} total_us={} open_us={} query_us={} systems_us={} catalog_us={} {}",
         loaded.catalog.len(),
         loaded.rows,
         loaded.us,
         loaded.open_us,
         loaded.query_us,
         loaded.systems_us,
-        loaded.catalog_us
+        loaded.catalog_us,
+        library_db::catalog_load_counter_detail()
     )
 }
 
