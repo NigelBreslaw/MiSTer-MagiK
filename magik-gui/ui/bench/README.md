@@ -23,6 +23,12 @@ through `MISTER_VIDEO_PATH` or a filename-sorted `.mp4` folder playlist through
 `/media/fat/mister-magik/mslug3.mov` clip as a compatibility fallback when the
 folder is absent.
 
+For 60 fps Neo Geo video snaps on the MiSTer, use half-resolution source assets
+(`320x240` for the original `640x480` snaps) and leave
+`MISTER_VIDEO_SCALE=source`. This keeps the fast YUV420P-to-RGB565 conversion
+path active and avoids runtime upscaling or FFmpeg swscale in the hot frame
+loop.
+
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
 production benchmark scenes. Build them with `scripts/deploy-rust.sh
 --experiments` and run them through `scripts/experiments/`; see
@@ -53,9 +59,11 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
 | `MISTER_VIDEO_RENDER_MODE=slint-image\|direct-blit` | Compare Slint image upload with direct RGB565 cached-buffer blit |
 | `MISTER_VIDEO_QUEUE_DEPTH=N` | Decode worker channel depth, default 2 |
-| `MISTER_VIDEO_SCALE=source\|fit-height\|fit-width\|native` | Runtime FFmpeg scaling mode within the 640x480 bench video target |
+| `MISTER_VIDEO_SCALE=source\|fit-height\|fit-width\|native` | Runtime scaling mode within the 640x480 bench video target; `source` keeps the custom RGB565 converter eligible |
 | `MISTER_VIDEO_PROFILE=summary\|full\|trace` | Video-specific alias for `MISTER_PROFILE` |
 | `MISTER_VIDEO_THREADS=N` | FFmpeg decoder thread count where supported |
+| `MISTER_VIDEO_THREAD_TYPE=none\|frame\|slice\|auto` | FFmpeg decoder threading mode when `MISTER_VIDEO_THREADS` is set |
+| `MISTER_VIDEO_CONVERT=custom-neon\|swscale-rgb565` | Select the ARM custom YUV420P-to-RGB565 converter or FFmpeg swscale fallback |
 
 Phase breakdown each frame: **prepare** (input/catalog/bridge work before Slint
 timers) · **anim** (Slint timers) · **slint-render** (software renderer) ·
@@ -99,5 +107,5 @@ Sync the local Neo Geo MP4 snaps and run only the video scene:
 
 ```bash
 scripts/sync-video-snaps.sh
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-render-mode direct-blit --replace-label
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-render-mode direct-blit --video-scale source --video-convert custom-neon --video-thread-type none --replace-label
 ```

@@ -40,11 +40,13 @@ FRAME_ORDER="${MISTER_FRAME_ORDER:-render-then-vsync}"
 DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
 LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
 LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
-VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-slint-image}"
+VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-direct-blit}"
 VIDEO_QUEUE_DEPTH="${MISTER_VIDEO_QUEUE_DEPTH:-2}"
 VIDEO_SCALE="${MISTER_VIDEO_SCALE:-source}"
 VIDEO_PROFILE="${MISTER_VIDEO_PROFILE:-summary}"
 VIDEO_THREADS="${MISTER_VIDEO_THREADS:-}"
+VIDEO_THREAD_TYPE="${MISTER_VIDEO_THREAD_TYPE:-none}"
+VIDEO_CONVERT="${MISTER_VIDEO_CONVERT:-custom-neon}"
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
 MIN_FPS="${MISTER_BENCH_MIN_FPS:-55}"
 MAX_VSYNC_FALLBACK="${MISTER_BENCH_MAX_VSYNC_FALLBACK:-0}"
@@ -66,7 +68,8 @@ usage() {
   echo "         --launcher-dirty-opt on|off"
   echo "         --video-render-mode slint-image|direct-blit"
   echo "         --video-queue-depth N  --video-scale source|fit-height|fit-width|native"
-  echo "         --video-profile summary|full|trace  --video-threads N"
+  echo "         --video-profile summary|full|trace  --video-threads N  --video-thread-type none|frame|slice|auto"
+  echo "         --video-convert custom-neon|swscale-rgb565"
   echo "         --ui-scope all|launcher|arcade"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
@@ -105,6 +108,8 @@ while [[ $# -gt 0 ]]; do
     --video-scale) VIDEO_SCALE="${2:?}"; shift 2 ;;
     --video-profile) VIDEO_PROFILE="${2:?}"; shift 2 ;;
     --video-threads) VIDEO_THREADS="${2:?}"; shift 2 ;;
+    --video-thread-type) VIDEO_THREAD_TYPE="${2:?}"; shift 2 ;;
+    --video-convert) VIDEO_CONVERT="${2:?}"; shift 2 ;;
     --ui-scope) UI_SCOPE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
@@ -684,7 +689,7 @@ set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep $SETTLE_SECS
 if [ '$scene' = 'video_playback' ]; then
-  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_RENDER_MODE=$VIDEO_RENDER_MODE MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_QUEUE_DEPTH=$VIDEO_QUEUE_DEPTH MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_VIDEO_THREADS=$VIDEO_THREADS $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_RENDER_MODE=$VIDEO_RENDER_MODE MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_QUEUE_DEPTH=$VIDEO_QUEUE_DEPTH MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_VIDEO_THREADS=$VIDEO_THREADS MISTER_VIDEO_THREAD_TYPE=$VIDEO_THREAD_TYPE MISTER_VIDEO_CONVERT=$VIDEO_CONVERT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 else
   MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 fi

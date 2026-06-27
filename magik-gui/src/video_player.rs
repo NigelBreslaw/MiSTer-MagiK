@@ -83,6 +83,57 @@ fn video_threads_from_env() -> Option<usize> {
         .filter(|&n| n > 0)
 }
 
+fn video_thread_type_from_env() -> codec::threading::Type {
+    match std::env::var("MISTER_VIDEO_THREAD_TYPE")
+        .unwrap_or_else(|_| "frame".to_string())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "none" | "off" | "single" => codec::threading::Type::None,
+        "slice" => codec::threading::Type::Slice,
+        "frame" => codec::threading::Type::Frame,
+        "auto" => codec::threading::Type::None,
+        other => {
+            eprintln!(
+                "video: unknown MISTER_VIDEO_THREAD_TYPE={other:?}; use none|frame|slice|auto"
+            );
+            codec::threading::Type::Frame
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoConvertMode {
+    CustomNeon,
+    SwscaleRgb565,
+}
+
+impl VideoConvertMode {
+    fn from_env() -> Self {
+        match std::env::var("MISTER_VIDEO_CONVERT")
+            .unwrap_or_else(|_| "custom-neon".to_string())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "custom-neon" | "custom_neon" | "neon" | "custom" => Self::CustomNeon,
+            "swscale-rgb565" | "swscale_rgb565" | "swscale" => Self::SwscaleRgb565,
+            other => {
+                eprintln!(
+                    "video: unknown MISTER_VIDEO_CONVERT={other:?}; use custom-neon|swscale-rgb565"
+                );
+                Self::CustomNeon
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::CustomNeon => "custom-neon",
+            Self::SwscaleRgb565 => "swscale-rgb565",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VideoScaleMode {
     Source,
@@ -163,6 +214,9 @@ pub struct VideoPlayer {
     video_codec: String,
     audio_codec: String,
     scale_mode: VideoScaleMode,
+    convert_mode: VideoConvertMode,
+    output_width: u32,
+    output_height: u32,
 }
 
 pub struct PlaybackFrame {
@@ -335,7 +389,7 @@ impl VideoPlayer {
         }
         let player = Self::open_inner(paths, 0, 0)?;
         println!(
-            "video: opened {} (playlist={} file=1; {}x{}, video={}, frame_interval={}us; audio={} {}Hz {}ch {} -> 48000Hz stereo s16; scale={})",
+            "video: opened {} (playlist={} file=1; {}x{}, video={}, frame_interval={}us; audio={} {}Hz {}ch {} -> 48000Hz stereo s16; scale={} convert={})",
             player.path,
             player.playlist.len(),
             player.video_decoder.width(),
@@ -346,7 +400,8 @@ impl VideoPlayer {
             player.audio_rate,
             player.audio_channels,
             player.audio_decoder.format().name(),
-            player.scale_mode.label()
+            player.scale_mode.label(),
+            player.convert_mode.label()
         );
         Ok(player)
     }
@@ -384,7 +439,7 @@ impl VideoPlayer {
             .map_err(|e| format!("decoder parameters: {e}"))?;
         if let Some(threads) = video_threads_from_env() {
             let mut threading = codec::threading::Config::count(threads);
-            threading.kind = codec::threading::Type::Frame;
+            threading.kind = video_thread_type_from_env();
             video_context.set_threading(threading);
         }
         let video_decoder = video_context
@@ -412,6 +467,7 @@ impl VideoPlayer {
         .map_err(|e| format!("create audio resampler: {e}"))?;
 
         let scale_mode = VideoScaleMode::from_env();
+        let convert_mode = VideoConvertMode::from_env();
         let (output_w, output_h) = scale_mode.output_dimensions(
             video_decoder.width(),
             video_decoder.height(),
@@ -451,6 +507,9 @@ impl VideoPlayer {
             video_codec,
             audio_codec,
             scale_mode,
+            convert_mode,
+            output_width: output_w,
+            output_height: output_h,
         })
     }
 
@@ -490,9 +549,13 @@ impl VideoPlayer {
         audio_frames: usize,
         mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some((frame, video_metrics)) =
-            receive_rgb565_frame(&mut self.video_decoder, &mut self.scaler)?
-        {
+        if let Some((frame, video_metrics)) = receive_rgb565_frame(
+            &mut self.video_decoder,
+            &mut self.scaler,
+            self.convert_mode,
+            self.output_width,
+            self.output_height,
+        )? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
@@ -512,9 +575,13 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((frame, video_metrics)) =
-                    receive_rgb565_frame(&mut self.video_decoder, &mut self.scaler)?
-                {
+                if let Some((frame, video_metrics)) = receive_rgb565_frame(
+                    &mut self.video_decoder,
+                    &mut self.scaler,
+                    self.convert_mode,
+                    self.output_width,
+                    self.output_height,
+                )? {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
@@ -554,9 +621,13 @@ impl VideoPlayer {
             &mut metrics,
         )?;
         self.add_pending_audio_metrics(metrics);
-        if let Some((frame, video_metrics)) =
-            receive_rgb565_frame(&mut self.video_decoder, &mut self.scaler)?
-        {
+        if let Some((frame, video_metrics)) = receive_rgb565_frame(
+            &mut self.video_decoder,
+            &mut self.scaler,
+            self.convert_mode,
+            self.output_width,
+            self.output_height,
+        )? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
@@ -651,19 +722,34 @@ impl VideoPlayer {
 fn receive_rgb565_frame(
     decoder: &mut ffmpeg::decoder::Video,
     scaler: &mut ScalingContext,
+    convert_mode: VideoConvertMode,
+    output_width: u32,
+    output_height: u32,
 ) -> Result<Option<(VideoRgb565Frame, VideoDecodeMetrics)>, String> {
     let mut decoded = Video::empty();
     let decode_t0 = Instant::now();
     match decoder.receive_frame(&mut decoded) {
         Ok(()) => {
             let decode_us = decode_t0.elapsed().as_micros() as u64;
-            let mut rgb = Video::empty();
             let scale_t0 = Instant::now();
-            scaler
-                .run(&decoded, &mut rgb)
-                .map_err(|e| format!("scale video frame: {e}"))?;
+            let frame = match convert_mode {
+                VideoConvertMode::CustomNeon => {
+                    rgb565_frame_from_custom_i420(&decoded, output_width, output_height)?
+                }
+                VideoConvertMode::SwscaleRgb565 => None,
+            };
+            let frame = match frame {
+                Some(frame) => frame,
+                None => {
+                    let mut rgb = Video::empty();
+                    scaler
+                        .run(&decoded, &mut rgb)
+                        .map_err(|e| format!("scale video frame: {e}"))?;
+                    rgb565_frame_to_words(&rgb)?
+                }
+            };
             Ok(Some((
-                rgb565_frame_to_words(&rgb)?,
+                frame,
                 VideoDecodeMetrics {
                     decode_us,
                     scale_us: scale_t0.elapsed().as_micros() as u64,
@@ -672,6 +758,226 @@ fn receive_rgb565_frame(
         }
         Err(_) => Ok(None),
     }
+}
+
+fn rgb565_frame_from_custom_i420(
+    frame: &Video,
+    output_width: u32,
+    output_height: u32,
+) -> Result<Option<VideoRgb565Frame>, String> {
+    if frame.format() != FfmpegPixel::YUV420P {
+        return Ok(None);
+    }
+
+    let width = frame.width();
+    let height = frame.height();
+    if width != output_width || height != output_height {
+        return Ok(None);
+    }
+
+    let mut pixels = vec![0u16; width as usize * height as usize];
+    convert_i420_to_rgb565(
+        frame.data(0),
+        frame_stride_usize(frame, 0),
+        frame.data(1),
+        frame_stride_usize(frame, 1),
+        frame.data(2),
+        frame_stride_usize(frame, 2),
+        &mut pixels,
+        width as usize,
+        width as usize,
+        height as usize,
+    )?;
+
+    Ok(Some(VideoRgb565Frame {
+        pixels,
+        width,
+        height,
+    }))
+}
+
+fn frame_stride_usize(frame: &Video, plane: usize) -> usize {
+    frame.stride(plane)
+}
+
+#[cfg(target_arch = "arm")]
+extern "C" {
+    fn mister_i420_to_rgb565_neon(
+        src_y: *const u8,
+        src_stride_y: libc::c_int,
+        src_u: *const u8,
+        src_stride_u: libc::c_int,
+        src_v: *const u8,
+        src_stride_v: libc::c_int,
+        dst_rgb565: *mut u16,
+        dst_stride_rgb565: libc::c_int,
+        width: libc::c_int,
+        height: libc::c_int,
+    );
+}
+
+fn convert_i420_to_rgb565(
+    src_y: &[u8],
+    src_stride_y: usize,
+    src_u: &[u8],
+    src_stride_u: usize,
+    src_v: &[u8],
+    src_stride_v: usize,
+    dst: &mut [u16],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+) -> Result<(), String> {
+    validate_i420_to_rgb565_buffers(
+        src_y,
+        src_stride_y,
+        src_u,
+        src_stride_u,
+        src_v,
+        src_stride_v,
+        dst,
+        dst_stride,
+        width,
+        height,
+    )?;
+    #[cfg(target_arch = "arm")]
+    {
+        unsafe {
+            mister_i420_to_rgb565_neon(
+                src_y.as_ptr(),
+                stride_i32(src_stride_y, "Y")?,
+                src_u.as_ptr(),
+                stride_i32(src_stride_u, "U")?,
+                src_v.as_ptr(),
+                stride_i32(src_stride_v, "V")?,
+                dst.as_mut_ptr(),
+                stride_i32(dst_stride, "RGB565")?,
+                stride_i32(width, "width")?,
+                stride_i32(height, "height")?,
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        convert_i420_to_rgb565_scalar(
+            src_y,
+            src_stride_y,
+            src_u,
+            src_stride_u,
+            src_v,
+            src_stride_v,
+            dst,
+            dst_stride,
+            width,
+            height,
+        );
+        Ok(())
+    }
+}
+
+fn validate_i420_to_rgb565_buffers(
+    src_y: &[u8],
+    src_stride_y: usize,
+    src_u: &[u8],
+    src_stride_u: usize,
+    src_v: &[u8],
+    src_stride_v: usize,
+    dst: &[u16],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("video frame has zero dimensions".into());
+    }
+    let chroma_w = width.div_ceil(2);
+    let chroma_h = height.div_ceil(2);
+    if src_stride_y < width || src_stride_u < chroma_w || src_stride_v < chroma_w {
+        return Err(format!(
+            "I420 strides too small for {width}x{height}: y={src_stride_y} u={src_stride_u} v={src_stride_v}"
+        ));
+    }
+    if dst_stride < width {
+        return Err(format!(
+            "RGB565 stride {dst_stride} too small for width {width}"
+        ));
+    }
+    let y_len = src_stride_y
+        .checked_mul(height.saturating_sub(1))
+        .and_then(|n| n.checked_add(width))
+        .ok_or_else(|| "Y plane size overflow".to_string())?;
+    let u_len = src_stride_u
+        .checked_mul(chroma_h.saturating_sub(1))
+        .and_then(|n| n.checked_add(chroma_w))
+        .ok_or_else(|| "U plane size overflow".to_string())?;
+    let v_len = src_stride_v
+        .checked_mul(chroma_h.saturating_sub(1))
+        .and_then(|n| n.checked_add(chroma_w))
+        .ok_or_else(|| "V plane size overflow".to_string())?;
+    let dst_len = dst_stride
+        .checked_mul(height.saturating_sub(1))
+        .and_then(|n| n.checked_add(width))
+        .ok_or_else(|| "RGB565 plane size overflow".to_string())?;
+    if src_y.len() < y_len || src_u.len() < u_len || src_v.len() < v_len || dst.len() < dst_len {
+        return Err(format!(
+            "I420 buffer too small for {width}x{height}: y={}/{} u={}/{} v={}/{} dst={}/{}",
+            src_y.len(),
+            y_len,
+            src_u.len(),
+            u_len,
+            src_v.len(),
+            v_len,
+            dst.len(),
+            dst_len
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "arm")]
+fn stride_i32(value: usize, label: &str) -> Result<libc::c_int, String> {
+    libc::c_int::try_from(value).map_err(|_| format!("{label} is too large for NEON converter"))
+}
+
+#[cfg(not(target_arch = "arm"))]
+fn convert_i420_to_rgb565_scalar(
+    src_y: &[u8],
+    src_stride_y: usize,
+    src_u: &[u8],
+    src_stride_u: usize,
+    src_v: &[u8],
+    src_stride_v: usize,
+    dst: &mut [u16],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+) {
+    for row in 0..height {
+        let y_row = &src_y[row * src_stride_y..];
+        let u_row = &src_u[(row / 2) * src_stride_u..];
+        let v_row = &src_v[(row / 2) * src_stride_v..];
+        let dst_row = &mut dst[row * dst_stride..];
+        for x in 0..width {
+            dst_row[x] = i420_pixel_to_rgb565(y_row[x], u_row[x / 2], v_row[x / 2]);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "arm"))]
+fn i420_pixel_to_rgb565(y: u8, u: u8, v: u8) -> u16 {
+    let c = (i32::from(y) - 16).max(0);
+    let d = i32::from(u) - 128;
+    let e = i32::from(v) - 128;
+    let r = clamp_u8_i32((298 * c + 409 * e + 128) >> 8);
+    let g = clamp_u8_i32((298 * c - 100 * d - 208 * e + 128) >> 8);
+    let b = clamp_u8_i32((298 * c + 516 * d + 128) >> 8);
+    ((u16::from(r & 0xf8)) << 8) | ((u16::from(g & 0xfc)) << 3) | (u16::from(b) >> 3)
+}
+
+#[cfg(not(target_arch = "arm"))]
+fn clamp_u8_i32(value: i32) -> u8 {
+    value.clamp(0, 255) as u8
 }
 
 fn append_decoded_audio_packet(
