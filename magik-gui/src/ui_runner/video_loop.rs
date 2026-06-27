@@ -157,33 +157,39 @@ pub(super) fn direct_video_copy_rect(
 
 #[cfg(all(feature = "video", mister_bench_scenes))]
 pub(super) fn blit_video_frame_to_cached(
-    frame: &SharedPixelBuffer<Rgb8Pixel>,
+    frame: &crate::video_player::VideoRgb565Frame,
     cached: &mut [Rgb565Pixel],
     render_w: usize,
 ) {
-    let src_w = frame.width() as usize;
-    let src_h = frame.height() as usize;
-    let bytes = frame.as_bytes();
+    let src_w = frame.width as usize;
+    let src_h = frame.height as usize;
     let dst_x = VIDEO_IMAGE_RECT.x0;
     let dst_y = VIDEO_IMAGE_RECT.y0;
     for y in 0..src_h {
-        let src = &bytes[y * src_w * 3..(y + 1) * src_w * 3];
+        let src = &frame.pixels[y * src_w..(y + 1) * src_w];
         let dst =
             &mut cached[(dst_y + y) * render_w + dst_x..(dst_y + y) * render_w + dst_x + src_w];
-        unsafe {
-            let mut src = src.as_ptr();
-            let mut dst = dst.as_mut_ptr();
-            for _ in 0..src_w {
-                dst.write(<Rgb565Pixel as TargetPixel>::from_rgb(
-                    *src,
-                    *src.add(1),
-                    *src.add(2),
-                ));
-                src = src.add(3);
-                dst = dst.add(1);
-            }
+        for (dst, src) in dst.iter_mut().zip(src) {
+            *dst = Rgb565Pixel(*src);
         }
     }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+pub(super) fn rgb565_frame_to_slint_image(
+    frame: &crate::video_player::VideoRgb565Frame,
+) -> slint::Image {
+    let mut buffer = SharedPixelBuffer::<Rgb8Pixel>::new(frame.width, frame.height);
+    let dst = buffer.make_mut_bytes();
+    for (word, rgb) in frame.pixels.iter().copied().zip(dst.chunks_exact_mut(3)) {
+        let r5 = ((word >> 11) & 0x1f) as u8;
+        let g6 = ((word >> 5) & 0x3f) as u8;
+        let b5 = (word & 0x1f) as u8;
+        rgb[0] = (r5 << 3) | (r5 >> 2);
+        rgb[1] = (g6 << 2) | (g6 >> 4);
+        rgb[2] = (b5 << 3) | (b5 >> 2);
+    }
+    slint::Image::from_rgb8(buffer)
 }
 
 #[cfg(all(feature = "video", mister_bench_scenes))]
@@ -280,7 +286,7 @@ pub(super) fn run_video_playback_loop(
             video_queue_depth: phases.queue_depth,
             ..Default::default()
         };
-        let mut direct_frame: Option<SharedPixelBuffer<Rgb8Pixel>> = None;
+        let mut direct_frame: Option<crate::video_player::VideoRgb565Frame> = None;
 
         match frame_order {
             FrameOrder::RenderThenVsync => {
@@ -292,7 +298,7 @@ pub(super) fn run_video_playback_loop(
                         Ok(Some(frame)) => {
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
                             let crate::video_player::PlaybackFrame {
-                                pixel_buffer,
+                                frame,
                                 audio,
                                 audio_requested_frames,
                                 loop_count,
@@ -325,13 +331,13 @@ pub(super) fn run_video_playback_loop(
                             match render_mode {
                                 VideoRenderMode::SlintImage => {
                                     let image_t0 = Instant::now();
-                                    app.set_frame(slint::Image::from_rgb8(pixel_buffer));
+                                    app.set_frame(rgb565_frame_to_slint_image(&frame));
                                     phases.image_us = image_t0.elapsed().as_micros() as u64;
                                     video_profile.video_image_us = phases.image_us;
                                     window.request_redraw();
                                 }
                                 VideoRenderMode::DirectBlit => {
-                                    direct_frame = Some(pixel_buffer);
+                                    direct_frame = Some(frame);
                                 }
                             }
                             let audio_t0 = Instant::now();
@@ -440,7 +446,7 @@ pub(super) fn run_video_playback_loop(
                         Ok(Some(frame)) => {
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
                             let crate::video_player::PlaybackFrame {
-                                pixel_buffer,
+                                frame,
                                 audio,
                                 audio_requested_frames,
                                 loop_count,
@@ -473,13 +479,13 @@ pub(super) fn run_video_playback_loop(
                             match render_mode {
                                 VideoRenderMode::SlintImage => {
                                     let image_t0 = Instant::now();
-                                    app.set_frame(slint::Image::from_rgb8(pixel_buffer));
+                                    app.set_frame(rgb565_frame_to_slint_image(&frame));
                                     phases.image_us = image_t0.elapsed().as_micros() as u64;
                                     video_profile.video_image_us = phases.image_us;
                                     window.request_redraw();
                                 }
                                 VideoRenderMode::DirectBlit => {
-                                    direct_frame = Some(pixel_buffer);
+                                    direct_frame = Some(frame);
                                 }
                             }
                             let audio_t0 = Instant::now();
