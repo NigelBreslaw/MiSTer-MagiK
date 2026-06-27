@@ -136,7 +136,7 @@ magik-gui/build-arm.sh --device
 # Profiling build (symbols, pprof feature — do not ship)
 magik-gui/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magik-fb
-# Run on device: scripts/cpu-flamegraph-scene.sh full_motion 10 FM-CPU
+# Run on device: scripts/cpu-flamegraph-scene.sh video_playback 10 VIDEO-CPU
 
 # Video/audio benchmark build
 magik-gui/build-arm.sh --video
@@ -203,12 +203,13 @@ backend sees FFmpeg under `/target/ffmpeg-minimal/armv7/dist`; the local Apple
 container backend sees the same host cache under
 `/project/target/ffmpeg-minimal/armv7/dist`.
 
-The minimal FFmpeg build enables only H.264-in-MOV/MP4 playback plus software
-scaling and PCM stream discovery: `avcodec`, `avformat`, `avutil`, `swscale`,
-H.264 decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
-`video_playback` writes 48 kHz stereo signed 16-bit PCM packets directly to
-`/dev/MrAudio`, so AAC and swresample stay out of V1. avfilter, avdevice,
-programs, and autodetected libraries are disabled.
+The minimal FFmpeg build pins upstream FFmpeg 8.1.2 and enables only
+H.264-in-MOV/MP4 playback plus audio decode/resampling for MiSTer video snaps:
+`avcodec`, `avformat`, `avutil`, `swscale`, `swresample`, H.264 decoder/parser,
+AAC decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
+`video_playback` decodes audio and converts it to 48 kHz stereo signed 16-bit
+PCM for `/dev/MrAudio`. avfilter, avdevice, programs, and autodetected
+libraries are disabled.
 The checked-in ARMv7 image includes both C and C++ cross toolchains so FFmpeg and
 any C++-probing native crates see the same compiler family locally and in CI.
 

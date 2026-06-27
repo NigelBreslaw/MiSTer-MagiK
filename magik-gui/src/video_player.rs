@@ -3,9 +3,13 @@
 use ffmpeg::codec;
 use ffmpeg::format;
 use ffmpeg::media;
+use ffmpeg::software::resampling::Context as ResamplingContext;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
+use ffmpeg::util::format::sample::{Sample, Type as SampleType};
 use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
+use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
+use ffmpeg::ChannelLayout;
 use ffmpeg_next as ffmpeg;
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::path::Path;
@@ -22,10 +26,12 @@ pub struct VideoPlayer {
     video_stream_index: usize,
     audio_stream_index: usize,
     video_decoder: ffmpeg::decoder::Video,
+    audio_decoder: ffmpeg::decoder::Audio,
     scaler: ScalingContext,
+    audio_resampler: ResamplingContext,
     frame_interval: Duration,
     audio_rate: u32,
-    audio_channels: u32,
+    audio_channels: u16,
     queued_audio: Vec<i16>,
     audio_start: usize,
     loop_count: u64,
@@ -148,13 +154,14 @@ impl VideoPlayer {
         let path = path.as_ref().display().to_string();
         let player = Self::open_inner(path)?;
         println!(
-            "video: opened {} ({}x{}, frame_interval={}us; audio={}Hz {}ch pcm_s16le)",
+            "video: opened {} ({}x{}, frame_interval={}us; audio={}Hz {}ch {} -> 48000Hz stereo s16)",
             player.path,
             player.video_decoder.width(),
             player.video_decoder.height(),
             player.frame_interval.as_micros(),
             player.audio_rate,
-            player.audio_channels
+            player.audio_channels,
+            player.audio_decoder.format().name()
         );
         Ok(player)
     }
@@ -185,8 +192,24 @@ impl VideoPlayer {
             .video()
             .map_err(|e| format!("open video decoder: {e}"))?;
 
-        let audio_parameters = audio_stream.parameters();
-        let (audio_rate, audio_channels) = validate_audio_parameters(&path, &audio_parameters)?;
+        let audio_context = codec::context::Context::from_parameters(audio_stream.parameters())
+            .map_err(|e| format!("audio decoder parameters: {e}"))?;
+        let audio_decoder = audio_context
+            .decoder()
+            .audio()
+            .map_err(|e| format!("open audio decoder: {e}"))?;
+        let audio_layout = decoder_audio_layout(&audio_decoder)?;
+        let audio_rate = audio_decoder.rate();
+        let audio_channels = audio_decoder.channels();
+        let audio_resampler = ResamplingContext::get(
+            audio_decoder.format(),
+            audio_layout,
+            audio_rate,
+            Sample::I16(SampleType::Packed),
+            ChannelLayout::STEREO,
+            AUDIO_RATE,
+        )
+        .map_err(|e| format!("create audio resampler: {e}"))?;
 
         let scaler = ScalingContext::get(
             video_decoder.format(),
@@ -205,7 +228,9 @@ impl VideoPlayer {
             video_stream_index,
             audio_stream_index,
             video_decoder,
+            audio_decoder,
             scaler,
+            audio_resampler,
             frame_interval,
             audio_rate,
             audio_channels,
@@ -278,11 +303,22 @@ impl VideoPlayer {
                     }));
                 }
             } else if stream_index == self.audio_stream_index {
-                append_pcm_audio_packet(&packet, self.audio_channels, &mut self.queued_audio)?;
+                append_decoded_audio_packet(
+                    &packet,
+                    &mut self.audio_decoder,
+                    &mut self.audio_resampler,
+                    &mut self.queued_audio,
+                )?;
             }
         }
 
         let _ = self.video_decoder.send_eof();
+        let _ = self.audio_decoder.send_eof();
+        drain_decoded_audio(
+            &mut self.audio_decoder,
+            &mut self.audio_resampler,
+            &mut self.queued_audio,
+        )?;
         if let Some(pixel_buffer) =
             receive_rgb_pixel_buffer(&mut self.video_decoder, &mut self.scaler)?
         {
@@ -309,7 +345,12 @@ impl VideoPlayer {
             let (stream, packet) = item;
             let stream_index = stream.index();
             if stream_index == self.audio_stream_index {
-                append_pcm_audio_packet(&packet, self.audio_channels, &mut self.queued_audio)?;
+                append_decoded_audio_packet(
+                    &packet,
+                    &mut self.audio_decoder,
+                    &mut self.audio_resampler,
+                    &mut self.queued_audio,
+                )?;
                 if self.queued_audio.len().saturating_sub(self.audio_start) >= target_samples {
                     return Ok(());
                 }
@@ -353,75 +394,61 @@ fn receive_rgb_pixel_buffer(
     }
 }
 
-fn append_pcm_audio_packet(
+fn append_decoded_audio_packet(
     packet: &ffmpeg::codec::packet::Packet,
-    input_channels: u32,
+    decoder: &mut ffmpeg::decoder::Audio,
+    resampler: &mut ResamplingContext,
     queued_audio: &mut Vec<i16>,
 ) -> Result<(), String> {
-    let Some(data) = packet.data() else {
-        return Ok(());
-    };
-    let input_channels = input_channels as usize;
-    let input_frame_bytes = input_channels * std::mem::size_of::<i16>();
-    if input_frame_bytes == 0 || data.len() % input_frame_bytes != 0 {
-        return Err(format!(
-            "pcm_s16le packet has {} bytes, expected a multiple of {input_frame_bytes} for {input_channels}ch frames",
-            data.len(),
-        ));
-    }
-    queued_audio.reserve(data.len() / input_frame_bytes * OUTPUT_AUDIO_CHANNELS);
-    match input_channels {
-        1 => {
-            for chunk in data.chunks_exact(2) {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                queued_audio.push(sample);
-                queued_audio.push(sample);
-            }
-        }
-        2 => {
-            for chunk in data.chunks_exact(2) {
-                queued_audio.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-            }
-        }
-        _ => {
-            return Err(format!(
-                "pcm_s16le audio must be mono or stereo, got {input_channels} channels"
-            ));
-        }
+    decoder
+        .send_packet(packet)
+        .map_err(|e| format!("send audio packet: {e}"))?;
+    drain_decoded_audio(decoder, resampler, queued_audio)
+}
+
+fn drain_decoded_audio(
+    decoder: &mut ffmpeg::decoder::Audio,
+    resampler: &mut ResamplingContext,
+    queued_audio: &mut Vec<i16>,
+) -> Result<(), String> {
+    let mut decoded = Audio::empty();
+    while decoder.receive_frame(&mut decoded).is_ok() {
+        let mut resampled = Audio::empty();
+        resampler
+            .run(&decoded, &mut resampled)
+            .map_err(|e| format!("resample audio frame: {e}"))?;
+        append_resampled_stereo_i16(&resampled, queued_audio)?;
     }
     Ok(())
 }
 
-fn validate_audio_parameters(
-    path: &str,
-    parameters: &ffmpeg::codec::Parameters,
-) -> Result<(u32, u32), String> {
-    if parameters.id() != ffmpeg::codec::Id::PCM_S16LE {
+fn append_resampled_stereo_i16(frame: &Audio, queued_audio: &mut Vec<i16>) -> Result<(), String> {
+    if frame.format() != Sample::I16(SampleType::Packed) || frame.channels() != 2 {
         return Err(format!(
-            "{path}: audio must be pcm_s16le, got {:?}",
-            parameters.id()
+            "resampler produced {} with {} channels, expected packed stereo s16",
+            frame.format().name(),
+            frame.channels()
         ));
     }
-    let (sample_rate, channels) = audio_parameter_shape(parameters);
-    if sample_rate != AUDIO_RATE {
-        return Err(format!(
-            "{path}: audio must be {AUDIO_RATE}Hz PCM, got {}Hz",
-            sample_rate
-        ));
+    queued_audio.reserve(frame.samples() * OUTPUT_AUDIO_CHANNELS);
+    for &(left, right) in frame.plane::<(i16, i16)>(0) {
+        queued_audio.push(left);
+        queued_audio.push(right);
     }
-    if channels != 1 && channels != 2 {
-        return Err(format!(
-            "{path}: audio must be mono or stereo PCM, got {} channels",
-            channels
-        ));
-    }
-    Ok((sample_rate, channels as u32))
+    Ok(())
 }
 
-fn audio_parameter_shape(parameters: &ffmpeg::codec::Parameters) -> (u32, i32) {
-    unsafe {
-        let raw = parameters.as_ptr();
-        ((*raw).sample_rate as u32, (*raw).ch_layout.nb_channels)
+fn decoder_audio_layout(decoder: &ffmpeg::decoder::Audio) -> Result<ChannelLayout, String> {
+    let layout = decoder.channel_layout();
+    if !layout.is_empty() {
+        return Ok(layout);
+    }
+    match decoder.channels() {
+        1 => Ok(ChannelLayout::MONO),
+        2 => Ok(ChannelLayout::STEREO),
+        channels => Err(format!(
+            "audio decoder did not report a channel layout for {channels} channels"
+        )),
     }
 }
 
