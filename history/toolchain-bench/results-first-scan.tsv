@@ -2412,3 +2412,377 @@ CAT10-C05-AFTER-20260627	1310bb48	import_stage_total	11218	path=/tmp/mister-magi
 CAT10-C05-AFTER-20260627	1310bb48	sqlite_publish_progress	2034	bytes=19431424 copy_ms=2014 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
 CAT10-C05-AFTER-20260627	1310bb48	library_db_saved	54629	bytes=19431424 scan_us=34240157 discover_us=27960164 classify_us=34239040 import_us=14231479 discoveries=9237 normal_files=7519 containers=154 entries=281
 CAT10-C05-AFTER-20260627	1310bb48	db_count	0	9237
+RETAIN-HEAD-20260627	73d729af	first_frame	82	catalog_ready=false
+RETAIN-HEAD-20260627	73d729af	bootstrap_counter_climb	379	target=50
+RETAIN-HEAD-20260627	73d729af	bootstrap_counter_sustained_climb	747	target=900
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+RETAIN-HEAD-20260627	73d729af	scan_stage_first_candidate	2212	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-HEAD-20260627	73d729af	scan_stage_first_discovery	2313	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	10333	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+RETAIN-HEAD-20260627	73d729af	full_scan_counter_climb	21730	target=1000
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	1302	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	39	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	113	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	216	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	14011	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	573	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	13393	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	6922	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	2734	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	7950	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	3871	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	41	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk_target	5	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+RETAIN-HEAD-20260627	73d729af	scan_stage_walk	28157	candidates=7527
+RETAIN-HEAD-20260627	73d729af	scan_stage_profile_match	86	calls=7527
+RETAIN-HEAD-20260627	73d729af	scan_stage_installed_collection	159	calls=7521
+RETAIN-HEAD-20260627	73d729af	scan_stage_archive_toc	794	containers=154
+RETAIN-HEAD-20260627	73d729af	scan_stage_collection_listings	0	collections=0
+RETAIN-HEAD-20260627	73d729af	scan_stage_file_discovery	30947	files=7519
+RETAIN-HEAD-20260627	73d729af	scan_stage_classify_total	34411	discoveries=9362 normal_files=7519 containers=154 entries=281
+RETAIN-HEAD-20260627	73d729af	library_scan_complete	35463	scan_us=34411767 discover_us=28157062 classify_us=34410673 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-HEAD-20260627	73d729af	library_ready	40679	games=7259 load_us=5185353
+RETAIN-HEAD-20260627	73d729af	catalog_bridge_sync_update	40679	games=7259 elapsed_us=104
+RETAIN-HEAD-20260627	73d729af	catalog_worker_ram_catalog	40680	games=7259 catalog_us=5185353
+RETAIN-HEAD-20260627	73d729af	import_stage_schema	43	tables=14
+RETAIN-HEAD-20260627	73d729af	import_stage_metadata_load	2407	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+RETAIN-HEAD-20260627	73d729af	import_stage_begin_tx	0	-
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_profiles	1	rows=16
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_payloads	900	normal_files=7519 entries=281
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	423	from=0 to=1000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	362	from=1000 to=2000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	415	from=2000 to=3000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	404	from=3000 to=4000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	380	from=4000 to=5000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	387	from=5000 to=6000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	499	from=6000 to=7000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	568	from=7000 to=8000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	582	from=8000 to=9000 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_chunk	141	from=9000 to=9237 total=9237
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_games_total	4190	rows=9237 launcher_rows=6245
+RETAIN-HEAD-20260627	73d729af	import_stage_materialize_arcade_ui	954	-
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_launcher_arcade	27	-
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_launcher_console	518	rows=6185
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_launcher_launch_plans	1427	rows=4497
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_meta	266	rows=11
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_catalog_stamp	0	rows=11
+RETAIN-HEAD-20260627	73d729af	import_stage_insert_software_hash_cache	0	rows=0
+RETAIN-HEAD-20260627	73d729af	import_stage_build_saved_catalog	429	rows=7259
+RETAIN-HEAD-20260627	73d729af	import_stage_commit	23	-
+RETAIN-HEAD-20260627	73d729af	import_stage_total	11185	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+RETAIN-HEAD-20260627	73d729af	sqlite_publish_progress	1407	bytes=19431424 copy_ms=1387 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+RETAIN-HEAD-20260627	73d729af	library_db_saved	54195	bytes=19431424 scan_us=34411767 discover_us=28157062 classify_us=34410673 import_us=13454595 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-HEAD-20260627	73d729af	counter_plateau	20983	from=target=900 to=target=1000
+RETAIN-HEAD-20260627	73d729af	db_count	0	9237
+RETAIN-PREFETCH3-20260627	73d729af	first_frame	85	catalog_ready=false
+RETAIN-PREFETCH3-20260627	73d729af	bootstrap_counter_climb	380	target=50
+RETAIN-PREFETCH3-20260627	73d729af	bootstrap_counter_sustained_climb	714	target=900
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_first_candidate	2015	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_first_discovery	2164	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	12080	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+RETAIN-PREFETCH3-20260627	73d729af	full_scan_counter_climb	24181	target=1000
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	1815	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	64	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	255	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	278	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	16743	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	503	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	16581	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	12319	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	4632	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	7681	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	3491	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	26	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk_target	52	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_walk	26692	candidates=7527
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_profile_match	68	calls=7527
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_installed_collection	170	calls=7521
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_archive_toc	871	containers=154
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_collection_listings	0	collections=0
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_file_discovery	30846	files=7519
+RETAIN-PREFETCH3-20260627	73d729af	scan_stage_classify_total	34224	discoveries=9362 normal_files=7519 containers=154 entries=281
+RETAIN-PREFETCH3-20260627	73d729af	library_scan_complete	35214	scan_us=34225437 discover_us=26691794 classify_us=34224333 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-PREFETCH3-20260627	73d729af	library_ready	40502	games=7259 load_us=5178837
+RETAIN-PREFETCH3-20260627	73d729af	catalog_bridge_sync_update	40502	games=7259 elapsed_us=104
+RETAIN-PREFETCH3-20260627	73d729af	catalog_worker_ram_catalog	40502	games=7259 catalog_us=5178837
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_schema	46	tables=14
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_metadata_load	2406	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_begin_tx	0	-
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_profiles	4	rows=16
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_payloads	895	normal_files=7519 entries=281
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	436	from=0 to=1000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	349	from=1000 to=2000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	391	from=2000 to=3000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	383	from=3000 to=4000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	384	from=4000 to=5000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	403	from=5000 to=6000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	506	from=6000 to=7000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	533	from=7000 to=8000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	539	from=8000 to=9000 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_chunk	138	from=9000 to=9237 total=9237
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_games_total	4104	rows=9237 launcher_rows=6245
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_materialize_arcade_ui	960	-
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_launcher_arcade	29	-
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_launcher_console	524	rows=6185
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_launcher_launch_plans	1398	rows=4497
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_meta	260	rows=11
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_catalog_stamp	0	rows=11
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_insert_software_hash_cache	0	rows=0
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_build_saved_catalog	455	rows=7259
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_commit	12	-
+RETAIN-PREFETCH3-20260627	73d729af	import_stage_total	11094	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.622
+RETAIN-PREFETCH3-20260627	73d729af	sqlite_publish_progress	2295	bytes=19431424 copy_ms=2278 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+RETAIN-PREFETCH3-20260627	73d729af	library_db_saved	54835	bytes=19431424 scan_us=34225437 discover_us=26691794 classify_us=34224333 import_us=14343693 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-PREFETCH3-20260627	73d729af	counter_plateau	23467	from=target=900 to=target=1000
+RETAIN-PREFETCH3-20260627	73d729af	db_count	0	9237
+RETAIN-PREFETCH4-20260627	73d729af	first_frame	85	catalog_ready=false
+RETAIN-PREFETCH4-20260627	73d729af	bootstrap_counter_climb	381	target=50
+RETAIN-PREFETCH4-20260627	73d729af	bootstrap_counter_sustained_climb	715	target=900
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_first_candidate	2007	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_first_discovery	2114	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	13259	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	1781	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	47	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	215	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	265	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	19023	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	573	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	19205	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	14302	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	6008	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	14623	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	5612	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	44	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk_target	15	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+RETAIN-PREFETCH4-20260627	73d729af	full_scan_counter_climb	25465	target=1050
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_walk	24405	candidates=7527
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_profile_match	86	calls=7527
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_installed_collection	169	calls=7521
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_archive_toc	848	containers=154
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_collection_listings	0	collections=0
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_file_discovery	30897	files=7519
+RETAIN-PREFETCH4-20260627	73d729af	scan_stage_classify_total	34244	discoveries=9362 normal_files=7519 containers=154 entries=281
+RETAIN-PREFETCH4-20260627	73d729af	library_scan_complete	35215	scan_us=34245076 discover_us=24405255 classify_us=34244014 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-PREFETCH4-20260627	73d729af	library_ready	40506	games=7259 load_us=5195422
+RETAIN-PREFETCH4-20260627	73d729af	catalog_bridge_sync_update	40507	games=7259 elapsed_us=101
+RETAIN-PREFETCH4-20260627	73d729af	catalog_worker_ram_catalog	40507	games=7259 catalog_us=5195422
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_schema	39	tables=14
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_metadata_load	2396	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_begin_tx	0	-
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_profiles	1	rows=16
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_payloads	907	normal_files=7519 entries=281
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	439	from=0 to=1000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	400	from=1000 to=2000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	387	from=2000 to=3000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	393	from=3000 to=4000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	385	from=4000 to=5000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	401	from=5000 to=6000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	515	from=6000 to=7000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	558	from=7000 to=8000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	546	from=8000 to=9000 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_chunk	136	from=9000 to=9237 total=9237
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_games_total	4194	rows=9237 launcher_rows=6245
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_materialize_arcade_ui	989	-
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_launcher_arcade	21	-
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_launcher_console	527	rows=6185
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_launcher_launch_plans	1405	rows=4497
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_meta	270	rows=11
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_catalog_stamp	7	rows=11
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_insert_software_hash_cache	0	rows=0
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_build_saved_catalog	435	rows=7259
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_commit	16	-
+RETAIN-PREFETCH4-20260627	73d729af	import_stage_total	11207	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+RETAIN-PREFETCH4-20260627	73d729af	sqlite_publish_progress	1648	bytes=19431424 copy_ms=1626 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+RETAIN-PREFETCH4-20260627	73d729af	library_db_saved	54353	bytes=19431424 scan_us=34245076 discover_us=24405255 classify_us=34244014 import_us=13836600 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-PREFETCH4-20260627	73d729af	counter_plateau	24750	from=target=900 to=target=1050
+RETAIN-PREFETCH4-20260627	73d729af	db_count	0	9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	first_frame	60	catalog_ready=false
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_first_candidate	2023	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_first_discovery	2138	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	10206	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	1162	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	34	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	120	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	240	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	13861	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	479	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	13527	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	6589	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	2729	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	7513	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	3811	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	42	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk_target	9	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_walk	27424	candidates=7527
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_profile_match	102	calls=7527
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_installed_collection	115	calls=7521
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_archive_toc	730	containers=154
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_collection_listings	0	collections=0
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_file_discovery	30328	files=7519
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	scan_stage_classify_total	33560	discoveries=9362 normal_files=7519 containers=154 entries=281
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	library_scan_complete	34462	scan_us=33560695 discover_us=27423511 classify_us=33559550 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	library_ready	39448	games=7259 load_us=4971616
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	catalog_bridge_sync_update	39448	games=7259 elapsed_us=102
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	catalog_worker_ram_catalog	39449	games=7259 catalog_us=4971616
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_schema	38	tables=14
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_metadata_load	2259	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_begin_tx	0	-
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_profiles	3	rows=16
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_payloads	834	normal_files=7519 entries=281
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	370	from=0 to=1000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	351	from=1000 to=2000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	390	from=2000 to=3000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	390	from=3000 to=4000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	378	from=4000 to=5000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	376	from=5000 to=6000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	446	from=6000 to=7000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	509	from=7000 to=8000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	549	from=8000 to=9000 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_chunk	122	from=9000 to=9237 total=9237
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_games_total	3914	rows=9237 launcher_rows=6245
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_materialize_arcade_ui	886	-
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_launcher_arcade	29	-
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_launcher_console	500	rows=6185
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_launcher_launch_plans	1355	rows=4497
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_meta	255	rows=11
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_catalog_stamp	0	rows=11
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_insert_software_hash_cache	0	rows=0
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_build_saved_catalog	402	rows=7259
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_commit	12	-
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	import_stage_total	10489	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	sqlite_publish_progress	1591	bytes=19431424 copy_ms=1572 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	library_db_saved	52409	bytes=19431424 scan_us=33560695 discover_us=27423511 classify_us=33559550 import_us=12894096 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-NOPROGRESSUI-20260627	73d729af-dirty	db_count	0	9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	first_frame	83	catalog_ready=false
+RETAIN-NOWORKERS-20260627	73d729af-dirty	bootstrap_counter_climb	363	target=50
+RETAIN-NOWORKERS-20260627	73d729af-dirty	bootstrap_counter_sustained_climb	713	target=900
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_first_candidate	2124	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_first_discovery	2183	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	5565	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	419	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	6	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	95	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+RETAIN-NOWORKERS-20260627	73d729af-dirty	full_scan_counter_climb	11764	target=700
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	5280	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	541	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	6402	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	4582	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	1281	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	5201	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	1512	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	27	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk_target	11	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_walk	33025	candidates=7527
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_profile_match	103	calls=7527
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_installed_collection	247	calls=7521
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_archive_toc	698	containers=154
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_collection_listings	0	collections=0
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_file_discovery	29844	files=7519
+RETAIN-NOWORKERS-20260627	73d729af-dirty	scan_stage_classify_total	33675	discoveries=9362 normal_files=7519 containers=154 entries=281
+RETAIN-NOWORKERS-20260627	73d729af-dirty	library_scan_complete	34680	scan_us=33675921 discover_us=33024747 classify_us=33674750 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-NOWORKERS-20260627	73d729af-dirty	library_ready	39906	games=7259 load_us=5119587
+RETAIN-NOWORKERS-20260627	73d729af-dirty	catalog_bridge_sync_update	39907	games=7259 elapsed_us=100
+RETAIN-NOWORKERS-20260627	73d729af-dirty	catalog_worker_ram_catalog	39907	games=7259 catalog_us=5119587
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_schema	34	tables=14
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_metadata_load	2365	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_begin_tx	0	-
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_profiles	1	rows=16
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_payloads	911	normal_files=7519 entries=281
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	429	from=0 to=1000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	370	from=1000 to=2000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	403	from=2000 to=3000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	391	from=3000 to=4000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	386	from=4000 to=5000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	380	from=5000 to=6000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	521	from=6000 to=7000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	570	from=7000 to=8000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	523	from=8000 to=9000 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_chunk	141	from=9000 to=9237 total=9237
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_games_total	4145	rows=9237 launcher_rows=6245
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_materialize_arcade_ui	982	-
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_launcher_arcade	23	-
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_launcher_console	528	rows=6185
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_launcher_launch_plans	1375	rows=4497
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_meta	268	rows=11
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_catalog_stamp	0	rows=11
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_insert_software_hash_cache	0	rows=0
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_build_saved_catalog	434	rows=7259
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_commit	21	-
+RETAIN-NOWORKERS-20260627	73d729af-dirty	import_stage_total	11088	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+RETAIN-NOWORKERS-20260627	73d729af-dirty	sqlite_publish_progress	1395	bytes=19431424 copy_ms=1372 build_sync_ms=0 final_sync_ms=0 rename_ms=7 parent_sync_ms=0 progress_events=76 result=bench-ok
+RETAIN-NOWORKERS-20260627	73d729af-dirty	library_db_saved	53392	bytes=19431424 scan_us=33675921 discover_us=33024747 classify_us=33674750 import_us=13474611 discoveries=9237 normal_files=7519 containers=154 entries=281
+RETAIN-NOWORKERS-20260627	73d729af-dirty	counter_plateau	11051	from=target=900 to=target=700
+RETAIN-NOWORKERS-20260627	73d729af-dirty	db_count	0	9237
+GATE-LOCK-20260627	73d729af-dirty	first_frame	127	catalog_ready=false
+GATE-LOCK-20260627	73d729af-dirty	bootstrap_counter_climb	459	target=50
+GATE-LOCK-20260627	73d729af-dirty	bootstrap_counter_sustained_climb	759	target=900
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_first_candidate	1989	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_first_discovery	2039	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	5441	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	450	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	0	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	4	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	88	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+GATE-LOCK-20260627	73d729af-dirty	full_scan_counter_climb	11245	target=650
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	5581	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	460	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	6202	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	4528	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	1291	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	5220	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	1531	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	26	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk_target	5	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_walk	32797	candidates=7527
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_profile_match	115	calls=7527
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_installed_collection	203	calls=7521
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_archive_toc	749	containers=154
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_collection_listings	0	collections=0
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_file_discovery	29751	files=7519
+GATE-LOCK-20260627	73d729af-dirty	scan_stage_classify_total	33431	discoveries=9362 normal_files=7519 containers=154 entries=281
+GATE-LOCK-20260627	73d729af-dirty	library_scan_complete	34485	scan_us=33432046 discover_us=32796802 classify_us=33430921 discoveries=9237 normal_files=7519 containers=154 entries=281
+GATE-LOCK-20260627	73d729af-dirty	library_ready	39604	games=7259 load_us=5046270
+GATE-LOCK-20260627	73d729af-dirty	catalog_bridge_sync_update	39605	games=7259 elapsed_us=111
+GATE-LOCK-20260627	73d729af-dirty	catalog_worker_ram_catalog	39605	games=7259 catalog_us=5046270
+GATE-LOCK-20260627	73d729af-dirty	import_stage_schema	50	tables=14
+GATE-LOCK-20260627	73d729af-dirty	import_stage_metadata_load	2367	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+GATE-LOCK-20260627	73d729af-dirty	import_stage_begin_tx	0	-
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_profiles	1	rows=16
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_payloads	924	normal_files=7519 entries=281
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	413	from=0 to=1000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	344	from=1000 to=2000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	393	from=2000 to=3000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	413	from=3000 to=4000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	399	from=4000 to=5000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	413	from=5000 to=6000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	481	from=6000 to=7000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	554	from=7000 to=8000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	526	from=8000 to=9000 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_chunk	135	from=9000 to=9237 total=9237
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_games_total	4104	rows=9237 launcher_rows=6245
+GATE-LOCK-20260627	73d729af-dirty	import_stage_materialize_arcade_ui	981	-
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_launcher_arcade	32	-
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_launcher_console	502	rows=6185
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_launcher_launch_plans	1393	rows=4497
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_meta	268	rows=11
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_catalog_stamp	0	rows=11
+GATE-LOCK-20260627	73d729af-dirty	import_stage_insert_software_hash_cache	0	rows=0
+GATE-LOCK-20260627	73d729af-dirty	import_stage_build_saved_catalog	423	rows=7259
+GATE-LOCK-20260627	73d729af-dirty	import_stage_commit	15	-
+GATE-LOCK-20260627	73d729af-dirty	import_stage_total	11060	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.622
+GATE-LOCK-20260627	73d729af-dirty	sqlite_publish_progress	1388	bytes=19431424 copy_ms=1367 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+GATE-LOCK-20260627	73d729af-dirty	library_db_saved	53011	bytes=19431424 scan_us=33432046 discover_us=32796802 classify_us=33430921 import_us=13358071 discoveries=9237 normal_files=7519 containers=154 entries=281
+GATE-LOCK-20260627	73d729af-dirty	counter_plateau	10486	from=target=900 to=target=650
+GATE-LOCK-20260627	73d729af-dirty	db_count	0	9237

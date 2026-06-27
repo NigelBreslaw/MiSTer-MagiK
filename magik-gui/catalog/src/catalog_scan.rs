@@ -4,15 +4,14 @@ use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition, ProfilePat
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Instant;
 
 const DISCOVERY_EVENT_BUFFER: usize = 8192;
-const DEFAULT_PREFETCH_WORKERS: usize = 2;
 const ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES: usize = 64 * 1024;
 const ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 const ZIP_SKIP_BUFFER_BYTES: usize = 4 * 1024;
@@ -96,12 +95,6 @@ struct WalkTargetStats {
     aborted: bool,
 }
 
-struct WalkTargetBatch {
-    target: PathBuf,
-    stats: WalkTargetStats,
-    files: Vec<FoundFile>,
-}
-
 pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
     let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
     std::thread::Builder::new()
@@ -154,107 +147,18 @@ fn walk_index_candidates_streaming(
     candidate_exts: &HashSet<String>,
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> usize {
-    if targets.is_empty() {
-        return 0;
-    }
     let mut dirs = 0usize;
-    let (batch_tx, batch_rx) = mpsc::channel();
-    let background_targets: Vec<(usize, PathBuf)> =
-        targets.iter().cloned().enumerate().skip(1).collect();
-    let background_count = background_targets.len();
-    // Keep the first target streaming for early progress, while background
-    // walkers pre-scan later targets and replay them in deterministic target
-    // order.
-    if !background_targets.is_empty() {
-        let worker_count = prefetch_worker_count(background_count);
-        let queue = Arc::new(Mutex::new(
-            background_targets.into_iter().collect::<VecDeque<_>>(),
-        ));
-        let profiles = Arc::new(profiles.to_vec());
-        let candidate_exts = Arc::new(candidate_exts.clone());
-        for worker_idx in 0..worker_count {
-            let batch_tx = batch_tx.clone();
-            let queue = Arc::clone(&queue);
-            let profiles = Arc::clone(&profiles);
-            let candidate_exts = Arc::clone(&candidate_exts);
-            std::thread::Builder::new()
-                .name(format!("library-walker-prefetch-{worker_idx}"))
-                .spawn(move || {
-                    loop {
-                        let Some((idx, target)) = queue.lock().ok().and_then(|mut q| q.pop_front())
-                        else {
-                            break;
-                        };
-                        let batch = collect_target_candidates(target, &profiles, &candidate_exts);
-                        if batch_tx.send((idx, batch)).is_err() {
-                            break;
-                        }
-                    }
-                })
-                .expect("spawn library-walker-prefetch");
-        }
-    }
-    drop(batch_tx);
-
-    let first_target = &targets[0];
-    let first_stats = scan_target_candidates(first_target, profiles, candidate_exts, |file| {
-        tx.send(DiscoveryEvent::File(file)).is_ok()
-    });
-    dirs += first_stats.dirs;
-    report_walk_target(first_target, &first_stats);
-    if first_stats.aborted {
-        return dirs;
-    }
-
-    let mut batches: Vec<Option<WalkTargetBatch>> = std::iter::repeat_with(|| None)
-        .take(targets.len())
-        .collect();
-    for _ in 0..background_count {
-        let Ok((idx, batch)) = batch_rx.recv() else {
+    for target in targets {
+        let stats = scan_target_candidates(&target, profiles, candidate_exts, |file| {
+            tx.send(DiscoveryEvent::File(file)).is_ok()
+        });
+        dirs += stats.dirs;
+        report_walk_target(&target, &stats);
+        if stats.aborted {
             break;
-        };
-        batches[idx] = Some(batch);
-    }
-
-    for batch in batches.into_iter().skip(1).flatten() {
-        dirs += batch.stats.dirs;
-        report_walk_target(&batch.target, &batch.stats);
-        for file in batch.files {
-            if tx.send(DiscoveryEvent::File(file)).is_err() {
-                return dirs;
-            }
         }
     }
     dirs
-}
-
-fn prefetch_worker_count(background_count: usize) -> usize {
-    if background_count == 0 {
-        return 0;
-    }
-    std::env::var("MISTER_LIBRARY_PREFETCH_WORKERS")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|count| *count > 0)
-        .unwrap_or(DEFAULT_PREFETCH_WORKERS)
-        .min(background_count)
-}
-
-fn collect_target_candidates(
-    target: PathBuf,
-    profiles: &[LaunchProfile],
-    candidate_exts: &HashSet<String>,
-) -> WalkTargetBatch {
-    let mut files = Vec::new();
-    let stats = scan_target_candidates(&target, profiles, candidate_exts, |file| {
-        files.push(file);
-        true
-    });
-    WalkTargetBatch {
-        target,
-        stats,
-        files,
-    }
 }
 
 fn scan_target_candidates(
@@ -799,8 +703,8 @@ mod tests {
     }
 
     #[test]
-    fn target_prefetch_replays_candidates_in_target_order_without_gaps() {
-        let root = unique_temp_dir("target-prefetch-order");
+    fn target_streaming_emits_candidates_in_target_order_without_gaps() {
+        let root = unique_temp_dir("target-streaming-order");
         let nes = root.join("games/NES");
         let snes = root.join("games/SNES");
         let gba = root.join("games/GBA");
@@ -841,8 +745,8 @@ mod tests {
     }
 
     #[test]
-    fn target_prefetch_aborts_when_downstream_closes() {
-        let root = unique_temp_dir("target-prefetch-abort");
+    fn target_streaming_aborts_when_downstream_closes() {
+        let root = unique_temp_dir("target-streaming-abort");
         let nes = root.join("games/NES");
         let snes = root.join("games/SNES");
         std::fs::create_dir_all(&nes).expect("create nes dir");

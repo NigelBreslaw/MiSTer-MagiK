@@ -10,8 +10,9 @@ APIs, progress states, and benchmark expectations.
 - Warm unchanged validation should be a root stamp check: under 500ms is the
   soft target, under 2s is the hard gate.
 - Fresh catalog creation and explicit refresh both use the same full builder.
-  Current acceptance is catalog ready under 60s on the target MiSTer; 45s remains
-  a stretch target for future scanner/import work.
+  Current cold first-scan acceptance is RAM catalog usable under 41s on the
+  target MiSTer and durable SQLite save complete under 55s. Anything above
+  either threshold fails `scripts/profile-first-scan.sh`.
 - Unchanged virtual launch cache materialization should complete under 2s and
   must not read every generated `.mgl` file.
 
@@ -59,14 +60,19 @@ Cold or reset database:
 1. Launcher starts immediately and presents Slint UI.
 2. Catalog worker treats missing, empty, or old-schema DBs as unusable.
 3. Worker runs `ForceBuild`.
-4. Full-screen scan UI is visible while the database is built.
-5. The builder scans source game locations under `/media/fat`, keeps scan facts
-   in Rust memory, creates SQLite under `/tmp/mister-magik/sqlite-build` for
-   production `/media/fat` databases, and publishes the completed file at the
-   end.
-6. The worker reports `Ready` as soon as the saved SQLite catalog has been
-   loaded. Virtual launch cache materialization runs after readiness so it
-   cannot extend first usable catalog time.
+4. Full-screen scan UI is visible while the fresh catalog is scanned and
+   projected.
+5. The builder scans source game locations under `/media/fat` and keeps scan
+   facts in Rust memory.
+6. The worker reports `Ready` from the fresh RAM catalog as soon as it can
+   provide a usable launcher catalog. The launcher clears the scan UI at this
+   point and records `library_ready`.
+7. The worker continues durable persistence in the background, creates SQLite
+   under `/tmp/mister-magik/sqlite-build` for production `/media/fat` databases,
+   publishes the completed file, then reports `Persisted` and records
+   `library_db_saved`.
+8. Virtual launch cache materialization runs after readiness so it cannot extend
+   first usable catalog time.
 
 The Settings-screen `Reset Database` action removes the SQLite catalog, its
 adjacent `library.summary.json` projection, and all recognized screenshot pack

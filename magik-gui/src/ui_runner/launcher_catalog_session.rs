@@ -498,10 +498,6 @@ impl GamesFoundCounter {
             return None;
         };
         let phase = phase.expect("phase exists when target parses");
-        let target = match phase {
-            CatalogCounterPhase::Bootstrap if target >= 500 => target.max(1000),
-            _ => target,
-        };
         if phase == CatalogCounterPhase::FullScan && target <= self.displayed {
             return Some(format_games_found(self.displayed));
         }
@@ -984,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn games_found_counter_uses_slow_bootstrap_target_floor() {
+    pub(super) fn games_found_counter_uses_real_bootstrap_target() {
         let now = Instant::now();
         let mut counter = GamesFoundCounter::default();
 
@@ -992,7 +988,7 @@ mod tests {
             counter.progress_detail("Finding games", "Games found: 911", now),
             Some("Games found: 0".to_string())
         );
-        assert_eq!(counter.target, 1000);
+        assert_eq!(counter.target, 911);
         for frame in 1..=20 {
             counter.tick(now + Duration::from_millis(frame * 66));
         }
@@ -1008,13 +1004,13 @@ mod tests {
 
         counter.progress_detail("Finding games", "Games found: 911", now);
         counter.displayed = 650;
-        counter.target = 1000;
+        counter.target = 911;
         assert_eq!(
             counter.progress_detail("Classifying library", "Games found: 50", now),
             Some("Games found: 650".to_string())
         );
         assert_eq!(counter.displayed, 650);
-        assert_eq!(counter.target, 1000);
+        assert_eq!(counter.target, 911);
 
         assert_eq!(
             counter.progress_detail("Classifying library", "Games found: 700", now),

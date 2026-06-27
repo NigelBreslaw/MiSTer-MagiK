@@ -15,6 +15,8 @@ DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
+RAM_CATALOG_READY_GATE_MS=41000
+DB_SAVE_GATE_MS=55000
 
 usage() {
   cat <<'EOF'
@@ -92,6 +94,9 @@ ensure_launcher_recovered() {
 ensure_launcher_recovered "setup"
 
 commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ "$commit" != "unknown" ]] && ! git -C "$HERE" diff --quiet -- . ':!history/toolchain-bench/results-first-scan.tsv'; then
+  commit="${commit}-dirty"
+fi
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
 env_file="$(mktemp)"
 local_log="$(mktemp)"
@@ -136,15 +141,30 @@ if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
-if (( ready_ms > 60000 )); then
-  echo "warning: first scan library_ready exceeded 60000ms: ${ready_ms}ms" >&2
+if (( ready_ms > RAM_CATALOG_READY_GATE_MS )); then
+  echo "first scan RAM catalog usable gate failed: library_ready=${ready_ms}ms > ${RAM_CATALOG_READY_GATE_MS}ms" >&2
+  tail -80 "$local_log" >&2 || true
+  exit 1
+fi
+if (( saved_ms > DB_SAVE_GATE_MS )); then
+  echo "first scan DB save gate failed: library_db_saved=${saved_ms}ms > ${DB_SAVE_GATE_MS}ms" >&2
+  tail -80 "$local_log" >&2 || true
+  exit 1
 fi
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   BEGIN { OFS = "\t" }
-  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "bootstrap_counter_climb" || $2 == "bootstrap_counter_sustained_climb" || $2 == "full_scan_counter_climb" || $2 == "catalog_counter_climb" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update") {
+  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "bootstrap_counter_climb" || $2 == "bootstrap_counter_sustained_climb" || $2 == "full_scan_counter_climb" || $2 == "catalog_counter_climb" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update" || $2 == "catalog_worker_ram_catalog") {
     ms = $3
     sub(/ms$/, "", ms)
+    if ($2 == "bootstrap_counter_sustained_climb") {
+      bootstrap_sustained_ms = ms
+      bootstrap_sustained_detail = $4
+    }
+    if ($2 == "full_scan_counter_climb") {
+      full_scan_climb_ms = ms
+      full_scan_climb_detail = $4
+    }
     print label, commit, $2, ms, $4
   }
   $1 == "library_sqlite_publish_tsv" {
@@ -157,6 +177,12 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   $1 == "library_scan_timing" {
     note = ($4 == "" ? "-" : $4)
     print label, commit, "scan_stage_" $2, int(($3 + 500) / 1000), note
+  }
+  END {
+    if (bootstrap_sustained_ms != "" && full_scan_climb_ms != "") {
+      plateau_ms = full_scan_climb_ms - bootstrap_sustained_ms
+      print label, commit, "counter_plateau", plateau_ms, "from=" bootstrap_sustained_detail " to=" full_scan_climb_detail
+    }
   }
 ' "$local_log" >>"$TSV"
 
