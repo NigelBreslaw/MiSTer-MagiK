@@ -197,6 +197,7 @@ impl LauncherCatalogSession {
                 summary,
                 load_us,
                 source,
+                durable_save_pending,
             } => {
                 self.handle_ready(
                     context.catalog_ready,
@@ -204,12 +205,19 @@ impl LauncherCatalogSession {
                     summary,
                     load_us,
                     source,
+                    durable_save_pending,
                     &mut effects,
                 );
             }
             CatalogWorkerMessage::Persisted { summary } => {
                 self.persisted_summary_seen = true;
+                self.refresh_done = true;
+                self.foreground_update = false;
+                self.refresh_failed = false;
+                effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
+                effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_saved", format_library_refresh_summary(&summary));
+                effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
             CatalogWorkerMessage::PersistenceFailed { error } => {
                 self.refresh_done = true;
@@ -363,12 +371,13 @@ impl LauncherCatalogSession {
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
         source: CatalogSource,
+        durable_save_pending: bool,
         effects: &mut CatalogSessionEffects,
     ) {
-        let cached_before_refresh = summary.is_none();
+        let cached_before_refresh = summary.is_none() && !durable_save_pending;
         let duplicate_cached_catalog = !self.summary_only
             && duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
-        self.refresh_done = !cached_before_refresh;
+        self.refresh_done = !cached_before_refresh && !durable_save_pending;
         let catalog_len = ready_catalog.len();
         if !duplicate_cached_catalog {
             self.summary_only = false;
@@ -418,6 +427,8 @@ impl LauncherCatalogSession {
                 self.foreground_update,
                 catalog_len,
             ));
+        } else if durable_save_pending {
+            effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         } else {
             effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         }
@@ -668,6 +679,21 @@ mod tests {
         (effect_names, ui_names)
     }
 
+    fn refresh_summary() -> library_db::LibraryRefreshSummary {
+        library_db::LibraryRefreshSummary {
+            skipped: false,
+            scan_us: 10,
+            discover_us: 11,
+            classify_us: 12,
+            import_us: 13,
+            bytes: 14,
+            normal_files: 15,
+            containers: 16,
+            entries: 17,
+            discoveries: 18,
+        }
+    }
+
     #[test]
     fn ready_catalog_replaces_cache_and_requests_media_seed() {
         let now = Instant::now();
@@ -683,6 +709,7 @@ mod tests {
                 summary: None,
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
+                durable_save_pending: false,
             },
             now,
         );
@@ -692,6 +719,60 @@ mod tests {
             vec!["request-media-seed", "catalog", "event", "ui", "sync"]
         );
         assert!(!session.refresh_done());
+    }
+
+    #[test]
+    fn early_ready_keeps_refresh_open_until_persisted() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(false);
+        let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(3),
+                summary: None,
+                load_us: 42,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: true,
+            },
+            now,
+        ));
+
+        assert_eq!(
+            ready_effects,
+            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
+        );
+        assert_eq!(ready_ui, vec!["clear-catalog-scan"]);
+        assert!(!session.refresh_done());
+
+        let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Persisted {
+                summary: refresh_summary(),
+            },
+            now,
+        ));
+
+        assert_eq!(
+            persisted_effects,
+            vec![
+                "finish-media-if-no-seed",
+                "catalog-validation-finished",
+                "event",
+                "ui"
+            ]
+        );
+        assert_eq!(persisted_ui, vec!["hide-background-scan"]);
+        assert!(session.refresh_done());
+        assert!(!session.foreground_update());
+        assert!(!session.refresh_failed);
     }
 
     #[test]
@@ -724,6 +805,7 @@ mod tests {
                 summary: None,
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
+                durable_save_pending: false,
             },
             now,
         );
