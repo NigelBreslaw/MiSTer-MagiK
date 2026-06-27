@@ -9,6 +9,8 @@ use slint::platform::software_renderer::Rgb565Pixel;
 
 pub(crate) const ARCADE_LIST_X: usize = 8;
 pub(crate) const ARCADE_LIST_Y: usize = 56;
+pub(crate) const ARCADE_SEARCH_LIST_X: usize = 488;
+pub(crate) const ARCADE_SEARCH_LIST_Y: usize = 56;
 pub(crate) const ARCADE_LIST_W: usize = 464;
 pub(crate) const ARCADE_LIST_H: usize = 384;
 pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
@@ -29,6 +31,32 @@ const ARCADE_SELECTION_FRAME_COLOR: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6,
 const ARCADE_NEW_BADGE_FILL: Pixel = Pixel(0x0006d6a0);
 const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ArcadeListGeometry {
+    pub(crate) x: usize,
+    pub(crate) y: usize,
+}
+
+impl ArcadeListGeometry {
+    pub(crate) const NORMAL: Self = Self {
+        x: ARCADE_LIST_X,
+        y: ARCADE_LIST_Y,
+    };
+    pub(crate) const SEARCH: Self = Self {
+        x: ARCADE_SEARCH_LIST_X,
+        y: ARCADE_SEARCH_LIST_Y,
+    };
+
+    pub(crate) fn dirty_rect(self) -> DirtyRect {
+        DirtyRect {
+            x0: self.x,
+            y0: self.y,
+            x1: self.x + ARCADE_LIST_W,
+            y1: self.y + ARCADE_LIST_H,
+        }
+    }
+}
+
 pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
@@ -43,6 +71,7 @@ pub(crate) struct ArcadeListRenderer {
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
     last_filter_draw: Option<ArcadeFilterListDrawKey>,
+    geometry: ArcadeListGeometry,
 }
 
 pub(crate) struct CachedArcadeRow {
@@ -104,6 +133,7 @@ pub(crate) enum ArcadeListUpdate {
     /// on MiSTer's write-combined framebuffer than rewriting the list overlay.
     Scroll {
         delta_y: isize,
+        rect: DirtyRect,
     },
 }
 
@@ -123,15 +153,20 @@ impl ArcadeListRenderer {
             surface_y: 0,
             last_draw: None,
             last_filter_draw: None,
+            geometry: ArcadeListGeometry::NORMAL,
         }
     }
 
-    pub(crate) fn dirty_rect() -> DirtyRect {
-        DirtyRect {
-            x0: ARCADE_LIST_X,
-            y0: ARCADE_LIST_Y,
-            x1: ARCADE_LIST_X + ARCADE_LIST_W,
-            y1: ARCADE_LIST_Y + ARCADE_LIST_H,
+    pub(crate) fn dirty_rect(&self) -> DirtyRect {
+        self.geometry.dirty_rect()
+    }
+
+    pub(crate) fn set_geometry(&mut self, geometry: ArcadeListGeometry) {
+        if self.geometry != geometry {
+            self.geometry = geometry;
+            self.last_draw = None;
+            self.last_filter_draw = None;
+            self.surface_y = 0;
         }
     }
 
@@ -171,7 +206,7 @@ impl ArcadeListRenderer {
             return None;
         }
         if force && self.last_draw.as_ref() == Some(&key) {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         let content_delta = previous
             .as_ref()
@@ -204,19 +239,20 @@ impl ArcadeListRenderer {
             self.draw_content_band(games, visual_index, 0, d);
         }
         if force {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         if previous.is_none() {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         if !can_reuse_scrolled_surface {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
-            return Some(ArcadeListUpdate::Full(Self::dirty_rect()));
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         Some(ArcadeListUpdate::Scroll {
             delta_y: content_delta as isize,
+            rect: self.dirty_rect(),
         })
     }
 
@@ -239,16 +275,16 @@ impl ArcadeListRenderer {
         self.last_filter_draw = Some(key);
         self.surface_y = 0;
         self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
-        Some(ArcadeListUpdate::Full(Self::dirty_rect()))
+        Some(ArcadeListUpdate::Full(self.dirty_rect()))
     }
 
-    pub(crate) fn selection_rect() -> DirtyRect {
+    pub(crate) fn selection_rect(&self) -> DirtyRect {
         let y = Self::selection_y();
         DirtyRect {
-            x0: ARCADE_LIST_X,
-            y0: ARCADE_LIST_Y + y,
-            x1: ARCADE_LIST_X + ARCADE_LIST_W,
-            y1: ARCADE_LIST_Y + y + ARCADE_ROW_HEIGHT as usize,
+            x0: self.geometry.x,
+            y0: self.geometry.y + y,
+            x1: self.geometry.x + ARCADE_LIST_W,
+            y1: self.geometry.y + y + ARCADE_ROW_HEIGHT as usize,
         }
     }
 
@@ -560,8 +596,8 @@ impl ArcadeListRenderer {
             let src = src_y * ARCADE_LIST_W;
             target.present_rect_565(
                 disp,
-                ARCADE_LIST_X,
-                ARCADE_LIST_Y + viewport_y,
+                self.geometry.x,
+                self.geometry.y + viewport_y,
                 ARCADE_LIST_W,
                 h,
                 &self.surface[src..src + h * ARCADE_LIST_W],
@@ -570,8 +606,8 @@ impl ArcadeListRenderer {
         }
         target.present_rect_565_strided(
             disp,
-            ARCADE_LIST_X + x,
-            ARCADE_LIST_Y + viewport_y,
+            self.geometry.x + x,
+            self.geometry.y + viewport_y,
             w,
             h,
             &self.surface,
@@ -586,7 +622,7 @@ impl ArcadeListRenderer {
         target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
     ) {
-        let rect = Self::selection_rect();
+        let rect = self.selection_rect();
         let color = ARCADE_SELECTION_FRAME_COLOR;
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);

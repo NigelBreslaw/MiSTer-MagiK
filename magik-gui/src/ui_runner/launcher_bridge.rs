@@ -57,6 +57,16 @@ pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::
     bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
 }
 
+fn sync_arcade_list_geometry_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &LauncherNav) {
+    let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
+        ArcadeListGeometry::SEARCH
+    } else {
+        ArcadeListGeometry::NORMAL
+    };
+    bridge.set_arcade_list_x(geometry.x as i32);
+    bridge.set_arcade_list_y(geometry.y as i32);
+}
+
 pub(super) struct CatalogScanBridgeStatus {
     visible: bool,
     background_visible: bool,
@@ -246,6 +256,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
+    sync_arcade_list_geometry_bridge(&bridge, nav);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
@@ -274,11 +285,14 @@ pub(super) fn sync_bridge_launcher(
         active_games_for_preview = Some(games);
     }
     bridge.set_arcade_games_loading(active_games_loading);
+    sync_arcade_search_bridge(&bridge, nav);
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
     LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
-    if nav.screen == Screen::Arcade && active_games_loading {
+    if nav.screen == Screen::Arcade
+        && (active_games_loading || nav.arcade_search.is_active(&nav.arcade_filter.active))
+    {
         preview.clear(&bridge);
     } else if nav.screen == Screen::Arcade {
         let games = active_games_for_preview
@@ -320,17 +334,21 @@ pub(super) fn sync_bridge_launcher_light(
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
+    sync_arcade_list_geometry_bridge(&bridge, nav);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
     }
     bridge.set_arcade_games_loading(active_games_loading);
+    sync_arcade_search_bridge(&bridge, nav);
     bridge.set_confirm_visible(nav.confirm_action.is_some());
     bridge.set_confirm_selected(nav.confirm_selected as i32);
     sync_confirm_bridge(&bridge, nav.confirm_action);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
     status_presenter.sync_loading(loading_message, loading_detail);
-    if nav.screen == Screen::Arcade && active_games_loading {
+    if nav.screen == Screen::Arcade
+        && (active_games_loading || nav.arcade_search.is_active(&nav.arcade_filter.active))
+    {
         preview.clear(&bridge);
     } else if nav.screen == Screen::Arcade {
         let games = active_arcade_games.unwrap_or_else(|| active_system_game_view(catalog, nav));
@@ -389,11 +407,21 @@ pub(super) fn active_system<'a>(
 
 pub(super) fn active_system_game_view<'a>(
     catalog: &'a ArcadeCatalog,
-    nav: &LauncherNav,
+    nav: &'a LauncherNav,
 ) -> ArcadeGameView<'a> {
     active_system(catalog, nav)
-        .map(|system| catalog.filtered_game_view(&system.id, &nav.arcade_filter.active))
+        .map(|system| nav.active_arcade_game_view(catalog, &system.id))
         .unwrap_or_else(ArcadeGameView::empty)
+}
+
+fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &LauncherNav) {
+    bridge.set_arcade_search_active(nav.arcade_search.is_active(&nav.arcade_filter.active));
+    bridge.set_arcade_search_query(nav.arcade_search.query.clone().into());
+    bridge.set_arcade_search_key_selected(nav.arcade_search.selected_key as i32);
+    bridge.set_arcade_search_pane(match nav.arcade_search.pane {
+        launcher::ArcadeSearchPane::Keyboard => 0,
+        launcher::ArcadeSearchPane::Results => 1,
+    });
 }
 
 pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
@@ -446,6 +474,9 @@ pub(super) struct LauncherBridgeKey {
     arcade_filter_level: launcher::ArcadeFilterLevel,
     arcade_filter_selected: usize,
     arcade_filter_active: arcade_catalog::ArcadeFilter,
+    arcade_search_query: String,
+    arcade_search_selected_key: usize,
+    arcade_search_pane: launcher::ArcadeSearchPane,
 }
 
 impl LauncherBridgeKey {
@@ -463,6 +494,9 @@ impl LauncherBridgeKey {
             arcade_filter_level: nav.arcade_filter.level,
             arcade_filter_selected: nav.arcade_filter.selected,
             arcade_filter_active: nav.arcade_filter.active.clone(),
+            arcade_search_query: nav.arcade_search.query.clone(),
+            arcade_search_selected_key: nav.arcade_search.selected_key,
+            arcade_search_pane: nav.arcade_search.pane,
         }
     }
 }

@@ -123,6 +123,16 @@ out one filter level; `B` is the same action except at the filter top level,
 where left is a no-op and `B` returns to the Home launcher. `Home` always jumps
 back to the Home launcher from Arcade or any open filter level.
 
+Arcade search is a top-level filter, but it behaves like its own mode instead
+of another hierarchical drawer level. The left pane becomes an on-screen
+keyboard and the Rust-painted game list moves to the right pane as search
+results. Search results are cached as indexes into the hydrated
+`ArcadeCatalog`; queries match normalized title text and the MRA basename,
+including compact forms so punctuation and spaces do not block obvious matches.
+While search is active, screenshot previews stay suppressed because the right
+pane is reserved for result navigation. Launch return state stores the search
+query and restores the filtered result list before selecting the returning game.
+
 Current rules:
 
 - Production `mister-magik-fb` exposes the minimal command surface:

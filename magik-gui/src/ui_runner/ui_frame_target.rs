@@ -267,13 +267,13 @@ pub(super) fn copy_arcade_list_update(
             renderer.copy_layer_to_target(target, disp, true);
             rect.rows()
         }
-        ArcadeListUpdate::Scroll { .. } => {
+        ArcadeListUpdate::Scroll { rect, .. } => {
             // `Scroll` means the renderer reused its cached RAM surface. A
             // prior live-framebuffer scroll-present path was visually correct
             // but roughly doubled present cost because `/dev/fb0` reads are
             // expensive on the MiSTer write-combined framebuffer.
             renderer.copy_layer_to_target(target, disp, false);
-            ArcadeListRenderer::dirty_rect().rows()
+            rect.rows()
         }
     }
 }
@@ -281,19 +281,17 @@ pub(super) fn copy_arcade_list_update(
 pub(super) fn arcade_update_dirty_rect(update: &ArcadeListUpdate) -> DirtyRect {
     match update {
         ArcadeListUpdate::Full(rect) => *rect,
-        ArcadeListUpdate::Scroll { .. } => ArcadeListRenderer::dirty_rect(),
+        ArcadeListUpdate::Scroll { rect, .. } => *rect,
     }
 }
 
 pub(super) fn arcade_list_needs_forced_redraw(
+    renderer: &ArcadeListRenderer,
     slint_dirty: Option<DirtyRect>,
     full_frame_present: bool,
 ) -> bool {
     full_frame_present
-        || slint_dirty.is_some_and(|rect| {
-            rect.intersection(ArcadeListRenderer::dirty_rect())
-                .is_some()
-        })
+        || slint_dirty.is_some_and(|rect| rect.intersection(renderer.dirty_rect()).is_some())
 }
 
 #[cfg(mister_bench_scenes)]
@@ -352,14 +350,20 @@ mod tests {
 
     #[test]
     fn arcade_list_overlay_redraws_when_full_frame_present_overwrites_stationary_text() {
-        assert!(arcade_list_needs_forced_redraw(None, true));
+        let renderer = ArcadeListRenderer::new();
+        assert!(arcade_list_needs_forced_redraw(&renderer, None, true));
     }
 
     #[test]
     fn arcade_list_overlay_redraws_when_slint_dirty_touches_list() {
-        let rect = ArcadeListRenderer::dirty_rect();
+        let renderer = ArcadeListRenderer::new();
+        let rect = renderer.dirty_rect();
 
-        assert!(arcade_list_needs_forced_redraw(Some(rect), false));
+        assert!(arcade_list_needs_forced_redraw(
+            &renderer,
+            Some(rect),
+            false
+        ));
     }
 
     #[test]
@@ -371,7 +375,12 @@ mod tests {
             y1: ARCADE_LIST_Y + 20,
         };
 
-        assert!(!arcade_list_needs_forced_redraw(Some(rect), false));
+        let renderer = ArcadeListRenderer::new();
+        assert!(!arcade_list_needs_forced_redraw(
+            &renderer,
+            Some(rect),
+            false
+        ));
     }
 
     #[test]
