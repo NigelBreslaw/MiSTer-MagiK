@@ -79,9 +79,17 @@ pub struct ArcadeCatalog {
     pub systems: Vec<GameSystemEntry>,
     games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
     games_by_filter: HashMap<String, Vec<ArcadeGameEntry>>,
+    filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
     preview_games_by_system: HashMap<String, Vec<ArcadeGameEntry>>,
     games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ArcadeSystemFilterOptions {
+    decades: Vec<ArcadeFilterOption>,
+    manufacturers: Vec<ArcadeFilterOption>,
+    categories: Vec<ArcadeFilterOption>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +124,7 @@ impl ArcadeCatalog {
     ) -> Self {
         let games_by_system = games_by_system(&games);
         let games_by_filter = games_by_filter(&games);
+        let filter_options_by_system = filter_options_by_system(&games);
         let preview_games_by_system = preview_games_by_system(&games);
         let games_by_ref: HashMap<Arc<str>, usize> = games
             .iter()
@@ -132,6 +141,7 @@ impl ArcadeCatalog {
             systems,
             games_by_system,
             games_by_filter,
+            filter_options_by_system,
             preview_games_by_system,
             games_by_ref,
             launch_plans_by_ref,
@@ -205,7 +215,11 @@ impl ArcadeCatalog {
         self.filtered_game_slice(system_id, filter).get(index)
     }
 
-    pub fn filtered_game_slice(&self, system_id: &str, filter: &ArcadeFilter) -> &[ArcadeGameEntry] {
+    pub fn filtered_game_slice(
+        &self,
+        system_id: &str,
+        filter: &ArcadeFilter,
+    ) -> &[ArcadeGameEntry] {
         match filter {
             ArcadeFilter::All => self.system_game_slice(system_id),
             ArcadeFilter::Decade(decade) => self
@@ -227,28 +241,27 @@ impl ArcadeCatalog {
     }
 
     pub fn decade_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
-        let mut counts = BTreeMap::<u16, usize>::new();
-        for game in self.system_game_slice(system_id) {
-            if let Some(year) = game.year {
-                let decade = (year / 10) * 10;
-                *counts.entry(decade).or_default() += 1;
-            }
-        }
-        counts
-            .into_iter()
-            .map(|(decade, count)| ArcadeFilterOption {
-                label: format!("{decade}'s"),
-                count,
-            })
-            .collect()
+        self.filter_options(system_id).decades.clone()
+    }
+
+    pub fn decade_option_count(&self, system_id: &str) -> usize {
+        self.filter_options(system_id).decades.len()
     }
 
     pub fn manufacturer_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
-        string_filter_options(self.system_game_slice(system_id), |game| &game.manufacturer)
+        self.filter_options(system_id).manufacturers.clone()
+    }
+
+    pub fn manufacturer_option_count(&self, system_id: &str) -> usize {
+        self.filter_options(system_id).manufacturers.len()
     }
 
     pub fn category_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
-        string_filter_options(self.system_game_slice(system_id), |game| &game.category)
+        self.filter_options(system_id).categories.clone()
+    }
+
+    pub fn category_option_count(&self, system_id: &str) -> usize {
+        self.filter_options(system_id).categories.len()
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
@@ -270,6 +283,13 @@ impl ArcadeCatalog {
             .get(system_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    fn filter_options(&self, system_id: &str) -> &ArcadeSystemFilterOptions {
+        static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
+        self.filter_options_by_system
+            .get(system_id)
+            .unwrap_or_else(|| EMPTY.get_or_init(ArcadeSystemFilterOptions::default))
     }
 }
 
@@ -378,17 +398,60 @@ fn filter_key(system_id: &str, kind: &str, value: &str) -> String {
     format!("{system_id}\n{kind}\n{value}")
 }
 
-fn string_filter_options(
+#[derive(Default)]
+struct FilterOptionCounts {
+    decades: BTreeMap<u16, usize>,
+    manufacturers: BTreeMap<String, usize>,
+    categories: BTreeMap<String, usize>,
+}
+
+fn filter_options_by_system(
     games: &[ArcadeGameEntry],
-    value: impl Fn(&ArcadeGameEntry) -> &Arc<str>,
-) -> Vec<ArcadeFilterOption> {
-    let mut counts = BTreeMap::<String, usize>::new();
+) -> HashMap<String, ArcadeSystemFilterOptions> {
+    let mut counts_by_system = HashMap::<String, FilterOptionCounts>::new();
     for game in games {
-        let value = value(game).trim();
-        if !value.is_empty() {
-            *counts.entry(value.to_string()).or_default() += 1;
+        let counts = counts_by_system
+            .entry(game.system_id.to_string())
+            .or_default();
+        if let Some(year) = game.year {
+            let decade = (year / 10) * 10;
+            *counts.decades.entry(decade).or_default() += 1;
+        }
+        let manufacturer = game.manufacturer.trim();
+        if !manufacturer.is_empty() {
+            *counts
+                .manufacturers
+                .entry(manufacturer.to_string())
+                .or_default() += 1;
+        }
+        let category = game.category.trim();
+        if !category.is_empty() {
+            *counts.categories.entry(category.to_string()).or_default() += 1;
         }
     }
+    counts_by_system
+        .into_iter()
+        .map(|(system_id, counts)| {
+            (
+                system_id,
+                ArcadeSystemFilterOptions {
+                    decades: counts
+                        .decades
+                        .into_iter()
+                        .map(|(decade, count)| ArcadeFilterOption {
+                            label: format!("{decade}'s"),
+                            count,
+                        })
+                        .collect(),
+                    manufacturers: string_filter_options_from_counts(counts.manufacturers),
+                    categories: string_filter_options_from_counts(counts.categories),
+                },
+            )
+        })
+        .collect()
+}
+
+fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<ArcadeFilterOption> {
     counts
         .into_iter()
         .map(|(label, count)| ArcadeFilterOption { label, count })
@@ -718,6 +781,70 @@ mod tests {
         assert!(catalog.system_preview_games("missing").is_empty());
         assert_eq!(catalog.system_preview_game_count("missing"), 0);
         assert!(catalog.system_preview_game_at("missing", 0).is_none());
+    }
+
+    #[test]
+    fn filter_options_are_precomputed_by_system() {
+        let mut first = game("1942", "/games/1942.mra", "", "arcade");
+        first.year = Some(1984);
+        first.manufacturer = "Capcom".into();
+        first.category = "Shooter".into();
+        let mut second = game("1943", "/games/1943.mra", "", "arcade");
+        second.year = Some(1987);
+        second.manufacturer = "Capcom".into();
+        second.category = "Shooter".into();
+        let mut third = game("Out Run", "/games/outrun.mra", "", "arcade");
+        third.year = Some(1986);
+        third.manufacturer = "Sega".into();
+        third.category = "Driving".into();
+        let mut other_system = game("Agony", "/games/agony.mgl", "", "amiga");
+        other_system.manufacturer = "Psygnosis".into();
+
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![first, second, third, other_system],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            catalog.decade_options("arcade"),
+            vec![ArcadeFilterOption {
+                label: "1980's".into(),
+                count: 3
+            }]
+        );
+        assert_eq!(catalog.decade_option_count("arcade"), 1);
+        assert_eq!(
+            catalog.manufacturer_options("arcade"),
+            vec![
+                ArcadeFilterOption {
+                    label: "Capcom".into(),
+                    count: 2
+                },
+                ArcadeFilterOption {
+                    label: "Sega".into(),
+                    count: 1
+                },
+            ]
+        );
+        assert_eq!(catalog.manufacturer_option_count("arcade"), 2);
+        assert_eq!(
+            catalog.category_options("arcade"),
+            vec![
+                ArcadeFilterOption {
+                    label: "Driving".into(),
+                    count: 1
+                },
+                ArcadeFilterOption {
+                    label: "Shooter".into(),
+                    count: 2
+                },
+            ]
+        );
+        assert_eq!(catalog.category_option_count("arcade"), 2);
+        assert_eq!(catalog.manufacturer_option_count("amiga"), 1);
+        assert!(catalog.decade_options("missing").is_empty());
+        assert_eq!(catalog.category_option_count("missing"), 0);
     }
 
     #[test]

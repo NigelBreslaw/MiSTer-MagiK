@@ -3182,6 +3182,9 @@ fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
     let command = format!("/media/fat/mister-magik/mister-magik-fb library-sql {quoted_args}");
     let out = exec(sess, &command, true)?;
     if out.rc != 0 && library_sql_command_unavailable(&out.stdout, &out.stderr) {
+        eprintln!(
+            "scripts/mister db: remote library-sql unavailable; using SFTP local-query fallback"
+        );
         let output = run_library_db_query_via_sftp(sess, &query_args)?;
         print!("{output}");
         if !output.ends_with('\n') {

@@ -150,7 +150,6 @@ fn main() {
         return;
     }
 
-    #[cfg(feature = "diagnostics")]
     if cmd == "library-sql" {
         run_library_sql();
         return;
