@@ -201,29 +201,17 @@ impl ArcadeCatalog {
         systems: Vec<GameSystemEntry>,
         launch_plans: Vec<StructuredLaunchPlan>,
     ) -> Self {
-        let games_by_system = games_by_system(&games);
-        let games_by_filter = games_by_filter(&games);
-        let filter_options_by_system = filter_options_by_system(&games);
-        let preview_games_by_system = preview_games_by_system(&games);
-        let games_by_ref: HashMap<Arc<str>, usize> = games
-            .iter()
-            .enumerate()
-            .map(|(idx, game)| (game.mra_path.clone(), idx))
-            .collect();
-        let launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan> = launch_plans
-            .into_iter()
-            .map(|plan| (plan.launch_ref.clone(), plan))
-            .collect();
+        let indexes = build_arcade_catalog_indexes(&games, launch_plans);
         Self {
             root,
             games,
             systems,
-            games_by_system,
-            games_by_filter,
-            filter_options_by_system,
-            preview_games_by_system,
-            games_by_ref,
-            launch_plans_by_ref,
+            games_by_system: indexes.games_by_system,
+            games_by_filter: indexes.games_by_filter,
+            filter_options_by_system: indexes.filter_options_by_system,
+            preview_games_by_system: indexes.preview_games_by_system,
+            games_by_ref: indexes.games_by_ref,
+            launch_plans_by_ref: indexes.launch_plans_by_ref,
         }
     }
 
@@ -400,6 +388,135 @@ impl ArcadeCatalog {
     }
 }
 
+struct ArcadeCatalogIndexes {
+    games_by_system: HashMap<String, Vec<usize>>,
+    games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
+    filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
+    preview_games_by_system: HashMap<String, Vec<usize>>,
+    games_by_ref: HashMap<Arc<str>, usize>,
+    launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+}
+
+fn build_arcade_catalog_indexes(
+    games: &[ArcadeGameEntry],
+    launch_plans: Vec<StructuredLaunchPlan>,
+) -> ArcadeCatalogIndexes {
+    let mut games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>> = HashMap::new();
+    let mut filter_counts_by_system = HashMap::<String, FilterOptionCounts>::new();
+    let mut preview_games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
+    let mut games_by_ref: HashMap<Arc<str>, usize> = HashMap::with_capacity(games.len());
+
+    for (idx, game) in games.iter().enumerate() {
+        let system_id_string = game.system_id.to_string();
+        let system_id_arc = game.system_id.clone();
+        games_by_ref.insert(game.mra_path.clone(), idx);
+        games_by_system
+            .entry(system_id_string.clone())
+            .or_default()
+            .push(idx);
+
+        let counts = filter_counts_by_system
+            .entry(system_id_string.clone())
+            .or_default();
+        if let Some(year) = game.year {
+            let decade = (year / 10) * 10;
+            games_by_filter
+                .entry(ArcadeFilterKey {
+                    system_id: system_id_arc.clone(),
+                    kind: ArcadeFilterKindKey::Decade(decade),
+                })
+                .or_default()
+                .push(idx);
+            *counts.decades.entry(decade).or_default() += 1;
+        }
+
+        if !game.manufacturer.is_empty() {
+            games_by_filter
+                .entry(ArcadeFilterKey {
+                    system_id: system_id_arc.clone(),
+                    kind: ArcadeFilterKindKey::Manufacturer(game.manufacturer.clone()),
+                })
+                .or_default()
+                .push(idx);
+        }
+        let manufacturer = game.manufacturer.trim();
+        if !manufacturer.is_empty() {
+            *counts
+                .manufacturers
+                .entry(manufacturer.to_string())
+                .or_default() += 1;
+        }
+
+        if !game.category.is_empty() {
+            games_by_filter
+                .entry(ArcadeFilterKey {
+                    system_id: system_id_arc,
+                    kind: ArcadeFilterKindKey::Category(game.category.clone()),
+                })
+                .or_default()
+                .push(idx);
+        }
+        let category = game.category.trim();
+        if !category.is_empty() {
+            *counts.categories.entry(category.to_string()).or_default() += 1;
+        }
+
+        if has_preview_image(game) {
+            let preview_indexes = preview_games_by_system
+                .entry(system_id_string.clone())
+                .or_default();
+            let best_by_key = preview_best_by_system
+                .entry(system_id_string)
+                .or_default();
+            let key = preview_dedupe_key(&game.title);
+            if let Some(&preview_pos) = best_by_key.get(&key) {
+                if prefer_preview_game(game, &games[preview_indexes[preview_pos]]) {
+                    preview_indexes[preview_pos] = idx;
+                }
+            } else {
+                best_by_key.insert(key, preview_indexes.len());
+                preview_indexes.push(idx);
+            }
+        }
+    }
+
+    let filter_options_by_system = filter_counts_by_system
+        .into_iter()
+        .map(|(system_id, counts)| {
+            (
+                system_id,
+                ArcadeSystemFilterOptions {
+                    decades: counts
+                        .decades
+                        .into_iter()
+                        .map(|(decade, count)| ArcadeFilterOption {
+                            label: format!("{decade}'s"),
+                            count,
+                        })
+                        .collect(),
+                    manufacturers: string_filter_options_from_counts(counts.manufacturers),
+                    categories: string_filter_options_from_counts(counts.categories),
+                },
+            )
+        })
+        .collect();
+    let launch_plans_by_ref = launch_plans
+        .into_iter()
+        .map(|plan| (plan.launch_ref.clone(), plan))
+        .collect();
+
+    ArcadeCatalogIndexes {
+        games_by_system,
+        games_by_filter,
+        filter_options_by_system,
+        preview_games_by_system,
+        games_by_ref,
+        launch_plans_by_ref,
+    }
+}
+
 fn derive_structured_launch_plan(
     game: &ArcadeGameEntry,
     profiles_by_system: &HashMap<&'static str, launch_profiles::LaunchProfile>,
@@ -463,53 +580,6 @@ fn mount_kind_label(kind: MountKind) -> &'static str {
     }
 }
 
-fn games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<usize>> {
-    let mut by_system: HashMap<String, Vec<usize>> = HashMap::new();
-    for (idx, game) in games.iter().enumerate() {
-        by_system
-            .entry(game.system_id.to_string())
-            .or_default()
-            .push(idx);
-    }
-    by_system
-}
-
-fn games_by_filter(games: &[ArcadeGameEntry]) -> HashMap<ArcadeFilterKey, Vec<usize>> {
-    let mut by_filter: HashMap<ArcadeFilterKey, Vec<usize>> = HashMap::new();
-    for (idx, game) in games.iter().enumerate() {
-        let system_id = game.system_id.as_ref();
-        if let Some(year) = game.year {
-            let decade = (year / 10) * 10;
-            by_filter
-                .entry(ArcadeFilterKey {
-                    system_id: Arc::from(system_id),
-                    kind: ArcadeFilterKindKey::Decade(decade),
-                })
-                .or_default()
-                .push(idx);
-        }
-        if !game.manufacturer.is_empty() {
-            by_filter
-                .entry(ArcadeFilterKey {
-                    system_id: Arc::from(system_id),
-                    kind: ArcadeFilterKindKey::Manufacturer(game.manufacturer.clone()),
-                })
-                .or_default()
-                .push(idx);
-        }
-        if !game.category.is_empty() {
-            by_filter
-                .entry(ArcadeFilterKey {
-                    system_id: Arc::from(system_id),
-                    kind: ArcadeFilterKindKey::Category(game.category.clone()),
-                })
-                .or_default()
-                .push(idx);
-        }
-    }
-    by_filter
-}
-
 fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey> {
     match filter {
         ArcadeFilter::All => None,
@@ -535,52 +605,6 @@ struct FilterOptionCounts {
     categories: BTreeMap<String, usize>,
 }
 
-fn filter_options_by_system(
-    games: &[ArcadeGameEntry],
-) -> HashMap<String, ArcadeSystemFilterOptions> {
-    let mut counts_by_system = HashMap::<String, FilterOptionCounts>::new();
-    for game in games {
-        let counts = counts_by_system
-            .entry(game.system_id.to_string())
-            .or_default();
-        if let Some(year) = game.year {
-            let decade = (year / 10) * 10;
-            *counts.decades.entry(decade).or_default() += 1;
-        }
-        let manufacturer = game.manufacturer.trim();
-        if !manufacturer.is_empty() {
-            *counts
-                .manufacturers
-                .entry(manufacturer.to_string())
-                .or_default() += 1;
-        }
-        let category = game.category.trim();
-        if !category.is_empty() {
-            *counts.categories.entry(category.to_string()).or_default() += 1;
-        }
-    }
-    counts_by_system
-        .into_iter()
-        .map(|(system_id, counts)| {
-            (
-                system_id,
-                ArcadeSystemFilterOptions {
-                    decades: counts
-                        .decades
-                        .into_iter()
-                        .map(|(decade, count)| ArcadeFilterOption {
-                            label: format!("{decade}'s"),
-                            count,
-                        })
-                        .collect(),
-                    manufacturers: string_filter_options_from_counts(counts.manufacturers),
-                    categories: string_filter_options_from_counts(counts.categories),
-                },
-            )
-        })
-        .collect()
-}
-
 fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<ArcadeFilterOption> {
     counts
         .into_iter()
@@ -588,20 +612,7 @@ fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<Arc
         .collect()
 }
 
-fn preview_games_by_system(games: &[ArcadeGameEntry]) -> HashMap<String, Vec<usize>> {
-    let mut by_system: HashMap<String, Vec<usize>> = HashMap::new();
-    for (idx, game) in games.iter().enumerate() {
-        by_system
-            .entry(game.system_id.to_string())
-            .or_default()
-            .push(idx);
-    }
-    by_system
-        .into_iter()
-        .map(|(system_id, indexes)| (system_id, preview_games(games, indexes.into_iter())))
-        .collect()
-}
-
+#[cfg(test)]
 fn preview_games(games: &[ArcadeGameEntry], indexes: impl Iterator<Item = usize>) -> Vec<usize> {
     let mut best_idx: HashMap<String, usize> = HashMap::new();
     let mut out: Vec<usize> = Vec::new();
