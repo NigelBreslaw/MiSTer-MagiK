@@ -3,6 +3,7 @@
 use crate::catalog_config::default_sqlite_path;
 use crate::catalog_scan;
 use crate::library_db::{self, BenchConfig};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -44,7 +45,10 @@ pub(crate) fn run_scan_bench() {
         let build_us = build_t.elapsed().as_micros() as u64;
 
         let import_t = Instant::now();
-        std::env::set_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION", iteration.to_string());
+        std::env::set_var(
+            "MISTER_LIBRARY_BENCH_ACTIVE_ITERATION",
+            iteration.to_string(),
+        );
         let summary = match library_db::save_scan_artifact_to_sqlite(&cfg, artifact, None) {
             Ok(summary) => summary,
             Err(e) => {
@@ -175,6 +179,7 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
         return Err("library-sql only allows read-only SELECT/WITH queries".into());
     }
 
+    let total_t = Instant::now();
     let metadata = std::fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
     if !metadata.is_file() {
         return Err(format!("{} is not a file", path.display()));
@@ -183,29 +188,164 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
         return Err(format!("{} is empty", path.display()));
     }
 
+    let open_t = Instant::now();
     let conn = library_db::open_sqlite_read_only(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let open_us = open_t.elapsed().as_micros() as u64;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    let prepare_t = Instant::now();
     let mut stmt = conn
         .prepare(&query)
         .map_err(|e| format!("prepare query: {e}"))?;
+    let prepare_us = prepare_t.elapsed().as_micros() as u64;
     let column_count = stmt.column_count();
     let mut out = String::new();
     if column_count > 0 {
+        let format_t = Instant::now();
         out.push_str(&stmt.column_names().join("\t"));
         out.push('\n');
-    }
-    let mut rows = stmt.query([]).map_err(|e| format!("run query: {e}"))?;
-    while let Some(row) = rows.next().map_err(|e| format!("read row: {e}"))? {
-        for col in 0..column_count {
-            if col > 0 {
-                out.push('\t');
+        let mut format_us = format_t.elapsed().as_micros() as u64;
+        let mut row_read_us = 0u64;
+        let mut first_row_us = 0u64;
+        let mut row_count = 0usize;
+        let mut rows = stmt.query([]).map_err(|e| format!("run query: {e}"))?;
+        let first_row_t = Instant::now();
+        loop {
+            let read_t = Instant::now();
+            let row = rows.next().map_err(|e| format!("read row: {e}"))?;
+            let read_us = read_t.elapsed().as_micros() as u64;
+            row_read_us += read_us;
+            if row_count == 0 {
+                first_row_us = first_row_t.elapsed().as_micros() as u64;
             }
-            out.push_str(&sqlite_cell_to_string(row, col)?);
+            let Some(row) = row else {
+                break;
+            };
+            row_count += 1;
+            let format_t = Instant::now();
+            for col in 0..column_count {
+                if col > 0 {
+                    out.push('\t');
+                }
+                out.push_str(&sqlite_cell_to_string(row, col)?);
+            }
+            out.push('\n');
+            format_us += format_t.elapsed().as_micros() as u64;
         }
-        out.push('\n');
+        let stdout_bytes = out.len();
+        append_sqlite_timing_row(
+            &mut out,
+            SqliteInspectTiming {
+                path: &path,
+                db_bytes: metadata.len(),
+                query_hash: sqlite_query_hash(&query),
+                open_us,
+                schema_check_us: None,
+                prepare_us,
+                first_row_us,
+                row_read_us,
+                format_us,
+                total_us: total_t.elapsed().as_micros() as u64,
+                rows: row_count,
+                columns: column_count,
+                stdout_bytes,
+            },
+        );
+        return Ok(out);
     }
+    let mut row_read_us = 0u64;
+    let mut first_row_us = 0u64;
+    let mut row_count = 0usize;
+    let mut rows = stmt.query([]).map_err(|e| format!("run query: {e}"))?;
+    let first_row_t = Instant::now();
+    loop {
+        let read_t = Instant::now();
+        let row = rows.next().map_err(|e| format!("read row: {e}"))?;
+        row_read_us += read_t.elapsed().as_micros() as u64;
+        if row_count == 0 {
+            first_row_us = first_row_t.elapsed().as_micros() as u64;
+        }
+        if row.is_none() {
+            break;
+        }
+        row_count += 1;
+    }
+    let stdout_bytes = out.len();
+    append_sqlite_timing_row(
+        &mut out,
+        SqliteInspectTiming {
+            path: &path,
+            db_bytes: metadata.len(),
+            query_hash: sqlite_query_hash(&query),
+            open_us,
+            schema_check_us: None,
+            prepare_us,
+            first_row_us,
+            row_read_us,
+            format_us: 0,
+            total_us: total_t.elapsed().as_micros() as u64,
+            rows: row_count,
+            columns: column_count,
+            stdout_bytes,
+        },
+    );
     Ok(out)
+}
+
+struct SqliteInspectTiming<'a> {
+    path: &'a Path,
+    db_bytes: u64,
+    query_hash: u64,
+    open_us: u64,
+    schema_check_us: Option<u64>,
+    prepare_us: u64,
+    first_row_us: u64,
+    row_read_us: u64,
+    format_us: u64,
+    total_us: u64,
+    rows: usize,
+    columns: usize,
+    stdout_bytes: usize,
+}
+
+fn append_sqlite_timing_row(out: &mut String, timing: SqliteInspectTiming<'_>) {
+    let schema_check = timing
+        .schema_check_us
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let _ = writeln!(
+        out,
+        "library_sql_timing_tsv\t{}\t{}\t{:016x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        tsv_field(&timing.path.display().to_string()),
+        timing.db_bytes,
+        timing.query_hash,
+        timing.open_us,
+        schema_check,
+        timing.prepare_us,
+        timing.first_row_us,
+        timing.row_read_us,
+        timing.format_us,
+        timing.total_us,
+        timing.rows,
+        timing.columns,
+        timing.stdout_bytes
+    );
+}
+
+fn sqlite_query_hash(query: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001b3;
+    query.as_bytes().iter().fold(FNV_OFFSET, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    })
+}
+
+fn tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> Result<String, String> {
@@ -379,10 +519,39 @@ mod tests {
         ])
         .expect("inspect sqlite fixture");
 
-        assert_eq!(
-            out,
-            "int_value\treal_value\ttext_value\tblob_value\tnull_value\n42\t1.5\thello\t<blob:3>\t\n"
+        assert!(
+            out.starts_with(
+                "int_value\treal_value\ttext_value\tblob_value\tnull_value\n42\t1.5\thello\t<blob:3>\t\n"
+            ),
+            "{out}"
         );
+        let timing = out.lines().last().expect("timing row");
+        assert_sqlite_timing_row(timing, &db, 1, 5);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_inspect_appends_timing_row() {
+        let root = unique_temp_dir("sqlite-inspect-timing");
+        let db = root.join("library.sqlite3");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE values_fixture(value INTEGER);
+             INSERT INTO values_fixture VALUES(1),(2);",
+        )
+        .expect("create inspect fixture");
+        drop(conn);
+
+        let out = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "SELECT value FROM values_fixture ORDER BY value".to_string(),
+        ])
+        .expect("inspect sqlite fixture");
+
+        assert!(out.starts_with("value\n1\n2\n"), "{out}");
+        let timing = out.lines().last().expect("timing row");
+        assert_sqlite_timing_row(timing, &db, 2, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -407,5 +576,25 @@ mod tests {
         ] {
             assert!(!sqlite_inspect_query_is_read_only(query), "{query}");
         }
+    }
+
+    fn assert_sqlite_timing_row(row: &str, db: &Path, rows: usize, columns: usize) {
+        let fields = row.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 14, "{row}");
+        assert_eq!(fields[0], "library_sql_timing_tsv");
+        assert_eq!(fields[1], db.display().to_string());
+        assert!(fields[2].parse::<u64>().expect("db bytes") > 0);
+        assert_eq!(fields[3].len(), 16);
+        assert!(u64::from_str_radix(fields[3], 16).is_ok());
+        assert!(fields[4].parse::<u64>().is_ok(), "open_us");
+        assert_eq!(fields[5], "");
+        assert!(fields[6].parse::<u64>().is_ok(), "prepare_us");
+        assert!(fields[7].parse::<u64>().is_ok(), "first_row_us");
+        assert!(fields[8].parse::<u64>().is_ok(), "row_read_us");
+        assert!(fields[9].parse::<u64>().is_ok(), "format_us");
+        assert!(fields[10].parse::<u64>().is_ok(), "total_us");
+        assert_eq!(fields[11].parse::<usize>().expect("rows"), rows);
+        assert_eq!(fields[12].parse::<usize>().expect("columns"), columns);
+        assert!(fields[13].parse::<usize>().is_ok(), "stdout_bytes");
     }
 }

@@ -873,17 +873,17 @@ impl LauncherNav {
             },
             ArcadeDrawerItem {
                 label: "Decades".to_string(),
-                count: catalog.decade_options(system_id).len(),
+                count: catalog.decade_option_count(system_id),
                 active: matches!(self.arcade_filter.active, ArcadeFilter::Decade(_)),
             },
             ArcadeDrawerItem {
                 label: "Manufacturer".to_string(),
-                count: catalog.manufacturer_options(system_id).len(),
+                count: catalog.manufacturer_option_count(system_id),
                 active: matches!(self.arcade_filter.active, ArcadeFilter::Manufacturer(_)),
             },
             ArcadeDrawerItem {
                 label: "Categories".to_string(),
-                count: catalog.category_options(system_id).len(),
+                count: catalog.category_option_count(system_id),
                 active: matches!(self.arcade_filter.active, ArcadeFilter::Category(_)),
             },
         ]

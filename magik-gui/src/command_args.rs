@@ -36,7 +36,6 @@ pub const COMMANDS: &[&str] = &[
     "preview-pack-bench",
     #[cfg(feature = "diagnostics")]
     "preview-index-refresh-bench",
-    #[cfg(feature = "diagnostics")]
     "library-sql",
     #[cfg(feature = "diagnostics")]
     "hbmame-metadata-from-library",
@@ -114,12 +113,12 @@ mod tests {
     #[test]
     #[cfg(not(feature = "diagnostics"))]
     fn production_command_list_hides_diagnostics() {
+        assert!(COMMANDS.contains(&"library-sql"));
         for command in [
             "read",
             "vsync-probe",
             "cpu-profile-smoke",
             "input",
-            "library-sql",
             "hbmame-metadata-from-library",
             "library-scan-bench",
             "preview-pack-bench",

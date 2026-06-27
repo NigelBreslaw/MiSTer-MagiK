@@ -36,12 +36,21 @@ APIs, progress states, and benchmark expectations.
 
 ## Read-Only Inspection
 
-Use `scripts/mister db` or `mister-magik-fb library-sql` for catalog database
-inspection. These entrypoints are intentionally read-only: they accept
+Use `scripts/mister db`, `scripts/mister library-db`, or
+`mister-magik-fb library-sql` for catalog database inspection. `library-sql` is
+available in release-device builds so device queries do not need `sqlite3(1)` or
+a diagnostics binary. These entrypoints are intentionally read-only: they accept
 `SELECT`/read-only `WITH` queries, reject obvious write statements before
 opening the database, and also open SQLite with read-only/query-only settings.
 Do not add write, repair, migration, or cache rebuild behavior to these
 inspection paths; use the catalog builder and launcher worker flows instead.
+
+`library-sql` prints normal query rows first, then appends one
+`library_sql_timing_tsv` row with path, database size, query hash, open/prepare,
+first-row, row-read, formatting, total elapsed time, row count, column count, and
+query-output byte count. If `scripts/mister db` reports that it is using the
+SFTP fallback, the timing describes the host-side local query of a copied
+database, not direct device SQLite performance.
 
 ## Lifecycle
 

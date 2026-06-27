@@ -321,6 +321,14 @@ scripts/mister db
 scripts/mister db "SELECT count(*) FROM games"
 ```
 
+Release-device builds expose the read-only `library-sql` command used by
+`scripts/mister db`. Successful queries print normal result rows first and then
+append a `library_sql_timing_tsv` row for SQLite open, prepare, first-row,
+row-read, formatting, total query time, row count, column count, and result byte
+count. If the wrapper says it is using the SFTP fallback, the timing describes a
+host-side query against a copied database rather than direct device SQLite
+performance.
+
 `profile-first-scan.sh` deletes the production catalog database plus
 `library.summary.json` and reboots with `scripts/mister reboot-wait`, which uses
 the supervised `mister_magik_reboot` path when the Main fork is available. It
