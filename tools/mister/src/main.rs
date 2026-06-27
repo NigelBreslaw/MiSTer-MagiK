@@ -159,7 +159,12 @@ fn run_cli() -> Result<()> {
                 println!("reboot issued to {host} ({issued})");
             }
             if action == "reboot-wait" {
-                wait_down(40.0);
+                if !wait_down(40.0) {
+                    return Err(
+                        "reboot-wait did not observe the device go down; refusing to treat the existing SSH session as a reboot"
+                            .into(),
+                    );
+                }
                 let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
                 std::process::exit(wait_up(secs)?);
             }
@@ -1842,6 +1847,12 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
             }
         }
         if agent_ready_ms.is_some() && ssh_ready_ms.is_some() {
+            if down_ms.is_none() {
+                return Err(format!(
+                    "agent reboot-wait did not observe the device go down; refusing to treat the existing connection as a {mode} reboot"
+                )
+                .into());
+            }
             println!(
                 "agent reboot-wait ok mode={mode} down_ms={} agent_ready_ms={} ssh_ready_ms={}",
                 opt_ms(down_ms),
