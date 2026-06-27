@@ -7,15 +7,15 @@ use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::sqlite_catalog;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 2;
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 3;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB3\0";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogNavigationProjection {
     pub schema: u32,
     pub catalog_schema_version: u32,
@@ -28,14 +28,14 @@ pub struct CatalogNavigationProjection {
     pub launch_plans: Vec<NavigationLaunchPlan>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavigationSystem {
     pub id: String,
     pub title: String,
     pub count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavigationGame {
     pub title: String,
     pub launch_ref: String,
@@ -49,7 +49,7 @@ pub struct NavigationGame {
     pub is_new: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavigationLaunchPlan {
     pub launch_ref: String,
     pub title: String,
@@ -86,7 +86,7 @@ pub fn read_catalog_navigation_projection(
     };
     let decoded = lz4_flex::decompress_size_prepended(&bytes)
         .map_err(|e| format!("decompress catalog navigation {}: {e}", path.display()))?;
-    let projection: CatalogNavigationProjection = serde_json::from_slice(&decoded)
+    let projection = decode_navigation_projection(&decoded)
         .map_err(|e| format!("parse catalog navigation {}: {e}", path.display()))?;
     if !projection.matches(expected_stamp) {
         return Ok(None);
@@ -221,10 +221,254 @@ fn write_catalog_navigation_projection(
     navigation_path: &Path,
     projection: &CatalogNavigationProjection,
 ) -> Result<(), String> {
-    let encoded = serde_json::to_vec(projection)
-        .map_err(|e| format!("serialize catalog navigation: {e}"))?;
+    let encoded = encode_navigation_projection(projection)?;
     let compressed = lz4_flex::compress_prepend_size(&encoded);
     write_bytes_atomically(navigation_path, &compressed)
+}
+
+fn encode_navigation_projection(projection: &CatalogNavigationProjection) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    out.extend_from_slice(CATALOG_NAVIGATION_BINARY_MAGIC);
+    write_u32(&mut out, projection.schema);
+    write_u32(&mut out, projection.catalog_schema_version);
+    write_u32(&mut out, projection.catalog_build_version);
+    write_string(&mut out, &projection.catalog_generation)?;
+    write_string(&mut out, &projection.catalog_stamp_fingerprint)?;
+    write_len(&mut out, projection.catalog_stamp_lines.len())?;
+    for line in &projection.catalog_stamp_lines {
+        write_string(&mut out, line)?;
+    }
+    write_len(&mut out, projection.systems.len())?;
+    for system in &projection.systems {
+        write_string(&mut out, &system.id)?;
+        write_string(&mut out, &system.title)?;
+        write_u64(&mut out, system.count as u64);
+    }
+    write_len(&mut out, projection.games.len())?;
+    for game in &projection.games {
+        write_string(&mut out, &game.title)?;
+        write_string(&mut out, &game.launch_ref)?;
+        write_string(&mut out, &game.preview_archive_path)?;
+        write_string(&mut out, &game.preview_asset_key)?;
+        write_bool(&mut out, game.has_preview);
+        write_string(&mut out, &game.system_id)?;
+        match game.year {
+            Some(year) => {
+                write_bool(&mut out, true);
+                write_u16(&mut out, year);
+            }
+            None => write_bool(&mut out, false),
+        }
+        write_string(&mut out, &game.manufacturer)?;
+        write_string(&mut out, &game.category)?;
+        write_bool(&mut out, game.is_new);
+    }
+    write_len(&mut out, projection.launch_plans.len())?;
+    for plan in &projection.launch_plans {
+        write_string(&mut out, &plan.launch_ref)?;
+        write_string(&mut out, &plan.title)?;
+        write_string(&mut out, &plan.system_id)?;
+        write_string(&mut out, &plan.core_path)?;
+        write_string(&mut out, &plan.payload_path)?;
+        write_string(&mut out, &plan.mount_kind)?;
+        out.push(plan.mount_index);
+        out.push(plan.delay_secs);
+    }
+    Ok(out)
+}
+
+fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProjection, String> {
+    let mut reader = NavigationBinaryReader::new(bytes);
+    reader.expect_magic(CATALOG_NAVIGATION_BINARY_MAGIC)?;
+    let schema = reader.read_u32()?;
+    let catalog_schema_version = reader.read_u32()?;
+    let catalog_build_version = reader.read_u32()?;
+    let catalog_generation = reader.read_string()?;
+    let catalog_stamp_fingerprint = reader.read_string()?;
+    let stamp_line_count = reader.read_len()?;
+    let mut catalog_stamp_lines = Vec::with_capacity(stamp_line_count);
+    for _ in 0..stamp_line_count {
+        catalog_stamp_lines.push(reader.read_string()?);
+    }
+    let system_count = reader.read_len()?;
+    let mut systems = Vec::with_capacity(system_count);
+    for _ in 0..system_count {
+        systems.push(NavigationSystem {
+            id: reader.read_string()?,
+            title: reader.read_string()?,
+            count: reader.read_u64()?.try_into().map_err(|_| "system count too large".to_string())?,
+        });
+    }
+    let game_count = reader.read_len()?;
+    let mut games = Vec::with_capacity(game_count);
+    for _ in 0..game_count {
+        let title = reader.read_string()?;
+        let launch_ref = reader.read_string()?;
+        let preview_archive_path = reader.read_string()?;
+        let preview_asset_key = reader.read_string()?;
+        let has_preview = reader.read_bool()?;
+        let system_id = reader.read_string()?;
+        let year = if reader.read_bool()? {
+            Some(reader.read_u16()?)
+        } else {
+            None
+        };
+        let manufacturer = reader.read_string()?;
+        let category = reader.read_string()?;
+        let is_new = reader.read_bool()?;
+        games.push(NavigationGame {
+            title,
+            launch_ref,
+            preview_archive_path,
+            preview_asset_key,
+            has_preview,
+            system_id,
+            year,
+            manufacturer,
+            category,
+            is_new,
+        });
+    }
+    let launch_plan_count = reader.read_len()?;
+    let mut launch_plans = Vec::with_capacity(launch_plan_count);
+    for _ in 0..launch_plan_count {
+        launch_plans.push(NavigationLaunchPlan {
+            launch_ref: reader.read_string()?,
+            title: reader.read_string()?,
+            system_id: reader.read_string()?,
+            core_path: reader.read_string()?,
+            payload_path: reader.read_string()?,
+            mount_kind: reader.read_string()?,
+            mount_index: reader.read_u8()?,
+            delay_secs: reader.read_u8()?,
+        });
+    }
+    reader.finish()?;
+    Ok(CatalogNavigationProjection {
+        schema,
+        catalog_schema_version,
+        catalog_build_version,
+        catalog_generation,
+        catalog_stamp_fingerprint,
+        catalog_stamp_lines,
+        systems,
+        games,
+        launch_plans,
+    })
+}
+
+fn write_len(out: &mut Vec<u8>, value: usize) -> Result<(), String> {
+    let value: u32 = value
+        .try_into()
+        .map_err(|_| "catalog navigation collection too large".to_string())?;
+    write_u32(out, value);
+    Ok(())
+}
+
+fn write_string(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
+    write_len(out, value.len())?;
+    out.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn write_bool(out: &mut Vec<u8>, value: bool) {
+    out.push(u8::from(value));
+}
+
+fn write_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+struct NavigationBinaryReader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> NavigationBinaryReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn expect_magic(&mut self, magic: &[u8]) -> Result<(), String> {
+        let bytes = self.take(magic.len())?;
+        if bytes == magic {
+            Ok(())
+        } else {
+            Err("navigation projection magic mismatch".to_string())
+        }
+    }
+
+    fn read_len(&mut self) -> Result<usize, String> {
+        self.read_u32()?
+            .try_into()
+            .map_err(|_| "navigation projection length too large".to_string())
+    }
+
+    fn read_string(&mut self) -> Result<String, String> {
+        let len = self.read_len()?;
+        let bytes = self.take(len)?;
+        std::str::from_utf8(bytes)
+            .map(str::to_string)
+            .map_err(|e| format!("navigation projection string is not utf-8: {e}"))
+    }
+
+    fn read_bool(&mut self) -> Result<bool, String> {
+        match self.read_u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => Err(format!("navigation projection bool value {value} is invalid")),
+        }
+    }
+
+    fn read_u8(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn read_u16(&mut self) -> Result<u16, String> {
+        let bytes = self.take(2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, String> {
+        let bytes = self.take(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, String> {
+        let bytes = self.take(8)?;
+        Ok(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .pos
+            .checked_add(len)
+            .ok_or_else(|| "navigation projection offset overflow".to_string())?;
+        if end > self.bytes.len() {
+            return Err("navigation projection is truncated".to_string());
+        }
+        let bytes = &self.bytes[self.pos..end];
+        self.pos = end;
+        Ok(bytes)
+    }
+
+    fn finish(self) -> Result<(), String> {
+        if self.pos == self.bytes.len() {
+            Ok(())
+        } else {
+            Err("navigation projection has trailing bytes".to_string())
+        }
+    }
 }
 
 fn write_bytes_atomically(final_path: &Path, bytes: &[u8]) -> Result<(), String> {
