@@ -4,14 +4,15 @@ use crate::launch_profiles::{self, LaunchProfile, ProfilePathClass};
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
 const DISCOVERY_EVENT_BUFFER: usize = 8192;
+const DEFAULT_PREFETCH_WORKERS: usize = 2;
 const ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES: usize = 64 * 1024;
 const ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 const ZIP_SKIP_BUFFER_BYTES: usize = 4 * 1024;
@@ -161,23 +162,39 @@ fn walk_index_candidates_streaming(
     let background_targets: Vec<(usize, PathBuf)> =
         targets.iter().cloned().enumerate().skip(1).collect();
     let background_count = background_targets.len();
-    // Keep the first target streaming for early progress, while one extra walker
-    // pre-scans later targets and replays them in deterministic target order.
+    // Keep the first target streaming for early progress, while background
+    // walkers pre-scan later targets and replay them in deterministic target
+    // order.
     if !background_targets.is_empty() {
-        let profiles = profiles.to_vec();
-        let candidate_exts = candidate_exts.clone();
-        std::thread::Builder::new()
-            .name("library-walker-prefetch".to_string())
-            .spawn(move || {
-                for (idx, target) in background_targets {
-                    let batch = collect_target_candidates(target, &profiles, &candidate_exts);
-                    if batch_tx.send((idx, batch)).is_err() {
-                        break;
+        let worker_count = prefetch_worker_count(background_count);
+        let queue = Arc::new(Mutex::new(
+            background_targets.into_iter().collect::<VecDeque<_>>(),
+        ));
+        let profiles = Arc::new(profiles.to_vec());
+        let candidate_exts = Arc::new(candidate_exts.clone());
+        for worker_idx in 0..worker_count {
+            let batch_tx = batch_tx.clone();
+            let queue = Arc::clone(&queue);
+            let profiles = Arc::clone(&profiles);
+            let candidate_exts = Arc::clone(&candidate_exts);
+            std::thread::Builder::new()
+                .name(format!("library-walker-prefetch-{worker_idx}"))
+                .spawn(move || {
+                    loop {
+                        let Some((idx, target)) = queue.lock().ok().and_then(|mut q| q.pop_front())
+                        else {
+                            break;
+                        };
+                        let batch = collect_target_candidates(target, &profiles, &candidate_exts);
+                        if batch_tx.send((idx, batch)).is_err() {
+                            break;
+                        }
                     }
-                }
-            })
-            .expect("spawn library-walker-prefetch");
+                })
+                .expect("spawn library-walker-prefetch");
+        }
     }
+    drop(batch_tx);
 
     let first_target = &targets[0];
     let first_stats = scan_target_candidates(first_target, profiles, candidate_exts, |file| {
@@ -209,6 +226,18 @@ fn walk_index_candidates_streaming(
         }
     }
     dirs
+}
+
+fn prefetch_worker_count(background_count: usize) -> usize {
+    if background_count == 0 {
+        return 0;
+    }
+    std::env::var("MISTER_LIBRARY_PREFETCH_WORKERS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(DEFAULT_PREFETCH_WORKERS)
+        .min(background_count)
 }
 
 fn collect_target_candidates(
@@ -754,6 +783,68 @@ mod tests {
             classify_profile_path(&profiles, Path::new("/media/fat/_Console/Game Gear.mgl"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn target_prefetch_replays_candidates_in_target_order_without_gaps() {
+        let root = unique_temp_dir("target-prefetch-order");
+        let nes = root.join("games/NES");
+        let snes = root.join("games/SNES");
+        let gba = root.join("games/GBA");
+        let gbc = root.join("games/GBC");
+        std::fs::create_dir_all(&nes).expect("create nes dir");
+        std::fs::create_dir_all(&snes).expect("create snes dir");
+        std::fs::create_dir_all(&gba).expect("create gba dir");
+        std::fs::create_dir_all(&gbc).expect("create gbc dir");
+        let paths = [
+            nes.join("01-first.nes"),
+            snes.join("02-second.sfc"),
+            gba.join("03-third.gba"),
+            gbc.join("04-fourth.gbc"),
+        ];
+        for path in &paths {
+            std::fs::write(path, "rom").expect("write candidate");
+        }
+        let profiles = launch_profiles::builtin_profiles();
+        let candidate_exts = source_index_extensions(&profiles);
+        let targets = vec![nes, snes, gba, gbc];
+        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
+
+        let dirs = walk_index_candidates_streaming(targets, &profiles, &candidate_exts, &tx);
+        drop(tx);
+        let found = rx
+            .try_iter()
+            .map(|event| match event {
+                DiscoveryEvent::File(file) => file.path,
+                DiscoveryEvent::Done { .. } => unreachable!("direct walk does not send done"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(dirs, 4);
+        assert_eq!(found, paths);
+        let unique = found.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), paths.len());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn target_prefetch_aborts_when_downstream_closes() {
+        let root = unique_temp_dir("target-prefetch-abort");
+        let nes = root.join("games/NES");
+        let snes = root.join("games/SNES");
+        std::fs::create_dir_all(&nes).expect("create nes dir");
+        std::fs::create_dir_all(&snes).expect("create snes dir");
+        std::fs::write(nes.join("01-first.nes"), "rom").expect("write first candidate");
+        std::fs::write(snes.join("02-second.sfc"), "rom").expect("write second candidate");
+        let profiles = launch_profiles::builtin_profiles();
+        let candidate_exts = source_index_extensions(&profiles);
+        let targets = vec![nes, snes];
+        let (tx, rx) = std::sync::mpsc::sync_channel(0);
+        drop(rx);
+
+        let dirs = walk_index_candidates_streaming(targets, &profiles, &candidate_exts, &tx);
+
+        assert_eq!(dirs, 1);
     }
 
     #[test]
