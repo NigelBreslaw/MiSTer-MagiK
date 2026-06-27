@@ -16,10 +16,12 @@ kill -9 $(pidof mister-magik-fb) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui video_playback 20
 ```
 
-With a `--video` build, run `video_playback`. It accepts a single file through
-`MISTER_VIDEO_PATH` and, after the playlist work, a folder through
-`MISTER_VIDEO_DIR`. The current compatibility default is
-`/media/fat/mister-magik/mslug3.mov`.
+With a `--video` build, run `video_playback`. It accepts a single looping file
+through `MISTER_VIDEO_PATH` or a filename-sorted `.mp4` folder playlist through
+`MISTER_VIDEO_DIR`. The folder default is
+`/media/fat/mister-magik/video-snaps/neogeo`, with the legacy
+`/media/fat/mister-magik/mslug3.mov` clip as a compatibility fallback when the
+folder is absent.
 
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
 production benchmark scenes. Build them with `scripts/deploy-rust.sh
@@ -49,13 +51,21 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PROFILE_FILE=…` | Write per-frame TSV |
 | `MISTER_TRACE_FILE=…` | Write Chrome/Perfetto trace JSON |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
+| `MISTER_VIDEO_RENDER_MODE=slint-image\|direct-blit` | Compare Slint image upload with direct RGB565 cached-buffer blit |
+| `MISTER_VIDEO_QUEUE_DEPTH=N` | Decode worker channel depth, default 2 |
+| `MISTER_VIDEO_SCALE=source\|fit-height\|fit-width\|native` | Runtime FFmpeg scaling mode within the 640x480 bench video target |
+| `MISTER_VIDEO_PROFILE=summary\|full\|trace` | Video-specific alias for `MISTER_PROFILE` |
+| `MISTER_VIDEO_THREADS=N` | FFmpeg decoder thread count where supported |
 
 Phase breakdown each frame: **prepare** (input/catalog/bridge work before Slint
 timers) · **anim** (Slint timers) · **slint-render** (software renderer) ·
 **custom-draw** (project-owned drawing such as arcade list layers) · **vsync**
 (`FBIO_WAITFORVSYNC`) · **fb-present** (dirty rect/rows → fb0). `fb-present` is
 also split into **cached-present** and **overlay-present** where applicable.
-**wall** = whole iteration.
+Video builds also add **video-decode**, **video-scale**, **video-recv**,
+**video-image**, **video-blit**, **audio-decode**, **audio-resample**, and
+**audio-write**, plus queue depth, audio buffer frames, underrun, codec, size,
+and file metadata. **wall** = whole iteration.
 
 Host-side profile reports (no MiSTer packages required):
 
@@ -85,8 +95,9 @@ appended to the `notes` field per row: `physical_mode`, `fb_size`,
 `render_size`, `fb_scale`, `pixel_repetition`, `uio_fb`, and `ini_mode`. PNG
 capture dimensions, stride, and bpp are read from `/sys/class/graphics/fb0`.
 
-Include the video scene and upload the local 320×224 H.264 + PCM benchmark clip:
+Sync the local Neo Geo MP4 snaps and run only the video scene:
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO --video --replace-label
+scripts/sync-video-snaps.sh
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-render-mode direct-blit --replace-label
 ```

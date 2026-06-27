@@ -19,6 +19,13 @@ DEFAULT_PHASES = [
     "fb_present_us",
     "cached_present_us",
     "arcade_list_present_us",
+    "video_decode_us",
+    "video_scale_us",
+    "video_image_us",
+    "video_blit_us",
+    "audio_decode_us",
+    "audio_resample_us",
+    "audio_write_us",
 ]
 
 BUCKETS_US = [

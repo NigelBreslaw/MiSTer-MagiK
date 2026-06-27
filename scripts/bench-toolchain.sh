@@ -19,8 +19,8 @@ MISTER="$HERE/scripts/mister"
 # Active benchmark scene set; retired synthetic Slint scenes are archived under
 # history/bench-scenes/.
 BENCH_SCENES=(launcher)
-VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
-VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magik/mslug3.mov}"
+VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/(SAMPLE) SNK Neo Geo AES (Video Snaps)(HQ)}"
+VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -41,6 +41,10 @@ DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
 LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
 LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
 VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-slint-image}"
+VIDEO_QUEUE_DEPTH="${MISTER_VIDEO_QUEUE_DEPTH:-2}"
+VIDEO_SCALE="${MISTER_VIDEO_SCALE:-source}"
+VIDEO_PROFILE="${MISTER_VIDEO_PROFILE:-summary}"
+VIDEO_THREADS="${MISTER_VIDEO_THREADS:-}"
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
 MIN_FPS="${MISTER_BENCH_MIN_FPS:-55}"
 MAX_VSYNC_FALLBACK="${MISTER_BENCH_MAX_VSYNC_FALLBACK:-0}"
@@ -61,6 +65,8 @@ usage() {
   echo "         --launcher-scenario idle|home-nav|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
   echo "         --launcher-dirty-opt on|off"
   echo "         --video-render-mode slint-image|direct-blit"
+  echo "         --video-queue-depth N  --video-scale source|fit-height|fit-width|native"
+  echo "         --video-profile summary|full|trace  --video-threads N"
   echo "         --ui-scope all|launcher|arcade"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
@@ -95,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     --launcher-scenario) LAUNCHER_SCENARIO="${2:?}"; shift 2 ;;
     --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
     --video-render-mode) VIDEO_RENDER_MODE="${2:?}"; shift 2 ;;
+    --video-queue-depth) VIDEO_QUEUE_DEPTH="${2:?}"; shift 2 ;;
+    --video-scale) VIDEO_SCALE="${2:?}"; shift 2 ;;
+    --video-profile) VIDEO_PROFILE="${2:?}"; shift 2 ;;
+    --video-threads) VIDEO_THREADS="${2:?}"; shift 2 ;;
     --ui-scope) UI_SCOPE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
@@ -126,6 +136,23 @@ esac
 case "$VIDEO_RENDER_MODE" in
   slint-image|direct-blit) ;;
   *) echo "Unknown --video-render-mode: $VIDEO_RENDER_MODE" >&2; exit 1 ;;
+esac
+case "$VIDEO_QUEUE_DEPTH" in
+  ''|*[!0-9]*) echo "Invalid --video-queue-depth: $VIDEO_QUEUE_DEPTH" >&2; exit 1 ;;
+  *) ;;
+esac
+case "$VIDEO_SCALE" in
+  source|fit-height|fit-width|native) ;;
+  *) echo "Unknown --video-scale: $VIDEO_SCALE" >&2; exit 1 ;;
+esac
+case "$VIDEO_PROFILE" in
+  summary|full|trace) ;;
+  *) echo "Unknown --video-profile: $VIDEO_PROFILE" >&2; exit 1 ;;
+esac
+case "$VIDEO_THREADS" in
+  '') ;;
+  *[!0-9]*) echo "Invalid --video-threads: $VIDEO_THREADS" >&2; exit 1 ;;
+  *) ;;
 esac
 case "$UI_SCOPE" in
   all|launcher|arcade) ;;
@@ -369,6 +396,12 @@ function value_after(line, key, rest) {
 /^video_render_mode=/ {
   video_render_mode = value_after($0, "video_render_mode=")
 }
+/^video_controls / {
+  video_queue_depth = value_after($0, "queue_depth=")
+  video_scale = value_after($0, "scale=")
+  video_profile = value_after($0, "profile=")
+  video_threads = value_after($0, "threads=")
+}
 /^display-config:/ {
   fb0 = value_after($0, "fb0=")
   physical = value_after($0, "uio_vres=")
@@ -392,6 +425,10 @@ END {
   add_note("launcher_scenario", launcher_scenario)
   add_note("launcher_dirty_opt", launcher_dirty_opt)
   add_note("video_render_mode", video_render_mode)
+  add_note("video_queue_depth", video_queue_depth)
+  add_note("video_scale", video_scale)
+  add_note("video_profile", video_profile)
+  add_note("video_threads", video_threads)
   print out
 }
 ' "$ui_log"
@@ -646,7 +683,11 @@ set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz.
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep $SETTLE_SECS
-MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_RENDER_MODE=$VIDEO_RENDER_MODE $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+if [ '$scene' = 'video_playback' ]; then
+  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_RENDER_MODE=$VIDEO_RENDER_MODE MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_QUEUE_DEPTH=$VIDEO_QUEUE_DEPTH MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_VIDEO_THREADS=$VIDEO_THREADS $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+else
+  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+fi
 UI_PID=\$!
 CPU_SUM=0
 CPU_MAX=0
@@ -877,12 +918,8 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"
   if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
-    if [[ ! -f "$VIDEO_SRC" ]]; then
-      echo "Video benchmark source missing: $VIDEO_SRC" >&2
-      exit 1
-    fi
-    echo "==> Deploy video $VIDEO_SRC -> $VIDEO_REMOTE"
-    mister put "$VIDEO_SRC" "$VIDEO_REMOTE"
+    echo "==> Sync video snaps $VIDEO_SRC_DIR -> $VIDEO_REMOTE_DIR"
+    "$HERE/scripts/sync-video-snaps.sh" "$VIDEO_SRC_DIR" "$VIDEO_REMOTE_DIR"
   fi
   mister run "file $REMOTE && ldd $REMOTE 2>&1 | head -3" || HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ldd-fail"
   ini_mode_notes="$(detect_ini_mode_notes || true)"

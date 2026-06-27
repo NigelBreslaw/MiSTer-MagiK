@@ -52,6 +52,7 @@ pub(super) fn run_bench_frame(
                 vsync_source: pace.source,
                 vsync_period_us: pace.period_us,
                 vsync_miss_streak: pace.miss_streak,
+                video: crate::frame_profile::VideoFrameProfile::default(),
             }
         }
         FrameOrder::VsyncThenRender => {
@@ -91,6 +92,7 @@ pub(super) fn run_bench_frame(
                 vsync_source: pace.source,
                 vsync_period_us: pace.period_us,
                 vsync_miss_streak: pace.miss_streak,
+                video: crate::frame_profile::VideoFrameProfile::default(),
             }
         }
     }

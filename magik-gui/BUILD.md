@@ -142,7 +142,7 @@ magik-gui/build-arm.sh --profile
 magik-gui/build-arm.sh --video
 # Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
 # Video builds force all-scenes UI scope because video_playback.slint is a bench scene.
-# Default media path on MiSTer: /media/fat/mister-magik/mslug3.mov
+# Default media folder on MiSTer: /media/fat/mister-magik/video-snaps/neogeo
 
 # Deploy runtime binary only (default = release-device).
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
