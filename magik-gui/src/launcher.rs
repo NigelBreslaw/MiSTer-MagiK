@@ -2039,6 +2039,15 @@ mod tests {
         let _ = nav.handle_input(&PadState::default(), t + Duration::from_millis(ms), catalog);
     }
 
+    fn assert_no_catalog_loads_during(action: impl FnOnce()) {
+        library_db::reset_catalog_load_counters();
+        action();
+        assert_eq!(
+            library_db::catalog_load_counters(),
+            library_db::CatalogLoadCounters::default()
+        );
+    }
+
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         let path =
             std::env::temp_dir().join(format!("mister-magik-{label}-{}", std::process::id()));
@@ -2118,6 +2127,56 @@ mod tests {
         let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(64), &catalog);
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
         assert!(!nav.arcade_filter.drawer_open);
+    }
+
+    #[test]
+    fn repeated_arcade_entry_and_filter_navigation_do_not_query_catalog_storage() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let press_b = pad_with(|pad| pad.btn_b = true);
+        let press_left = pad_with(|pad| pad.dpad_left = true);
+        let press_down = pad_with(|pad| pad.dpad_down = true);
+        let press_right = pad_with(|pad| pad.dpad_right = true);
+
+        assert_no_catalog_loads_during(|| {
+            let _ = nav.handle_input(&press_a, t0, &catalog);
+            release(&mut nav, &catalog, t0, 16);
+            let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(32), &catalog);
+            release(&mut nav, &catalog, t0, 48);
+            let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog);
+            release(&mut nav, &catalog, t0, 80);
+            let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(96), &catalog);
+            release(&mut nav, &catalog, t0, 112);
+            let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
+            release(&mut nav, &catalog, t0, 144);
+            let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(160), &catalog);
+            release(&mut nav, &catalog, t0, 176);
+            let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(192), &catalog);
+        });
+    }
+
+    #[test]
+    fn launch_return_restore_does_not_query_catalog_storage() {
+        let catalog = filter_catalog();
+        let state = LaunchReturnState {
+            schema_version: LAUNCH_RETURN_STATE_SCHEMA,
+            screen: "arcade".to_string(),
+            system_id: "arcade".to_string(),
+            system_index: 0,
+            game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
+            game_index: 0,
+            filter_kind: Some("decade".to_string()),
+            filter_value: Some("1980".to_string()),
+        };
+        let mut nav = LauncherNav::new();
+
+        assert_no_catalog_loads_during(|| {
+            assert!(apply_launch_return_state(&mut nav, &catalog, state));
+        });
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::Decade(1980));
     }
 
     #[test]

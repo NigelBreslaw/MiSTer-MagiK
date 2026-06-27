@@ -298,10 +298,11 @@ fn read_catalog_summary_seed(
             start,
             "catalog_summary_load",
             format!(
-                "status=sqlite_missing elapsed_us={} sqlite_path={} path={}",
+                "status=sqlite_missing elapsed_us={} sqlite_path={} path={} {}",
                 summary_t.elapsed().as_micros(),
                 sqlite_path.display(),
-                summary_path.display()
+                summary_path.display(),
+                library_db::catalog_load_counter_detail()
             ),
         );
         return None;
@@ -311,10 +312,11 @@ fn read_catalog_summary_seed(
             start,
             "catalog_summary_load",
             format!(
-                "status=sqlite_unusable elapsed_us={} sqlite_path={} path={}",
+                "status=sqlite_unusable elapsed_us={} sqlite_path={} path={} {}",
                 summary_t.elapsed().as_micros(),
                 sqlite_path.display(),
-                summary_path.display()
+                summary_path.display(),
+                library_db::catalog_load_counter_detail()
             ),
         );
         return None;
@@ -326,11 +328,12 @@ fn read_catalog_summary_seed(
                 start,
                 "catalog_summary_load",
                 format!(
-                    "status=ready systems={} games={} elapsed_us={} path={}",
+                    "status=ready systems={} games={} elapsed_us={} path={} {}",
                     summary.systems.len(),
                     summary.total_game_count,
                     summary_t.elapsed().as_micros(),
-                    summary_path.display()
+                    summary_path.display(),
+                    library_db::catalog_load_counter_detail()
                 ),
             );
             Some(summary)
@@ -340,9 +343,10 @@ fn read_catalog_summary_seed(
                 start,
                 "catalog_summary_load",
                 format!(
-                    "status=empty elapsed_us={} path={}",
+                    "status=empty elapsed_us={} path={} {}",
                     summary_t.elapsed().as_micros(),
-                    summary_path.display()
+                    summary_path.display(),
+                    library_db::catalog_load_counter_detail()
                 ),
             );
             None
@@ -352,9 +356,10 @@ fn read_catalog_summary_seed(
                 start,
                 "catalog_summary_load",
                 format!(
-                    "status=missing_or_stale elapsed_us={} path={}",
+                    "status=missing_or_stale elapsed_us={} path={} {}",
                     summary_t.elapsed().as_micros(),
-                    summary_path.display()
+                    summary_path.display(),
+                    library_db::catalog_load_counter_detail()
                 ),
             );
             None
@@ -364,10 +369,11 @@ fn read_catalog_summary_seed(
                 start,
                 "catalog_summary_load_failed",
                 format!(
-                    "elapsed_us={} path={} error={}",
+                    "elapsed_us={} path={} error={} {}",
                     summary_t.elapsed().as_micros(),
                     summary_path.display(),
-                    e
+                    e,
+                    library_db::catalog_load_counter_detail()
                 ),
             );
             None
@@ -664,6 +670,7 @@ pub(super) fn run_launcher_loop(
             );
         }
     } else {
+        library_db::record_catalog_ui_load();
         match library_db::load_arcade_catalog_from_sqlite(&arcade_root) {
             Ok(loaded) if !loaded.catalog.games.is_empty() => {
                 print_startup_event(

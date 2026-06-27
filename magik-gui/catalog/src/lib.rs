@@ -5,6 +5,7 @@ pub mod catalog_build;
 pub mod catalog_classify;
 pub mod catalog_config;
 mod catalog_projection;
+mod catalog_load_metrics;
 mod catalog_progress;
 mod catalog_scan;
 pub mod catalog_stamp;

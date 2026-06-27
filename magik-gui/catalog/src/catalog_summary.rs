@@ -2,6 +2,7 @@
 
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
+use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::media_identity;
 use crate::sqlite_catalog;
@@ -48,6 +49,7 @@ pub(crate) fn write_catalog_summary_for_catalog(
 pub fn read_catalog_summary(
     summary_path: &Path,
 ) -> Result<Option<CatalogSummaryProjection>, String> {
+    catalog_load_metrics::record_summary_read();
     let text = match std::fs::read_to_string(summary_path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),

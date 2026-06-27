@@ -1,6 +1,7 @@
 //! SQLite catalog import, publish, and loading.
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
+use crate::catalog_load_metrics;
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
@@ -273,6 +274,7 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
 ) -> Result<LibraryCatalogLoad, String> {
     let t = Instant::now();
     let open_t = Instant::now();
+    catalog_load_metrics::record_sqlite_open();
     let conn = open_sqlite_read_only(path).map_err(|e| format!("open library db: {e}"))?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     ensure_sqlite_schema_current(&conn)?;
@@ -1853,6 +1855,7 @@ pub(crate) fn sqlite_cached_summary(
     path: &Path,
     scan_us: u64,
 ) -> Result<LibraryRefreshSummary, String> {
+    catalog_load_metrics::record_sqlite_open();
     let conn = open_sqlite_read_only(path).map_err(|e| format!("open cached summary: {e}"))?;
     ensure_sqlite_schema_current(&conn)?;
     let bytes = std::fs::metadata(path)
