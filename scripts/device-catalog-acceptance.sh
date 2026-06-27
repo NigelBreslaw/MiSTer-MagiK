@@ -58,6 +58,23 @@ last_number() {
   awk 'NF { value=$NF } END { gsub(/[^0-9]/, "", value); print value }'
 }
 
+first_result_number() {
+  awk '
+    /^library_sql_timing_tsv[[:space:]]/ { next }
+    NF && seen_header {
+      value=$1
+      gsub(/[^0-9]/, "", value)
+      print value
+      exit
+    }
+    NF { seen_header=1 }
+  '
+}
+
+db_scalar() {
+  db "$1" | first_result_number
+}
+
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
   if [ "$actual" != "$expected" ]; then
@@ -87,7 +104,7 @@ pack_exists_for_platform() {
 
 preview_count_for_platform() {
   local platform="$1"
-  db "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';" | last_number
+  db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';"
 }
 
 arcade_pack_exists() {
@@ -111,7 +128,7 @@ remote "test -s '$REMOTE_DB'"
 echo "ok: $REMOTE_DB is present and non-empty"
 
 launcher_catalog_tables="$(
-  db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';" | last_number
+  db_scalar "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';"
 )"
 assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
 
@@ -130,7 +147,7 @@ console_pack_count="$(
 )"
 if [ "$console_pack_count" -gt 0 ]; then
   asset_entry_tables="$(
-    db "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" | last_number
+    db_scalar "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';"
   )"
   assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
 fi
