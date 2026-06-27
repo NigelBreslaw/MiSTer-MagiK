@@ -25,17 +25,9 @@ fn main() {
     }
 
     let mut sources = vec!["../ui/controller_test.slint", "../ui/launcher.slint"];
-    if !launcher_only && bench_scenes {
-        sources.push("../ui/app.slint");
-    }
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
-        sources.extend([
-            "../ui/bench/full_motion.slint",
-            "../ui/bench/static_ui.slint",
-            "../ui/bench/local_motion.slint",
-            "../ui/bench/effect_hud.slint",
-        ]);
+        sources.push("../ui/experiments/effect_hud.slint");
         if video {
             sources.push("../ui/bench/video_playback.slint");
         }
@@ -54,16 +46,8 @@ fn main() {
         "../ui/fonts/PressStart2P-Regular.ttf",
         "../ui/icons/settings.svg",
     ];
-    if !launcher_only && bench_scenes {
-        inputs.push("../ui/app.slint");
-    }
     if bench_scenes {
-        inputs.extend([
-            "../ui/bench/effect_hud.slint",
-            "../ui/bench/full_motion.slint",
-            "../ui/bench/local_motion.slint",
-            "../ui/bench/static_ui.slint",
-        ]);
+        inputs.push("../ui/experiments/effect_hud.slint");
         if video {
             inputs.push("../ui/bench/video_playback.slint");
         }

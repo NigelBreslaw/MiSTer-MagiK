@@ -3,12 +3,12 @@
 #
 # Common PR4 flow:
 #   scripts/mister-video-mode-test.sh set-960
-#   scripts/mister-video-mode-test.sh magik-run static_ui 12
+#   scripts/mister-video-mode-test.sh magik-run launcher 12
 #   scripts/mister-video-mode-test.sh restore
 #
 # Common PR5 flow:
 #   scripts/mister-video-mode-test.sh sweep-list
-#   scripts/mister-video-mode-test.sh sweep-mode 960 static_ui
+#   scripts/mister-video-mode-test.sh sweep-mode 960 launcher
 #   # visually verify, then repeat for the next label
 set -euo pipefail
 
@@ -37,10 +37,10 @@ Usage:
 
 Examples:
   scripts/mister-video-mode-test.sh set-960
-  scripts/mister-video-mode-test.sh magik-run static_ui 12
+  scripts/mister-video-mode-test.sh magik-run launcher 12
   scripts/mister-video-mode-test.sh magik-sweep 12
   scripts/mister-video-mode-test.sh sweep-list
-  scripts/mister-video-mode-test.sh sweep-mode 720p static_ui
+  scripts/mister-video-mode-test.sh sweep-mode 720p launcher
   scripts/mister-video-mode-test.sh stock-ui-mode high
   scripts/mister-video-mode-test.sh stock-ui-auto
   scripts/mister-video-mode-test.sh crt-list
@@ -84,10 +84,10 @@ Representative HDMI mode sweep labels:
   high    -> 14             (MiSTer pixel-repetition preset, optional)
 
 Run one visual checkpoint at a time:
-  scripts/mister-video-mode-test.sh sweep-mode auto static_ui
-  scripts/mister-video-mode-test.sh sweep-mode low static_ui
-  scripts/mister-video-mode-test.sh sweep-mode 960 static_ui
-  scripts/mister-video-mode-test.sh sweep-mode 720p full_motion
+  scripts/mister-video-mode-test.sh sweep-mode auto launcher
+  scripts/mister-video-mode-test.sh sweep-mode low launcher
+  scripts/mister-video-mode-test.sh sweep-mode 960 launcher
+  scripts/mister-video-mode-test.sh sweep-mode 720p launcher
 
 Use the preset labels for standard HDMI modes. Custom WIDTH,HEIGHT,REFRESH
 values ask MiSTer to synthesize a CVT mode, which may not match stock timings.
@@ -165,7 +165,7 @@ set_mode() {
 
   echo "==> Rebooting into video_mode=$mode"
   mister reboot-wait
-  echo "==> Mode set; run a scene with: scripts/mister-video-mode-test.sh magik-run static_ui 12"
+  echo "==> Mode set; run a scene with: scripts/mister-video-mode-test.sh magik-run launcher 12"
 }
 
 write_mode_no_reboot() {
@@ -257,7 +257,7 @@ restore_mode() {
 
 safe_scene() {
   case "$1" in
-    demo|full_motion|static_ui|local_motion|launcher|controller_test) return 0 ;;
+    launcher|controller_test|video_playback) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -287,7 +287,7 @@ show_bench_log() {
 }
 
 magik_run() {
-  local scene="${1:-static_ui}"
+  local scene="${1:-launcher}"
   local secs="${2:-12}"
   echo "==> Running through MiSTer MagiK bench boot scene=$scene secs=$secs"
   write_bench_request "$scene" "$secs"
@@ -297,7 +297,7 @@ magik_run() {
 
 magik_sweep() {
   local secs="${1:-12}"
-  local scenes=(static_ui full_motion local_motion demo)
+  local scenes=(launcher controller_test)
   for scene in "${scenes[@]}"; do
     echo "=== MiSTer MagiK sweep scene=$scene secs=$secs ==="
     write_bench_request "$scene" "$secs"
@@ -332,7 +332,7 @@ capture_current_fb_png() {
 
 sweep_mode() {
   local label="${1:-}"
-  local scene="${2:-static_ui}"
+  local scene="${2:-launcher}"
   [[ -n "$label" ]] || {
     echo "sweep-mode needs a mode label; run sweep-list" >&2
     exit 2
@@ -501,14 +501,14 @@ crt_smoke() {
     comment_main_for_probe "$dir"/MiSTer.ini.*.crt "$stock_ini"
     mister put "$stock_ini" "$REMOTE_INI"
   else
-    write_bench_request static_ui 0
+    write_bench_request launcher 0
   fi
 
   echo "==> Rebooting into CRT/direct-video smoke path"
   mister reboot-wait
   if [[ "$owner" == "magik" ]]; then
-    mister run "for i in \$(seq 1 30); do test -f '/tmp/mister-magik-bench-static_ui.log' && break; sleep 1; done; sleep 6"
-    mister get /tmp/mister-magik-bench-static_ui.log "$dir/static_ui.log" || true
+    mister run "for i in \$(seq 1 30); do test -f '/tmp/mister-magik-bench-launcher.log' && break; sleep 1; done; sleep 6"
+    mister get /tmp/mister-magik-bench-launcher.log "$dir/launcher.log" || true
     mister get /tmp/mister-magik/main-status.json "$dir/main-status.json" || true
   fi
   mister run "awk 'BEGIN{s=\"global\"} /^\\[/ {s=\$0} /^[;[:space:]]*(main|video_mode|direct_video|menu_pal|forced_scandoubler|fb_size|fb_terminal)[[:space:]]*=/ {print s \" \" NR \":\" \$0}' '$REMOTE_INI'; echo -n 'fb_mode='; cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true; echo; cat /tmp/mister-magik/main-status.json 2>/dev/null || true" \

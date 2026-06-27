@@ -34,7 +34,9 @@ use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::display_config::{detect_runtime_display_geometry, DisplayConfig};
 #[cfg(mister_bench_scenes)]
-use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample};
+use crate::frame_profile::FrameRect;
+#[cfg(all(feature = "video", mister_bench_scenes))]
+use crate::frame_profile::{FrameProfiler, FrameSample};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
@@ -95,8 +97,6 @@ mod text_effects_loop;
 #[cfg(mister_experiments)]
 mod transition_effects_loop;
 pub(crate) mod ui_boot;
-#[cfg(mister_bench_scenes)]
-mod ui_frame_loop;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 #[cfg(all(feature = "video", mister_bench_scenes))]
@@ -130,8 +130,6 @@ use text_effects_loop::run_text_effects_loop;
 #[cfg(mister_experiments)]
 use transition_effects_loop::run_transition_effects_loop;
 use ui_boot::*;
-#[cfg(mister_bench_scenes)]
-use ui_frame_loop::*;
 use ui_frame_target::*;
 use ui_platform::*;
 #[cfg(all(feature = "video", mister_bench_scenes))]
@@ -165,15 +163,7 @@ pub const UI_SCENES: &[&str] = &[
     "raster-effects",
     #[cfg(mister_experiments)]
     "transition-effects",
-    #[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
-    "demo",
     "controller_test",
-    #[cfg(mister_bench_scenes)]
-    "full_motion",
-    #[cfg(mister_bench_scenes)]
-    "static_ui",
-    #[cfg(mister_bench_scenes)]
-    "local_motion",
     #[cfg(all(feature = "video", mister_bench_scenes))]
     "video_playback",
 ];
@@ -337,70 +327,6 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
-        #[cfg(all(not(mister_ui_scope_launcher), mister_bench_scenes))]
-        "demo" => {
-            with_scene_app!(app::AppWindow, &ui, &window, app, {
-                app.show().expect("show");
-                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
-                run_frame_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    f,
-                    &window,
-                    &mut target,
-                    &animation_clock,
-                );
-            });
-        }
-        #[cfg(mister_bench_scenes)]
-        "full_motion" => {
-            with_scene_app!(full_motion::FullMotion, &ui, &window, app, {
-                app.show().expect("show");
-                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
-                run_frame_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    f,
-                    &window,
-                    &mut target,
-                    &animation_clock,
-                );
-            });
-        }
-        #[cfg(mister_bench_scenes)]
-        "static_ui" => {
-            with_scene_app!(static_ui::StaticUi, &ui, &window, app, {
-                app.show().expect("show");
-                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
-                run_frame_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    f,
-                    &window,
-                    &mut target,
-                    &animation_clock,
-                );
-            });
-        }
-        #[cfg(mister_bench_scenes)]
-        "local_motion" => {
-            with_scene_app!(local_motion::LocalMotion, &ui, &window, app, {
-                app.show().expect("show");
-                let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
-                run_frame_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    f,
-                    &window,
-                    &mut target,
-                    &animation_clock,
-                );
-            });
-        }
         #[cfg(all(feature = "video", mister_bench_scenes))]
         "video_playback" => {
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Benchmark a toolchain configuration: host compile time + binary size, then each
-# Slint bench scene on the MiSTer (timings, CPU, framebuffer PNG).
+# Benchmark a toolchain configuration: host compile time + binary size, then the
+# production launcher or media scene on the MiSTer (timings, CPU, framebuffer PNG).
 #
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh A0 --clean
 #
@@ -10,16 +10,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release-device
-# Toolchain benchmarks need the Slint bench scene set even though ordinary UI
-# builds now omit it for faster local iteration.
 BUILD_FLAG=(--device --all-scenes)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
 
-# Slint scenes (see magik-gui/ui/bench/README.md)
-BENCH_SCENES=(demo full_motion static_ui local_motion)
+# Active benchmark scene set; retired synthetic Slint scenes are archived under
+# history/bench-scenes/.
+BENCH_SCENES=(launcher)
 VIDEO_SRC="${MISTER_VIDEO_SRC:-$HERE/build/video/mslug3_320x224_60_h264_baseline_pcm_s16le_mono.mov}"
 VIDEO_REMOTE="${MISTER_VIDEO_REMOTE:-/media/fat/mister-magik/mslug3.mov}"
 
