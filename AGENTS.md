@@ -84,6 +84,8 @@ default. Override with `MISTER_MAIN_DIR`.
 - Never stage private source screenshots, generated caches, snapshot archives,
   `.env`, `.wrangler/`, or Cloudflare credentials. The parent repo should see
   only the submodule gitlink, not private file contents.
+- Local real-device test fixtures may live under ignored `private/test-fixtures/`;
+  use them for optional validation only and never stage their contents.
 - Treat `reference/` as read-only. Do not commit changes there.
 - Preserve user changes. Do not reset, checkout, or clean unrelated work.
 

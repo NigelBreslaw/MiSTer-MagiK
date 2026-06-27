@@ -467,11 +467,14 @@ pub enum ArcadeSearchPane {
 #[derive(Clone, Debug)]
 pub struct ArcadeSearchState {
     pub query: String,
+    pub suggestion: String,
     pub selected_key: usize,
     pub pane: ArcadeSearchPane,
     results: Vec<usize>,
     result_system_id: String,
     result_query: String,
+    suggestion_system_id: String,
+    suggestion_query: String,
 }
 
 impl Default for ArcadeSearchState {
@@ -484,11 +487,14 @@ impl ArcadeSearchState {
     pub fn new() -> Self {
         Self {
             query: String::new(),
+            suggestion: String::new(),
             selected_key: 0,
             pane: ArcadeSearchPane::Keyboard,
             results: Vec::new(),
             result_system_id: String::new(),
             result_query: String::new(),
+            suggestion_system_id: String::new(),
+            suggestion_query: String::new(),
         }
     }
 
@@ -694,7 +700,7 @@ impl LauncherNav {
         }
 
         if self.arcade_search.is_active(&self.arcade_filter.active) {
-            return self.handle_arcade_search(now, frame_now, catalog, system_id, count);
+            return self.handle_arcade_search(now, frame_now, catalog, system_id);
         }
 
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
@@ -746,9 +752,9 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         system_id: &str,
-        count: usize,
     ) -> Option<LauncherEvent> {
         self.ensure_arcade_search_results(catalog, system_id);
+        let count = self.active_arcade_game_count(catalog, system_id);
         if rising(now.btn_home, self.prev.btn_home) {
             if !system_id.is_empty() {
                 self.save_game_list_state(system_id);
@@ -767,14 +773,15 @@ impl LauncherNav {
                     }
                     return None;
                 }
+                if rising(now.btn_y, self.prev.btn_y) {
+                    self.accept_arcade_search_suggestion(catalog, system_id);
+                    return None;
+                }
                 if self.repeat.tick_left(now.dpad_left, frame_now) {
                     self.move_arcade_search_key(-1, 0);
                 }
                 if self.repeat.tick_right(now.dpad_right, frame_now) {
-                    if search_key_col(self.arcade_search.selected_key) + 1
-                        >= ARCADE_SEARCH_KEY_COLUMNS
-                        && count > 0
-                    {
+                    if search_key_is_row_end(self.arcade_search.selected_key) && count > 0 {
                         self.arcade_search.pane = ArcadeSearchPane::Results;
                     } else {
                         self.move_arcade_search_key(1, 0);
@@ -1217,6 +1224,8 @@ impl LauncherNav {
     fn ensure_arcade_search_results(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
         if self.arcade_search.result_system_id != system_id
             || self.arcade_search.result_query != self.arcade_search.query
+            || self.arcade_search.suggestion_system_id != system_id
+            || self.arcade_search.suggestion_query != self.arcade_search.query
         {
             self.refresh_arcade_search_results(catalog, system_id);
         }
@@ -1225,8 +1234,12 @@ impl LauncherNav {
     fn refresh_arcade_search_results(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
         self.arcade_search.results =
             catalog.search_game_indexes(system_id, &self.arcade_search.query);
+        self.arcade_search.suggestion =
+            catalog.autocomplete_search_word(system_id, &self.arcade_search.query);
         self.arcade_search.result_system_id = system_id.to_string();
         self.arcade_search.result_query = self.arcade_search.query.clone();
+        self.arcade_search.suggestion_system_id = system_id.to_string();
+        self.arcade_search.suggestion_query = self.arcade_search.query.clone();
         let count = self.arcade_search.results.len();
         if count == 0 {
             self.arcade.reset();
@@ -1267,6 +1280,15 @@ impl LauncherNav {
             "CLEAR" => self.arcade_search.query.clear(),
             value => self.arcade_search.query.push_str(value),
         }
+        self.refresh_arcade_search_results(catalog, system_id);
+    }
+
+    fn accept_arcade_search_suggestion(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+        if self.arcade_search.suggestion.is_empty() {
+            return;
+        }
+        let suggestion = self.arcade_search.suggestion.clone();
+        replace_current_search_word(&mut self.arcade_search.query, &suggestion);
         self.refresh_arcade_search_results(catalog, system_id);
     }
 
@@ -1316,16 +1338,30 @@ fn filter_memory_key(filter: &ArcadeFilter) -> String {
     }
 }
 
-fn search_key_col(index: usize) -> usize {
-    index % ARCADE_SEARCH_KEY_COLUMNS
-}
-
 fn search_row_len(row: usize) -> usize {
     let start = row * ARCADE_SEARCH_KEY_COLUMNS;
     ARCADE_SEARCH_KEYS
         .len()
         .saturating_sub(start)
         .min(ARCADE_SEARCH_KEY_COLUMNS)
+}
+
+fn search_key_is_row_end(index: usize) -> bool {
+    let row = index / ARCADE_SEARCH_KEY_COLUMNS;
+    let col = index % ARCADE_SEARCH_KEY_COLUMNS;
+    col + 1 >= search_row_len(row)
+}
+
+fn replace_current_search_word(query: &mut String, suggestion: &str) {
+    let trim_end_len = query.trim_end_matches(char::is_whitespace).len();
+    query.truncate(trim_end_len);
+    let start = query
+        .rfind(char::is_whitespace)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    query.truncate(start);
+    query.push_str(suggestion);
+    query.push(' ');
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2544,6 +2580,98 @@ mod tests {
             event.path.as_deref(),
             Some("/media/fat/_Arcade/brawl-1988.mra")
         );
+    }
+
+    #[test]
+    fn arcade_search_accepts_autocomplete_word_with_y() {
+        let catalog = ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            vec![
+                ArcadeGameEntry {
+                    title: "Street Fighter II".into(),
+                    mra_path: "/media/fat/_Arcade/sf2.mra".into(),
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
+                    system_id: "arcade".into(),
+                    year: Some(1991),
+                    manufacturer: "Capcom".into(),
+                    category: "Fighter / 2D".into(),
+                    is_new: false,
+                },
+                ArcadeGameEntry {
+                    title: "Street Hoop".into(),
+                    mra_path: "/media/fat/_Arcade/strhoop.mra".into(),
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
+                    system_id: "arcade".into(),
+                    year: Some(1994),
+                    manufacturer: "Data East".into(),
+                    category: "Sports".into(),
+                    is_new: false,
+                },
+            ],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 2,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Arcade;
+        nav.enter_arcade_search(&catalog, "arcade");
+
+        nav.arcade_search.query = "str".to_string();
+        nav.refresh_arcade_search_results(&catalog, "arcade");
+        assert_eq!(nav.arcade_search.suggestion, "street");
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_y = true), t0, &catalog);
+        assert_eq!(nav.arcade_search.query, "street ");
+
+        release(&mut nav, &catalog, t0, 16);
+        nav.arcade_search.query = "street f".to_string();
+        nav.refresh_arcade_search_results(&catalog, "arcade");
+        assert_eq!(nav.arcade_search.suggestion, "fighter");
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_y = true),
+            t0 + Duration::from_millis(32),
+            &catalog,
+        );
+        assert_eq!(nav.arcade_search.query, "street fighter ");
+        assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 1);
+    }
+
+    #[test]
+    fn arcade_search_y_does_nothing_without_suggestion() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.enter_arcade_search(&catalog, "arcade");
+        nav.arcade_search.query = "x".to_string();
+        nav.refresh_arcade_search_results(&catalog, "arcade");
+
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_y = true), Instant::now(), &catalog);
+
+        assert_eq!(nav.arcade_search.query, "x");
+        assert_eq!(nav.arcade_search.suggestion, "");
+    }
+
+    #[test]
+    fn arcade_search_right_from_short_final_row_enters_results() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.enter_arcade_search(&catalog, "arcade");
+        nav.arcade_search.selected_key = ARCADE_SEARCH_KEYS.len() - 1;
+
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.dpad_right = true),
+            Instant::now(),
+            &catalog,
+        );
+
+        assert_eq!(nav.arcade_search.pane, ArcadeSearchPane::Results);
     }
 
     #[test]

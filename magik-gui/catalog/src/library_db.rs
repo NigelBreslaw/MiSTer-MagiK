@@ -1290,9 +1290,8 @@ mod tests {
         let archive_launch_ref =
             "/media/fat/games/NES/Collection.zip/Collection/Legend of Zelda.nes";
         let archive_entry = GameDiscovery {
-            source_path: format!(
-                "/media/fat/games/NES/Collection.zip::Collection/Legend of Zelda.nes"
-            ),
+            source_path:
+                "/media/fat/games/NES/Collection.zip::Collection/Legend of Zelda.nes".to_string(),
             launch_ref: archive_launch_ref.to_string(),
             source_kind: DiscoverySourceKind::ArchiveEntry,
             title: "Legend of Zelda".to_string(),

@@ -53,6 +53,31 @@ query-output byte count. If `scripts/mister db` reports that it is using the
 SFTP fallback, the timing describes the host-side local query of a copied
 database, not direct device SQLite performance.
 
+## Launcher Search
+
+The Arcade `Search` filter is a runtime UI index, not a catalog table or a
+SQLite hot path. When the launcher hydrates the in-memory `ArcadeCatalog`, it
+also builds normalized search keys and a small autocomplete word index from each
+game's title, launch path basename, manufacturer, category, year, and decade.
+Typing on the virtual keyboard scans only the active system's in-memory rows and
+updates the Rust-painted result list plus the Slint suggestion strip in the next
+UI sync.
+
+Search matching treats punctuation as whitespace and ranks visible fields above
+launch-path matches. Metadata is first-class: a query such as `capcom` matches
+games whose manufacturer is Capcom even if the title does not contain that word.
+Autocomplete remains separate from result search; it suggests one word for the
+current partial token, prioritizing current-system title and metadata words over
+noisy path or region tokens.
+
+Real-library search expectations can be checked with a local, ignored fixture:
+
+```bash
+mkdir -p private/test-fixtures
+scripts/mister db "SELECT system_id,title,launch_ref,COALESCE(year,''),COALESCE(manufacturer,''),COALESCE(category,'') FROM launcher_catalog ORDER BY system_id,title" > private/test-fixtures/autocomplete-launcher-catalog.tsv
+cargo test --manifest-path magik-gui/catalog/Cargo.toml arcade_search
+```
+
 ## Lifecycle
 
 Cold or reset database:

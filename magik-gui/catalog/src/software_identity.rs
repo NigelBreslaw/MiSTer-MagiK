@@ -720,18 +720,20 @@ pub(crate) fn parse_hex_u32(value: &str) -> Option<u32> {
     u32::from_str_radix(value.trim(), 16).ok()
 }
 
-pub(crate) fn mame_identity_projection<'a>(
-    identity_id: &str,
-    metadata: &'a ArcadeMachineMetadata,
-    mra_parent: Option<&str>,
-) -> (
+type MameIdentityProjection<'a> = (
     String,
     Option<&'a str>,
     Option<&'a str>,
     Option<&'a str>,
     Option<&'a str>,
     &'static str,
-) {
+);
+
+pub(crate) fn mame_identity_projection<'a>(
+    identity_id: &str,
+    metadata: &'a ArcadeMachineMetadata,
+    mra_parent: Option<&str>,
+) -> MameIdentityProjection<'a> {
     if let Some(machine) = metadata.mame.get(identity_id) {
         let family_id = machine
             .parent_setname

@@ -87,6 +87,44 @@ component SearchKeyboard inherits Rectangle {
             }
         }
 
+        Rectangle {
+            height: 30px * root.s;
+            background: MisterBridge.arcade-search-suggestion == "" ? #15101d : #211a2b;
+            border-width: 1px;
+            border-color: MisterBridge.arcade-search-suggestion == "" ? #2a2236 : #5c4a72;
+
+            HorizontalLayout {
+                padding-left: 10px * root.s;
+                padding-right: 10px * root.s;
+                spacing: 8px * root.s;
+
+                Rectangle {
+                    width: 26px * root.s;
+                    height: 18px * root.s;
+                    background: MisterBridge.arcade-search-suggestion == "" ? #20182a : #06d6a0;
+                    border-width: 1px;
+                    border-color: MisterBridge.arcade-search-suggestion == "" ? #352848 : #ffffff;
+
+                    Text {
+                        text: "Y";
+                        color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #101420;
+                        font-size: 9px * root.s;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion;
+                    color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
+                    font-size: 11px * root.s;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
         SearchKeyboardRow { start-index: 0; key-count: 8; }
         SearchKeyboardRow { start-index: 8; key-count: 8; }
         SearchKeyboardRow { start-index: 16; key-count: 8; }
