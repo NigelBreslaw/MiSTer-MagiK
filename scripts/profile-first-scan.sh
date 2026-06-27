@@ -73,6 +73,24 @@ case "$DEPLOY" in
   skip) : ;;
 esac
 
+ensure_launcher_recovered() {
+  local phase="$1"
+  local status
+  status="$("$MISTER" run "cat /tmp/mister-magik/main-status.json 2>/dev/null || true" 2>/dev/null || true)"
+  if printf '%s\n' "$status" | grep -q '"launcher_state"[[:space:]]*:[[:space:]]*"LauncherCrashed"'; then
+    echo "==> launcher is crashed before first-scan $phase; restarting supervised launcher"
+    "$MISTER" agent magik restart-launcher >/dev/null
+    status="$("$MISTER" run "cat /tmp/mister-magik/main-status.json 2>/dev/null || true" 2>/dev/null || true)"
+  fi
+  if printf '%s\n' "$status" | grep -q '"launcher_state"[[:space:]]*:[[:space:]]*"LauncherCrashed"'; then
+    echo "first-scan $phase cannot continue: launcher remains LauncherCrashed" >&2
+    printf '%s\n' "$status" >&2
+    exit 1
+  fi
+}
+
+ensure_launcher_recovered "setup"
+
 commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
 env_file="$(mktemp)"
