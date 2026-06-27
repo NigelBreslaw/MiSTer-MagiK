@@ -3,18 +3,17 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use crate::arcade_catalog::ArcadeCatalog;
+use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameMetadataKey, StructuredLaunchPlan};
 use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_config;
 use crate::catalog_config::DEFAULT_SQLITE_PATH;
+pub use crate::catalog_config::{
+    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
+};
 use crate::catalog_load_metrics;
 pub use crate::catalog_navigation::{
     navigation_path_for_sqlite, read_catalog_navigation_projection,
-    write_catalog_navigation_projection_for_catalog,
-    CatalogNavigationProjection,
-};
-pub use crate::catalog_config::{
-    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
+    write_catalog_navigation_projection_for_catalog, CatalogNavigationProjection,
 };
 pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
@@ -28,17 +27,20 @@ use crate::catalog_stamp;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
-    GameDiscovery,
+    profile_id_for_discovery, DiscoverySourceKind, GameDiscovery,
 };
-use crate::launch_profiles::{CollectionListing, PayloadRule};
+use crate::launch_profiles::{self, CollectionListing, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
+use crate::preview_worker;
 use crate::software_identity::{
-    load_arcade_machine_metadata, mame_identity_for_discovery, mame_identity_projection,
-    write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows,
+    console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
+    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
+    write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows, PreviewArchivePaths,
+    SoftwareHashCache,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
@@ -176,8 +178,12 @@ impl LibraryScanArtifact {
         &self.stats
     }
 
+    pub fn catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
+        build_catalog_from_scan(root, &self.scan)
+    }
+
     pub fn arcade_catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
-        build_arcade_catalog_from_scan(root, &self.scan)
+        self.catalog(root)
     }
 
     pub fn save_default_sqlite(self) -> Result<LibraryRefreshSummary, String> {
@@ -254,15 +260,18 @@ pub fn load_arcade_catalog_from_navigation_projection(
 ) -> Result<Option<LibraryCatalogLoad>, String> {
     let started = std::time::Instant::now();
     let read_t = std::time::Instant::now();
-    let Some(projection) =
-        read_catalog_navigation_projection(&navigation_path_for_sqlite(sqlite_path), expected_stamp)?
+    let Some(projection) = read_catalog_navigation_projection(
+        &navigation_path_for_sqlite(sqlite_path),
+        expected_stamp,
+    )?
     else {
         return Ok(None);
     };
     let read_us = read_t.elapsed().as_micros() as u64;
     let rows = projection.games.len();
     let catalog_t = std::time::Instant::now();
-    let catalog = ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
+    let catalog =
+        ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(Some(LibraryCatalogLoad {
         catalog,
@@ -634,12 +643,242 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
     CatalogRefreshPipeline::new(cfg).save_artifact_with_catalog(artifact, root, progress)
 }
 
+#[cfg(test)]
 fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
-    let arcade_metadata =
-        load_arcade_machine_metadata(&default_mame_sqlite_path(), &default_hbmame_sqlite_path());
+    let arcade_metadata = crate::software_identity::load_arcade_machine_metadata(
+        &default_mame_sqlite_path(),
+        &default_hbmame_sqlite_path(),
+    );
     build_arcade_catalog_from_scan_with_metadata(root, scan, &arcade_metadata)
 }
 
+fn build_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
+    let mame_sqlite_path = default_mame_sqlite_path();
+    let hbmame_sqlite_path = default_hbmame_sqlite_path();
+    let preview_paths = PreviewArchivePaths::from_paths(
+        preview_worker::preview_archive_paths_for_catalog_projection(),
+    );
+    build_catalog_from_scan_with_sources(
+        root,
+        scan,
+        &mame_sqlite_path,
+        &hbmame_sqlite_path,
+        &preview_paths,
+        SoftwareHashCache::load(&default_sqlite_path()),
+        sqlite_catalog::DiscoveryHistory::load(&default_sqlite_path()),
+    )
+}
+
+fn build_catalog_from_scan_with_sources(
+    root: impl AsRef<Path>,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+    hbmame_sqlite_path: &Path,
+    preview_paths: &PreviewArchivePaths,
+    mut software_hash_cache: SoftwareHashCache,
+    discovery_history: Option<sqlite_catalog::DiscoveryHistory>,
+) -> ArcadeCatalog {
+    let covered_payloads = covered_payload_paths(&scan.discoveries);
+    let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
+    let arcade_setnames = arcade_metadata_setnames(discoveries.values().copied());
+    let software_metadata = load_mame_software_metadata(mame_sqlite_path);
+    let arcade_metadata = load_arcade_machine_metadata_for_setnames(
+        mame_sqlite_path,
+        hbmame_sqlite_path,
+        &arcade_setnames,
+    );
+    let now = unix_now_secs();
+    let mut arcade_rows = Vec::<CatalogProjectionRow>::new();
+    let mut launcher_rows = Vec::<CatalogProjectionRow>::new();
+    let mut launch_plans = Vec::<StructuredLaunchPlan>::new();
+
+    for (key, discovery) in discoveries {
+        let system_id = catalog_system_id_for_discovery(discovery);
+        let launch_ref = launch_ref_for_discovery(&key, discovery);
+        if !is_launcher_launch_ref(&launch_ref) {
+            continue;
+        }
+        if let Some(plan) = structured_launch_plan_for_discovery(discovery, &launch_ref) {
+            launch_plans.push(plan);
+        }
+        let discovered_at_unix = discovery_history
+            .as_ref()
+            .and_then(|history| history.discovered_at_for(&key, scan));
+        let software_identity = mame_software_identity_for_discovery(
+            discovery,
+            &software_metadata,
+            &mut software_hash_cache,
+        );
+        let (preview, setname, parent, family_key, metadata) =
+            if system_id == "arcade" || system_id == "neogeo" {
+                let (identity_id, family_id, metadata) =
+                    catalog_arcade_projection_fields_for_discovery(discovery, &arcade_metadata);
+                let preview_key = if family_id.is_empty() {
+                    identity_id.clone()
+                } else {
+                    family_id.clone()
+                };
+                let preview = if preview_key.is_empty() {
+                    LauncherPreviewAsset::none()
+                } else {
+                    LauncherPreviewAsset::new(
+                        preview_paths
+                            .archive_for_platform(&system_id)
+                            .unwrap_or_default(),
+                        preview_key,
+                    )
+                };
+                (preview, identity_id, family_id, None, metadata)
+            } else {
+                let preview = software_identity
+                    .as_ref()
+                    .and_then(|identity| console_preview_asset(identity, preview_paths));
+                let family_key = software_identity
+                    .as_ref()
+                    .map(|identity| format!("mame-software:{}", identity.family_id));
+                (
+                    LauncherPreviewAsset::from_console_asset(preview.as_ref()),
+                    discovery.setname.clone().unwrap_or_default(),
+                    discovery.parent.clone().unwrap_or_default(),
+                    family_key,
+                    ArcadeGameMetadataKey {
+                        year: discovery.year,
+                        manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                        category: discovery.genre.clone().unwrap_or_default(),
+                    },
+                )
+            };
+        let row = CatalogProjectionRow::new(
+            discovery.title.clone(),
+            launch_ref,
+            system_id.clone(),
+            preview,
+            metadata,
+            sqlite_catalog::is_new_discovery(discovered_at_unix, now),
+            CatalogProjectionSource {
+                discovered_at_unix,
+                source_kind: launch_kind_for_discovery(discovery).to_string(),
+                setname,
+                parent,
+                family_key,
+            },
+        );
+        if system_id == "arcade" || system_id == "neogeo" {
+            arcade_rows.push(row);
+        } else {
+            launcher_rows.push(row);
+        }
+    }
+
+    catalog_from_sqlite_launcher_projection_order(root, arcade_rows, launcher_rows, launch_plans)
+}
+
+fn catalog_from_sqlite_launcher_projection_order(
+    root: impl AsRef<Path>,
+    mut arcade_rows: Vec<CatalogProjectionRow>,
+    mut launcher_rows: Vec<CatalogProjectionRow>,
+    mut launch_plans: Vec<StructuredLaunchPlan>,
+) -> ArcadeCatalog {
+    arcade_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
+    launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
+    let mut games = catalog_projection::collapse_catalog_variants(arcade_rows);
+    games.extend(catalog_projection::collapse_catalog_variants(launcher_rows));
+    let visible_refs = games
+        .iter()
+        .map(|game| game.mra_path.to_string())
+        .collect::<HashSet<_>>();
+    launch_plans.retain(|plan| visible_refs.contains(plan.launch_ref.as_ref()));
+    let systems = arcade_catalog::systems_from_games(&games);
+    ArcadeCatalog::new_with_launch_plans(root.as_ref().to_path_buf(), games, systems, launch_plans)
+}
+
+fn structured_launch_plan_for_discovery(
+    discovery: &GameDiscovery,
+    launch_ref: &str,
+) -> Option<StructuredLaunchPlan> {
+    if launch_kind_for_discovery(discovery) != "virtual-mgl" {
+        return None;
+    }
+    let profile_id = profile_id_for_discovery(discovery)?;
+    let profile = launch_profiles::builtin_profiles()
+        .into_iter()
+        .find(|profile| profile.id == profile_id)?;
+    let payload_path = discovery.launch_ref.as_str();
+    let payload_rule = match discovery.source_kind {
+        DiscoverySourceKind::ArchiveEntry => {
+            profile.classify_archive_entry(Path::new(payload_path))
+        }
+        DiscoverySourceKind::PayloadFile => match profile.classify_path(Path::new(payload_path)) {
+            launch_profiles::ProfilePathClass::Payload { rule } => Some(rule),
+            _ => None,
+        },
+        _ => None,
+    };
+    let mount = payload_rule
+        .as_ref()
+        .map(|rule| rule.mount)
+        .unwrap_or_else(|| launch_profiles::MountSpec::mount_image(0));
+    Some(StructuredLaunchPlan {
+        launch_ref: launch_ref.into(),
+        title: discovery.title.clone().into(),
+        system_id: catalog_system_id_for_discovery(discovery).into(),
+        core_path: profile
+            .core_path
+            .unwrap_or(discovery.core_id.as_str())
+            .into(),
+        payload_path: payload_path.into(),
+        mount_kind: sqlite_catalog::mount_kind_str(mount.kind).into(),
+        mount_index: mount.index,
+        delay_secs: mount.delay_secs,
+    })
+}
+
+fn arcade_metadata_setnames<'a>(
+    discoveries: impl Iterator<Item = &'a GameDiscovery>,
+) -> HashSet<String> {
+    discoveries
+        .filter_map(mame_identity_for_discovery)
+        .collect()
+}
+
+fn catalog_arcade_projection_fields_for_discovery(
+    discovery: &GameDiscovery,
+    arcade_metadata: &ArcadeMachineMetadata,
+) -> (String, String, ArcadeGameMetadataKey) {
+    if let Some(identity_id) = mame_identity_for_discovery(discovery) {
+        let (family_id, _, year, manufacturer, category, _) =
+            mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
+        let parent = if family_id == identity_id {
+            String::new()
+        } else {
+            family_id
+        };
+        return (
+            identity_id,
+            parent,
+            ArcadeGameMetadataKey {
+                year: optional_year_from_metadata(year),
+                manufacturer: manufacturer.unwrap_or_default().to_string(),
+                category: category.unwrap_or_default().to_string(),
+            },
+        );
+    }
+    (
+        discovery.setname.clone().unwrap_or_default(),
+        discovery.parent.clone().unwrap_or_default(),
+        ArcadeGameMetadataKey {
+            year: discovery.year,
+            manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+            category: discovery.genre.clone().unwrap_or_default(),
+        },
+    )
+}
+
+fn optional_year_from_metadata(value: Option<&str>) -> Option<u16> {
+    value.and_then(|value| value.parse::<u16>().ok())
+}
+
+#[cfg(test)]
 fn build_arcade_catalog_from_scan_with_metadata(
     root: impl AsRef<Path>,
     scan: &LibraryScan,
@@ -678,6 +917,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
     catalog_projection::catalog_from_projection_rows(root, rows)
 }
 
+#[cfg(test)]
 fn catalog_family_fields_for_discovery(
     discovery: &GameDiscovery,
     arcade_metadata: &ArcadeMachineMetadata,
@@ -826,7 +1066,44 @@ mod tests {
     use super::*;
     use crate::catalog_store;
     use crate::game_discovery::unique_discovery_count;
+    use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind};
+    use crate::media_metadata;
+    use crate::software_identity::software_asset_key;
+    use crate::sqlite_catalog::write_sqlite_scan_with_mame_and_preview_pack;
     use crate::test_support::*;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CatalogGameSnapshot {
+        title: String,
+        launch_ref: String,
+        preview_archive_path: String,
+        preview_asset_key: String,
+        has_preview: bool,
+        system_id: String,
+        year: Option<u16>,
+        manufacturer: String,
+        category: String,
+        is_new: bool,
+    }
+
+    fn catalog_game_snapshots(catalog: &ArcadeCatalog) -> Vec<CatalogGameSnapshot> {
+        catalog
+            .games
+            .iter()
+            .map(|game| CatalogGameSnapshot {
+                title: game.title.to_string(),
+                launch_ref: game.mra_path.to_string(),
+                preview_archive_path: game.preview_archive_path.to_string(),
+                preview_asset_key: game.preview_asset_key.to_string(),
+                has_preview: game.has_preview,
+                system_id: game.system_id.to_string(),
+                year: game.year,
+                manufacturer: game.manufacturer.to_string(),
+                category: game.category.to_string(),
+                is_new: game.is_new,
+            })
+            .collect()
+    }
 
     #[test]
     fn ram_catalog_from_scan_matches_sqlite_catalog_for_simple_mra_fixture() {
@@ -884,7 +1161,8 @@ mod tests {
         clone.setname = Some("1942b".to_string());
         clone.parent = None;
         let scan = sqlite_scan_with_discoveries(vec![parent, clone]);
-        let metadata = load_arcade_machine_metadata(&mame_db, &PathBuf::new());
+        let metadata =
+            crate::software_identity::load_arcade_machine_metadata(&mame_db, &PathBuf::new());
         let ram_catalog =
             build_arcade_catalog_from_scan_with_metadata("/media/fat/_Arcade", &scan, &metadata);
 
@@ -901,6 +1179,139 @@ mod tests {
             ram_catalog.games[0].title.as_ref(),
             sqlite_catalog.catalog.games[0].title.as_ref()
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_artifact_catalog_matches_sqlite_catalog_for_mixed_fixtures() {
+        let root = unique_temp_dir("ram-catalog-mixed-fixtures");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[(
+                "nes",
+                "smb",
+                None,
+                "Super Mario Bros. (USA)",
+                Some("1985"),
+                Some("Nintendo"),
+                Some("usa"),
+            )],
+            &[],
+        );
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root.join("nes-screenshots.mmlz4b").display().to_string(),
+            codec: "mmlz4b",
+            entries: vec![software_asset_key("nes", "smb")],
+        };
+        let preview_paths = PreviewArchivePaths::from_paths(vec![pack.path.clone()]);
+
+        let mut arcade_parent = mra_discovery(1, "Moon Patrol");
+        arcade_parent.setname = Some("mpatrol".to_string());
+        let mut arcade_clone = mra_discovery(2, "Moon Patrol (Japan)");
+        arcade_clone.setname = Some("mpatrolj".to_string());
+        arcade_clone.parent = Some("mpatrol".to_string());
+
+        let mut nes_payload = payload("/media/fat/games/NES/Super Mario Bros.nes");
+        nes_payload.title = "Super Mario Bros. (USA)".to_string();
+        nes_payload.category = "Console".to_string();
+        nes_payload.platform_id = "nes".to_string();
+        nes_payload.core_id = "NES".to_string();
+        nes_payload.hardware_id = "nes".to_string();
+
+        let mut dos_launcher = mgl(
+            "/media/fat/_DOS Games/Commander Keen.mgl",
+            "/media/fat/_DOS Games/Commander Keen.mgl",
+        );
+        dos_launcher.title = "Commander Keen".to_string();
+        dos_launcher.category = "Computer".to_string();
+        dos_launcher.platform_id = "dos".to_string();
+        dos_launcher.core_id = "AO486".to_string();
+        dos_launcher.hardware_id = "ao486".to_string();
+
+        let archive_launch_ref =
+            "/media/fat/games/NES/Collection.zip/Collection/Legend of Zelda.nes";
+        let archive_entry = GameDiscovery {
+            source_path: format!(
+                "/media/fat/games/NES/Collection.zip::Collection/Legend of Zelda.nes"
+            ),
+            launch_ref: archive_launch_ref.to_string(),
+            source_kind: DiscoverySourceKind::ArchiveEntry,
+            title: "Legend of Zelda".to_string(),
+            category: "Console".to_string(),
+            platform_id: "nes".to_string(),
+            core_id: "NES".to_string(),
+            hardware_id: "nes".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: None,
+            parent: None,
+            covered_payload_path: None,
+            confidence: DiscoveryConfidence::ArchiveToc,
+        };
+
+        let amigavision_game = GameDiscovery {
+            source_path: "/media/fat/games/Amiga/AmigaVision.hdf::Alien Breed".to_string(),
+            launch_ref: media_metadata::amigavision_game_launch_ref("Alien Breed"),
+            source_kind: DiscoverySourceKind::CatalogEntry,
+            title: "Alien Breed".to_string(),
+            category: "Computer".to_string(),
+            platform_id: "amiga".to_string(),
+            core_id: "Minimig".to_string(),
+            hardware_id: "amiga".to_string(),
+            manufacturer: None,
+            genre: Some("AmigaVision".to_string()),
+            year: None,
+            setname: None,
+            parent: None,
+            covered_payload_path: None,
+            confidence: DiscoveryConfidence::CatalogMetadata,
+        };
+
+        let scan = sqlite_scan_with_discoveries(vec![
+            arcade_parent,
+            arcade_clone,
+            nes_payload,
+            dos_launcher,
+            archive_entry,
+            amigavision_game,
+        ]);
+        let ram_catalog = build_catalog_from_scan_with_sources(
+            "/media/fat/_Arcade",
+            &scan,
+            &mame_db,
+            &PathBuf::new(),
+            &preview_paths,
+            SoftwareHashCache::load(&db),
+            None,
+        );
+        write_sqlite_scan_with_mame_and_preview_pack(&db, &scan, &mame_db, &pack)
+            .expect("save sqlite");
+        let sqlite_catalog =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
+
+        assert_eq!(
+            catalog_game_snapshots(&ram_catalog),
+            catalog_game_snapshots(&sqlite_catalog.catalog)
+        );
+        assert_eq!(ram_catalog.system_game_count("arcade"), 1);
+        assert!(ram_catalog
+            .games
+            .iter()
+            .any(|game| game.mra_path.starts_with("magik-amigavision:")));
+        let virtual_ref = ram_catalog
+            .games
+            .iter()
+            .find(|game| game.title.as_ref() == "Legend of Zelda")
+            .expect("archive entry")
+            .mra_path
+            .to_string();
+        assert!(matches!(
+            ram_catalog.launch_target_for_ref(&virtual_ref),
+            crate::arcade_catalog::LaunchTarget::Structured(_)
+        ));
         let _ = std::fs::remove_dir_all(root);
     }
 

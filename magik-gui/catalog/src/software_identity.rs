@@ -126,12 +126,13 @@ pub(crate) struct SoftwareIdentity {
     pub(crate) source: &'static str,
 }
 
+#[cfg(test)]
 pub(crate) fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMachineMetadata> {
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return HashMap::new();
     };
-    let has_category = library_db::sqlite_column_exists(&conn, "mame_machines", "category")
-        .unwrap_or(false);
+    let has_category =
+        library_db::sqlite_column_exists(&conn, "mame_machines", "category").unwrap_or(false);
     let sql = if has_category {
         "SELECT setname,parent_setname,title,year,manufacturer,category FROM mame_machines"
     } else {
@@ -167,8 +168,8 @@ pub(crate) fn load_mame_machine_metadata_for_setnames(
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return HashMap::new();
     };
-    let has_category = library_db::sqlite_column_exists(&conn, "mame_machines", "category")
-        .unwrap_or(false);
+    let has_category =
+        library_db::sqlite_column_exists(&conn, "mame_machines", "category").unwrap_or(false);
     let mut out = HashMap::with_capacity(setnames.len());
     let setnames = setnames.iter().map(String::as_str).collect::<Vec<_>>();
     for chunk in setnames.chunks(400) {
@@ -310,6 +311,7 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     metadata
 }
 
+#[cfg(test)]
 pub(crate) fn load_arcade_machine_metadata(
     mame_path: &Path,
     hbmame_path: &Path,
