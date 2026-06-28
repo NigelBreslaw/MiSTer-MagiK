@@ -8,6 +8,18 @@ This document defines current benchmark policy. Dated measurement logs live in
 - Use RGB565 for production launcher and arcade conclusions. The UI/app
   benchmark path is RGB565-only; wider-color env overrides and color-route
   smoke paths are deleted from the app.
+- For each performance-changing commit, run the targeted "before" benchmark on
+  the previous implementation, make one logical change, then rerun the same
+  command shape after validation. Commit messages and evidence notes should name
+  the labels and the metric that changed.
+- Prefer short targeted benchmarks over broad soak runs. Scroll-path changes use
+  one 30s `turbo-hold` run unless the code path needs a different scenario.
+  Avoid duplicate long scroll and turbo-scroll runs for the same claim.
+- "Still 60fps" is not evidence by itself. Report the metric owned by the
+  change: for example preview decode latency, catalog apply time/backlog,
+  launch-prep p50/p95, `arcade_list_update_us`, or framebuffer present p95/p99.
+- Before committing a performance change, run code review against the exact diff
+  and tidy any findings before the final validation/benchmark rerun.
 - Start visual benchmarks from a clean display-owner state. If stock OSD/menu is
   visible over the benchmark, the run is invalid even if the framebuffer PNG
   looks correct.
@@ -418,7 +430,8 @@ handoff, or launch failure recovery:
 
 ```bash
 scripts/profile-launch-handoff.sh LABEL --replace-label --iterations 5
-scripts/profile-launch-prep.sh LABEL --replace-label --iterations 10
+scripts/profile-launch-prep.sh LABEL-WARM --replace-label --scenario warm --iterations 5
+scripts/profile-launch-prep.sh LABEL-COLD --replace-label --scenario cold --iterations 3
 ```
 
 `profile-launch-handoff.sh` writes
