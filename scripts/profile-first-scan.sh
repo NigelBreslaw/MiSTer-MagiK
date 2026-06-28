@@ -9,6 +9,7 @@ REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 BENCH_DIR="$HERE/history/toolchain-bench"
+OUT_DIR="$HERE/build/first-scan-profiles"
 TSV="$BENCH_DIR/results-first-scan.tsv"
 LABEL=""
 DEPLOY="skip"
@@ -17,14 +18,17 @@ TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
 RAM_CATALOG_READY_GATE_MS=41000
 DB_SAVE_GATE_MS=55000
+source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--thread-sample]
 
 Deletes the launcher catalog database and summary projection, reboots the
 MiSTer, waits for the visible first-boot scan to complete, and appends timing
 rows to history/toolchain-bench/results-first-scan.tsv.
+--thread-sample records /proc per-thread CPU/core/scheduler samples once per
+second after reboot while the first scan completes.
 EOF
 }
 
@@ -35,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
     --sqlite-build-dir) SQLITE_BUILD_DIR="${2:?}"; shift 2 ;;
+    --thread-sample) thread_sample_enabled="1"; shift ;;
     --sqlite-publish-mode) echo "--sqlite-publish-mode was removed; library DB publishing has one supported path" >&2; exit 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -61,7 +66,8 @@ if [[ ! "$TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
   echo "--timeout must be an integer number of seconds" >&2
   exit 2
 fi
-mkdir -p "$BENCH_DIR"
+label="$LABEL"
+mkdir -p "$BENCH_DIR" "$OUT_DIR"
 if [[ ! -f "$TSV" ]]; then
   echo "label	commit	event	ms	notes" >"$TSV"
 elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
@@ -100,6 +106,12 @@ fi
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
 env_file="$(mktemp)"
 local_log="$(mktemp)"
+artifact_report="$OUT_DIR/${LABEL}-artifacts.tsv"
+emit_thread_sample_artifact_report() {
+  if [[ "$thread_sample_enabled" == "1" ]]; then
+    thread_sample_emit_artifacts | tee "$artifact_report"
+  fi
+}
 cleanup() {
   rm -f "$local_log" "$env_file"
   "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
@@ -114,6 +126,7 @@ printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log; sync"
 "$MISTER" reboot-wait
+thread_sample_start "$LABEL" "first-scan" "$OUT_DIR" "$TIMEOUT_SECS"
 
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
@@ -129,7 +142,10 @@ while (( SECONDS < deadline )); do
 done
 
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
+thread_sample_stop
+thread_sample_collect
 if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+  emit_thread_sample_artifact_report || true
   echo "first scan failed while saving the catalog; latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
@@ -137,16 +153,19 @@ fi
 ready_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_ready" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
 saved_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_db_saved" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
 if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
+  emit_thread_sample_artifact_report || true
   echo "first scan did not complete both gates within ${TIMEOUT_SECS}s (library_ready=${ready_ms:-missing}, library_db_saved=${saved_ms:-missing}); latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
 if (( ready_ms > RAM_CATALOG_READY_GATE_MS )); then
+  emit_thread_sample_artifact_report || true
   echo "first scan RAM catalog usable gate failed: library_ready=${ready_ms}ms > ${RAM_CATALOG_READY_GATE_MS}ms" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
 if (( saved_ms > DB_SAVE_GATE_MS )); then
+  emit_thread_sample_artifact_report || true
   echo "first scan DB save gate failed: library_db_saved=${saved_ms}ms > ${DB_SAVE_GATE_MS}ms" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
@@ -189,6 +208,7 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
 db_count="$("$MISTER" db "SELECT count(*) FROM games" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
 status="$("$MISTER" status 2>/dev/null || true)"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "db_count" "0" "$db_count" >>"$TSV"
+emit_thread_sample_artifact_report
 
 echo "appended to $TSV"
 echo "db_count=$db_count"
