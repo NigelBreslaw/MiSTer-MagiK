@@ -88,6 +88,7 @@ pub struct ArcadeCatalog {
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
     search_keys: Vec<ArcadeSearchKey>,
     autocomplete: ArcadeAutocompleteIndex,
+    lazy_text_indexes: OnceLock<ArcadeTextIndexes>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -205,7 +206,7 @@ impl ArcadeCatalog {
         systems: Vec<GameSystemEntry>,
         launch_plans: Vec<StructuredLaunchPlan>,
     ) -> Self {
-        let indexes = build_arcade_catalog_indexes(&games, launch_plans);
+        let indexes = build_arcade_catalog_indexes(&games, launch_plans, CatalogIndexMode::Eager);
         Self {
             root,
             games,
@@ -218,6 +219,7 @@ impl ArcadeCatalog {
             launch_plans_by_ref: indexes.launch_plans_by_ref,
             search_keys: indexes.search_keys,
             autocomplete: indexes.autocomplete,
+            lazy_text_indexes: OnceLock::new(),
         }
     }
 
@@ -225,7 +227,23 @@ impl ArcadeCatalog {
         root: impl Into<PathBuf>,
         projection: CatalogNavigationProjection,
     ) -> Self {
-        let games = projection.games.into_iter().map(ArcadeGameEntry::from).collect();
+        Self::from_navigation_projection_with_index_mode(
+            root,
+            projection,
+            CatalogIndexMode::DeferredText,
+        )
+    }
+
+    fn from_navigation_projection_with_index_mode(
+        root: impl Into<PathBuf>,
+        projection: CatalogNavigationProjection,
+        index_mode: CatalogIndexMode,
+    ) -> Self {
+        let games: Vec<ArcadeGameEntry> = projection
+            .games
+            .into_iter()
+            .map(ArcadeGameEntry::from)
+            .collect();
         let systems = projection
             .systems
             .into_iter()
@@ -236,7 +254,21 @@ impl ArcadeCatalog {
             .into_iter()
             .map(StructuredLaunchPlan::from)
             .collect();
-        Self::new_with_launch_plans(root.into(), games, systems, launch_plans)
+        let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
+        Self {
+            root: root.into(),
+            games,
+            systems,
+            games_by_system: indexes.games_by_system,
+            games_by_filter: indexes.games_by_filter,
+            filter_options_by_system: indexes.filter_options_by_system,
+            preview_games_by_system: indexes.preview_games_by_system,
+            games_by_ref: indexes.games_by_ref,
+            launch_plans_by_ref: indexes.launch_plans_by_ref,
+            search_keys: indexes.search_keys,
+            autocomplete: indexes.autocomplete,
+            lazy_text_indexes: OnceLock::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -302,10 +334,11 @@ impl ArcadeCatalog {
             .iter()
             .copied()
             .filter_map(|index| {
-                self.search_keys
+                let score = self
+                    .search_keys()
                     .get(index)
-                    .and_then(|key| key.score(&tokens, &compact_needle))
-                    .map(|score| SearchMatch { index, score })
+                    .and_then(|key| key.score(&tokens, &compact_needle))?;
+                Some(SearchMatch { index, score })
             })
             .collect();
         scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.index.cmp(&b.index)));
@@ -314,9 +347,30 @@ impl ArcadeCatalog {
 
     pub fn autocomplete_search_word(&self, system_id: &str, query: &str) -> String {
         let fragment = current_search_word(query);
-        self.autocomplete
+        self.autocomplete()
             .suggest(system_id, fragment)
             .unwrap_or_default()
+    }
+
+    fn search_keys(&self) -> &[ArcadeSearchKey] {
+        if self.search_keys.len() == self.games.len() {
+            &self.search_keys
+        } else {
+            &self.lazy_text_indexes().search_keys
+        }
+    }
+
+    fn autocomplete(&self) -> &ArcadeAutocompleteIndex {
+        if self.autocomplete.is_empty() && !self.games.is_empty() {
+            &self.lazy_text_indexes().autocomplete
+        } else {
+            &self.autocomplete
+        }
+    }
+
+    fn lazy_text_indexes(&self) -> &ArcadeTextIndexes {
+        self.lazy_text_indexes
+            .get_or_init(|| build_arcade_text_indexes(&self.games))
     }
 
     pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
@@ -437,6 +491,18 @@ struct ArcadeCatalogIndexes {
     autocomplete: ArcadeAutocompleteIndex,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ArcadeTextIndexes {
+    search_keys: Vec<ArcadeSearchKey>,
+    autocomplete: ArcadeAutocompleteIndex,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogIndexMode {
+    Eager,
+    DeferredText,
+}
+
 #[derive(Clone, Debug)]
 struct ArcadeSearchKey {
     title: String,
@@ -460,6 +526,7 @@ struct SearchMatch {
 fn build_arcade_catalog_indexes(
     games: &[ArcadeGameEntry],
     launch_plans: Vec<StructuredLaunchPlan>,
+    mode: CatalogIndexMode,
 ) -> ArcadeCatalogIndexes {
     let mut games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
     let mut games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>> = HashMap::new();
@@ -467,14 +534,14 @@ fn build_arcade_catalog_indexes(
     let mut preview_games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
     let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
     let mut games_by_ref: HashMap<Arc<str>, usize> = HashMap::with_capacity(games.len());
-    let mut search_keys = Vec::with_capacity(games.len());
-    let mut autocomplete = ArcadeAutocompleteIndex::default();
+    let mut text_indexes = match mode {
+        CatalogIndexMode::Eager => build_arcade_text_indexes(games),
+        CatalogIndexMode::DeferredText => ArcadeTextIndexes::default(),
+    };
 
     for (idx, game) in games.iter().enumerate() {
-        search_keys.push(ArcadeSearchKey::from_game(game));
         let system_id_string = game.system_id.to_string();
         let system_id_arc = game.system_id.clone();
-        autocomplete.add_game(game);
         games_by_ref.insert(game.mra_path.clone(), idx);
         games_by_system
             .entry(system_id_string.clone())
@@ -578,6 +645,19 @@ fn build_arcade_catalog_indexes(
         preview_games_by_system,
         games_by_ref,
         launch_plans_by_ref,
+        search_keys: std::mem::take(&mut text_indexes.search_keys),
+        autocomplete: std::mem::take(&mut text_indexes.autocomplete),
+    }
+}
+
+fn build_arcade_text_indexes(games: &[ArcadeGameEntry]) -> ArcadeTextIndexes {
+    let mut search_keys = Vec::with_capacity(games.len());
+    let mut autocomplete = ArcadeAutocompleteIndex::default();
+    for game in games {
+        search_keys.push(ArcadeSearchKey::from_game(game));
+        autocomplete.add_game(game);
+    }
+    ArcadeTextIndexes {
         search_keys,
         autocomplete,
     }
@@ -707,6 +787,10 @@ impl PartialOrd for AutocompleteCandidate {
 }
 
 impl ArcadeAutocompleteIndex {
+    fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+
     fn add_game(&mut self, game: &ArcadeGameEntry) {
         self.add_words(&game.system_id, &game.title, AutocompleteSource::Title);
         self.add_words(&game.system_id, &game.manufacturer, AutocompleteSource::Metadata);
@@ -1367,6 +1451,114 @@ mod tests {
 
         let year = catalog.search_game_indexes("arcade", "1984");
         assert_eq!(year, vec![0]);
+    }
+
+    #[test]
+    fn navigation_projection_catalog_defers_text_indexes_without_changing_search() {
+        let mut capcom_shooter = game("1942", "/games/1942.mra", "", "arcade");
+        capcom_shooter.year = Some(1984);
+        capcom_shooter.manufacturer = "Capcom".into();
+        capcom_shooter.category = "Shooter / Vertical".into();
+        let mut capcom_fighter = game("Final Fight", "/games/ffight.mra", "", "arcade");
+        capcom_fighter.year = Some(1989);
+        capcom_fighter.manufacturer = "Capcom".into();
+        capcom_fighter.category = "Fighter / 2D".into();
+        let mut title_match = game("Capcom Sports Club", "/games/csclub.mra", "", "arcade");
+        title_match.manufacturer = "Mitchell".into();
+        title_match.category = "Sports".into();
+        let mut other_system = game("Capcom Quiz", "/games/capquiz.mgl", "", "amiga");
+        other_system.manufacturer = "Capcom".into();
+        let games = vec![capcom_shooter, capcom_fighter, title_match, other_system];
+        let systems = vec![
+            GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 3,
+            },
+            GameSystemEntry {
+                id: "amiga".into(),
+                title: "Amiga".into(),
+                count: 1,
+            },
+        ];
+        let eager = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            games.clone(),
+            systems.clone(),
+        );
+        let projection = CatalogNavigationProjection::from_catalog(
+            &ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems),
+            &crate::catalog_stamp::CatalogStamp::from_lines(vec!["arcade|1|2".into()]),
+        );
+        let deferred = ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", projection);
+
+        assert!(deferred.search_keys.is_empty());
+        assert!(deferred.lazy_text_indexes.get().is_none());
+        for query in [
+            "capcom",
+            "capcom fighter",
+            "shooter vertical",
+            "1984",
+            "csclub",
+            "missing",
+        ] {
+            assert_eq!(
+                deferred.search_game_indexes("arcade", query),
+                eager.search_game_indexes("arcade", query),
+                "query {query}"
+            );
+        }
+        assert!(deferred.lazy_text_indexes.get().is_some());
+    }
+
+    #[test]
+    fn navigation_projection_catalog_defers_text_indexes_without_changing_autocomplete() {
+        let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
+        street.manufacturer = "Capcom".into();
+        street.category = "Fighter / 2D".into();
+        let mut pac = game("Pac-Man", "/games/pacman.mra", "", "arcade");
+        pac.manufacturer = "Namco".into();
+        pac.category = "Maze / Pac-Man".into();
+        let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
+        shooter.year = Some(1984);
+        shooter.manufacturer = "Capcom".into();
+        shooter.category = "Shooter / Vertical".into();
+        let mut other_system = game("Street Racer", "/games/street-racer.mgl", "", "amiga");
+        other_system.manufacturer = "Psygnosis".into();
+        let games = vec![street, pac, shooter, other_system];
+        let systems = vec![
+            GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 3,
+            },
+            GameSystemEntry {
+                id: "amiga".into(),
+                title: "Amiga".into(),
+                count: 1,
+            },
+        ];
+        let eager = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            games.clone(),
+            systems.clone(),
+        );
+        let projection = CatalogNavigationProjection::from_catalog(
+            &ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems),
+            &crate::catalog_stamp::CatalogStamp::from_lines(vec!["arcade|1|2".into()]),
+        );
+        let deferred = ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", projection);
+
+        assert!(deferred.search_keys.is_empty());
+        assert!(deferred.lazy_text_indexes.get().is_none());
+        for query in ["str", "fig", "pac", "cap", "sho", "194", "psy", "x"] {
+            assert_eq!(
+                deferred.autocomplete_search_word("arcade", query),
+                eager.autocomplete_search_word("arcade", query),
+                "query {query}"
+            );
+        }
+        assert!(deferred.lazy_text_indexes.get().is_some());
     }
 
     #[test]
