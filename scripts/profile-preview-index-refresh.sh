@@ -38,7 +38,17 @@ local_log="$OUT_DIR/${label}-preview-index-refresh.log"
 remote_tsv="/tmp/${label}-preview-index-refresh.tsv"
 remote_log="/tmp/${label}-preview-index-refresh.log"
 
-"$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik/mister-magik-fb preview-index-refresh-bench '$label' >'$remote_tsv' 2>'$remote_log'" >/dev/null
+if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik/mister-magik-fb preview-index-refresh-bench '$label' >'$remote_tsv' 2>'$remote_log'" >/dev/null; then
+  "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
+  "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null || true
+  if grep -q "unknown command 'preview-index-refresh-bench'" "$local_log" "$local_tsv" 2>/dev/null; then
+    echo "ERROR: deployed mister-magik-fb does not expose preview-index-refresh-bench." >&2
+    echo "Build/deploy a diagnostics-capable production binary before running this profile." >&2
+    exit 3
+  fi
+  echo "preview index refresh profile failed; see $local_log" >&2
+  exit 1
+fi
 "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null
 "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
 

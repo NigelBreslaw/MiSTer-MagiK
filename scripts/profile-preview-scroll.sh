@@ -12,7 +12,7 @@ ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--visual-captures N] [--skip-preview-warm]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--visual-captures N] [--skip-preview-warm]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -48,6 +48,16 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="device"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
     --self-test) self_test="1"; shift ;;
+    --secs)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--secs needs a value" >&2; usage >&2; exit 2; fi
+      secs="$2"
+      shift 2
+      ;;
+    --scenario)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--scenario needs a value" >&2; usage >&2; exit 2; fi
+      scenario="$2"
+      shift 2
+      ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
     --skip-preview-warm|--cold-preview-load) skip_preview_warm="1"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -56,10 +66,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${#positionals[@]}" -ge 1 ]]; then secs="${positionals[0]}"; fi
-if [[ "${#positionals[@]}" -ge 2 ]]; then scenario="${positionals[1]}"; fi
-if [[ "${#positionals[@]}" -ge 3 ]]; then label="${positionals[2]}"; fi
 if [[ "${#positionals[@]}" -gt 3 ]]; then usage >&2; exit 2; fi
+if [[ "${#positionals[@]}" -ge 1 ]]; then
+  if [[ "${positionals[0]}" =~ ^[0-9]+$ ]]; then
+    secs="${positionals[0]}"
+    if [[ "${#positionals[@]}" -ge 2 ]]; then scenario="${positionals[1]}"; fi
+    if [[ "${#positionals[@]}" -ge 3 ]]; then label="${positionals[2]}"; fi
+  else
+    label="${positionals[0]}"
+    if [[ "${#positionals[@]}" -ge 2 ]]; then scenario="${positionals[1]}"; fi
+    if [[ "${#positionals[@]}" -ge 3 ]]; then
+      echo "unexpected argument after LABEL SCENARIO: ${positionals[2]}" >&2
+      usage >&2
+      exit 2
+    fi
+  fi
+fi
 
 case "$scenario" in
   velocity-scroll|held-scroll|turbo-hold|preview-step-hold|preview-idle) ;;
