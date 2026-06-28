@@ -74,7 +74,8 @@ const _: () = {
 };
 
 fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
-    // Rgb565Pixel is repr(transparent) over u16 in Slint's software renderer.
+    // SAFETY: Rgb565Pixel is repr(transparent) over u16 in Slint's software
+    // renderer, with size/alignment asserted above.
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<Rgb565Pixel>(), words.len()) }
 }
 

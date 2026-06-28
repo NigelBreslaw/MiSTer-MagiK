@@ -18,6 +18,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use crate::video_i420::convert_i420_to_rgb565;
+
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
 pub const DEFAULT_VIDEO_DIR: &str = "/media/fat/mister-magik/video-snaps/neogeo";
 const DEFAULT_VIDEO_MAX_W: u32 = 640;
@@ -359,6 +361,8 @@ impl VideoFrameWorker {
 
 fn lower_decode_thread_priority() {
     #[cfg(target_os = "linux")]
+    // SAFETY: setpriority does not dereference Rust memory; failure only means
+    // the decode thread keeps its current scheduler priority.
     unsafe {
         let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 5);
     }
@@ -798,186 +802,6 @@ fn rgb565_frame_from_custom_i420(
 
 fn frame_stride_usize(frame: &Video, plane: usize) -> usize {
     frame.stride(plane)
-}
-
-#[cfg(target_arch = "arm")]
-extern "C" {
-    fn mister_i420_to_rgb565_neon(
-        src_y: *const u8,
-        src_stride_y: libc::c_int,
-        src_u: *const u8,
-        src_stride_u: libc::c_int,
-        src_v: *const u8,
-        src_stride_v: libc::c_int,
-        dst_rgb565: *mut u16,
-        dst_stride_rgb565: libc::c_int,
-        width: libc::c_int,
-        height: libc::c_int,
-    );
-}
-
-fn convert_i420_to_rgb565(
-    src_y: &[u8],
-    src_stride_y: usize,
-    src_u: &[u8],
-    src_stride_u: usize,
-    src_v: &[u8],
-    src_stride_v: usize,
-    dst: &mut [u16],
-    dst_stride: usize,
-    width: usize,
-    height: usize,
-) -> Result<(), String> {
-    validate_i420_to_rgb565_buffers(
-        src_y,
-        src_stride_y,
-        src_u,
-        src_stride_u,
-        src_v,
-        src_stride_v,
-        dst,
-        dst_stride,
-        width,
-        height,
-    )?;
-    #[cfg(target_arch = "arm")]
-    {
-        unsafe {
-            mister_i420_to_rgb565_neon(
-                src_y.as_ptr(),
-                stride_i32(src_stride_y, "Y")?,
-                src_u.as_ptr(),
-                stride_i32(src_stride_u, "U")?,
-                src_v.as_ptr(),
-                stride_i32(src_stride_v, "V")?,
-                dst.as_mut_ptr(),
-                stride_i32(dst_stride, "RGB565")?,
-                stride_i32(width, "width")?,
-                stride_i32(height, "height")?,
-            );
-        }
-        Ok(())
-    }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        convert_i420_to_rgb565_scalar(
-            src_y,
-            src_stride_y,
-            src_u,
-            src_stride_u,
-            src_v,
-            src_stride_v,
-            dst,
-            dst_stride,
-            width,
-            height,
-        );
-        Ok(())
-    }
-}
-
-fn validate_i420_to_rgb565_buffers(
-    src_y: &[u8],
-    src_stride_y: usize,
-    src_u: &[u8],
-    src_stride_u: usize,
-    src_v: &[u8],
-    src_stride_v: usize,
-    dst: &[u16],
-    dst_stride: usize,
-    width: usize,
-    height: usize,
-) -> Result<(), String> {
-    if width == 0 || height == 0 {
-        return Err("video frame has zero dimensions".into());
-    }
-    let chroma_w = width.div_ceil(2);
-    let chroma_h = height.div_ceil(2);
-    if src_stride_y < width || src_stride_u < chroma_w || src_stride_v < chroma_w {
-        return Err(format!(
-            "I420 strides too small for {width}x{height}: y={src_stride_y} u={src_stride_u} v={src_stride_v}"
-        ));
-    }
-    if dst_stride < width {
-        return Err(format!(
-            "RGB565 stride {dst_stride} too small for width {width}"
-        ));
-    }
-    let y_len = src_stride_y
-        .checked_mul(height.saturating_sub(1))
-        .and_then(|n| n.checked_add(width))
-        .ok_or_else(|| "Y plane size overflow".to_string())?;
-    let u_len = src_stride_u
-        .checked_mul(chroma_h.saturating_sub(1))
-        .and_then(|n| n.checked_add(chroma_w))
-        .ok_or_else(|| "U plane size overflow".to_string())?;
-    let v_len = src_stride_v
-        .checked_mul(chroma_h.saturating_sub(1))
-        .and_then(|n| n.checked_add(chroma_w))
-        .ok_or_else(|| "V plane size overflow".to_string())?;
-    let dst_len = dst_stride
-        .checked_mul(height.saturating_sub(1))
-        .and_then(|n| n.checked_add(width))
-        .ok_or_else(|| "RGB565 plane size overflow".to_string())?;
-    if src_y.len() < y_len || src_u.len() < u_len || src_v.len() < v_len || dst.len() < dst_len {
-        return Err(format!(
-            "I420 buffer too small for {width}x{height}: y={}/{} u={}/{} v={}/{} dst={}/{}",
-            src_y.len(),
-            y_len,
-            src_u.len(),
-            u_len,
-            src_v.len(),
-            v_len,
-            dst.len(),
-            dst_len
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_arch = "arm")]
-fn stride_i32(value: usize, label: &str) -> Result<libc::c_int, String> {
-    libc::c_int::try_from(value).map_err(|_| format!("{label} is too large for NEON converter"))
-}
-
-#[cfg(not(target_arch = "arm"))]
-fn convert_i420_to_rgb565_scalar(
-    src_y: &[u8],
-    src_stride_y: usize,
-    src_u: &[u8],
-    src_stride_u: usize,
-    src_v: &[u8],
-    src_stride_v: usize,
-    dst: &mut [u16],
-    dst_stride: usize,
-    width: usize,
-    height: usize,
-) {
-    for row in 0..height {
-        let y_row = &src_y[row * src_stride_y..];
-        let u_row = &src_u[(row / 2) * src_stride_u..];
-        let v_row = &src_v[(row / 2) * src_stride_v..];
-        let dst_row = &mut dst[row * dst_stride..];
-        for x in 0..width {
-            dst_row[x] = i420_pixel_to_rgb565(y_row[x], u_row[x / 2], v_row[x / 2]);
-        }
-    }
-}
-
-#[cfg(not(target_arch = "arm"))]
-fn i420_pixel_to_rgb565(y: u8, u: u8, v: u8) -> u16 {
-    let c = (i32::from(y) - 16).max(0);
-    let d = i32::from(u) - 128;
-    let e = i32::from(v) - 128;
-    let r = clamp_u8_i32((298 * c + 409 * e + 128) >> 8);
-    let g = clamp_u8_i32((298 * c - 100 * d - 208 * e + 128) >> 8);
-    let b = clamp_u8_i32((298 * c + 516 * d + 128) >> 8);
-    ((u16::from(r & 0xf8)) << 8) | ((u16::from(g & 0xfc)) << 3) | (u16::from(b) >> 3)
-}
-
-#[cfg(not(target_arch = "arm"))]
-fn clamp_u8_i32(value: i32) -> u8 {
-    value.clamp(0, 255) as u8
 }
 
 fn append_decoded_audio_packet(

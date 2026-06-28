@@ -551,6 +551,8 @@ fn load_navigation_projection_cache(
 
 pub(super) fn lower_background_priority() {
     #[cfg(target_os = "linux")]
+    // SAFETY: setpriority does not dereference Rust memory; failure only means
+    // the worker keeps its current scheduler priority.
     unsafe {
         let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 10);
     }
@@ -558,6 +560,8 @@ pub(super) fn lower_background_priority() {
 
 fn restore_catalog_worker_priority() {
     #[cfg(target_os = "linux")]
+    // SAFETY: setpriority does not dereference Rust memory; failure only means
+    // the worker keeps its current scheduler priority.
     unsafe {
         let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 0);
     }

@@ -23,6 +23,8 @@ pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_MEDIA_SIZE: &str = DEFAULT_SCREENSHOT_IMAGE_SIZE;
+const MAX_PREVIEW_ARCHIVE_ENTRIES: usize = 100_000;
+const MAX_PREVIEW_ARCHIVE_RAW_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct PreviewRequest {
@@ -711,11 +713,9 @@ fn load_raw565_preview_asset_timed(
             }
         }
     }
-    if let Some(loaded) = try_load_raw565_preview_asset_from_index(
-        Path::new(archive_path),
-        &entry_name,
-        scratch,
-    ) {
+    if let Some(loaded) =
+        try_load_raw565_preview_asset_from_index(Path::new(archive_path), &entry_name, scratch)
+    {
         start_background_preview_archive_load(archive_path.to_string());
         return Ok(loaded);
     }
@@ -732,7 +732,7 @@ fn load_raw565_preview_asset_timed(
     ))
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreviewArchiveEntry {
     raw_len: usize,
     compressed_len: usize,
@@ -1066,6 +1066,10 @@ fn preview_archive_entry_stems(path: &Path) -> Result<HashSet<String>, String> {
 pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String> {
     let mut file =
         File::open(path).map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
+    let archive_bytes = file
+        .metadata()
+        .map_err(|e| format!("metadata preview archive {}: {e}", path.display()))?
+        .len();
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)
         .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
@@ -1073,23 +1077,46 @@ pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String>
         return Err(format!("{}: bad preview archive v2 magic", path.display()));
     }
     let count = read_u32(&mut file)? as usize;
+    validate_preview_archive_entry_count(count, "preview archive index")?;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         let name_len = read_u16(&mut file)? as usize;
-        let _width = read_u32(&mut file)?;
-        let _height = read_u32(&mut file)?;
-        let _stride_bytes = read_u32(&mut file)?;
-        let _raw_len = read_u32(&mut file)?;
+        let width = read_u32(&mut file)?;
+        let height = read_u32(&mut file)?;
+        let stride_bytes = read_u32(&mut file)?;
+        let raw_len = read_u32(&mut file)? as usize;
         let mut payload_flag = [0u8; 1];
         file.read_exact(&mut payload_flag)
             .map_err(|e| format!("read preview archive payload flag: {e}"))?;
-        let _payload_len = read_u32(&mut file)?;
-        let _offset = read_u64(&mut file)?;
+        let compressed_len = read_u32(&mut file)? as usize;
+        let offset = read_u64(&mut file)?;
         let mut name = vec![0u8; name_len];
         file.read_exact(&mut name)
             .map_err(|e| format!("read preview archive entry name: {e}"))?;
         let name =
             String::from_utf8(name).map_err(|e| format!("preview archive entry name utf8: {e}"))?;
+        validate_preview_archive_entry_geometry(
+            "preview archive index",
+            &name,
+            width,
+            height,
+            stride_bytes,
+            raw_len,
+        )?;
+        validate_preview_archive_entry_payload(
+            "preview archive index",
+            &name,
+            payload_flag[0],
+            raw_len,
+            compressed_len,
+        )?;
+        validate_preview_archive_entry_bounds(
+            "preview archive index",
+            &name,
+            offset,
+            compressed_len,
+            archive_bytes,
+        )?;
         if let Some(stem) = Path::new(&name).file_stem().and_then(|s| s.to_str()) {
             entries.push(stem.to_ascii_lowercase());
         }
@@ -1217,7 +1244,9 @@ fn auto_console_archive_paths() -> Vec<String> {
 fn default_console_archive_paths() -> Vec<String> {
     supported_screenshot_pack_ids()
         .filter(|system| !matches!(*system, "arcade" | "neogeo"))
-        .map(|system| legacy_archive_path_for_system(Path::new(DEFAULT_SCREENSHOT_ASSET_DIR), system))
+        .map(|system| {
+            legacy_archive_path_for_system(Path::new(DEFAULT_SCREENSHOT_ASSET_DIR), system)
+        })
         .collect()
 }
 
@@ -1230,7 +1259,8 @@ fn resolve_preview_archive_path(preview_archive_path: &str) -> String {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new(DEFAULT_SCREENSHOT_ASSET_DIR));
-    preferred_archive_path_for_system(root, system).unwrap_or_else(|| preview_archive_path.to_string())
+    preferred_archive_path_for_system(root, system)
+        .unwrap_or_else(|| preview_archive_path.to_string())
 }
 
 fn auto_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
@@ -1264,7 +1294,11 @@ fn preferred_media_size() -> String {
         .unwrap_or_else(|| DEFAULT_MEDIA_SIZE.to_string())
 }
 
-fn state_archive_path_for_system(root: &Path, system: &str, preferred_size: &str) -> Option<String> {
+fn state_archive_path_for_system(
+    root: &Path,
+    system: &str,
+    preferred_size: &str,
+) -> Option<String> {
     let state_path = screenshot_media_state_path_in_root(root);
     let text = std::fs::read_to_string(state_path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -1407,10 +1441,9 @@ fn preview_archive_sidecar_index(
             }
         }
     }
-    let index = Arc::new(read_preview_archive_sidecar_index(
-        &index_path,
-        archive_fingerprint.size,
-    )?);
+    let index = read_preview_archive_sidecar_index(&index_path, archive_fingerprint.size)?;
+    validate_preview_archive_sidecar_matches_archive(archive_path, &index)?;
+    let index = Arc::new(index);
     if let Ok(mut cache) = cache.lock() {
         cache.insert(
             cache_key,
@@ -1454,6 +1487,58 @@ fn preview_archive_fingerprint(path: &Path) -> Result<PreviewArchiveFingerprint,
     })
 }
 
+fn read_preview_archive_embedded_entries(
+    archive_path: &Path,
+) -> Result<HashMap<String, PreviewArchiveEntry>, String> {
+    let mut file = File::open(archive_path)
+        .map_err(|e| format!("open preview archive {}: {e}", archive_path.display()))?;
+    let archive_bytes = file
+        .metadata()
+        .map_err(|e| format!("metadata preview archive {}: {e}", archive_path.display()))?
+        .len();
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)
+        .map_err(|e| format!("read preview archive magic {}: {e}", archive_path.display()))?;
+    if &magic != PreviewArchive::V2_PIXELS_MAGIC {
+        return Err(format!(
+            "{}: bad preview archive v2 magic",
+            archive_path.display()
+        ));
+    }
+    let count = read_u32(&mut file)? as usize;
+    PreviewArchive::read_v2_pixel_entries(&mut file, count, archive_bytes)
+}
+
+fn validate_preview_archive_sidecar_matches_archive(
+    archive_path: &Path,
+    sidecar: &PreviewArchiveSidecarIndex,
+) -> Result<(), String> {
+    let embedded = read_preview_archive_embedded_entries(archive_path)?;
+    if sidecar.entries.len() != embedded.len() {
+        return Err(format!(
+            "{}: preview archive index entry count mismatch sidecar={} embedded={}",
+            archive_path.display(),
+            sidecar.entries.len(),
+            embedded.len()
+        ));
+    }
+    for (name, sidecar_entry) in &sidecar.entries {
+        let Some(embedded_entry) = embedded.get(name) else {
+            return Err(format!(
+                "{}: preview archive index has stale entry {name}",
+                archive_path.display()
+            ));
+        };
+        if sidecar_entry != embedded_entry {
+            return Err(format!(
+                "{}: preview archive index metadata mismatch for {name}: sidecar={sidecar_entry:?} embedded={embedded_entry:?}",
+                archive_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn read_preview_archive_sidecar_index(
     index_path: &Path,
     archive_bytes: u64,
@@ -1461,10 +1546,16 @@ fn read_preview_archive_sidecar_index(
     let bytes = std::fs::read(index_path)
         .map_err(|e| format!("read preview archive index {}: {e}", index_path.display()))?;
     if bytes.len() < 84 {
-        return Err(format!("{}: preview archive index too short", index_path.display()));
+        return Err(format!(
+            "{}: preview archive index too short",
+            index_path.display()
+        ));
     }
     if &bytes[..8] != b"MMIDX02\0" {
-        return Err(format!("{}: bad preview archive index magic", index_path.display()));
+        return Err(format!(
+            "{}: bad preview archive index magic",
+            index_path.display()
+        ));
     }
     let indexed_archive_bytes = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
     if indexed_archive_bytes != archive_bytes {
@@ -1477,14 +1568,21 @@ fn read_preview_archive_sidecar_index(
     let archive_sha = std::str::from_utf8(&bytes[16..80])
         .map_err(|e| format!("preview archive index sha utf8: {e}"))?;
     if archive_sha.len() != 64 || !archive_sha.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(format!("{}: bad preview archive index sha", index_path.display()));
+        return Err(format!(
+            "{}: bad preview archive index sha",
+            index_path.display()
+        ));
     }
     let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+    validate_preview_archive_entry_count(count, "preview archive sidecar index")?;
     let mut pos = 84usize;
     let mut entries = HashMap::with_capacity(count);
     for _ in 0..count {
         if bytes.len().saturating_sub(pos) < 31 {
-            return Err(format!("{}: truncated preview archive index", index_path.display()));
+            return Err(format!(
+                "{}: truncated preview archive index",
+                index_path.display()
+            ));
         }
         let name_len = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
         pos += 2;
@@ -1498,29 +1596,47 @@ fn read_preview_archive_sidecar_index(
         pos += 4;
         let payload_flag = bytes[pos];
         pos += 1;
-        let compressed_len =
-            u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        let compressed_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         let offset = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
         pos += 8;
-        let end = pos
-            .checked_add(name_len)
-            .ok_or_else(|| format!("{}: preview archive index name overflow", index_path.display()))?;
+        let end = pos.checked_add(name_len).ok_or_else(|| {
+            format!(
+                "{}: preview archive index name overflow",
+                index_path.display()
+            )
+        })?;
         if end > bytes.len() {
-            return Err(format!("{}: truncated preview archive index name", index_path.display()));
+            return Err(format!(
+                "{}: truncated preview archive index name",
+                index_path.display()
+            ));
         }
         let name = String::from_utf8(bytes[pos..end].to_vec())
             .map_err(|e| format!("preview archive index name utf8: {e}"))?;
         pos = end;
-        let payload_end = offset
-            .checked_add(compressed_len as u64)
-            .ok_or_else(|| format!("{}: preview archive index offset overflow", index_path.display()))?;
-        if payload_end > archive_bytes {
-            return Err(format!(
-                "{}: preview archive index payload outside archive",
-                index_path.display()
-            ));
-        }
+        validate_preview_archive_entry_geometry(
+            &format!("preview archive index {}", index_path.display()),
+            &name,
+            width,
+            height,
+            stride_bytes,
+            raw_len,
+        )?;
+        validate_preview_archive_entry_payload(
+            &format!("preview archive index {}", index_path.display()),
+            &name,
+            payload_flag,
+            raw_len,
+            compressed_len,
+        )?;
+        validate_preview_archive_entry_bounds(
+            &format!("preview archive index {}", index_path.display()),
+            &name,
+            offset,
+            compressed_len,
+            archive_bytes,
+        )?;
         let key = name.to_ascii_lowercase();
         if entries
             .insert(
@@ -1584,6 +1700,10 @@ impl PreviewArchive {
     fn open(path: &Path) -> Result<Self, String> {
         let mut file = File::open(path)
             .map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
+        let archive_bytes = file
+            .metadata()
+            .map_err(|e| format!("metadata preview archive {}: {e}", path.display()))?
+            .len();
         let mut magic = [0u8; 8];
         file.read_exact(&mut magic)
             .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
@@ -1591,7 +1711,7 @@ impl PreviewArchive {
             return Err(format!("{}: bad preview archive v2 magic", path.display()));
         }
         let count = read_u32(&mut file)? as usize;
-        let entries = Self::read_v2_pixel_entries(&mut file, count)?;
+        let entries = Self::read_v2_pixel_entries(&mut file, count, archive_bytes)?;
         let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
         Ok(Self { bytes, entries })
     }
@@ -1599,7 +1719,9 @@ impl PreviewArchive {
     fn read_v2_pixel_entries(
         file: &mut File,
         count: usize,
+        archive_bytes: u64,
     ) -> Result<HashMap<String, PreviewArchiveEntry>, String> {
+        validate_preview_archive_entry_count(count, "preview archive v2")?;
         let mut entries = HashMap::with_capacity(count);
         for _ in 0..count {
             let name_len = read_u16(file)? as usize;
@@ -1617,32 +1739,46 @@ impl PreviewArchive {
                 .map_err(|e| format!("read preview archive v2 entry name: {e}"))?;
             let name = String::from_utf8(name)
                 .map_err(|e| format!("preview archive v2 entry name utf8: {e}"))?;
-            let expected_raw_len = (stride_bytes as usize)
-                .checked_mul(height as usize)
-                .ok_or("preview archive v2 raw length overflow")?;
-            if stride_bytes < width.saturating_mul(2) || raw_len != expected_raw_len {
-                return Err(format!(
-                    "preview archive v2 bad geometry for {name}: width={width} height={height} stride={stride_bytes} raw_len={raw_len}"
-                ));
+            validate_preview_archive_entry_geometry(
+                "preview archive v2",
+                &name,
+                width,
+                height,
+                stride_bytes,
+                raw_len,
+            )?;
+            validate_preview_archive_entry_payload(
+                "preview archive v2",
+                &name,
+                payload_flag[0],
+                raw_len,
+                compressed_len,
+            )?;
+            validate_preview_archive_entry_bounds(
+                "preview archive v2",
+                &name,
+                offset,
+                compressed_len,
+                archive_bytes,
+            )?;
+            let key = name.to_ascii_lowercase();
+            if entries
+                .insert(
+                    key.clone(),
+                    PreviewArchiveEntry {
+                        raw_len,
+                        compressed_len,
+                        offset,
+                        width,
+                        height,
+                        stride_bytes,
+                        payload_flag: payload_flag[0],
+                    },
+                )
+                .is_some()
+            {
+                return Err(format!("preview archive v2 duplicate entry {key}"));
             }
-            if !matches!(payload_flag[0], 0 | 1) {
-                return Err(format!(
-                    "preview archive v2 unsupported payload flag {} for {name}",
-                    payload_flag[0]
-                ));
-            }
-            entries.insert(
-                name.to_ascii_lowercase(),
-                PreviewArchiveEntry {
-                    raw_len,
-                    compressed_len,
-                    offset,
-                    width,
-                    height,
-                    stride_bytes,
-                    payload_flag: payload_flag[0],
-                },
-            );
         }
         Ok(entries)
     }
@@ -1715,6 +1851,8 @@ fn thread_cpu_us() -> Option<u64> {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: ts points to initialized writable storage for the duration of the
+    // syscall; failures are handled by returning None.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
     if rc == 0 {
         Some(ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1_000)
@@ -1732,6 +1870,105 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
     start
         .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
         .unwrap_or(0)
+}
+
+fn validate_preview_archive_entry_count(count: usize, context: &str) -> Result<(), String> {
+    if count > MAX_PREVIEW_ARCHIVE_ENTRIES {
+        return Err(format!(
+            "{context} has {count} entries, max {MAX_PREVIEW_ARCHIVE_ENTRIES}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_preview_archive_entry_geometry(
+    context: &str,
+    name: &str,
+    width: u32,
+    height: u32,
+    stride_bytes: u32,
+    raw_len: usize,
+) -> Result<usize, String> {
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "{context} bad geometry for {name}: width={width} height={height}"
+        ));
+    }
+    let width_bytes = (width as usize)
+        .checked_mul(2)
+        .ok_or_else(|| format!("{context} width overflow for {name}: width={width}"))?;
+    let stride = stride_bytes as usize;
+    if !stride.is_multiple_of(2) || stride < width_bytes {
+        return Err(format!(
+            "{context} bad stride for {name}: width={width} stride={stride_bytes}"
+        ));
+    }
+    let expected = stride
+        .checked_mul(height as usize)
+        .ok_or_else(|| format!("{context} raw length overflow for {name}"))?;
+    if expected > MAX_PREVIEW_ARCHIVE_RAW_BYTES {
+        return Err(format!(
+            "{context} raw length too large for {name}: {expected} > {MAX_PREVIEW_ARCHIVE_RAW_BYTES}"
+        ));
+    }
+    if raw_len != expected {
+        return Err(format!(
+            "{context} bad geometry for {name}: width={width} height={height} stride={stride_bytes} raw_len={raw_len} expected={expected}"
+        ));
+    }
+    Ok(expected)
+}
+
+fn validate_preview_archive_entry_payload(
+    context: &str,
+    name: &str,
+    payload_flag: u8,
+    raw_len: usize,
+    compressed_len: usize,
+) -> Result<(), String> {
+    let max_encoded = match payload_flag {
+        0 => raw_len
+            .checked_add(raw_len / 255)
+            .and_then(|n| n.checked_add(16))
+            .ok_or_else(|| format!("{context} compressed length overflow for {name}"))?,
+        1 => {
+            if compressed_len != raw_len {
+                return Err(format!(
+                    "{context} raw payload length mismatch for {name}: compressed_len={compressed_len} raw_len={raw_len}"
+                ));
+            }
+            raw_len
+        }
+        other => {
+            return Err(format!(
+                "{context} unsupported payload flag {other} for {name}"
+            ));
+        }
+    };
+    if compressed_len == 0 || compressed_len > max_encoded {
+        return Err(format!(
+            "{context} encoded length too large for {name}: {compressed_len} > {max_encoded}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_preview_archive_entry_bounds(
+    context: &str,
+    name: &str,
+    offset: u64,
+    compressed_len: usize,
+    archive_bytes: u64,
+) -> Result<(), String> {
+    let payload_end = offset
+        .checked_add(compressed_len as u64)
+        .ok_or_else(|| format!("{context} offset overflow for {name}"))?;
+    if payload_end > archive_bytes {
+        return Err(format!(
+            "{context} payload outside archive for {name}: end={payload_end} archive_bytes={archive_bytes}"
+        ));
+    }
+    Ok(())
 }
 
 fn decode_preview_archive_entry_into<'a>(
@@ -1808,41 +2045,35 @@ fn decode_pixel_preview_bytes(
     entry: PreviewArchiveEntry,
     data: &[u8],
 ) -> Result<PreviewPixels, String> {
-    let expected = (entry.stride_bytes as usize)
-        .checked_mul(entry.height as usize)
-        .ok_or("pixel preview length overflow")?;
-    if entry.stride_bytes < entry.width.saturating_mul(2) || data.len() != expected {
-        return Err(format!(
-            "pixel preview bad geometry width={} height={} stride={} got={} expected={}",
-            entry.width,
-            entry.height,
-            entry.stride_bytes,
-            data.len(),
-            expected
-        ));
-    }
-    #[cfg(target_endian = "little")]
-    let words = {
-        let mut words = vec![0; expected / 2];
-        unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), words.as_mut_ptr() as *mut u8, expected);
-        }
-        words
-    };
-    #[cfg(not(target_endian = "little"))]
-    let mut words = Vec::with_capacity(expected / 2);
-    #[cfg(not(target_endian = "little"))]
-    {
-        for chunk in data.chunks_exact(2) {
-            words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
-    }
+    validate_preview_archive_entry_geometry(
+        "pixel preview",
+        "<decoded>",
+        entry.width,
+        entry.height,
+        entry.stride_bytes,
+        data.len(),
+    )?;
+    let words = raw565_words_from_le_bytes(data, "pixel preview")?;
     Ok(PreviewPixels::Rgb565 {
         width: entry.width,
         height: entry.height,
         stride_bytes: entry.stride_bytes,
         words: Arc::from(words.into_boxed_slice()),
     })
+}
+
+fn raw565_words_from_le_bytes(data: &[u8], context: &str) -> Result<Vec<u16>, String> {
+    if !data.len().is_multiple_of(2) {
+        return Err(format!(
+            "{context} has odd byte length {} for RGB565 words",
+            data.len()
+        ));
+    }
+    let mut words = Vec::with_capacity(data.len() / 2);
+    for chunk in data.chunks_exact(2) {
+        words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    Ok(words)
 }
 
 fn read_u16(file: &mut File) -> Result<u16, String> {
@@ -1886,26 +2117,7 @@ fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
             expected
         ));
     }
-    #[cfg(target_endian = "little")]
-    let words = {
-        let mut words = vec![0; expected / 2];
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                data[20..].as_ptr(),
-                words.as_mut_ptr() as *mut u8,
-                expected,
-            );
-        }
-        words
-    };
-    #[cfg(not(target_endian = "little"))]
-    let mut words = Vec::with_capacity(expected / 2);
-    #[cfg(not(target_endian = "little"))]
-    {
-        for chunk in data[20..].chunks_exact(2) {
-            words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
-    }
+    let words = raw565_words_from_le_bytes(&data[20..], "raw565 preview")?;
     Ok(PreviewPixels::Rgb565 {
         width,
         height,
@@ -1931,6 +2143,8 @@ fn preview_trace_enabled() -> bool {
 
 fn lower_thread_priority() {
     #[cfg(target_os = "linux")]
+    // SAFETY: setpriority does not dereference Rust memory; failure only means
+    // the worker keeps its current scheduler priority.
     unsafe {
         let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 5);
     }
@@ -2172,6 +2386,7 @@ mod tests {
             std::process::id()
         ));
         let name = b"mpatrol.rgb565";
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
@@ -2182,8 +2397,9 @@ mod tests {
         bytes.extend_from_slice(&16u32.to_le_bytes());
         bytes.push(1);
         bytes.extend_from_slice(&16u32.to_le_bytes());
-        bytes.extend_from_slice(&64u64.to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
         bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&[0; 16]);
         std::fs::write(&path, bytes).expect("write lz4 block fixture");
 
         let stems = preview_archive_entry_stems(&path).expect("read lz4 block index");
@@ -2199,6 +2415,7 @@ mod tests {
             std::process::id()
         ));
         let name = b"1941u.rgb565";
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
@@ -2206,17 +2423,47 @@ mod tests {
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&16u32.to_le_bytes());
-        bytes.extend_from_slice(&8192u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
         bytes.push(1);
-        bytes.extend_from_slice(&17u32.to_le_bytes());
-        bytes.extend_from_slice(&4096u64.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
         bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&[0; 16]);
         std::fs::write(&path, bytes).expect("write lz4 block fixture");
 
         let index = preview_archive_index(&path).expect("read lz4 block index");
 
         assert_eq!(index.codec, "lz4-block");
         assert_eq!(index.entries, vec!["1941u"]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_index_rejects_bad_geometry_without_payload_decode() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-entry-bad-geometry-{}.mmlz4b",
+            std::process::id()
+        ));
+        let name = b"bad.rgb565";
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&18u32.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&18u32.to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&[0; 18]);
+        std::fs::write(&path, bytes).expect("write bad geometry index fixture");
+
+        let err = preview_archive_index(&path).expect_err("bad geometry must fail");
+
+        assert!(err.contains("bad geometry"), "unexpected error: {err}");
         let _ = std::fs::remove_file(path);
     }
 
@@ -2267,6 +2514,51 @@ mod tests {
     }
 
     #[test]
+    fn stale_sidecar_geometry_falls_back_to_archive_metadata() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-stale-sidecar-{}.mmlz4b",
+            std::process::id()
+        ));
+        let name = "tiny.rgb565";
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_lz4_block_archive(&path, name, &payload);
+        let archive_bytes = std::fs::metadata(&path).unwrap().len();
+        let archive_payload_offset = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let index_path = preview_archive_sidecar_path(&path);
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&16u32.to_le_bytes());
+        index.extend_from_slice(&16u32.to_le_bytes());
+        index.push(1);
+        index.extend_from_slice(&16u32.to_le_bytes());
+        index.extend_from_slice(&(archive_payload_offset as u64).to_le_bytes());
+        index.extend_from_slice(name.as_bytes());
+        std::fs::write(&index_path, index).expect("write stale sidecar fixture");
+        let mut scratch = PreviewArchiveScratch::default();
+
+        let loaded = load_preview_pixels(
+            &path.display().to_string(),
+            "tiny",
+            &mut scratch,
+            PreviewResizeSpec::off(),
+        )
+        .expect("load should fall back to archive mem");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
+        assert_eq!(loaded.timing.source_width, 2);
+        assert_eq!(loaded.timing.source_height, 1);
+        let _ = std::fs::remove_file(index_path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn archive_mem_timing_splits_lz4_decode_from_raw565_parse() {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-preview-timing-split-{}.mmlz4b",
@@ -2295,7 +2587,9 @@ mod tests {
         let large = raw565_fixture(
             4,
             2,
-            &[0xf800, 0x07e0, 0x001f, 0xffff, 0x0000, 0x1111, 0x2222, 0x3333],
+            &[
+                0xf800, 0x07e0, 0x001f, 0xffff, 0x0000, 0x1111, 0x2222, 0x3333,
+            ],
         );
         let small = raw565_fixture(1, 1, &[0x07e0]);
         let mut large_payload = vec![0];
@@ -2304,16 +2598,14 @@ mod tests {
         small_payload.extend_from_slice(&lz4_flex::block::compress(&small));
         let mut scratch = Vec::new();
 
-        let decoded_large =
-            decode_lz4_block_entry_into(&large_payload, large.len(), &mut scratch)
-                .expect("decode large lz4 block");
+        let decoded_large = decode_lz4_block_entry_into(&large_payload, large.len(), &mut scratch)
+            .expect("decode large lz4 block");
         assert_eq!(decoded_large, large.as_slice());
         let grown_len = scratch.len();
         assert_eq!(grown_len, large.len());
 
-        let decoded_small =
-            decode_lz4_block_entry_into(&small_payload, small.len(), &mut scratch)
-                .expect("decode small lz4 block");
+        let decoded_small = decode_lz4_block_entry_into(&small_payload, small.len(), &mut scratch)
+            .expect("decode small lz4 block");
         assert_eq!(decoded_small, small.as_slice());
         assert_eq!(scratch.len(), grown_len);
     }
@@ -2359,13 +2651,8 @@ mod tests {
             "mister-magik-preview-index-fallback-{}.mmlz4b",
             std::process::id()
         ));
-        write_lz4_block_archive(
-            &path,
-            "tiny.rgb565",
-            &raw565_fixture(1, 1, &[0xf800]),
-        );
-        std::fs::write(preview_archive_sidecar_path(&path), b"bad-index")
-            .expect("write bad index");
+        write_lz4_block_archive(&path, "tiny.rgb565", &raw565_fixture(1, 1, &[0xf800]));
+        std::fs::write(preview_archive_sidecar_path(&path), b"bad-index").expect("write bad index");
         let mut scratch = PreviewArchiveScratch::default();
 
         let loaded = load_preview_pixels(
@@ -2457,10 +2744,8 @@ mod tests {
 
     #[test]
     fn state_resolution_maps_legacy_path_to_size_qualified_pack() {
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-preview-state-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-preview-state-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create archive root");
         let archive = root.join("neogeo-screenshots-320x320.mmlz4b");
         std::fs::write(&archive, b"lz4").expect("write archive marker");
@@ -2585,6 +2870,185 @@ mod tests {
         assert_eq!(bytes.len(), 20 + 16 * 2);
         assert!(bytes[20 + 10..20 + 16].iter().all(|b| *b == 0));
         assert!(bytes[20 + 16 + 10..20 + 32].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn pixel_preview_rejects_odd_stride_before_word_conversion() {
+        let entry = PreviewArchiveEntry {
+            raw_len: 3,
+            compressed_len: 3,
+            offset: 0,
+            width: 1,
+            height: 1,
+            stride_bytes: 3,
+            payload_flag: 1,
+        };
+
+        let err = decode_pixel_preview_bytes(entry, &[0, 0, 0])
+            .expect_err("odd RGB565 stride must be rejected");
+
+        assert!(err.contains("bad stride"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn raw565_word_conversion_rejects_odd_byte_length() {
+        let err = raw565_words_from_le_bytes(&[0xaa, 0xbb, 0xcc], "fixture")
+            .expect_err("odd byte length must be rejected");
+
+        assert!(err.contains("odd byte length"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn preview_archive_open_rejects_oversized_entry_count_before_allocating() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-too-many-{}.mmlz4b",
+            std::process::id()
+        ));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(&((MAX_PREVIEW_ARCHIVE_ENTRIES as u32) + 1).to_le_bytes());
+        std::fs::write(&path, bytes).expect("write oversized count archive fixture");
+
+        let err = match PreviewArchive::open(&path) {
+            Ok(_) => panic!("oversized count must fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("max"), "unexpected error: {err}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_open_rejects_oversized_raw_len_before_allocating() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-too-large-{}.mmlz4b",
+            std::process::id()
+        ));
+        let name = "huge.rgb565";
+        let raw_len = MAX_PREVIEW_ARCHIVE_RAW_BYTES + 2;
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(raw_len as u32).to_le_bytes());
+        bytes.extend_from_slice(&(raw_len as u32).to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        std::fs::write(&path, bytes).expect("write oversized raw length archive fixture");
+
+        let err = match PreviewArchive::open(&path) {
+            Ok(_) => panic!("oversized raw len must fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("too large"), "unexpected error: {err}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_sidecar_rejects_oversized_entry_count_before_allocating() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-too-many-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_lz4_block_archive(&path, "tiny.rgb565", &raw565_fixture(1, 1, &[0xf800]));
+        let archive_bytes = std::fs::metadata(&path).unwrap().len();
+        let index_path = preview_archive_sidecar_path(&path);
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&((MAX_PREVIEW_ARCHIVE_ENTRIES as u32) + 1).to_le_bytes());
+        std::fs::write(&index_path, index).expect("write oversized sidecar count fixture");
+
+        let err = read_preview_archive_sidecar_index(&index_path, archive_bytes)
+            .expect_err("oversized sidecar count must fail");
+
+        assert!(err.contains("max"), "unexpected error: {err}");
+        let _ = std::fs::remove_file(index_path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_sidecar_rejects_oversized_encoded_len_before_allocating() {
+        let index_path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-huge-encoded-{}.mmlz4b.idx",
+            std::process::id()
+        ));
+        let name = "tiny.rgb565";
+        let raw_len = 16usize;
+        let compressed_len = 1024usize;
+        let offset = 4096u64;
+        let archive_bytes = offset + compressed_len as u64;
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&16u32.to_le_bytes());
+        index.extend_from_slice(&(raw_len as u32).to_le_bytes());
+        index.push(0);
+        index.extend_from_slice(&(compressed_len as u32).to_le_bytes());
+        index.extend_from_slice(&offset.to_le_bytes());
+        index.extend_from_slice(name.as_bytes());
+        std::fs::write(&index_path, index).expect("write huge encoded sidecar fixture");
+
+        let err = read_preview_archive_sidecar_index(&index_path, archive_bytes)
+            .expect_err("oversized encoded length must fail before allocation");
+
+        assert!(
+            err.contains("encoded length too large"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_file(index_path);
+    }
+
+    #[test]
+    fn preview_archive_sidecar_rejects_geometry_mismatch_before_decode() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-bad-geometry-{}.mmlz4b",
+            std::process::id()
+        ));
+        let name = "tiny.rgb565";
+        let payload = raw565_fixture(1, 1, &[0xf800]);
+        write_lz4_block_archive(&path, name, &payload);
+        let archive_bytes = std::fs::metadata(&path).unwrap().len();
+        let pixel_len = payload.len() - 20;
+        let archive_payload_offset = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let index_path = preview_archive_sidecar_path(&path);
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&archive_bytes.to_le_bytes());
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&1u32.to_le_bytes());
+        index.extend_from_slice(&16u32.to_le_bytes());
+        index.extend_from_slice(&((pixel_len as u32) + 2).to_le_bytes());
+        index.push(1);
+        index.extend_from_slice(&(pixel_len as u32).to_le_bytes());
+        index.extend_from_slice(&(archive_payload_offset as u64).to_le_bytes());
+        index.extend_from_slice(name.as_bytes());
+        std::fs::write(&index_path, index).expect("write bad geometry sidecar fixture");
+
+        let err = read_preview_archive_sidecar_index(&index_path, archive_bytes)
+            .expect_err("sidecar geometry mismatch must fail");
+
+        assert!(err.contains("bad geometry"), "unexpected error: {err}");
+        let _ = std::fs::remove_file(index_path);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -2759,15 +3223,13 @@ mod tests {
             payload.len() - 20,
             payload.len() - 21,
         );
-        let archive = PreviewArchive::open(&path).expect("open corrupt v2 pixel archive fixture");
-        let mut scratch = PreviewArchiveScratch::default();
-
-        let err = archive
-            .load_timed("bad.rgb565", &mut scratch)
-            .expect_err("raw pixel length mismatch should fail");
+        let err = match PreviewArchive::open(&path) {
+            Ok(_) => panic!("raw pixel length mismatch should fail early"),
+            Err(err) => err,
+        };
 
         assert!(
-            err.contains("raw pixel length mismatch"),
+            err.contains("raw payload length mismatch"),
             "unexpected error: {err}"
         );
         let _ = std::fs::remove_file(path);
@@ -2865,7 +3327,8 @@ mod tests {
         let mut index = Vec::new();
         index.extend_from_slice(b"MMIDX02\0");
         index.extend_from_slice(&archive_bytes.to_le_bytes());
-        index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
         index.extend_from_slice(&1u32.to_le_bytes());
         index.extend_from_slice(&(name.len() as u16).to_le_bytes());
         index.extend_from_slice(&width.to_le_bytes());
@@ -2886,7 +3349,8 @@ mod tests {
         let mut index = Vec::new();
         index.extend_from_slice(b"MMIDX02\0");
         index.extend_from_slice(&archive_bytes.to_le_bytes());
-        index.extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
         index.extend_from_slice(&2u32.to_le_bytes());
         for _ in 0..2 {
             index.extend_from_slice(&(name.len() as u16).to_le_bytes());

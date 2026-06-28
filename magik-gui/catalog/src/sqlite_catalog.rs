@@ -2385,7 +2385,30 @@ mod tests {
     }
 
     fn write_preview_sidecar_index(pack: &Path, names: &[&str]) {
-        std::fs::write(pack, vec![0u8; 1024]).expect("write preview pack placeholder");
+        let index_len = 8
+            + 4
+            + names
+                .iter()
+                .map(|name| 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len())
+                .sum::<usize>();
+        let mut archive = Vec::new();
+        archive.extend_from_slice(b"MMPX2B1\0");
+        archive.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for (idx, name) in names.iter().enumerate() {
+            archive.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            archive.extend_from_slice(&1u32.to_le_bytes());
+            archive.extend_from_slice(&1u32.to_le_bytes());
+            archive.extend_from_slice(&16u32.to_le_bytes());
+            archive.extend_from_slice(&16u32.to_le_bytes());
+            archive.push(1);
+            archive.extend_from_slice(&16u32.to_le_bytes());
+            archive.extend_from_slice(&((index_len + idx * 16) as u64).to_le_bytes());
+            archive.extend_from_slice(name.as_bytes());
+        }
+        for _ in names {
+            archive.extend_from_slice(&[0; 16]);
+        }
+        std::fs::write(pack, archive).expect("write preview pack fixture");
         let archive_bytes = std::fs::metadata(pack).expect("stat preview pack").len();
         let mut index = Vec::new();
         index.extend_from_slice(b"MMIDX02\0");
@@ -2393,15 +2416,15 @@ mod tests {
         index
             .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
         index.extend_from_slice(&(names.len() as u32).to_le_bytes());
-        for name in names {
+        for (idx, name) in names.iter().enumerate() {
             index.extend_from_slice(&(name.len() as u16).to_le_bytes());
             index.extend_from_slice(&1u32.to_le_bytes());
             index.extend_from_slice(&1u32.to_le_bytes());
             index.extend_from_slice(&16u32.to_le_bytes());
             index.extend_from_slice(&16u32.to_le_bytes());
             index.push(1);
-            index.extend_from_slice(&0u32.to_le_bytes());
-            index.extend_from_slice(&0u64.to_le_bytes());
+            index.extend_from_slice(&16u32.to_le_bytes());
+            index.extend_from_slice(&((index_len + idx * 16) as u64).to_le_bytes());
             index.extend_from_slice(name.as_bytes());
         }
         std::fs::write(

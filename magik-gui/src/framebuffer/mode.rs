@@ -77,6 +77,8 @@ static FB_MODE_RESTORE_ATEXIT: OnceLock<()> = OnceLock::new();
 
 fn remember_fb_mode_for_exit(previous: FbInfo) {
     FB_MODE_RESTORE_ATEXIT.get_or_init(|| unsafe {
+        // SAFETY: restore_fb_mode_at_exit is an extern "C" function with no
+        // captured state. It performs best-effort cleanup and does not unwind.
         libc::atexit(restore_fb_mode_at_exit);
     });
     if let Ok(mut slot) = FB_MODE_RESTORE.lock() {

@@ -833,6 +833,8 @@ fn thread_cpu_us() -> Option<u64> {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: ts points to initialized writable storage for the duration of the
+    // syscall; failures are handled by returning None.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
     if rc == 0 {
         Some(ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1_000)

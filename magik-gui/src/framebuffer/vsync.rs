@@ -141,6 +141,8 @@ pub struct VsyncPacer {
 pub fn wait_vsync_fd(fd: std::os::unix::io::RawFd) -> VsyncWaitStatus {
     let arg: u32 = 0;
     let start = Instant::now();
+    // SAFETY: fd is a live framebuffer descriptor owned by the caller, and the
+    // ioctl only reads the u32 argument during the call.
     let rc = unsafe { libc::ioctl(fd, FBIO_WAITFORVSYNC, &arg as *const u32) };
     let wait_us = start.elapsed().as_micros() as u64;
     let at = Instant::now();

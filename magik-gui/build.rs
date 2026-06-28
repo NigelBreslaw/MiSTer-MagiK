@@ -21,15 +21,4 @@ fn main() {
     if experiments {
         println!("cargo:rustc-cfg=mister_experiments");
     }
-
-    let video = std::env::var_os("CARGO_FEATURE_VIDEO").is_some();
-    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    if video && target_arch == "arm" {
-        cc::Build::new()
-            .file("src/video_i420_rgb565_neon.c")
-            .flag("-mfpu=neon")
-            .warnings(false)
-            .compile("mister_video_i420_rgb565_neon");
-        println!("cargo:rerun-if-changed=src/video_i420_rgb565_neon.c");
-    }
 }

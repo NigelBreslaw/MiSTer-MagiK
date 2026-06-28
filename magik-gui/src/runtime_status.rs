@@ -61,9 +61,7 @@ pub struct LauncherStatus<'a> {
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
     let _ = create_dir_all(DIR);
-    let row = event_value(name, &detail.to_string(), unix_ms(), unsafe {
-        libc::getpid()
-    });
+    let row = event_value(name, &detail.to_string(), unix_ms(), std::process::id());
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -75,14 +73,14 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
 
 pub fn write_launcher_status(status: LauncherStatus<'_>) {
     let _ = create_dir_all(DIR);
-    let value = launcher_status_value(status, unix_ms(), unsafe { libc::getpid() });
+    let value = launcher_status_value(status, unix_ms(), std::process::id());
     let tmp = format!("{STATUS_PATH}.tmp");
     if std::fs::write(&tmp, format!("{value}\n")).is_ok() {
         let _ = std::fs::rename(tmp, STATUS_PATH);
     }
 }
 
-fn event_value(name: &str, detail: &str, ts_unix_ms: u128, pid: libc::pid_t) -> Value {
+fn event_value(name: &str, detail: &str, ts_unix_ms: u128, pid: u32) -> Value {
     json!({
         "ts_unix_ms": ts_unix_ms,
         "source": "slint",
@@ -92,7 +90,7 @@ fn event_value(name: &str, detail: &str, ts_unix_ms: u128, pid: libc::pid_t) -> 
     })
 }
 
-fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: libc::pid_t) -> Value {
+fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32) -> Value {
     let mut map = serde_json::Map::new();
     macro_rules! insert {
         ($key:literal, $value:expr) => {

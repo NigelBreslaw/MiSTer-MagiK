@@ -366,6 +366,8 @@ pub(super) fn sync_bridge_launcher_light(
 }
 
 pub(super) fn launcher_clock_text() -> String {
+    // SAFETY: time writes to a valid time_t, zeroed tm is valid storage for
+    // localtime_r, and both pointers remain live for the duration of the calls.
     unsafe {
         let mut now: libc::time_t = 0;
         if libc::time(&mut now) == -1 {

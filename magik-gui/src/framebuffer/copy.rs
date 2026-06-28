@@ -155,37 +155,36 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
     let mut i = 0;
     #[cfg(all(target_arch = "arm", target_feature = "neon"))]
     if use_neon_2x_scaler() {
+        // SAFETY: packed_len is min(dst.len() / 2, src.len()), so the NEON
+        // helper reads at most packed_len source words and writes exactly twice
+        // as many destination words.
         i = unsafe { copy_2x_u32_row_neon(dst, src, packed_len) };
     }
-    unsafe {
-        let src = src.as_ptr();
-        let dst = dst.as_mut_ptr();
-        while i + 4 <= packed_len {
-            let c0 = *src.add(i);
-            let c1 = *src.add(i + 1);
-            let c2 = *src.add(i + 2);
-            let c3 = *src.add(i + 3);
-            let d = dst.add(i * 2);
-            d.add(0).write(c0);
-            d.add(1).write(c0);
-            d.add(2).write(c1);
-            d.add(3).write(c1);
-            d.add(4).write(c2);
-            d.add(5).write(c2);
-            d.add(6).write(c3);
-            d.add(7).write(c3);
-            i += 4;
-        }
-        while i < packed_len {
-            let color = *src.add(i);
-            let d = dst.add(i * 2);
-            d.write(color);
-            d.add(1).write(color);
-            i += 1;
-        }
-        if !dst_len.is_multiple_of(2) && packed_len < src_len {
-            dst.add(packed_len * 2).write(*src.add(packed_len));
-        }
+    while i + 4 <= packed_len {
+        let c0 = src[i];
+        let c1 = src[i + 1];
+        let c2 = src[i + 2];
+        let c3 = src[i + 3];
+        let d = i * 2;
+        dst[d] = c0;
+        dst[d + 1] = c0;
+        dst[d + 2] = c1;
+        dst[d + 3] = c1;
+        dst[d + 4] = c2;
+        dst[d + 5] = c2;
+        dst[d + 6] = c3;
+        dst[d + 7] = c3;
+        i += 4;
+    }
+    while i < packed_len {
+        let color = src[i];
+        let d = i * 2;
+        dst[d] = color;
+        dst[d + 1] = color;
+        i += 1;
+    }
+    if !dst_len.is_multiple_of(2) && packed_len < src_len {
+        dst[packed_len * 2] = src[packed_len];
     }
 }
 
@@ -204,6 +203,8 @@ fn use_neon_2x_scaler() -> bool {
 unsafe fn copy_2x_u32_row_neon(dst: &mut [u32], src: &[u32], packed_len: usize) -> usize {
     use core::arch::arm::{vld1q_u32, vst1q_u32, vzipq_u32};
 
+    debug_assert!(packed_len <= src.len());
+    debug_assert!(packed_len * 2 <= dst.len());
     let mut i = 0;
     let src = src.as_ptr();
     let dst = dst.as_mut_ptr();

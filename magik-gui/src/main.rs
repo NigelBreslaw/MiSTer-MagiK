@@ -73,6 +73,7 @@ mod ui_display;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
 mod ui_runner;
+mod video_i420;
 #[cfg(feature = "video")]
 mod video_player;
 mod vt;
@@ -708,6 +709,9 @@ fn exec_mister(args: &[String]) {
         .map(|s| s.as_ptr())
         .chain([std::ptr::null()])
         .collect();
+    // SAFETY: c_path and every argv pointer are NUL-terminated CStrings kept
+    // alive across the call, and ptrs is terminated by a null pointer. On
+    // success execv does not return; on failure we only inspect errno.
     let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
     eprintln!("execv({MISTER_BIN}) failed: {err}");
     std::process::exit(1);
