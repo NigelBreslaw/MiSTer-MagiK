@@ -5,6 +5,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/arcade-scroll-profiles"
+REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 usage() {
   cat <<'EOF'
@@ -84,12 +86,14 @@ if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scr
 
 mkdir -p "$OUT_DIR"
 remote_tsv="/tmp/${label}-arcade-scroll.tsv"
-remote_log="/tmp/mister-magik-slint.log"
+remote_log="$REMOTE_LOG"
 local_tsv="$OUT_DIR/${label}-arcade-scroll.tsv"
 local_log="$OUT_DIR/${label}-arcade-scroll.log"
+env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
 
 cleanup() {
-  "$MISTER" launcher-restart --clear-env --timeout 20 >/dev/null 2>&1 || true
+  rm -f "$env_file"
+  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -99,16 +103,17 @@ case "$deploy" in
 esac
 
 echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy"
-"$MISTER" run "rm -f '$remote_tsv' '$remote_log'" >/dev/null
-"$MISTER" launcher-restart \
-  --env MISTER_CATALOG_REFRESH=default \
-  --env MISTER_LAUNCHER_START_SCREEN=arcade \
-  --env MISTER_LAUNCHER_LOCK_SCREEN=arcade \
-  --env "MISTER_LAUNCHER_BENCH_SCENARIO=$remote_scenario" \
-  --env MISTER_PREVIEW_TRACE=1 \
-  --env "MISTER_PREVIEW_SCROLL_TRACE_SECS=$secs" \
-  --env "MISTER_PREVIEW_SCROLL_TRACE=$remote_tsv" \
-  --timeout 30 >/dev/null
+{
+  printf 'export MISTER_CATALOG_REFRESH=default\n'
+  printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+  printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
+  printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
+  printf 'export MISTER_PREVIEW_TRACE=1\n'
+  printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
+  printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
+} >"$env_file"
+"$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
+"$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
 sleep $((secs + 7))
 
 if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
