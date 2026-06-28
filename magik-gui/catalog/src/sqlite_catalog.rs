@@ -1520,7 +1520,6 @@ fn write_sqlite_scan_with_sources_inner(
             hardware_id TEXT NOT NULL,
             setname TEXT,
             parent TEXT,
-            priority INTEGER NOT NULL,
             confidence TEXT NOT NULL
         );
         CREATE VIEW path_values_text AS
@@ -1561,7 +1560,6 @@ fn write_sqlite_scan_with_sources_inner(
                    lt.hardware_id,
                    lt.setname,
                    lt.parent,
-                   lt.priority,
                    lt.confidence
             FROM launch_targets lt
             JOIN games ON games.game_key_id = lt.game_key_id
@@ -1626,7 +1624,6 @@ fn write_sqlite_scan_with_sources_inner(
             identity_id TEXT,
             family_id TEXT NOT NULL,
             parent_setname TEXT,
-            asset_pack_id TEXT,
             asset_key TEXT,
             asset_link_reason TEXT NOT NULL,
             preferred_reason TEXT NOT NULL
@@ -1647,7 +1644,6 @@ fn write_sqlite_scan_with_sources_inner(
             discovered_at_unix INTEGER,
             identity_id TEXT,
             parent_setname TEXT,
-            asset_pack_id TEXT,
             asset_key TEXT,
             asset_link_reason TEXT NOT NULL,
             preferred INTEGER NOT NULL,
@@ -1700,14 +1696,12 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE TABLE region_metadata_rows (
             game_key_id INTEGER PRIMARY KEY,
             inferred_region TEXT,
-            confidence TEXT NOT NULL,
-            override_region TEXT
+            confidence TEXT NOT NULL
         ) WITHOUT ROWID;
         CREATE VIEW region_metadata AS
             SELECT games.game_id AS game_id,
                    region_metadata_rows.inferred_region,
-                   region_metadata_rows.confidence,
-                   region_metadata_rows.override_region
+                   region_metadata_rows.confidence
             FROM region_metadata_rows
             JOIN games ON games.game_key_id = region_metadata_rows.game_key_id;
         CREATE TABLE meta (
@@ -1870,8 +1864,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
             .prepare(
-                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,priority,confidence)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             )
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
         let mut identity_stmt = tx
@@ -1882,8 +1876,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare launchable identity insert: {e}"))?;
         let mut region_stmt = tx
             .prepare(
-                "INSERT INTO region_metadata_rows(game_key_id,inferred_region,confidence,override_region)
-                 VALUES (?1,?2,?3,?4)",
+                "INSERT INTO region_metadata_rows(game_key_id,inferred_region,confidence)
+                 VALUES (?1,?2,?3)",
             )
             .map_err(|e| format!("prepare region metadata insert: {e}"))?;
         let discovery_total = discoveries.len();
@@ -2001,7 +1995,6 @@ fn write_sqlite_scan_with_sources_inner(
                     discovery.hardware_id.as_str(),
                     discovery.setname.as_deref(),
                     discovery.parent.as_deref(),
-                    0i64,
                     confidence_str(discovery.confidence)
                 ])
                 .map_err(|e| format!("insert launch target: {e}"))?;
@@ -2059,8 +2052,7 @@ fn write_sqlite_scan_with_sources_inner(
                 .execute(params![
                     game_key_id,
                     region.region,
-                    region.confidence,
-                    Option::<&str>::None
+                    region.confidence
                 ])
                 .map_err(|e| format!("insert region metadata: {e}"))?;
             let written = idx + 1;
@@ -3726,12 +3718,25 @@ mod tests {
         assert!(sqlite_column_exists(&conn, "launch_targets", "game_key_id").expect("target game_key_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "game_id").expect("target game_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "plan_id").expect("target plan_id"));
+        assert!(!sqlite_column_exists(&conn, "launch_targets", "priority").expect("target priority"));
         assert!(sqlite_column_exists(&conn, "region_metadata_rows", "game_key_id").expect("region game_key_id"));
         assert!(!sqlite_column_exists(&conn, "region_metadata_rows", "game_id").expect("region game_id"));
+        assert!(
+            !sqlite_column_exists(&conn, "region_metadata_rows", "override_region")
+                .expect("region override")
+        );
         assert!(sqlite_column_exists(&conn, "launchable_identity_rows", "game_key_id").expect("identity game_key_id"));
         assert!(
             !sqlite_column_exists(&conn, "launchable_identity_rows", "launchable_id")
                 .expect("identity launchable_id")
+        );
+        assert!(
+            !sqlite_column_exists(&conn, "ui_arcade_preferred", "asset_pack_id")
+                .expect("preferred asset pack")
+        );
+        assert!(
+            !sqlite_column_exists(&conn, "ui_arcade_variants", "asset_pack_id")
+                .expect("variant asset pack")
         );
         let view_count: i64 = conn
             .query_row(
