@@ -80,10 +80,10 @@ mod tests {
 
         let after = snapshot();
         assert!(after.sqlite_opens >= before.sqlite_opens + 2);
-        assert!(after.summary_reads >= before.summary_reads + 1);
-        assert!(after.nav_projection_reads >= before.nav_projection_reads + 1);
-        assert!(after.worker_cache_loads >= before.worker_cache_loads + 1);
-        assert!(after.ui_catalog_loads >= before.ui_catalog_loads + 1);
+        assert!(after.summary_reads > before.summary_reads);
+        assert!(after.nav_projection_reads > before.nav_projection_reads);
+        assert!(after.worker_cache_loads > before.worker_cache_loads);
+        assert!(after.ui_catalog_loads > before.ui_catalog_loads);
 
         assert_eq!(
             format_snapshot(CatalogLoadCounters {
