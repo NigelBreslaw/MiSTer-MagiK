@@ -1694,9 +1694,10 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE VIEW region_metadata AS
             SELECT games.game_id AS game_id,
                    region_metadata_rows.inferred_region,
-                   region_metadata_rows.confidence
-            FROM region_metadata_rows
-            JOIN games ON games.game_key_id = region_metadata_rows.game_key_id;
+                   COALESCE(region_metadata_rows.confidence, 'unknown') AS confidence
+            FROM games
+            LEFT JOIN region_metadata_rows
+                   ON region_metadata_rows.game_key_id = games.game_key_id;
         CREATE TABLE meta (
             key TEXT PRIMARY KEY,
             value INTEGER NOT NULL
@@ -1984,13 +1985,15 @@ fn write_sqlite_scan_with_sources_inner(
                         })
                 })
                 .unwrap_or_else(|| media_metadata::infer_region_metadata(discovery));
-            region_stmt
-                .execute(params![
-                    game_key_id,
-                    region.region,
-                    region.confidence
-                ])
-                .map_err(|e| format!("insert region metadata: {e}"))?;
+            if region.region.is_some() || region.confidence != "unknown" {
+                region_stmt
+                    .execute(params![
+                        game_key_id,
+                        region.region,
+                        region.confidence
+                    ])
+                    .map_err(|e| format!("insert region metadata: {e}"))?;
+            }
             let written = idx + 1;
             if written % 1000 == 0 || written == discovery_total {
                 report_library_import_timing(
@@ -3734,6 +3737,7 @@ mod tests {
         assert!(sqlite_column_exists(&conn, "launch_targets", "mount_kind").expect("target mount_kind"));
         assert!(sqlite_column_exists(&conn, "launch_targets", "mount_index").expect("target mount_index"));
         assert!(sqlite_column_exists(&conn, "launch_targets", "delay_secs").expect("target delay_secs"));
+        assert!(sqlite_column_exists(&conn, "launch_targets", "launch_ref_kind").expect("target launch_ref_kind"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "game_id").expect("target game_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "plan_id").expect("target plan_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "priority").expect("target priority"));
@@ -3781,6 +3785,21 @@ mod tests {
         assert_eq!(reconstructed.1, "/media/fat/games/Saturn/Nights.chd");
         assert!(reconstructed.2.starts_with("plan:payload:"));
         assert_eq!(reconstructed.3, "payload:/media/fat/games/Saturn/Nights.chd");
+
+        let region_rows: i64 = conn
+            .query_row("SELECT count(*) FROM region_metadata_rows", [], |row| row.get(0))
+            .expect("region row count");
+        assert_eq!(region_rows, 0);
+        let default_region: (Option<String>, String) = conn
+            .query_row(
+                "SELECT inferred_region, confidence
+                 FROM region_metadata
+                 WHERE game_id='payload:/media/fat/games/Saturn/Nights.chd'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("default region view row");
+        assert_eq!(default_region, (None, "unknown".to_string()));
         let _ = std::fs::remove_dir_all(root);
     }
 
