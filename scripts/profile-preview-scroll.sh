@@ -9,10 +9,11 @@ PRESENT_TRACE="$HERE/scripts/launcher-present-trace.py"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 ORIGINAL_ARGS=("$@")
+source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--self-test] [--visual-captures N] [--skip-preview-warm]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--skip-preview-warm]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -24,6 +25,8 @@ non-empty CPU SVG artifact.
 --visual-captures captures fixed Arcade indices from the real launcher screen.
 --skip-preview-warm skips launcher benchmark archive preloading so first-preview
 measurement can exercise the .idx + pread fast lane.
+--thread-sample records /proc per-thread CPU/core/scheduler samples once per
+second while the timed scenario runs.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for Arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -47,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
+    --thread-sample) thread_sample_enabled="1"; shift ;;
     --self-test) self_test="1"; shift ;;
     --secs)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--secs needs a value" >&2; usage >&2; exit 2; fi
@@ -188,10 +192,17 @@ emit_run_context_row() {
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\n' \
-    "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
-    "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-    "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at"
+  if [[ "$thread_sample_enabled" == "1" ]]; then
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\tthread_sample=%s\n' \
+      "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
+      "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at" "$thread_sample_enabled"
+  else
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\n' \
+      "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
+      "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at"
+  fi
 }
 
 cleanup() {
@@ -267,7 +278,9 @@ run_case() {
   fi
   write_launcher_env "$remote_scenario" "$remote_tsv"
   restart_supervised_launcher "$remote_tsv"
+  thread_sample_start "$label" "$name" "$OUT_DIR" $((secs + 10))
   sleep $((secs + 7))
+  thread_sample_finish
   if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
     "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
     "$MISTER" status >"$local_status" 2>&1 || true

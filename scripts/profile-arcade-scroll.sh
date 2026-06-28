@@ -7,10 +7,11 @@ MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/arcade-scroll-profiles"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
+source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -18,6 +19,8 @@ Legacy positional form is still accepted:
 Runs the Main-supervised launcher on the real Arcade screen with
 MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE,
 pulls the raw TSV/log, then prints frame timing summaries.
+--thread-sample records /proc per-thread CPU/core/scheduler samples once per
+second while the timed scenario runs.
 
 Do not use row-step `list-scroll` for arcade performance benchmarking. It does
 not reproduce real velocity scrolling.
@@ -36,6 +39,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
+    --thread-sample) thread_sample_enabled="1"; shift ;;
     --secs)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--secs needs a value" >&2; usage >&2; exit 2; fi
       secs="$2"
@@ -114,7 +118,9 @@ echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=
 } >"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
 sleep $((secs + 7))
+thread_sample_finish
 
 if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
   "$MISTER" get "$remote_log" "$local_log" >/dev/null || true

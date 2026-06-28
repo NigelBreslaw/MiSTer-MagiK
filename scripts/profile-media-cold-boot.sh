@@ -13,6 +13,7 @@ REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 DEFAULT_MANIFEST_URL="https://assets.mistermagik.com/mister-magik/v1/manifest.json"
 ORIGINAL_ARGS=("$@")
+source "$HERE/scripts/thread-sampler-lib.sh"
 
 label=""
 deploy="skip"
@@ -28,7 +29,7 @@ systems_csv="arcade,neogeo,saturn"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-media-cold-boot.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--asset-dir PATH] [--keep-assets] [--keep-catalog] [--manifest-url URL] [--image-size SIZE] [--self-test]
+Usage: scripts/profile-media-cold-boot.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--asset-dir PATH] [--keep-assets] [--keep-catalog] [--manifest-url URL] [--image-size SIZE] [--thread-sample] [--self-test]
 
 Runs the supervised launcher after a reboot with a cold catalog and screenshot
 media asset directory, then emits AI-readable rows showing whether arcade,
@@ -39,6 +40,8 @@ The default asset directory is a label-scoped temporary path under
 /media/fat/mister-magik and is removed after the run. Use --keep-assets to
 preserve it for inspection. Use --keep-catalog to reuse the installed catalog
 database instead of forcing the first-boot scan path.
+--thread-sample records /proc per-thread CPU/core/scheduler samples once per
+second after reboot while the cold media run completes.
 EOF
 }
 
@@ -54,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --manifest-url) manifest_url="${2:?}"; shift 2 ;;
     --image-size) image_size="${2:?}"; shift 2 ;;
     --systems) systems_csv="${2:?}"; shift 2 ;;
+    --thread-sample) thread_sample_enabled="1"; shift ;;
     --self-test) self_test=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -182,10 +186,17 @@ emit_run_context_row() {
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-media-cold-boot.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tsystems=%s\tasset_dir=%s\timage_size=%s\tdeploy=%s\treset_catalog=%s\ttimeout_secs=%s\tstarted_at=%s\n' \
-    "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
-    "$(tsv_value "$systems_csv")" "$(tsv_value "$asset_dir")" "$(tsv_value "$image_size")" \
-    "$deploy" "$reset_catalog" "$timeout_secs" "$started_at"
+  if [[ "$thread_sample_enabled" == "1" ]]; then
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tsystems=%s\tasset_dir=%s\timage_size=%s\tdeploy=%s\treset_catalog=%s\ttimeout_secs=%s\tstarted_at=%s\tthread_sample=%s\n' \
+      "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
+      "$(tsv_value "$systems_csv")" "$(tsv_value "$asset_dir")" "$(tsv_value "$image_size")" \
+      "$deploy" "$reset_catalog" "$timeout_secs" "$started_at" "$thread_sample_enabled"
+  else
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tsystems=%s\tasset_dir=%s\timage_size=%s\tdeploy=%s\treset_catalog=%s\ttimeout_secs=%s\tstarted_at=%s\n' \
+      "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
+      "$(tsv_value "$systems_csv")" "$(tsv_value "$asset_dir")" "$(tsv_value "$image_size")" \
+      "$deploy" "$reset_catalog" "$timeout_secs" "$started_at"
+  fi
 }
 
 summarize_media_log() {
@@ -494,6 +505,7 @@ fi
 reset_cmd+="; sync"
 "$MISTER" run "$reset_cmd" >/dev/null
 "$MISTER" reboot-wait
+thread_sample_start "$label" "media-cold-boot" "$OUT_DIR" "$timeout_secs"
 
 deadline=$((SECONDS + timeout_secs))
 snapshot_taken=0
@@ -530,6 +542,8 @@ done
 
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
 "$MISTER" status >"$local_status" 2>&1 || true
+thread_sample_stop
+thread_sample_collect
 if [[ "$snapshot_taken" -eq 0 ]]; then
   rm -rf "$snapshot_dir"
   "$MISTER" snapshot "$snapshot_dir" >/dev/null 2>&1 || snapshot_taken=2
@@ -541,6 +555,7 @@ fi
   emit_artifact_row "status" "$local_status" "scripts/mister status"
   emit_artifact_row "snapshot-status" "$snapshot_dir/status.json" "scripts/mister snapshot"
   emit_artifact_row "snapshot-png" "$snapshot_dir/fb0.png" "scripts/mister snapshot"
+  thread_sample_emit_artifacts
   summarize_media_log "$local_log" "$label" "$commit" "$systems_csv"
   if [[ "$run_done" -eq 1 ]]; then
     emit_validity_row "1" "ok" "completion=$completion_reason log=$local_log status=$local_status snapshot=$snapshot_dir asset_dir=$asset_dir reset_catalog=$reset_catalog"
