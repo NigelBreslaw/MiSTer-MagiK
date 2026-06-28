@@ -2608,7 +2608,6 @@ dependencies = [
  "serde_json",
  "slint",
  "swash",
- "zune-png",
 ]
 
 [[package]]
@@ -5608,16 +5607,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
-]
-
-[[package]]
-name = "zune-png"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a321146329f7617ba0a5b26982cba45b7ce78163135aba78be25850aefcea80"
-dependencies = [
- "zune-core",
- "zune-inflate",
 ]
 
 [[package]]

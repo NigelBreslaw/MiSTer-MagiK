@@ -23,6 +23,10 @@ modes now prepare RGB565 scratch pixels and present through the checked
 framebuffer APIs; there is no direct raw/scaled framebuffer copy path or FPGA
 scaler fill mode to preserve.
 
+Effect source images are generated in code. Do not add runtime PNG/JPG fixture
+decoders for effect scenes; production screenshot media is prepared offline as
+raw565-oriented preview packs.
+
 Build and deploy an experiment-enabled binary before running these tools:
 
 ```bash
