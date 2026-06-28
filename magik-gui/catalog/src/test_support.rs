@@ -75,6 +75,7 @@ pub(crate) fn catalog_row(
     parent: &str,
 ) -> CatalogProjectionRow {
     CatalogProjectionRow {
+        launch_id: 0,
         game: ArcadeGameEntry {
             title: title.into(),
             mra_path: path.into(),
@@ -97,6 +98,7 @@ pub(crate) fn catalog_row(
 
 pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjectionRow {
     CatalogProjectionRow {
+        launch_id: 0,
         game: ArcadeGameEntry {
             title: title.into(),
             mra_path: path.into(),
@@ -119,6 +121,7 @@ pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjection
 
 pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogProjectionRow {
     CatalogProjectionRow {
+        launch_id: 0,
         game: ArcadeGameEntry {
             title: title.into(),
             mra_path: path.into(),
