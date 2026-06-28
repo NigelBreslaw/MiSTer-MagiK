@@ -1405,15 +1405,16 @@ pub(super) fn run_launcher_loop(
                         && catalog_ready
                         && nav.screen == Screen::Arcade
                     {
-                        auto_launch_selected_done = true;
-                        active_system(&catalog, &nav)
+                        let event = active_system(&catalog, &nav)
                             .and_then(|system| {
                                 nav.active_arcade_game_at(&catalog, &system.id, nav.arcade.selected)
                             })
                             .map(|game| launcher::LauncherEvent {
                                 action: LauncherAction::LaunchGame,
                                 path: Some(game.mra_path.to_string()),
-                            })
+                            });
+                        auto_launch_selected_done = event.is_some();
+                        event
                     } else if scheduler.launch_benchmark_enabled() {
                         None
                     } else {
