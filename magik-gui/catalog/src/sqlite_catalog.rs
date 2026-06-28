@@ -1628,15 +1628,18 @@ fn write_sqlite_scan_with_sources_inner(
             category TEXT,
             discovered_at_unix INTEGER
         );
-        CREATE TABLE launcher_launch_plans (
-            launch_id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL,
-            system_id TEXT NOT NULL,
-            core_path TEXT NOT NULL,
-            mount_kind TEXT NOT NULL,
-            mount_index INTEGER NOT NULL,
-            delay_secs INTEGER NOT NULL
-        ) WITHOUT ROWID;
+        CREATE VIEW launcher_launch_plans AS
+            SELECT launcher_catalog.launch_id,
+                   launcher_catalog.title,
+                   launcher_catalog.system_id,
+                   COALESCE(profiles.core_path, launch_targets.core_id) AS core_path,
+                   COALESCE(launch_targets.mount_kind, 'mount-image') AS mount_kind,
+                   COALESCE(launch_targets.mount_index, 0) AS mount_index,
+                   COALESCE(launch_targets.delay_secs, 1) AS delay_secs
+            FROM launcher_catalog
+            JOIN launch_targets ON launch_targets.launch_id = launcher_catalog.launch_id
+            LEFT JOIN profiles ON profiles.profile_id = launch_targets.profile_id
+            WHERE launch_targets.launch_kind = 'virtual-mgl';
         CREATE VIEW ui_arcade_preferred_text AS
             SELECT ui_arcade_preferred.*,
                    launch_plans.launch_ref AS launch_ref
@@ -1688,7 +1691,7 @@ fn write_sqlite_scan_with_sources_inner(
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=13");
+    report_library_import_timing("schema", schema_t, "tables=12");
 
     let metadata_t = Instant::now();
     let mame_signature = library_db::file_signature(sources.mame_sqlite_path);
