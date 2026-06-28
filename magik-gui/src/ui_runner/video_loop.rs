@@ -18,6 +18,67 @@ pub(super) fn video_frame_rect(frame: &crate::video_player::VideoRgb565Frame) ->
 }
 
 #[cfg(all(feature = "video", mister_bench_scenes))]
+fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
+    debug_assert_eq!(
+        std::mem::size_of::<Rgb565Pixel>(),
+        std::mem::size_of::<u16>()
+    );
+    debug_assert_eq!(
+        std::mem::align_of::<Rgb565Pixel>(),
+        std::mem::align_of::<u16>()
+    );
+    unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<Rgb565Pixel>(), words.len()) }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+fn present_video_frame_direct(
+    disp: &mut MappedRgb565Framebuffer,
+    frame: &crate::video_player::VideoRgb565Frame,
+    rect: DirtyRect,
+) {
+    let src = rgb565_words_as_pixels(&frame.pixels);
+    if let Err(e) = disp.present_rect_565_strided(
+        rect.x0,
+        rect.y0,
+        rect.width(),
+        rect.rows() as usize,
+        src,
+        frame.width as usize,
+        0,
+        0,
+    ) {
+        eprintln!("framebuffer present video direct failed: {e}");
+    }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+fn present_direct_video_frame(
+    disp: &mut MappedRgb565Framebuffer,
+    ui: &UiDisplay,
+    cached: &[Rgb565Pixel],
+    frame: &crate::video_player::VideoRgb565Frame,
+    dirty: Option<DirtyRect>,
+    video_dirty_clip_ready: bool,
+) -> (u32, Option<DirtyRect>) {
+    let video_rect = video_frame_rect(frame);
+    let mut rows = 0u32;
+    let mut copied_rect = None;
+
+    if let Some(dirty) = dirty {
+        if !video_dirty_clip_ready || dirty.intersection(video_rect).is_none() {
+            copy_cached_rect_565(disp, frame_target_geometry(ui), cached, dirty);
+            rows = rows.saturating_add(dirty.rows());
+            copied_rect = Some(dirty);
+        }
+    }
+
+    present_video_frame_direct(disp, frame, video_rect);
+    rows = rows.saturating_add(video_rect.rows());
+    copied_rect = Some(copied_rect.map_or(video_rect, |rect: DirtyRect| rect.union(video_rect)));
+    (rows, copied_rect)
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[derive(Default)]
 pub(super) struct VideoFramePhases {
     frame_updated: bool,
@@ -146,43 +207,6 @@ pub(super) fn video_copy_rect(
         dirty.intersection(VIDEO_IMAGE_RECT).unwrap_or(dirty)
     } else {
         dirty
-    }
-}
-
-#[cfg(all(feature = "video", mister_bench_scenes))]
-pub(super) fn direct_video_copy_rect(
-    dirty: Option<DirtyRect>,
-    video_dirty_clip_ready: bool,
-    video_rect: DirtyRect,
-) -> DirtyRect {
-    let Some(dirty) = dirty else {
-        return video_rect;
-    };
-    if !video_dirty_clip_ready {
-        return dirty.union(video_rect);
-    }
-    dirty
-        .intersection(video_rect)
-        .unwrap_or(dirty.union(video_rect))
-}
-
-#[cfg(all(feature = "video", mister_bench_scenes))]
-pub(super) fn blit_video_frame_to_cached(
-    frame: &crate::video_player::VideoRgb565Frame,
-    cached: &mut [Rgb565Pixel],
-    render_w: usize,
-) {
-    let src_w = frame.width as usize;
-    let src_h = frame.height as usize;
-    let dst_x = VIDEO_IMAGE_RECT.x0;
-    let dst_y = VIDEO_IMAGE_RECT.y0;
-    for y in 0..src_h {
-        let src = &frame.pixels[y * src_w..(y + 1) * src_w];
-        let dst =
-            &mut cached[(dst_y + y) * render_w + dst_x..(dst_y + y) * render_w + dst_x + src_w];
-        for (dst, src) in dst.iter_mut().zip(src) {
-            *dst = Rgb565Pixel(*src);
-        }
     }
 }
 
@@ -391,24 +415,20 @@ pub(super) fn run_video_playback_loop(
                     this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
                 });
                 let t2 = Instant::now();
-                if let Some(frame) = direct_frame.as_ref() {
-                    let blit_t0 = Instant::now();
-                    blit_video_frame_to_cached(frame, &mut cached, ui.render_w());
-                    phases.blit_us = blit_t0.elapsed().as_micros() as u64;
-                    video_profile.video_blit_us = phases.blit_us;
-                }
                 let pace = pacer.wait();
                 let t3 = Instant::now();
                 let mut copied_rect = None;
-                let rows = if direct_frame.is_some() {
-                    let rect = direct_video_copy_rect(
+                let rows = if let Some(frame) = direct_frame.as_ref() {
+                    let (rows, rect) = present_direct_video_frame(
+                        disp,
+                        ui,
+                        &cached,
+                        frame,
                         this_rect,
                         video_dirty_clip_ready,
-                        video_frame_rect(direct_frame.as_ref().unwrap()),
                     );
-                    copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
-                    copied_rect = Some(rect);
-                    rect.rows()
+                    copied_rect = rect;
+                    rows
                 } else if let Some(rect) = this_rect {
                     let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
                     copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
@@ -543,22 +563,18 @@ pub(super) fn run_video_playback_loop(
                     this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
                 });
                 let t3 = Instant::now();
-                if let Some(frame) = direct_frame.as_ref() {
-                    let blit_t0 = Instant::now();
-                    blit_video_frame_to_cached(frame, &mut cached, ui.render_w());
-                    phases.blit_us = blit_t0.elapsed().as_micros() as u64;
-                    video_profile.video_blit_us = phases.blit_us;
-                }
                 let mut copied_rect = None;
-                let rows = if direct_frame.is_some() {
-                    let rect = direct_video_copy_rect(
+                let rows = if let Some(frame) = direct_frame.as_ref() {
+                    let (rows, rect) = present_direct_video_frame(
+                        disp,
+                        ui,
+                        &cached,
+                        frame,
                         this_rect,
                         video_dirty_clip_ready,
-                        video_frame_rect(direct_frame.as_ref().unwrap()),
                     );
-                    copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
-                    copied_rect = Some(rect);
-                    rect.rows()
+                    copied_rect = rect;
+                    rows
                 } else if let Some(rect) = this_rect {
                     let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
                     copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
