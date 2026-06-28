@@ -257,12 +257,7 @@ fn avg3_table() -> &'static [u8; 766] {
 
 fn vhs_source_image() -> &'static SourceImage {
     static IMAGE: OnceLock<SourceImage> = OnceLock::new();
-    IMAGE.get_or_init(|| {
-        decode_fixture_png(include_bytes!(
-            "../benches/png-fixtures/04-metal-slug-super-vehicle-001.png"
-        ))
-        .unwrap_or_else(|_| vhs_fallback_image())
-    })
+    IMAGE.get_or_init(vhs_fallback_image)
 }
 
 fn crt_image_for_size(size: EffectSize) -> Option<&'static CrtImage> {
@@ -281,46 +276,6 @@ fn crt_image_for_size(size: EffectSize) -> Option<&'static CrtImage> {
         (960, 540) => cached!(CRT_960_540, 960, 540),
         _ => None,
     }
-}
-
-fn decode_fixture_png(data: &[u8]) -> Result<SourceImage, String> {
-    use zune_png::zune_core::bytestream::ZCursor;
-    use zune_png::zune_core::colorspace::ColorSpace;
-    use zune_png::zune_core::options::DecoderOptions;
-    use zune_png::PngDecoder;
-
-    let options = DecoderOptions::default().png_set_strip_to_8bit(true);
-    let mut decoder = PngDecoder::new_with_options(ZCursor::new(data), options);
-    decoder
-        .decode_headers()
-        .map_err(|e| format!("zune png headers: {e}"))?;
-    let (w, h) = decoder
-        .dimensions()
-        .ok_or_else(|| "zune png missing dimensions".to_string())?;
-    let colorspace = decoder
-        .colorspace()
-        .ok_or_else(|| "zune png missing colorspace".to_string())?;
-    let buf = decoder
-        .decode_raw()
-        .map_err(|e| format!("zune png decode: {e}"))?;
-    let mut pixels = Vec::with_capacity(w * h);
-    match colorspace {
-        ColorSpace::RGB => {
-            for px in buf.chunks_exact(3) {
-                pixels.push(rgb(px[0] as u32, px[1] as u32, px[2] as u32));
-            }
-        }
-        ColorSpace::RGBA => {
-            for px in buf.chunks_exact(4) {
-                pixels.push(rgb(px[0] as u32, px[1] as u32, px[2] as u32));
-            }
-        }
-        other => return Err(format!("unsupported zune png colorspace: {other:?}")),
-    }
-    if pixels.len() != w * h {
-        return Err("zune png decoded length mismatch".to_string());
-    }
-    Ok(SourceImage { w, h, pixels })
 }
 
 fn build_crt_image(size: EffectSize) -> CrtImage {
