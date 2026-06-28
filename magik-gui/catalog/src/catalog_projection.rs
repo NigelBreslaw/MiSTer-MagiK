@@ -286,7 +286,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             discovered_at_unix,
             identity_id,
             parent_setname,
-            asset_pack_id,
             asset_key,
             asset_link_reason,
             preferred,
@@ -380,7 +379,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             discovered_at_unix,
             identity_id,
             parent_setname,
-            NULL,
             preview_key,
             CASE WHEN preview_available = 1 THEN 'derived-family' ELSE 'none' END,
             CASE WHEN family_rank = 1 THEN 1 ELSE 0 END,
@@ -416,7 +414,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             identity_id,
             family_id,
             parent_setname,
-            asset_pack_id,
             asset_key,
             asset_link_reason,
             preferred_reason
@@ -437,7 +434,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             identity_id,
             family_id,
             parent_setname,
-            asset_pack_id,
             asset_key,
             asset_link_reason,
             preferred_reason
