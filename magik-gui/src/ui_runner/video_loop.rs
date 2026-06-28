@@ -8,6 +8,16 @@ pub(super) const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
 };
 
 #[cfg(all(feature = "video", mister_bench_scenes))]
+pub(super) fn video_frame_rect(frame: &crate::video_player::VideoRgb565Frame) -> DirtyRect {
+    DirtyRect {
+        x0: VIDEO_IMAGE_RECT.x0,
+        y0: VIDEO_IMAGE_RECT.y0,
+        x1: (VIDEO_IMAGE_RECT.x0 + frame.width as usize).min(VIDEO_IMAGE_RECT.x1),
+        y1: (VIDEO_IMAGE_RECT.y0 + frame.height as usize).min(VIDEO_IMAGE_RECT.y1),
+    }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
 #[derive(Default)]
 pub(super) struct VideoFramePhases {
     frame_updated: bool,
@@ -143,16 +153,17 @@ pub(super) fn video_copy_rect(
 pub(super) fn direct_video_copy_rect(
     dirty: Option<DirtyRect>,
     video_dirty_clip_ready: bool,
+    video_rect: DirtyRect,
 ) -> DirtyRect {
     let Some(dirty) = dirty else {
-        return VIDEO_IMAGE_RECT;
+        return video_rect;
     };
     if !video_dirty_clip_ready {
-        return dirty.union(VIDEO_IMAGE_RECT);
+        return dirty.union(video_rect);
     }
     dirty
-        .intersection(VIDEO_IMAGE_RECT)
-        .unwrap_or(dirty.union(VIDEO_IMAGE_RECT))
+        .intersection(video_rect)
+        .unwrap_or(dirty.union(video_rect))
 }
 
 #[cfg(all(feature = "video", mister_bench_scenes))]
@@ -390,7 +401,11 @@ pub(super) fn run_video_playback_loop(
                 let t3 = Instant::now();
                 let mut copied_rect = None;
                 let rows = if direct_frame.is_some() {
-                    let rect = direct_video_copy_rect(this_rect, video_dirty_clip_ready);
+                    let rect = direct_video_copy_rect(
+                        this_rect,
+                        video_dirty_clip_ready,
+                        video_frame_rect(direct_frame.as_ref().unwrap()),
+                    );
                     copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
                     copied_rect = Some(rect);
                     rect.rows()
@@ -536,7 +551,11 @@ pub(super) fn run_video_playback_loop(
                 }
                 let mut copied_rect = None;
                 let rows = if direct_frame.is_some() {
-                    let rect = direct_video_copy_rect(this_rect, video_dirty_clip_ready);
+                    let rect = direct_video_copy_rect(
+                        this_rect,
+                        video_dirty_clip_ready,
+                        video_frame_rect(direct_frame.as_ref().unwrap()),
+                    );
                     copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
                     copied_rect = Some(rect);
                     rect.rows()
