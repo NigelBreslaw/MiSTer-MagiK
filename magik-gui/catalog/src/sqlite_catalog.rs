@@ -371,7 +371,6 @@ pub(crate) fn load_materialized_ui_catalog(
         conn,
         "SELECT title,
                 launch_ref,
-                preview_archive_path,
                 preview_asset_key,
                 has_preview,
                 system_id,
@@ -388,7 +387,6 @@ pub(crate) fn load_materialized_ui_catalog(
             conn,
             "SELECT title,
                     launch_ref,
-                    preview_archive_path,
                     preview_asset_key,
                     has_preview,
                     system_id,
@@ -415,7 +413,6 @@ fn load_materialized_launcher_catalog(
         conn,
         "SELECT title,
                 launch_ref,
-                preview_archive_path,
                 preview_asset_key,
                 has_preview,
                 system_id,
@@ -454,6 +451,7 @@ fn query_game_entries_with_timing(
     let mut row_hydrate_us = 0;
     let mut games = Vec::new();
     let mut first_row_seen = false;
+    let mut preview_archive_paths_by_system = HashMap::<String, std::sync::Arc<str>>::new();
     loop {
         let next_t = Instant::now();
         let row = rows.next().map_err(|e| format!("read {label} row: {e}"))?;
@@ -465,8 +463,8 @@ fn query_game_entries_with_timing(
             break;
         };
         let hydrate_t = Instant::now();
-        let game =
-            game_entry_from_row(row, now).map_err(|e| format!("hydrate {label} row: {e}"))?;
+        let game = game_entry_from_row(row, now, &mut preview_archive_paths_by_system)
+            .map_err(|e| format!("hydrate {label} row: {e}"))?;
         row_hydrate_us += hydrate_t.elapsed().as_micros() as u64;
         games.push(game);
     }
@@ -484,18 +482,29 @@ fn query_game_entries_with_timing(
 fn game_entry_from_row(
     row: &rusqlite::Row<'_>,
     now_unix: i64,
+    preview_archive_paths_by_system: &mut HashMap<String, std::sync::Arc<str>>,
 ) -> rusqlite::Result<ArcadeGameEntry> {
-    let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
+    let system_id: String = row.get(4)?;
+    let preview_asset_key: String = row.get(2)?;
+    let preview_archive_path = if preview_asset_key.is_empty() {
+        std::sync::Arc::<str>::from("")
+    } else {
+        preview_archive_paths_by_system
+            .entry(system_id.clone())
+            .or_insert_with(|| preview_worker::preview_archive_path_for_system(&system_id).into())
+            .clone()
+    };
+    let discovered_at_unix = row.get::<_, Option<i64>>(8)?;
     Ok(ArcadeGameEntry {
         title: row.get::<_, String>(0)?.into(),
         mra_path: row.get::<_, String>(1)?.into(),
-        preview_archive_path: row.get::<_, String>(2)?.into(),
-        preview_asset_key: row.get::<_, String>(3)?.into(),
-        has_preview: row.get::<_, i64>(4)? != 0,
-        system_id: row.get::<_, String>(5)?.into(),
-        year: optional_year_from_row(row, 6)?,
-        manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default().into(),
-        category: row.get::<_, Option<String>>(8)?.unwrap_or_default().into(),
+        preview_archive_path,
+        preview_asset_key: preview_asset_key.into(),
+        has_preview: row.get::<_, i64>(3)? != 0,
+        system_id: system_id.into(),
+        year: optional_year_from_row(row, 5)?,
+        manufacturer: row.get::<_, Option<String>>(6)?.unwrap_or_default().into(),
+        category: row.get::<_, Option<String>>(7)?.unwrap_or_default().into(),
         is_new: is_new_discovery(discovered_at_unix, now_unix),
     })
 }
@@ -1457,7 +1466,6 @@ fn write_sqlite_scan_with_sources_inner(
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
-            preview_archive_path TEXT NOT NULL,
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
@@ -1480,7 +1488,6 @@ fn write_sqlite_scan_with_sources_inner(
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
-            preview_archive_path TEXT NOT NULL,
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
@@ -1502,7 +1509,6 @@ fn write_sqlite_scan_with_sources_inner(
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             launch_ref TEXT NOT NULL,
-            preview_archive_path TEXT NOT NULL,
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
             system_id TEXT NOT NULL,
@@ -2313,7 +2319,6 @@ fn count_preview_candidates(
             "SELECT count(*)
              FROM {table}
              WHERE system_id=?1
-               AND preview_archive_path != ''
                AND preview_asset_key != ''"
         ),
         [system_id],
@@ -2340,7 +2345,6 @@ fn update_preview_candidates(
                  )
                  THEN 1 ELSE 0 END
              WHERE system_id=?1
-               AND preview_archive_path != ''
                AND preview_asset_key != ''"
         )
     } else {
@@ -2348,7 +2352,6 @@ fn update_preview_candidates(
             "UPDATE {table}
              SET has_preview = 0
              WHERE system_id=?1
-               AND preview_archive_path != ''
                AND preview_asset_key != ''"
         )
     };
@@ -2473,19 +2476,16 @@ mod tests {
             INSERT INTO meta(key,value) VALUES ('version', {SCHEMA_VERSION});
             CREATE TABLE launcher_catalog(
                 system_id TEXT NOT NULL,
-                preview_archive_path TEXT NOT NULL,
                 preview_asset_key TEXT NOT NULL,
                 has_preview INTEGER NOT NULL
             );
             CREATE TABLE ui_arcade_preferred(
                 system_id TEXT NOT NULL,
-                preview_archive_path TEXT NOT NULL,
                 preview_asset_key TEXT NOT NULL,
                 has_preview INTEGER NOT NULL
             );
             CREATE TABLE ui_arcade_variants(
                 system_id TEXT NOT NULL,
-                preview_archive_path TEXT NOT NULL,
                 preview_asset_key TEXT NOT NULL,
                 has_preview INTEGER NOT NULL
             );
@@ -2499,14 +2499,14 @@ mod tests {
         ] {
             let mut stmt = conn
                 .prepare(&format!(
-                    "INSERT INTO {table}(system_id,preview_archive_path,preview_asset_key,has_preview)
-                     VALUES (?1,?2,?3,?4)"
+                    "INSERT INTO {table}(system_id,preview_asset_key,has_preview)
+                     VALUES (?1,?2,?3)"
                 ))
                 .expect("prepare preview refresh row");
             for (system_id, archive_path, asset_key, has_preview) in rows {
+                let _ = archive_path;
                 stmt.execute(params![
                     *system_id,
-                    *archive_path,
                     *asset_key,
                     if *has_preview { 1 } else { 0 }
                 ])

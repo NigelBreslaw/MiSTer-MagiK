@@ -6,15 +6,16 @@ use crate::arcade_catalog::{
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
+use crate::preview_worker;
 use crate::sqlite_catalog;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 3;
-const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB3\0";
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 4;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB4\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogNavigationProjection {
@@ -256,7 +257,6 @@ fn encode_navigation_projection(projection: &CatalogNavigationProjection) -> Res
     for game in &projection.games {
         write_string(&mut out, &game.title)?;
         write_string(&mut out, &game.launch_ref)?;
-        write_string(&mut out, &game.preview_archive_path)?;
         write_string(&mut out, &game.preview_asset_key)?;
         write_bool(&mut out, game.has_preview);
         write_string(&mut out, &game.system_id)?;
@@ -309,13 +309,21 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     }
     let game_count = reader.read_len()?;
     let mut games = Vec::with_capacity(game_count);
+    let mut preview_archive_paths_by_system = HashMap::<String, Arc<str>>::new();
     for _ in 0..game_count {
         let title = reader.read_arc_string()?;
         let launch_ref = reader.read_arc_string()?;
-        let preview_archive_path = reader.read_arc_string()?;
         let preview_asset_key = reader.read_arc_string()?;
         let has_preview = reader.read_bool()?;
         let system_id = reader.read_arc_string()?;
+        let preview_archive_path = if preview_asset_key.is_empty() {
+            Arc::from("")
+        } else {
+            preview_archive_paths_by_system
+                .entry(system_id.to_string())
+                .or_insert_with(|| preview_worker::preview_archive_path_for_system(&system_id).into())
+                .clone()
+        };
         let year = if reader.read_bool()? {
             Some(reader.read_u16()?)
         } else {
