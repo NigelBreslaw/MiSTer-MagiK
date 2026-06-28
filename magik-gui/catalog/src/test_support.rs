@@ -480,6 +480,8 @@ pub(crate) fn set_file_mtime_for_test(path: &Path, sec: i64, nsec: i64) {
             tv_nsec: nsec as libc::c_long,
         },
     ];
+    // SAFETY: c_path is a NUL-terminated CString, and times points to two
+    // initialized timespec values that live for the duration of the syscall.
     let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
     assert_eq!(rc, 0, "utimensat failed for {}", path.display());
 }

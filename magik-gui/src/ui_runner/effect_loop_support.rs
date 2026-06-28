@@ -118,6 +118,8 @@ pub(super) fn process_cpu_us() -> u64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: ts points to initialized writable storage for the duration of the
+    // syscall; failures are converted to 0.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts) };
     if rc == 0 {
         (ts.tv_sec as u64)

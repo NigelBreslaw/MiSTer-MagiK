@@ -24,6 +24,8 @@ pub mod setup_nav;
 pub mod sprite_effects;
 pub mod text_effects;
 pub mod transition_effects;
+#[cfg(test)]
+mod video_i420;
 
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,

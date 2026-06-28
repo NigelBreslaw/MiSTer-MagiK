@@ -159,11 +159,14 @@ mod tests {
             "transition-effects",
             "effects",
             "effect-bench",
-            "scenes",
             "experiment-capabilities",
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");
         }
+        #[cfg(not(mister_bench_scenes))]
+        assert!(!COMMANDS.contains(&"scenes"), "scenes");
+        #[cfg(mister_bench_scenes)]
+        assert!(COMMANDS.contains(&"scenes"), "scenes");
     }
 
     #[test]

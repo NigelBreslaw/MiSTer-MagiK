@@ -188,6 +188,8 @@ struct FbVarScreeninfo {
 
 impl FbVarScreeninfo {
     fn zeroed() -> Self {
+        // SAFETY: Linux framebuffer ioctls expect this C POD struct to be
+        // zero-initialized before the kernel fills it.
         unsafe { std::mem::zeroed() }
     }
 }
@@ -221,9 +223,21 @@ struct FbFixScreeninfo {
 
 impl FbFixScreeninfo {
     fn zeroed() -> Self {
+        // SAFETY: Linux framebuffer ioctls expect this C POD struct to be
+        // zero-initialized before the kernel fills it.
         unsafe { std::mem::zeroed() }
     }
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<Rgb565Pixel>() == std::mem::size_of::<u16>());
+    assert!(std::mem::align_of::<Rgb565Pixel>() == std::mem::align_of::<u16>());
+    assert!(std::mem::size_of::<FbVarScreeninfo>() == 160);
+    #[cfg(target_pointer_width = "32")]
+    assert!(std::mem::size_of::<FbFixScreeninfo>() == 68);
+    #[cfg(target_pointer_width = "64")]
+    assert!(std::mem::size_of::<FbFixScreeninfo>() == 80);
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FramebufferVarValidationError {
@@ -569,6 +583,8 @@ impl MappedRgb565Framebuffer {
         let fd = fb0.as_raw_fd();
         let mut var = FbVarScreeninfo::zeroed();
         let mut fix = FbFixScreeninfo::zeroed();
+        // SAFETY: fd refers to /dev/fb0 and var/fix are full-size repr(C)
+        // framebuffer structs with stable addresses for the duration of ioctl.
         let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
         if !var_ok {
@@ -600,12 +616,16 @@ impl MappedRgb565Framebuffer {
         let mut var = FbVarScreeninfo::zeroed();
         let fd = fb0.as_raw_fd();
         let mut fix = FbFixScreeninfo::zeroed();
+        // SAFETY: fd refers to /dev/fb0 and var is a full-size repr(C)
+        // framebuffer struct with a stable address for the duration of ioctl.
         let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
         if var_ok {
             if let Err(e) = validate_var_screeninfo_for_rgb565(&var, w, h) {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
             }
         }
+        // SAFETY: fd refers to /dev/fb0 and fix is a full-size repr(C)
+        // framebuffer struct with a stable address for the duration of ioctl.
         let fix_ok = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } == 0;
         if let Err(e) =
             validate_fix_screeninfo_for_map(fix_ok, &fix, expected_stride_bytes, map_len)
@@ -614,6 +634,9 @@ impl MappedRgb565Framebuffer {
         }
         let info = fb_info_from(var_ok, &var, fix_ok, &fix, w, h);
         // mmap the framebuffer itself (offset 0) — this is the write-combining map.
+        // SAFETY: map_len was checked for overflow, /dev/fb0 is open read/write,
+        // and fix-screeninfo validation confirms the exposed memory is large
+        // enough when the driver reports smem_len.
         let mem = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -626,6 +649,17 @@ impl MappedRgb565Framebuffer {
         };
         if mem == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
+        }
+        if mem.is_null() {
+            // SAFETY: mem/map_len were just returned by mmap and have not been
+            // stored elsewhere. Rust slices cannot be formed from a null base.
+            unsafe {
+                libc::munmap(mem, map_len);
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "fb0 mmap returned a null address",
+            ));
         }
         Ok(Self {
             mem: mem as *mut u8,
@@ -651,6 +685,17 @@ impl MappedRgb565Framebuffer {
     }
 
     fn buffer_565_mut(&mut self) -> &mut [Rgb565Pixel] {
+        debug_assert_eq!(
+            self.map_len,
+            self.stride_pixels * self.h * std::mem::size_of::<Rgb565Pixel>()
+        );
+        debug_assert_eq!(
+            self.mem.align_offset(std::mem::align_of::<Rgb565Pixel>()),
+            0
+        );
+        // SAFETY: self.mem is a live mmap for map_len bytes, Rgb565Pixel is
+        // layout-compatible with u16, and &mut self prevents aliasing through
+        // another MappedRgb565Framebuffer slice.
         unsafe {
             std::slice::from_raw_parts_mut(
                 self.mem.cast::<Rgb565Pixel>(),
@@ -660,6 +705,16 @@ impl MappedRgb565Framebuffer {
     }
 
     fn buffer_565(&self) -> &[Rgb565Pixel] {
+        debug_assert_eq!(
+            self.map_len,
+            self.stride_pixels * self.h * std::mem::size_of::<Rgb565Pixel>()
+        );
+        debug_assert_eq!(
+            self.mem.align_offset(std::mem::align_of::<Rgb565Pixel>()),
+            0
+        );
+        // SAFETY: self.mem is a live mmap for map_len bytes and Rgb565Pixel is
+        // layout-compatible with u16.
         unsafe {
             std::slice::from_raw_parts(self.mem.cast::<Rgb565Pixel>(), self.stride_pixels * self.h)
         }
@@ -778,6 +833,8 @@ impl MappedRgb565Framebuffer {
 
 impl Drop for MappedRgb565Framebuffer {
     fn drop(&mut self) {
+        // SAFETY: mem/map_len come from a successful mmap in open_rgb565 and are
+        // unmapped exactly once when the owning framebuffer object is dropped.
         unsafe {
             libc::munmap(self.mem as *mut libc::c_void, self.map_len);
         }
@@ -1257,5 +1314,22 @@ mod tests {
                 expected_stride_bytes: 1920,
             })
         );
+    }
+
+    #[test]
+    fn framebuffer_unsafe_layout_assumptions_are_explicit() {
+        assert_eq!(
+            std::mem::size_of::<Rgb565Pixel>(),
+            std::mem::size_of::<u16>()
+        );
+        assert_eq!(
+            std::mem::align_of::<Rgb565Pixel>(),
+            std::mem::align_of::<u16>()
+        );
+        assert_eq!(std::mem::size_of::<FbVarScreeninfo>(), 160);
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(std::mem::size_of::<FbFixScreeninfo>(), 68);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(std::mem::size_of::<FbFixScreeninfo>(), 80);
     }
 }

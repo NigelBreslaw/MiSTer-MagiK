@@ -26,6 +26,8 @@ impl VtGraphicsGuard {
         boot_analytics::event("vt_graphics_attempt", "open_tty");
         let (tty, path) = open_vt_tty()?;
         let fd = tty.as_raw_fd();
+        // SAFETY: fd is an open tty file descriptor; KDSETMODE takes an integer
+        // mode value and does not dereference Rust memory.
         if unsafe { libc::ioctl(fd, KDSETMODE, KD_GRAPHICS) } < 0 {
             let e = io::Error::last_os_error();
             boot_analytics::event("vt_graphics_result", format!("ok=0 path={path} error={e}"));
@@ -51,6 +53,8 @@ impl VtGraphicsGuard {
 impl Drop for VtGraphicsGuard {
     fn drop(&mut self) {
         let fd = self.tty.as_raw_fd();
+        // SAFETY: fd remains owned by self.tty during Drop; KDSETMODE takes an
+        // integer mode value and does not dereference Rust memory.
         if unsafe { libc::ioctl(fd, KDSETMODE, KD_TEXT) } < 0 {
             eprintln!("vt: KD_TEXT restore failed: {}", io::Error::last_os_error());
         }

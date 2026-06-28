@@ -580,6 +580,8 @@ fn count_capability_bits(words: &str) -> usize {
 
 fn js_ioctl_u8(file: &File, req: libc::c_ulong) -> io::Result<u8> {
     let mut buf = [0u8];
+    // SAFETY: file is open for the duration of the ioctl and buf points to one
+    // writable byte, which matches JSIOCGAXES/JSIOCGBUTTONS.
     let rc = unsafe { libc::ioctl(file.as_raw_fd(), req, buf.as_mut_ptr()) };
     if rc < 0 {
         return Err(io::Error::last_os_error());
@@ -589,10 +591,14 @@ fn js_ioctl_u8(file: &File, req: libc::c_ulong) -> io::Result<u8> {
 
 fn set_nonblocking(file: &File) -> io::Result<()> {
     let fd = file.as_raw_fd();
+    // SAFETY: fcntl(F_GETFL) does not dereference Rust memory and fd is owned
+    // by the borrowed File for the duration of the call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: fcntl(F_SETFL) does not dereference Rust memory and preserves the
+    // open file description while only adding O_NONBLOCK.
     let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     if rc < 0 {
         return Err(io::Error::last_os_error());
@@ -623,6 +629,8 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
 
     // Try to grab evdev so MiSTer can't swallow events (ignore failure).
     let grab: i32 = 1;
+    // SAFETY: evdev is open for the duration of the ioctl and the kernel reads
+    // one i32 EVIOCGRAB flag from &grab.
     let _ = unsafe {
         libc::ioctl(
             evdev.as_raw_fd(),
@@ -716,6 +724,8 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
     }
 
     let grab_off: i32 = 0;
+    // SAFETY: evdev is still open here and the kernel reads one i32 EVIOCGRAB
+    // flag from &grab_off.
     let _ = unsafe {
         libc::ioctl(
             evdev.as_raw_fd(),

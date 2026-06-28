@@ -30,7 +30,7 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
 
     let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let boot_ms = boot_ms();
-    let pid = unsafe { libc::getpid() };
+    let pid = std::process::id();
     let detail = sanitize(&detail);
     let needs_header = std::fs::metadata(OUT_PATH)
         .map(|m| m.len() == 0)

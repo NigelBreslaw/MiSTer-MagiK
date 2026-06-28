@@ -351,13 +351,17 @@ fn blend_565_row(
     current: &[Rgb565Pixel],
     alpha: u8,
 ) {
+    assert!(
+        previous.len() >= dst.len() && current.len() >= dst.len(),
+        "RGB565 fade rows must cover destination length"
+    );
     let a = ((alpha as u16 + 4) >> 3).min(32);
     if a == 0 {
-        dst.copy_from_slice(previous);
+        dst.copy_from_slice(&previous[..dst.len()]);
         return;
     }
     if a >= 32 {
-        dst.copy_from_slice(current);
+        dst.copy_from_slice(&current[..dst.len()]);
         return;
     }
     let start = blend_565_row_platform(dst, previous, current, a);
@@ -374,10 +378,13 @@ fn blend_565_row_platform(
     current: &[Rgb565Pixel],
     alpha_bucket: u16,
 ) -> usize {
-    let vector_len = dst.len() & !3;
+    let vector_len = dst.len().min(previous.len()).min(current.len()) & !3;
     if vector_len == 0 {
         return 0;
     }
+    // SAFETY: vector_len is rounded down to a multiple of four within dst.len();
+    // it is also capped to previous/current lengths here, and alpha is clamped
+    // to the 1..=31 bucket range before reaching this platform helper.
     unsafe { blend_565_row_neon_u32rb(dst, previous, current, vector_len, alpha_bucket) };
     vector_len
 }
@@ -395,6 +402,11 @@ unsafe fn blend_565_row_neon_u32rb(
         vshrq_n_u32, vst1_u16,
     };
 
+    debug_assert!(vector_len <= dst.len());
+    debug_assert!(vector_len <= previous.len());
+    debug_assert!(vector_len <= current.len());
+    debug_assert_eq!(vector_len % 4, 0);
+    debug_assert!(alpha_bucket <= 32);
     let rb_mask = vdupq_n_u32(0xf81f);
     let g_mask = vdupq_n_u32(0x07e0);
     let alpha = alpha_bucket as u32;

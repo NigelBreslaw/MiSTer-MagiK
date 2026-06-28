@@ -133,6 +133,9 @@ impl Fpga {
 
     pub fn open() -> io::Result<Self> {
         let file = OpenOptions::new().read(true).write(true).open("/dev/mem")?;
+        // SAFETY: maps the documented MiSTer FPGA manager MMIO page from
+        // /dev/mem. MGR_LEN and MGR_BASE are constants for this device, and the
+        // returned mapping is checked before use and unmapped in Drop.
         let base = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -158,11 +161,17 @@ impl Fpga {
     #[inline]
     fn wr(&mut self, v: u32) {
         self.gpo = v;
+        debug_assert!(GPO_OFF + std::mem::size_of::<u32>() <= MGR_LEN);
+        // SAFETY: base is a live /dev/mem MMIO mapping for MGR_LEN bytes, and
+        // GPO_OFF is within that mapping. Volatile preserves the device write.
         unsafe { write_volatile(self.base.add(GPO_OFF) as *mut u32, v) };
     }
 
     #[inline]
     fn rd(&self) -> u32 {
+        debug_assert!(GPI_OFF + std::mem::size_of::<u32>() <= MGR_LEN);
+        // SAFETY: base is a live /dev/mem MMIO mapping for MGR_LEN bytes, and
+        // GPI_OFF is within that mapping. Volatile preserves the device read.
         unsafe { read_volatile(self.base.add(GPI_OFF) as *const u32) }
     }
 
@@ -446,6 +455,8 @@ mod tests {
 
 impl Drop for Fpga {
     fn drop(&mut self) {
+        // SAFETY: base/MGR_LEN come from a successful mmap in Fpga::open and
+        // this Drop path runs once for the owning Fpga.
         unsafe {
             libc::munmap(self.base as *mut libc::c_void, MGR_LEN);
         }

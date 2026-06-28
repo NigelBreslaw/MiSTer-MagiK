@@ -127,6 +127,8 @@ pub fn run_tone_from_args(args: &[String]) -> Result<(), String> {
 
 fn samples_as_le_bytes(samples: &[i16]) -> &[u8] {
     debug_assert!(cfg!(target_endian = "little"));
+    // SAFETY: u8 has alignment 1, and the returned byte slice is tied to the
+    // input slice lifetime. The caller only uses this on little-endian targets.
     unsafe {
         std::slice::from_raw_parts(
             samples.as_ptr() as *const u8,

@@ -27,6 +27,8 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
         std::mem::align_of::<Rgb565Pixel>(),
         std::mem::align_of::<u16>()
     );
+    // SAFETY: Rgb565Pixel is layout-compatible with u16; the size/alignment
+    // assumptions are asserted above before casting the shared slice.
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<Rgb565Pixel>(), words.len()) }
 }
 
@@ -962,6 +964,7 @@ fn cpu_sample_between(
 #[cfg(all(feature = "video", mister_bench_scenes))]
 fn linux_ticks_per_sec() -> f64 {
     #[cfg(target_os = "linux")]
+    // SAFETY: sysconf(_SC_CLK_TCK) does not dereference Rust memory.
     unsafe {
         let value = libc::sysconf(libc::_SC_CLK_TCK);
         if value > 0 {
