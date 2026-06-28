@@ -75,6 +75,22 @@ fi
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
+source "$ROOT/scripts/bench-context-lib.sh"
+verified_context="$(bench_context_binary_fields release-device launcher ui "$ROOT/does-not-exist" production verified)"
+case "$verified_context" in
+  *$'binary_scope=launcher-scope'*$'runtime_type=production'*$'deployment_state=verified'*$'production_restore_required=0'*) ;;
+  *) echo "unexpected verified benchmark context: $verified_context" >&2; exit 1 ;;
+esac
+unknown_context="$(bench_context_binary_fields release-device launcher ui "$ROOT/does-not-exist" production unverified-skip-build)"
+case "$unknown_context" in
+  *$'binary_scope=deployed-unknown'*$'runtime_type=deployed-unknown'*$'deployment_state=unverified-skip-build'*$'production_restore_required=unknown'*) ;;
+  *) echo "unexpected unverified benchmark context: $unknown_context" >&2; exit 1 ;;
+esac
+profile_context="$(bench_context_binary_fields release-device-profile launcher ui,profile "$ROOT/does-not-exist" profile verified)"
+case "$profile_context" in
+  *$'binary_scope=profile-launcher-scope'*$'runtime_type=profile'*$'deployment_state=verified'*$'production_restore_required=1'*) ;;
+  *) echo "unexpected profile benchmark context: $profile_context" >&2; exit 1 ;;
+esac
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test

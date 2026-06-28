@@ -189,20 +189,25 @@ emit_validity_row() {
 }
 
 emit_run_context_row() {
-  local commit command_text started_at profile features binary_path runtime_type binary_fields
+  local commit command_text started_at profile features binary_path runtime_type deployment_state binary_fields
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   profile="release-device"
   features="ui"
   runtime_type="production"
+  deployment_state="unverified-skip-build"
+  if [[ "$deploy" == "device" ]]; then
+    deployment_state="verified"
+  fi
   if [[ "$cpu_profile" == "1" ]]; then
     profile="release-device-profile"
     features="ui,profile"
     runtime_type="profile"
+    deployment_state="verified"
   fi
   binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
-  binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type")"
+  binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type" "$deployment_state")"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
