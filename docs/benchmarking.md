@@ -45,6 +45,10 @@ for the run:
 - `binary_scope=profile-launcher-scope`: profiling `release-device-profile`
   build with `ui_scope=launcher` and `features=ui,profile`, suitable only for
   CPU profile artifacts.
+- `binary_scope=deployed-unknown`: `--skip-build` run where the script did not
+  deploy or fingerprint the binary currently on the MiSTer. The row still
+  records the expected local `profile`, `features`, path, and size, but runtime
+  comparisons must account for possible stale profiling or alternate binaries.
 
 Do not compare these as if they were the same artifact. A CPU-profile run must
 be read as profiling evidence, not production frame-time evidence, and the

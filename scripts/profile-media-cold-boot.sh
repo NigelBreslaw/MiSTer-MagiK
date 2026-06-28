@@ -183,12 +183,16 @@ emit_validity_row() {
 }
 
 emit_run_context_row() {
-  local commit command_text started_at binary_path binary_fields
+  local commit command_text started_at binary_path deployment_state binary_fields
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-media-cold-boot.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
-  binary_fields="$(bench_context_binary_fields "release-device" "launcher" "ui" "$binary_path" "production")"
+  deployment_state="unverified-skip-build"
+  if [[ "$deploy" == "device" ]]; then
+    deployment_state="verified"
+  fi
+  binary_fields="$(bench_context_binary_fields "release-device" "launcher" "ui" "$binary_path" "production" "$deployment_state")"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tsystems=%s\tasset_dir=%s\timage_size=%s\tdeploy=%s\treset_catalog=%s\ttimeout_secs=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
