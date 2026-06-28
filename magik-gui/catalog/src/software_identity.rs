@@ -962,9 +962,9 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, String, String, String, String, i64, String) = conn
+        let row: (String, String, String, String, i64, String) = conn
             .query_row(
-                "SELECT i.namespace,i.identity_id,i.family_id,l.preview_archive_path,l.preview_asset_key,l.has_preview,r.confidence
+                "SELECT i.namespace,i.identity_id,i.family_id,l.preview_asset_key,l.has_preview,r.confidence
                  FROM launchable_identities i
                  JOIN launchables lb ON lb.launchable_id=i.launchable_id
                  JOIN launcher_catalog l ON l.launch_ref=lb.launch_ref
@@ -979,7 +979,6 @@ mod tests {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
-                        row.get(6)?,
                     ))
                 },
             )
@@ -991,7 +990,6 @@ mod tests {
                 "mame-software".to_string(),
                 "nes:smb".to_string(),
                 "nes:smb".to_string(),
-                "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b".to_string(),
                 software_asset_key("nes", "smb"),
                 1,
                 "filename".to_string()
@@ -1189,21 +1187,17 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, String, i64, String) = conn
+        let row: (String, i64, String) = conn
             .query_row(
-                "SELECT preview_archive_path,preview_asset_key,has_preview,system_id FROM launcher_catalog",
+                "SELECT preview_asset_key,has_preview,system_id FROM launcher_catalog",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("launcher row");
 
-        assert_eq!(
-            row.0,
-            "/media/fat/mister-magik/assets/snes-screenshots.mmlz4b"
-        );
-        assert_eq!(row.1, software_asset_key("snes", "parent"));
-        assert_eq!(row.2, 1);
-        assert_eq!(row.3, "snes");
+        assert_eq!(row.0, software_asset_key("snes", "parent"));
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2, "snes");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1254,24 +1248,17 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, String, i64) = conn
+        let row: (String, i64) = conn
             .query_row(
-                "SELECT l.preview_archive_path,l.preview_asset_key,l.has_preview
+                "SELECT l.preview_asset_key,l.has_preview
                  FROM launcher_catalog l
                  WHERE l.system_id='saturn'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .expect("launcher row");
 
-        assert_eq!(
-            row,
-            (
-                "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b".to_string(),
-                software_asset_key("saturn", "albert"),
-                1
-            )
-        );
+        assert_eq!(row, (software_asset_key("saturn", "albert"), 1));
         assert!(!sqlite_table_exists(&conn, "asset_entries").expect("check asset_entries table"));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1316,15 +1303,15 @@ mod tests {
         .expect("save sqlite");
 
         let conn = Connection::open(&db).expect("open library sqlite");
-        let row: (String, String, i64) = conn
+        let row: (String, i64) = conn
             .query_row(
-                "SELECT preview_archive_path,preview_asset_key,has_preview FROM launcher_catalog",
+                "SELECT preview_asset_key,has_preview FROM launcher_catalog",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .expect("launcher row");
 
-        assert_eq!(row, (String::new(), String::new(), 0));
+        assert_eq!(row, (String::new(), 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2086,7 +2073,7 @@ mod tests {
         let conn = Connection::open(&db).expect("open library sqlite");
         let mut stmt = conn
             .prepare(
-                "SELECT identity_id,asset_key,asset_link_reason,preview_archive_path,preview_asset_key,has_preview
+                "SELECT identity_id,asset_key,asset_link_reason,preview_asset_key,has_preview
                  FROM ui_arcade_variants
                  ORDER BY identity_id",
             )
@@ -2098,8 +2085,7 @@ mod tests {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(4)?,
                 ))
             })
             .expect("query variant assets")
@@ -2107,7 +2093,7 @@ mod tests {
             .collect::<Vec<_>>();
         let preferred = conn
             .query_row(
-                "SELECT identity_id,asset_key,asset_link_reason,preview_archive_path,preview_asset_key,has_preview
+                "SELECT identity_id,asset_key,asset_link_reason,preview_asset_key,has_preview
                  FROM ui_arcade_preferred",
                 [],
                 |row| {
@@ -2116,8 +2102,7 @@ mod tests {
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(4)?,
                     ))
                 },
             )
@@ -2127,16 +2112,14 @@ mod tests {
         for row in &rows {
             assert_eq!(row.1.as_deref(), Some("1941"));
             assert_eq!(row.2, "derived-family");
-            assert_eq!(row.3, pack.path);
-            assert_eq!(row.4, "1941");
-            assert_eq!(row.5, 1);
+            assert_eq!(row.3, "1941");
+            assert_eq!(row.4, 1);
         }
         assert_eq!(preferred.0.as_deref(), Some("1941"));
         assert_eq!(preferred.1.as_deref(), Some("1941"));
         assert_eq!(preferred.2, "derived-family");
-        assert_eq!(preferred.3, pack.path);
-        assert_eq!(preferred.4, "1941");
-        assert_eq!(preferred.5, 1);
+        assert_eq!(preferred.3, "1941");
+        assert_eq!(preferred.4, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 }

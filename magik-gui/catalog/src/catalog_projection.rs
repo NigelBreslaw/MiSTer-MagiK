@@ -270,7 +270,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             title,
             sort_title,
             launch_ref,
-            preview_archive_path,
             preview_asset_key,
             has_preview,
             system_id,
@@ -364,7 +363,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             title,
             sort_title,
             launch_ref,
-            preview_archive_path,
             preview_key,
             preview_available,
             system_id,
@@ -400,7 +398,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             title,
             sort_title,
             launch_ref,
-            preview_archive_path,
             preview_asset_key,
             has_preview,
             system_id,
@@ -422,7 +419,6 @@ pub(crate) fn materialize_arcade_ui_projections(
             title,
             sort_title,
             launch_ref,
-            preview_archive_path,
             preview_asset_key,
             has_preview,
             system_id,
@@ -449,8 +445,8 @@ pub(crate) fn materialize_arcade_ui_projections(
 
 pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute(
-        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
-         SELECT ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
+        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
+         SELECT ordinal,title,sort_title,launch_ref,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
          FROM ui_arcade_preferred
          ORDER BY ordinal",
         [],
@@ -472,8 +468,8 @@ pub(crate) fn insert_console_launcher_catalog(
     let launcher_games = collapse_catalog_variant_rows(rows);
     let mut launcher_stmt = tx
         .prepare(
-            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_archive_path,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         )
         .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
     for (idx, row) in launcher_games.iter().enumerate() {
@@ -484,7 +480,6 @@ pub(crate) fn insert_console_launcher_catalog(
                 game.title.as_ref(),
                 library_db::normalize_title(&game.title),
                 game.mra_path.as_ref(),
-                game.preview_archive_path.as_ref(),
                 game.preview_asset_key.as_ref(),
                 if game.has_preview { 1 } else { 0 },
                 game.system_id.as_ref(),

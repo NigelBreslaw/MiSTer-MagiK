@@ -799,9 +799,7 @@ fn build_catalog_from_scan_with_sources(
                     LauncherPreviewAsset::none()
                 } else {
                     LauncherPreviewAsset::new(
-                        preview_paths
-                            .archive_for_platform(&system_id)
-                            .unwrap_or_default(),
+                        preview_worker::preview_archive_path_for_system(&system_id),
                         preview_key,
                     )
                 };
@@ -810,11 +808,20 @@ fn build_catalog_from_scan_with_sources(
                 let preview = software_identity
                     .as_ref()
                     .and_then(|identity| console_preview_asset(identity, preview_paths));
+                let preview = preview
+                    .as_ref()
+                    .map(|asset| {
+                        LauncherPreviewAsset::new(
+                            preview_worker::preview_archive_path_for_system(&system_id),
+                            asset.asset_key.to_string(),
+                        )
+                    })
+                    .unwrap_or_else(LauncherPreviewAsset::none);
                 let family_key = software_identity
                     .as_ref()
                     .map(|identity| format!("mame-software:{}", identity.family_id));
                 (
-                    LauncherPreviewAsset::from_console_asset(preview.as_ref()),
+                    preview,
                     discovery.setname.clone().unwrap_or_default(),
                     discovery.parent.clone().unwrap_or_default(),
                     family_key,
@@ -825,7 +832,7 @@ fn build_catalog_from_scan_with_sources(
                     },
                 )
             };
-        let row = CatalogProjectionRow::new(
+        let mut row = CatalogProjectionRow::new(
             discovery.title.clone(),
             launch_ref,
             system_id.clone(),
@@ -841,6 +848,8 @@ fn build_catalog_from_scan_with_sources(
             },
         );
         if system_id == "arcade" || system_id == "neogeo" {
+            row.game.has_preview = row.game.has_preview
+                && preview_paths.archive_for_platform(&system_id).is_some();
             arcade_rows.push(row);
         } else {
             launcher_rows.push(row);

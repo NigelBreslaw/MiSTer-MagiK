@@ -1135,6 +1135,11 @@ pub fn resolved_preview_archive_path(preview_archive_path: &str) -> String {
     resolve_preview_archive_path(preview_archive_path)
 }
 
+pub fn preview_archive_path_for_system(system_id: &str) -> String {
+    let root = default_preview_archive_root();
+    legacy_archive_path_for_system(&root, system_id)
+}
+
 pub fn preview_archive_sidecar_entry_stems(
     path: &Path,
 ) -> Result<Option<PreviewArchiveSidecarStems>, String> {
