@@ -34,6 +34,7 @@ grep -q '^video_mode=8$' "$TMP/repaired.ini"
 for script in \
   "$ROOT/scripts/check-no-main-kill.sh" \
   "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
+  "$ROOT/scripts/bench-context-lib.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \

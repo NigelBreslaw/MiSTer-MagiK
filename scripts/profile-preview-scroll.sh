@@ -10,6 +10,7 @@ REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/thread-sampler-lib.sh"
+source "$HERE/scripts/bench-context-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -188,20 +189,30 @@ emit_validity_row() {
 }
 
 emit_run_context_row() {
-  local commit command_text started_at
+  local commit command_text started_at profile features binary_path runtime_type binary_fields
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  profile="release-device"
+  features="ui"
+  runtime_type="production"
+  if [[ "$cpu_profile" == "1" ]]; then
+    profile="release-device-profile"
+    features="ui,profile"
+    runtime_type="profile"
+  fi
+  binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
+  binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type")"
   if [[ "$thread_sample_enabled" == "1" ]]; then
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\tthread_sample=%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at" "$thread_sample_enabled"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at" "$binary_fields" "$thread_sample_enabled"
   else
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\t%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at" "$binary_fields"
   fi
 }
 
