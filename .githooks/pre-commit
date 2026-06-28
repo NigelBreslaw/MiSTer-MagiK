@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Keep commit-time Rust checks aligned with the CI clippy gates.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+
+(
+  cd magik-gui/catalog
+  cargo clippy --all-targets -- -D warnings
+)
+
+(
+  cd magik-gui
+  cargo clippy --lib --no-default-features -- -D warnings
+)
