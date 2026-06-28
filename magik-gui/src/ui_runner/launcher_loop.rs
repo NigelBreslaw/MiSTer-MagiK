@@ -15,13 +15,14 @@ use mister_magik_fb::framebuffer::ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 use mister_magik_fb::framebuffer::vsync::VsyncWaitStatus;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::io::Read;
 use std::path::Path;
 
 const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
 const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
+const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
@@ -551,6 +552,10 @@ pub(super) fn run_launcher_loop(
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
     let mut scheduler = LauncherScheduler::new(launcher_bench_launch_handoff);
     let mut catalog_events = CatalogJobEventBuf::new();
+    let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
+    let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
+    let mut catalog_ready_deferred_since: Option<Instant> = None;
+    let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut media_events = MediaJobEventBuf::new();
     let mut lifecycle_effects = LifecycleEffects::new();
     let bench_starts_on_arcade =
@@ -1039,40 +1044,94 @@ pub(super) fn run_launcher_loop(
             scheduler.start_catalog_worker(worker.root, worker.request, worker.initial_cache);
         }
 
-        if !catalog_session.refresh_done() {
+        if pending_catalog_ready.is_some() || !catalog_session.refresh_done() {
             scheduler.poll_catalog(&mut catalog_events);
-            for message in catalog_events.drain() {
-                let media_gate =
-                    if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
-                        let media_gate = media_session.current_gate(
-                            frame_accounting.first_visible_copy_done(),
-                            scheduler.has_pending_launch() || launching,
-                            benchmark_media_interaction_active,
-                            loop_start,
-                        );
-                        apply_screenshot_media_update_effects(
-                            media_session.sync_gate(media_gate),
-                            &app,
-                            &catalog,
-                            &mut scheduler,
-                            &mut full_bridge_dirty,
-                            start,
-                        );
-                        Some(media_gate)
-                    } else {
-                        None
-                    };
-                let effects = catalog_session.handle_worker_message(
-                    CatalogWorkerMessageContext {
-                        catalog_ready,
-                        screen: nav.screen,
-                        media_gate,
-                    },
-                    message,
+            deferred_catalog_events.extend(catalog_events.drain());
+
+            if let Some(message) = pending_catalog_ready.take() {
+                catalog_ready_stationary_edge_since = update_catalog_ready_stationary_edge_since(
+                    &nav,
+                    catalog_ready_stationary_edge_since,
                     loop_start,
                 );
-                apply_catalog_session_effects(
-                    effects,
+                if should_defer_catalog_message(
+                    &message,
+                    catalog_ready,
+                    &nav,
+                    catalog_ready_stationary_edge_since,
+                    loop_start,
+                ) {
+                    let deferred_since = *catalog_ready_deferred_since.get_or_insert(loop_start);
+                    pending_catalog_ready = Some(message);
+                    prepare_trace.catalog_ready_deferred = true;
+                    prepare_trace.catalog_ready_deferred_age_us = loop_start
+                        .saturating_duration_since(deferred_since)
+                        .as_micros();
+                } else {
+                    catalog_ready_deferred_since = None;
+                    catalog_ready_stationary_edge_since = None;
+                    process_catalog_worker_message(
+                        message,
+                        &mut prepare_trace,
+                        frame_accounting.first_visible_copy_done(),
+                        launching,
+                        benchmark_media_interaction_active,
+                        loop_start,
+                        &app,
+                        &pad,
+                        &mut nav,
+                        &setup,
+                        &loading_title,
+                        &mut catalog,
+                        &mut catalog_ready,
+                        &mut catalog_version,
+                        &mut pending_launch_return_state,
+                        &mut preview,
+                        &mut bridge_models,
+                        &mut media_session,
+                        &mut scheduler,
+                        &mut catalog_session,
+                        &mut lifecycle,
+                        &mut lifecycle_effects,
+                        &mut full_bridge_dirty,
+                        start,
+                    );
+                }
+            }
+
+            while let Some(message) = deferred_catalog_events.pop_front() {
+                catalog_ready_stationary_edge_since = update_catalog_ready_stationary_edge_since(
+                    &nav,
+                    catalog_ready_stationary_edge_since,
+                    loop_start,
+                );
+                if should_defer_catalog_message(
+                    &message,
+                    catalog_ready,
+                    &nav,
+                    catalog_ready_stationary_edge_since,
+                    loop_start,
+                ) {
+                    let deferred_since = *catalog_ready_deferred_since.get_or_insert(loop_start);
+                    if pending_catalog_ready.is_none() {
+                        pending_catalog_ready = Some(message);
+                    } else {
+                        deferred_catalog_events.push_front(message);
+                        break;
+                    }
+                    prepare_trace.catalog_ready_deferred = true;
+                    prepare_trace.catalog_ready_deferred_age_us = loop_start
+                        .saturating_duration_since(deferred_since)
+                        .as_micros();
+                    continue;
+                }
+                process_catalog_worker_message(
+                    message,
+                    &mut prepare_trace,
+                    frame_accounting.first_visible_copy_done(),
+                    launching,
+                    benchmark_media_interaction_active,
+                    loop_start,
                     &app,
                     &pad,
                     &mut nav,
@@ -1086,11 +1145,20 @@ pub(super) fn run_launcher_loop(
                     &mut bridge_models,
                     &mut media_session,
                     &mut scheduler,
+                    &mut catalog_session,
                     &mut lifecycle,
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
                     start,
                 );
+            }
+            prepare_trace.catalog_backlog = deferred_catalog_events
+                .len()
+                .saturating_add(usize::from(pending_catalog_ready.is_some()))
+                .min(u32::MAX as usize) as u32;
+            if deferred_catalog_events.is_empty() && pending_catalog_ready.is_none() {
+                catalog_ready_deferred_since = None;
+                catalog_ready_stationary_edge_since = None;
             }
         }
         if let Some(trace_start) = catalog_worker_trace_start {
@@ -2007,6 +2075,117 @@ fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instan
     (secs > 0).then(|| run_start + Duration::from_secs(secs))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn process_catalog_worker_message(
+    message: CatalogWorkerMessage,
+    prepare_trace: &mut LauncherPrepareTrace,
+    first_visible_copy_done: bool,
+    launching: bool,
+    benchmark_media_interaction_active: bool,
+    loop_start: Instant,
+    app: &slint_ui::launcher::Launcher,
+    pad: &PadPool,
+    nav: &mut LauncherNav,
+    setup: &SetupNav,
+    loading_title: &str,
+    catalog: &mut ArcadeCatalog,
+    catalog_ready: &mut bool,
+    catalog_version: &mut usize,
+    pending_launch_return_state: &mut Option<launcher::LaunchReturnState>,
+    preview: &mut PreviewState,
+    bridge_models: &mut LauncherBridgeModels,
+    media_session: &mut ScreenshotMediaUpdateSession,
+    scheduler: &mut LauncherScheduler,
+    catalog_session: &mut LauncherCatalogSession,
+    lifecycle: &mut LauncherLifecycle,
+    lifecycle_effects: &mut LifecycleEffects,
+    full_bridge_dirty: &mut bool,
+    start: Instant,
+) {
+    prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
+    let media_gate = if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
+        let media_gate = media_session.current_gate(
+            first_visible_copy_done,
+            scheduler.has_pending_launch() || launching,
+            benchmark_media_interaction_active,
+            loop_start,
+        );
+        apply_screenshot_media_update_effects(
+            media_session.sync_gate(media_gate),
+            app,
+            catalog,
+            scheduler,
+            full_bridge_dirty,
+            start,
+        );
+        Some(media_gate)
+    } else {
+        None
+    };
+    let effects = catalog_session.handle_worker_message(
+        CatalogWorkerMessageContext {
+            catalog_ready: *catalog_ready,
+            screen: nav.screen,
+            media_gate,
+        },
+        message,
+        loop_start,
+    );
+    apply_catalog_session_effects(
+        effects,
+        app,
+        pad,
+        nav,
+        setup,
+        loading_title,
+        catalog,
+        catalog_ready,
+        catalog_version,
+        pending_launch_return_state,
+        preview,
+        bridge_models,
+        media_session,
+        scheduler,
+        lifecycle,
+        lifecycle_effects,
+        full_bridge_dirty,
+        start,
+    );
+}
+
+fn should_defer_catalog_message(
+    message: &CatalogWorkerMessage,
+    catalog_ready: bool,
+    nav: &LauncherNav,
+    stationary_edge_since: Option<Instant>,
+    now: Instant,
+) -> bool {
+    if !catalog_ready
+        || nav.screen != Screen::Arcade
+        || !matches!(message, CatalogWorkerMessage::Ready { .. })
+    {
+        return false;
+    }
+    if nav.arcade.has_scroll_motion_or_queue() {
+        return true;
+    }
+    nav.arcade.is_scroll_active()
+        && stationary_edge_since.is_none_or(|since| {
+            now.saturating_duration_since(since) < CATALOG_READY_STATIONARY_EDGE_SETTLE
+        })
+}
+
+fn update_catalog_ready_stationary_edge_since(
+    nav: &LauncherNav,
+    current: Option<Instant>,
+    now: Instant,
+) -> Option<Instant> {
+    (nav.screen == Screen::Arcade
+        && nav.arcade.is_scroll_active()
+        && !nav.arcade.has_scroll_motion_or_queue())
+    .then_some(current.unwrap_or(now))
+}
+
 fn launcher_auto_launch_selected_enabled() -> bool {
     matches!(
         std::env::var("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED")
@@ -2556,6 +2735,109 @@ mod tests {
             })
             .collect();
         ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), systems)
+    }
+
+    fn ready_catalog_message() -> CatalogWorkerMessage {
+        CatalogWorkerMessage::Ready {
+            catalog: catalog_for_media_systems(&["arcade"]),
+            summary: None,
+            load_us: 42,
+            source: CatalogSource::FullSqlite,
+            durable_save_pending: false,
+        }
+    }
+
+    #[test]
+    pub(super) fn catalog_ready_swap_defers_while_arcade_scroll_is_active() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 2);
+
+        assert!(should_defer_catalog_message(
+            &ready_catalog_message(),
+            true,
+            &nav,
+            None,
+            now
+        ));
+    }
+
+    #[test]
+    pub(super) fn catalog_ready_swap_does_not_defer_first_usable_catalog() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 2);
+
+        assert!(!should_defer_catalog_message(
+            &ready_catalog_message(),
+            false,
+            &nav,
+            None,
+            now
+        ));
+    }
+
+    #[test]
+    pub(super) fn catalog_ready_swap_briefly_defers_while_direction_is_held_at_edge() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 1);
+        let edge_since = update_catalog_ready_stationary_edge_since(&nav, None, now);
+
+        assert!(should_defer_catalog_message(
+            &ready_catalog_message(),
+            true,
+            &nav,
+            edge_since,
+            now + CATALOG_READY_STATIONARY_EDGE_SETTLE / 2
+        ));
+    }
+
+    #[test]
+    pub(super) fn catalog_ready_swap_applies_after_stationary_edge_settles() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 1);
+        let edge_since = update_catalog_ready_stationary_edge_since(&nav, None, now);
+
+        assert!(!should_defer_catalog_message(
+            &ready_catalog_message(),
+            true,
+            &nav,
+            edge_since,
+            now + CATALOG_READY_STATIONARY_EDGE_SETTLE
+        ));
+    }
+
+    #[test]
+    pub(super) fn catalog_terminal_messages_are_not_defer_candidates() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 2);
+
+        let message = CatalogWorkerMessage::Unchanged {
+            summary: library_db::LibraryRefreshSummary {
+                skipped: true,
+                scan_us: 1,
+                discover_us: 1,
+                classify_us: 1,
+                import_us: 1,
+                bytes: 0,
+                normal_files: 0,
+                containers: 0,
+                entries: 0,
+                discoveries: 0,
+            },
+        };
+
+        assert!(!should_defer_catalog_message(
+            &message, true, &nav, None, now
+        ));
     }
 
     #[test]
