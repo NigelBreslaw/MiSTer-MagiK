@@ -22,3 +22,5 @@ library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	2	progress	18026496	0	1396	0	0
 library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	3	progress	18026496	0	1465	0	0	0	1477	70	bench-ok
 library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	4	progress	18026496	0	1390	0	0	0	1402	70	bench-ok
 library_sqlite_publish_tsv	SHIP-20260625-DCD0DBB1	5	progress	18026496	0	1409	0	0	0	1421	70	bench-ok
+library_sqlite_publish_tsv	PERF20260628-LIBSAVE	1	progress	19431424	0	1733	0	0	0	1746	76	bench-ok
+library_sqlite_publish_tsv	PERF20260628-LIBSAVE	2	progress	19431424	0	1792	0	0	0	1805	76	bench-ok

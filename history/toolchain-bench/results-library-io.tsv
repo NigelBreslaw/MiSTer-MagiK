@@ -150,7 +150,7 @@ TOOLING-AFTER	scan_stage_file_discovery	10992											files=7511
 TOOLING-AFTER	scan_stage_classify_total	25860											discoveries=9354 normal_files=7897 containers=154 entries=281
 TOOLING-AFTER	import_stage_schema	12											tables=14
 TOOLING-AFTER	import_stage_metadata_load	1745											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-TOOLING-AFTER	import_stage_begin_tx	0											
+TOOLING-AFTER	import_stage_begin_tx	0
 TOOLING-AFTER	import_stage_insert_profiles	1											rows=16
 TOOLING-AFTER	import_stage_insert_payloads	439											normal_files=7897 entries=281
 TOOLING-AFTER	import_stage_insert_games_chunk	196											from=0 to=1000 total=9229
@@ -164,13 +164,13 @@ TOOLING-AFTER	import_stage_insert_games_chunk	312											from=7000 to=8000 to
 TOOLING-AFTER	import_stage_insert_games_chunk	262											from=8000 to=9000 total=9229
 TOOLING-AFTER	import_stage_insert_games_chunk	605											from=9000 to=9229 total=9229
 TOOLING-AFTER	import_stage_insert_games_total	2747											rows=9229 launcher_rows=6245
-TOOLING-AFTER	import_stage_materialize_arcade_ui	470											
-TOOLING-AFTER	import_stage_insert_launcher_arcade	12											
+TOOLING-AFTER	import_stage_materialize_arcade_ui	470
+TOOLING-AFTER	import_stage_insert_launcher_arcade	12
 TOOLING-AFTER	import_stage_insert_launcher_console	225											rows=6185
 TOOLING-AFTER	import_stage_insert_meta	162											rows=11
 TOOLING-AFTER	import_stage_insert_catalog_stamp	0											rows=11
 TOOLING-AFTER	import_stage_insert_software_hash_cache	0											rows=0
-TOOLING-AFTER	import_stage_commit	8											
+TOOLING-AFTER	import_stage_commit	8
 TOOLING-AFTER	import_stage_total	5838											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2163
 TOOLING-AFTER	sqlite_publish_progress	1											bytes=18026496 copy_ms=1387 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 TOOLING-AFTER	refresh_done	0											skipped=false bytes=18026496 scan_us=26008401 discover_us=25332972 classify_us=25860363 import_us=7680608 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -214,7 +214,7 @@ COLDIO-BEFORE	scan_stage_file_discovery	1455											files=7511
 COLDIO-BEFORE	scan_stage_classify_total	3663											discoveries=9354 normal_files=7897 containers=154 entries=281
 COLDIO-BEFORE	import_stage_schema	12											tables=14
 COLDIO-BEFORE	import_stage_metadata_load	1466											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-COLDIO-BEFORE	import_stage_begin_tx	0											
+COLDIO-BEFORE	import_stage_begin_tx	0
 COLDIO-BEFORE	import_stage_insert_profiles	1											rows=16
 COLDIO-BEFORE	import_stage_insert_payloads	488											normal_files=7897 entries=281
 COLDIO-BEFORE	import_stage_insert_games_chunk	203											from=0 to=1000 total=9229
@@ -228,13 +228,13 @@ COLDIO-BEFORE	import_stage_insert_games_chunk	278											from=7000 to=8000 to
 COLDIO-BEFORE	import_stage_insert_games_chunk	282											from=8000 to=9000 total=9229
 COLDIO-BEFORE	import_stage_insert_games_chunk	116											from=9000 to=9229 total=9229
 COLDIO-BEFORE	import_stage_insert_games_total	2316											rows=9229 launcher_rows=6245
-COLDIO-BEFORE	import_stage_materialize_arcade_ui	439											
-COLDIO-BEFORE	import_stage_insert_launcher_arcade	12											
+COLDIO-BEFORE	import_stage_materialize_arcade_ui	439
+COLDIO-BEFORE	import_stage_insert_launcher_arcade	12
 COLDIO-BEFORE	import_stage_insert_launcher_console	222											rows=6185
 COLDIO-BEFORE	import_stage_insert_meta	164											rows=11
 COLDIO-BEFORE	import_stage_insert_catalog_stamp	0											rows=11
 COLDIO-BEFORE	import_stage_insert_software_hash_cache	0											rows=0
-COLDIO-BEFORE	import_stage_commit	8											
+COLDIO-BEFORE	import_stage_commit	8
 COLDIO-BEFORE	import_stage_total	5145											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1581
 COLDIO-BEFORE	sqlite_publish_progress	2											bytes=18026496 copy_ms=1970 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 COLDIO-BEFORE	refresh_done	0											skipped=false bytes=18026496 scan_us=3814045 discover_us=3594098 classify_us=3663522 import_us=7796364 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -277,7 +277,7 @@ COLDIO-AFTER2	scan_stage_file_discovery	2140											files=7511
 COLDIO-AFTER2	scan_stage_classify_total	2607											discoveries=9354 normal_files=7897 containers=154 entries=281
 COLDIO-AFTER2	import_stage_schema	11											tables=14
 COLDIO-AFTER2	import_stage_metadata_load	1463											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-COLDIO-AFTER2	import_stage_begin_tx	0											
+COLDIO-AFTER2	import_stage_begin_tx	0
 COLDIO-AFTER2	import_stage_insert_profiles	1											rows=16
 COLDIO-AFTER2	import_stage_insert_payloads	480											normal_files=7897 entries=281
 COLDIO-AFTER2	import_stage_insert_games_chunk	199											from=0 to=1000 total=9229
@@ -291,13 +291,13 @@ COLDIO-AFTER2	import_stage_insert_games_chunk	275											from=7000 to=8000 to
 COLDIO-AFTER2	import_stage_insert_games_chunk	265											from=8000 to=9000 total=9229
 COLDIO-AFTER2	import_stage_insert_games_chunk	114											from=9000 to=9229 total=9229
 COLDIO-AFTER2	import_stage_insert_games_total	2235											rows=9229 launcher_rows=6245
-COLDIO-AFTER2	import_stage_materialize_arcade_ui	447											
-COLDIO-AFTER2	import_stage_insert_launcher_arcade	12											
+COLDIO-AFTER2	import_stage_materialize_arcade_ui	447
+COLDIO-AFTER2	import_stage_insert_launcher_arcade	12
 COLDIO-AFTER2	import_stage_insert_launcher_console	220											rows=6185
 COLDIO-AFTER2	import_stage_insert_meta	159											rows=11
 COLDIO-AFTER2	import_stage_insert_catalog_stamp	0											rows=11
 COLDIO-AFTER2	import_stage_insert_software_hash_cache	0											rows=0
-COLDIO-AFTER2	import_stage_commit	8											
+COLDIO-AFTER2	import_stage_commit	8
 COLDIO-AFTER2	import_stage_total	5055											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1585
 COLDIO-AFTER2	sqlite_publish_progress	1											bytes=18026496 copy_ms=1407 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 COLDIO-AFTER2	refresh_done	0											skipped=false bytes=18026496 scan_us=2754265 discover_us=1985597 classify_us=2607440 import_us=7134693 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -340,7 +340,7 @@ COLDIMPORT-BEFORE	scan_stage_file_discovery	2102											files=7511
 COLDIMPORT-BEFORE	scan_stage_classify_total	2605											discoveries=9354 normal_files=7897 containers=154 entries=281
 COLDIMPORT-BEFORE	import_stage_schema	12											tables=14
 COLDIMPORT-BEFORE	import_stage_metadata_load	1462											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-COLDIMPORT-BEFORE	import_stage_begin_tx	0											
+COLDIMPORT-BEFORE	import_stage_begin_tx	0
 COLDIMPORT-BEFORE	import_stage_insert_profiles	1											rows=16
 COLDIMPORT-BEFORE	import_stage_insert_payloads	491											normal_files=7897 entries=281
 COLDIMPORT-BEFORE	import_stage_insert_games_chunk	197											from=0 to=1000 total=9229
@@ -354,13 +354,13 @@ COLDIMPORT-BEFORE	import_stage_insert_games_chunk	274											from=7000 to=800
 COLDIMPORT-BEFORE	import_stage_insert_games_chunk	272											from=8000 to=9000 total=9229
 COLDIMPORT-BEFORE	import_stage_insert_games_chunk	123											from=9000 to=9229 total=9229
 COLDIMPORT-BEFORE	import_stage_insert_games_total	2264											rows=9229 launcher_rows=6245
-COLDIMPORT-BEFORE	import_stage_materialize_arcade_ui	430											
-COLDIMPORT-BEFORE	import_stage_insert_launcher_arcade	12											
+COLDIMPORT-BEFORE	import_stage_materialize_arcade_ui	430
+COLDIMPORT-BEFORE	import_stage_insert_launcher_arcade	12
 COLDIMPORT-BEFORE	import_stage_insert_launcher_console	221											rows=6185
 COLDIMPORT-BEFORE	import_stage_insert_meta	159											rows=11
 COLDIMPORT-BEFORE	import_stage_insert_catalog_stamp	0											rows=11
 COLDIMPORT-BEFORE	import_stage_insert_software_hash_cache	0											rows=0
-COLDIMPORT-BEFORE	import_stage_commit	8											
+COLDIMPORT-BEFORE	import_stage_commit	8
 COLDIMPORT-BEFORE	import_stage_total	5078											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1577
 COLDIMPORT-BEFORE	sqlite_publish_progress	1											bytes=18026496 copy_ms=1436 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 COLDIMPORT-BEFORE	refresh_done	0											skipped=false bytes=18026496 scan_us=2756123 discover_us=1959302 classify_us=2604953 import_us=7189746 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -403,7 +403,7 @@ COLDIMPORT-AFTER	scan_stage_file_discovery	2144											files=7511
 COLDIMPORT-AFTER	scan_stage_classify_total	2575											discoveries=9354 normal_files=7897 containers=154 entries=281
 COLDIMPORT-AFTER	import_stage_schema	12											tables=14
 COLDIMPORT-AFTER	import_stage_metadata_load	1472											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-COLDIMPORT-AFTER	import_stage_begin_tx	0											
+COLDIMPORT-AFTER	import_stage_begin_tx	0
 COLDIMPORT-AFTER	import_stage_insert_profiles	1											rows=16
 COLDIMPORT-AFTER	import_stage_insert_payloads	497											normal_files=7897 entries=281
 COLDIMPORT-AFTER	import_stage_insert_games_chunk	187											from=0 to=1000 total=9229
@@ -417,13 +417,13 @@ COLDIMPORT-AFTER	import_stage_insert_games_chunk	261											from=7000 to=8000
 COLDIMPORT-AFTER	import_stage_insert_games_chunk	254											from=8000 to=9000 total=9229
 COLDIMPORT-AFTER	import_stage_insert_games_chunk	84											from=9000 to=9229 total=9229
 COLDIMPORT-AFTER	import_stage_insert_games_total	2122											rows=9229 launcher_rows=6245
-COLDIMPORT-AFTER	import_stage_materialize_arcade_ui	472											
-COLDIMPORT-AFTER	import_stage_insert_launcher_arcade	12											
+COLDIMPORT-AFTER	import_stage_materialize_arcade_ui	472
+COLDIMPORT-AFTER	import_stage_insert_launcher_arcade	12
 COLDIMPORT-AFTER	import_stage_insert_launcher_console	222											rows=6185
 COLDIMPORT-AFTER	import_stage_insert_meta	161											rows=11
 COLDIMPORT-AFTER	import_stage_insert_catalog_stamp	0											rows=11
 COLDIMPORT-AFTER	import_stage_insert_software_hash_cache	0											rows=0
-COLDIMPORT-AFTER	import_stage_commit	8											
+COLDIMPORT-AFTER	import_stage_commit	8
 COLDIMPORT-AFTER	import_stage_total	4998											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1578
 COLDIMPORT-AFTER	sqlite_publish_progress	2											bytes=18026496 copy_ms=1514 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 COLDIMPORT-AFTER	refresh_done	0											skipped=false bytes=18026496 scan_us=2723053 discover_us=1925474 classify_us=2574981 import_us=7170854 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -466,7 +466,7 @@ FINAL-LIBIO-20260624	scan_stage_file_discovery	2145											files=7511
 FINAL-LIBIO-20260624	scan_stage_classify_total	2563											discoveries=9354 normal_files=7897 containers=154 entries=281
 FINAL-LIBIO-20260624	import_stage_schema	11											tables=14
 FINAL-LIBIO-20260624	import_stage_metadata_load	1477											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-FINAL-LIBIO-20260624	import_stage_begin_tx	0											
+FINAL-LIBIO-20260624	import_stage_begin_tx	0
 FINAL-LIBIO-20260624	import_stage_insert_profiles	1											rows=16
 FINAL-LIBIO-20260624	import_stage_insert_payloads	471											normal_files=7897 entries=281
 FINAL-LIBIO-20260624	import_stage_insert_games_chunk	181											from=0 to=1000 total=9229
@@ -480,13 +480,13 @@ FINAL-LIBIO-20260624	import_stage_insert_games_chunk	255											from=7000 to=
 FINAL-LIBIO-20260624	import_stage_insert_games_chunk	249											from=8000 to=9000 total=9229
 FINAL-LIBIO-20260624	import_stage_insert_games_chunk	86											from=9000 to=9229 total=9229
 FINAL-LIBIO-20260624	import_stage_insert_games_total	2077											rows=9229 launcher_rows=6245
-FINAL-LIBIO-20260624	import_stage_materialize_arcade_ui	468											
-FINAL-LIBIO-20260624	import_stage_insert_launcher_arcade	12											
+FINAL-LIBIO-20260624	import_stage_materialize_arcade_ui	468
+FINAL-LIBIO-20260624	import_stage_insert_launcher_arcade	12
 FINAL-LIBIO-20260624	import_stage_insert_launcher_console	218											rows=6185
 FINAL-LIBIO-20260624	import_stage_insert_meta	164											rows=11
 FINAL-LIBIO-20260624	import_stage_insert_catalog_stamp	0											rows=11
 FINAL-LIBIO-20260624	import_stage_insert_software_hash_cache	0											rows=0
-FINAL-LIBIO-20260624	import_stage_commit	8											
+FINAL-LIBIO-20260624	import_stage_commit	8
 FINAL-LIBIO-20260624	import_stage_total	4926											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1574
 FINAL-LIBIO-20260624	sqlite_publish_progress	2											bytes=18026496 copy_ms=1507 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 FINAL-LIBIO-20260624	refresh_done	0											skipped=false bytes=18026496 scan_us=2715090 discover_us=2007160 classify_us=2562816 import_us=7078451 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -529,7 +529,7 @@ PERFREVIEW-20260624-LIBIO	scan_stage_file_discovery	2159											files=7511
 PERFREVIEW-20260624-LIBIO	scan_stage_classify_total	2588											discoveries=9354 normal_files=7897 containers=154 entries=281
 PERFREVIEW-20260624-LIBIO	import_stage_schema	11											tables=14
 PERFREVIEW-20260624-LIBIO	import_stage_metadata_load	1440											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-PERFREVIEW-20260624-LIBIO	import_stage_begin_tx	0											
+PERFREVIEW-20260624-LIBIO	import_stage_begin_tx	0
 PERFREVIEW-20260624-LIBIO	import_stage_insert_profiles	1											rows=16
 PERFREVIEW-20260624-LIBIO	import_stage_insert_payloads	477											normal_files=7897 entries=281
 PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	181											from=0 to=1000 total=9229
@@ -543,13 +543,13 @@ PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	259											from=700
 PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	251											from=8000 to=9000 total=9229
 PERFREVIEW-20260624-LIBIO	import_stage_insert_games_chunk	78											from=9000 to=9229 total=9229
 PERFREVIEW-20260624-LIBIO	import_stage_insert_games_total	2096											rows=9229 launcher_rows=6245
-PERFREVIEW-20260624-LIBIO	import_stage_materialize_arcade_ui	471											
-PERFREVIEW-20260624-LIBIO	import_stage_insert_launcher_arcade	12											
+PERFREVIEW-20260624-LIBIO	import_stage_materialize_arcade_ui	471
+PERFREVIEW-20260624-LIBIO	import_stage_insert_launcher_arcade	12
 PERFREVIEW-20260624-LIBIO	import_stage_insert_launcher_console	225											rows=6185
 PERFREVIEW-20260624-LIBIO	import_stage_insert_meta	159											rows=11
 PERFREVIEW-20260624-LIBIO	import_stage_insert_catalog_stamp	0											rows=11
 PERFREVIEW-20260624-LIBIO	import_stage_insert_software_hash_cache	0											rows=0
-PERFREVIEW-20260624-LIBIO	import_stage_commit	8											
+PERFREVIEW-20260624-LIBIO	import_stage_commit	8
 PERFREVIEW-20260624-LIBIO	import_stage_total	4918											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1682
 PERFREVIEW-20260624-LIBIO	sqlite_publish_progress	2											bytes=18026496 copy_ms=1623 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 PERFREVIEW-20260624-LIBIO	refresh_done	0											skipped=false bytes=18026496 scan_us=2734028 discover_us=1892866 classify_us=2588224 import_us=7177473 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -592,7 +592,7 @@ ITEM11-BEFORE-zip-toc	scan_stage_file_discovery	2328											files=7511
 ITEM11-BEFORE-zip-toc	scan_stage_classify_total	2727											discoveries=9354 normal_files=7897 containers=154 entries=281
 ITEM11-BEFORE-zip-toc	import_stage_schema	12											tables=14
 ITEM11-BEFORE-zip-toc	import_stage_metadata_load	1451											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-ITEM11-BEFORE-zip-toc	import_stage_begin_tx	0											
+ITEM11-BEFORE-zip-toc	import_stage_begin_tx	0
 ITEM11-BEFORE-zip-toc	import_stage_insert_profiles	0											rows=16
 ITEM11-BEFORE-zip-toc	import_stage_insert_payloads	484											normal_files=7897 entries=281
 ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
@@ -606,13 +606,13 @@ ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	261											from=7000 to
 ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	255											from=8000 to=9000 total=9229
 ITEM11-BEFORE-zip-toc	import_stage_insert_games_chunk	102											from=9000 to=9229 total=9229
 ITEM11-BEFORE-zip-toc	import_stage_insert_games_total	2124											rows=9229 launcher_rows=6245
-ITEM11-BEFORE-zip-toc	import_stage_materialize_arcade_ui	443											
-ITEM11-BEFORE-zip-toc	import_stage_insert_launcher_arcade	12											
+ITEM11-BEFORE-zip-toc	import_stage_materialize_arcade_ui	443
+ITEM11-BEFORE-zip-toc	import_stage_insert_launcher_arcade	12
 ITEM11-BEFORE-zip-toc	import_stage_insert_launcher_console	235											rows=6185
 ITEM11-BEFORE-zip-toc	import_stage_insert_meta	158											rows=11
 ITEM11-BEFORE-zip-toc	import_stage_insert_catalog_stamp	0											rows=11
 ITEM11-BEFORE-zip-toc	import_stage_insert_software_hash_cache	0											rows=0
-ITEM11-BEFORE-zip-toc	import_stage_commit	8											
+ITEM11-BEFORE-zip-toc	import_stage_commit	8
 ITEM11-BEFORE-zip-toc	import_stage_total	4945											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1827
 ITEM11-BEFORE-zip-toc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1387 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM11-BEFORE-zip-toc	refresh_done	0											skipped=false bytes=18026496 scan_us=2875279 discover_us=1875838 classify_us=2727285 import_us=6994598 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -655,7 +655,7 @@ ITEM11-AFTER-zip-toc	scan_stage_file_discovery	2109											files=7511
 ITEM11-AFTER-zip-toc	scan_stage_classify_total	2503											discoveries=9354 normal_files=7897 containers=154 entries=281
 ITEM11-AFTER-zip-toc	import_stage_schema	12											tables=14
 ITEM11-AFTER-zip-toc	import_stage_metadata_load	1483											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-ITEM11-AFTER-zip-toc	import_stage_begin_tx	0											
+ITEM11-AFTER-zip-toc	import_stage_begin_tx	0
 ITEM11-AFTER-zip-toc	import_stage_insert_profiles	1											rows=16
 ITEM11-AFTER-zip-toc	import_stage_insert_payloads	464											normal_files=7897 entries=281
 ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
@@ -669,13 +669,13 @@ ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	258											from=7000 to=
 ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	250											from=8000 to=9000 total=9229
 ITEM11-AFTER-zip-toc	import_stage_insert_games_chunk	77											from=9000 to=9229 total=9229
 ITEM11-AFTER-zip-toc	import_stage_insert_games_total	2107											rows=9229 launcher_rows=6245
-ITEM11-AFTER-zip-toc	import_stage_materialize_arcade_ui	483											
-ITEM11-AFTER-zip-toc	import_stage_insert_launcher_arcade	12											
+ITEM11-AFTER-zip-toc	import_stage_materialize_arcade_ui	483
+ITEM11-AFTER-zip-toc	import_stage_insert_launcher_arcade	12
 ITEM11-AFTER-zip-toc	import_stage_insert_launcher_console	218											rows=6185
 ITEM11-AFTER-zip-toc	import_stage_insert_meta	157											rows=11
 ITEM11-AFTER-zip-toc	import_stage_insert_catalog_stamp	0											rows=11
 ITEM11-AFTER-zip-toc	import_stage_insert_software_hash_cache	0											rows=0
-ITEM11-AFTER-zip-toc	import_stage_commit	8											
+ITEM11-AFTER-zip-toc	import_stage_commit	8
 ITEM11-AFTER-zip-toc	import_stage_total	4963											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2020
 ITEM11-AFTER-zip-toc	sqlite_publish_progress	2											bytes=18026496 copy_ms=1544 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM11-AFTER-zip-toc	refresh_done	0											skipped=false bytes=18026496 scan_us=2646070 discover_us=1908766 classify_us=2503280 import_us=7133660 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -718,7 +718,7 @@ ITEM12-BEFORE-metadata-caps	scan_stage_file_discovery	2161											files=7511
 ITEM12-BEFORE-metadata-caps	scan_stage_classify_total	2561											discoveries=9354 normal_files=7897 containers=154 entries=281
 ITEM12-BEFORE-metadata-caps	import_stage_schema	12											tables=14
 ITEM12-BEFORE-metadata-caps	import_stage_metadata_load	1474											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-ITEM12-BEFORE-metadata-caps	import_stage_begin_tx	0											
+ITEM12-BEFORE-metadata-caps	import_stage_begin_tx	0
 ITEM12-BEFORE-metadata-caps	import_stage_insert_profiles	1											rows=16
 ITEM12-BEFORE-metadata-caps	import_stage_insert_payloads	492											normal_files=7897 entries=281
 ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
@@ -732,13 +732,13 @@ ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	259											from=7
 ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	250											from=8000 to=9000 total=9229
 ITEM12-BEFORE-metadata-caps	import_stage_insert_games_chunk	77											from=9000 to=9229 total=9229
 ITEM12-BEFORE-metadata-caps	import_stage_insert_games_total	2125											rows=9229 launcher_rows=6245
-ITEM12-BEFORE-metadata-caps	import_stage_materialize_arcade_ui	483											
-ITEM12-BEFORE-metadata-caps	import_stage_insert_launcher_arcade	12											
+ITEM12-BEFORE-metadata-caps	import_stage_materialize_arcade_ui	483
+ITEM12-BEFORE-metadata-caps	import_stage_insert_launcher_arcade	12
 ITEM12-BEFORE-metadata-caps	import_stage_insert_launcher_console	217											rows=6185
 ITEM12-BEFORE-metadata-caps	import_stage_insert_meta	156											rows=11
 ITEM12-BEFORE-metadata-caps	import_stage_insert_catalog_stamp	0											rows=11
 ITEM12-BEFORE-metadata-caps	import_stage_insert_software_hash_cache	0											rows=0
-ITEM12-BEFORE-metadata-caps	import_stage_commit	8											
+ITEM12-BEFORE-metadata-caps	import_stage_commit	8
 ITEM12-BEFORE-metadata-caps	import_stage_total	4998											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2255
 ITEM12-BEFORE-metadata-caps	sqlite_publish_progress	1											bytes=18026496 copy_ms=1404 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM12-BEFORE-metadata-caps	refresh_done	0											skipped=false bytes=18026496 scan_us=2704220 discover_us=1950828 classify_us=2560632 import_us=7072425 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -781,7 +781,7 @@ ITEM12-AFTER-metadata-caps	scan_stage_file_discovery	2091											files=7511
 ITEM12-AFTER-metadata-caps	scan_stage_classify_total	2494											discoveries=9354 normal_files=7897 containers=154 entries=281
 ITEM12-AFTER-metadata-caps	import_stage_schema	12											tables=14
 ITEM12-AFTER-metadata-caps	import_stage_metadata_load	1486											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-ITEM12-AFTER-metadata-caps	import_stage_begin_tx	0											
+ITEM12-AFTER-metadata-caps	import_stage_begin_tx	0
 ITEM12-AFTER-metadata-caps	import_stage_insert_profiles	1											rows=16
 ITEM12-AFTER-metadata-caps	import_stage_insert_payloads	441											normal_files=7897 entries=281
 ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	184											from=0 to=1000 total=9229
@@ -795,13 +795,13 @@ ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	260											from=70
 ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	252											from=8000 to=9000 total=9229
 ITEM12-AFTER-metadata-caps	import_stage_insert_games_chunk	65											from=9000 to=9229 total=9229
 ITEM12-AFTER-metadata-caps	import_stage_insert_games_total	2113											rows=9229 launcher_rows=6245
-ITEM12-AFTER-metadata-caps	import_stage_materialize_arcade_ui	497											
-ITEM12-AFTER-metadata-caps	import_stage_insert_launcher_arcade	12											
+ITEM12-AFTER-metadata-caps	import_stage_materialize_arcade_ui	497
+ITEM12-AFTER-metadata-caps	import_stage_insert_launcher_arcade	12
 ITEM12-AFTER-metadata-caps	import_stage_insert_launcher_console	217											rows=6185
 ITEM12-AFTER-metadata-caps	import_stage_insert_meta	134											rows=11
 ITEM12-AFTER-metadata-caps	import_stage_insert_catalog_stamp	0											rows=11
 ITEM12-AFTER-metadata-caps	import_stage_insert_software_hash_cache	0											rows=0
-ITEM12-AFTER-metadata-caps	import_stage_commit	8											
+ITEM12-AFTER-metadata-caps	import_stage_commit	8
 ITEM12-AFTER-metadata-caps	import_stage_total	4939											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2813
 ITEM12-AFTER-metadata-caps	sqlite_publish_progress	2											bytes=18026496 copy_ms=1749 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM12-AFTER-metadata-caps	refresh_done	0											skipped=false bytes=18026496 scan_us=2616140 discover_us=1973029 classify_us=2493958 import_us=7324140 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -845,7 +845,7 @@ ITEM14-BEFORE-metadata-alloc	scan_stage_file_discovery	3792											files=7511
 ITEM14-BEFORE-metadata-alloc	scan_stage_classify_total	4114											discoveries=9354 normal_files=7897 containers=154 entries=281
 ITEM14-BEFORE-metadata-alloc	import_stage_schema	12											tables=14
 ITEM14-BEFORE-metadata-alloc	import_stage_metadata_load	1534											mame=50097 hbmame=608 software_lists=14979 preview_paths=8
-ITEM14-BEFORE-metadata-alloc	import_stage_begin_tx	0											
+ITEM14-BEFORE-metadata-alloc	import_stage_begin_tx	0
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_profiles	1											rows=16
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_payloads	447											normal_files=7897 entries=281
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	182											from=0 to=1000 total=9229
@@ -859,14 +859,14 @@ ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	285											from=
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	266											from=8000 to=9000 total=9229
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_chunk	65											from=9000 to=9229 total=9229
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_games_total	2096											rows=9229 launcher_rows=6245
-ITEM14-BEFORE-metadata-alloc	import_stage_materialize_arcade_ui	456											
-ITEM14-BEFORE-metadata-alloc	import_stage_insert_launcher_arcade	12											
+ITEM14-BEFORE-metadata-alloc	import_stage_materialize_arcade_ui	456
+ITEM14-BEFORE-metadata-alloc	import_stage_insert_launcher_arcade	12
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_launcher_console	215											rows=6185
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_meta	169											rows=11
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_catalog_stamp	0											rows=11
 ITEM14-BEFORE-metadata-alloc	import_stage_insert_software_hash_cache	0											rows=0
 ITEM14-BEFORE-metadata-alloc	import_stage_build_saved_catalog	117											rows=7256
-ITEM14-BEFORE-metadata-alloc	import_stage_commit	8											
+ITEM14-BEFORE-metadata-alloc	import_stage_commit	8
 ITEM14-BEFORE-metadata-alloc	import_stage_total	5086											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1705
 ITEM14-BEFORE-metadata-alloc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1395 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM14-BEFORE-metadata-alloc	refresh_done	0											skipped=false bytes=18026496 scan_us=4237840 discover_us=1326701 classify_us=4114533 import_us=6894486 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -908,7 +908,7 @@ ITEM14-AFTER-metadata-alloc	scan_stage_file_discovery	2069											files=7511
 ITEM14-AFTER-metadata-alloc	scan_stage_classify_total	2494											discoveries=9354 normal_files=7897 containers=154 entries=281
 ITEM14-AFTER-metadata-alloc	import_stage_schema	12											tables=14
 ITEM14-AFTER-metadata-alloc	import_stage_metadata_load	1168											mame=2671 hbmame=608 mame_needed=2975 software_lists=14979 preview_paths=8
-ITEM14-AFTER-metadata-alloc	import_stage_begin_tx	0											
+ITEM14-AFTER-metadata-alloc	import_stage_begin_tx	0
 ITEM14-AFTER-metadata-alloc	import_stage_insert_profiles	1											rows=16
 ITEM14-AFTER-metadata-alloc	import_stage_insert_payloads	450											normal_files=7897 entries=281
 ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	185											from=0 to=1000 total=9229
@@ -922,14 +922,14 @@ ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	313											from=7
 ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	254											from=8000 to=9000 total=9229
 ITEM14-AFTER-metadata-alloc	import_stage_insert_games_chunk	66											from=9000 to=9229 total=9229
 ITEM14-AFTER-metadata-alloc	import_stage_insert_games_total	2024											rows=9229 launcher_rows=6245
-ITEM14-AFTER-metadata-alloc	import_stage_materialize_arcade_ui	429											
-ITEM14-AFTER-metadata-alloc	import_stage_insert_launcher_arcade	11											
+ITEM14-AFTER-metadata-alloc	import_stage_materialize_arcade_ui	429
+ITEM14-AFTER-metadata-alloc	import_stage_insert_launcher_arcade	11
 ITEM14-AFTER-metadata-alloc	import_stage_insert_launcher_console	269											rows=6185
 ITEM14-AFTER-metadata-alloc	import_stage_insert_meta	135											rows=11
 ITEM14-AFTER-metadata-alloc	import_stage_insert_catalog_stamp	0											rows=11
 ITEM14-AFTER-metadata-alloc	import_stage_insert_software_hash_cache	0											rows=0
 ITEM14-AFTER-metadata-alloc	import_stage_build_saved_catalog	121											rows=7256
-ITEM14-AFTER-metadata-alloc	import_stage_commit	8											
+ITEM14-AFTER-metadata-alloc	import_stage_commit	8
 ITEM14-AFTER-metadata-alloc	import_stage_total	4648											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2004
 ITEM14-AFTER-metadata-alloc	sqlite_publish_progress	1											bytes=18026496 copy_ms=1319 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=70 result=bench-ok
 ITEM14-AFTER-metadata-alloc	refresh_done	0											skipped=false bytes=18026496 scan_us=2617554 discover_us=2019650 classify_us=2493746 import_us=6207050 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
@@ -1314,6 +1314,70 @@ SHIP-20260625-DCD0DBB1	import_stage_total	4798											path=/tmp/mister-magik/
 SHIP-20260625-DCD0DBB1	sqlite_publish_progress	1											bytes=18026496 copy_ms=1451 build_sync_ms=0 final_sync_ms=0 rename_ms=7 parent_sync_ms=0 progress_events=70 result=bench-ok
 SHIP-20260625-DCD0DBB1	refresh_done	0											skipped=false bytes=18026496 scan_us=2845523 discover_us=1849951 classify_us=2723945 import_us=6497996 discoveries=9229 normal_files=7897 containers=154 entries=281 virtual_launch_total=4659 virtual_launch_written=0 virtual_launch_unchanged=4659 virtual_launch_errors=0
 SHIP-20260625-DCD0DBB1	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	0	0	1	0	0	6987	11604	7699	1833	17628	334	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	1	67	44	0	0	7079	11733	7702	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	2	143	88	0	0	7178	11863	7703	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	3	245	96	0	0	7303	11968	7703	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	4	349	103	0	0	7429	12070	7703	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	5	455	108	0	0	7557	12171	7703	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	7	558	113	0	0	7685	12272	7703	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	8	662	118	0	0	7813	12368	7703	1833	17628	340	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	9	763	123	0	1064960	7933	12466	7703	1836	17628	345	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	sample	10	763	138	0	13910016	7955	12576	7703	1916	17628	395	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260628-LIBIO	scan_stage_walk_targets	0											roots=4 targets=15 extensions=29
+PERF20260628-LIBIO	scan_stage_first_candidate	53											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF20260628-LIBIO	scan_stage_first_discovery	57											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF20260628-LIBIO	scan_stage_walk_target	388											path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+PERF20260628-LIBIO	scan_stage_walk_target	52											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+PERF20260628-LIBIO	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+PERF20260628-LIBIO	scan_stage_walk_target	5											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+PERF20260628-LIBIO	scan_stage_walk_target	15											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+PERF20260628-LIBIO	scan_stage_walk_target	371											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+PERF20260628-LIBIO	scan_stage_walk_target	58											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+PERF20260628-LIBIO	scan_stage_walk_target	360											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+PERF20260628-LIBIO	scan_stage_walk_target	246											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+PERF20260628-LIBIO	scan_stage_walk_target	110											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+PERF20260628-LIBIO	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+PERF20260628-LIBIO	scan_stage_walk_target	316											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+PERF20260628-LIBIO	scan_stage_walk_target	106											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+PERF20260628-LIBIO	scan_stage_walk_target	15											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PERF20260628-LIBIO	scan_stage_walk_target	11											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PERF20260628-LIBIO	scan_stage_walk	2057											candidates=7527
+PERF20260628-LIBIO	scan_stage_profile_match	58											calls=7527
+PERF20260628-LIBIO	scan_stage_installed_collection	98											calls=7521
+PERF20260628-LIBIO	scan_stage_archive_toc	10											containers=154
+PERF20260628-LIBIO	scan_stage_collection_listings	0											collections=0
+PERF20260628-LIBIO	scan_stage_file_discovery	2178											files=7519
+PERF20260628-LIBIO	scan_stage_classify_total	2576											discoveries=9362 normal_files=7519 containers=154 entries=281
+PERF20260628-LIBIO	import_stage_schema	12											tables=14
+PERF20260628-LIBIO	import_stage_metadata_load	1168											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+PERF20260628-LIBIO	import_stage_begin_tx	0
+PERF20260628-LIBIO	import_stage_insert_profiles	1											rows=16
+PERF20260628-LIBIO	import_stage_insert_payloads	422											normal_files=7519 entries=281
+PERF20260628-LIBIO	import_stage_insert_games_chunk	188											from=0 to=1000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	219											from=1000 to=2000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	184											from=2000 to=3000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	187											from=3000 to=4000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	179											from=4000 to=5000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	187											from=5000 to=6000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	245											from=6000 to=7000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	308											from=7000 to=8000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	252											from=8000 to=9000 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_chunk	66											from=9000 to=9237 total=9237
+PERF20260628-LIBIO	import_stage_insert_games_total	2029											rows=9237 launcher_rows=6245
+PERF20260628-LIBIO	import_stage_materialize_arcade_ui	505
+PERF20260628-LIBIO	import_stage_insert_launcher_arcade	15
+PERF20260628-LIBIO	import_stage_insert_launcher_console	278											rows=6185
+PERF20260628-LIBIO	import_stage_insert_launcher_launch_plans	671											rows=4497
+PERF20260628-LIBIO	import_stage_insert_meta	128											rows=11
+PERF20260628-LIBIO	import_stage_insert_catalog_stamp	0											rows=11
+PERF20260628-LIBIO	import_stage_insert_software_hash_cache	0											rows=0
+PERF20260628-LIBIO	import_stage_build_saved_catalog	861											rows=7259
+PERF20260628-LIBIO	import_stage_commit	8
+PERF20260628-LIBIO	import_stage_total	6101											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1543
+PERF20260628-LIBIO	sqlite_publish_progress	2											bytes=19431424 copy_ms=1582 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+PERF20260628-LIBIO	refresh_done	0											skipped=false bytes=19431424 scan_us=2698957 discover_us=2056828 classify_us=2576081 import_us=8132281 discoveries=9237 normal_files=7519 containers=154 entries=281
+PERF20260628-LIBIO	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
 COLDSCAN-BEFORE-20260628	sample	0	0	1	0	0	4446	7759	5774	1404	17635	151	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
 COLDSCAN-BEFORE-20260628	sample	1	72	44	0	0	4538	7887	5776	1404	17635	151	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
 COLDSCAN-BEFORE-20260628	sample	2	143	96	0	0	4633	8023	5777	1404	17635	151	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
@@ -1378,6 +1442,201 @@ COLDSCAN-BEFORE-20260628	import_stage_total	6062											path=/tmp/mister-magi
 COLDSCAN-BEFORE-20260628	sqlite_publish_progress	2											bytes=19431424 copy_ms=1620 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
 COLDSCAN-BEFORE-20260628	refresh_done	0											skipped=false bytes=19431424 scan_us=2674074 discover_us=2162153 classify_us=2548426 import_us=8121834 discoveries=9237 normal_files=7519 containers=154 entries=281
 COLDSCAN-BEFORE-20260628	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	0	0	1	0	0	4212	7613	5464	1473	17606	166	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	1	67	45	0	4096	4302	7744	5465	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	2	147	93	0	4096	4403	7872	5466	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	3	250	102	0	4096	4530	7973	5466	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	4	354	109	0	4096	4658	8073	5466	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	5	459	115	0	4096	4788	8171	5467	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	7	566	119	0	4096	4918	8269	5467	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	8	672	125	0	4096	5046	8369	5467	1473	17606	172	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	9	765	130	0	2117632	5158	8465	5467	1483	17606	181	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	sample	10	765	146	1536	15753216	5182	8577	5467	1562	17609	235	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN-AFTER-20260628	scan_stage_walk_targets	0											roots=4 targets=15 extensions=29
+COLDSCAN-AFTER-20260628	scan_stage_first_candidate	52											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+COLDSCAN-AFTER-20260628	scan_stage_first_discovery	56											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	428											path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	53											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	19											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	334											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	49											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	375											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	264											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	116											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	339											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	134											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	13											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+COLDSCAN-AFTER-20260628	scan_stage_walk_target	8											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+COLDSCAN-AFTER-20260628	scan_stage_walk	2142											candidates=7527
+COLDSCAN-AFTER-20260628	scan_stage_profile_match	62											calls=7527
+COLDSCAN-AFTER-20260628	scan_stage_installed_collection	91											calls=7521
+COLDSCAN-AFTER-20260628	scan_stage_archive_toc	18											containers=154
+COLDSCAN-AFTER-20260628	scan_stage_collection_listings	0											collections=0
+COLDSCAN-AFTER-20260628	scan_stage_file_discovery	2162											files=7519
+COLDSCAN-AFTER-20260628	scan_stage_classify_total	2551											discoveries=9362 normal_files=7519 containers=154 entries=281
+COLDSCAN-AFTER-20260628	import_stage_schema	13											tables=14
+COLDSCAN-AFTER-20260628	import_stage_metadata_load	1170											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+COLDSCAN-AFTER-20260628	import_stage_begin_tx	0
+COLDSCAN-AFTER-20260628	import_stage_insert_profiles	1											rows=16
+COLDSCAN-AFTER-20260628	import_stage_insert_payloads	427											normal_files=7519 entries=281
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	188											from=0 to=1000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	207											from=1000 to=2000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	184											from=2000 to=3000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	186											from=3000 to=4000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	197											from=4000 to=5000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	184											from=5000 to=6000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	246											from=6000 to=7000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	287											from=7000 to=8000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	251											from=8000 to=9000 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_chunk	66											from=9000 to=9237 total=9237
+COLDSCAN-AFTER-20260628	import_stage_insert_games_total	2010											rows=9237 launcher_rows=6245
+COLDSCAN-AFTER-20260628	import_stage_materialize_arcade_ui	468
+COLDSCAN-AFTER-20260628	import_stage_insert_launcher_arcade	17
+COLDSCAN-AFTER-20260628	import_stage_insert_launcher_console	277											rows=6185
+COLDSCAN-AFTER-20260628	import_stage_insert_launcher_launch_plans	674											rows=4497
+COLDSCAN-AFTER-20260628	import_stage_insert_meta	127											rows=11
+COLDSCAN-AFTER-20260628	import_stage_insert_catalog_stamp	0											rows=11
+COLDSCAN-AFTER-20260628	import_stage_insert_software_hash_cache	0											rows=0
+COLDSCAN-AFTER-20260628	import_stage_build_saved_catalog	839											rows=7259
+COLDSCAN-AFTER-20260628	import_stage_commit	8
+COLDSCAN-AFTER-20260628	import_stage_total	6030											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1580
+COLDSCAN-AFTER-20260628	sqlite_publish_progress	2											bytes=19431424 copy_ms=1822 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+COLDSCAN-AFTER-20260628	refresh_done	0											skipped=false bytes=19431424 scan_us=2677515 discover_us=2141517 classify_us=2550945 import_us=8349734 discoveries=9237 normal_files=7519 containers=154 entries=281
+COLDSCAN-AFTER-20260628	done	11											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	0	0	1	0	0	8854	22665	22189	1684	17609	286	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	1	77	44	0	0	8954	22787	22190	1684	17609	286	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	2	157	92	0	4096	9052	22916	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	3	258	101	0	4096	9180	23017	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	4	366	105	0	4096	9314	23113	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	6	477	106	0	4096	9449	23208	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	7	583	113	0	4096	9578	23309	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	8	691	118	0	4096	9708	23409	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	9	796	124	0	4096	9839	23507	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	10	902	131	0	4096	9971	23605	22192	1684	17609	292	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	11	921	142	512	9723904	10009	23712	22192	1760	17610	329	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	sample	12	937	156	1024	20082688	10055	23823	22192	1828	17611	382	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN2-AFTER-20260628	scan_stage_walk_targets	0											roots=4 targets=15 extensions=29
+COLDSCAN2-AFTER-20260628	scan_stage_first_candidate	50											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+COLDSCAN2-AFTER-20260628	scan_stage_first_discovery	54											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	389											path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	48											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	5											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	21											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	332											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	62											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	399											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	245											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	102											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	3											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	356											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	144											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	11											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+COLDSCAN2-AFTER-20260628	scan_stage_walk_target	3											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+COLDSCAN2-AFTER-20260628	scan_stage_walk	2125											candidates=7527
+COLDSCAN2-AFTER-20260628	scan_stage_profile_match	61											calls=7527
+COLDSCAN2-AFTER-20260628	scan_stage_installed_collection	109											calls=7521
+COLDSCAN2-AFTER-20260628	scan_stage_archive_toc	10											containers=154
+COLDSCAN2-AFTER-20260628	scan_stage_collection_listings	0											collections=0
+COLDSCAN2-AFTER-20260628	scan_stage_file_discovery	2032											files=7519
+COLDSCAN2-AFTER-20260628	scan_stage_classify_total	2442											discoveries=9362 normal_files=7519 containers=154 entries=281
+COLDSCAN2-AFTER-20260628	import_stage_schema	14											tables=14
+COLDSCAN2-AFTER-20260628	import_stage_metadata_load	1186											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+COLDSCAN2-AFTER-20260628	import_stage_begin_tx	0
+COLDSCAN2-AFTER-20260628	import_stage_insert_profiles	1											rows=16
+COLDSCAN2-AFTER-20260628	import_stage_insert_payloads	427											normal_files=7519 entries=281
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	191											from=0 to=1000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	206											from=1000 to=2000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	194											from=2000 to=3000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	188											from=3000 to=4000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	182											from=4000 to=5000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	190											from=5000 to=6000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	257											from=6000 to=7000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	296											from=7000 to=8000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	256											from=8000 to=9000 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_chunk	67											from=9000 to=9237 total=9237
+COLDSCAN2-AFTER-20260628	import_stage_insert_games_total	2042											rows=9237 launcher_rows=6245
+COLDSCAN2-AFTER-20260628	import_stage_materialize_arcade_ui	480
+COLDSCAN2-AFTER-20260628	import_stage_insert_launcher_arcade	22
+COLDSCAN2-AFTER-20260628	import_stage_insert_launcher_console	275											rows=6185
+COLDSCAN2-AFTER-20260628	import_stage_insert_launcher_launch_plans	687											rows=4497
+COLDSCAN2-AFTER-20260628	import_stage_insert_meta	131											rows=11
+COLDSCAN2-AFTER-20260628	import_stage_insert_catalog_stamp	0											rows=11
+COLDSCAN2-AFTER-20260628	import_stage_insert_software_hash_cache	0											rows=0
+COLDSCAN2-AFTER-20260628	import_stage_build_saved_catalog	0											skipped=precomputed_projection
+COLDSCAN2-AFTER-20260628	import_stage_commit	9
+COLDSCAN2-AFTER-20260628	import_stage_total	5275											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1832
+COLDSCAN2-AFTER-20260628	sqlite_publish_progress	2											bytes=19431424 copy_ms=1777 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+COLDSCAN2-AFTER-20260628	refresh_done	0											skipped=false bytes=19431424 scan_us=2570216 discover_us=2124838 classify_us=2442406 import_us=9852264 discoveries=9237 normal_files=7519 containers=154 entries=281
+COLDSCAN2-AFTER-20260628	done	14											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	0	0	1	0	0	26358	89648	97988	1831	17611	389	disk_io_ms=3 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	1	75	44	0	0	26457	89772	97989	1831	17611	389	disk_io_ms=3 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	2	148	93	0	4096	26551	89907	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	3	253	102	0	4096	26678	90011	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	4	362	105	0	4096	26811	90111	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	6	474	107	0	4096	26948	90206	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	7	580	113	0	4096	27078	90310	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	8	689	119	0	4096	27209	90411	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	9	798	123	0	4096	27342	90510	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	10	906	129	0	4096	27471	90611	97991	1831	17611	395	disk_io_ms=19 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	sample	11	922	143	0	12865536	27508	90722	97991	1903	17611	445	disk_io_ms=913 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+COLDSCAN3-AFTER-20260628	scan_stage_walk_targets	0											roots=4 targets=15 extensions=29
+COLDSCAN3-AFTER-20260628	scan_stage_first_candidate	51											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+COLDSCAN3-AFTER-20260628	scan_stage_first_discovery	55											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	389											path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	52											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	2											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	5											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	17											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	384											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	59											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	359											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	250											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	120											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	280											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	130											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	22											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+COLDSCAN3-AFTER-20260628	scan_stage_walk_target	3											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+COLDSCAN3-AFTER-20260628	scan_stage_walk	2075											candidates=7527
+COLDSCAN3-AFTER-20260628	scan_stage_profile_match	87											calls=7527
+COLDSCAN3-AFTER-20260628	scan_stage_installed_collection	88											calls=7521
+COLDSCAN3-AFTER-20260628	scan_stage_archive_toc	21											containers=154
+COLDSCAN3-AFTER-20260628	scan_stage_collection_listings	0											collections=0
+COLDSCAN3-AFTER-20260628	scan_stage_file_discovery	2088											files=7519
+COLDSCAN3-AFTER-20260628	scan_stage_classify_total	2518											discoveries=9362 normal_files=7519 containers=154 entries=281
+COLDSCAN3-AFTER-20260628	import_stage_schema	14											tables=14
+COLDSCAN3-AFTER-20260628	import_stage_metadata_load	1194											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+COLDSCAN3-AFTER-20260628	import_stage_begin_tx	0
+COLDSCAN3-AFTER-20260628	import_stage_insert_profiles	1											rows=16
+COLDSCAN3-AFTER-20260628	import_stage_insert_payloads	441											normal_files=7519 entries=281
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	209											from=0 to=1000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	194											from=1000 to=2000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	182											from=2000 to=3000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	184											from=3000 to=4000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	180											from=4000 to=5000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	188											from=5000 to=6000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	245											from=6000 to=7000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	283											from=7000 to=8000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	252											from=8000 to=9000 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_chunk	66											from=9000 to=9237 total=9237
+COLDSCAN3-AFTER-20260628	import_stage_insert_games_total	1998											rows=9237 launcher_rows=6245
+COLDSCAN3-AFTER-20260628	import_stage_materialize_arcade_ui	471
+COLDSCAN3-AFTER-20260628	import_stage_insert_launcher_arcade	13
+COLDSCAN3-AFTER-20260628	import_stage_insert_launcher_console	291											rows=6185
+COLDSCAN3-AFTER-20260628	import_stage_insert_launcher_launch_plans	690											rows=4497
+COLDSCAN3-AFTER-20260628	import_stage_insert_meta	132											rows=11
+COLDSCAN3-AFTER-20260628	import_stage_insert_catalog_stamp	0											rows=11
+COLDSCAN3-AFTER-20260628	import_stage_insert_software_hash_cache	0											rows=0
+COLDSCAN3-AFTER-20260628	import_stage_build_saved_catalog	0											skipped=precomputed_projection
+COLDSCAN3-AFTER-20260628	import_stage_commit	9
+COLDSCAN3-AFTER-20260628	import_stage_total	5255											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2342
+COLDSCAN3-AFTER-20260628	sqlite_publish_progress	2											bytes=19431424 copy_ms=1622 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
+COLDSCAN3-AFTER-20260628	refresh_done	0											skipped=false bytes=19431424 scan_us=2644485 discover_us=2075105 classify_us=2518454 import_us=9670367 discoveries=9237 normal_files=7519 containers=154 entries=281
+COLDSCAN3-AFTER-20260628	done	13											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
 COLDSCAN4-AFTER-20260628	sample	0	0	1	0	0	29768	99087	107541	1997	17611	501	disk_io_ms=1963 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
 COLDSCAN4-AFTER-20260628	sample	1	71	45	0	0	29861	99215	107542	1997	17611	501	disk_io_ms=1963 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
 COLDSCAN4-AFTER-20260628	sample	2	147	90	0	0	29959	99347	107544	1997	17611	506	disk_io_ms=1981 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
