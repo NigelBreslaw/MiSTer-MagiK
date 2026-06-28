@@ -21,7 +21,7 @@ use crate::game_discovery::{
     profile_id_for_discovery, system_title_for_discovery, unique_discovery_count,
     DiscoverySourceKind, GameDiscovery,
 };
-use crate::launch_profiles::{self, MountKind, PayloadDisposition, RuleSourceKind};
+use crate::launch_profiles::{self, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
     self, BenchConfig, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
     LibraryRefreshSummary, LibraryScan, ProgressCallback, VirtualLaunchPlan,
@@ -281,9 +281,9 @@ pub(crate) fn load_virtual_launch_plans_for_system_from_conn(
                     games.system_id,
                     COALESCE(profiles.core_path, launch_targets.core_id),
                     COALESCE(payload_paths.path, ''),
-                    COALESCE(payloads.mount_kind, 'mount-image'),
-                    COALESCE(payloads.mount_index, 0),
-                    COALESCE(payloads.mount_delay_secs, 1)
+                    COALESCE(launch_targets.mount_kind, 'mount-image'),
+                    COALESCE(launch_targets.mount_index, 0),
+                    COALESCE(launch_targets.delay_secs, 1)
              FROM launch_targets
              JOIN games ON games.game_key_id = launch_targets.game_key_id
              JOIN path_values_text launch_paths
@@ -291,9 +291,6 @@ pub(crate) fn load_virtual_launch_plans_for_system_from_conn(
              LEFT JOIN path_values_text payload_paths
                     ON payload_paths.path_id = launch_targets.payload_path_id
              LEFT JOIN profiles ON profiles.profile_id = launch_targets.profile_id
-             LEFT JOIN payloads
-                    ON payloads.launch_path_id = launch_targets.payload_path_id
-                   AND payloads.profile_id = launch_targets.profile_id
              WHERE launch_targets.launch_kind = 'virtual-mgl'
                AND games.system_id = ?1
              ORDER BY games.sort_title, launch_paths.path
@@ -1465,22 +1462,6 @@ fn write_sqlite_scan_with_sources_inner(
             source_kind TEXT NOT NULL,
             source_detail TEXT NOT NULL
         ) WITHOUT ROWID;
-        CREATE TABLE payloads (
-            payload_id TEXT PRIMARY KEY,
-            file_path_id INTEGER NOT NULL,
-            entry_path_id INTEGER,
-            launch_path_id INTEGER NOT NULL,
-            profile_id TEXT,
-            title TEXT NOT NULL,
-            mount_kind TEXT,
-            mount_index INTEGER,
-            mount_delay_secs INTEGER,
-            disposition TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            mtime_secs INTEGER NOT NULL,
-            source_kind TEXT NOT NULL,
-            source_detail TEXT NOT NULL
-        ) WITHOUT ROWID;
         CREATE TABLE systems (
             system_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -1520,6 +1501,9 @@ fn write_sqlite_scan_with_sources_inner(
             hardware_id TEXT NOT NULL,
             setname TEXT,
             parent TEXT,
+            mount_kind TEXT,
+            mount_index INTEGER,
+            delay_secs INTEGER,
             confidence TEXT NOT NULL
         );
         CREATE VIEW path_values_text AS
@@ -1527,25 +1511,6 @@ fn write_sqlite_scan_with_sources_inner(
                    path_prefixes.prefix || path_values.leaf AS path
             FROM path_values
             JOIN path_prefixes ON path_prefixes.prefix_id = path_values.prefix_id;
-        CREATE VIEW payloads_text AS
-            SELECT payloads.payload_id,
-                   file_paths.path AS file_path,
-                   entry_paths.path AS entry_path,
-                   launch_paths.path AS launch_ref,
-                   payloads.profile_id,
-                   payloads.title,
-                   payloads.mount_kind,
-                   payloads.mount_index,
-                   payloads.mount_delay_secs,
-                   payloads.disposition,
-                   payloads.size,
-                   payloads.mtime_secs,
-                   payloads.source_kind,
-                   payloads.source_detail
-            FROM payloads
-            JOIN path_values_text file_paths ON file_paths.path_id = payloads.file_path_id
-            JOIN path_values_text launch_paths ON launch_paths.path_id = payloads.launch_path_id
-            LEFT JOIN path_values_text entry_paths ON entry_paths.path_id = payloads.entry_path_id;
         CREATE VIEW launch_plans AS
             SELECT 'plan:' || games.game_id AS plan_id,
                    lt.launch_id,
@@ -1723,7 +1688,7 @@ fn write_sqlite_scan_with_sources_inner(
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=14");
+    report_library_import_timing("schema", schema_t, "tables=13");
 
     let metadata_t = Instant::now();
     let mame_signature = library_db::file_signature(sources.mame_sqlite_path);
@@ -1784,74 +1749,6 @@ fn write_sqlite_scan_with_sources_inner(
     }
     {
         let stage_t = Instant::now();
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO payloads(payload_id,file_path_id,entry_path_id,launch_path_id,profile_id,title,mount_kind,mount_index,mount_delay_secs,disposition,size,mtime_secs,source_kind,source_detail)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-            )
-            .map_err(|e| format!("prepare payload insert: {e}"))?;
-        for payload in &scan.normal_files {
-            let path = &payload.path;
-            let path_id = path_interner.intern(path.as_str());
-            stmt.execute(params![
-                format!("file:{path}"),
-                path_id,
-                Option::<i64>::None,
-                path_id,
-                payload.profile_id.as_str(),
-                library_db::title_from_path(path),
-                mount_kind_str(payload.rule.mount.kind),
-                payload.rule.mount.index as i64,
-                payload.rule.mount.delay_secs as i64,
-                payload_disposition_str(payload.rule.disposition),
-                payload.size as i64,
-                payload.mtime_secs,
-                source_kind_name(payload.rule.provenance.kind),
-                payload.rule.provenance.detail
-            ])
-            .map_err(|e| format!("insert payload file: {e}"))?;
-        }
-        for entry in &scan.entries {
-            let file_path_id = path_interner.intern(entry.file_path.as_str());
-            let entry_path_id = path_interner.intern(entry.entry_path.as_str());
-            let launch_path_id = path_interner.intern(entry.launch_ref.as_str());
-            stmt.execute(params![
-                format!("entry:{}", entry.launch_ref),
-                file_path_id,
-                entry_path_id,
-                launch_path_id,
-                entry.profile_id.as_str(),
-                entry.normalized_title.as_str(),
-                mount_kind_str(entry.rule.mount.kind),
-                entry.rule.mount.index as i64,
-                entry.rule.mount.delay_secs as i64,
-                if entry.launchable {
-                    "candidate"
-                } else {
-                    "support"
-                },
-                entry
-                    .uncompressed_size
-                    .or(entry.compressed_size)
-                    .unwrap_or(0) as i64,
-                0i64,
-                source_kind_name(entry.rule.provenance.kind),
-                entry.rule.provenance.detail
-            ])
-            .map_err(|e| format!("insert payload entry: {e}"))?;
-        }
-        report_library_import_timing(
-            "insert_payloads",
-            stage_t,
-            format!(
-                "normal_files={} entries={}",
-                scan.normal_files.len(),
-                scan.entries.len()
-            ),
-        );
-    }
-    {
-        let stage_t = Instant::now();
         let mut launcher_rows = Vec::<CatalogProjectionRow>::new();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
@@ -1864,8 +1761,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
             .prepare(
-                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,confidence)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,mount_kind,mount_index,delay_secs,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
         let mut identity_stmt = tx
@@ -1981,11 +1878,13 @@ fn write_sqlite_scan_with_sources_inner(
             let launch_path_id = path_interner.intern(plan_launch_ref.as_str());
             let launcher_path_id = path_interner.intern_optional(launcher_path);
             let payload_path_id = path_interner.intern_optional(payload_path);
+            let profile_id = profile_id_for_discovery(discovery);
+            let mount = launch_target_mount_for_discovery(discovery, profile_id);
             target_stmt
                 .execute(params![
                     launch_id,
                     game_key_id,
-                    profile_id_for_discovery(discovery),
+                    profile_id,
                     launch_kind_for_discovery(discovery),
                     source_path_id,
                     launch_path_id,
@@ -1995,6 +1894,9 @@ fn write_sqlite_scan_with_sources_inner(
                     discovery.hardware_id.as_str(),
                     discovery.setname.as_deref(),
                     discovery.parent.as_deref(),
+                    mount.map(|mount| mount_kind_str(mount.kind)),
+                    mount.map(|mount| mount.index as i64),
+                    mount.map(|mount| mount.delay_secs as i64),
                     confidence_str(discovery.confidence)
                 ])
                 .map_err(|e| format!("insert launch target: {e}"))?;
@@ -2568,11 +2470,33 @@ pub(crate) fn mount_kind_str(kind: MountKind) -> &'static str {
     }
 }
 
-pub(crate) fn payload_disposition_str(disposition: PayloadDisposition) -> &'static str {
-    match disposition {
-        PayloadDisposition::Playable => "playable",
-        PayloadDisposition::AttachedMedia => "attached-media",
+fn launch_target_mount_for_discovery(
+    discovery: &GameDiscovery,
+    profile_id: Option<&str>,
+) -> Option<MountSpec> {
+    if launch_kind_for_discovery(discovery) != "virtual-mgl" {
+        return None;
     }
+    let mount = profile_id
+        .and_then(|profile_id| {
+            launch_profiles::builtin_profiles()
+                .into_iter()
+                .find(|profile| profile.id == profile_id)
+        })
+        .and_then(|profile| match discovery.source_kind {
+            DiscoverySourceKind::ArchiveEntry => profile
+                .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
+                .map(|rule| rule.mount),
+            DiscoverySourceKind::PayloadFile => match profile.classify_path(Path::new(
+                discovery.launch_ref.as_str(),
+            )) {
+                launch_profiles::ProfilePathClass::Payload { rule } => Some(rule.mount),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| MountSpec::mount_image(0));
+    Some(mount)
 }
 
 #[cfg(test)]
@@ -2854,14 +2778,31 @@ mod tests {
         let old_summary = sqlite_cached_summary(&db, 0).expect("old database readable");
         assert_eq!(old_summary.normal_files, 1);
 
-        let err = save_sqlite_scan(
+        let build_tmp = root
+            .join("tmpfs-build")
+            .join(format!(".library.sqlite3.build.{}", std::process::id()));
+        let initial_plan = SqliteBuildTempPlan {
+            build_tmp_path: build_tmp,
+            final_tmp_path: sqlite_temp_path(&db),
+            source: SqliteBuildTempSource::DefaultTmpfs,
+        };
+        let mut writer = |_path: &Path,
+                          _scan: &LibraryScan,
+                          _progress: &mut ProgressCallback<'_>|
+         -> Result<(), String> {
+            Err("insert launch target: UNIQUE constraint failed".to_string())
+        };
+        let err = save_sqlite_scan_with_progress_using_writer(
             &db,
-            &sqlite_scan_with_normal_files(&["/new/game.mra", "/new/game.mra"]),
+            &sqlite_scan_with_normal_files(&["/new/game.mra"]),
+            None,
+            initial_plan,
+            &mut writer,
         )
-        .expect_err("duplicate normal_files row should fail temp import");
+        .expect_err("logical import error should fail temp import");
 
         assert!(
-            err.contains("insert payload file"),
+            err.contains("insert launch target"),
             "unexpected error: {err}"
         );
         let still_old = sqlite_cached_summary(&db, 0).expect("old database survived failed import");
@@ -3074,7 +3015,7 @@ mod tests {
                           _progress: &mut ProgressCallback<'_>|
          -> Result<(), String> {
             attempts += 1;
-            Err("insert payload file: UNIQUE constraint failed".to_string())
+            Err("insert launch target: UNIQUE constraint failed".to_string())
         };
 
         let err = save_sqlite_scan_with_progress_using_writer(
@@ -3087,7 +3028,7 @@ mod tests {
         .expect_err("logical import error should not retry");
 
         assert!(
-            err.contains("insert payload file"),
+            err.contains("insert launch target"),
             "unexpected error: {err}"
         );
         assert_eq!(attempts, 1);
@@ -3716,6 +3657,9 @@ mod tests {
         assert!(!sqlite_column_exists(&conn, "launcher_launch_plans", "payload_path").expect("payload_path"));
         assert!(sqlite_column_exists(&conn, "games", "game_key_id").expect("game_key_id"));
         assert!(sqlite_column_exists(&conn, "launch_targets", "game_key_id").expect("target game_key_id"));
+        assert!(sqlite_column_exists(&conn, "launch_targets", "mount_kind").expect("target mount_kind"));
+        assert!(sqlite_column_exists(&conn, "launch_targets", "mount_index").expect("target mount_index"));
+        assert!(sqlite_column_exists(&conn, "launch_targets", "delay_secs").expect("target delay_secs"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "game_id").expect("target game_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "plan_id").expect("target plan_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "priority").expect("target priority"));
@@ -3767,8 +3711,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_payload_storage_reconstructs_text_view() {
-        let root = unique_temp_dir("sqlite-compact-payload-storage");
+    fn launch_targets_store_mounts_without_payload_inventory_table() {
+        let root = unique_temp_dir("sqlite-launch-target-mount-storage");
         let db = root.join("library.sqlite3");
         let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
         let neogeo_file = "/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack.zip";
@@ -3817,45 +3761,52 @@ mod tests {
         save_sqlite_scan(&db, &scan).expect("write sqlite");
         let conn = Connection::open(&db).expect("open sqlite");
 
-        assert!(sqlite_column_exists(&conn, "payloads", "file_path_id").expect("file_path_id"));
-        assert!(sqlite_column_exists(&conn, "payloads", "launch_path_id").expect("launch_path_id"));
-        assert!(!sqlite_column_exists(&conn, "payloads", "file_path").expect("file_path"));
-        assert!(!sqlite_column_exists(&conn, "payloads", "launch_ref").expect("launch_ref"));
-        let view_count: i64 = conn
+        assert!(!sqlite_table_exists(&conn, "payloads").expect("payloads absent"));
+        let payload_view_count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master
                  WHERE type='view' AND name='payloads_text'",
                 [],
                 |row| row.get(0),
             )
-            .expect("payloads_text view");
-        assert_eq!(view_count, 1);
+            .expect("payloads_text view count");
+        assert_eq!(payload_view_count, 0);
 
-        let saturn_payload: (String, Option<String>, String) = conn
+        let saturn_target: (String, String, i64, i64) = conn
             .query_row(
-                "SELECT file_path, entry_path, launch_ref
-                 FROM payloads_text
-                 WHERE launch_ref='/media/fat/games/Saturn/Nights.chd'",
+                "SELECT launch_plans.payload_path,
+                        launch_targets.mount_kind,
+                        launch_targets.mount_index,
+                        launch_targets.delay_secs
+                 FROM launch_plans
+                 JOIN launch_targets ON launch_targets.launch_id = launch_plans.launch_id
+                 WHERE launch_plans.payload_path='/media/fat/games/Saturn/Nights.chd'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
-            .expect("saturn payload");
-        assert_eq!(saturn_payload.0, "/media/fat/games/Saturn/Nights.chd");
-        assert_eq!(saturn_payload.1, None);
-        assert_eq!(saturn_payload.2, "/media/fat/games/Saturn/Nights.chd");
+            .expect("saturn launch target");
+        assert_eq!(saturn_target.0, "/media/fat/games/Saturn/Nights.chd");
+        assert_eq!(saturn_target.1, "mount-image");
+        assert_eq!(saturn_target.2, 0);
+        assert_eq!(saturn_target.3, 1);
 
-        let archive_payload: (String, Option<String>, String) = conn
+        let archive_target: (String, String, i64, i64) = conn
             .query_row(
-                "SELECT file_path, entry_path, launch_ref
-                 FROM payloads_text
-                 WHERE entry_path IS NOT NULL",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "SELECT launch_plans.payload_path,
+                        launch_targets.mount_kind,
+                        launch_targets.mount_index,
+                        launch_targets.delay_secs
+                 FROM launch_plans
+                 JOIN launch_targets ON launch_targets.launch_id = launch_plans.launch_id
+                 WHERE launch_plans.payload_path=?1",
+                [neogeo_launch_ref.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
-            .expect("archive payload");
-        assert_eq!(archive_payload.0, neogeo_file);
-        assert_eq!(archive_payload.1.as_deref(), Some(neogeo_entry));
-        assert_eq!(archive_payload.2, neogeo_launch_ref);
+            .expect("archive launch target");
+        assert_eq!(archive_target.0, neogeo_launch_ref);
+        assert_eq!(archive_target.1, "load-file");
+        assert_eq!(archive_target.2, 1);
+        assert_eq!(archive_target.3, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3922,6 +3873,9 @@ mod tests {
         assert_eq!(plans[0].system_id, "saturn");
         assert_eq!(plans[0].core_path, "_Console/Saturn");
         assert_eq!(plans[0].payload_path, "/media/fat/games/Saturn/Nights.chd");
+        assert_eq!(plans[0].mount_kind, "mount-image");
+        assert_eq!(plans[0].mount_index, 0);
+        assert_eq!(plans[0].mount_delay_secs, 1);
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]

@@ -167,10 +167,6 @@ fn scan_library_with_progress_and_events(
                 }
                 normal_files.push(LibraryPayloadFile {
                     path: f.path.display().to_string(),
-                    profile_id: profile.id.to_string(),
-                    size: f.size,
-                    mtime_secs: f.mtime_secs,
-                    rule: payload_rule,
                 });
                 let discovery_t = Instant::now();
                 discoveries.push(discovery_from_profile_file(
@@ -183,10 +179,10 @@ fn scan_library_with_progress_and_events(
                 timing.file_discovery_count += 1;
             }
             Some((
-                profile,
+                _,
                 ProfilePathClass::Payload {
                     rule:
-                        payload_rule @ PayloadRule {
+                        PayloadRule {
                             disposition: PayloadDisposition::AttachedMedia,
                             ..
                         },
@@ -194,10 +190,6 @@ fn scan_library_with_progress_and_events(
             )) => {
                 normal_files.push(LibraryPayloadFile {
                     path: f.path.display().to_string(),
-                    profile_id: profile.id.to_string(),
-                    size: f.size,
-                    mtime_secs: f.mtime_secs,
-                    rule: payload_rule,
                 });
                 ignored_files += 1;
             }

@@ -522,17 +522,14 @@ pub(crate) fn materialize_launcher_launch_plans(tx: &Transaction<'_>) -> Result<
             lc.title,
             lc.system_id,
             COALESCE(profiles.core_path, launch_targets.core_id),
-            COALESCE(payloads.mount_kind, 'mount-image'),
-            COALESCE(payloads.mount_index, 0),
-            COALESCE(payloads.mount_delay_secs, 1)
+            COALESCE(launch_targets.mount_kind, 'mount-image'),
+            COALESCE(launch_targets.mount_index, 0),
+            COALESCE(launch_targets.delay_secs, 1)
         FROM launcher_catalog lc
         JOIN launch_targets
           ON launch_targets.launch_id = lc.launch_id
         LEFT JOIN profiles
           ON profiles.profile_id = launch_targets.profile_id
-        LEFT JOIN payloads
-          ON payloads.launch_path_id = launch_targets.payload_path_id
-         AND payloads.profile_id = launch_targets.profile_id
         WHERE launch_targets.launch_kind = 'virtual-mgl'
         ORDER BY lc.ordinal
         "#,

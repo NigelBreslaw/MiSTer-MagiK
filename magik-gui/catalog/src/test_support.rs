@@ -4,7 +4,6 @@ use crate::arcade_catalog::ArcadeGameEntry;
 use crate::catalog_config::SCHEMA_VERSION;
 use crate::catalog_projection::CatalogProjectionRow;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
-use crate::launch_profiles::{self, PayloadDisposition, PayloadRule};
 use crate::library_db::{title_from_path, unix_now_secs, LibraryPayloadFile, LibraryScan};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
@@ -420,17 +419,6 @@ pub(crate) fn sqlite_scan_with_normal_files(paths: &[&str]) -> LibraryScan {
             .iter()
             .map(|path| LibraryPayloadFile {
                 path: path.to_string(),
-                profile_id: "mgl".to_string(),
-                size: 0,
-                mtime_secs: 0,
-                rule: PayloadRule {
-                    extensions: &["mgl"],
-                    mount: launch_profiles::MountSpec::launcher(),
-                    disposition: PayloadDisposition::Playable,
-                    provenance: launch_profiles::RuleProvenance::mgl(
-                        "test fixture launcher payload",
-                    ),
-                },
             })
             .collect(),
         containers: Vec::new(),
