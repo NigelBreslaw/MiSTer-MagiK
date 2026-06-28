@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
+const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
 pub const LIBRARY_REBUILD_ON_NEXT_BOOT_PATH: &str = "/media/fat/mister-magik/rebuild-on-next-boot";
 #[cfg(test)]
 const STATE_FILENAME: &str = mister_magik_catalog::media_identity::SCREENSHOT_MEDIA_STATE_FILENAME;
@@ -36,6 +37,7 @@ const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
+const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
 const ARCADE_FILTER_ROW_HEIGHT: i32 = 40;
@@ -1667,6 +1669,7 @@ trait LaunchIo {
     fn wait_for_started_mister(&mut self) -> bool;
     fn wait_for_command_fifo(&mut self) -> bool;
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String>;
+    fn wait_for_magik_handoff_ack(&mut self, before: Option<MagikMainStatusSnapshot>) -> bool;
 }
 
 struct SystemLaunchIo;
@@ -1705,6 +1708,10 @@ impl LaunchIo for SystemLaunchIo {
 
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
         write_mister_command_nonblocking(cmd)
+    }
+
+    fn wait_for_magik_handoff_ack(&mut self, before: Option<MagikMainStatusSnapshot>) -> bool {
+        wait_for_magik_handoff_ack(before)
     }
 }
 
@@ -1822,6 +1829,59 @@ pub fn mister_running_arcade_core() -> bool {
     cmdline.contains(".rbf") && !cmdline.contains("menu.rbf")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MagikMainStatusSnapshot {
+    ts_boot_ms: u64,
+    handoff_acknowledged: bool,
+}
+
+fn read_magik_main_status_snapshot() -> Option<MagikMainStatusSnapshot> {
+    let text = fs::read_to_string(MAIN_STATUS_PATH).ok()?;
+    magik_main_status_snapshot_from_text(&text)
+}
+
+fn wait_for_magik_handoff_ack(before: Option<MagikMainStatusSnapshot>) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < MAGIK_HANDOFF_ACK_TIMEOUT {
+        if magik_main_status_acknowledged_handoff_after(before) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+fn magik_main_status_acknowledged_handoff_after(before: Option<MagikMainStatusSnapshot>) -> bool {
+    let Some(snapshot) = read_magik_main_status_snapshot() else {
+        return false;
+    };
+    if !snapshot.handoff_acknowledged {
+        return false;
+    }
+    magik_handoff_ack_is_newer(before, snapshot)
+}
+
+fn magik_main_status_snapshot_from_text(text: &str) -> Option<MagikMainStatusSnapshot> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return None;
+    };
+    let ts_boot_ms = value.get("ts_boot_ms").and_then(|value| value.as_u64())?;
+    let state = value
+        .get("launcher_state")
+        .and_then(|state| state.as_str())?;
+    Some(MagikMainStatusSnapshot {
+        ts_boot_ms,
+        handoff_acknowledged: matches!(state, "HandoffToGame" | "Unconfigured"),
+    })
+}
+
+fn magik_handoff_ack_is_newer(
+    before: Option<MagikMainStatusSnapshot>,
+    snapshot: MagikMainStatusSnapshot,
+) -> bool {
+    before.is_some_and(|before| snapshot.ts_boot_ms > before.ts_boot_ms)
+}
+
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
 /// Returns `true` if Main was spawned for this launch (caller should stop it on failure).
 pub fn execute_game_launch(launch_target: &LaunchTarget) -> Result<bool, LaunchError> {
@@ -1877,6 +1937,10 @@ pub fn execute_game_launch_handoff_bench(
 
         fn write_mister_command(&mut self, _cmd: &str) -> Result<(), String> {
             Err("benchmark handoff does not write the real MiSTer FIFO".to_string())
+        }
+
+        fn wait_for_magik_handoff_ack(&mut self, _before: Option<MagikMainStatusSnapshot>) -> bool {
+            false
         }
     }
 
@@ -1934,6 +1998,9 @@ fn execute_game_launch_with(
     }
 
     let magik_running = io.magik_running();
+    let main_status_before_handoff = magik_running
+        .then(read_magik_main_status_snapshot)
+        .flatten();
     let cmd = match (magik_running, launch_target) {
         (true, LaunchTarget::Path(path)) => format!("mister_magik_launch {path}\n"),
         (true, LaunchTarget::Structured(plan)) => {
@@ -1962,6 +2029,14 @@ fn execute_game_launch_with(
     println!("launch: {}", cmd.trim_end());
     io.write_mister_command(&cmd)
         .map_err(|e| LaunchError::new(e, spawned))?;
+    if magik_running && !io.wait_for_magik_handoff_ack(main_status_before_handoff) {
+        return Err(LaunchError::new(
+            format!(
+                "timed out waiting for MiSTer_MagiK launch acknowledgement in {MAIN_STATUS_PATH}"
+            ),
+            spawned,
+        ));
+    }
 
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
     Ok(spawned)
@@ -2077,6 +2152,7 @@ mod tests {
         started_ready: bool,
         fifo_ready: bool,
         write_result: Result<(), String>,
+        handoff_ack: bool,
         start_calls: usize,
         commands: Vec<String>,
     }
@@ -2111,6 +2187,10 @@ mod tests {
             self.commands.push(cmd.to_string());
             self.write_result.clone()
         }
+
+        fn wait_for_magik_handoff_ack(&mut self, _before: Option<MagikMainStatusSnapshot>) -> bool {
+            self.handoff_ack
+        }
     }
 
     fn launch_io() -> FakeLaunchIo {
@@ -2122,6 +2202,7 @@ mod tests {
             started_ready: true,
             fifo_ready: true,
             write_result: Ok(()),
+            handoff_ack: true,
             start_calls: 0,
             commands: Vec::new(),
         }
@@ -3822,6 +3903,92 @@ mod tests {
             ]
         );
         reset_launch();
+    }
+
+    #[test]
+    fn magik_launch_requires_post_write_handoff_ack() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.handoff_ack = false;
+
+        let err = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect_err("missing Main acknowledgement should fail launch");
+
+        assert_eq!(
+            io.commands,
+            vec!["mister_magik_launch /media/fat/_Arcade/test.mra\n"]
+        );
+        assert!(err
+            .to_string()
+            .contains("MiSTer_MagiK launch acknowledgement"));
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn stock_main_launch_does_not_wait_for_magik_ack() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.magik_running = false;
+        io.handoff_ack = false;
+
+        execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect("stock Main launch does not use MagiK status ack");
+
+        assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
+        assert!(launch_in_progress());
+        reset_launch();
+    }
+
+    #[test]
+    fn magik_main_status_ack_accepts_known_handoff_states_only() {
+        let handoff = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":10,"launcher_state":"HandoffToGame"}"#,
+        )
+        .expect("parse handoff status");
+        assert!(handoff.handoff_acknowledged);
+
+        let unconfigured = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":11,"launcher_state":"Unconfigured"}"#,
+        )
+        .expect("parse unconfigured status");
+        assert!(unconfigured.handoff_acknowledged);
+
+        let active = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":12,"launcher_state":"LauncherActive"}"#,
+        )
+        .expect("parse active status");
+        assert!(!active.handoff_acknowledged);
+
+        let crashed = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":13,"launcher_state":"LauncherCrashed"}"#,
+        )
+        .expect("parse crash status");
+        assert!(!crashed.handoff_acknowledged);
+
+        assert!(magik_main_status_snapshot_from_text("{}").is_none());
+    }
+
+    #[test]
+    fn magik_main_status_ack_requires_newer_status_timestamp() {
+        let before = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":42,"launcher_state":"LauncherActive"}"#,
+        )
+        .expect("parse before status");
+        let stale = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":42,"launcher_state":"HandoffToGame"}"#,
+        )
+        .expect("parse stale handoff status");
+        let fresh = magik_main_status_snapshot_from_text(
+            r#"{"ts_boot_ms":43,"launcher_state":"HandoffToGame"}"#,
+        )
+        .expect("parse fresh handoff status");
+
+        assert!(stale.handoff_acknowledged);
+        assert!(!magik_handoff_ack_is_newer(Some(before), stale));
+        assert!(magik_handoff_ack_is_newer(Some(before), fresh));
+        assert!(!magik_handoff_ack_is_newer(None, fresh));
     }
 
     #[test]
