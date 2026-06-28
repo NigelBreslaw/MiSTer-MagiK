@@ -1,7 +1,7 @@
 label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	catalog_load_open_us	catalog_load_schema_check_us	catalog_load_query_us	catalog_load_query_prepare_us	catalog_load_query_first_row_us	catalog_load_query_row_read_us	catalog_load_query_row_hydrate_us	catalog_load_launch_plans_us	catalog_load_systems_us	catalog_load_catalog_us	result
-WARMCAT-BEFORE 1 498 true 471 459165 -1  44 75 -1  ok
-WARMCAT-BEFORE 1 503 true 467 463360 -1  46 73 -1  ok
-WARMCAT-AFTER 1 48 true -1  2 200 34 72 498 474516 ok
+WARMCAT-BEFORE 1 498 true 471 459165 -1  44 75 -1  ok																						
+WARMCAT-BEFORE 1 503 true 467 463360 -1  46 73 -1  ok																						
+WARMCAT-AFTER 1 48 true -1  2 200 34 72 498 474516 ok																						
 WARMCAT-AFTER	1	48	true	-1		2	194	33	74	515	486417											ok
 PERFREVIEW-20260624-WARM	1	49	true	-1		2	257	34	71	482	463078											ok
 PERFREVIEW-20260624-WARM	2	48	true	-1		2	262	36	71	482	463318											ok
@@ -185,3 +185,8 @@ SPARSEREGION-AFTER-COLDNAV-20260628	3	24	true	-1		2	246	31	113	2356	296220	15009
 ARCADEPROJ-AFTER-COLDNAV-20260628	1	24	true	-1		2	249	31	116	2356	297280	152030	0	0	0	0	0	0	0	0	145239	ok
 ARCADEPROJ-AFTER-COLDNAV-20260628	2	24	true	-1		2	244	31	72	2356	296135	149970	0	0	0	0	0	0	0	0	146155	ok
 ARCADEPROJ-AFTER-COLDNAV-20260628	3	24	true	-1		2	244	32	114	2356	290490	148445	0	0	0	0	0	0	0	0	142035	ok
+PERF20260629-WARM	1	22	true	-1		2	260	74	74	2356	291930	154484	0	0	0	0	0	0	0	0	137438	ok
+PERF20260629-WARM	2	24	true	-1		2	248	33	117	2356	281480	143164	0	0	0	0	0	0	0	0	138306	ok
+PERF20260629-WARM	3	25	true	-1		2	246	33	117	2357	291108	152050	0	0	0	0	0	0	0	0	139049	ok
+PERF20260629-WARM	4	28	true	-1		2	237	32	123	2353	287675	141771	0	0	0	0	0	0	0	0	145893	ok
+PERF20260629-WARM	5	24	true	-1		2	242	32	118	2357	280440	141663	0	0	0	0	0	0	0	0	138768	ok

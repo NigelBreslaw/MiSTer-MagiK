@@ -2912,3 +2912,65 @@ COLDSCAN3-AFTER-20260628	4fbf6346-dirty	sqlite_publish_progress	1690	bytes=19431
 COLDSCAN3-AFTER-20260628	4fbf6346-dirty	library_db_saved	53701	bytes=19431424 scan_us=34112971 discover_us=33474503 classify_us=34111782 import_us=13062399 discoveries=9237 normal_files=7519 containers=154 entries=281
 COLDSCAN3-AFTER-20260628	4fbf6346-dirty	counter_plateau	11866	from=target=900 to=target=750
 COLDSCAN3-AFTER-20260628	4fbf6346-dirty	db_count	0	9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	first_frame	73	catalog_ready=false
+PERF20260629-FIRSTSCAN	5d966944-dirty	bootstrap_counter_climb	381	target=50
+PERF20260629-FIRSTSCAN	5d966944-dirty	bootstrap_counter_sustained_climb	714	target=900
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_first_candidate	2193	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_first_discovery	2292	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	5274	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	386	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	17	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	113	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+PERF20260629-FIRSTSCAN	5d966944-dirty	full_scan_counter_climb	10848	target=650
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	5305	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	545	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	6728	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	4681	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	1262	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	5948	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	721	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	26	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk_target	15	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_walk	33190	candidates=7527
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_profile_match	101	calls=7527
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_installed_collection	209	calls=7521
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_archive_toc	788	containers=154
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_collection_listings	0	collections=0
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_file_discovery	29538	files=7519
+PERF20260629-FIRSTSCAN	5d966944-dirty	scan_stage_classify_total	33774	discoveries=9362 normal_files=7519 containers=154 entries=281
+PERF20260629-FIRSTSCAN	5d966944-dirty	library_scan_complete	34764	scan_us=33774881 discover_us=33189754 classify_us=33773679 discoveries=9237 normal_files=7519 containers=154 entries=281
+PERF20260629-FIRSTSCAN	5d966944-dirty	library_ready	40282	games=7259 load_us=5250067
+PERF20260629-FIRSTSCAN	5d966944-dirty	catalog_bridge_sync_update	40282	games=7259 elapsed_us=146
+PERF20260629-FIRSTSCAN	5d966944-dirty	catalog_worker_ram_catalog	40283	games=7259 catalog_us=5250067 projection_us=269243
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_schema	76	tables=12
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_metadata_load	2385	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_begin_tx	0	-
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_profiles	8	rows=16
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	253	from=0 to=1000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	182	from=1000 to=2000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	243	from=2000 to=3000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	204	from=3000 to=4000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	227	from=4000 to=5000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	290	from=5000 to=6000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	389	from=6000 to=7000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	474	from=7000 to=8000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	450	from=8000 to=9000 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_chunk	113	from=9000 to=9237 total=9237
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_games_total	3521	rows=9237 launcher_rows=6245
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_materialize_arcade_ui	2444	-
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_launcher_arcade	629	-
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_launcher_console	478	rows=6185
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_launcher_launch_plans	80	rows=4497
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_meta	342	rows=11
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_catalog_stamp	0	rows=11
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_insert_software_hash_cache	0	rows=0
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_commit	15	-
+PERF20260629-FIRSTSCAN	5d966944-dirty	import_stage_total	9978	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.624
+PERF20260629-FIRSTSCAN	5d966944-dirty	sqlite_publish_progress	517	bytes=6856704 copy_ms=511 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
+PERF20260629-FIRSTSCAN	5d966944-dirty	library_db_saved	51655	bytes=6856704 scan_us=33774881 discover_us=33189754 classify_us=33773679 import_us=11294909 discoveries=9237 normal_files=7519 containers=154 entries=281
+PERF20260629-FIRSTSCAN	5d966944-dirty	counter_plateau	10134	from=target=900 to=target=650
+PERF20260629-FIRSTSCAN	5d966944-dirty	db_count	0	9237
