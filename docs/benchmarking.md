@@ -32,6 +32,25 @@ This document defines current benchmark policy. Dated measurement logs live in
   for current performance conclusions because it bypasses Main's OSD, VT, and
   input ownership setup.
 
+## Binary Scope Labels
+
+Benchmark `run_context_tsv` rows identify the binary artifact that was expected
+for the run:
+
+- `binary_scope=prod-all`: production `release-device` build with
+  `ui_scope=all`, suitable for whole-app release checks and general scene
+  benchmarks.
+- `binary_scope=launcher-scope`: production `release-device` build with
+  `ui_scope=launcher`, suitable for launcher/Arcade production scroll evidence.
+- `binary_scope=profile-launcher-scope`: profiling `release-device-profile`
+  build with `ui_scope=launcher` and `features=ui,profile`, suitable only for
+  CPU profile artifacts.
+
+Do not compare these as if they were the same artifact. A CPU-profile run must
+be read as profiling evidence, not production frame-time evidence, and the
+production `release-device` binary should be redeployed after any profiling
+binary has been installed on the MiSTer.
+
 ## Arcade And Preview Scenarios
 
 Approved arcade scroll scenarios:
@@ -70,6 +89,8 @@ The CPU profile command builds/deploys the profiling binary, runs the real
 Main-supervised Arcade screen with `MISTER_PPROF=1`, exits after the trace
 window so the profiler can flush, and pulls
 `build/preview-scroll-profiles/LABEL-CPU-FADE-TURBO-arcade-cpu.svg`.
+Its `run_context_tsv` row is marked `runtime_type=profile`,
+`binary_scope=profile-launcher-scope`, and `production_restore_required=1`.
 
 Preview-scroll benchmarks synchronously warm the screenshot archive cache before
 the benchmark timing window and first launcher step unless
