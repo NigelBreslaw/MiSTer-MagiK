@@ -204,6 +204,12 @@ pub(super) fn start_library_catalog_worker(
                 let catalog = artifact.catalog(&root);
                 let load_us = catalog_t.elapsed().as_micros() as u64;
                 let catalog_len = catalog.len();
+                let projection_t = Instant::now();
+                let summary_projection =
+                    catalog_summary::CatalogSummaryProjection::from_catalog(&catalog, artifact.stamp());
+                let navigation_projection =
+                    library_db::CatalogNavigationProjection::from_catalog(&catalog, artifact.stamp());
+                let projection_us = projection_t.elapsed().as_micros() as u64;
                 let _ = tx.send(CatalogWorkerMessage::Ready {
                     catalog,
                     summary: None,
@@ -213,20 +219,29 @@ pub(super) fn start_library_catalog_worker(
                 });
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_worker_ram_catalog".to_string(),
-                    detail: format!("games={catalog_len} catalog_us={load_us}"),
+                    detail: format!(
+                        "games={catalog_len} catalog_us={load_us} projection_us={projection_us}"
+                    ),
                 });
                 send_catalog_progress(
                     &tx,
                     library_db::CatalogProgress::saving_before_opening_launcher(),
                 );
-                match artifact.save_default_sqlite_with_catalog(&root, Some(&mut progress)) {
-                    Ok(refresh) => {
-                        let summary = refresh.summary;
-                        let loaded = refresh.catalog;
+                match artifact.save_default_sqlite_with_projections(
+                    summary_projection,
+                    navigation_projection,
+                    Some(&mut progress),
+                ) {
+                    Ok(summary) => {
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
                         });
-                        send_catalog_load_timing(&tx, "catalog_worker_saved_catalog", &loaded);
+                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                            name: "catalog_worker_saved_catalog".to_string(),
+                            detail: format!(
+                                "games={catalog_len} skipped=precomputed_projection"
+                            ),
+                        });
                     }
                     Err(e) => {
                         eprintln!("library persistence failed after RAM catalog ready: {e}");
@@ -546,6 +561,12 @@ fn load_navigation_projection_cache(
         return Ok(None);
     };
     let stamp = catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines);
+    let Some(stored_stamp) = library_db::read_sqlite_catalog_stamp(&sqlite_path)? else {
+        return Ok(None);
+    };
+    if stored_stamp != stamp {
+        return Ok(None);
+    }
     library_db::load_arcade_catalog_from_navigation_projection(root, &sqlite_path, &stamp)
 }
 

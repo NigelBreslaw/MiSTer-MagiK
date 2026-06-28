@@ -71,9 +71,15 @@ pub(crate) struct SqlitePublishMetrics {
     pub(crate) progress_events: u64,
 }
 
+#[cfg(test)]
 pub(crate) struct SqliteSavedCatalog {
     pub(crate) bytes: u64,
     pub(crate) catalog: LibraryCatalogLoad,
+}
+
+pub(crate) struct CatalogSaveProjections {
+    pub(crate) summary: catalog_summary::CatalogSummaryProjection,
+    pub(crate) navigation: catalog_navigation::CatalogNavigationProjection,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -581,6 +587,12 @@ pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection>
     )
 }
 
+pub(crate) fn read_sqlite_catalog_stamp(path: &Path) -> Result<Option<catalog_stamp::CatalogStamp>, String> {
+    let conn = open_sqlite_read_only(path)
+        .map_err(|e| format!("open catalog stamp db {}: {e}", path.display()))?;
+    catalog_store::read_catalog_stamp(&conn)
+}
+
 pub(crate) fn sqlite_uri_path(path: &Path) -> String {
     path.to_string_lossy()
         .bytes()
@@ -760,6 +772,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp(
     Ok(bytes)
 }
 
+#[cfg(test)]
 pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog(
     path: &Path,
     scan: &LibraryScan,
@@ -808,6 +821,68 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog(
         )?;
     }
     Ok(SqliteSavedCatalog { bytes, catalog })
+}
+
+pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
+    path: &Path,
+    scan: &LibraryScan,
+    stamp: &catalog_stamp::CatalogStamp,
+    projections: &CatalogSaveProjections,
+    progress: ProgressCallback<'_>,
+) -> Result<u64, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
+    }
+
+    let discovery_history = DiscoveryHistory::load(path);
+    let bytes = {
+        let mut writer =
+            |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
+                let software_hash_cache = SoftwareHashCache::load(path);
+                write_sqlite_scan_without_catalog_rebuild(
+                    build_path,
+                    scan,
+                    reborrow_progress(progress),
+                    software_hash_cache,
+                    discovery_history.clone(),
+                    Some(stamp),
+                )
+            };
+        save_sqlite_scan_with_progress_using_writer(
+            path,
+            scan,
+            progress,
+            sqlite_build_temp_plan(path),
+            &mut writer,
+        )?
+    };
+    remove_catalog_projection_files(path)?;
+    catalog_summary::write_catalog_summary_projection(path, &projections.summary)?;
+    catalog_navigation::write_catalog_navigation_projection_for_sqlite(path, &projections.navigation)?;
+    Ok(bytes)
+}
+
+fn remove_catalog_projection_files(sqlite_path: &Path) -> Result<(), String> {
+    let summary = remove_projection_file(
+        &catalog_summary::summary_path_for_sqlite(sqlite_path),
+        "summary",
+    );
+    let navigation = remove_projection_file(
+        &catalog_navigation::navigation_path_for_sqlite(sqlite_path),
+        "navigation",
+    );
+    summary.and(navigation)
+}
+
+fn remove_projection_file(path: &Path, label: &str) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!(
+            "remove stale catalog {label} projection {}: {e}",
+            path.display()
+        )),
+    }
 }
 
 pub(crate) fn save_sqlite_scan_with_progress_using_writer(
@@ -1125,6 +1200,7 @@ pub(crate) fn write_sqlite_scan(
     .map(|_| ())
 }
 
+#[cfg(test)]
 pub(crate) fn write_sqlite_scan_with_catalog(
     path: &Path,
     scan: &LibraryScan,
@@ -1153,6 +1229,36 @@ pub(crate) fn write_sqlite_scan_with_catalog(
         root.as_ref(),
         progress,
     )
+}
+
+fn write_sqlite_scan_without_catalog_rebuild(
+    path: &Path,
+    scan: &LibraryScan,
+    progress: ProgressCallback<'_>,
+    software_hash_cache: SoftwareHashCache,
+    discovery_history: Option<DiscoveryHistory>,
+    stamp: Option<&catalog_stamp::CatalogStamp>,
+) -> Result<(), String> {
+    let preview_paths = PreviewArchivePaths::from_paths(
+        preview_worker::preview_archive_paths_for_catalog_projection(),
+    );
+    let mame_sqlite_path = default_mame_sqlite_path();
+    let hbmame_sqlite_path = default_hbmame_sqlite_path();
+    write_sqlite_scan_with_sources_inner(
+        path,
+        scan,
+        SqliteScanSources {
+            mame_sqlite_path: &mame_sqlite_path,
+            hbmame_sqlite_path: &hbmame_sqlite_path,
+            preview_paths: &preview_paths,
+            software_hash_cache,
+            discovery_history,
+            stamp,
+        },
+        None,
+        progress,
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -1236,13 +1342,25 @@ struct SqliteScanSources<'a> {
     stamp: Option<&'a catalog_stamp::CatalogStamp>,
 }
 
+#[cfg(test)]
 fn write_sqlite_scan_with_sources(
     path: &Path,
     scan: &LibraryScan,
-    mut sources: SqliteScanSources<'_>,
+    sources: SqliteScanSources<'_>,
     root: &Path,
-    mut progress: ProgressCallback<'_>,
+    progress: ProgressCallback<'_>,
 ) -> Result<LibraryCatalogLoad, String> {
+    write_sqlite_scan_with_sources_inner(path, scan, sources, Some(root), progress)?
+        .ok_or_else(|| "saved catalog was not returned".to_string())
+}
+
+fn write_sqlite_scan_with_sources_inner(
+    path: &Path,
+    scan: &LibraryScan,
+    mut sources: SqliteScanSources<'_>,
+    root: Option<&Path>,
+    mut progress: ProgressCallback<'_>,
+) -> Result<Option<LibraryCatalogLoad>, String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
     let schema_t = Instant::now();
@@ -1903,12 +2021,25 @@ fn write_sqlite_scan_with_sources(
         );
     }
     let saved_catalog_t = Instant::now();
-    let saved_catalog = load_arcade_catalog_from_connection(root, &tx, saved_catalog_t, 0, 0)?;
-    report_library_import_timing(
-        "build_saved_catalog",
-        saved_catalog_t,
-        format!("rows={}", saved_catalog.rows),
-    );
+    let saved_catalog = match root {
+        Some(root) => {
+            let saved_catalog = load_arcade_catalog_from_connection(root, &tx, saved_catalog_t, 0, 0)?;
+            report_library_import_timing(
+                "build_saved_catalog",
+                saved_catalog_t,
+                format!("rows={}", saved_catalog.rows),
+            );
+            Some(saved_catalog)
+        }
+        None => {
+            report_library_import_timing(
+                "build_saved_catalog",
+                saved_catalog_t,
+                "skipped=precomputed_projection",
+            );
+            None
+        }
+    };
     let commit_t = Instant::now();
     tx.commit().map_err(|e| format!("commit sqlite tx: {e}"))?;
     report_library_import_timing("commit", commit_t, "");
@@ -2881,6 +3012,9 @@ mod tests {
         let summary = catalog_summary::read_catalog_summary(&summary_path)
             .expect("read summary")
             .expect("current summary");
+        let stored_stamp = read_sqlite_catalog_stamp(&db)
+            .expect("read sqlite stamp")
+            .expect("stored sqlite stamp");
         let navigation =
             catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
                 .expect("read navigation")
@@ -2899,6 +3033,7 @@ mod tests {
         assert_eq!(summary.catalog_stamp_fingerprint, stamp.fingerprint_hex());
         assert_eq!(summary.catalog_generation, stamp.fingerprint_hex());
         assert_eq!(summary.catalog_stamp_lines, stamp.lines());
+        assert_eq!(stored_stamp, stamp);
         assert_eq!(summary.total_game_count, saved.catalog.catalog.games.len());
         assert_eq!(summary.systems.len(), saved.catalog.catalog.systems.len());
         for (summary_system, sqlite_system) in summary.systems.iter().zip(&loaded.catalog.systems) {
@@ -2912,6 +3047,83 @@ mod tests {
             .find(|system| system.id == "arcade")
             .expect("arcade summary system");
         assert_eq!(arcade.supported_media, vec!["screenshots".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn projection_publish_failure_removes_stale_projection_pair() {
+        let root = unique_temp_dir("sqlite-projection-publish-failure");
+        let db = root.join("library.sqlite3");
+        let old_stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\told".to_string(),
+            "root\t0\told".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp_and_catalog(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Old Alpha")]),
+            Some(&old_stamp),
+            "/media/fat/_Arcade",
+            None,
+        )
+        .expect("write old catalog and projections");
+
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
+        assert!(summary_path.exists(), "old summary fixture");
+        assert!(navigation_path.exists(), "old navigation fixture");
+        std::fs::create_dir(root.join(".library.summary.json.tmp"))
+            .expect("block summary temp creation");
+
+        let new_scan = sqlite_scan_with_discoveries(vec![
+            mra_discovery(2, "New Alpha"),
+            mra_discovery(3, "New Beta"),
+        ]);
+        let new_stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tnew".to_string(),
+            "root\t0\tnew".to_string(),
+        ]);
+        let catalog = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load old sqlite catalog")
+            .catalog;
+        let projections = CatalogSaveProjections {
+            summary: catalog_summary::CatalogSummaryProjection::from_catalog(&catalog, &new_stamp),
+            navigation: catalog_navigation::CatalogNavigationProjection::from_catalog(
+                &catalog,
+                &new_stamp,
+            ),
+        };
+
+        let err = save_sqlite_scan_with_progress_and_stamp_and_projections(
+            &db,
+            &new_scan,
+            &new_stamp,
+            &projections,
+            None,
+        )
+        .expect_err("summary temp directory should fail projection publish");
+
+        assert!(
+            err.contains("create catalog summary temp"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !summary_path.exists(),
+            "old summary must be invalidated before failed publish returns"
+        );
+        assert!(
+            !navigation_path.exists(),
+            "old navigation must be invalidated before failed publish returns"
+        );
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("new sqlite database should remain live");
+        assert_eq!(loaded.catalog.len(), 2);
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .any(|game| game.title.as_ref() == "New Beta"));
         let _ = std::fs::remove_dir_all(root);
     }
 

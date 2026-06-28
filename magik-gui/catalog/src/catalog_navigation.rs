@@ -72,7 +72,14 @@ pub fn write_catalog_navigation_projection_for_catalog(
     stamp: &CatalogStamp,
 ) -> Result<(), String> {
     let projection = CatalogNavigationProjection::from_catalog(catalog, stamp);
-    write_catalog_navigation_projection(&navigation_path_for_sqlite(sqlite_path), &projection)
+    write_catalog_navigation_projection_for_sqlite(sqlite_path, &projection)
+}
+
+pub(crate) fn write_catalog_navigation_projection_for_sqlite(
+    sqlite_path: &Path,
+    projection: &CatalogNavigationProjection,
+) -> Result<(), String> {
+    write_catalog_navigation_projection(&navigation_path_for_sqlite(sqlite_path), projection)
 }
 
 pub fn read_catalog_navigation_projection(
