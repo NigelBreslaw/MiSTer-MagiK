@@ -377,7 +377,9 @@ impl LauncherCatalogSession {
         let cached_before_refresh = summary.is_none() && !durable_save_pending;
         let duplicate_cached_catalog = !self.summary_only
             && duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
-        self.refresh_done = !cached_before_refresh && !durable_save_pending;
+        let validation_already_finished = self.refresh_done;
+        self.refresh_done =
+            validation_already_finished || (!cached_before_refresh && !durable_save_pending);
         let catalog_len = ready_catalog.len();
         if !duplicate_cached_catalog {
             self.summary_only = false;
@@ -422,7 +424,7 @@ impl LauncherCatalogSession {
             return;
         }
         self.games_found_counter.reset();
-        if cached_before_refresh {
+        if cached_before_refresh && !validation_already_finished {
             effects.ui(cached_catalog_validation_intent(
                 self.foreground_update,
                 catalog_len,
@@ -769,6 +771,49 @@ mod tests {
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(!session.refresh_failed);
+    }
+
+    #[test]
+    fn late_cached_ready_after_terminal_validation_does_not_reopen_refresh() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(false);
+        session.note_summary_seed_ready();
+
+        let _ = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Arcade,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Unchanged {
+                summary: refresh_summary(),
+            },
+            now,
+        );
+        assert!(session.refresh_done());
+
+        let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Arcade,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(3),
+                summary: None,
+                load_us: 42,
+                source: CatalogSource::FullSqlite,
+                durable_save_pending: false,
+            },
+            now,
+        ));
+
+        assert_eq!(
+            effects,
+            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
+        );
+        assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
+        assert!(session.refresh_done());
     }
 
     #[test]

@@ -65,6 +65,10 @@ pub(super) struct LauncherPresentedFrame {
 #[derive(Clone, Copy, Default)]
 pub(super) struct LauncherPrepareTrace {
     pub(super) catalog_worker_us: u128,
+    pub(super) catalog_message_count: u32,
+    pub(super) catalog_backlog: u32,
+    pub(super) catalog_ready_deferred: bool,
+    pub(super) catalog_ready_deferred_age_us: u128,
     pub(super) media_worker_us: u128,
     pub(super) media_gate_us: u128,
     pub(super) preview_schedule_us: u128,
@@ -91,6 +95,10 @@ struct PreviewScrollTraceRow {
     copied_rows: u32,
     prepare_us: u128,
     catalog_worker_us: u128,
+    catalog_message_count: u32,
+    catalog_backlog: u32,
+    catalog_ready_deferred: u8,
+    catalog_ready_deferred_age_us: u128,
     media_worker_us: u128,
     media_gate_us: u128,
     preview_schedule_us: u128,
@@ -136,7 +144,7 @@ impl PreviewScrollTrace {
             self.row_text.clear();
             let _ = write!(
                 self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.frame,
                 row.elapsed_us,
                 row.loop_delta_us,
@@ -149,6 +157,10 @@ impl PreviewScrollTrace {
                 row.copied_rows,
                 row.prepare_us,
                 row.catalog_worker_us,
+                row.catalog_message_count,
+                row.catalog_backlog,
+                row.catalog_ready_deferred,
+                row.catalog_ready_deferred_age_us,
                 row.media_worker_us,
                 row.media_gate_us,
                 row.preview_schedule_us,
@@ -382,6 +394,10 @@ impl LauncherFrameAccounting {
             copied_rows: frame.copied_rows,
             prepare_us: frame.prepare_us,
             catalog_worker_us: frame.prepare_trace.catalog_worker_us,
+            catalog_message_count: frame.prepare_trace.catalog_message_count,
+            catalog_backlog: frame.prepare_trace.catalog_backlog,
+            catalog_ready_deferred: u8::from(frame.prepare_trace.catalog_ready_deferred),
+            catalog_ready_deferred_age_us: frame.prepare_trace.catalog_ready_deferred_age_us,
             media_worker_us: frame.prepare_trace.media_worker_us,
             media_gate_us: frame.prepare_trace.media_gate_us,
             preview_schedule_us: frame.prepare_trace.preview_schedule_us,
@@ -683,7 +699,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tcatalog_worker_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

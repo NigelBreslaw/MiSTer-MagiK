@@ -395,12 +395,10 @@ impl ArcadeNav {
         self.scroll.visual_px == self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT
     }
 
-    #[cfg(test)]
     pub fn is_scroll_active(&self) -> bool {
         !self.is_settled() || self.scroll.held_dir != 0 || self.scroll.intent_queue != 0
     }
 
-    #[cfg(test)]
     pub fn has_scroll_motion_or_queue(&self) -> bool {
         !self.is_settled() || self.scroll.intent_queue != 0
     }
