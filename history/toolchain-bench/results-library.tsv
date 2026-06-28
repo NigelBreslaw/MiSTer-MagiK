@@ -1705,3 +1705,59 @@ NAVPLAN-AFTER-20260628	1	sqlite_publish_progress	679	bytes=8548352 copy_ms=673 b
 NAVPLAN-AFTER-20260628	1	refresh_scan	2571943	skipped=false bytes=8548352 scan_us=2571943 discover_us=1850635 classify_us=2447768 import_us=8000651 discoveries=9237 normal_files=7519 containers=154 entries=281
 NAVPLAN-AFTER-20260628	1	refresh_import	8000651	skipped=false bytes=8548352 scan_us=2571943 discover_us=1850635 classify_us=2447768 import_us=8000651 discoveries=9237 normal_files=7519 containers=154 entries=281
 NAVPLAN-AFTER-20260628	1	refresh_done	0	bytes=8548352 skipped=false bytes=8548352 scan_us=2571943 discover_us=1850635 classify_us=2447768 import_us=8000651 discoveries=9237 normal_files=7519 containers=154 entries=281
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_first_candidate	20	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_first_discovery	24	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	305	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	55	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	17	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	331	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	49	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	345	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	265	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	101	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	320	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	108	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	15	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk_target	3	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_walk	1939	candidates=7527
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_profile_match	67	calls=7527
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_installed_collection	91	calls=7521
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_archive_toc	9	containers=154
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_collection_listings	0	collections=0
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_file_discovery	2050	files=7519
+LAUNCHPLANVIEW-AFTER-20260628	1	scan_stage_classify_total	2462	discoveries=9362 normal_files=7519 containers=154 entries=281
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_precompute_catalog	2174	rows=7259
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_precompute_projections	123	rows=7259
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_schema	23	tables=12
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_metadata_load	1112	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_begin_tx	0
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_profiles	1	rows=16
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	140	from=0 to=1000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	109	from=1000 to=2000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	119	from=2000 to=3000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	118	from=3000 to=4000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	129	from=4000 to=5000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	164	from=5000 to=6000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	194	from=6000 to=7000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	221	from=7000 to=8000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	246	from=8000 to=9000 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_chunk	56	from=9000 to=9237 total=9237
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_games_total	2007	rows=9237 launcher_rows=6245
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_materialize_arcade_ui	826
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_launcher_arcade	10
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_launcher_console	230	rows=6185
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_launcher_launch_plans	36	rows=4497
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_meta	158	rows=11
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_catalog_stamp	0	rows=11
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_insert_software_hash_cache	0	rows=0
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_commit	8
+LAUNCHPLANVIEW-AFTER-20260628	1	import_stage_total	4413	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.2568
+LAUNCHPLANVIEW-AFTER-20260628	1	sqlite_publish_progress	622	bytes=8183808 copy_ms=616 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=33 result=bench-ok
+LAUNCHPLANVIEW-AFTER-20260628	1	refresh_scan	2586945	skipped=false bytes=8183808 scan_us=2586945 discover_us=1938837 classify_us=2462477 import_us=7775453 discoveries=9237 normal_files=7519 containers=154 entries=281
+LAUNCHPLANVIEW-AFTER-20260628	1	refresh_import	7775453	skipped=false bytes=8183808 scan_us=2586945 discover_us=1938837 classify_us=2462477 import_us=7775453 discoveries=9237 normal_files=7519 containers=154 entries=281
+LAUNCHPLANVIEW-AFTER-20260628	1	refresh_done	0	bytes=8183808 skipped=false bytes=8183808 scan_us=2586945 discover_us=1938837 classify_us=2462477 import_us=7775453 discoveries=9237 normal_files=7519 containers=154 entries=281

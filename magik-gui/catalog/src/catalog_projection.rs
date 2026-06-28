@@ -506,36 +506,11 @@ fn non_empty_arc_str(value: &std::sync::Arc<str>) -> Option<&str> {
 }
 
 pub(crate) fn materialize_launcher_launch_plans(tx: &Transaction<'_>) -> Result<usize, String> {
-    tx.execute(
-        r#"
-        INSERT INTO launcher_launch_plans(
-            launch_id,
-            title,
-            system_id,
-            core_path,
-            mount_kind,
-            mount_index,
-            delay_secs
-        )
-        SELECT
-            lc.launch_id,
-            lc.title,
-            lc.system_id,
-            COALESCE(profiles.core_path, launch_targets.core_id),
-            COALESCE(launch_targets.mount_kind, 'mount-image'),
-            COALESCE(launch_targets.mount_index, 0),
-            COALESCE(launch_targets.delay_secs, 1)
-        FROM launcher_catalog lc
-        JOIN launch_targets
-          ON launch_targets.launch_id = lc.launch_id
-        LEFT JOIN profiles
-          ON profiles.profile_id = launch_targets.profile_id
-        WHERE launch_targets.launch_kind = 'virtual-mgl'
-        ORDER BY lc.ordinal
-        "#,
-        [],
-    )
-    .map_err(|e| format!("materialize launcher launch plans: {e}"))
+    tx.query_row("SELECT count(*) FROM launcher_launch_plans", [], |row| {
+        let count: i64 = row.get(0)?;
+        Ok(count as usize)
+    })
+    .map_err(|e| format!("count launcher launch plans: {e}"))
 }
 
 #[cfg(test)]
