@@ -137,6 +137,7 @@ pub(crate) struct LibraryScan {
 
 pub struct LibraryCatalogLoad {
     pub catalog: ArcadeCatalog,
+    pub stamp: Option<catalog_stamp::CatalogStamp>,
     pub us: u64,
     pub open_us: u64,
     pub schema_check_us: u64,
@@ -156,6 +157,7 @@ impl LibraryCatalogLoad {
         let rows = catalog.len();
         Self {
             catalog,
+            stamp: None,
             us,
             open_us: 0,
             schema_check_us: 0,
@@ -311,6 +313,7 @@ pub fn load_arcade_catalog_from_navigation_projection(
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(Some(LibraryCatalogLoad {
         catalog,
+        stamp: Some(expected_stamp.clone()),
         us: started.elapsed().as_micros() as u64,
         open_us: read_us,
         schema_check_us: 0,
@@ -404,6 +407,21 @@ pub fn load_arcade_catalog_from_sqlite(
     root: impl AsRef<Path>,
 ) -> Result<LibraryCatalogLoad, String> {
     sqlite_catalog::load_arcade_catalog_from_sqlite(root)
+}
+
+pub fn repair_catalog_projections_for_catalog(
+    sqlite_path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<(), String> {
+    sqlite_catalog::repair_catalog_projections_for_catalog(sqlite_path, catalog, stamp)
+}
+
+pub fn catalog_projection_pair_current(
+    sqlite_path: &Path,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<bool, String> {
+    sqlite_catalog::catalog_projection_pair_current(sqlite_path, stamp)
 }
 
 #[cfg(test)]

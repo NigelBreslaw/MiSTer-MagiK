@@ -369,11 +369,7 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     ensure_sqlite_schema_current(&conn)?;
     let schema_check_us = schema_t.elapsed().as_micros() as u64;
     let stamp = catalog_store::read_catalog_stamp(&conn)?;
-    let loaded = load_arcade_catalog_from_connection(root, &conn, t, open_us, schema_check_us)?;
-    if let Some(stamp) = stamp.as_ref() {
-        repair_navigation_projection_after_sqlite_load(path, &loaded.catalog, stamp)?;
-    }
-    Ok(loaded)
+    load_arcade_catalog_from_connection(root, &conn, t, open_us, schema_check_us, stamp)
 }
 
 fn load_arcade_catalog_from_connection(
@@ -382,6 +378,7 @@ fn load_arcade_catalog_from_connection(
     started: Instant,
     open_us: u64,
     schema_check_us: u64,
+    stamp: Option<catalog_stamp::CatalogStamp>,
 ) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let query_t = Instant::now();
@@ -411,6 +408,7 @@ fn load_arcade_catalog_from_connection(
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
         catalog,
+        stamp,
         us: started.elapsed().as_micros() as u64,
         open_us,
         schema_check_us,
@@ -587,25 +585,35 @@ fn game_entry_from_row(
     })
 }
 
-fn repair_navigation_projection_after_sqlite_load(
+pub(crate) fn repair_catalog_projections_for_catalog(
     sqlite_path: &Path,
     catalog: &ArcadeCatalog,
     stamp: &catalog_stamp::CatalogStamp,
 ) -> Result<(), String> {
-    let navigation_path = catalog_navigation::navigation_path_for_sqlite(sqlite_path);
-    match catalog_navigation::read_catalog_navigation_projection(&navigation_path, stamp) {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => catalog_navigation::write_catalog_navigation_projection_for_catalog(
-            sqlite_path,
-            catalog,
-            stamp,
-        ),
-        Err(_) => catalog_navigation::write_catalog_navigation_projection_for_catalog(
-            sqlite_path,
-            catalog,
-            stamp,
-        ),
+    if catalog_projection_pair_current(sqlite_path, stamp).unwrap_or(false) {
+        return Ok(());
     }
+    let summary = catalog_summary::CatalogSummaryProjection::from_catalog(catalog, stamp);
+    let navigation = catalog_navigation::CatalogNavigationProjection::from_catalog(catalog, stamp);
+    remove_catalog_projection_files(sqlite_path)?;
+    catalog_summary::write_catalog_summary_projection(sqlite_path, &summary)?;
+    catalog_navigation::write_catalog_navigation_projection_for_sqlite(sqlite_path, &navigation)
+}
+
+pub(crate) fn catalog_projection_pair_current(
+    sqlite_path: &Path,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<bool, String> {
+    let summary_path = catalog_summary::summary_path_for_sqlite(sqlite_path);
+    let Some(summary) = catalog_summary::read_catalog_summary(&summary_path)? else {
+        return Ok(false);
+    };
+    if summary.catalog_stamp_fingerprint != stamp.fingerprint_hex() {
+        return Ok(false);
+    }
+    let navigation_path = catalog_navigation::navigation_path_for_sqlite(sqlite_path);
+    catalog_navigation::read_catalog_navigation_projection(&navigation_path, stamp)
+        .map(|projection| projection.is_some())
 }
 
 pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -2135,7 +2143,14 @@ fn write_sqlite_scan_with_sources_inner(
     let saved_catalog_t = Instant::now();
     let saved_catalog = match root {
         Some(root) => {
-            let saved_catalog = load_arcade_catalog_from_connection(root, &tx, saved_catalog_t, 0, 0)?;
+            let saved_catalog = load_arcade_catalog_from_connection(
+                root,
+                &tx,
+                saved_catalog_t,
+                0,
+                0,
+                sources.stamp.cloned(),
+            )?;
             report_library_import_timing(
                 "build_saved_catalog",
                 saved_catalog_t,
@@ -3318,8 +3333,8 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_load_repairs_missing_navigation_projection() {
-        let root = unique_temp_dir("sqlite-navigation-repair");
+    fn sqlite_load_does_not_repair_missing_navigation_projection() {
+        let root = unique_temp_dir("sqlite-navigation-read-only");
         let db = root.join("library.sqlite3");
         let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
             format!("schema\t{SCHEMA_VERSION}"),
@@ -3344,21 +3359,110 @@ mod tests {
             .expect("load sqlite fallback");
 
         assert!(
-            navigation_path.exists(),
-            "fallback load should repair projection"
+            !navigation_path.exists(),
+            "SQLite load should not repair projection on the read path"
         );
+        assert_eq!(loaded.catalog.games.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_projection_repair_writes_missing_projection_pair() {
+        let root = unique_temp_dir("sqlite-projection-pair-repair");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp_and_catalog(
+            &db,
+            &sqlite_scan_with_discoveries(vec![
+                mra_discovery(1, "Repair Alpha"),
+                mra_discovery(2, "Repair Beta"),
+            ]),
+            Some(&stamp),
+            "/media/fat/_Arcade",
+            None,
+        )
+        .expect("write catalog and projection");
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
+        std::fs::remove_file(&summary_path).expect("remove summary");
+        std::fs::remove_file(&navigation_path).expect("remove projection");
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load sqlite fallback");
+        repair_catalog_projections_for_catalog(&db, &loaded.catalog, &stamp)
+            .expect("repair projection pair");
+
+        assert!(summary_path.exists(), "explicit repair should write summary");
+        assert!(
+            navigation_path.exists(),
+            "explicit repair should write projection"
+        );
+        let repaired_summary = catalog_summary::read_catalog_summary(&summary_path)
+            .expect("read repaired summary")
+            .expect("current repaired summary");
         let repaired =
             catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
                 .expect("read repaired projection")
                 .expect("current repaired projection");
         let repaired_catalog =
             ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", repaired);
+        assert_eq!(repaired_summary.catalog_stamp_fingerprint, stamp.fingerprint_hex());
+        assert_eq!(repaired_summary.total_game_count, loaded.catalog.games.len());
         assert_eq!(repaired_catalog.games.len(), loaded.catalog.games.len());
         assert_eq!(repaired_catalog.systems, loaded.catalog.systems);
         assert_eq!(
             repaired_catalog.decade_options("arcade"),
             loaded.catalog.decade_options("arcade")
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_projection_repair_rewrites_corrupt_projection_pair() {
+        let root = unique_temp_dir("sqlite-projection-corrupt-repair");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        save_sqlite_scan_with_progress_and_stamp_and_catalog(
+            &db,
+            &sqlite_scan_with_discoveries(vec![
+                mra_discovery(1, "Repair Corrupt Alpha"),
+                mra_discovery(2, "Repair Corrupt Beta"),
+            ]),
+            Some(&stamp),
+            "/media/fat/_Arcade",
+            None,
+        )
+        .expect("write catalog and projection");
+        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
+        std::fs::write(&summary_path, b"{not-json").expect("corrupt summary");
+        std::fs::write(&navigation_path, b"not-lz4b").expect("corrupt projection");
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load sqlite fallback");
+        repair_catalog_projections_for_catalog(&db, &loaded.catalog, &stamp)
+            .expect("repair corrupt projection pair");
+
+        let repaired_summary = catalog_summary::read_catalog_summary(&summary_path)
+            .expect("read repaired summary")
+            .expect("current repaired summary");
+        let repaired =
+            catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
+                .expect("read repaired projection")
+                .expect("current repaired projection");
+        assert_eq!(
+            repaired_summary.catalog_stamp_fingerprint,
+            stamp.fingerprint_hex()
+        );
+        assert_eq!(repaired.games.len(), loaded.catalog.games.len());
         let _ = std::fs::remove_dir_all(root);
     }
 

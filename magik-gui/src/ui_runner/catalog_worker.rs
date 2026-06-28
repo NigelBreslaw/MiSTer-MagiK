@@ -1,5 +1,5 @@
 use super::*;
-use mister_magik_catalog::{catalog_stamp, catalog_summary};
+use mister_magik_catalog::{arcade_catalog::ArcadeCatalog, catalog_stamp, catalog_summary};
 
 pub(super) fn start_library_catalog_worker(
     root: String,
@@ -33,6 +33,8 @@ pub(super) fn start_library_catalog_worker(
                 }
             };
             let mut cache_state = CatalogCacheState::Missing;
+            let mut projection_repair_catalog: Option<(ArcadeCatalog, catalog_stamp::CatalogStamp)> =
+                None;
             match initial_cache {
                 CatalogWorkerInitialCache::ProbeNavigationThenSqlite => {
                     match load_navigation_projection_cache(&root) {
@@ -77,6 +79,7 @@ pub(super) fn start_library_catalog_worker(
                                     cache_state = CatalogCacheState::Empty;
                                 } else {
                                     cache_state = CatalogCacheState::Ready;
+                                    let catalog_for_repair = loaded.catalog.clone();
                                     let _ = tx.send(CatalogWorkerMessage::Ready {
                                         catalog: loaded.catalog,
                                         summary: None,
@@ -84,6 +87,10 @@ pub(super) fn start_library_catalog_worker(
                                         source: CatalogSource::FullSqlite,
                                         durable_save_pending: false,
                                     });
+                                    if let Some(stamp) = loaded.stamp {
+                                        projection_repair_catalog =
+                                            Some((catalog_for_repair, stamp));
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -105,6 +112,7 @@ pub(super) fn start_library_catalog_worker(
                                 cache_state = CatalogCacheState::Empty;
                             } else {
                                 cache_state = CatalogCacheState::Ready;
+                                let catalog_for_repair = loaded.catalog.clone();
                                 let _ = tx.send(CatalogWorkerMessage::Ready {
                                     catalog: loaded.catalog,
                                     summary: None,
@@ -112,6 +120,9 @@ pub(super) fn start_library_catalog_worker(
                                     source: CatalogSource::FullSqlite,
                                     durable_save_pending: false,
                                 });
+                                if let Some(stamp) = loaded.stamp {
+                                    projection_repair_catalog = Some((catalog_for_repair, stamp));
+                                }
                             }
                         }
                         Err(e) => {
@@ -147,6 +158,11 @@ pub(super) fn start_library_catalog_worker(
             match plan {
                 CatalogWorkerPlan::LoadOnly => {
                     let _ = tx.send(CatalogWorkerMessage::Done);
+                    repair_navigation_projection_cache_after_ready(
+                        &root,
+                        projection_repair_catalog.as_ref(),
+                        &tx,
+                    );
                     return;
                 }
                 CatalogWorkerPlan::CheckStamp => {}
@@ -273,6 +289,11 @@ pub(super) fn start_library_catalog_worker(
                             match library_db::default_sqlite_cached_summary(check.check_us) {
                                 Ok(summary) => {
                                     let _ = tx.send(CatalogWorkerMessage::Unchanged { summary });
+                                    repair_navigation_projection_cache_after_ready(
+                                        &root,
+                                        projection_repair_catalog.as_ref(),
+                                        &tx,
+                                    );
                                     return;
                                 }
                                 Err(e) => {
@@ -550,6 +571,229 @@ fn send_catalog_load_timing(
         name: name.to_string(),
         detail: catalog_load_timing_detail(loaded),
     });
+}
+
+fn repair_navigation_projection_cache_after_ready(
+    root: &str,
+    loaded_catalog: Option<&(ArcadeCatalog, catalog_stamp::CatalogStamp)>,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+) {
+    if let Some((catalog, stamp)) = loaded_catalog {
+        repair_navigation_projection_cache_for_catalog(catalog, stamp, tx);
+    } else {
+        repair_navigation_projection_cache(root, tx);
+    }
+}
+
+fn repair_navigation_projection_cache_for_catalog(
+    catalog: &ArcadeCatalog,
+    stamp: &catalog_stamp::CatalogStamp,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+) {
+    let started = Instant::now();
+    let sqlite_path = library_db::default_sqlite_path();
+    match library_db::catalog_projection_pair_current(&sqlite_path, stamp) {
+        Ok(true) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=current elapsed_us={}",
+                    started.elapsed().as_micros()
+                ),
+            });
+            return;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=projection_check_failed elapsed_us={} error={e}",
+                    started.elapsed().as_micros()
+                ),
+            });
+        }
+    }
+
+    let repair_t = Instant::now();
+    if !loaded_catalog_stamp_still_current(&sqlite_path, stamp, started, tx) {
+        return;
+    }
+    match library_db::repair_catalog_projections_for_catalog(&sqlite_path, catalog, stamp) {
+        Ok(()) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=ok elapsed_us={} load_us=0 repair_us={} games={}",
+                    started.elapsed().as_micros(),
+                    repair_t.elapsed().as_micros(),
+                    catalog.len()
+                ),
+            });
+        }
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=repair_failed elapsed_us={} load_us=0 repair_us={} error={e}",
+                    started.elapsed().as_micros(),
+                    repair_t.elapsed().as_micros()
+                ),
+            });
+        }
+    }
+}
+
+fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorkerMessage>) {
+    let started = Instant::now();
+    let sqlite_path = library_db::default_sqlite_path();
+    let Some(stamp) = (match library_db::read_sqlite_catalog_stamp(&sqlite_path) {
+        Ok(stamp) => stamp,
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=stamp_failed elapsed_us={} error={e}",
+                    started.elapsed().as_micros()
+                ),
+            });
+            return;
+        }
+    }) else {
+        let _ = tx.send(CatalogWorkerMessage::Timing {
+            name: "catalog_navigation_repair_tsv".to_string(),
+            detail: format!(
+                "status=missing_stamp elapsed_us={}",
+                started.elapsed().as_micros()
+            ),
+        });
+        return;
+    };
+    match library_db::catalog_projection_pair_current(&sqlite_path, &stamp) {
+        Ok(true) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=current elapsed_us={}",
+                    started.elapsed().as_micros()
+                ),
+            });
+            return;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=projection_check_failed elapsed_us={} error={e}",
+                    started.elapsed().as_micros()
+                ),
+            });
+        }
+    }
+
+    let load_t = Instant::now();
+    let loaded = match library_db::load_arcade_catalog_from_sqlite(root) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=load_failed elapsed_us={} error={e}",
+                    started.elapsed().as_micros()
+                ),
+            });
+            return;
+        }
+    };
+    let load_us = load_t.elapsed().as_micros();
+    let repair_t = Instant::now();
+    let Some(loaded_stamp) = loaded.stamp.as_ref() else {
+        let _ = tx.send(CatalogWorkerMessage::Timing {
+            name: "catalog_navigation_repair_tsv".to_string(),
+            detail: format!(
+                "status=missing_loaded_stamp elapsed_us={} load_us={}",
+                started.elapsed().as_micros(),
+                load_us
+            ),
+        });
+        return;
+    };
+    if !loaded_catalog_stamp_still_current(&sqlite_path, loaded_stamp, started, tx) {
+        return;
+    }
+    match library_db::repair_catalog_projections_for_catalog(
+        &sqlite_path,
+        &loaded.catalog,
+        loaded_stamp,
+    ) {
+        Ok(()) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=ok elapsed_us={} load_us={} repair_us={} games={}",
+                    started.elapsed().as_micros(),
+                    load_us,
+                    repair_t.elapsed().as_micros(),
+                    loaded.catalog.len()
+                ),
+            });
+        }
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=repair_failed elapsed_us={} load_us={} repair_us={} error={e}",
+                    started.elapsed().as_micros(),
+                    load_us,
+                    repair_t.elapsed().as_micros()
+                ),
+            });
+        }
+    }
+}
+
+fn loaded_catalog_stamp_still_current(
+    sqlite_path: &std::path::Path,
+    loaded_stamp: &catalog_stamp::CatalogStamp,
+    started: Instant,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+) -> bool {
+    match library_db::read_sqlite_catalog_stamp(sqlite_path) {
+        Ok(Some(current_stamp)) if &current_stamp == loaded_stamp => true,
+        Ok(Some(current_stamp)) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=stamp_changed elapsed_us={} loaded={} current={}",
+                    started.elapsed().as_micros(),
+                    loaded_stamp.fingerprint_hex(),
+                    current_stamp.fingerprint_hex()
+                ),
+            });
+            false
+        }
+        Ok(None) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=missing_live_stamp elapsed_us={}",
+                    started.elapsed().as_micros()
+                ),
+            });
+            false
+        }
+        Err(e) => {
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_navigation_repair_tsv".to_string(),
+                detail: format!(
+                    "status=live_stamp_failed elapsed_us={} error={e}",
+                    started.elapsed().as_micros()
+                ),
+            });
+            false
+        }
+    }
 }
 
 fn load_navigation_projection_cache(
