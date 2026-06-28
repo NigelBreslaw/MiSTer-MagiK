@@ -745,6 +745,7 @@ struct PreviewArchiveEntry {
 
 #[derive(Clone, Debug)]
 struct PreviewArchiveSidecarIndex {
+    archive_sha256: String,
     entries: HashMap<String, PreviewArchiveEntry>,
 }
 
@@ -1441,8 +1442,22 @@ fn preview_archive_sidecar_index(
             }
         }
     }
+    let read_t = Instant::now();
     let index = read_preview_archive_sidecar_index(&index_path, archive_fingerprint.size)?;
-    validate_preview_archive_sidecar_matches_archive(archive_path, &index)?;
+    let trust = preview_archive_sidecar_trust(archive_path, &index_path, &archive_fingerprint, &index)?;
+    let read_us = read_t.elapsed().as_micros() as u64;
+    if preview_trace_enabled() {
+        eprintln!(
+            "preview_trace sidecar_index_trusted archive_path={} index_path={} entries={} archive_bytes={} archive_sha256={} trust={} read_us={}",
+            archive_path.display(),
+            index_path.display(),
+            index.entries.len(),
+            archive_fingerprint.size,
+            index.archive_sha256,
+            trust,
+            read_us
+        );
+    }
     let index = Arc::new(index);
     if let Ok(mut cache) = cache.lock() {
         cache.insert(
@@ -1487,56 +1502,149 @@ fn preview_archive_fingerprint(path: &Path) -> Result<PreviewArchiveFingerprint,
     })
 }
 
-fn read_preview_archive_embedded_entries(
+fn preview_archive_sidecar_trust(
     archive_path: &Path,
-) -> Result<HashMap<String, PreviewArchiveEntry>, String> {
-    let mut file = File::open(archive_path)
-        .map_err(|e| format!("open preview archive {}: {e}", archive_path.display()))?;
-    let archive_bytes = file
-        .metadata()
-        .map_err(|e| format!("metadata preview archive {}: {e}", archive_path.display()))?
-        .len();
-    let mut magic = [0u8; 8];
-    file.read_exact(&mut magic)
-        .map_err(|e| format!("read preview archive magic {}: {e}", archive_path.display()))?;
-    if &magic != PreviewArchive::V2_PIXELS_MAGIC {
-        return Err(format!(
-            "{}: bad preview archive v2 magic",
-            archive_path.display()
-        ));
-    }
-    let count = read_u32(&mut file)? as usize;
-    PreviewArchive::read_v2_pixel_entries(&mut file, count, archive_bytes)
-}
-
-fn validate_preview_archive_sidecar_matches_archive(
-    archive_path: &Path,
-    sidecar: &PreviewArchiveSidecarIndex,
-) -> Result<(), String> {
-    let embedded = read_preview_archive_embedded_entries(archive_path)?;
-    if sidecar.entries.len() != embedded.len() {
-        return Err(format!(
-            "{}: preview archive index entry count mismatch sidecar={} embedded={}",
-            archive_path.display(),
-            sidecar.entries.len(),
-            embedded.len()
-        ));
-    }
-    for (name, sidecar_entry) in &sidecar.entries {
-        let Some(embedded_entry) = embedded.get(name) else {
-            return Err(format!(
-                "{}: preview archive index has stale entry {name}",
-                archive_path.display()
-            ));
-        };
-        if sidecar_entry != embedded_entry {
-            return Err(format!(
-                "{}: preview archive index metadata mismatch for {name}: sidecar={sidecar_entry:?} embedded={embedded_entry:?}",
-                archive_path.display()
-            ));
+    index_path: &Path,
+    archive_fingerprint: &PreviewArchiveFingerprint,
+    index: &PreviewArchiveSidecarIndex,
+) -> Result<&'static str, String> {
+    let Some(root) = archive_path.parent() else {
+        return Ok("structural");
+    };
+    let state_path = screenshot_media_state_path_in_root(root);
+    let Ok(text) = std::fs::read_to_string(&state_path) else {
+        return Ok("structural");
+    };
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("parse screenshot media state {}: {e}", state_path.display()))?;
+    let archive_text = archive_path.display().to_string();
+    let index_text = index_path.display().to_string();
+    let mut found_archive_state = false;
+    if let Some(systems) = value.get("systems").and_then(serde_json::Value::as_object) {
+        for system_state in systems.values() {
+            if sidecar_state_entry_matches(
+                system_state,
+                &archive_text,
+                &index_text,
+                archive_fingerprint.size,
+                &index.archive_sha256,
+                &mut found_archive_state,
+            )? {
+                return Ok("state_sha");
+            }
         }
     }
-    Ok(())
+    if let Some(packs) = value.get("packs").and_then(serde_json::Value::as_object) {
+        for pack_state in packs.values() {
+            if sidecar_state_entry_matches(
+                pack_state,
+                &archive_text,
+                &index_text,
+                archive_fingerprint.size,
+                &index.archive_sha256,
+                &mut found_archive_state,
+            )? {
+                return Ok("state_sha");
+            }
+        }
+    }
+    if found_archive_state {
+        return Err(format!(
+            "{}: preview archive index state mismatch",
+            index_path.display()
+        ));
+    }
+    Ok("structural")
+}
+
+fn sidecar_state_entry_matches(
+    value: &serde_json::Value,
+    archive_path: &str,
+    index_path: &str,
+    archive_bytes: u64,
+    archive_sha256: &str,
+    found_archive_state: &mut bool,
+) -> Result<bool, String> {
+    if pack_state_matches(value, archive_path, index_path, archive_bytes, archive_sha256, found_archive_state)? {
+        return Ok(true);
+    }
+    if let Some(size) = value
+        .get("preferred_size")
+        .and_then(serde_json::Value::as_str)
+    {
+        if let Some(pack_state) = value.get("packs").and_then(|packs| packs.get(size)) {
+            if pack_state_matches(
+                pack_state,
+                archive_path,
+                index_path,
+                archive_bytes,
+                archive_sha256,
+                found_archive_state,
+            )? {
+                return Ok(true);
+            }
+        }
+    }
+    if let Some(packs) = value.get("packs").and_then(serde_json::Value::as_object) {
+        for pack_state in packs.values() {
+            if pack_state_matches(
+                pack_state,
+                archive_path,
+                index_path,
+                archive_bytes,
+                archive_sha256,
+                found_archive_state,
+            )? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn pack_state_matches(
+    pack_state: &serde_json::Value,
+    archive_path: &str,
+    index_path: &str,
+    archive_bytes: u64,
+    archive_sha256: &str,
+    found_archive_state: &mut bool,
+) -> Result<bool, String> {
+    if pack_state
+        .get("local_path")
+        .and_then(serde_json::Value::as_str)
+        != Some(archive_path)
+    {
+        return Ok(false);
+    }
+    *found_archive_state = true;
+    let Some(index_state) = pack_state.get("index") else {
+        return Err(format!("{index_path}: preview archive index state missing"));
+    };
+    if index_state
+        .get("local_path")
+        .and_then(serde_json::Value::as_str)
+        != Some(index_path)
+    {
+        return Err(format!("{index_path}: preview archive index path mismatch in state"));
+    }
+    if index_state
+        .get("archive_bytes")
+        .and_then(serde_json::Value::as_u64)
+        != Some(archive_bytes)
+    {
+        return Err(format!("{index_path}: preview archive byte count mismatch in state"));
+    }
+    if index_state
+        .get("archive_sha256")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+        != Some(archive_sha256)
+    {
+        return Err(format!("{index_path}: preview archive sha mismatch in state"));
+    }
+    Ok(true)
 }
 
 fn read_preview_archive_sidecar_index(
@@ -1659,7 +1767,16 @@ fn read_preview_archive_sidecar_index(
             ));
         }
     }
-    Ok(PreviewArchiveSidecarIndex { entries })
+    if pos != bytes.len() {
+        return Err(format!(
+            "{}: trailing preview archive index bytes",
+            index_path.display()
+        ));
+    }
+    Ok(PreviewArchiveSidecarIndex {
+        archive_sha256: archive_sha.to_ascii_lowercase(),
+        entries,
+    })
 }
 
 #[cfg(unix)]
@@ -2514,7 +2631,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_sidecar_geometry_falls_back_to_archive_metadata() {
+    fn structurally_valid_sidecar_metadata_is_trusted() {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-preview-stale-sidecar-{}.mmlz4b",
             std::process::id()
@@ -2549,13 +2666,123 @@ mod tests {
             &mut scratch,
             PreviewResizeSpec::off(),
         )
-        .expect("load should fall back to archive mem");
+        .expect("load should use trusted sidecar metadata");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::IndexPread);
+        assert_eq!(loaded.timing.source_width, 1);
+        assert_eq!(loaded.timing.source_height, 1);
+        let _ = std::fs::remove_file(index_path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn generated_sidecar_state_sha_mismatch_falls_back_to_archive_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-state-sha-mismatch-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let path = root.join("arcade-screenshots-320x320.mmlz4b");
+        let name = "tiny.rgb565";
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_lz4_block_archive_with_index(&path, name, &payload);
+        let index_path = preview_archive_sidecar_path(&path);
+        let state_path = crate::media_identity::screenshot_media_state_path_in_root(&root);
+        let state = serde_json::json!({
+            "systems": {
+                "arcade": {
+                    "preferred_size": "320x320",
+                    "packs": {
+                        "320x320": {
+                            "local_path": path.display().to_string(),
+                            "index": {
+                                "local_path": index_path.display().to_string(),
+                                "archive_bytes": std::fs::metadata(&path).unwrap().len(),
+                                "archive_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(&state_path, state.to_string()).expect("write media state");
+        let mut scratch = PreviewArchiveScratch::default();
+
+        let loaded = load_preview_pixels(
+            &path.display().to_string(),
+            "tiny",
+            &mut scratch,
+            PreviewResizeSpec::off(),
+        )
+        .expect("load should fall back when generated sidecar state mismatches");
 
         assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
         assert_eq!(loaded.timing.source_width, 2);
         assert_eq!(loaded.timing.source_height, 1);
         let _ = std::fs::remove_file(index_path);
         let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(state_path);
+        let _ = std::fs::remove_dir(root);
+    }
+
+    #[test]
+    fn generated_sidecar_state_checks_non_preferred_pack_size() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-state-nonpreferred-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let path = root.join("arcade-screenshots-240x240.mmlz4b");
+        let name = "tiny.rgb565";
+        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        write_lz4_block_archive_with_index(&path, name, &payload);
+        let index_path = preview_archive_sidecar_path(&path);
+        let state_path = crate::media_identity::screenshot_media_state_path_in_root(&root);
+        let state = serde_json::json!({
+            "systems": {
+                "arcade": {
+                    "preferred_size": "320x320",
+                    "packs": {
+                        "320x320": {
+                            "local_path": root.join("arcade-screenshots-320x320.mmlz4b").display().to_string(),
+                            "index": {
+                                "local_path": root.join("arcade-screenshots-320x320.mmlz4b.idx").display().to_string(),
+                                "archive_bytes": 1,
+                                "archive_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                            }
+                        },
+                        "240x240": {
+                            "local_path": path.display().to_string(),
+                            "index": {
+                                "local_path": index_path.display().to_string(),
+                                "archive_bytes": std::fs::metadata(&path).unwrap().len(),
+                                "archive_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(&state_path, state.to_string()).expect("write media state");
+        let mut scratch = PreviewArchiveScratch::default();
+
+        let loaded = load_preview_pixels(
+            &path.display().to_string(),
+            "tiny",
+            &mut scratch,
+            PreviewResizeSpec::off(),
+        )
+        .expect("non-preferred generated pack must still use state checks");
+
+        assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
+        assert_eq!(loaded.timing.source_width, 2);
+        assert_eq!(loaded.timing.source_height, 1);
+        let _ = std::fs::remove_file(index_path);
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(state_path);
+        let _ = std::fs::remove_dir(root);
     }
 
     #[test]
@@ -3047,6 +3274,27 @@ mod tests {
             .expect_err("sidecar geometry mismatch must fail");
 
         assert!(err.contains("bad geometry"), "unexpected error: {err}");
+        let _ = std::fs::remove_file(index_path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_sidecar_rejects_trailing_bytes() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-trailing-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_lz4_block_archive_with_index(&path, "tiny.rgb565", &raw565_fixture(1, 1, &[0xf800]));
+        let archive_bytes = std::fs::metadata(&path).unwrap().len();
+        let index_path = preview_archive_sidecar_path(&path);
+        let mut index = std::fs::read(&index_path).expect("read generated sidecar");
+        index.extend_from_slice(b"garbage");
+        std::fs::write(&index_path, index).expect("write sidecar with trailing bytes");
+
+        let err = read_preview_archive_sidecar_index(&index_path, archive_bytes)
+            .expect_err("sidecar trailing bytes must fail");
+
+        assert!(err.contains("trailing"), "unexpected error: {err}");
         let _ = std::fs::remove_file(index_path);
         let _ = std::fs::remove_file(path);
     }
