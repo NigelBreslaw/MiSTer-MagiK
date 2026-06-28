@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -75,17 +76,13 @@ pub(crate) struct ArcadeListRenderer {
 }
 
 pub(crate) struct CachedArcadeRow {
-    pub(crate) title: String,
+    pub(crate) title: Arc<str>,
     pub(crate) is_new: bool,
     pub(crate) pixels: Vec<Rgb565Pixel>,
     pub(crate) last_used: u64,
 }
 
 struct CachedArcadeRowFingerprint {
-    system_id: Arc<str>,
-    mra_path: Arc<str>,
-    preview_archive_path: Arc<str>,
-    preview_asset_key: Arc<str>,
     title: Arc<str>,
     is_new: bool,
     hash: u64,
@@ -94,12 +91,7 @@ struct CachedArcadeRowFingerprint {
 
 impl CachedArcadeRowFingerprint {
     fn matches(&self, game: &ArcadeGameEntry) -> bool {
-        self.is_new == game.is_new
-            && arc_str_eq(&self.system_id, &game.system_id)
-            && arc_str_eq(&self.mra_path, &game.mra_path)
-            && arc_str_eq(&self.preview_archive_path, &game.preview_archive_path)
-            && arc_str_eq(&self.preview_asset_key, &game.preview_asset_key)
-            && arc_str_eq(&self.title, &game.title)
+        self.is_new == game.is_new && arc_str_eq(&self.title, &game.title)
     }
 }
 
@@ -412,7 +404,7 @@ impl ArcadeListRenderer {
         y: isize,
     ) {
         let needs_render = self.row_cache.get(&idx).is_none_or(|cached| {
-            cached.title != game.title.as_ref() || cached.is_new != game.is_new
+            !arc_str_eq(&cached.title, &game.title) || cached.is_new != game.is_new
         });
         if needs_render {
             if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
@@ -423,7 +415,7 @@ impl ArcadeListRenderer {
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
-                    title: game.title.to_string(),
+                    title: Arc::clone(&game.title),
                     is_new: game.is_new,
                     pixels: row,
                     last_used,
@@ -505,10 +497,6 @@ impl ArcadeListRenderer {
         self.row_fingerprint_cache.insert(
             idx,
             CachedArcadeRowFingerprint {
-                system_id: Arc::clone(&game.system_id),
-                mra_path: Arc::clone(&game.mra_path),
-                preview_archive_path: Arc::clone(&game.preview_archive_path),
-                preview_asset_key: Arc::clone(&game.preview_asset_key),
                 title: Arc::clone(&game.title),
                 is_new: game.is_new,
                 hash,
@@ -900,10 +888,6 @@ fn arcade_visible_window_range(len: usize, visual_index: f32) -> Option<(usize, 
 }
 
 fn arcade_hash_game(hash: &mut u64, game: &ArcadeGameEntry) {
-    arcade_hash_bytes(hash, game.system_id.as_bytes());
-    arcade_hash_bytes(hash, game.mra_path.as_bytes());
-    arcade_hash_bytes(hash, game.preview_archive_path.as_bytes());
-    arcade_hash_bytes(hash, game.preview_asset_key.as_bytes());
     arcade_hash_bytes(hash, game.title.as_bytes());
     arcade_hash_bytes(hash, &[game.is_new as u8]);
 }
@@ -960,15 +944,23 @@ fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
     }
 }
 
-fn clipped_title(title: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    for ch in title.chars().take(max_chars) {
-        out.push(ch);
+fn clipped_title(title: &str, max_chars: usize) -> Cow<'_, str> {
+    if max_chars == 0 {
+        return Cow::Borrowed("");
     }
-    if title.chars().count() > max_chars {
-        out.push_str("...");
+    let mut chars = title.char_indices();
+    for _ in 0..max_chars {
+        if chars.next().is_none() {
+            return Cow::Borrowed(title);
+        }
     }
-    out
+    let Some((cut, _)) = chars.next() else {
+        return Cow::Borrowed(title);
+    };
+    let mut out = String::with_capacity(cut + 3);
+    out.push_str(&title[..cut]);
+    out.push_str("...");
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -976,20 +968,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn arcade_anchor_hash_changes_for_anchor_identity_fields() {
+    fn arcade_anchor_hash_tracks_visible_row_fields_only() {
         let base = game("arcade", "/media/fat/_Arcade/a.mra", "Alpha");
 
-        assert_ne!(
+        assert_eq!(
             arcade_anchor_hash(Some(&base)),
             arcade_anchor_hash(Some(&game("console", "/media/fat/_Arcade/a.mra", "Alpha")))
         );
-        assert_ne!(
+        assert_eq!(
             arcade_anchor_hash(Some(&base)),
             arcade_anchor_hash(Some(&game("arcade", "/media/fat/_Arcade/b.mra", "Alpha")))
         );
         assert_ne!(
             arcade_anchor_hash(Some(&base)),
             arcade_anchor_hash(Some(&game("arcade", "/media/fat/_Arcade/a.mra", "Beta")))
+        );
+        let mut with_badge = base.clone();
+        with_badge.is_new = true;
+        assert_ne!(
+            arcade_anchor_hash(Some(&base)),
+            arcade_anchor_hash(Some(&with_badge))
         );
     }
 
@@ -1133,7 +1131,7 @@ mod tests {
             cache.insert(
                 idx,
                 CachedArcadeRow {
-                    title: format!("Game {idx}"),
+                    title: format!("Game {idx}").into(),
                     is_new: false,
                     pixels: Vec::new(),
                     last_used: idx as u64,
