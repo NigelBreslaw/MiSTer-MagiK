@@ -10,7 +10,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release-device
-BUILD_FLAG=(--device --all-scenes)
+BUILD_FLAG=(--device)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
@@ -47,7 +47,7 @@ VIDEO_PROFILE="${MISTER_VIDEO_PROFILE:-summary}"
 VIDEO_THREADS="${MISTER_VIDEO_THREADS:-}"
 VIDEO_THREAD_TYPE="${MISTER_VIDEO_THREAD_TYPE:-none}"
 VIDEO_CONVERT="${MISTER_VIDEO_CONVERT:-custom-neon}"
-UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
+UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-launcher}"
 MIN_FPS="${MISTER_BENCH_MIN_FPS:-55}"
 MAX_VSYNC_FALLBACK="${MISTER_BENCH_MAX_VSYNC_FALLBACK:-0}"
 MAX_VSYNC_ERRORS="${MISTER_BENCH_MAX_VSYNC_ERRORS:-0}"
@@ -70,7 +70,7 @@ usage() {
   echo "         --video-queue-depth N  --video-scale source|fit-height|fit-width|native"
   echo "         --video-profile summary|full|trace  --video-threads N  --video-thread-type none|frame|slice|auto"
   echo "         --video-convert custom-neon|swscale-rgb565"
-  echo "         --ui-scope all|launcher|arcade"
+  echo "         --ui-scope launcher|arcade|all (default: launcher)"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
   echo "Gate env: MISTER_BENCH_MIN_FPS=$MIN_FPS, MISTER_BENCH_MAX_VSYNC_FALLBACK=$MAX_VSYNC_FALLBACK,"
@@ -88,12 +88,13 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --self-test) SELF_TEST=1; shift ;;
     --device) BUILD_PROFILE=release-device; shift ;;
-    --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
+    --video) INCLUDE_VIDEO=1; UI_SCOPE=all; BUILD_FLAG+=(--video); shift ;;
     --scene)
       SCENE_FILTER=1
       BENCH_SCENES=("${2:?}")
       if [[ "$2" == "video_playback" ]]; then
         INCLUDE_VIDEO=1
+        UI_SCOPE=all
         BUILD_FLAG+=(--video)
       fi
       shift 2
@@ -170,14 +171,8 @@ elif [[ "$SCENE_FILTER" -eq 0 && "$UI_SCOPE" == "arcade" ]]; then
 elif [[ "$SCENE_FILTER" -eq 0 && "$UI_SCOPE" == "launcher" ]]; then
   BENCH_SCENES=(launcher)
 fi
-if [[ "$UI_SCOPE" != "all" ]]; then
-  filtered_build_flags=()
-  for flag in "${BUILD_FLAG[@]}"; do
-    if [[ "$flag" != "--all-scenes" ]]; then
-      filtered_build_flags+=("$flag")
-    fi
-  done
-  BUILD_FLAG=("${filtered_build_flags[@]}")
+if [[ "$UI_SCOPE" == "all" ]]; then
+  BUILD_FLAG+=(--all-scenes)
 fi
 for numeric_var in MIN_FPS MAX_VSYNC_FALLBACK MAX_VSYNC_ERRORS; do
   numeric_value="${!numeric_var}"

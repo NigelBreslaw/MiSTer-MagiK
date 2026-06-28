@@ -40,8 +40,8 @@ Deprecated for arcade performance conclusions:
 Use these entrypoints:
 
 ```bash
-scripts/profile-arcade-scroll.sh LABEL
-scripts/profile-preview-scroll.sh LABEL
+scripts/profile-arcade-scroll.sh LABEL --secs 30 --scenario turbo-hold
+scripts/profile-preview-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-first-preview.sh LABEL --skip-build
 ```
 
@@ -50,15 +50,14 @@ before/after device evidence with the same command set. Use labels that include
 the PR slice and BEFORE/AFTER state:
 
 ```bash
-scripts/profile-preview-scroll.sh 60 held-scroll LABEL-FADE-VEL --skip-build --visual-captures 0
-scripts/profile-preview-scroll.sh 60 turbo-hold LABEL-FADE-TURBO --skip-build --visual-captures 0
-scripts/profile-preview-scroll.sh 60 held-scroll LABEL-CPU-FADE-VEL --cpu-profile --visual-captures 0
+scripts/profile-preview-scroll.sh LABEL-FADE-TURBO --skip-build --secs 30 --scenario turbo-hold --visual-captures 0
+scripts/profile-preview-scroll.sh LABEL-CPU-FADE-TURBO --cpu-profile --secs 30 --scenario turbo-hold --visual-captures 0
 ```
 
 The CPU profile command builds/deploys the profiling binary, runs the real
 Main-supervised Arcade screen with `MISTER_PPROF=1`, exits after the trace
 window so the profiler can flush, and pulls
-`build/preview-scroll-profiles/LABEL-CPU-FADE-VEL-arcade-cpu.svg`.
+`build/preview-scroll-profiles/LABEL-CPU-FADE-TURBO-arcade-cpu.svg`.
 
 Preview-scroll benchmarks synchronously warm the screenshot archive cache before
 the benchmark timing window and first launcher step unless
@@ -89,7 +88,9 @@ After the preview fade optimization work, run the final release gate with:
 scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
 ```
 
-The gate runs 60s held-scroll fade and 60s turbo-hold fade, then fails if either
+The gate is for release-candidate confirmation. Per-commit scroll evidence uses
+the shorter targeted 30s `turbo-hold` profile above, then the gate can be run
+with `--secs 30` when a combined preservation check is useful. It fails if a
 trace has non-vsync pacing sources, non-zero max miss streak, or p99 work
 at/above the configured threshold. It reports `work_gt_16_7ms` separately so
 isolated scheduler/prepare-wall outliers can be investigated without hiding p99
@@ -268,7 +269,7 @@ For screenshot-pack index work, run both:
 ```bash
 scripts/profile-preview-index-refresh.sh PREVIEW-IDX-DB-YYYYMMDD
 scripts/profile-first-preview.sh FIRST-IDX-YYYYMMDD --skip-build
-scripts/profile-preview-scroll.sh 30 held-scroll SCROLL-IDX-YYYYMMDD --skip-build --skip-preview-warm --visual-captures 0
+scripts/profile-preview-scroll.sh SCROLL-IDX-YYYYMMDD --skip-build --secs 30 --scenario turbo-hold --skip-preview-warm --visual-captures 0
 ```
 
 Acceptance evidence should show per-system DB refresh timing from
