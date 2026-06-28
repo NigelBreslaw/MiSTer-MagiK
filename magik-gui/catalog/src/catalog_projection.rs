@@ -400,43 +400,13 @@ pub(crate) fn materialize_arcade_ui_projections(
         r#"
         INSERT INTO ui_arcade_preferred(
             ordinal,
-            launchable_id,
-            launch_id,
-            title,
-            sort_title,
-            preview_asset_key,
-            has_preview,
-            system_id,
-            year,
-            manufacturer,
-            category,
-            discovered_at_unix,
-            identity_id,
             family_id,
-            parent_setname,
-            asset_key,
-            asset_link_reason,
-            preferred_reason
+            variant_ordinal
         )
         SELECT
             row_number() OVER (ORDER BY sort_title ASC, launch_ref ASC) - 1,
-            launchable_id,
-            launch_id,
-            title,
-            sort_title,
-            preview_asset_key,
-            has_preview,
-            system_id,
-            year,
-            manufacturer,
-            category,
-            discovered_at_unix,
-            identity_id,
             family_id,
-            parent_setname,
-            asset_key,
-            asset_link_reason,
-            preferred_reason
+            variant_ordinal
         FROM ui_arcade_variants_text
         WHERE preferred = 1
         ORDER BY sort_title ASC, launch_ref ASC;
@@ -451,7 +421,7 @@ pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(),
     tx.execute(
         "INSERT INTO launcher_catalog(ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
          SELECT ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
-         FROM ui_arcade_preferred
+         FROM ui_arcade_preferred_text
          ORDER BY ordinal",
         [],
     )

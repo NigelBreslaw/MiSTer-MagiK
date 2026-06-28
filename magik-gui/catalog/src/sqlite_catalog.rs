@@ -1600,23 +1600,9 @@ fn write_sqlite_scan_with_sources_inner(
             JOIN games ON games.game_key_id = launchable_identity_rows.game_key_id;
         CREATE TABLE ui_arcade_preferred (
             ordinal INTEGER PRIMARY KEY,
-            launchable_id TEXT NOT NULL,
-            launch_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            sort_title TEXT NOT NULL,
-            preview_asset_key TEXT NOT NULL,
-            has_preview INTEGER NOT NULL,
-            system_id TEXT NOT NULL,
-            year INTEGER,
-            manufacturer TEXT,
-            category TEXT,
-            discovered_at_unix INTEGER,
-            identity_id TEXT,
             family_id TEXT NOT NULL,
-            parent_setname TEXT,
-            asset_key TEXT,
-            asset_link_reason TEXT NOT NULL,
-            preferred_reason TEXT NOT NULL
+            variant_ordinal INTEGER NOT NULL,
+            UNIQUE(family_id, variant_ordinal)
         );
         CREATE TABLE ui_arcade_variants (
             family_id TEXT NOT NULL,
@@ -1665,16 +1651,35 @@ fn write_sqlite_scan_with_sources_inner(
             JOIN launch_targets ON launch_targets.launch_id = launcher_catalog.launch_id
             LEFT JOIN profiles ON profiles.profile_id = launch_targets.profile_id
             WHERE launch_targets.launch_kind = 'virtual-mgl';
-        CREATE VIEW ui_arcade_preferred_text AS
-            SELECT ui_arcade_preferred.*,
-                   launch_plans.launch_ref AS launch_ref
-            FROM ui_arcade_preferred
-            JOIN launch_plans ON launch_plans.launch_id = ui_arcade_preferred.launch_id;
         CREATE VIEW ui_arcade_variants_text AS
             SELECT ui_arcade_variants.*,
                    launch_plans.launch_ref AS launch_ref
             FROM ui_arcade_variants
             JOIN launch_plans ON launch_plans.launch_id = ui_arcade_variants.launch_id;
+        CREATE VIEW ui_arcade_preferred_text AS
+            SELECT ui_arcade_preferred.ordinal,
+                   ui_arcade_variants_text.launchable_id,
+                   ui_arcade_variants_text.launch_id,
+                   ui_arcade_variants_text.title,
+                   ui_arcade_variants_text.sort_title,
+                   ui_arcade_variants_text.preview_asset_key,
+                   ui_arcade_variants_text.has_preview,
+                   ui_arcade_variants_text.system_id,
+                   ui_arcade_variants_text.year,
+                   ui_arcade_variants_text.manufacturer,
+                   ui_arcade_variants_text.category,
+                   ui_arcade_variants_text.discovered_at_unix,
+                   ui_arcade_variants_text.identity_id,
+                   ui_arcade_variants_text.family_id,
+                   ui_arcade_variants_text.parent_setname,
+                   ui_arcade_variants_text.asset_key,
+                   ui_arcade_variants_text.asset_link_reason,
+                   ui_arcade_variants_text.preferred_reason,
+                   ui_arcade_variants_text.launch_ref
+            FROM ui_arcade_preferred
+            JOIN ui_arcade_variants_text
+              ON ui_arcade_variants_text.family_id = ui_arcade_preferred.family_id
+             AND ui_arcade_variants_text.variant_ordinal = ui_arcade_preferred.variant_ordinal;
         CREATE VIEW launcher_catalog_text AS
             SELECT launcher_catalog.*,
                    launch_plans.launch_ref AS launch_ref
@@ -2377,11 +2382,7 @@ fn set_preview_flags_for_system(
     system_id: &str,
     entries: Option<&[String]>,
 ) -> Result<(usize, usize), String> {
-    const TABLES: &[&str] = &[
-        "launcher_catalog",
-        "ui_arcade_preferred",
-        "ui_arcade_variants",
-    ];
+    const TABLES: &[&str] = &["launcher_catalog", "ui_arcade_variants"];
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin preview index refresh tx: {e}"))?;
@@ -2781,12 +2782,8 @@ mod tests {
         assert_eq!(row.result, "ok");
         assert_eq!(row.system_id, "nes");
         assert_eq!(row.index_entries, 1);
-        assert_eq!(row.candidate_rows, 6);
+        assert_eq!(row.candidate_rows, 4);
         assert_eq!(preview_flag_counts(&db, "launcher_catalog", "nes"), (2, 1));
-        assert_eq!(
-            preview_flag_counts(&db, "ui_arcade_preferred", "nes"),
-            (2, 1)
-        );
         assert_eq!(
             preview_flag_counts(&db, "ui_arcade_variants", "nes"),
             (2, 1)
@@ -2809,12 +2806,8 @@ mod tests {
 
         assert_eq!(row.result, "missing-index");
         assert!(row.error.is_empty());
-        assert_eq!(row.candidate_rows, 3);
+        assert_eq!(row.candidate_rows, 2);
         assert_eq!(preview_flag_counts(&db, "launcher_catalog", "nes"), (1, 0));
-        assert_eq!(
-            preview_flag_counts(&db, "ui_arcade_preferred", "nes"),
-            (1, 0)
-        );
         assert_eq!(
             preview_flag_counts(&db, "ui_arcade_variants", "nes"),
             (1, 0)
@@ -3756,6 +3749,20 @@ mod tests {
             !sqlite_column_exists(&conn, "ui_arcade_preferred", "asset_pack_id")
                 .expect("preferred asset pack")
         );
+        assert!(sqlite_column_exists(&conn, "ui_arcade_preferred", "family_id").expect("preferred family"));
+        assert!(
+            sqlite_column_exists(&conn, "ui_arcade_preferred", "variant_ordinal")
+                .expect("preferred variant ordinal")
+        );
+        assert!(!sqlite_column_exists(&conn, "ui_arcade_preferred", "title").expect("preferred title"));
+        assert!(
+            !sqlite_column_exists(&conn, "ui_arcade_preferred", "preview_asset_key")
+                .expect("preferred preview")
+        );
+        assert!(
+            !sqlite_column_exists(&conn, "ui_arcade_preferred", "system_id")
+                .expect("preferred system")
+        );
         assert!(
             !sqlite_column_exists(&conn, "ui_arcade_variants", "asset_pack_id")
                 .expect("variant asset pack")
@@ -4005,7 +4012,7 @@ mod tests {
         let preferred = conn
             .query_row(
                 "SELECT identity_id,family_id,preferred_reason,title,has_preview
-                 FROM ui_arcade_preferred",
+                 FROM ui_arcade_preferred_text",
                 [],
                 |row| {
                     Ok((
@@ -4083,7 +4090,7 @@ mod tests {
         let preferred = conn
             .query_row(
                 "SELECT identity_id,family_id,preferred_reason,has_preview
-                 FROM ui_arcade_preferred",
+                 FROM ui_arcade_preferred_text",
                 [],
                 |row| {
                     Ok((
