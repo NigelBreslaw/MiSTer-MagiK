@@ -1,7 +1,7 @@
 label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	catalog_load_open_us	catalog_load_schema_check_us	catalog_load_query_us	catalog_load_query_prepare_us	catalog_load_query_first_row_us	catalog_load_query_row_read_us	catalog_load_query_row_hydrate_us	catalog_load_launch_plans_us	catalog_load_systems_us	catalog_load_catalog_us	result
-WARMCAT-BEFORE 1 498 true 471 459165 -1  44 75 -1  ok																						
-WARMCAT-BEFORE 1 503 true 467 463360 -1  46 73 -1  ok																						
-WARMCAT-AFTER 1 48 true -1  2 200 34 72 498 474516 ok																						
+WARMCAT-BEFORE 1 498 true 471 459165 -1  44 75 -1  ok
+WARMCAT-BEFORE 1 503 true 467 463360 -1  46 73 -1  ok
+WARMCAT-AFTER 1 48 true -1  2 200 34 72 498 474516 ok
 WARMCAT-AFTER	1	48	true	-1		2	194	33	74	515	486417											ok
 PERFREVIEW-20260624-WARM	1	49	true	-1		2	257	34	71	482	463078											ok
 PERFREVIEW-20260624-WARM	2	48	true	-1		2	262	36	71	482	463318											ok
@@ -176,3 +176,6 @@ NAVPLAN-AFTER-COLDNAV-20260628	3	24	true	-1		2	251	33	76	2356	296795	151597	0	0	
 LAUNCHPLANVIEW-AFTER-COLDNAV-20260628	1	24	true	-1		2	268	31	75	2356	291590	153563	0	0	0	0	0	0	0	0	138018	ok
 LAUNCHPLANVIEW-AFTER-COLDNAV-20260628	2	24	true	-1		2	249	33	76	2356	292267	151449	0	0	0	0	0	0	0	0	140806	ok
 LAUNCHPLANVIEW-AFTER-COLDNAV-20260628	3	24	true	-1		2	250	33	77	2356	297628	154979	0	0	0	0	0	0	0	0	142640	ok
+SQLLAUNCHREF-AFTER-COLDNAV-20260628	1	64	false	-1		2	355	11	76	-1												ok
+SQLLAUNCHREF-AFTER-COLDNAV-20260628	2	24	true	-1		2	259	32	122	2356	298260	154300	0	0	0	0	0	0	0	0	143950	ok
+SQLLAUNCHREF-AFTER-COLDNAV-20260628	3	22	true	-1		2	250	33	113	2357	298794	155046	0	0	0	0	0	0	0	0	143737	ok

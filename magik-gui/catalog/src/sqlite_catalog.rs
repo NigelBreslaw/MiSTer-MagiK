@@ -276,7 +276,12 @@ pub(crate) fn load_virtual_launch_plans_for_system_from_conn(
 ) -> Result<Vec<VirtualLaunchPlan>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT launch_paths.path,
+            "SELECT CASE launch_targets.launch_ref_kind
+                        WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                        WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                        WHEN 'same-payload' THEN payload_paths.path
+                        ELSE launch_paths.path
+                    END AS launch_ref,
                     games.title,
                     games.system_id,
                     COALESCE(profiles.core_path, launch_targets.core_id),
@@ -286,14 +291,14 @@ pub(crate) fn load_virtual_launch_plans_for_system_from_conn(
                     COALESCE(launch_targets.delay_secs, 1)
              FROM launch_targets
              JOIN games ON games.game_key_id = launch_targets.game_key_id
-             JOIN path_values_text launch_paths
+             LEFT JOIN path_values_text launch_paths
                     ON launch_paths.path_id = launch_targets.launch_path_id
              LEFT JOIN path_values_text payload_paths
                     ON payload_paths.path_id = launch_targets.payload_path_id
              LEFT JOIN profiles ON profiles.profile_id = launch_targets.profile_id
              WHERE launch_targets.launch_kind = 'virtual-mgl'
                AND games.system_id = ?1
-             ORDER BY games.sort_title, launch_paths.path
+             ORDER BY games.sort_title, launch_ref
              LIMIT ?2",
         )
         .map_err(|e| format!("prepare virtual launch list query: {e}"))?;
@@ -1494,7 +1499,8 @@ fn write_sqlite_scan_with_sources_inner(
             profile_id TEXT,
             launch_kind TEXT NOT NULL,
             source_path_id INTEGER NOT NULL,
-            launch_path_id INTEGER NOT NULL,
+            launch_ref_kind TEXT NOT NULL,
+            launch_path_id INTEGER,
             launcher_path_id INTEGER,
             payload_path_id INTEGER,
             core_id TEXT NOT NULL,
@@ -1512,26 +1518,39 @@ fn write_sqlite_scan_with_sources_inner(
             FROM path_values
             JOIN path_prefixes ON path_prefixes.prefix_id = path_values.prefix_id;
         CREATE VIEW launch_plans AS
+            WITH expanded AS (
+                SELECT lt.*,
+                       source_paths.path AS source_path,
+                       CASE lt.launch_ref_kind
+                           WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                           WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                           WHEN 'same-payload' THEN payload_paths.path
+                           ELSE launch_paths.path
+                       END AS launch_ref,
+                       launcher_paths.path AS launcher_path,
+                       payload_paths.path AS payload_path
+                FROM launch_targets lt
+                JOIN path_values_text source_paths ON source_paths.path_id = lt.source_path_id
+                LEFT JOIN path_values_text launch_paths ON launch_paths.path_id = lt.launch_path_id
+                LEFT JOIN path_values_text launcher_paths ON launcher_paths.path_id = lt.launcher_path_id
+                LEFT JOIN path_values_text payload_paths ON payload_paths.path_id = lt.payload_path_id
+            )
             SELECT 'plan:' || games.game_id AS plan_id,
-                   lt.launch_id,
+                   expanded.launch_id,
                    games.game_id,
-                   lt.profile_id,
-                   lt.launch_kind,
-                   source_paths.path AS source_path,
-                   launch_paths.path AS launch_ref,
-                   launcher_paths.path AS launcher_path,
-                   payload_paths.path AS payload_path,
-                   lt.core_id,
-                   lt.hardware_id,
-                   lt.setname,
-                   lt.parent,
-                   lt.confidence
-            FROM launch_targets lt
-            JOIN games ON games.game_key_id = lt.game_key_id
-            JOIN path_values_text source_paths ON source_paths.path_id = lt.source_path_id
-            JOIN path_values_text launch_paths ON launch_paths.path_id = lt.launch_path_id
-            LEFT JOIN path_values_text launcher_paths ON launcher_paths.path_id = lt.launcher_path_id
-            LEFT JOIN path_values_text payload_paths ON payload_paths.path_id = lt.payload_path_id;
+                   expanded.profile_id,
+                   expanded.launch_kind,
+                   expanded.source_path,
+                   expanded.launch_ref,
+                   expanded.launcher_path,
+                   expanded.payload_path,
+                   expanded.core_id,
+                   expanded.hardware_id,
+                   expanded.setname,
+                   expanded.parent,
+                   expanded.confidence
+            FROM expanded
+            JOIN games ON games.game_key_id = expanded.game_key_id;
         CREATE VIEW launchables AS
             SELECT games.game_id AS launchable_id,
                    lt.launch_id AS launch_id,
@@ -1539,7 +1558,12 @@ fn write_sqlite_scan_with_sources_inner(
                    games.system_id AS system_id,
                    lt.launch_kind AS launch_kind,
                    source_paths.path AS source_path,
-                   launch_paths.path AS launch_ref,
+                   CASE lt.launch_ref_kind
+                       WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                       WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                       WHEN 'same-payload' THEN payload_paths.path
+                       ELSE launch_paths.path
+                   END AS launch_ref,
                    lt.setname AS setname,
                    lt.core_id AS core_id,
                    lt.hardware_id AS hardware_id,
@@ -1547,7 +1571,8 @@ fn write_sqlite_scan_with_sources_inner(
             FROM launch_targets lt
             JOIN games ON games.game_key_id = lt.game_key_id
             JOIN path_values_text source_paths ON source_paths.path_id = lt.source_path_id
-            JOIN path_values_text launch_paths ON launch_paths.path_id = lt.launch_path_id;
+            LEFT JOIN path_values_text launch_paths ON launch_paths.path_id = lt.launch_path_id
+            LEFT JOIN path_values_text payload_paths ON payload_paths.path_id = lt.payload_path_id;
         CREATE VIEW launch_plans_text AS SELECT * FROM launch_plans;
         CREATE TABLE launchable_identity_rows (
             game_key_id INTEGER NOT NULL,
@@ -1764,8 +1789,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
             .prepare(
-                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,mount_kind,mount_index,delay_secs,confidence)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_ref_kind,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,mount_kind,mount_index,delay_secs,confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             )
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
         let mut identity_stmt = tx
@@ -1878,9 +1903,14 @@ fn write_sqlite_scan_with_sources_inner(
                 .with_launch_id(launch_id));
             }
             let source_path_id = path_interner.intern(discovery.source_path.as_str());
-            let launch_path_id = path_interner.intern(plan_launch_ref.as_str());
             let launcher_path_id = path_interner.intern_optional(launcher_path);
             let payload_path_id = path_interner.intern_optional(payload_path);
+            let launch_ref_storage = launch_ref_storage_for(
+                plan_launch_ref.as_str(),
+                payload_path,
+                launch_kind_for_discovery(discovery),
+            );
+            let launch_path_id = path_interner.intern_optional(launch_ref_storage.path);
             let profile_id = profile_id_for_discovery(discovery);
             let mount = launch_target_mount_for_discovery(discovery, profile_id);
             target_stmt
@@ -1890,6 +1920,7 @@ fn write_sqlite_scan_with_sources_inner(
                     profile_id,
                     launch_kind_for_discovery(discovery),
                     source_path_id,
+                    launch_ref_storage.kind,
                     launch_path_id,
                     launcher_path_id,
                     payload_path_id,
@@ -2470,6 +2501,46 @@ pub(crate) fn mount_kind_str(kind: MountKind) -> &'static str {
         MountKind::LoadFile => "load-file",
         MountKind::MountImage => "mount-image",
         MountKind::Core => "core",
+    }
+}
+
+struct LaunchRefStorage<'a> {
+    kind: &'static str,
+    path: Option<&'a str>,
+}
+
+fn launch_ref_storage_for<'a>(
+    launch_ref: &'a str,
+    payload_path: Option<&'a str>,
+    launch_kind: &str,
+) -> LaunchRefStorage<'a> {
+    if let Some(payload_path) = payload_path {
+        if launch_kind == "virtual-mgl" {
+            let payload_ref = format!("magik-plan:payload:{payload_path}");
+            if launch_ref == payload_ref {
+                return LaunchRefStorage {
+                    kind: "payload",
+                    path: None,
+                };
+            }
+            let archive_ref = format!("magik-plan:archive:{payload_path}");
+            if launch_ref == archive_ref {
+                return LaunchRefStorage {
+                    kind: "archive",
+                    path: None,
+                };
+            }
+        }
+        if launch_kind == "catalog-entry" && launch_ref == payload_path {
+            return LaunchRefStorage {
+                kind: "same-payload",
+                path: None,
+            };
+        }
+    }
+    LaunchRefStorage {
+        kind: "path",
+        path: Some(launch_ref),
     }
 }
 
