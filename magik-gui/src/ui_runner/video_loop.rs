@@ -255,8 +255,8 @@ pub(super) fn run_video_playback_loop(
             std::process::exit(1);
         }
     };
-    let mut audio_sink = match crate::mr_audio::MrAudioSink::open_default() {
-        Ok(sink) => sink,
+    let audio_writer = match AudioWriteWorker::start() {
+        Ok(worker) => worker,
         Err(e) => {
             eprintln!("video_playback audio: {e}");
             std::process::exit(1);
@@ -312,6 +312,9 @@ pub(super) fn run_video_playback_loop(
     );
 
     while secs == 0 || start.elapsed().as_secs() < secs {
+        if !drain_audio_write_results(&audio_writer, &frame_worker, &mut audio_stats) {
+            break;
+        }
         let frame_start = Instant::now();
         let t0 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
@@ -375,26 +378,18 @@ pub(super) fn run_video_playback_loop(
                                     direct_frame = Some(frame);
                                 }
                             }
-                            let audio_t0 = Instant::now();
-                            match audio_sink.write_frames(&audio) {
-                                Ok(written) => {
-                                    phases.audio_write_us = audio_t0.elapsed().as_micros() as u64;
-                                    phases.audio_underrun = written < audio_requested_frames;
-                                    video_profile.audio_write_us = phases.audio_write_us;
-                                    video_profile.audio_underrun = phases.audio_underrun;
-                                    audio_stats.add(
-                                        Duration::from_micros(phases.audio_write_us),
-                                        audio_requested_frames,
-                                        written,
-                                        loop_count,
-                                    );
-                                }
-                                Err(e) => {
-                                    eprintln!("video_playback audio: {e}");
-                                    break;
-                                }
+                            if !enqueue_audio_write(
+                                &audio_writer,
+                                &frame_worker,
+                                &mut audio_stats,
+                                audio,
+                                audio_requested_frames,
+                                loop_count,
+                                &mut phases,
+                                &mut video_profile,
+                            ) {
+                                break;
                             }
-                            frame_worker.recycle_audio(audio);
                         }
                         Ok(None) => {
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
@@ -523,26 +518,18 @@ pub(super) fn run_video_playback_loop(
                                     direct_frame = Some(frame);
                                 }
                             }
-                            let audio_t0 = Instant::now();
-                            match audio_sink.write_frames(&audio) {
-                                Ok(written) => {
-                                    phases.audio_write_us = audio_t0.elapsed().as_micros() as u64;
-                                    phases.audio_underrun = written < audio_requested_frames;
-                                    video_profile.audio_write_us = phases.audio_write_us;
-                                    video_profile.audio_underrun = phases.audio_underrun;
-                                    audio_stats.add(
-                                        Duration::from_micros(phases.audio_write_us),
-                                        audio_requested_frames,
-                                        written,
-                                        loop_count,
-                                    );
-                                }
-                                Err(e) => {
-                                    eprintln!("video_playback audio: {e}");
-                                    break;
-                                }
+                            if !enqueue_audio_write(
+                                &audio_writer,
+                                &frame_worker,
+                                &mut audio_stats,
+                                audio,
+                                audio_requested_frames,
+                                loop_count,
+                                &mut phases,
+                                &mut video_profile,
+                            ) {
+                                break;
                             }
-                            frame_worker.recycle_audio(audio);
                         }
                         Ok(None) => {
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
@@ -620,6 +607,7 @@ pub(super) fn run_video_playback_loop(
         frames += 1;
     }
 
+    let _ = drain_audio_write_results(&audio_writer, &frame_worker, &mut audio_stats);
     let elapsed = start.elapsed().as_secs_f64();
     println!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
@@ -672,6 +660,154 @@ impl AudioWindowStats {
 
     pub(super) fn reset(&mut self) {
         *self = Self::default();
+    }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+struct AudioWriteJob {
+    audio: Vec<i16>,
+    requested_frames: usize,
+    loop_count: u64,
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+struct AudioWriteResult {
+    audio: Vec<i16>,
+    requested_frames: usize,
+    written_frames: usize,
+    loop_count: u64,
+    write_us: u64,
+    error: Option<String>,
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+struct AudioWriteWorker {
+    tx: mpsc::SyncSender<AudioWriteJob>,
+    rx: mpsc::Receiver<AudioWriteResult>,
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+impl AudioWriteWorker {
+    fn start() -> Result<Self, String> {
+        let mut sink = crate::mr_audio::MrAudioSink::open_default()?;
+        let (tx, job_rx) = mpsc::sync_channel::<AudioWriteJob>(4);
+        let (result_tx, rx) = mpsc::channel::<AudioWriteResult>();
+        std::thread::Builder::new()
+            .name("video-audio-write".to_string())
+            .spawn(move || {
+                while let Ok(job) = job_rx.recv() {
+                    let t0 = Instant::now();
+                    let result = match sink.write_frames(&job.audio) {
+                        Ok(written) => AudioWriteResult {
+                            audio: job.audio,
+                            requested_frames: job.requested_frames,
+                            written_frames: written,
+                            loop_count: job.loop_count,
+                            write_us: t0.elapsed().as_micros() as u64,
+                            error: None,
+                        },
+                        Err(e) => AudioWriteResult {
+                            audio: job.audio,
+                            requested_frames: job.requested_frames,
+                            written_frames: 0,
+                            loop_count: job.loop_count,
+                            write_us: t0.elapsed().as_micros() as u64,
+                            error: Some(e),
+                        },
+                    };
+                    let failed = result.error.is_some();
+                    if result_tx.send(result).is_err() || failed {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("spawn video-audio-write: {e}"))?;
+        Ok(Self { tx, rx })
+    }
+
+    fn try_send(&self, job: AudioWriteJob) -> Result<(), mpsc::TrySendError<AudioWriteJob>> {
+        self.tx.try_send(job)
+    }
+
+    fn try_recv(&self) -> Result<AudioWriteResult, mpsc::TryRecvError> {
+        self.rx.try_recv()
+    }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+fn drain_audio_write_results(
+    audio_writer: &AudioWriteWorker,
+    frame_worker: &crate::video_player::VideoFrameWorker,
+    audio_stats: &mut AudioWindowStats,
+) -> bool {
+    loop {
+        match audio_writer.try_recv() {
+            Ok(result) => {
+                if let Some(e) = result.error {
+                    eprintln!("video_playback audio: {e}");
+                    frame_worker.recycle_audio(result.audio);
+                    return false;
+                }
+                audio_stats.add(
+                    Duration::from_micros(result.write_us),
+                    result.requested_frames,
+                    result.written_frames,
+                    result.loop_count,
+                );
+                frame_worker.recycle_audio(result.audio);
+            }
+            Err(mpsc::TryRecvError::Empty) => return true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                eprintln!("video_playback audio: writer stopped");
+                return false;
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "video", mister_bench_scenes))]
+#[allow(clippy::too_many_arguments)]
+fn enqueue_audio_write(
+    audio_writer: &AudioWriteWorker,
+    frame_worker: &crate::video_player::VideoFrameWorker,
+    audio_stats: &mut AudioWindowStats,
+    audio: Vec<i16>,
+    requested_frames: usize,
+    loop_count: u64,
+    phases: &mut VideoFramePhases,
+    video_profile: &mut VideoFrameProfile,
+) -> bool {
+    let audio_t0 = Instant::now();
+    let job = AudioWriteJob {
+        audio,
+        requested_frames,
+        loop_count,
+    };
+    match audio_writer.try_send(job) {
+        Ok(()) => {
+            phases.audio_write_us = audio_t0.elapsed().as_micros() as u64;
+            video_profile.audio_write_us = phases.audio_write_us;
+            true
+        }
+        Err(mpsc::TrySendError::Full(job)) => {
+            phases.audio_write_us = audio_t0.elapsed().as_micros() as u64;
+            phases.audio_underrun = true;
+            video_profile.audio_write_us = phases.audio_write_us;
+            video_profile.audio_underrun = true;
+            audio_stats.add(
+                Duration::from_micros(phases.audio_write_us),
+                job.requested_frames,
+                0,
+                job.loop_count,
+            );
+            frame_worker.recycle_audio(job.audio);
+            true
+        }
+        Err(mpsc::TrySendError::Disconnected(job)) => {
+            eprintln!("video_playback audio: writer stopped");
+            frame_worker.recycle_audio(job.audio);
+            false
+        }
     }
 }
 
