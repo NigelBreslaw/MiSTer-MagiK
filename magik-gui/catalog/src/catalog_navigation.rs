@@ -8,14 +8,17 @@ use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::preview_worker;
 use crate::sqlite_catalog;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 4;
-const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB4\0";
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 5;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB5\0";
+const NAV_REF_FULL: u8 = 0;
+const NAV_REF_PAYLOAD: u8 = 1;
+const NAV_REF_ARCHIVE: u8 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogNavigationProjection {
@@ -219,7 +222,9 @@ fn structured_launch_plans(catalog: &ArcadeCatalog) -> Vec<NavigationLaunchPlan>
         if !seen.insert(game.mra_path.to_string()) {
             continue;
         }
-        if let LaunchTarget::Structured(plan) = catalog.launch_target_for_ref(game.mra_path.as_ref()) {
+        if let LaunchTarget::Structured(plan) =
+            catalog.launch_target_for_ref(game.mra_path.as_ref())
+        {
             plans.push(NavigationLaunchPlan::from(&plan));
         }
     }
@@ -235,8 +240,226 @@ fn write_catalog_navigation_projection(
     write_bytes_atomically(navigation_path, &compressed)
 }
 
-fn encode_navigation_projection(projection: &CatalogNavigationProjection) -> Result<Vec<u8>, String> {
+struct CompactNavigationProjection<'a> {
+    launch_defaults: Vec<NavigationLaunchDefault>,
+    games: Vec<CompactNavigationGame<'a>>,
+    launch_plans: Vec<CompactNavigationLaunchPlan<'a>>,
+}
+
+struct CompactNavigationGame<'a> {
+    title: &'a str,
+    launch_ref: CompactGameLaunchRef<'a>,
+    preview_asset_key: &'a str,
+    has_preview: bool,
+    system_id: &'a str,
+    year: Option<u16>,
+    manufacturer: &'a str,
+    category: &'a str,
+    is_new: bool,
+}
+
+enum CompactGameLaunchRef<'a> {
+    Full(&'a str),
+    PlanIndex(u32),
+}
+
+struct CompactNavigationLaunchPlan<'a> {
+    game_index: u32,
+    ref_kind: u8,
+    full_launch_ref: Option<&'a str>,
+    payload_path: &'a str,
+    core_path_override: Option<&'a str>,
+    mount_override: Option<NavigationLaunchMount>,
+}
+
+#[derive(Clone)]
+struct NavigationLaunchDefault {
+    system_id: String,
+    core_path: Arc<str>,
+    mount_kind: Arc<str>,
+    mount_index: u8,
+    delay_secs: u8,
+}
+
+#[derive(Clone)]
+struct NavigationLaunchMount {
+    mount_kind: Arc<str>,
+    mount_index: u8,
+    delay_secs: u8,
+}
+
+struct CompactDecodedGame {
+    title: Arc<str>,
+    launch_ref: CompactDecodedGameLaunchRef,
+    preview_archive_path: Arc<str>,
+    preview_asset_key: Arc<str>,
+    has_preview: bool,
+    system_id: Arc<str>,
+    year: Option<u16>,
+    manufacturer: Arc<str>,
+    category: Arc<str>,
+    is_new: bool,
+}
+
+enum CompactDecodedGameLaunchRef {
+    Full(Arc<str>),
+    PlanIndex(usize),
+}
+
+impl<'a> CompactNavigationProjection<'a> {
+    fn from_projection(projection: &'a CatalogNavigationProjection) -> Result<Self, String> {
+        let plan_by_ref = projection
+            .launch_plans
+            .iter()
+            .enumerate()
+            .map(|(idx, plan)| (plan.launch_ref.as_ref(), (idx, plan)))
+            .collect::<HashMap<_, _>>();
+        let game_index_by_ref = projection
+            .games
+            .iter()
+            .enumerate()
+            .map(|(idx, game)| (game.launch_ref.as_ref(), idx))
+            .collect::<HashMap<_, _>>();
+
+        let mut default_candidates = BTreeMap::<&str, BTreeMap<(&str, &str, u8, u8), usize>>::new();
+        for plan in &projection.launch_plans {
+            *default_candidates
+                .entry(plan.system_id.as_ref())
+                .or_default()
+                .entry((
+                    plan.core_path.as_ref(),
+                    plan.mount_kind.as_ref(),
+                    plan.mount_index,
+                    plan.delay_secs,
+                ))
+                .or_default() += 1;
+        }
+        let mut defaults_by_system = HashMap::<&str, NavigationLaunchDefault>::new();
+        let mut launch_defaults = Vec::new();
+        for (system_id, candidates) in default_candidates {
+            let ((core_path, mount_kind, mount_index, delay_secs), _) = candidates
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .ok_or_else(|| format!("navigation launch defaults missing for {system_id}"))?;
+            let default = NavigationLaunchDefault {
+                system_id: system_id.to_string(),
+                core_path: Arc::from(core_path),
+                mount_kind: Arc::from(mount_kind),
+                mount_index,
+                delay_secs,
+            };
+            defaults_by_system.insert(system_id, default.clone());
+            launch_defaults.push(default);
+        }
+
+        let mut games = Vec::with_capacity(projection.games.len());
+        for game in &projection.games {
+            let launch_ref =
+                if let Some((plan_index, plan)) = plan_by_ref.get(game.launch_ref.as_ref()) {
+                    if compact_launch_ref_kind(plan.launch_ref.as_ref())
+                        .and_then(|kind| launch_ref_from_kind(kind, &plan.payload_path).ok())
+                        .is_some_and(|expected| expected.as_ref() == game.launch_ref.as_ref())
+                    {
+                        CompactGameLaunchRef::PlanIndex(
+                            (*plan_index)
+                                .try_into()
+                                .map_err(|_| "navigation plan index too large".to_string())?,
+                        )
+                    } else {
+                        CompactGameLaunchRef::Full(game.launch_ref.as_ref())
+                    }
+                } else {
+                    CompactGameLaunchRef::Full(game.launch_ref.as_ref())
+                };
+            games.push(CompactNavigationGame {
+                title: game.title.as_ref(),
+                launch_ref,
+                preview_asset_key: game.preview_asset_key.as_ref(),
+                has_preview: game.has_preview,
+                system_id: game.system_id.as_ref(),
+                year: game.year,
+                manufacturer: game.manufacturer.as_ref(),
+                category: game.category.as_ref(),
+                is_new: game.is_new,
+            });
+        }
+
+        let mut launch_plans = Vec::with_capacity(projection.launch_plans.len());
+        for plan in &projection.launch_plans {
+            let game_index = game_index_by_ref
+                .get(plan.launch_ref.as_ref())
+                .ok_or_else(|| {
+                    format!("navigation launch plan has no game: {}", plan.launch_ref)
+                })?;
+            let default = defaults_by_system
+                .get(plan.system_id.as_ref())
+                .ok_or_else(|| {
+                    format!("navigation launch default missing for {}", plan.system_id)
+                })?;
+            let core_path_override = if plan.core_path == default.core_path {
+                None
+            } else {
+                Some(plan.core_path.as_ref())
+            };
+            let mount_override = if plan.mount_kind == default.mount_kind
+                && plan.mount_index == default.mount_index
+                && plan.delay_secs == default.delay_secs
+            {
+                None
+            } else {
+                Some(NavigationLaunchMount {
+                    mount_kind: plan.mount_kind.clone(),
+                    mount_index: plan.mount_index,
+                    delay_secs: plan.delay_secs,
+                })
+            };
+            launch_plans.push(CompactNavigationLaunchPlan {
+                game_index: (*game_index)
+                    .try_into()
+                    .map_err(|_| "navigation game index too large".to_string())?,
+                ref_kind: compact_launch_ref_kind(plan.launch_ref.as_ref()).unwrap_or(NAV_REF_FULL),
+                full_launch_ref: compact_launch_ref_kind(plan.launch_ref.as_ref())
+                    .is_none()
+                    .then_some(plan.launch_ref.as_ref()),
+                payload_path: plan.payload_path.as_ref(),
+                core_path_override,
+                mount_override,
+            });
+        }
+
+        Ok(Self {
+            launch_defaults,
+            games,
+            launch_plans,
+        })
+    }
+}
+
+fn compact_launch_ref_kind(launch_ref: &str) -> Option<u8> {
+    if launch_ref.starts_with("magik-plan:payload:") {
+        Some(NAV_REF_PAYLOAD)
+    } else if launch_ref.starts_with("magik-plan:archive:") {
+        Some(NAV_REF_ARCHIVE)
+    } else {
+        None
+    }
+}
+
+fn launch_ref_from_kind(ref_kind: u8, payload_path: &str) -> Result<Arc<str>, String> {
+    match ref_kind {
+        NAV_REF_PAYLOAD => Ok(Arc::from(format!("magik-plan:payload:{payload_path}"))),
+        NAV_REF_ARCHIVE => Ok(Arc::from(format!("magik-plan:archive:{payload_path}"))),
+        value => Err(format!(
+            "navigation compact launch ref kind {value} is invalid"
+        )),
+    }
+}
+
+fn encode_navigation_projection(
+    projection: &CatalogNavigationProjection,
+) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
+    let compact = CompactNavigationProjection::from_projection(projection)?;
     out.extend_from_slice(CATALOG_NAVIGATION_BINARY_MAGIC);
     write_u32(&mut out, projection.schema);
     write_u32(&mut out, projection.catalog_schema_version);
@@ -253,13 +476,30 @@ fn encode_navigation_projection(projection: &CatalogNavigationProjection) -> Res
         write_string(&mut out, &system.title)?;
         write_u64(&mut out, system.count as u64);
     }
-    write_len(&mut out, projection.games.len())?;
-    for game in &projection.games {
-        write_string(&mut out, &game.title)?;
-        write_string(&mut out, &game.launch_ref)?;
-        write_string(&mut out, &game.preview_asset_key)?;
+    write_len(&mut out, compact.launch_defaults.len())?;
+    for default in &compact.launch_defaults {
+        write_string(&mut out, &default.system_id)?;
+        write_string(&mut out, &default.core_path)?;
+        write_string(&mut out, &default.mount_kind)?;
+        out.push(default.mount_index);
+        out.push(default.delay_secs);
+    }
+    write_len(&mut out, compact.games.len())?;
+    for game in &compact.games {
+        write_string(&mut out, game.title)?;
+        match &game.launch_ref {
+            CompactGameLaunchRef::Full(launch_ref) => {
+                out.push(NAV_REF_FULL);
+                write_string(&mut out, launch_ref)?;
+            }
+            CompactGameLaunchRef::PlanIndex(plan_index) => {
+                out.push(NAV_REF_PAYLOAD);
+                write_u32(&mut out, *plan_index);
+            }
+        }
+        write_string(&mut out, game.preview_asset_key)?;
         write_bool(&mut out, game.has_preview);
-        write_string(&mut out, &game.system_id)?;
+        write_string(&mut out, game.system_id)?;
         match game.year {
             Some(year) => {
                 write_bool(&mut out, true);
@@ -267,20 +507,38 @@ fn encode_navigation_projection(projection: &CatalogNavigationProjection) -> Res
             }
             None => write_bool(&mut out, false),
         }
-        write_string(&mut out, &game.manufacturer)?;
-        write_string(&mut out, &game.category)?;
+        write_string(&mut out, game.manufacturer)?;
+        write_string(&mut out, game.category)?;
         write_bool(&mut out, game.is_new);
     }
-    write_len(&mut out, projection.launch_plans.len())?;
-    for plan in &projection.launch_plans {
-        write_string(&mut out, &plan.launch_ref)?;
-        write_string(&mut out, &plan.title)?;
-        write_string(&mut out, &plan.system_id)?;
-        write_string(&mut out, &plan.core_path)?;
-        write_string(&mut out, &plan.payload_path)?;
-        write_string(&mut out, &plan.mount_kind)?;
-        out.push(plan.mount_index);
-        out.push(plan.delay_secs);
+    write_len(&mut out, compact.launch_plans.len())?;
+    for plan in &compact.launch_plans {
+        write_u32(&mut out, plan.game_index);
+        out.push(plan.ref_kind);
+        if plan.ref_kind == NAV_REF_FULL {
+            write_string(
+                &mut out,
+                plan.full_launch_ref
+                    .ok_or_else(|| "navigation full launch ref missing".to_string())?,
+            )?;
+        }
+        write_string(&mut out, plan.payload_path)?;
+        match &plan.core_path_override {
+            Some(value) => {
+                write_bool(&mut out, true);
+                write_string(&mut out, value)?;
+            }
+            None => write_bool(&mut out, false),
+        }
+        match &plan.mount_override {
+            Some(value) => {
+                write_bool(&mut out, true);
+                write_string(&mut out, &value.mount_kind)?;
+                out.push(value.mount_index);
+                out.push(value.delay_secs);
+            }
+            None => write_bool(&mut out, false),
+        }
     }
     Ok(out)
 }
@@ -304,15 +562,39 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
         systems.push(NavigationSystem {
             id: reader.read_string()?,
             title: reader.read_string()?,
-            count: reader.read_u64()?.try_into().map_err(|_| "system count too large".to_string())?,
+            count: reader
+                .read_u64()?
+                .try_into()
+                .map_err(|_| "system count too large".to_string())?,
         });
     }
+    let launch_default_count = reader.read_len()?;
+    let mut launch_defaults = HashMap::<String, NavigationLaunchDefault>::new();
+    for _ in 0..launch_default_count {
+        let system_id = reader.read_string()?;
+        let default = NavigationLaunchDefault {
+            system_id: system_id.clone(),
+            core_path: Arc::from(reader.read_string()?),
+            mount_kind: Arc::from(reader.read_string()?),
+            mount_index: reader.read_u8()?,
+            delay_secs: reader.read_u8()?,
+        };
+        launch_defaults.insert(system_id, default);
+    }
     let game_count = reader.read_len()?;
-    let mut games = Vec::with_capacity(game_count);
+    let mut game_rows = Vec::with_capacity(game_count);
     let mut preview_archive_paths_by_system = HashMap::<String, Arc<str>>::new();
     for _ in 0..game_count {
         let title = reader.read_arc_string()?;
-        let launch_ref = reader.read_arc_string()?;
+        let launch_ref = match reader.read_u8()? {
+            NAV_REF_FULL => CompactDecodedGameLaunchRef::Full(reader.read_arc_string()?),
+            NAV_REF_PAYLOAD => CompactDecodedGameLaunchRef::PlanIndex(reader.read_u32()? as usize),
+            value => {
+                return Err(format!(
+                    "navigation projection launch ref mode {value} is invalid"
+                ))
+            }
+        };
         let preview_asset_key = reader.read_arc_string()?;
         let has_preview = reader.read_bool()?;
         let system_id = reader.read_arc_string()?;
@@ -321,7 +603,9 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
         } else {
             preview_archive_paths_by_system
                 .entry(system_id.to_string())
-                .or_insert_with(|| preview_worker::preview_archive_path_for_system(&system_id).into())
+                .or_insert_with(|| {
+                    preview_worker::preview_archive_path_for_system(&system_id).into()
+                })
                 .clone()
         };
         let year = if reader.read_bool()? {
@@ -332,7 +616,7 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
         let manufacturer = reader.read_arc_string()?;
         let category = reader.read_arc_string()?;
         let is_new = reader.read_bool()?;
-        games.push(NavigationGame {
+        game_rows.push(CompactDecodedGame {
             title,
             launch_ref,
             preview_archive_path,
@@ -348,15 +632,79 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     let launch_plan_count = reader.read_len()?;
     let mut launch_plans = Vec::with_capacity(launch_plan_count);
     for _ in 0..launch_plan_count {
+        let game_index = reader.read_u32()? as usize;
+        let ref_kind = reader.read_u8()?;
+        let full_launch_ref = if ref_kind == NAV_REF_FULL {
+            Some(reader.read_arc_string()?)
+        } else {
+            None
+        };
+        let payload_path = reader.read_arc_string()?;
+        let core_path_override = if reader.read_bool()? {
+            Some(reader.read_arc_string()?)
+        } else {
+            None
+        };
+        let mount_override = if reader.read_bool()? {
+            Some(NavigationLaunchMount {
+                mount_kind: reader.read_arc_string()?,
+                mount_index: reader.read_u8()?,
+                delay_secs: reader.read_u8()?,
+            })
+        } else {
+            None
+        };
+        let game = game_rows
+            .get(game_index)
+            .ok_or_else(|| format!("navigation launch plan game index {game_index} is invalid"))?;
+        let launch_ref = if let Some(launch_ref) = full_launch_ref {
+            launch_ref
+        } else {
+            launch_ref_from_kind(ref_kind, &payload_path)?
+        };
+        let default = launch_defaults
+            .get(game.system_id.as_ref())
+            .ok_or_else(|| format!("navigation launch defaults missing for {}", game.system_id))?;
+        let mount = mount_override.unwrap_or_else(|| NavigationLaunchMount {
+            mount_kind: default.mount_kind.clone(),
+            mount_index: default.mount_index,
+            delay_secs: default.delay_secs,
+        });
         launch_plans.push(NavigationLaunchPlan {
-            launch_ref: reader.read_arc_string()?,
-            title: reader.read_arc_string()?,
-            system_id: reader.read_arc_string()?,
-            core_path: reader.read_arc_string()?,
-            payload_path: reader.read_arc_string()?,
-            mount_kind: reader.read_arc_string()?,
-            mount_index: reader.read_u8()?,
-            delay_secs: reader.read_u8()?,
+            launch_ref,
+            title: game.title.clone(),
+            system_id: game.system_id.clone(),
+            core_path: core_path_override.unwrap_or_else(|| default.core_path.clone()),
+            payload_path,
+            mount_kind: mount.mount_kind,
+            mount_index: mount.mount_index,
+            delay_secs: mount.delay_secs,
+        });
+    }
+    let mut games = Vec::with_capacity(game_rows.len());
+    let launch_refs_by_plan = launch_plans
+        .iter()
+        .map(|plan| plan.launch_ref.clone())
+        .collect::<Vec<_>>();
+    for game in game_rows {
+        let launch_ref = match game.launch_ref {
+            CompactDecodedGameLaunchRef::Full(launch_ref) => launch_ref,
+            CompactDecodedGameLaunchRef::PlanIndex(plan_index) => launch_refs_by_plan
+                .get(plan_index)
+                .cloned()
+                .ok_or_else(|| format!("navigation game plan index {plan_index} is invalid"))?,
+        };
+        games.push(NavigationGame {
+            title: game.title,
+            launch_ref,
+            preview_archive_path: game.preview_archive_path,
+            preview_asset_key: game.preview_asset_key,
+            has_preview: game.has_preview,
+            system_id: game.system_id,
+            year: game.year,
+            manufacturer: game.manufacturer,
+            category: game.category,
+            is_new: game.is_new,
         });
     }
     reader.finish()?;
@@ -448,7 +796,9 @@ impl<'a> NavigationBinaryReader<'a> {
         match self.read_u8()? {
             0 => Ok(false),
             1 => Ok(true),
-            value => Err(format!("navigation projection bool value {value} is invalid")),
+            value => Err(format!(
+                "navigation projection bool value {value} is invalid"
+            )),
         }
     }
 
@@ -508,15 +858,10 @@ fn write_bytes_atomically(final_path: &Path, bytes: &[u8]) -> Result<(), String>
                 temp_path.display()
             )
         })?;
-        file.write_all(bytes).map_err(|e| {
-            format!(
-                "write catalog navigation temp {}: {e}",
-                temp_path.display()
-            )
-        })?;
-        file.sync_all().map_err(|e| {
-            format!("sync catalog navigation temp {}: {e}", temp_path.display())
-        })?;
+        file.write_all(bytes)
+            .map_err(|e| format!("write catalog navigation temp {}: {e}", temp_path.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("sync catalog navigation temp {}: {e}", temp_path.display()))?;
         drop(file);
         std::fs::rename(&temp_path, final_path).map_err(|e| {
             format!(
@@ -567,9 +912,20 @@ mod tests {
     }
 
     fn projection_catalog() -> ArcadeCatalog {
+        let saturn_payload = "/media/fat/games/Saturn/Nights.chd";
+        let neogeo_payload = "/media/fat/games/NEOGEO/Pack.zip/Pack/World A-Z/mslug.neo";
         let games = vec![
             game("1942", "/media/fat/_Arcade/1942.mra", "arcade"),
-            game("Nights", "magik-plan:saturn:nights", "saturn"),
+            game(
+                "Nights",
+                &format!("magik-plan:payload:{saturn_payload}"),
+                "saturn",
+            ),
+            game(
+                "Metal Slug",
+                &format!("magik-plan:archive:{neogeo_payload}"),
+                "neogeo",
+            ),
         ];
         let systems = vec![
             GameSystemEntry {
@@ -582,26 +938,46 @@ mod tests {
                 title: "Saturn".to_string(),
                 count: 1,
             },
+            GameSystemEntry {
+                id: "neogeo".to_string(),
+                title: "NeoGeo".to_string(),
+                count: 1,
+            },
         ];
-        let plans = vec![StructuredLaunchPlan {
-            launch_ref: Arc::from("magik-plan:saturn:nights"),
-            title: Arc::from("Nights"),
-            system_id: Arc::from("saturn"),
-            core_path: Arc::from("_Console/Saturn"),
-            payload_path: Arc::from("/media/fat/games/Saturn/Nights.chd"),
-            mount_kind: Arc::from("mount-image"),
-            mount_index: 0,
-            delay_secs: 1,
-        }];
-        ArcadeCatalog::new_with_launch_plans(PathBuf::from("/media/fat/_Arcade"), games, systems, plans)
+        let plans = vec![
+            StructuredLaunchPlan {
+                launch_ref: Arc::from(format!("magik-plan:payload:{saturn_payload}")),
+                title: Arc::from("Nights"),
+                system_id: Arc::from("saturn"),
+                core_path: Arc::from("_Console/Saturn"),
+                payload_path: Arc::from(saturn_payload),
+                mount_kind: Arc::from("mount-image"),
+                mount_index: 0,
+                delay_secs: 1,
+            },
+            StructuredLaunchPlan {
+                launch_ref: Arc::from(format!("magik-plan:archive:{neogeo_payload}")),
+                title: Arc::from("Metal Slug"),
+                system_id: Arc::from("neogeo"),
+                core_path: Arc::from("_Console/NeoGeo"),
+                payload_path: Arc::from(neogeo_payload),
+                mount_kind: Arc::from("load-file"),
+                mount_index: 1,
+                delay_secs: 1,
+            },
+        ];
+        ArcadeCatalog::new_with_launch_plans(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            systems,
+            plans,
+        )
     }
 
     #[test]
     fn navigation_projection_round_trips_catalog_rows_and_plans() {
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-navigation-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-navigation-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create temp dir");
         let db = root.join("library.sqlite3");
@@ -618,14 +994,20 @@ mod tests {
 
         assert_eq!(loaded.games.len(), catalog.games.len());
         assert_eq!(loaded.systems.len(), catalog.systems.len());
-        assert_eq!(loaded.launch_plans.len(), 1);
+        assert_eq!(loaded.launch_plans.len(), 2);
         assert_eq!(hydrated.games.len(), catalog.games.len());
         assert_eq!(hydrated.systems, catalog.systems);
         assert_eq!(hydrated.decade_option_count("arcade"), 1);
         assert_eq!(hydrated.manufacturer_option_count("arcade"), 1);
         assert_eq!(hydrated.category_option_count("arcade"), 1);
         assert!(matches!(
-            hydrated.launch_target_for_ref("magik-plan:saturn:nights"),
+            hydrated.launch_target_for_ref("magik-plan:payload:/media/fat/games/Saturn/Nights.chd"),
+            LaunchTarget::Structured(_)
+        ));
+        assert!(matches!(
+            hydrated.launch_target_for_ref(
+                "magik-plan:archive:/media/fat/games/NEOGEO/Pack.zip/Pack/World A-Z/mslug.neo"
+            ),
             LaunchTarget::Structured(_)
         ));
         let _ = std::fs::remove_dir_all(root);
@@ -646,11 +1028,9 @@ mod tests {
 
         write_catalog_navigation_projection_for_catalog(&db, &projection_catalog(), &current_stamp)
             .expect("write projection");
-        assert!(
-            read_catalog_navigation_projection(&path, &stale_stamp)
-                .expect("read stale projection")
-                .is_none()
-        );
+        assert!(read_catalog_navigation_projection(&path, &stale_stamp)
+            .expect("read stale projection")
+            .is_none());
         std::fs::write(&path, b"not-lz4").expect("write corrupt projection");
         assert!(read_catalog_navigation_projection(&path, &current_stamp).is_err());
         let _ = std::fs::remove_dir_all(root);
