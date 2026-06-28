@@ -575,4 +575,66 @@ mod tests {
             "4th & Inches (OCS)[en]"
         );
     }
+
+    #[test]
+    fn percent_decode_rejects_bad_escapes_and_utf8() {
+        assert_eq!(
+            decode_launch_component("Agony%").expect_err("trailing percent"),
+            "invalid percent escape in launch ref"
+        );
+        assert_eq!(
+            decode_launch_component("Agony%XZ").expect_err("bad hex"),
+            "invalid percent escape in launch ref"
+        );
+        assert!(decode_launch_component("%ff")
+            .expect_err("bad utf8")
+            .contains("invalid UTF-8 in launch ref"));
+    }
+
+    #[test]
+    fn launch_prep_bench_scenario_parses_aliases_and_defaults() {
+        assert_eq!(
+            LaunchPrepBenchScenario::from_arg(None),
+            LaunchPrepBenchScenario::Warm
+        );
+        assert_eq!(
+            LaunchPrepBenchScenario::from_arg(Some(" COLD ")),
+            LaunchPrepBenchScenario::Cold
+        );
+        assert_eq!(
+            LaunchPrepBenchScenario::from_arg(Some("prewarm")),
+            LaunchPrepBenchScenario::PriorityPrewarm
+        );
+        assert_eq!(
+            LaunchPrepBenchScenario::from_arg(Some("priority-prewarm")).label(),
+            "priority-prewarm"
+        );
+        assert_eq!(
+            LaunchPrepBenchScenario::from_arg(Some("surprise")),
+            LaunchPrepBenchScenario::Warm
+        );
+    }
+
+    #[test]
+    fn launch_prep_kind_classifies_ref_families() {
+        assert_eq!(launch_prep_kind("magik-plan:snes/foo"), "virtual");
+        assert_eq!(launch_prep_kind("magik-amigavision:Agony"), "amigavision");
+        assert_eq!(launch_prep_kind("/media/fat/_Arcade/foo.mra"), "direct");
+    }
+
+    #[test]
+    fn percentile_sample_uses_upper_rank_and_handles_empty_samples() {
+        assert_eq!(percentile_sample(&[], 0.95), 0);
+        assert_eq!(percentile_sample(&[10], 0.95), 10);
+        assert_eq!(percentile_sample(&[10, 20, 30, 40], 0.50), 30);
+        assert_eq!(percentile_sample(&[10, 20, 30, 40], 0.95), 40);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn proc_io_parser_returns_zeros_on_non_linux_hosts() {
+        let counters = read_self_proc_io();
+        assert_eq!(counters.read_bytes, 0);
+        assert_eq!(counters.write_bytes, 0);
+    }
 }

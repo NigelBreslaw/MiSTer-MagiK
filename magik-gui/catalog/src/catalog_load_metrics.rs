@@ -63,3 +63,37 @@ pub fn format_snapshot(counters: CatalogLoadCounters) -> String {
         counters.ui_catalog_loads
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_increment_snapshot_and_format_in_stable_order() {
+        let before = snapshot();
+        record_sqlite_open();
+        record_sqlite_open();
+        record_summary_read();
+        record_nav_projection_read();
+        record_worker_cache_load();
+        record_ui_catalog_load();
+
+        let after = snapshot();
+        assert!(after.sqlite_opens >= before.sqlite_opens + 2);
+        assert!(after.summary_reads >= before.summary_reads + 1);
+        assert!(after.nav_projection_reads >= before.nav_projection_reads + 1);
+        assert!(after.worker_cache_loads >= before.worker_cache_loads + 1);
+        assert!(after.ui_catalog_loads >= before.ui_catalog_loads + 1);
+
+        assert_eq!(
+            format_snapshot(CatalogLoadCounters {
+                sqlite_opens: 2,
+                summary_reads: 1,
+                nav_projection_reads: 1,
+                worker_cache_loads: 1,
+                ui_catalog_loads: 1,
+            }),
+            "sqlite_opens=2 summary_reads=1 nav_projection_reads=1 worker_cache_loads=1 ui_catalog_loads=1"
+        );
+    }
+}

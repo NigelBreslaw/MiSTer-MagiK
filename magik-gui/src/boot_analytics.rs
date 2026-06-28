@@ -147,3 +147,102 @@ fn sanitize(s: &str) -> String {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // Environment variables are process-global, so keep these tests serialized.
+    struct EnvScope {
+        originals: Vec<(&'static str, Option<String>)>,
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl EnvScope {
+        fn new() -> Self {
+            let guard = ENV_LOCK.lock().expect("lock env");
+            Self {
+                originals: Vec::new(),
+                _guard: guard,
+            }
+        }
+
+        fn set(&mut self, key: &'static str, value: &str) {
+            if !self
+                .originals
+                .iter()
+                .any(|(existing_key, _)| *existing_key == key)
+            {
+                self.originals.push((key, std::env::var(key).ok()));
+            }
+            std::env::set_var(key, value);
+        }
+    }
+
+    impl Drop for EnvScope {
+        fn drop(&mut self) {
+            for (key, original) in self.originals.iter().rev() {
+                match original {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn enabled_accepts_only_explicit_truthy_values() {
+        let mut env = EnvScope::new();
+        env.set("MISTER_BOOT_ANALYTICS", "YeS");
+        assert!(enabled());
+
+        std::env::set_var("MISTER_BOOT_ANALYTICS", "0");
+        assert!(!enabled());
+
+        std::env::set_var("MISTER_BOOT_ANALYTICS", "false");
+        assert!(!enabled());
+    }
+
+    #[test]
+    fn sanitize_keeps_tsv_rows_single_line() {
+        assert_eq!(sanitize("a\tb\nc\rd"), "a b c d");
+    }
+
+    #[test]
+    fn launcher_frame_writer_records_until_limit() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-frame-profile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let profile_path = root.join("frames.tsv");
+        let mut env = EnvScope::new();
+        env.set("MISTER_BOOT_ANALYTICS", "1");
+        env.set(
+            "MISTER_BOOT_FRAME_PROFILE_FILE",
+            profile_path.to_str().expect("utf8 path"),
+        );
+        env.set("MISTER_BOOT_FRAME_PROFILE_FRAMES", "1");
+
+        {
+            let mut writer = LauncherFrameWriter::from_env().expect("profile writer");
+            assert!(writer.should_record(0));
+            assert!(!writer.should_record(1));
+            writer.record(
+                0, 1, 2, 3, 4, 5, true, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+            );
+            writer.record(
+                1, 21, 22, 23, 24, 25, false, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
+            );
+        }
+
+        let rows = std::fs::read_to_string(&profile_path).expect("read frame profile");
+        assert_eq!(rows.lines().count(), 2);
+        assert!(rows.lines().next().unwrap().starts_with("frame\tboot_ms"));
+        assert!(rows.contains("\t1\t2\t3\t4\t5\t1\t0000000000000006"));
+        assert!(!rows.contains("\t21\t22\t23\t24\t25\t0\t000000000000001a"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

@@ -572,4 +572,143 @@ mod tests {
         assert!(matches!(action, SetupAction::Done));
         assert_eq!(nav.phase, SetupPhase::None);
     }
+
+    #[test]
+    fn configure_fields_include_unknowns_and_saved_entry_details() {
+        let mut info = pad_info("1-1.4");
+        info.vendor_id.clear();
+        info.serial.clear();
+        info.phys.clear();
+        let mut db = empty_db("configure-fields");
+        db.upsert(&info, configured_entry("1-1.4"));
+
+        let rows = SetupNav::configure_fields(&info, "/dev/input/js0", &db);
+
+        assert!(rows.contains(&("Device".to_string(), "/dev/input/js0".to_string())));
+        assert!(rows.contains(&("Vendor ID".to_string(), "(unknown)".to_string())));
+        assert!(rows.contains(&("Serial".to_string(), "(none)".to_string())));
+        assert!(rows.contains(&("Saved label".to_string(), "Arcade Pad".to_string())));
+        assert!(rows.contains(&("Setup complete".to_string(), "yes".to_string())));
+    }
+
+    #[test]
+    fn configure_live_hint_reports_idle_last_and_held_input() {
+        assert_eq!(
+            SetupNav::configure_live_hint(&PadState::default()),
+            "Press any button on this controller to test input"
+        );
+
+        let mut state = PadState {
+            last_event_label: "A".to_string(),
+            ..PadState::default()
+        };
+        assert_eq!(SetupNav::configure_live_hint(&state), "Last input: A");
+
+        state.pressed_now = "A+B".to_string();
+        assert_eq!(
+            SetupNav::configure_live_hint(&state),
+            "Held: A+B  ·  Last: A"
+        );
+    }
+
+    #[test]
+    fn moved_port_can_pick_existing_registry_entry() {
+        let info = pad_info("1-1.9");
+        let mut db = empty_db("pick-existing");
+        db.upsert(&pad_info("1-1.1"), configured_entry("1-1.1"));
+        let mut nav = SetupNav::new();
+        nav.open_for(PadRegistryStatus::MovedPort, 0);
+        let now = Instant::now();
+
+        let _ = nav.handle_input(
+            &PadState {
+                btn_start: true,
+                ..PadState::default()
+            },
+            now,
+            &info,
+            &db,
+        );
+        assert_eq!(nav.phase, SetupPhase::NewOrExisting);
+
+        let _ = nav.handle_input(
+            &PadState {
+                dpad_right: true,
+                ..PadState::default()
+            },
+            now + std::time::Duration::from_millis(20),
+            &info,
+            &db,
+        );
+        assert_eq!(nav.list_index, 1);
+
+        let _ = nav.handle_input(
+            &press_a(),
+            now + std::time::Duration::from_millis(40),
+            &info,
+            &db,
+        );
+        assert_eq!(nav.phase, SetupPhase::PickExisting);
+
+        // The confirm press that opened PickExisting is still in prev; release first.
+        let _ = nav.handle_input(
+            &PadState::default(),
+            now + std::time::Duration::from_millis(50),
+            &info,
+            &db,
+        );
+        let action = nav.handle_input(
+            &press_a(),
+            now + std::time::Duration::from_millis(60),
+            &info,
+            &db,
+        );
+        assert!(matches!(
+            action,
+            SetupAction::ClaimExisting { list_index: 0 }
+        ));
+        assert_eq!(nav.phase, SetupPhase::Configure);
+    }
+
+    #[test]
+    fn new_controller_name_kind_cycles_kind_and_saves() {
+        let mut info = pad_info("1-1.10");
+        info.name.clear();
+        let db = empty_db("name-kind");
+        let mut nav = SetupNav::new();
+        nav.open_for(PadRegistryStatus::Unknown, 0);
+        nav.phase = SetupPhase::Configure;
+        let now = Instant::now();
+
+        let _ = nav.handle_input(&press_a(), now, &info, &db);
+        assert_eq!(nav.phase, SetupPhase::NameKind);
+        assert_eq!(nav.draft_label, "Controller 2563:0575");
+        assert_eq!(nav.draft_kind, ControllerKind::Gamepad);
+
+        let _ = nav.handle_input(
+            &PadState {
+                dpad_down: true,
+                ..PadState::default()
+            },
+            now + std::time::Duration::from_millis(20),
+            &info,
+            &db,
+        );
+        assert_eq!(nav.draft_kind, ControllerKind::FightStick);
+
+        let action = nav.handle_input(
+            &press_a(),
+            now + std::time::Duration::from_millis(40),
+            &info,
+            &db,
+        );
+        match action {
+            SetupAction::SaveFinish { label, kind } => {
+                assert_eq!(label, "Controller 2563:0575");
+                assert_eq!(kind, ControllerKind::FightStick);
+            }
+            _ => panic!("expected save action"),
+        }
+        assert_eq!(nav.phase, SetupPhase::None);
+    }
 }
