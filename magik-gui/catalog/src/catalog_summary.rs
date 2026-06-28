@@ -37,13 +37,21 @@ pub fn summary_path_for_sqlite(sqlite_path: &Path) -> PathBuf {
     sqlite_path.with_extension("summary.json")
 }
 
+#[cfg(test)]
 pub(crate) fn write_catalog_summary_for_catalog(
     sqlite_path: &Path,
     catalog: &ArcadeCatalog,
     stamp: &CatalogStamp,
 ) -> Result<(), String> {
     let summary = CatalogSummaryProjection::from_catalog(catalog, stamp);
-    write_catalog_summary(&summary_path_for_sqlite(sqlite_path), &summary)
+    write_catalog_summary_projection(sqlite_path, &summary)
+}
+
+pub(crate) fn write_catalog_summary_projection(
+    sqlite_path: &Path,
+    summary: &CatalogSummaryProjection,
+) -> Result<(), String> {
+    write_catalog_summary(&summary_path_for_sqlite(sqlite_path), summary)
 }
 
 pub fn read_catalog_summary(

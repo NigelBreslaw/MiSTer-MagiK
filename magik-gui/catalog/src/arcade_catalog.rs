@@ -206,7 +206,38 @@ impl ArcadeCatalog {
         systems: Vec<GameSystemEntry>,
         launch_plans: Vec<StructuredLaunchPlan>,
     ) -> Self {
-        let indexes = build_arcade_catalog_indexes(&games, launch_plans, CatalogIndexMode::Eager);
+        Self::new_with_launch_plans_and_index_mode(
+            root,
+            games,
+            systems,
+            launch_plans,
+            CatalogIndexMode::Eager,
+        )
+    }
+
+    pub fn new_with_deferred_text_indexes(
+        root: PathBuf,
+        games: Vec<ArcadeGameEntry>,
+        systems: Vec<GameSystemEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+    ) -> Self {
+        Self::new_with_launch_plans_and_index_mode(
+            root,
+            games,
+            systems,
+            launch_plans,
+            CatalogIndexMode::DeferredText,
+        )
+    }
+
+    fn new_with_launch_plans_and_index_mode(
+        root: PathBuf,
+        games: Vec<ArcadeGameEntry>,
+        systems: Vec<GameSystemEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        index_mode: CatalogIndexMode,
+    ) -> Self {
+        let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
         Self {
             root,
             games,
@@ -1552,6 +1583,55 @@ mod tests {
         assert!(deferred.search_keys.is_empty());
         assert!(deferred.lazy_text_indexes.get().is_none());
         for query in ["str", "fig", "pac", "cap", "sho", "194", "psy", "x"] {
+            assert_eq!(
+                deferred.autocomplete_search_word("arcade", query),
+                eager.autocomplete_search_word("arcade", query),
+                "query {query}"
+            );
+        }
+        assert!(deferred.lazy_text_indexes.get().is_some());
+    }
+
+    #[test]
+    fn deferred_text_constructor_keeps_search_and_autocomplete_equivalent() {
+        let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
+        street.manufacturer = "Capcom".into();
+        street.category = "Fighter / 2D".into();
+        let mut pac = game("Pac-Man", "/games/pacman.mra", "", "arcade");
+        pac.manufacturer = "Namco".into();
+        pac.category = "Maze / Pac-Man".into();
+        let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
+        shooter.year = Some(1984);
+        shooter.manufacturer = "Capcom".into();
+        shooter.category = "Shooter / Vertical".into();
+        let games = vec![street, pac, shooter];
+        let systems = vec![GameSystemEntry {
+            id: "arcade".into(),
+            title: "Arcade".into(),
+            count: 3,
+        }];
+        let eager = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            games.clone(),
+            systems.clone(),
+        );
+        let deferred = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            systems,
+            Vec::new(),
+        );
+
+        assert!(deferred.search_keys.is_empty());
+        assert!(deferred.lazy_text_indexes.get().is_none());
+        for query in ["street", "capcom", "fighter", "1984", "missing"] {
+            assert_eq!(
+                deferred.search_game_indexes("arcade", query),
+                eager.search_game_indexes("arcade", query),
+                "query {query}"
+            );
+        }
+        for query in ["str", "fig", "pac", "cap", "sho", "194", "x"] {
             assert_eq!(
                 deferred.autocomplete_search_word("arcade", query),
                 eager.autocomplete_search_word("arcade", query),

@@ -15,6 +15,7 @@ pub use crate::catalog_navigation::{
     navigation_path_for_sqlite, read_catalog_navigation_projection,
     write_catalog_navigation_projection_for_catalog, CatalogNavigationProjection,
 };
+use crate::catalog_summary::CatalogSummaryProjection;
 pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
     catalog_progress_percent_from_display, CatalogProgress, CatalogProgressPhase,
@@ -150,6 +151,27 @@ pub struct LibraryCatalogLoad {
     pub rows: usize,
 }
 
+impl LibraryCatalogLoad {
+    pub(crate) fn from_precomputed(catalog: ArcadeCatalog, us: u64) -> Self {
+        let rows = catalog.len();
+        Self {
+            catalog,
+            us,
+            open_us: 0,
+            schema_check_us: 0,
+            query_us: 0,
+            query_prepare_us: 0,
+            query_first_row_us: 0,
+            query_row_read_us: 0,
+            query_row_hydrate_us: 0,
+            launch_plans_us: 0,
+            systems_us: 0,
+            catalog_us: us,
+            rows,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LibraryScanStats {
     pub scan_us: u64,
@@ -176,6 +198,10 @@ pub struct LibraryBootstrapSummary {
 impl LibraryScanArtifact {
     pub fn stats(&self) -> &LibraryScanStats {
         &self.stats
+    }
+
+    pub fn stamp(&self) -> &catalog_stamp::CatalogStamp {
+        &self.stamp
     }
 
     pub fn catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
@@ -205,6 +231,16 @@ impl LibraryScanArtifact {
     ) -> Result<LibraryRefreshCatalog, String> {
         let cfg = BenchConfig::production();
         save_scan_artifact_to_sqlite_with_catalog(&cfg, self, root, progress)
+    }
+
+    pub fn save_default_sqlite_with_projections(
+        self,
+        summary: CatalogSummaryProjection,
+        navigation: CatalogNavigationProjection,
+        progress: ProgressCallback<'_>,
+    ) -> Result<LibraryRefreshSummary, String> {
+        let cfg = BenchConfig::production();
+        save_scan_artifact_to_sqlite_with_projections(&cfg, self, summary, navigation, progress)
     }
 }
 
@@ -395,6 +431,10 @@ pub(crate) fn sqlite_column_exists(
 
 pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection> {
     sqlite_catalog::open_sqlite_read_only(path)
+}
+
+pub fn read_sqlite_catalog_stamp(path: &Path) -> Result<Option<catalog_stamp::CatalogStamp>, String> {
+    sqlite_catalog::read_sqlite_catalog_stamp(path)
 }
 
 pub(crate) fn sqlite_temp_path(path: &Path) -> PathBuf {
@@ -643,6 +683,39 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
     CatalogRefreshPipeline::new(cfg).save_artifact_with_catalog(artifact, root, progress)
 }
 
+pub(crate) fn save_scan_artifact_to_sqlite_with_projections(
+    cfg: &BenchConfig,
+    artifact: LibraryScanArtifact,
+    summary_projection: CatalogSummaryProjection,
+    navigation_projection: CatalogNavigationProjection,
+    progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
+    let import_t = std::time::Instant::now();
+    let bytes = sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections(
+        &cfg.sqlite_path,
+        &artifact.scan,
+        &artifact.stamp,
+        &sqlite_catalog::CatalogSaveProjections {
+            summary: summary_projection,
+            navigation: navigation_projection,
+        },
+        progress,
+    )?;
+    let import_us = import_t.elapsed().as_micros() as u64;
+    Ok(LibraryRefreshSummary {
+        skipped: false,
+        scan_us: artifact.stats.scan_us,
+        discover_us: artifact.stats.discover_us,
+        classify_us: artifact.stats.classify_us,
+        import_us,
+        bytes,
+        normal_files: artifact.stats.normal_files,
+        containers: artifact.stats.containers,
+        entries: artifact.stats.entries,
+        discoveries: artifact.stats.discoveries,
+    })
+}
+
 #[cfg(test)]
 fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
     let arcade_metadata = crate::software_identity::load_arcade_machine_metadata(
@@ -793,7 +866,12 @@ fn catalog_from_sqlite_launcher_projection_order(
         .collect::<HashSet<_>>();
     launch_plans.retain(|plan| visible_refs.contains(plan.launch_ref.as_ref()));
     let systems = arcade_catalog::systems_from_games(&games);
-    ArcadeCatalog::new_with_launch_plans(root.as_ref().to_path_buf(), games, systems, launch_plans)
+    ArcadeCatalog::new_with_deferred_text_indexes(
+        root.as_ref().to_path_buf(),
+        games,
+        systems,
+        launch_plans,
+    )
 }
 
 fn structured_launch_plan_for_discovery(
