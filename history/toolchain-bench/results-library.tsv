@@ -1873,3 +1873,59 @@ SPARSEREGION-AFTER-20260628	1	sqlite_publish_progress	563	bytes=7028736 copy_ms=
 SPARSEREGION-AFTER-20260628	1	refresh_scan	2614106	skipped=false bytes=7028736 scan_us=2614106 discover_us=1986664 classify_us=2488378 import_us=7810901 discoveries=9237 normal_files=7519 containers=154 entries=281
 SPARSEREGION-AFTER-20260628	1	refresh_import	7810901	skipped=false bytes=7028736 scan_us=2614106 discover_us=1986664 classify_us=2488378 import_us=7810901 discoveries=9237 normal_files=7519 containers=154 entries=281
 SPARSEREGION-AFTER-20260628	1	refresh_done	0	bytes=7028736 skipped=false bytes=7028736 scan_us=2614106 discover_us=1986664 classify_us=2488378 import_us=7810901 discoveries=9237 normal_files=7519 containers=154 entries=281
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+ARCADEPROJ-AFTER-20260628	1	scan_stage_first_candidate	20	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCADEPROJ-AFTER-20260628	1	scan_stage_first_discovery	24	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	420	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	54	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	1	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	10	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	304	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	59	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	352	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	241	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	111	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	312	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	113	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	18	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk_target	4	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+ARCADEPROJ-AFTER-20260628	1	scan_stage_walk	2029	candidates=7527
+ARCADEPROJ-AFTER-20260628	1	scan_stage_profile_match	81	calls=7527
+ARCADEPROJ-AFTER-20260628	1	scan_stage_installed_collection	72	calls=7521
+ARCADEPROJ-AFTER-20260628	1	scan_stage_archive_toc	10	containers=154
+ARCADEPROJ-AFTER-20260628	1	scan_stage_collection_listings	0	collections=0
+ARCADEPROJ-AFTER-20260628	1	scan_stage_file_discovery	2001	files=7519
+ARCADEPROJ-AFTER-20260628	1	scan_stage_classify_total	2481	discoveries=9362 normal_files=7519 containers=154 entries=281
+ARCADEPROJ-AFTER-20260628	1	import_stage_precompute_catalog	2196	rows=7259
+ARCADEPROJ-AFTER-20260628	1	import_stage_precompute_projections	126	rows=7259
+ARCADEPROJ-AFTER-20260628	1	import_stage_schema	25	tables=12
+ARCADEPROJ-AFTER-20260628	1	import_stage_metadata_load	1126	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+ARCADEPROJ-AFTER-20260628	1	import_stage_begin_tx	0
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_profiles	1	rows=16
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	110	from=0 to=1000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	95	from=1000 to=2000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	107	from=2000 to=3000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	105	from=3000 to=4000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	104	from=4000 to=5000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	147	from=5000 to=6000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	176	from=6000 to=7000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	218	from=7000 to=8000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	209	from=8000 to=9000 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_chunk	56	from=9000 to=9237 total=9237
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_games_total	1668	rows=9237 launcher_rows=6245
+ARCADEPROJ-AFTER-20260628	1	import_stage_materialize_arcade_ui	1195
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_launcher_arcade	306
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_launcher_console	249	rows=6185
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_launcher_launch_plans	37	rows=4497
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_meta	141	rows=11
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_catalog_stamp	0	rows=11
+ARCADEPROJ-AFTER-20260628	1	import_stage_insert_software_hash_cache	0	rows=0
+ARCADEPROJ-AFTER-20260628	1	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+ARCADEPROJ-AFTER-20260628	1	import_stage_commit	8
+ARCADEPROJ-AFTER-20260628	1	import_stage_total	4761	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.3566
+ARCADEPROJ-AFTER-20260628	1	sqlite_publish_progress	550	bytes=6856704 copy_ms=545 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
+ARCADEPROJ-AFTER-20260628	1	refresh_scan	2607007	skipped=false bytes=6856704 scan_us=2607007 discover_us=2029119 classify_us=2481561 import_us=8064177 discoveries=9237 normal_files=7519 containers=154 entries=281
+ARCADEPROJ-AFTER-20260628	1	refresh_import	8064177	skipped=false bytes=6856704 scan_us=2607007 discover_us=2029119 classify_us=2481561 import_us=8064177 discoveries=9237 normal_files=7519 containers=154 entries=281
+ARCADEPROJ-AFTER-20260628	1	refresh_done	0	bytes=6856704 skipped=false bytes=6856704 scan_us=2607007 discover_us=2029119 classify_us=2481561 import_us=8064177 discoveries=9237 normal_files=7519 containers=154 entries=281

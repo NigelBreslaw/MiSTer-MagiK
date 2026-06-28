@@ -2094,7 +2094,7 @@ mod tests {
         let preferred = conn
             .query_row(
                 "SELECT identity_id,asset_key,asset_link_reason,preview_asset_key,has_preview
-                 FROM ui_arcade_preferred",
+                 FROM ui_arcade_preferred_text",
                 [],
                 |row| {
                     Ok((
