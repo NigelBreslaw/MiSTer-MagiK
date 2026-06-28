@@ -1704,3 +1704,68 @@ COLDSCAN4-AFTER-20260628	import_stage_total	5254											path=/tmp/mister-magi
 COLDSCAN4-AFTER-20260628	sqlite_publish_progress	1											bytes=19431424 copy_ms=1479 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=76 result=bench-ok
 COLDSCAN4-AFTER-20260628	refresh_done	0											skipped=false bytes=19431424 scan_us=2661254 discover_us=2035239 classify_us=2538946 import_us=9506129 discoveries=9237 normal_files=7519 containers=154 entries=281
 COLDSCAN4-AFTER-20260628	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	1	0	1	0	0	29660	65906	71434	1786	17623	2324	disk_io_ms=3406 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	2	70	45	0	0	29753	66036	71435	1786	17623	2324	disk_io_ms=3406 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	3	153	92	0	0	29856	66161	71436	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	4	257	100	0	0	29985	66263	71436	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	5	365	103	0	0	30115	66359	71436	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	6	474	104	0	0	30248	66453	71437	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	7	581	110	0	0	30377	66552	71437	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	8	689	114	0	0	30509	66649	71437	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	10	796	117	0	0	30639	66747	71437	1786	17623	2330	disk_io_ms=3421 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	sample	11	894	120	0	1855488	30756	66844	71437	1794	17623	2340	disk_io_ms=3561 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF20260629-LIBIO	scan_stage_walk_targets	0											roots=4 targets=15 extensions=29
+PERF20260629-LIBIO	scan_stage_first_candidate	50											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF20260629-LIBIO	scan_stage_first_discovery	54											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF20260629-LIBIO	scan_stage_walk_target	433											path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+PERF20260629-LIBIO	scan_stage_walk_target	59											path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+PERF20260629-LIBIO	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+PERF20260629-LIBIO	scan_stage_walk_target	1											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+PERF20260629-LIBIO	scan_stage_walk_target	16											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+PERF20260629-LIBIO	scan_stage_walk_target	301											path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+PERF20260629-LIBIO	scan_stage_walk_target	59											path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+PERF20260629-LIBIO	scan_stage_walk_target	342											path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+PERF20260629-LIBIO	scan_stage_walk_target	272											path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+PERF20260629-LIBIO	scan_stage_walk_target	115											path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+PERF20260629-LIBIO	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+PERF20260629-LIBIO	scan_stage_walk_target	345											path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+PERF20260629-LIBIO	scan_stage_walk_target	124											path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+PERF20260629-LIBIO	scan_stage_walk_target	21											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PERF20260629-LIBIO	scan_stage_walk_target	2											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PERF20260629-LIBIO	scan_stage_walk	2094											candidates=7527
+PERF20260629-LIBIO	scan_stage_profile_match	72											calls=7527
+PERF20260629-LIBIO	scan_stage_installed_collection	77											calls=7521
+PERF20260629-LIBIO	scan_stage_archive_toc	14											containers=154
+PERF20260629-LIBIO	scan_stage_collection_listings	0											collections=0
+PERF20260629-LIBIO	scan_stage_file_discovery	2051											files=7519
+PERF20260629-LIBIO	scan_stage_classify_total	2437											discoveries=9362 normal_files=7519 containers=154 entries=281
+PERF20260629-LIBIO	import_stage_precompute_catalog	2279											rows=7259
+PERF20260629-LIBIO	import_stage_precompute_projections	123											rows=7259
+PERF20260629-LIBIO	import_stage_schema	24											tables=12
+PERF20260629-LIBIO	import_stage_metadata_load	1156											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+PERF20260629-LIBIO	import_stage_begin_tx	0											
+PERF20260629-LIBIO	import_stage_insert_profiles	1											rows=16
+PERF20260629-LIBIO	import_stage_insert_games_chunk	110											from=0 to=1000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	93											from=1000 to=2000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	106											from=2000 to=3000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	104											from=3000 to=4000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	103											from=4000 to=5000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	157											from=5000 to=6000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	198											from=6000 to=7000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	232											from=7000 to=8000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	207											from=8000 to=9000 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_chunk	55											from=9000 to=9237 total=9237
+PERF20260629-LIBIO	import_stage_insert_games_total	1696											rows=9237 launcher_rows=6245
+PERF20260629-LIBIO	import_stage_materialize_arcade_ui	1217											
+PERF20260629-LIBIO	import_stage_insert_launcher_arcade	345											
+PERF20260629-LIBIO	import_stage_insert_launcher_console	232											rows=6185
+PERF20260629-LIBIO	import_stage_insert_launcher_launch_plans	37											rows=4497
+PERF20260629-LIBIO	import_stage_insert_meta	160											rows=11
+PERF20260629-LIBIO	import_stage_insert_catalog_stamp	0											rows=11
+PERF20260629-LIBIO	import_stage_insert_software_hash_cache	0											rows=0
+PERF20260629-LIBIO	import_stage_build_saved_catalog	0											skipped=precomputed_projection
+PERF20260629-LIBIO	import_stage_commit	8											
+PERF20260629-LIBIO	import_stage_total	4876											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.2826
+PERF20260629-LIBIO	sqlite_publish_progress	1											bytes=6856704 copy_ms=534 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
+PERF20260629-LIBIO	refresh_done	0											skipped=false bytes=6856704 scan_us=2562759 discover_us=2094407 classify_us=2436969 import_us=8242048 discoveries=9237 normal_files=7519 containers=154 entries=281
+PERF20260629-LIBIO	done	12											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none

@@ -80,3 +80,14 @@ screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	7	24283092	1953
 screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	8	24283092	1880	0	0	7	1888	96	bench-ok
 screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	9	24283092	2034	0	0	7	2042	96	bench-ok
 screenshot_save_bench_tsv	SHIP-20260625-DCD0DBB1	neogeo	progress	10	24283092	1954	0	0	7	1962	96	bench-ok
+screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	1	4973975	556	0	0	7	567	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	2	4973975	380	0	0	7	388	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	3	4973975	510	0	0	7	519	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	4	4973975	395	0	0	7	404	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	5	4973975	506	0	0	7	514	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	6	4973975	401	0	0	7	409	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	7	4973975	384	0	0	7	392	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	8	4973975	399	0	0	7	407	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	9	4973975	378	0	0	7	386	22	bench-ok
+screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	10	4973975	394	0	0	7	402	22	bench-ok
