@@ -1479,3 +1479,60 @@ PAYLOADPATH-AFTER-20260628	1	sqlite_publish_progress	1042	bytes=13197312 copy_ms
 PAYLOADPATH-AFTER-20260628	1	refresh_scan	2613538	skipped=false bytes=13197312 scan_us=2613538 discover_us=2145500 classify_us=2489659 import_us=9185629 discoveries=9237 normal_files=7519 containers=154 entries=281
 PAYLOADPATH-AFTER-20260628	1	refresh_import	9185629	skipped=false bytes=13197312 scan_us=2613538 discover_us=2145500 classify_us=2489659 import_us=9185629 discoveries=9237 normal_files=7519 containers=154 entries=281
 PAYLOADPATH-AFTER-20260628	1	refresh_done	0	bytes=13197312 skipped=false bytes=13197312 scan_us=2613538 discover_us=2145500 classify_us=2489659 import_us=9185629 discoveries=9237 normal_files=7519 containers=154 entries=281
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+LOGICALIDS-AFTER-20260628	1	scan_stage_first_candidate	20	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+LOGICALIDS-AFTER-20260628	1	scan_stage_first_discovery	24	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	412	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	47	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	2	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	20	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	348	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	58	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	320	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	290	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	98	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	335	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	118	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	18	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk_target	3	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+LOGICALIDS-AFTER-20260628	1	scan_stage_walk	2081	candidates=7527
+LOGICALIDS-AFTER-20260628	1	scan_stage_profile_match	55	calls=7527
+LOGICALIDS-AFTER-20260628	1	scan_stage_installed_collection	72	calls=7521
+LOGICALIDS-AFTER-20260628	1	scan_stage_archive_toc	9	containers=154
+LOGICALIDS-AFTER-20260628	1	scan_stage_collection_listings	0	collections=0
+LOGICALIDS-AFTER-20260628	1	scan_stage_file_discovery	2081	files=7519
+LOGICALIDS-AFTER-20260628	1	scan_stage_classify_total	2399	discoveries=9362 normal_files=7519 containers=154 entries=281
+LOGICALIDS-AFTER-20260628	1	import_stage_precompute_catalog	2225	rows=7259
+LOGICALIDS-AFTER-20260628	1	import_stage_precompute_projections	126	rows=7259
+LOGICALIDS-AFTER-20260628	1	import_stage_schema	25	tables=14
+LOGICALIDS-AFTER-20260628	1	import_stage_metadata_load	1157	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+LOGICALIDS-AFTER-20260628	1	import_stage_begin_tx	0
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_profiles	1	rows=16
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_payloads	463	normal_files=7519 entries=281
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	114	from=0 to=1000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	107	from=1000 to=2000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	116	from=2000 to=3000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	117	from=3000 to=4000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	111	from=4000 to=5000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	112	from=5000 to=6000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	146	from=6000 to=7000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	204	from=7000 to=8000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	193	from=8000 to=9000 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_chunk	45	from=9000 to=9237 total=9237
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_games_total	1787	rows=9237 launcher_rows=6245
+LOGICALIDS-AFTER-20260628	1	import_stage_materialize_arcade_ui	884
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_launcher_arcade	10
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_launcher_console	235	rows=6185
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_launcher_launch_plans	328	rows=4497
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_meta	135	rows=11
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_catalog_stamp	0	rows=11
+LOGICALIDS-AFTER-20260628	1	import_stage_insert_software_hash_cache	0	rows=0
+LOGICALIDS-AFTER-20260628	1	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+LOGICALIDS-AFTER-20260628	1	import_stage_commit	8
+LOGICALIDS-AFTER-20260628	1	import_stage_total	5035	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.4566
+LOGICALIDS-AFTER-20260628	1	sqlite_publish_progress	736	bytes=10625024 copy_ms=729 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=42 result=bench-ok
+LOGICALIDS-AFTER-20260628	1	refresh_scan	2523925	skipped=false bytes=10625024 scan_us=2523925 discover_us=2080612 classify_us=2398594 import_us=8536690 discoveries=9237 normal_files=7519 containers=154 entries=281
+LOGICALIDS-AFTER-20260628	1	refresh_import	8536690	skipped=false bytes=10625024 scan_us=2523925 discover_us=2080612 classify_us=2398594 import_us=8536690 discoveries=9237 normal_files=7519 containers=154 entries=281
+LOGICALIDS-AFTER-20260628	1	refresh_done	0	bytes=10625024 skipped=false bytes=10625024 scan_us=2523925 discover_us=2080612 classify_us=2398594 import_us=8536690 discoveries=9237 normal_files=7519 containers=154 entries=281
