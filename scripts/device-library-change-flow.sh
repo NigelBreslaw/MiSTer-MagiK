@@ -119,7 +119,7 @@ dump_failure_artifacts() {
   db "SELECT 'games', count(*) FROM games;" || true
   db "SELECT 'launcher_catalog', count(*) FROM launcher_catalog;" || true
   if [ -n "$TEMP_MRA" ]; then
-    db "SELECT 'temp_mra_payload', count(*) FROM payloads_text WHERE file_path=$(sql_string "$TEMP_MRA");" || true
+    db "SELECT 'temp_mra_launch', count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" || true
   fi
 }
 
@@ -190,13 +190,13 @@ force_refresh() {
 }
 
 temp_mra_count() {
-  db "SELECT count(*) FROM payloads_text WHERE file_path=$(sql_string "$TEMP_MRA");" | last_number
+  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | last_number
 }
 
 assert_temp_mra_count() {
   local expected="$1"
-  assert_db_count "temp MRA payload row count" "$expected" \
-    "SELECT count(*) FROM payloads_text WHERE file_path=$(sql_string "$TEMP_MRA");"
+  assert_db_count "temp MRA launch row count" "$expected" \
+    "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");"
 }
 
 write_temp_mra() {

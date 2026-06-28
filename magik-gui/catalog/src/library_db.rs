@@ -365,11 +365,8 @@ pub(crate) struct FileSignature {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LibraryPayloadFile {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) path: String,
-    pub(crate) profile_id: String,
-    pub(crate) size: u64,
-    pub(crate) mtime_secs: i64,
-    pub(crate) rule: PayloadRule,
 }
 
 pub fn run_scan_bench() {
