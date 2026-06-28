@@ -967,7 +967,7 @@ mod tests {
                 "SELECT i.namespace,i.identity_id,i.family_id,l.preview_asset_key,l.has_preview,r.confidence
                  FROM launchable_identities i
                  JOIN launchables lb ON lb.launchable_id=i.launchable_id
-                 JOIN launcher_catalog l ON l.launch_ref=lb.launch_ref
+                 JOIN launcher_catalog_text l ON l.launch_ref=lb.launch_ref
                  JOIN region_metadata r ON r.game_id=i.launchable_id
                  WHERE i.namespace='mame-software'",
                 [],
@@ -1432,7 +1432,7 @@ mod tests {
                     (SELECT count(*) FROM launcher_catalog WHERE system_id='saturn'),
                     title,
                     launch_ref
-                 FROM launcher_catalog
+                 FROM launcher_catalog_text
                  WHERE system_id='saturn'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

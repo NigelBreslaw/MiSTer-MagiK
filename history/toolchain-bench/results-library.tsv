@@ -1365,3 +1365,60 @@ PREVIEWARCH-DERIVED-CACHED-20260628	1	sqlite_publish_progress	1478	bytes=1899315
 PREVIEWARCH-DERIVED-CACHED-20260628	1	refresh_scan	21663973	skipped=false bytes=18993152 scan_us=21663973 discover_us=20927138 classify_us=21539497 import_us=9891268 discoveries=9237 normal_files=7519 containers=154 entries=281
 PREVIEWARCH-DERIVED-CACHED-20260628	1	refresh_import	9891268	skipped=false bytes=18993152 scan_us=21663973 discover_us=20927138 classify_us=21539497 import_us=9891268 discoveries=9237 normal_files=7519 containers=154 entries=281
 PREVIEWARCH-DERIVED-CACHED-20260628	1	refresh_done	0	bytes=18993152 skipped=false bytes=18993152 scan_us=21663973 discover_us=20927138 classify_us=21539497 import_us=9891268 discoveries=9237 normal_files=7519 containers=154 entries=281
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+PATHINTERN-AFTER-20260628	1	scan_stage_first_candidate	21	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PATHINTERN-AFTER-20260628	1	scan_stage_first_discovery	24	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	389	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	56	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	2	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	23	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	361	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	59	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	358	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	253	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	107	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	319	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	107	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	16	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PATHINTERN-AFTER-20260628	1	scan_stage_walk_target	10	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PATHINTERN-AFTER-20260628	1	scan_stage_walk	2070	candidates=7527
+PATHINTERN-AFTER-20260628	1	scan_stage_profile_match	62	calls=7527
+PATHINTERN-AFTER-20260628	1	scan_stage_installed_collection	82	calls=7521
+PATHINTERN-AFTER-20260628	1	scan_stage_archive_toc	10	containers=154
+PATHINTERN-AFTER-20260628	1	scan_stage_collection_listings	0	collections=0
+PATHINTERN-AFTER-20260628	1	scan_stage_file_discovery	2083	files=7519
+PATHINTERN-AFTER-20260628	1	scan_stage_classify_total	2430	discoveries=9362 normal_files=7519 containers=154 entries=281
+PATHINTERN-AFTER-20260628	1	import_stage_precompute_catalog	2202	rows=7259
+PATHINTERN-AFTER-20260628	1	import_stage_precompute_projections	127	rows=7259
+PATHINTERN-AFTER-20260628	1	import_stage_schema	22	tables=14
+PATHINTERN-AFTER-20260628	1	import_stage_metadata_load	1129	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+PATHINTERN-AFTER-20260628	1	import_stage_begin_tx	0
+PATHINTERN-AFTER-20260628	1	import_stage_insert_profiles	1	rows=16
+PATHINTERN-AFTER-20260628	1	import_stage_insert_payloads	423	normal_files=7519 entries=281
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	159	from=0 to=1000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	149	from=1000 to=2000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	150	from=2000 to=3000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	149	from=3000 to=4000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	156	from=4000 to=5000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	157	from=5000 to=6000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	195	from=6000 to=7000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	223	from=7000 to=8000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	249	from=8000 to=9000 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_chunk	57	from=9000 to=9237 total=9237
+PATHINTERN-AFTER-20260628	1	import_stage_insert_games_total	2168	rows=9237 launcher_rows=6245
+PATHINTERN-AFTER-20260628	1	import_stage_materialize_arcade_ui	844
+PATHINTERN-AFTER-20260628	1	import_stage_insert_launcher_arcade	10
+PATHINTERN-AFTER-20260628	1	import_stage_insert_launcher_console	234	rows=6185
+PATHINTERN-AFTER-20260628	1	import_stage_insert_launcher_launch_plans	923	rows=4497
+PATHINTERN-AFTER-20260628	1	import_stage_insert_meta	141	rows=11
+PATHINTERN-AFTER-20260628	1	import_stage_insert_catalog_stamp	0	rows=11
+PATHINTERN-AFTER-20260628	1	import_stage_insert_software_hash_cache	0	rows=0
+PATHINTERN-AFTER-20260628	1	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+PATHINTERN-AFTER-20260628	1	import_stage_commit	8
+PATHINTERN-AFTER-20260628	1	import_stage_total	5958	path=/tmp/mister-magik/sqlite-build/.library-scan-bench.sqlite3.build.3040
+PATHINTERN-AFTER-20260628	1	sqlite_publish_progress	1114	bytes=14688256 copy_ms=1104 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=58 result=bench-ok
+PATHINTERN-AFTER-20260628	1	refresh_scan	2553391	skipped=false bytes=14688256 scan_us=2553391 discover_us=2070144 classify_us=2430247 import_us=9757077 discoveries=9237 normal_files=7519 containers=154 entries=281
+PATHINTERN-AFTER-20260628	1	refresh_import	9757077	skipped=false bytes=14688256 scan_us=2553391 discover_us=2070144 classify_us=2430247 import_us=9757077 discoveries=9237 normal_files=7519 containers=154 entries=281
+PATHINTERN-AFTER-20260628	1	refresh_done	0	bytes=14688256 skipped=false bytes=14688256 scan_us=2553391 discover_us=2070144 classify_us=2430247 import_us=9757077 discoveries=9237 normal_files=7519 containers=154 entries=281

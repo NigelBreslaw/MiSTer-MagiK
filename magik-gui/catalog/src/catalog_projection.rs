@@ -48,6 +48,7 @@ impl LauncherPreviewAsset {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogProjectionRow {
+    pub(crate) launch_id: i64,
     pub(crate) game: ArcadeGameEntry,
     pub(crate) discovered_at_unix: Option<i64>,
     pub(crate) source_kind: String,
@@ -80,6 +81,7 @@ impl CatalogProjectionRow {
         let system_id = system_id.into();
         let has_preview = preview.has_preview();
         Self {
+            launch_id: 0,
             game: launcher_entry(
                 title,
                 launch_ref,
@@ -95,6 +97,11 @@ impl CatalogProjectionRow {
             parent: source.parent,
             family_key: source.family_key,
         }
+    }
+
+    pub(crate) fn with_launch_id(mut self, launch_id: i64) -> Self {
+        self.launch_id = launch_id;
+        self
     }
 }
 
@@ -267,9 +274,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             family_id,
             variant_ordinal,
             launchable_id,
+            launch_id,
             title,
             sort_title,
-            launch_ref,
             preview_asset_key,
             has_preview,
             system_id,
@@ -289,6 +296,7 @@ pub(crate) fn materialize_arcade_ui_projections(
             SELECT
                 COALESCE(i.family_id, l.launchable_id) AS family_id,
                 l.launchable_id AS launchable_id,
+                l.launch_id AS launch_id,
                 l.title AS title,
                 lower(l.title) AS sort_title,
                 l.launch_ref AS launch_ref,
@@ -360,9 +368,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             family_id,
             variant_ordinal,
             launchable_id,
+            launch_id,
             title,
             sort_title,
-            launch_ref,
             preview_key,
             preview_available,
             system_id,
@@ -395,9 +403,9 @@ pub(crate) fn materialize_arcade_ui_projections(
         INSERT INTO ui_arcade_preferred(
             ordinal,
             launchable_id,
+            launch_id,
             title,
             sort_title,
-            launch_ref,
             preview_asset_key,
             has_preview,
             system_id,
@@ -416,9 +424,9 @@ pub(crate) fn materialize_arcade_ui_projections(
         SELECT
             row_number() OVER (ORDER BY sort_title ASC, launch_ref ASC) - 1,
             launchable_id,
+            launch_id,
             title,
             sort_title,
-            launch_ref,
             preview_asset_key,
             has_preview,
             system_id,
@@ -433,7 +441,7 @@ pub(crate) fn materialize_arcade_ui_projections(
             asset_key,
             asset_link_reason,
             preferred_reason
-        FROM ui_arcade_variants
+        FROM ui_arcade_variants_text
         WHERE preferred = 1
         ORDER BY sort_title ASC, launch_ref ASC;
         "#,
@@ -445,8 +453,8 @@ pub(crate) fn materialize_arcade_ui_projections(
 
 pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute(
-        "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
-         SELECT ordinal,title,sort_title,launch_ref,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
+        "INSERT INTO launcher_catalog(ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
+         SELECT ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
          FROM ui_arcade_preferred
          ORDER BY ordinal",
         [],
@@ -468,7 +476,7 @@ pub(crate) fn insert_console_launcher_catalog(
     let launcher_games = collapse_catalog_variant_rows(rows);
     let mut launcher_stmt = tx
         .prepare(
-            "INSERT INTO launcher_catalog(ordinal,title,sort_title,launch_ref,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
+            "INSERT INTO launcher_catalog(ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         )
         .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
@@ -477,9 +485,9 @@ pub(crate) fn insert_console_launcher_catalog(
         launcher_stmt
             .execute(params![
                 ordinal_offset + idx as i64,
+                row.launch_id,
                 game.title.as_ref(),
                 library_db::normalize_title(&game.title),
-                game.mra_path.as_ref(),
                 game.preview_asset_key.as_ref(),
                 if game.has_preview { 1 } else { 0 },
                 game.system_id.as_ref(),
@@ -505,27 +513,25 @@ pub(crate) fn materialize_launcher_launch_plans(tx: &Transaction<'_>) -> Result<
     tx.execute(
         r#"
         INSERT INTO launcher_launch_plans(
-            launch_ref,
+            launch_id,
             title,
             system_id,
             core_path,
-            payload_path,
             mount_kind,
             mount_index,
             delay_secs
         )
         SELECT
-            lc.launch_ref,
+            lc.launch_id,
             lc.title,
             lc.system_id,
             COALESCE(profiles.core_path, launch_plans.core_id),
-            COALESCE(launch_plans.payload_path, ''),
             COALESCE(payloads.mount_kind, 'mount-image'),
             COALESCE(payloads.mount_index, 0),
             COALESCE(payloads.mount_delay_secs, 1)
         FROM launcher_catalog lc
         JOIN launch_plans
-          ON launch_plans.launch_ref = lc.launch_ref
+          ON launch_plans.launch_id = lc.launch_id
         LEFT JOIN profiles
           ON profiles.profile_id = launch_plans.profile_id
         LEFT JOIN payloads
