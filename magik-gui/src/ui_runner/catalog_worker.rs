@@ -1,4 +1,5 @@
 use super::*;
+use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_catalog::{arcade_catalog::ArcadeCatalog, catalog_stamp, catalog_summary};
 
 pub(super) fn start_library_catalog_worker(
@@ -10,6 +11,7 @@ pub(super) fn start_library_catalog_worker(
     std::thread::Builder::new()
         .name("library-catalog".to_string())
         .spawn(move || {
+            apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
             let progress_tx = tx.clone();
             let mut progress_coalescer = CatalogProgressCoalescer::default();
             let mut progress = move |title: &str, detail: &str| {
@@ -143,9 +145,6 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             let plan = catalog_worker_plan(cache_state, request);
-            if cache_state.has_usable_catalog() {
-                lower_background_priority();
-            }
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
                 detail: format!(
@@ -301,7 +300,6 @@ pub(super) fn start_library_catalog_worker(
                                         name: "catalog_cached_summary_failed".to_string(),
                                         detail: e,
                                     });
-                                    restore_catalog_worker_priority();
                                     let _ = tx.send(CatalogWorkerMessage::Changed {
                                         detail:
                                             "Catalog summary unavailable; rebuild required."
@@ -311,7 +309,6 @@ pub(super) fn start_library_catalog_worker(
                                 }
                             }
                         }
-                        restore_catalog_worker_priority();
                         let _ = tx.send(CatalogWorkerMessage::Changed {
                             detail: "Catalog stamp changed; rebuild required.".to_string(),
                         });
@@ -322,7 +319,6 @@ pub(super) fn start_library_catalog_worker(
                             name: "catalog_stamp_check_failed".to_string(),
                             detail: e,
                         });
-                        restore_catalog_worker_priority();
                         let _ = tx.send(CatalogWorkerMessage::Changed {
                             detail: "Catalog stamp check failed; rebuild required.".to_string(),
                         });
@@ -330,7 +326,6 @@ pub(super) fn start_library_catalog_worker(
                     }
                 }
             }
-            restore_catalog_worker_priority();
             let refresh = match library_db::rebuild_default_sqlite_database_with_catalog(
                 &root,
                 Some(&mut progress),
@@ -812,24 +807,6 @@ fn load_navigation_projection_cache(
         return Ok(None);
     }
     library_db::load_arcade_catalog_from_navigation_projection(root, &sqlite_path, &stamp)
-}
-
-pub(super) fn lower_background_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: setpriority does not dereference Rust memory; failure only means
-    // the worker keeps its current scheduler priority.
-    unsafe {
-        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 10);
-    }
-}
-
-fn restore_catalog_worker_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: setpriority does not dereference Rust memory; failure only means
-    // the worker keeps its current scheduler priority.
-    unsafe {
-        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 0);
-    }
 }
 
 pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::fmt::Display) {

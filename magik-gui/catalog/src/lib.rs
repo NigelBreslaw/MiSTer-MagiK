@@ -21,6 +21,7 @@ mod library_indexer;
 pub mod media_identity;
 mod media_metadata;
 pub mod preview_worker;
+pub mod runtime_thread;
 mod software_identity;
 mod sqlite_catalog;
 #[cfg(test)]

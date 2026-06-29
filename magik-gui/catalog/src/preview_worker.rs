@@ -18,6 +18,7 @@ use crate::media_identity::{
     supported_screenshot_pack_ids, valid_screenshot_image_size, DEFAULT_SCREENSHOT_ASSET_DIR,
     DEFAULT_SCREENSHOT_IMAGE_SIZE,
 };
+use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
@@ -392,7 +393,7 @@ fn preview_selected_thread(
     tx: mpsc::Sender<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
 ) {
-    lower_thread_priority();
+    apply_runtime_thread_policy(RuntimeThreadRole::PreviewSelected);
     let mut scratch = PreviewArchiveScratch::default();
     while let Ok(mut req) = rx.recv() {
         while let Ok(next) = rx.try_recv() {
@@ -410,7 +411,7 @@ fn preview_prefetch_thread(
     tx: mpsc::Sender<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
 ) {
-    lower_thread_priority();
+    apply_runtime_thread_policy(RuntimeThreadRole::PreviewPrefetch);
     let mut queue: Vec<PreviewRequest> = Vec::new();
     let mut scratch = PreviewArchiveScratch::default();
     loop {
@@ -2261,15 +2262,6 @@ fn preview_trace_enabled() -> bool {
             Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     })
-}
-
-fn lower_thread_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: setpriority does not dereference Rust memory; failure only means
-    // the worker keeps its current scheduler priority.
-    unsafe {
-        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 5);
-    }
 }
 
 #[cfg(test)]

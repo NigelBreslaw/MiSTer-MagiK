@@ -4,6 +4,7 @@ use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition, ProfilePat
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
+use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -100,6 +101,7 @@ pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<Dis
     std::thread::Builder::new()
         .name("library-walker".to_string())
         .spawn(move || {
+            apply_runtime_thread_policy(RuntimeThreadRole::LibraryWalker);
             let t = Instant::now();
             let dirs = discover_files_streaming(&roots, &tx);
             let _ = tx.send(DiscoveryEvent::Done {

@@ -2,6 +2,7 @@ use crate::artifact_publish::{
     hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_with_fallback,
     timestamped_temp_path_for, ArtifactPublishLabels,
 };
+use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_fb::media_update::{
     index_path_for_pack_path, pack_status_from_state, parse_manifest_json,
     size_qualified_pack_path, state_path, valid_image_size, LocalPackStatus, MediaIndex, MediaPack,
@@ -88,6 +89,7 @@ fn run_screenshot_media_worker(
     command_rx: mpsc::Receiver<MediaWorkerCommand>,
     tx: mpsc::Sender<MediaWorkerMessage>,
 ) {
+    apply_runtime_thread_policy(RuntimeThreadRole::MediaWorker);
     let _ = tx.send(MediaWorkerMessage::Timing {
         name: "screenshot_media_update_start".to_string(),
         detail: format!(
@@ -454,6 +456,7 @@ fn start_ready_downloads(
         std::thread::Builder::new()
             .name(format!("screenshot-media-{}", pack.id))
             .spawn(move || {
+                apply_runtime_thread_policy(RuntimeThreadRole::MediaDownload);
                 let result = download_pack_assets(
                     &download_config,
                     &download_pack,
@@ -855,6 +858,7 @@ fn start_silent_index_download(
     let handle = std::thread::Builder::new()
         .name(format!("screenshot-media-{}-index", pack.id))
         .spawn(move || {
+            apply_runtime_thread_policy(RuntimeThreadRole::MediaIndex);
             stream_index_to_publish_temp(
                 &index,
                 &pack,
