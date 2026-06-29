@@ -4,6 +4,7 @@ use ffmpeg::codec;
 use ffmpeg::format;
 use ffmpeg::media;
 use ffmpeg::software::resampling::Context as ResamplingContext;
+#[cfg(feature = "video-lab")]
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
 use ffmpeg::util::format::sample::{Sample, Type as SampleType};
@@ -80,59 +81,91 @@ fn video_queue_depth_from_env() -> usize {
         .unwrap_or(2)
 }
 
-fn video_threads_from_env() -> Option<usize> {
-    std::env::var("MISTER_VIDEO_THREADS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&n| n > 0)
+fn video_threading_from_env() -> Result<Option<codec::threading::Config>, String> {
+    #[cfg(feature = "video-lab")]
+    {
+        let Some(threads) = std::env::var("MISTER_VIDEO_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+        else {
+            return Ok(None);
+        };
+        let mut threading = codec::threading::Config::count(threads);
+        threading.kind = video_thread_type_from_env()?;
+        return Ok(Some(threading));
+    }
+
+    #[cfg(not(feature = "video-lab"))]
+    {
+        if let Some(value) = std::env::var("MISTER_VIDEO_THREADS")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            return Err(format!(
+                "MISTER_VIDEO_THREADS={value:?} requires a --video-lab build; production video is single-threaded"
+            ));
+        }
+        let thread_type = std::env::var("MISTER_VIDEO_THREAD_TYPE")
+            .unwrap_or_else(|_| "none".to_string())
+            .to_ascii_lowercase();
+        match thread_type.as_str() {
+            "" | "none" | "off" | "single" => Ok(None),
+            other => Err(format!(
+                "MISTER_VIDEO_THREAD_TYPE={other:?} requires a --video-lab build; production video supports only none"
+            )),
+        }
+    }
 }
 
-fn video_thread_type_from_env() -> codec::threading::Type {
+#[cfg(feature = "video-lab")]
+fn video_thread_type_from_env() -> Result<codec::threading::Type, String> {
     match std::env::var("MISTER_VIDEO_THREAD_TYPE")
         .unwrap_or_else(|_| "frame".to_string())
         .to_ascii_lowercase()
         .as_str()
     {
-        "none" | "off" | "single" => codec::threading::Type::None,
-        "slice" => codec::threading::Type::Slice,
-        "frame" => codec::threading::Type::Frame,
-        "auto" => codec::threading::Type::None,
-        other => {
-            eprintln!(
-                "video: unknown MISTER_VIDEO_THREAD_TYPE={other:?}; use none|frame|slice|auto"
-            );
-            codec::threading::Type::Frame
-        }
+        "none" | "off" | "single" => Ok(codec::threading::Type::None),
+        "slice" => Ok(codec::threading::Type::Slice),
+        "frame" => Ok(codec::threading::Type::Frame),
+        "auto" => Ok(codec::threading::Type::None),
+        other => Err(format!(
+            "video: unknown MISTER_VIDEO_THREAD_TYPE={other:?}; use none|frame|slice|auto"
+        )),
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VideoConvertMode {
     CustomNeon,
+    #[cfg(feature = "video-lab")]
     SwscaleRgb565,
 }
 
 impl VideoConvertMode {
-    fn from_env() -> Self {
+    fn from_env() -> Result<Self, String> {
         match std::env::var("MISTER_VIDEO_CONVERT")
             .unwrap_or_else(|_| "custom-neon".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
-            "custom-neon" | "custom_neon" | "neon" | "custom" => Self::CustomNeon,
-            "swscale-rgb565" | "swscale_rgb565" | "swscale" => Self::SwscaleRgb565,
-            other => {
-                eprintln!(
-                    "video: unknown MISTER_VIDEO_CONVERT={other:?}; use custom-neon|swscale-rgb565"
-                );
-                Self::CustomNeon
+            "custom-neon" | "custom_neon" | "neon" | "custom" => Ok(Self::CustomNeon),
+            #[cfg(feature = "video-lab")]
+            "swscale-rgb565" | "swscale_rgb565" | "swscale" => Ok(Self::SwscaleRgb565),
+            #[cfg(not(feature = "video-lab"))]
+            "swscale-rgb565" | "swscale_rgb565" | "swscale" => {
+                Err("MISTER_VIDEO_CONVERT=swscale-rgb565 requires a --video-lab build".to_string())
             }
+            other => Err(format!(
+                "video: unknown MISTER_VIDEO_CONVERT={other:?}; use custom-neon"
+            )),
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CustomNeon => "custom-neon",
+            #[cfg(feature = "video-lab")]
             Self::SwscaleRgb565 => "swscale-rgb565",
         }
     }
@@ -141,43 +174,56 @@ impl VideoConvertMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VideoScaleMode {
     Source,
+    #[cfg(feature = "video-lab")]
     FitHeight,
+    #[cfg(feature = "video-lab")]
     FitWidth,
+    #[cfg(feature = "video-lab")]
     Native,
 }
 
 impl VideoScaleMode {
-    fn from_env() -> Self {
+    fn from_env() -> Result<Self, String> {
         match std::env::var("MISTER_VIDEO_SCALE")
             .unwrap_or_else(|_| "source".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
-            "fit-height" | "fit_height" => Self::FitHeight,
-            "fit-width" | "fit_width" => Self::FitWidth,
-            "native" => Self::Native,
-            "source" => Self::Source,
-            other => {
-                eprintln!(
-                    "video: unknown MISTER_VIDEO_SCALE={other:?}; use source|fit-height|fit-width|native"
-                );
-                Self::Source
-            }
+            "source" => Ok(Self::Source),
+            #[cfg(feature = "video-lab")]
+            "fit-height" | "fit_height" => Ok(Self::FitHeight),
+            #[cfg(feature = "video-lab")]
+            "fit-width" | "fit_width" => Ok(Self::FitWidth),
+            #[cfg(feature = "video-lab")]
+            "native" => Ok(Self::Native),
+            #[cfg(not(feature = "video-lab"))]
+            "fit-height" | "fit_height" | "fit-width" | "fit_width" | "native" => Err(format!(
+                "MISTER_VIDEO_SCALE={:?} requires a --video-lab build; production video supports only source",
+                std::env::var("MISTER_VIDEO_SCALE").unwrap_or_default()
+            )),
+            other => Err(format!("video: unknown MISTER_VIDEO_SCALE={other:?}; use source")),
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::Source => "source",
+            #[cfg(feature = "video-lab")]
             Self::FitHeight => "fit-height",
+            #[cfg(feature = "video-lab")]
             Self::FitWidth => "fit-width",
+            #[cfg(feature = "video-lab")]
             Self::Native => "native",
         }
     }
 
     fn output_dimensions(self, src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
         match self {
+            #[cfg(feature = "video-lab")]
             Self::Source | Self::Native => (src_w.min(max_w), src_h.min(max_h)),
+            #[cfg(not(feature = "video-lab"))]
+            Self::Source => (src_w.min(max_w), src_h.min(max_h)),
+            #[cfg(feature = "video-lab")]
             Self::FitHeight => {
                 let out_h = src_h.min(max_h).max(1);
                 let out_w = ((src_w as u64 * out_h as u64) / src_h.max(1) as u64)
@@ -185,6 +231,7 @@ impl VideoScaleMode {
                     .max(1) as u32;
                 (out_w, out_h)
             }
+            #[cfg(feature = "video-lab")]
             Self::FitWidth => {
                 let out_w = src_w.min(max_w).max(1);
                 let out_h = ((src_h as u64 * out_w as u64) / src_w.max(1) as u64)
@@ -205,6 +252,7 @@ pub struct VideoPlayer {
     audio_stream_index: usize,
     video_decoder: ffmpeg::decoder::Video,
     audio_decoder: ffmpeg::decoder::Audio,
+    #[cfg(feature = "video-lab")]
     scaler: ScalingContext,
     audio_resampler: ResamplingContext,
     frame_interval: Duration,
@@ -378,6 +426,30 @@ impl AudioFramePacer {
     }
 }
 
+macro_rules! receive_player_rgb565_frame {
+    ($player:expr) => {{
+        #[cfg(feature = "video-lab")]
+        {
+            receive_rgb565_frame(
+                &mut $player.video_decoder,
+                &mut $player.scaler,
+                $player.convert_mode,
+                $player.output_width,
+                $player.output_height,
+            )
+        }
+        #[cfg(not(feature = "video-lab"))]
+        {
+            receive_rgb565_frame(
+                &mut $player.video_decoder,
+                $player.convert_mode,
+                $player.output_width,
+                $player.output_height,
+            )
+        }
+    }};
+}
+
 impl VideoPlayer {
     pub fn open(paths: Vec<String>) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| format!("ffmpeg init failed: {e}"))?;
@@ -434,9 +506,7 @@ impl VideoPlayer {
 
         let mut video_context = codec::context::Context::from_parameters(video_stream.parameters())
             .map_err(|e| format!("decoder parameters: {e}"))?;
-        if let Some(threads) = video_threads_from_env() {
-            let mut threading = codec::threading::Config::count(threads);
-            threading.kind = video_thread_type_from_env();
+        if let Some(threading) = video_threading_from_env()? {
             video_context.set_threading(threading);
         }
         let video_decoder = video_context
@@ -463,14 +533,15 @@ impl VideoPlayer {
         )
         .map_err(|e| format!("create audio resampler: {e}"))?;
 
-        let scale_mode = VideoScaleMode::from_env();
-        let convert_mode = VideoConvertMode::from_env();
+        let scale_mode = VideoScaleMode::from_env()?;
+        let convert_mode = VideoConvertMode::from_env()?;
         let (output_w, output_h) = scale_mode.output_dimensions(
             video_decoder.width(),
             video_decoder.height(),
             DEFAULT_VIDEO_MAX_W,
             DEFAULT_VIDEO_MAX_H,
         );
+        #[cfg(feature = "video-lab")]
         let scaler = ScalingContext::get(
             video_decoder.format(),
             video_decoder.width(),
@@ -491,6 +562,7 @@ impl VideoPlayer {
             audio_stream_index,
             video_decoder,
             audio_decoder,
+            #[cfg(feature = "video-lab")]
             scaler,
             audio_resampler,
             frame_interval,
@@ -546,13 +618,7 @@ impl VideoPlayer {
         audio_frames: usize,
         mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some((frame, video_metrics)) = receive_rgb565_frame(
-            &mut self.video_decoder,
-            &mut self.scaler,
-            self.convert_mode,
-            self.output_width,
-            self.output_height,
-        )? {
+        if let Some((frame, video_metrics)) = receive_player_rgb565_frame!(self)? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
@@ -572,13 +638,7 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((frame, video_metrics)) = receive_rgb565_frame(
-                    &mut self.video_decoder,
-                    &mut self.scaler,
-                    self.convert_mode,
-                    self.output_width,
-                    self.output_height,
-                )? {
+                if let Some((frame, video_metrics)) = receive_player_rgb565_frame!(self)? {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
@@ -618,13 +678,7 @@ impl VideoPlayer {
             &mut metrics,
         )?;
         self.add_pending_audio_metrics(metrics);
-        if let Some((frame, video_metrics)) = receive_rgb565_frame(
-            &mut self.video_decoder,
-            &mut self.scaler,
-            self.convert_mode,
-            self.output_width,
-            self.output_height,
-        )? {
+        if let Some((frame, video_metrics)) = receive_player_rgb565_frame!(self)? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
@@ -718,7 +772,7 @@ impl VideoPlayer {
 
 fn receive_rgb565_frame(
     decoder: &mut ffmpeg::decoder::Video,
-    scaler: &mut ScalingContext,
+    #[cfg(feature = "video-lab")] scaler: &mut ScalingContext,
     convert_mode: VideoConvertMode,
     output_width: u32,
     output_height: u32,
@@ -733,16 +787,29 @@ fn receive_rgb565_frame(
                 VideoConvertMode::CustomNeon => {
                     rgb565_frame_from_custom_i420(&decoded, output_width, output_height)?
                 }
+                #[cfg(feature = "video-lab")]
                 VideoConvertMode::SwscaleRgb565 => None,
             };
             let frame = match frame {
                 Some(frame) => frame,
                 None => {
-                    let mut rgb = Video::empty();
-                    scaler
-                        .run(&decoded, &mut rgb)
-                        .map_err(|e| format!("scale video frame: {e}"))?;
-                    rgb565_frame_to_words(&rgb)?
+                    #[cfg(feature = "video-lab")]
+                    {
+                        let mut rgb = Video::empty();
+                        scaler
+                            .run(&decoded, &mut rgb)
+                            .map_err(|e| format!("scale video frame: {e}"))?;
+                        rgb565_frame_to_words(&rgb)?
+                    }
+                    #[cfg(not(feature = "video-lab"))]
+                    {
+                        return Err(format!(
+                            "video frame format {:?} at {}x{} requires a --video-lab swscale fallback; production video requires source-size YUV420P",
+                            decoded.format(),
+                            decoded.width(),
+                            decoded.height()
+                        ));
+                    }
                 }
             };
             Ok(Some((

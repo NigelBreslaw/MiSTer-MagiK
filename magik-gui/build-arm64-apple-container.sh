@@ -48,6 +48,7 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
   ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
+  ./build-arm64-apple-container.sh --video-lab  → include video comparison/fallback paths
   ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
@@ -74,6 +75,10 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
+    --video-lab)
+      add_feature video
+      add_feature video-lab
+      ;;
     --diagnostics) add_feature diagnostics ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;
@@ -112,10 +117,6 @@ case "$UI_SCOPE" in
     ;;
 esac
 export MISTER_UI_BUILD_SCOPE="$UI_SCOPE"
-if [[ " ${FEATURES[*]-} " == *" video "* ]] && [ "$UI_SCOPE" != all ]; then
-  echo "ERROR: --video requires UI scope 'all' because video_playback.slint is a bench scene" >&2
-  exit 2
-fi
 
 if [ "$(uname -m)" != arm64 ]; then
   echo "ERROR: Apple-container native path requires an arm64 macOS host; got $(uname -m)." >&2
@@ -203,7 +204,11 @@ fi
 
 EXTRA_ENVS=()
 if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
-  "$PWD/scripts/build-minimal-ffmpeg.sh"
+  if [[ " ${FEATURES[*]-} " == *" video-lab "* ]]; then
+    MISTER_FFMPEG_VIDEO_LAB=1 "$PWD/scripts/build-minimal-ffmpeg.sh"
+  else
+    "$PWD/scripts/build-minimal-ffmpeg.sh"
+  fi
   EXTRA_ENVS+=(
     --env FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist
     --env PKG_CONFIG_PATH=/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig

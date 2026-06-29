@@ -294,7 +294,7 @@ pub(super) fn arcade_list_needs_forced_redraw(
         || slint_dirty.is_some_and(|rect| rect.intersection(renderer.dirty_rect()).is_some())
 }
 
-#[cfg(mister_bench_scenes)]
+#[cfg(any(mister_bench_scenes, mister_video_scene))]
 pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
     FrameRect {
         x0: rect.x0 as u32,

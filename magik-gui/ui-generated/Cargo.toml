@@ -19,7 +19,7 @@ slint = { version = "1.17", default-features = false, features = ["compat-1-2", 
 [features]
 default = []
 bench-scenes = []
-video = ["bench-scenes"]
+video = []
 
 [build-dependencies]
 slint-build = "1.17"

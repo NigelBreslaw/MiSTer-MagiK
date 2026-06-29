@@ -138,11 +138,15 @@ magik-gui/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magik-fb
 # Run on device: scripts/cpu-flamegraph-scene.sh video_playback 10 VIDEO-CPU
 
-# Video/audio benchmark build
+# Production video/audio benchmark build
 magik-gui/build-arm.sh --video
 # Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
-# Video builds force all-scenes UI scope because video_playback.slint is a bench scene.
+# Keeps only the fast path: direct blit, source-size YUV420P, custom NEON RGB565.
 # Default media folder on MiSTer: /media/fat/mister-magik/video-snaps/neogeo
+
+# Video lab build with comparison/fallback paths.
+magik-gui/build-arm.sh --video-lab
+# Adds FFmpeg swscale plus Slint-image, non-source scaling, and decoder-thread experiments.
 
 # Deploy runtime binary only (default = release-device).
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
@@ -203,15 +207,18 @@ backend sees FFmpeg under `/target/ffmpeg-minimal/armv7/dist`; the local Apple
 container backend sees the same host cache under
 `/project/target/ffmpeg-minimal/armv7/dist`.
 
-The minimal FFmpeg build pins upstream FFmpeg 8.1.2 and enables only
+The production minimal FFmpeg build pins upstream FFmpeg 8.1.2 and enables only
 H.264-in-MOV/MP4 playback plus audio decode/resampling for MiSTer video snaps:
-`avcodec`, `avformat`, `avutil`, `swscale`, `swresample`, H.264 decoder/parser,
-AAC decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
+`avcodec`, `avformat`, `avutil`, `swresample`, H.264 decoder/parser, AAC
+decoder/parser, `pcm_s16le`, MOV demuxer, and file protocol.
 `video_playback` decodes audio and converts it to 48 kHz stereo signed 16-bit
 PCM for `/dev/MrAudio`. On ARM video builds, source-size YUV420P frames can use
 the Rust NEON RGB565 converter (`MISTER_VIDEO_CONVERT=custom-neon`), implemented
 with `core::arch::arm` intrinsics and a scalar Rust fallback/reference path.
-FFmpeg swscale is retained for non-source scaling modes and comparison runs.
+Production `--video` rejects `MISTER_VIDEO_CONVERT=swscale-rgb565`,
+non-`source` `MISTER_VIDEO_SCALE`, `MISTER_VIDEO_RENDER_MODE=slint-image`, and
+decoder threading modes. Use `--video-lab` for those comparison paths; that mode
+also enables FFmpeg `swscale`.
 avfilter, avdevice, programs, and autodetected libraries are disabled.
 The checked-in ARMv7 image includes both C and C++ cross toolchains so FFmpeg and
 any C++-probing native crates see the same compiler family locally and in CI.
@@ -225,7 +232,7 @@ GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
 The matrix covers the local build modes that matter:
 
 - `magik-gui/build-arm.sh --device`
-- `magik-gui/build-arm.sh --device --all-scenes --video`
+- `magik-gui/build-arm.sh --device --video`
 
 CI runs on Linux, so `build-arm.sh` uses pinned `cross` 0.2.5 there. Each job
 uses `magik-gui/Dockerfile.cross-armv7` via `magik-gui/Cross.toml`, caches Cargo
@@ -250,6 +257,10 @@ project-local minimal build.
   `scripts/bench-toolchain.sh` opt in.
 - **Cargo feature `diagnostics`** — enables low-level runtime probes that are
   intentionally absent from the production command surface.
+- **Cargo feature `video`** — enables the slim production video scene and static
+  FFmpeg fast path without generated bench/effect scenes or FFmpeg swscale.
+- **Cargo feature `video-lab`** — extends `video` with swscale and comparison
+  knobs for lab runs; do not ship it as the release video variant.
 - **`MISTER_ARM_BUILD_BACKEND`** — local Apple-Silicon builds default to
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
 - **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — override the Slint modules

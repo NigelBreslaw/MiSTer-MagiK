@@ -12,7 +12,7 @@ use slint::platform::software_renderer::{
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
-#[cfg(feature = "video")]
+#[cfg(all(mister_video_scene, feature = "video-lab"))]
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -33,9 +33,9 @@ use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::display_config::{detect_runtime_display_geometry, DisplayConfig};
-#[cfg(mister_bench_scenes)]
+#[cfg(any(mister_bench_scenes, mister_video_scene))]
 use crate::frame_profile::FrameRect;
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 use crate::frame_profile::{FrameProfiler, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
@@ -99,7 +99,7 @@ mod transition_effects_loop;
 pub(crate) mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 mod video_loop;
 
 #[cfg(mister_experiments)]
@@ -132,7 +132,7 @@ use transition_effects_loop::run_transition_effects_loop;
 use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 use video_loop::*;
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
@@ -164,7 +164,7 @@ pub const UI_SCENES: &[&str] = &[
     #[cfg(mister_experiments)]
     "transition-effects",
     "controller_test",
-    #[cfg(all(feature = "video", mister_bench_scenes))]
+    #[cfg(mister_video_scene)]
     "video_playback",
 ];
 
@@ -327,7 +327,7 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
-        #[cfg(all(feature = "video", mister_bench_scenes))]
+        #[cfg(mister_video_scene)]
         "video_playback" => {
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
                 app.show().expect("show");

@@ -55,7 +55,7 @@ mod display_config;
 #[cfg(mister_experiments)]
 mod experiments;
 mod fpga;
-#[cfg(mister_bench_scenes)]
+#[cfg(any(mister_bench_scenes, mister_video_scene))]
 mod frame_profile;
 mod input;
 mod launch_preparation;
