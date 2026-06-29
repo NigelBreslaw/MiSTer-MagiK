@@ -145,7 +145,7 @@ for iteration in $(seq 1 "$ITERATIONS"); do
 done
 if [[ "$POST_REBOOT" -eq 1 ]]; then
   echo "== post-reboot explicit full rebuild =="
-  "$HERE/scripts/mister" reboot-wait
+  "$HERE/scripts/mister" reboot-wait --direct-reset
   OUT=$(run_with_launcher_suspended "MISTER_LIBRARY_SQLITE=$BENCH_SQLITE MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 $REMOTE library-refresh" 2>&1) || true
   echo "$OUT"
   echo "$OUT" | awk -v label="$LABEL" -F '\t' '

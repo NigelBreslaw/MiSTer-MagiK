@@ -368,9 +368,9 @@ host-side query against a copied database rather than direct device SQLite
 performance.
 
 `profile-first-scan.sh` deletes the production catalog database plus
-`library.summary.json` and reboots with `scripts/mister reboot-wait`, which uses
-the supervised `mister_magik_reboot` path when the Main fork is available. It
-records first-frame/catalog-ready timings in
+`library.summary.json`, syncs, and reboots with
+`scripts/mister reboot-wait --direct-reset` because no further writes are
+expected before reset. It records first-frame/catalog-ready timings in
 `history/toolchain-bench/results-first-scan.tsv`. The hard first-scan gates are
 `library_ready <= 41000ms` for RAM catalog usability and
 `library_db_saved <= 55000ms` for durable SQLite save completion. Anything above

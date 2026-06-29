@@ -23,12 +23,37 @@ const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RebootMode {
+    Supervised,
+    Raw,
+    DirectReset,
+    DirectResetNoSync,
+}
+
+impl RebootMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Supervised => "supervised",
+            Self::Raw => "raw",
+            Self::DirectReset => "direct-reset",
+            Self::DirectResetNoSync => "direct-reset-no-sync",
+        }
+    }
+
+    fn is_direct_reset(self) -> bool {
+        matches!(self, Self::DirectReset | Self::DirectResetNoSync)
+    }
+}
 
 fn main() {
     if let Err(e) = run_cli() {
@@ -151,11 +176,11 @@ fn run_cli() -> Result<()> {
             watch_external_reboot(&args)?;
         }
         "reboot" | "reboot-wait" => {
-            let raw = take_reboot_raw_flag(&mut args)?;
+            let mode = take_reboot_mode_flag(&mut args)?;
             let host = host();
             {
                 let sess = connect(10)?;
-                let issued = issue_reboot(&sess, raw)?;
+                let issued = issue_reboot(&sess, mode)?;
                 println!("reboot issued to {host} ({issued})");
             }
             if action == "reboot-wait" {
@@ -285,53 +310,75 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
 }
 
-fn take_reboot_raw_flag(args: &mut Vec<String>) -> Result<bool> {
-    let raw = if let Some(pos) = args.iter().position(|arg| arg == "--raw") {
-        args.remove(pos);
-        true
-    } else {
-        false
-    };
-    let supervised = if let Some(pos) = args.iter().position(|arg| arg == "--supervised") {
-        args.remove(pos);
-        true
-    } else {
-        false
-    };
-    if raw && supervised {
-        Err("use only one of --raw or --supervised".into())
-    } else {
-        Ok(raw)
+fn take_reboot_mode_flag(args: &mut Vec<String>) -> Result<RebootMode> {
+    let mut flags = Vec::new();
+    for flag in [
+        "--supervised",
+        "--raw",
+        "--direct-reset",
+        "--direct-reset-no-sync",
+    ] {
+        if let Some(pos) = args.iter().position(|arg| arg == flag) {
+            args.remove(pos);
+            flags.push(flag);
+        }
+    }
+    reboot_mode_from_flags(&flags)
+}
+
+fn reboot_mode_from_args(args: &[String]) -> Result<RebootMode> {
+    let flags: Vec<_> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| {
+            matches!(
+                *arg,
+                "--supervised" | "--raw" | "--direct-reset" | "--direct-reset-no-sync"
+            )
+        })
+        .collect();
+    reboot_mode_from_flags(&flags)
+}
+
+fn reboot_mode_from_flags(flags: &[&str]) -> Result<RebootMode> {
+    if flags.len() > 1 {
+        return Err(
+            "use only one of --supervised, --raw, --direct-reset, or --direct-reset-no-sync".into(),
+        );
+    }
+    Ok(match flags.first().copied() {
+        None | Some("--supervised") => RebootMode::Supervised,
+        Some("--raw") => RebootMode::Raw,
+        Some("--direct-reset") => RebootMode::DirectReset,
+        Some("--direct-reset-no-sync") => RebootMode::DirectResetNoSync,
+        Some(other) => return Err(format!("unsupported reboot mode flag: {other}").into()),
+    })
+}
+
+fn reboot_remote_command(mode: RebootMode) -> &'static str {
+    match mode {
+        RebootMode::Supervised => SUPERVISED_REBOOT_REMOTE_CMD,
+        RebootMode::Raw => RAW_REBOOT_REMOTE_CMD,
+        RebootMode::DirectReset => DIRECT_RESET_REMOTE_CMD,
+        RebootMode::DirectResetNoSync => DIRECT_RESET_NO_SYNC_REMOTE_CMD,
     }
 }
 
-fn reboot_raw_from_args(args: &[String]) -> Result<bool> {
-    let raw = args.iter().any(|arg| arg == "--raw");
-    let supervised = args.iter().any(|arg| arg == "--supervised");
-    if raw && supervised {
-        Err("use only one of --raw or --supervised".into())
-    } else {
-        Ok(raw)
+fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
+    if mode.is_direct_reset() {
+        eprintln!(
+            "WARNING: {} uses Main's direct reset-manager path; it can bypass normal Linux shutdown and previously reproduced Ethernet RX stalls.",
+            mode.label()
+        );
     }
-}
-
-fn reboot_remote_command(raw: bool) -> &'static str {
-    if raw {
-        RAW_REBOOT_REMOTE_CMD
-    } else {
-        SUPERVISED_REBOOT_REMOTE_CMD
-    }
-}
-
-fn issue_reboot(sess: &Session, raw: bool) -> Result<String> {
-    let out = exec(sess, reboot_remote_command(raw), true)?;
+    let out = exec(sess, reboot_remote_command(mode), true)?;
     let mode = out.stdout.trim();
     if mode.is_empty() {
-        Ok(if raw { "raw" } else { "unknown" }.to_string())
+        Ok("unknown".to_string())
     } else {
         Ok(mode.to_string())
     }
@@ -1664,7 +1711,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw] [--fail-on-timeout]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -1783,7 +1830,7 @@ fn agent_magik(args: &[String]) -> Result<()> {
 }
 
 fn agent_reboot_wait(args: &[String]) -> Result<()> {
-    let raw = reboot_raw_from_args(args)?;
+    let reboot_mode = reboot_mode_from_args(args)?;
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .or_else(|| {
@@ -1792,15 +1839,25 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
                 .and_then(|arg| arg.parse::<f64>().ok())
         })
         .unwrap_or(40.0);
-    let mode = if raw { "raw" } else { "supervised" };
+    let mode = reboot_mode.label();
     let issue_t = Instant::now();
-    let reply = agent_request("reboot", json!({"mode": mode}), Duration::from_secs(2))?;
-    let issue_ms = issue_t.elapsed().as_millis();
-    println!(
-        "agent reboot issued to {} after {issue_ms}ms: {}",
-        host(),
-        serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
-    );
+    if reboot_mode.is_direct_reset() {
+        let sess = connect(10)?;
+        let issued = issue_reboot(&sess, reboot_mode)?;
+        let issue_ms = issue_t.elapsed().as_millis();
+        println!(
+            "agent reboot issued to {} after {issue_ms}ms: {issued}",
+            host()
+        );
+    } else {
+        let reply = agent_request("reboot", json!({"mode": mode}), Duration::from_secs(2))?;
+        let issue_ms = issue_t.elapsed().as_millis();
+        println!(
+            "agent reboot issued to {} after {issue_ms}ms: {}",
+            host(),
+            serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
+        );
+    }
 
     let start = Instant::now();
     let mut down_ms = None;
@@ -2455,7 +2512,7 @@ fn agent_probe_label(timeout: Duration) -> String {
 fn agent_boot_profile(args: &[String]) -> Result<()> {
     let _ = agent_token()?;
     let samples = parse_profile_count(args, 1);
-    let raw = reboot_raw_from_args(args)?;
+    let reboot_mode = reboot_mode_from_args(args)?;
     let fail_on_timeout = args.iter().any(|arg| arg == "--fail-on-timeout");
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
@@ -2466,7 +2523,7 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
     let sleep_ms = option_value(args, "--sleep-ms")
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(50);
-    let mode = if raw { "raw" } else { "supervised" };
+    let mode = reboot_mode.label();
     let out_path = "history/toolchain-bench/results-agent.tsv";
     let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tagent_ready_ms\tssh_exec_ready_ms\tagent_first_hostdown_ms\tagent_first_noroute_ms\tagent_first_timeout_ms\tagent_first_refused_ms\tagent_first_other_ms\tagent_ok_count\tagent_hostdown_count\tagent_noroute_count\tagent_timeout_count\tagent_refused_count\tagent_other_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tagent_uptime_ms\tssh_uptime\tagent_transitions\tnote";
     println!("{header}");
@@ -2483,7 +2540,7 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
         let issue_t = Instant::now();
         let reboot_note = {
             let sess = connect(10)?;
-            issue_reboot(&sess, raw)?
+            issue_reboot(&sess, reboot_mode)?
         };
         let reboot_issue_ms = issue_t.elapsed().as_millis();
         let start = Instant::now();
@@ -2511,6 +2568,8 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
         let mut main_status_ms = None;
         let mut launcher_state = String::new();
         let mut note = reboot_note;
+        let mut first_agent_net = None;
+        let mut final_agent_net = None;
 
         while start.elapsed().as_secs_f64() < timeout_secs {
             let elapsed_ms = start.elapsed().as_millis();
@@ -2522,6 +2581,7 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
                     if let Ok(reply) =
                         agent_request("status", json!({}), Duration::from_millis(500))
                     {
+                        first_agent_net = agent_net_snapshot(&reply.response);
                         agent_uptime_ms = reply
                             .response
                             .pointer("/result/agent/uptime_ms")
@@ -2592,16 +2652,55 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
             thread::sleep(Duration::from_millis(sleep_ms));
         }
 
+        if agent_ready_ms.is_some() {
+            if let Ok(reply) = agent_request("status", json!({}), Duration::from_millis(500)) {
+                final_agent_net = agent_net_snapshot(&reply.response);
+            }
+        }
+
+        let agent_rx_delta = first_agent_net
+            .as_ref()
+            .zip(final_agent_net.as_ref())
+            .map(|(first, final_)| final_.rx_packets.saturating_sub(first.rx_packets));
+        let agent_tx_delta = first_agent_net
+            .as_ref()
+            .zip(final_agent_net.as_ref())
+            .map(|(first, final_)| final_.tx_packets.saturating_sub(first.tx_packets));
+        let agent_carrier = final_agent_net
+            .as_ref()
+            .map(|snapshot| snapshot.carrier.as_str())
+            .unwrap_or("missing");
+        let agent_final_rx_packets = final_agent_net.as_ref().map(|snapshot| snapshot.rx_packets);
+        let agent_final_tx_packets = final_agent_net.as_ref().map(|snapshot| snapshot.tx_packets);
+        let agent_rx_increasing = agent_rx_delta.map(|delta| delta > 0).unwrap_or(false);
+        let agent_rx_nonzero = agent_final_rx_packets
+            .map(|packets| packets > 0)
+            .unwrap_or(false);
         let transitions = agent_stats.transitions.join(",");
         let note = format!(
-            "{} main_status_ms={} launcher_state={}",
+            "{} main_status_ms={} launcher_state={} agent_carrier={} agent_rx_packets={} agent_tx_packets={} agent_rx_delta={} agent_tx_delta={} agent_rx_increasing={} agent_rx_nonzero={}",
             note,
             opt_ms(main_status_ms),
             if launcher_state.is_empty() {
                 "missing"
             } else {
                 &launcher_state
-            }
+            },
+            agent_carrier,
+            agent_final_rx_packets
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "missing".to_string()),
+            agent_final_tx_packets
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "missing".to_string()),
+            agent_rx_delta
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "missing".to_string()),
+            agent_tx_delta
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "missing".to_string()),
+            u8::from(agent_rx_increasing),
+            u8::from(agent_rx_nonzero)
         );
         let row = format!(
             "agent-boot\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{agent_uptime_ms}\t{ssh_uptime}\t{}\t{}",
@@ -2644,7 +2743,9 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
         let sample_recovered = down_ms.is_some()
             && agent_ready_ms.is_some()
             && ssh_ready_ms.is_some()
-            && launcher_state == "LauncherActive";
+            && launcher_state == "LauncherActive"
+            && agent_rx_nonzero
+            && agent_rx_increasing;
         if sample_recovered {
             recovered += 1;
         } else if fail_on_timeout {
@@ -2676,11 +2777,11 @@ fn agent_boot_profile(args: &[String]) -> Result<()> {
 
 fn boot_net_profile(args: &[String]) -> Result<()> {
     let samples = parse_profile_count(args, 3);
-    let raw = reboot_raw_from_args(args)?;
+    let reboot_mode = reboot_mode_from_args(args)?;
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(120.0);
-    let mode = if raw { "raw" } else { "supervised" };
+    let mode = reboot_mode.label();
     let out_path = "history/toolchain-bench/results-boot-net.tsv";
     let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\ttcp22_ms\tssh_exec_ready_ms\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tmain_status_ms\tslint_status_ms\tuptime\tlauncher_state\tslint_frames\tnote";
     println!("{header}");
@@ -2689,7 +2790,7 @@ fn boot_net_profile(args: &[String]) -> Result<()> {
         let issue_t = Instant::now();
         let reboot_note = {
             let sess = connect(10)?;
-            issue_reboot(&sess, raw)?
+            issue_reboot(&sess, reboot_mode)?
         };
         let reboot_issue_ms = issue_t.elapsed().as_millis();
         let start = Instant::now();
@@ -2926,7 +3027,7 @@ fn command_summary(program: &str, args: &[&str], contains: Option<&str>) -> Stri
 
 fn boot_tcp_profile(args: &[String]) -> Result<()> {
     let samples = parse_profile_count(args, 1);
-    let raw = reboot_raw_from_args(args)?;
+    let reboot_mode = reboot_mode_from_args(args)?;
     let timeout_secs = option_value(args, "--timeout")
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(40.0);
@@ -2936,7 +3037,7 @@ fn boot_tcp_profile(args: &[String]) -> Result<()> {
     let sleep_ms = option_value(args, "--sleep-ms")
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(50);
-    let mode = if raw { "raw" } else { "supervised" };
+    let mode = reboot_mode.label();
     let out_path = "history/toolchain-bench/results-boot-tcp.tsv";
     let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tfirst_ok_ms\tssh_exec_ready_ms\tfirst_hostdown_ms\tfirst_noroute_ms\tfirst_timeout_ms\tfirst_refused_ms\tfirst_other_ms\tok_count\thostdown_count\tnoroute_count\ttimeout_count\trefused_count\tother_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tuptime\ttransitions\tnote";
     println!("{header}");
@@ -2946,7 +3047,7 @@ fn boot_tcp_profile(args: &[String]) -> Result<()> {
         let issue_t = Instant::now();
         let reboot_note = {
             let sess = connect(10)?;
-            issue_reboot(&sess, raw)?
+            issue_reboot(&sess, reboot_mode)?
         };
         let reboot_issue_ms = issue_t.elapsed().as_millis();
         let start = Instant::now();
@@ -3181,6 +3282,29 @@ fn watch_external_reboot(args: &[String]) -> Result<()> {
 
 fn opt_ms(value: Option<u128>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AgentNetSnapshot {
+    carrier: String,
+    rx_packets: u64,
+    tx_packets: u64,
+}
+
+fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
+    let result = value.get("result").unwrap_or(value);
+    Some(AgentNetSnapshot {
+        carrier: result
+            .pointer("/network/carrier")
+            .and_then(Value::as_str)?
+            .to_string(),
+        rx_packets: result
+            .pointer("/network/stats/rx_packets")
+            .and_then(Value::as_u64)?,
+        tx_packets: result
+            .pointer("/network/stats/tx_packets")
+            .and_then(Value::as_u64)?,
+    })
 }
 
 fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
@@ -4506,7 +4630,7 @@ fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()
     {
         let sess = connect(10)?;
         let _ = exec(&sess, "mkdir -p /media/fat/mister-magik; : > /media/fat/mister-magik/boot-analytics.enabled; sync", true)?;
-        let issued = issue_reboot(&sess, false)?;
+        let issued = issue_reboot(&sess, RebootMode::Supervised)?;
         println!("reboot issued to {} ({issued})", host());
     }
     wait_down(40.0);
@@ -5221,7 +5345,7 @@ video_mode=14
 
     #[test]
     fn reboot_remote_command_supervised_uses_magik_command() {
-        let cmd = reboot_remote_command(false);
+        let cmd = reboot_remote_command(RebootMode::Supervised);
 
         assert!(cmd.contains("mister_magik_reboot"));
         assert!(cmd.contains("/dev/MiSTer_cmd"));
@@ -5231,26 +5355,62 @@ video_mode=14
 
     #[test]
     fn reboot_remote_command_raw_uses_linux_reboot() {
-        let cmd = reboot_remote_command(true);
+        let cmd = reboot_remote_command(RebootMode::Raw);
 
         assert!(cmd.contains("/sbin/reboot"));
         assert!(!cmd.contains("mister_magik_reboot"));
     }
 
     #[test]
-    fn reboot_defaults_to_supervised_and_raw_flag_is_removed_before_timeout_parse() {
-        let mut args = vec!["--raw".to_string(), "180".to_string()];
+    fn reboot_remote_command_direct_reset_uses_explicit_unsafe_fifo_command() {
+        let cmd = reboot_remote_command(RebootMode::DirectReset);
 
-        assert!(take_reboot_raw_flag(&mut args).unwrap());
-        assert_eq!(args, vec!["180"]);
-        assert!(!take_reboot_raw_flag(&mut args).unwrap());
+        assert!(cmd.contains("mister_magik_direct_reset"));
+        assert!(cmd.contains("/dev/MiSTer_cmd"));
+        assert!(!cmd.contains("/sbin/reboot"));
     }
 
     #[test]
-    fn reboot_raw_and_supervised_flags_conflict() {
+    fn reboot_remote_command_direct_reset_no_sync_uses_distinct_fifo_command() {
+        let cmd = reboot_remote_command(RebootMode::DirectResetNoSync);
+
+        assert!(cmd.contains("mister_magik_direct_reset_no_sync"));
+        assert!(cmd.contains("/dev/MiSTer_cmd"));
+        assert!(!cmd.contains("/sbin/reboot"));
+    }
+
+    #[test]
+    fn reboot_defaults_to_supervised_and_mode_flag_is_removed_before_timeout_parse() {
+        let mut args = vec!["--raw".to_string(), "180".to_string()];
+
+        assert_eq!(take_reboot_mode_flag(&mut args).unwrap(), RebootMode::Raw);
+        assert_eq!(args, vec!["180"]);
+        assert_eq!(
+            take_reboot_mode_flag(&mut args).unwrap(),
+            RebootMode::Supervised
+        );
+    }
+
+    #[test]
+    fn reboot_mode_flags_conflict() {
         let mut args = vec!["--raw".to_string(), "--supervised".to_string()];
 
-        assert!(take_reboot_raw_flag(&mut args).is_err());
+        assert!(take_reboot_mode_flag(&mut args).is_err());
+        assert!(
+            reboot_mode_from_args(&["--direct-reset".to_string(), "--raw".to_string()]).is_err()
+        );
+    }
+
+    #[test]
+    fn reboot_mode_from_args_accepts_direct_reset_modes() {
+        assert_eq!(
+            reboot_mode_from_args(&["--direct-reset".to_string()]).unwrap(),
+            RebootMode::DirectReset
+        );
+        assert_eq!(
+            reboot_mode_from_args(&["--direct-reset-no-sync".to_string()]).unwrap(),
+            RebootMode::DirectResetNoSync
+        );
     }
 
     #[test]

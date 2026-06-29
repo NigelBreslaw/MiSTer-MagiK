@@ -61,6 +61,7 @@ scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnuea
 scripts/mister agent magik status
 scripts/mister agent magik restart-launcher
 scripts/mister agent reboot-wait --timeout 40
+scripts/mister agent reboot-wait --direct-reset --timeout 40
 scripts/mister agent boot-profile 3 --timeout 40
 scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
 ```
@@ -129,6 +130,10 @@ The agent writes a synchronous `reboot_scheduled` breadcrumb to
 `/media/fat/mister-magik/bootlogs/agent.log` before rebooting so a failed reboot
 can still be root-caused after manual recovery. Pass `--raw` only for fallback
 recovery or detached Linux reboot testing without MagiK visual lockdown.
+Pass `--direct-reset` for fast dev-loop reboots after all writes have completed
+and synced. Keep supervised reboot for settings/INI changes, release gates,
+Ethernet soak tests, and unknown write state. `--direct-reset-no-sync` is only
+for attended experiments.
 
 `magik` exposes Main-owned launcher supervisor controls:
 
@@ -166,11 +171,21 @@ testing or recovering through the old path.
 agent response against first SSH command readiness. It defaults to the
 supervised MagiK reboot path and accepts `--fail-on-timeout` for release gates
 such as the 15-reboot Ethernet soak. Pass `--raw` only when testing the detached
-Linux reboot path. Rows are appended to:
+Linux reboot path. Pass `--direct-reset` for fast quiescent dev-loop reboot
+samples after writes are complete; keep the supervised default for release soak
+evidence. `--direct-reset-no-sync` is only for attended A/B testing. New rows include
+`agent_rx_increasing` and `agent_rx_nonzero` in the note field so RX-zero or
+non-increasing boots are not counted as recovered. Rows are appended to:
 
 ```text
 history/toolchain-bench/results-agent.tsv
 ```
+
+For shutdown-side attribution, install `scripts/mister-shutdown-trace.sh
+install-deep` before running a reboot profile. It times each `rcK` service stop
+plus `swapoff` and `umount`. Use `scripts/reboot-shutdown-summary.py` after
+collecting logs to compare host timing, Main reboot breadcrumbs, shutdown trace
+rows, and agent network health.
 
 ## Install And Recovery
 

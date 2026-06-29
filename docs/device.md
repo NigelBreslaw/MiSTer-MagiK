@@ -80,6 +80,27 @@ Use `scripts/mister reboot --raw` or `scripts/mister reboot-wait --raw` only for
 fallback recovery or for testing the detached Linux reboot path without MagiK
 visual lockdown.
 
+Use `--direct-reset` for fast development reboots only when all writes are
+known to be complete and synced. It enters the same MagiK reboot lockdown, then
+calls Main's reset-manager path instead of `/sbin/reboot`, avoiding the slow
+BusyBox shutdown path. Keep the supervised default for settings changes,
+INI/video-mode edits, release gates, Ethernet soaks, and any unknown write
+state. Use `--direct-reset-no-sync` only for explicit attended experiments.
+
+For shutdown timing, install the reversible deep trace with:
+
+```bash
+scripts/mister-shutdown-trace.sh install-deep
+scripts/mister agent boot-profile 5 --timeout 60 --fail-on-timeout
+scripts/mister-shutdown-trace.sh log
+scripts/mister-shutdown-trace.sh remove
+```
+
+To isolate user shutdown hooks, use the separate reversible
+`scripts/mister-shutdown-trace.sh bypass-s99user-install` and
+`bypass-s99user-remove` experiment. Summarize collected rows and pulled logs
+with `scripts/reboot-shutdown-summary.py`.
+
 To return from an active game core without a Linux reboot, send Main's generic
 core command instead of the MagiK supervisor restart command:
 
