@@ -19,7 +19,7 @@ MISTER="$HERE/scripts/mister"
 # Active benchmark scene set; retired synthetic Slint scenes are archived under
 # history/bench-scenes/.
 BENCH_SCENES=(launcher)
-VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/(SAMPLE) SNK Neo Geo AES (Video Snaps)(HQ)}"
+VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-halfres}"
 VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
@@ -32,6 +32,7 @@ SKIP_BUILD=0
 SKIP_DEVICE=0
 REPLACE_LABEL=0
 INCLUDE_VIDEO=0
+VIDEO_LAB=0
 SCENE_FILTER=0
 SELF_TEST=0
 SCENE_SECS=15
@@ -61,15 +62,15 @@ usage() {
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
   echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
-  echo "         --device (default; build profile release-device / A3)  --video  --scene NAME  --self-test  -h"
+  echo "         --device (default; build profile release-device / A3)  --video  --video-lab  --scene NAME  --self-test  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
   echo "         --launcher-scenario idle|home-nav|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
   echo "         --launcher-dirty-opt on|off"
-  echo "         --video-render-mode slint-image|direct-blit"
-  echo "         --video-queue-depth N  --video-scale source|fit-height|fit-width|native"
-  echo "         --video-profile summary|full|trace  --video-threads N  --video-thread-type none|frame|slice|auto"
-  echo "         --video-convert custom-neon|swscale-rgb565"
+  echo "         --video-render-mode direct-blit (slint-image requires --video-lab)"
+  echo "         --video-queue-depth N  --video-scale source (fit-height|fit-width|native require --video-lab)"
+  echo "         --video-profile summary|full|trace  --video-threads N  --video-thread-type none|frame|slice|auto (--video-threads/thread modes require --video-lab)"
+  echo "         --video-convert custom-neon (swscale-rgb565 requires --video-lab)"
   echo "         --ui-scope launcher|arcade|all (default: launcher)"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
@@ -88,13 +89,13 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --self-test) SELF_TEST=1; shift ;;
     --device) BUILD_PROFILE=release-device; shift ;;
-    --video) INCLUDE_VIDEO=1; UI_SCOPE=all; BUILD_FLAG+=(--video); shift ;;
+    --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
+    --video-lab) INCLUDE_VIDEO=1; VIDEO_LAB=1; BUILD_FLAG+=(--video-lab); shift ;;
     --scene)
       SCENE_FILTER=1
       BENCH_SCENES=("${2:?}")
       if [[ "$2" == "video_playback" ]]; then
         INCLUDE_VIDEO=1
-        UI_SCOPE=all
         BUILD_FLAG+=(--video)
       fi
       shift 2
@@ -160,6 +161,12 @@ case "$VIDEO_THREADS" in
   *[!0-9]*) echo "Invalid --video-threads: $VIDEO_THREADS" >&2; exit 1 ;;
   *) ;;
 esac
+if [[ "$VIDEO_RENDER_MODE" != "direct-blit" || "$VIDEO_SCALE" != "source" || -n "$VIDEO_THREADS" || "$VIDEO_THREAD_TYPE" != "none" || "$VIDEO_CONVERT" != "custom-neon" ]]; then
+  if [[ "$VIDEO_LAB" -ne 1 ]]; then
+    echo "Video comparison/fallback options require --video-lab; production --video supports direct-blit/source/custom-neon/thread-type none only." >&2
+    exit 1
+  fi
+fi
 case "$UI_SCOPE" in
   all|launcher|arcade) ;;
   *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;

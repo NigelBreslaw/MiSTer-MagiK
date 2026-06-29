@@ -16,9 +16,9 @@ kill -9 $(pidof mister-magik-fb) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui video_playback 20
 ```
 
-With a `--video` build, run `video_playback`. It accepts a single looping file
-through `MISTER_VIDEO_PATH` or a filename-sorted `.mp4` folder playlist through
-`MISTER_VIDEO_DIR`. The folder default is
+With a production `--video` build, run `video_playback`. It accepts a single
+looping file through `MISTER_VIDEO_PATH` or a filename-sorted `.mp4` folder
+playlist through `MISTER_VIDEO_DIR`. The folder default is
 `/media/fat/mister-magik/video-snaps/neogeo`, with the legacy
 `/media/fat/mister-magik/mslug3.mov` clip as a compatibility fallback when the
 folder is absent.
@@ -27,7 +27,14 @@ For 60 fps Neo Geo video snaps on the MiSTer, use half-resolution source assets
 (`320x240` for the original `640x480` snaps) and leave
 `MISTER_VIDEO_SCALE=source`. This keeps the fast YUV420P-to-RGB565 conversion
 path active and avoids runtime upscaling or FFmpeg swscale in the hot frame
-loop.
+loop. `scripts/sync-video-snaps.sh` defaults to
+`build/video-snaps-neogeo-halfres` and mirrors that set to the device so stale
+full-size MP4s do not remain in the playlist.
+
+Production `--video` supports the fast path only: `direct-blit`, `source`,
+`custom-neon`, and decoder thread type `none`. Build with `--video-lab` when
+comparing Slint-image upload, FFmpeg swscale conversion, non-source scaling, or
+decoder threading experiments.
 
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
 production benchmark scenes. Build them with `scripts/deploy-rust.sh
@@ -57,13 +64,16 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PROFILE_FILE=…` | Write per-frame TSV |
 | `MISTER_TRACE_FILE=…` | Write Chrome/Perfetto trace JSON |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
-| `MISTER_VIDEO_RENDER_MODE=slint-image\|direct-blit` | Compare Slint image upload with direct RGB565 cached-buffer blit |
+| `MISTER_VIDEO_RENDER_MODE=direct-blit` | Production fast path |
+| `MISTER_VIDEO_RENDER_MODE=slint-image` | Lab-only comparison; requires `--video-lab` |
 | `MISTER_VIDEO_QUEUE_DEPTH=N` | Decode worker channel depth, default 2 |
-| `MISTER_VIDEO_SCALE=source\|fit-height\|fit-width\|native` | Runtime scaling mode within the 640x480 bench video target; `source` keeps the custom RGB565 converter eligible |
+| `MISTER_VIDEO_SCALE=source` | Production fast path; keeps the custom RGB565 converter eligible |
+| `MISTER_VIDEO_SCALE=fit-height\|fit-width\|native` | Lab-only scaling modes; require `--video-lab` |
 | `MISTER_VIDEO_PROFILE=summary\|full\|trace` | Video-specific alias for `MISTER_PROFILE` |
-| `MISTER_VIDEO_THREADS=N` | FFmpeg decoder thread count where supported |
-| `MISTER_VIDEO_THREAD_TYPE=none\|frame\|slice\|auto` | FFmpeg decoder threading mode when `MISTER_VIDEO_THREADS` is set |
-| `MISTER_VIDEO_CONVERT=custom-neon\|swscale-rgb565` | Select the ARM custom YUV420P-to-RGB565 converter or FFmpeg swscale fallback |
+| `MISTER_VIDEO_THREADS=N` | Lab-only FFmpeg decoder thread count where supported |
+| `MISTER_VIDEO_THREAD_TYPE=none\|frame\|slice\|auto` | `none` is production; other modes require `--video-lab` |
+| `MISTER_VIDEO_CONVERT=custom-neon` | Production ARM custom YUV420P-to-RGB565 converter |
+| `MISTER_VIDEO_CONVERT=swscale-rgb565` | Lab-only FFmpeg swscale fallback; requires `--video-lab` |
 
 Phase breakdown each frame: **prepare** (input/catalog/bridge work before Slint
 timers) · **anim** (Slint timers) · **slint-render** (software renderer) ·

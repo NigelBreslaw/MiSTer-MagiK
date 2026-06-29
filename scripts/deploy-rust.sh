@@ -24,7 +24,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device) PROFILE=release-device; BUILD_FLAG=(--device) ;;
-    --video|--mame-metadata|--hbmame-metadata|--asset-packs)
+    --video|--video-lab|--mame-metadata|--hbmame-metadata|--asset-packs)
       echo "ERROR: $arg was removed from scripts/deploy-rust.sh; deploy runtime here and use catalog/media build tools explicitly" >&2
       exit 2
       ;;

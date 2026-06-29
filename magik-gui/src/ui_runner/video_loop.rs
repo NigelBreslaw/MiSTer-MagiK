@@ -7,7 +7,7 @@ pub(super) const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
     y1: 510,
 };
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 pub(super) fn video_frame_rect(frame: &crate::video_player::VideoRgb565Frame) -> DirtyRect {
     DirtyRect {
         x0: VIDEO_IMAGE_RECT.x0,
@@ -17,7 +17,7 @@ pub(super) fn video_frame_rect(frame: &crate::video_player::VideoRgb565Frame) ->
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
     debug_assert_eq!(
         std::mem::size_of::<Rgb565Pixel>(),
@@ -32,7 +32,7 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<Rgb565Pixel>(), words.len()) }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn present_video_frame_direct(
     disp: &mut MappedRgb565Framebuffer,
     frame: &crate::video_player::VideoRgb565Frame,
@@ -53,7 +53,7 @@ fn present_video_frame_direct(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn present_direct_video_frame(
     disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
@@ -80,7 +80,7 @@ fn present_direct_video_frame(
     (rows, copied_rect)
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[derive(Default)]
 pub(super) struct VideoFramePhases {
     frame_updated: bool,
@@ -97,7 +97,7 @@ pub(super) struct VideoFramePhases {
     audio_underrun: bool,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[derive(Default)]
 pub(super) struct VideoWindowTotals {
     frames: u64,
@@ -118,7 +118,7 @@ pub(super) struct VideoWindowTotals {
     copy_px: u128,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 impl VideoWindowTotals {
     pub(super) fn record(
         &mut self,
@@ -171,35 +171,49 @@ impl VideoWindowTotals {
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum VideoRenderMode {
+    #[cfg(feature = "video-lab")]
     SlintImage,
     DirectBlit,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 impl VideoRenderMode {
     pub(super) fn from_env() -> Self {
         match std::env::var("MISTER_VIDEO_RENDER_MODE")
-            .unwrap_or_else(|_| "slint-image".to_string())
+            .unwrap_or_else(|_| "direct-blit".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
             "direct" | "direct-blit" | "direct_blit" => Self::DirectBlit,
-            _ => Self::SlintImage,
+            #[cfg(feature = "video-lab")]
+            "slint-image" | "slint_image" => Self::SlintImage,
+            #[cfg(not(feature = "video-lab"))]
+            "slint-image" | "slint_image" => {
+                eprintln!(
+                    "MISTER_VIDEO_RENDER_MODE=slint-image requires a --video-lab build; production video supports only direct-blit"
+                );
+                std::process::exit(2);
+            }
+            other => {
+                eprintln!("unknown MISTER_VIDEO_RENDER_MODE={other:?}; use direct-blit");
+                std::process::exit(2);
+            }
         }
     }
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            #[cfg(feature = "video-lab")]
             Self::SlintImage => "slint-image",
             Self::DirectBlit => "direct-blit",
         }
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 pub(super) fn video_copy_rect(
     dirty: DirtyRect,
     video_dirty_clip_ready: bool,
@@ -212,7 +226,7 @@ pub(super) fn video_copy_rect(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(all(mister_video_scene, feature = "video-lab"))]
 pub(super) fn rgb565_frame_to_slint_image(
     frame: &crate::video_player::VideoRgb565Frame,
 ) -> slint::Image {
@@ -229,12 +243,13 @@ pub(super) fn rgb565_frame_to_slint_image(
     slint::Image::from_rgb8(buffer)
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 pub(super) fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
     window: &Rc<MinimalSoftwareWindow>,
+    #[cfg_attr(not(feature = "video-lab"), allow(unused_variables))]
     app: slint_ui::video_playback::VideoPlayback,
     animation_clock: &AnimationClock,
 ) {
@@ -369,6 +384,7 @@ pub(super) fn run_video_playback_loop(
                                 ..Default::default()
                             };
                             match render_mode {
+                                #[cfg(feature = "video-lab")]
                                 VideoRenderMode::SlintImage => {
                                     let image_t0 = Instant::now();
                                     app.set_frame(rgb565_frame_to_slint_image(&frame));
@@ -509,6 +525,7 @@ pub(super) fn run_video_playback_loop(
                                 ..Default::default()
                             };
                             match render_mode {
+                                #[cfg(feature = "video-lab")]
                                 VideoRenderMode::SlintImage => {
                                     let image_t0 = Instant::now();
                                     app.set_frame(rgb565_frame_to_slint_image(&frame));
@@ -632,7 +649,7 @@ pub(super) fn run_video_playback_loop(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[derive(Default)]
 pub(super) struct AudioWindowStats {
     write_us: u128,
@@ -642,7 +659,7 @@ pub(super) struct AudioWindowStats {
     loop_count: u64,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 impl AudioWindowStats {
     pub(super) fn add(
         &mut self,
@@ -665,14 +682,14 @@ impl AudioWindowStats {
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 struct AudioWriteJob {
     audio: Vec<i16>,
     requested_frames: usize,
     loop_count: u64,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 struct AudioWriteResult {
     audio: Vec<i16>,
     requested_frames: usize,
@@ -682,13 +699,13 @@ struct AudioWriteResult {
     error: Option<String>,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 struct AudioWriteWorker {
     tx: mpsc::SyncSender<AudioWriteJob>,
     rx: mpsc::Receiver<AudioWriteResult>,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 impl AudioWriteWorker {
     fn start() -> Result<Self, String> {
         let mut sink = crate::mr_audio::MrAudioSink::open_default()?;
@@ -739,7 +756,7 @@ impl AudioWriteWorker {
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn drain_audio_write_results(
     audio_writer: &AudioWriteWorker,
     frame_worker: &crate::video_player::VideoFrameWorker,
@@ -770,7 +787,7 @@ fn drain_audio_write_results(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[allow(clippy::too_many_arguments)]
 fn enqueue_audio_write(
     audio_writer: &AudioWriteWorker,
@@ -816,7 +833,7 @@ fn enqueue_audio_write(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_video_sample(
     phases: VideoFramePhases,
@@ -880,7 +897,7 @@ pub(super) fn record_video_sample(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct VideoCpuTicks {
     process: u64,
@@ -888,7 +905,7 @@ pub(super) struct VideoCpuTicks {
     decode: u64,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct VideoCpuSample {
     main_pct: f64,
@@ -896,14 +913,14 @@ pub(super) struct VideoCpuSample {
     process_pct: f64,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 pub(super) struct VideoCpuSampler {
     ticks_per_sec: f64,
     start: Option<(Instant, VideoCpuTicks)>,
     last: Option<(Instant, VideoCpuTicks)>,
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 impl VideoCpuSampler {
     pub(super) fn new() -> Self {
         let ticks_per_sec = linux_ticks_per_sec();
@@ -947,7 +964,7 @@ impl VideoCpuSampler {
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn cpu_sample_between(
     start: Instant,
     end: Instant,
@@ -964,7 +981,7 @@ fn cpu_sample_between(
     }
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn linux_ticks_per_sec() -> f64 {
     #[cfg(target_os = "linux")]
     // SAFETY: sysconf(_SC_CLK_TCK) does not dereference Rust memory.
@@ -977,7 +994,7 @@ fn linux_ticks_per_sec() -> f64 {
     100.0
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn read_video_cpu_ticks() -> Option<VideoCpuTicks> {
     let process = read_stat_ticks("/proc/self/stat")?;
     let main = read_stat_ticks(format!("/proc/self/task/{}/stat", std::process::id()))?;
@@ -989,7 +1006,7 @@ fn read_video_cpu_ticks() -> Option<VideoCpuTicks> {
     })
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn find_thread_ticks(name: &str) -> Option<u64> {
     let tasks = std::fs::read_dir("/proc/self/task").ok()?;
     for task in tasks.flatten() {
@@ -1002,7 +1019,7 @@ fn find_thread_ticks(name: &str) -> Option<u64> {
     None
 }
 
-#[cfg(all(feature = "video", mister_bench_scenes))]
+#[cfg(mister_video_scene)]
 fn read_stat_ticks(path: impl AsRef<std::path::Path>) -> Option<u64> {
     let stat = std::fs::read_to_string(path).ok()?;
     let after_comm = stat.rsplit_once(") ")?.1;

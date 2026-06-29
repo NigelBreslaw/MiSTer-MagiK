@@ -4,10 +4,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$HERE/scripts/apple-container-resources.sh"
 VERSION="${MISTER_FFMPEG_VERSION:-8.1.2}"
+VIDEO_LAB="${MISTER_FFMPEG_VIDEO_LAB:-0}"
 WORK="$HERE/target/ffmpeg-minimal/armv7"
 SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
-STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-aac-s16le-swresample-cortex-a9-o3"
+if [[ "$VIDEO_LAB" =~ ^(1|true|yes)$ ]]; then
+  FFMPEG_MODE="video-lab-swscale"
+else
+  FFMPEG_MODE="video-fast-noswscale"
+fi
+STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-aac-s16le-swresample-$FFMPEG_MODE-cortex-a9-o3"
 DOCKER_IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 BACKEND="${MISTER_FFMPEG_BUILD_BACKEND:-auto}"
@@ -19,15 +25,20 @@ REQUIRED_DIST_FILES=(
   "$DIST/include/libavformat/avformat.h"
   "$DIST/include/libavutil/avutil.h"
   "$DIST/include/libswresample/swresample.h"
-  "$DIST/include/libswscale/swscale.h"
   "$DIST/lib/libavcodec.a"
   "$DIST/lib/libavformat.a"
   "$DIST/lib/libavutil.a"
   "$DIST/lib/libswresample.a"
-  "$DIST/lib/libswscale.a"
   "$DIST/lib/pkgconfig/libavcodec.pc"
   "$DIST/lib/pkgconfig/libswresample.pc"
 )
+
+if [ "$FFMPEG_MODE" = "video-lab-swscale" ]; then
+  REQUIRED_DIST_FILES+=(
+    "$DIST/include/libswscale/swscale.h"
+    "$DIST/lib/libswscale.a"
+  )
+fi
 
 dist_is_complete() {
   local file
@@ -108,7 +119,13 @@ else
   )
 fi
 
-echo "==> configuring minimal FFmpeg n$VERSION"
+echo "==> configuring minimal FFmpeg n$VERSION mode=$FFMPEG_MODE"
+CONFIGURE_SW_SCALE=()
+if [ "$FFMPEG_MODE" = "video-lab-swscale" ]; then
+  CONFIGURE_SW_SCALE=(--enable-swscale)
+else
+  CONFIGURE_SW_SCALE=(--disable-swscale)
+fi
 "${RUNNER[@]}" \
   bash -lc '
 set -euo pipefail
@@ -137,7 +154,7 @@ rm -rf ../dist
   --enable-avcodec \
   --enable-avformat \
   --enable-avutil \
-  --enable-swscale \
+  "$@" \
   --enable-decoder=h264 \
   --enable-decoder=aac \
   --enable-decoder=pcm_s16le \
@@ -146,7 +163,7 @@ rm -rf ../dist
   --enable-demuxer=mov \
   --enable-protocol=file
 make -j"$(nproc)" install
-'
+' bash "${CONFIGURE_SW_SCALE[@]}"
 
 touch "$STAMP"
 echo "==> minimal FFmpeg built: $DIST"

@@ -42,7 +42,7 @@ impl AnimationClock {
         self.fixed_time.clone()
     }
 
-    #[cfg(mister_bench_scenes)]
+    #[cfg(any(mister_bench_scenes, mister_video_scene))]
     pub(super) fn label(&self) -> &'static str {
         if self.fixed_time.is_some() {
             "fixed60"
@@ -64,13 +64,13 @@ pub(crate) fn update_slint_animations(animation_clock: &AnimationClock) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(mister_bench_scenes)]
+#[cfg(any(mister_bench_scenes, mister_video_scene))]
 pub(super) enum FrameOrder {
     RenderThenVsync,
     VsyncThenRender,
 }
 
-#[cfg(mister_bench_scenes)]
+#[cfg(any(mister_bench_scenes, mister_video_scene))]
 impl FrameOrder {
     pub(super) fn from_env() -> Self {
         match std::env::var("MISTER_FRAME_ORDER")

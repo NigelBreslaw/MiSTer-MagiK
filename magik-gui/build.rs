@@ -3,6 +3,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
+    println!("cargo:rustc-check-cfg=cfg(mister_video_scene)");
 
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
     let launcher_only = match scope.as_str() {
@@ -16,6 +17,10 @@ fn main() {
     let bench_scenes = std::env::var_os("CARGO_FEATURE_BENCH_SCENES").is_some();
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
+    }
+    let video = std::env::var_os("CARGO_FEATURE_VIDEO").is_some();
+    if video {
+        println!("cargo:rustc-cfg=mister_video_scene");
     }
     let experiments = std::env::var_os("CARGO_FEATURE_EXPERIMENTS").is_some();
     if experiments {

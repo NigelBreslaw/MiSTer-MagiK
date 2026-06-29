@@ -3,6 +3,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLINT_FONT_SIZES");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
+    println!("cargo:rustc-check-cfg=cfg(mister_video_scene)");
 
     // Press Start 2P at all app design sizes used by the 960x540 UI.
     let font_sizes = if let Ok(font_sizes) = std::env::var("SLINT_FONT_SIZES") {
@@ -28,9 +29,10 @@ fn main() {
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
         sources.push("../ui/experiments/effect_hud.slint");
-        if video {
-            sources.push("../ui/bench/video_playback.slint");
-        }
+    }
+    if video {
+        println!("cargo:rustc-cfg=mister_video_scene");
+        sources.push("../ui/bench/video_playback.slint");
     }
 
     let mut inputs = vec![
@@ -48,9 +50,9 @@ fn main() {
     ];
     if bench_scenes {
         inputs.push("../ui/experiments/effect_hud.slint");
-        if video {
-            inputs.push("../ui/bench/video_playback.slint");
-        }
+    }
+    if video {
+        inputs.push("../ui/bench/video_playback.slint");
     }
 
     for path in &inputs {
