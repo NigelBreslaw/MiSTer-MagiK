@@ -57,9 +57,15 @@ if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
 fi
 
 mkdir -p "$BENCH_DIR"
+HEADER=$'label\tscenario\ttype\titeration\tref_index\tkind\tstatus\tprepare_us\tread_bytes\trchar\tsyscr\twrite_bytes\twchar\tsyscw\tdescriptor_written\tdescriptor_skipped\tdescriptor_bytes\tnotes'
 if [[ ! -f "$TSV" ]]; then
-  echo "label	scenario	type	iteration	ref_index	kind	status	prepare_us	read_bytes	rchar	syscr	write_bytes	wchar	syscw	notes" >"$TSV"
-elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
+  printf '%s\n' "$HEADER" >"$TSV"
+elif [[ "$(head -1 "$TSV")" != "$HEADER" ]]; then
+  tmp="$(mktemp)"
+  { printf '%s\n' "$HEADER"; tail -n +2 "$TSV"; } >"$tmp"
+  mv "$tmp" "$TSV"
+fi
+if [[ "$REPLACE_LABEL" -eq 1 ]]; then
   tmp="$(mktemp)"
   { head -1 "$TSV"; grep -v "^${LABEL}	" "$TSV" | tail -n +2; } >"$tmp" || true
   mv "$tmp" "$TSV"
@@ -93,7 +99,10 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
     split($12, wb, "=")
     split($13, wc, "=")
     split($14, sw, "=")
-    print label, $3, "sample", $4, $5, $6, $7, $8, rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], $15 " " $16
+    split($15, dw, "=")
+    split($16, ds, "=")
+    split($17, db, "=")
+    print label, $3, "sample", $4, $5, $6, $7, $8, rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], dw[2], ds[2], db[2], $18 " " $19
   }
   $1 == "launch_prep_bench_prewarm_tsv" {
     split($6, total, "=")
@@ -107,7 +116,7 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
     split($14, wb, "=")
     split($15, wc, "=")
     split($16, sw, "=")
-    print label, $3, "prewarm", $4, "", "", $5, prewarm[2], rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], "total=" total[2] " written=" written[2] " unchanged=" unchanged[2] " errors=" errors[2]
+    print label, $3, "prewarm", $4, "", "", $5, prewarm[2], rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], 0, 0, 0, "total=" total[2] " written=" written[2] " unchanged=" unchanged[2] " errors=" errors[2]
   }
   $1 == "launch_prep_bench_summary" {
     split($4, count, "=")
@@ -120,7 +129,10 @@ echo "$OUT" | awk -F '\t' -v label="$LABEL" '
     split($11, wb, "=")
     split($12, wc, "=")
     split($13, sw, "=")
-    print label, $3, "summary", "", "", "", "errors=" errors[2] " count=" count[2], "", rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], "p50_us=" p50[2] " p95_us=" p95[2]
+    split($14, dw, "=")
+    split($15, ds, "=")
+    split($16, db, "=")
+    print label, $3, "summary", "", "", "", "errors=" errors[2] " count=" count[2], "", rb[2], rc[2], sr[2], wb[2], wc[2], sw[2], dw[2], ds[2], db[2], "p50_us=" p50[2] " p95_us=" p95[2]
   }
 ' >>"$TSV"
 
