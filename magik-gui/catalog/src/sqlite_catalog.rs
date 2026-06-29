@@ -1,6 +1,8 @@
 //! SQLite catalog import, publish, and loading.
 
-use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey};
+use crate::arcade_catalog::{
+    self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, StructuredLaunchPlan,
+};
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
@@ -22,7 +24,7 @@ use crate::game_discovery::{
     profile_id_for_discovery, system_title_for_discovery, unique_discovery_count,
     DiscoverySourceKind, GameDiscovery,
 };
-use crate::launch_profiles::{self, MountKind, MountSpec, RuleSourceKind};
+use crate::launch_profiles::{self, LaunchProfile, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
     self, BenchConfig, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
     LibraryRefreshSummary, LibraryScan, ProgressCallback, VirtualLaunchPlan,
@@ -399,7 +401,7 @@ fn load_arcade_catalog_from_connection(
     let query_us = query_t.elapsed().as_micros() as u64;
     let rows = games.len();
     let launch_plans_t = Instant::now();
-    let launch_plans = Vec::new();
+    let launch_plans = load_launcher_launch_plans(conn)?;
     let launch_plans_us = launch_plans_t.elapsed().as_micros() as u64;
     let systems_t = Instant::now();
     let systems = arcade_catalog::systems_from_games(&games);
@@ -423,6 +425,39 @@ fn load_arcade_catalog_from_connection(
         catalog_us,
         rows,
     })
+}
+
+fn load_launcher_launch_plans(conn: &Connection) -> Result<Vec<StructuredLaunchPlan>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT launch_ref,
+                    title,
+                    system_id,
+                    core_path,
+                    payload_path,
+                    mount_kind,
+                    mount_index,
+                    delay_secs
+             FROM launcher_launch_plans_text
+             ORDER BY launch_id",
+        )
+        .map_err(|e| format!("prepare launcher launch plans query: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(StructuredLaunchPlan {
+                launch_ref: row.get::<_, String>(0)?.into(),
+                title: row.get::<_, String>(1)?.into(),
+                system_id: row.get::<_, String>(2)?.into(),
+                core_path: row.get::<_, String>(3)?.into(),
+                payload_path: row.get::<_, String>(4)?.into(),
+                mount_kind: row.get::<_, String>(5)?.into(),
+                mount_index: row.get::<_, i64>(6)?.clamp(0, u8::MAX as i64) as u8,
+                delay_secs: row.get::<_, i64>(7)?.clamp(0, u8::MAX as i64) as u8,
+            })
+        })
+        .map_err(|e| format!("query launcher launch plans: {e}"))?;
+    rows.map(|row| row.map_err(|e| format!("read launcher launch plan row: {e}")))
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -781,7 +816,7 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let stored = catalog_store::read_catalog_stamp(&conn)?;
     let read_us = read_t.elapsed().as_micros() as u64;
     let compute_t = Instant::now();
-    let profiles = launch_profiles::builtin_profiles();
+    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
     let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
     let current =
         catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
@@ -1785,23 +1820,23 @@ fn write_sqlite_scan_with_sources_inner(
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare profile insert: {e}"))?;
-        for profile in launch_profiles::builtin_profiles() {
+        for profile in &scan.profiles {
             stmt.execute(params![
-                profile.id,
-                profile.system_id,
-                profile.category,
-                profile.title,
-                profile.core_name,
-                profile.core_path,
+                profile.id.as_str(),
+                profile.system_id.as_str(),
+                profile.category.as_str(),
+                profile.title.as_str(),
+                profile.core_name.as_str(),
+                profile.core_path.as_deref(),
                 source_kind_name(profile.provenance.kind),
-                profile.provenance.detail
+                profile.provenance.detail.as_str()
             ])
             .map_err(|e| format!("insert profile: {e}"))?;
         }
         report_library_import_timing(
             "insert_profiles",
             stage_t,
-            format!("rows={}", launch_profiles::builtin_profiles().len()),
+            format!("rows={}", scan.profiles.len()),
         );
     }
     {
@@ -1969,7 +2004,7 @@ fn write_sqlite_scan_with_sources_inner(
             );
             let launch_path_id = path_interner.intern_optional(launch_ref_storage.path);
             let profile_id = profile_id_for_discovery(discovery);
-            let mount = launch_target_mount_for_discovery(discovery, profile_id);
+            let mount = launch_target_mount_for_discovery(discovery, profile_id, &scan.profiles);
             target_stmt
                 .execute(params![
                     launch_id,
@@ -2612,15 +2647,16 @@ fn launch_ref_storage_for<'a>(
 fn launch_target_mount_for_discovery(
     discovery: &GameDiscovery,
     profile_id: Option<&str>,
+    profiles: &[LaunchProfile],
 ) -> Option<MountSpec> {
     if launch_kind_for_discovery(discovery) != "virtual-mgl" {
         return None;
     }
     let mount = profile_id
         .and_then(|profile_id| {
-            launch_profiles::builtin_profiles()
-                .into_iter()
-                .find(|profile| profile.id == profile_id)
+            profiles
+                .iter()
+                .find(|profile| profile.id.as_str() == profile_id)
         })
         .and_then(|profile| match discovery.source_kind {
             DiscoverySourceKind::ArchiveEntry => profile
@@ -3035,6 +3071,120 @@ mod tests {
             changed.stored_fingerprint,
             Some(changed.current_fingerprint)
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_stamp_check_detects_installed_known_core_change() {
+        let root = unique_temp_dir("sqlite-catalog-stamp-known-core");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        install_test_console_core(&root, "ColecoVision");
+
+        let changed = sqlite_catalog_stamp_check(&cfg).expect("check changed stamp");
+
+        assert!(!changed.unchanged);
+        assert_ne!(
+            changed.stored_fingerprint,
+            Some(changed.current_fingerprint)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_stamp_check_detects_installed_unknown_core_change() {
+        let root = unique_temp_dir("sqlite-catalog-stamp-unknown-core");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        install_test_console_core(&root, "ChannelF");
+
+        let changed = sqlite_catalog_stamp_check(&cfg).expect("check changed stamp");
+
+        assert!(!changed.unchanged);
+        assert_ne!(
+            changed.stored_fingerprint,
+            Some(changed.current_fingerprint)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn generated_profile_populates_sqlite_profiles_games_launch_targets_and_audit() {
+        let root = unique_temp_dir("sqlite-generated-profile-e2e");
+        install_test_console_core(&root, "ColecoVision");
+        let coleco_dir = root.join("games/ColecoVision");
+        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
+        std::fs::write(coleco_dir.join("Mouse Trap.col"), b"rom").expect("write coleco rom");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        assert!(artifact
+            .scan
+            .profiles
+            .iter()
+            .any(|profile| profile.id == "colecovision"));
+
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        let conn = Connection::open(&db).expect("open sqlite");
+        let profile_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profiles
+                 WHERE profile_id='colecovision'
+                   AND system_id='colecovision'
+                   AND source_kind='main-source'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query profiles");
+        let game_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM games WHERE system_id='colecovision'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query games");
+        let target_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_targets
+                 WHERE profile_id='colecovision'
+                   AND core_id='ColecoVision'
+                   AND mount_kind='load-file'
+                   AND mount_index=1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launch targets");
+        let audit_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM catalog_audit
+                 WHERE core_id='ColecoVision'
+                   AND expected_game_dir='games/ColecoVision'
+                   AND catalog_status='cataloged'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query audit");
+
+        assert_eq!(profile_rows, 1);
+        assert_eq!(game_rows, 1);
+        assert_eq!(target_rows, 1);
+        assert_eq!(audit_rows, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4033,7 +4183,8 @@ mod tests {
             .into_iter()
             .find(|profile| profile.id == "neogeo")
             .expect("neogeo profile")
-            .archive_entry_rules[0];
+            .archive_entry_rules[0]
+            .clone();
         scan.entries.push(crate::library_db::LibraryContainerEntry {
             file_path: neogeo_file.to_string(),
             entry_path: neogeo_entry.to_string(),

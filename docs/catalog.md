@@ -231,7 +231,9 @@ The root stamp is the cheap unchanged validation. It includes:
 
 - catalog schema version and catalog build version,
 - launch profile set version,
+- core launch manifest version and fingerprint,
 - configured roots and root metadata,
+- catalog coverage audit rows for installed cores and unindexed launch surfaces,
 - MAME and HBMAME metadata DB signatures.
 
 The stamp intentionally does not enumerate source-backed scan target
@@ -260,11 +262,12 @@ remain in scope.
 
 Main_MiSTer is the source for the directory model. `SelectFile` resolves normal
 file pickers through `user_io_get_core_path(...)`, which maps to `games/<core>`
-except for source-defined special suffixes such as PCE-CD and NeoGeo-CD. Generic
-core extension strings come from the core OSD config string at runtime; MagiK
-keeps cataloged systems as explicit launch profiles with provenance and records
-uncataloged launchable-looking core/game surfaces in `catalog_audit` instead of
-silently skipping them.
+except for source-defined special suffixes such as PCE-CD and NeoGeo-CD. MagiK
+models this with an active `ProfileSet`: explicit special profiles plus
+generated manifest rows for installed generic cores with source-backed
+extensions. Game folder contents are not used to guess new profile support.
+Installed cores or launchable-looking game folders that cannot be cataloged are
+recorded in `catalog_audit` instead of being silently skipped.
 
 The default scan does not include `_Games`. That tree is treated as an organizer
 mirror of generated `.mgl` launchers for games already available through
@@ -273,21 +276,26 @@ diagnostic build that includes `_Games`.
 
 ## Supported Launch Profiles
 
-The supported built-in catalog profile set is intentionally fixed. Additions
-must update `PROFILE_SET_VERSION`, tests, and this document. Installed cores or
-game folders outside that set are not treated as launchable games by guesswork;
-they are persisted as coverage audit rows with expected `games/<core>` paths,
-extension hints when known, source evidence, status, and reason.
+Catalog profiles come from two sources:
 
-- Launcher profiles: MRA, MGL, and DOS installed MGL launchers.
-- Disc/computer profiles: Saturn, PlayStation/PSX, AO486, and Amiga/Minimig.
-- Arcade/console profile: NeoGeo.
-- Cartridge profiles: NES, SNES, GBA, Game Boy Color, Game Gear, Sega Master
-  System, Mega Drive, and Nintendo 64.
+- explicit special profiles for behavior that needs hand modeling: MRA, MGL,
+  DOS installed MGL launchers, Saturn, PlayStation/PSX, AO486, Amiga/Minimig,
+  AmigaVision, and NeoGeo ZIP/XML behavior;
+- generated generic profiles from
+  `magik-gui/catalog/data/core_launch_manifest.json`, activated only when a
+  matching `.rbf` is installed in `_Console`, `_Computer`, `_Arcade/cores`, or
+  `_LLAPI`.
 
-These profiles are source-backed by Main_MiSTer behavior, MRA/MGL launch files,
-or explicit MagiK profile rules. Generic extension guesses are not a supported
-product path.
+Generated manifest rows carry the core ID, title/category, expected
+`games/<core>` directories, payload extensions, mount behavior, archive-entry
+support, and source evidence. The checked-in manifest is the runtime source of
+truth for generic auto-cataloging; arbitrary game folders never create new
+profiles by themselves.
+
+Updating special profile semantics must bump `PROFILE_SET_VERSION`. Updating
+the generated manifest must update the manifest version or fingerprint covered
+by the catalog stamp. Unknown installed cores stay diagnostics until a
+source-backed manifest row or special profile is added.
 
 ## Catalog Coverage Audit
 
@@ -297,7 +305,9 @@ Every full scan writes `catalog_audit` rows. Query them with
 The audit records:
 
 - installed `.rbf` cores in normal core locations that have no catalog profile,
-- `games/<system>` folders with payload-looking files but no catalog profile,
+- `games/<system>` folders with payload-looking files but no active catalog
+  profile, including known manifest folders when the matching core is not
+  installed,
 - collection ZIPs in loose-file-only profiles that will not be indexed.
 
 Audit rows are diagnostic only. They do not become launch rows until a real

@@ -31,7 +31,7 @@ use crate::game_discovery::{
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
     profile_id_for_discovery, DiscoverySourceKind, GameDiscovery,
 };
-use crate::launch_profiles::{self, CollectionListing, PayloadRule};
+use crate::launch_profiles::{self, CollectionListing, LaunchProfile, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
 use crate::preview_worker;
 use crate::software_identity::{
@@ -56,16 +56,18 @@ pub enum LibraryScanEvent {
 pub(crate) const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 pub(crate) const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
 
-pub(crate) const AMIGAVISION_INSTALLED_LISTINGS: &[CollectionListing] = &[
-    CollectionListing {
-        entry_path: "listings/games.txt",
-        genre: "AmigaVision",
-    },
-    CollectionListing {
-        entry_path: "listings/demos.txt",
-        genre: "AmigaVision demos",
-    },
-];
+pub(crate) fn amigavision_installed_listings() -> Vec<CollectionListing> {
+    vec![
+        CollectionListing {
+            entry_path: "listings/games.txt".to_string(),
+            genre: "AmigaVision".to_string(),
+        },
+        CollectionListing {
+            entry_path: "listings/demos.txt".to_string(),
+            genre: "AmigaVision demos".to_string(),
+        },
+    ]
+}
 #[derive(Clone, Debug)]
 pub struct LibraryContainer {
     pub file_path: String,
@@ -127,6 +129,7 @@ pub enum ArchiveScanStatus {
 pub(crate) struct LibraryScan {
     pub(crate) version: u32,
     pub(crate) scanned_at_unix: i64,
+    pub(crate) profiles: Vec<LaunchProfile>,
     pub(crate) normal_files: Vec<LibraryPayloadFile>,
     pub(crate) containers: Vec<LibraryContainer>,
     pub(crate) entries: Vec<LibraryContainerEntry>,
@@ -800,7 +803,9 @@ fn build_catalog_from_scan_with_sources(
         if !is_launcher_launch_ref(&launch_ref) {
             continue;
         }
-        if let Some(plan) = structured_launch_plan_for_discovery(discovery, &launch_ref) {
+        if let Some(plan) =
+            structured_launch_plan_for_discovery(discovery, &launch_ref, &scan.profiles)
+        {
             launch_plans.push(plan);
         }
         let discovered_at_unix = discovery_history
@@ -915,14 +920,15 @@ fn catalog_from_sqlite_launcher_projection_order(
 fn structured_launch_plan_for_discovery(
     discovery: &GameDiscovery,
     launch_ref: &str,
+    profiles: &[LaunchProfile],
 ) -> Option<StructuredLaunchPlan> {
     if launch_kind_for_discovery(discovery) != "virtual-mgl" {
         return None;
     }
     let profile_id = profile_id_for_discovery(discovery)?;
-    let profile = launch_profiles::builtin_profiles()
-        .into_iter()
-        .find(|profile| profile.id == profile_id)?;
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.id.as_str() == profile_id)?;
     let payload_path = discovery.launch_ref.as_str();
     let payload_rule = match discovery.source_kind {
         DiscoverySourceKind::ArchiveEntry => {
@@ -944,6 +950,7 @@ fn structured_launch_plan_for_discovery(
         system_id: catalog_system_id_for_discovery(discovery).into(),
         core_path: profile
             .core_path
+            .as_deref()
             .unwrap_or(discovery.core_id.as_str())
             .into(),
         payload_path: payload_path.into(),
@@ -1517,6 +1524,7 @@ mod tests {
     #[test]
     fn scan_progress_waits_for_batch_before_reporting_found_games() {
         let root = unique_temp_dir("scan-progress-first-batch");
+        install_test_console_core(&root, "NES");
         let games = root.join("games");
         let nes = games.join("NES");
         std::fs::create_dir_all(&nes).expect("create NES dir");
@@ -1543,6 +1551,8 @@ mod tests {
     #[test]
     fn scan_events_report_supported_system_once() {
         let root = unique_temp_dir("scan-events-supported-systems");
+        install_test_console_core(&root, "NES");
+        install_test_console_core(&root, "SNES");
         let games = root.join("games");
         let nes = games.join("NES");
         let snes = games.join("SNES");
@@ -1571,6 +1581,8 @@ mod tests {
     #[test]
     fn scan_events_ignore_systems_without_screenshot_packs() {
         let root = unique_temp_dir("scan-events-unsupported-systems");
+        install_test_console_core(&root, "GBA");
+        install_test_console_core(&root, "NES");
         let games = root.join("games");
         let gba = games.join("GBA");
         let nes = games.join("NES");

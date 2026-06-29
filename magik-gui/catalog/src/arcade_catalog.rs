@@ -3,11 +3,9 @@
 //! The runtime launcher catalog is SQLite-backed. This module keeps the shared
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
-use crate::launch_profiles::{self, MountKind, PayloadRule};
 use crate::catalog_navigation::CatalogNavigationProjection;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -84,7 +82,6 @@ pub struct ArcadeCatalog {
     games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
     filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
     preview_games_by_system: HashMap<String, Vec<usize>>,
-    games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
     search_keys: Vec<ArcadeSearchKey>,
     autocomplete: ArcadeAutocompleteIndex,
@@ -246,7 +243,6 @@ impl ArcadeCatalog {
             games_by_filter: indexes.games_by_filter,
             filter_options_by_system: indexes.filter_options_by_system,
             preview_games_by_system: indexes.preview_games_by_system,
-            games_by_ref: indexes.games_by_ref,
             launch_plans_by_ref: indexes.launch_plans_by_ref,
             search_keys: indexes.search_keys,
             autocomplete: indexes.autocomplete,
@@ -294,7 +290,6 @@ impl ArcadeCatalog {
             games_by_filter: indexes.games_by_filter,
             filter_options_by_system: indexes.filter_options_by_system,
             preview_games_by_system: indexes.preview_games_by_system,
-            games_by_ref: indexes.games_by_ref,
             launch_plans_by_ref: indexes.launch_plans_by_ref,
             search_keys: indexes.search_keys,
             autocomplete: indexes.autocomplete,
@@ -325,12 +320,7 @@ impl ArcadeCatalog {
             .map(LaunchTarget::Structured)
             .unwrap_or_else(|| {
                 if launch_ref.starts_with("magik-plan:") {
-                    self.games_by_ref
-                        .get(launch_ref)
-                        .and_then(|idx| self.games.get(*idx))
-                        .and_then(|game| derive_structured_launch_plan(game, profiles_by_system()))
-                        .map(LaunchTarget::Structured)
-                        .unwrap_or_else(|| LaunchTarget::MissingStructured(Arc::from(launch_ref)))
+                    LaunchTarget::MissingStructured(Arc::from(launch_ref))
                 } else {
                     LaunchTarget::Path(Arc::from(launch_ref))
                 }
@@ -516,7 +506,6 @@ struct ArcadeCatalogIndexes {
     games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
     filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
     preview_games_by_system: HashMap<String, Vec<usize>>,
-    games_by_ref: HashMap<Arc<str>, usize>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
     search_keys: Vec<ArcadeSearchKey>,
     autocomplete: ArcadeAutocompleteIndex,
@@ -564,7 +553,6 @@ fn build_arcade_catalog_indexes(
     let mut filter_counts_by_system = HashMap::<String, FilterOptionCounts>::new();
     let mut preview_games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
     let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
-    let mut games_by_ref: HashMap<Arc<str>, usize> = HashMap::with_capacity(games.len());
     let mut text_indexes = match mode {
         CatalogIndexMode::Eager => build_arcade_text_indexes(games),
         CatalogIndexMode::DeferredText => ArcadeTextIndexes::default(),
@@ -573,7 +561,6 @@ fn build_arcade_catalog_indexes(
     for (idx, game) in games.iter().enumerate() {
         let system_id_string = game.system_id.to_string();
         let system_id_arc = game.system_id.clone();
-        games_by_ref.insert(game.mra_path.clone(), idx);
         games_by_system
             .entry(system_id_string.clone())
             .or_default()
@@ -674,7 +661,6 @@ fn build_arcade_catalog_indexes(
         games_by_filter,
         filter_options_by_system,
         preview_games_by_system,
-        games_by_ref,
         launch_plans_by_ref,
         search_keys: std::mem::take(&mut text_indexes.search_keys),
         autocomplete: std::mem::take(&mut text_indexes.autocomplete),
@@ -895,69 +881,6 @@ impl ArcadeAutocompleteIndex {
             })
             .max()
             .map(|candidate| candidate.word)
-    }
-}
-
-fn derive_structured_launch_plan(
-    game: &ArcadeGameEntry,
-    profiles_by_system: &HashMap<&'static str, launch_profiles::LaunchProfile>,
-) -> Option<StructuredLaunchPlan> {
-    let encoded_payload = game.mra_path.strip_prefix("magik-plan:")?;
-    let (archive_entry, payload_path) = encoded_payload
-        .strip_prefix("archive:")
-        .map(|payload| (true, payload))
-        .unwrap_or_else(|| {
-            encoded_payload
-                .strip_prefix("payload:")
-                .map(|payload| (false, payload))
-                .unwrap_or((false, encoded_payload))
-        });
-    let profile = profiles_by_system.get(game.system_id.as_ref())?;
-    let core_path = profile.core_path?;
-    let payload_rule = if archive_entry {
-        profile.classify_archive_entry(Path::new(payload_path))
-    } else {
-        payload_rule_for_path(profile, payload_path)
-    }?;
-    Some(StructuredLaunchPlan {
-        launch_ref: game.mra_path.clone(),
-        title: game.title.clone(),
-        system_id: game.system_id.clone(),
-        core_path: core_path.into(),
-        payload_path: payload_path.into(),
-        mount_kind: mount_kind_label(payload_rule.mount.kind).into(),
-        mount_index: payload_rule.mount.index,
-        delay_secs: payload_rule.mount.delay_secs,
-    })
-}
-
-fn profiles_by_system() -> &'static HashMap<&'static str, launch_profiles::LaunchProfile> {
-    static PROFILES_BY_SYSTEM: OnceLock<HashMap<&'static str, launch_profiles::LaunchProfile>> =
-        OnceLock::new();
-    PROFILES_BY_SYSTEM.get_or_init(|| {
-        launch_profiles::builtin_profiles()
-            .into_iter()
-            .map(|profile| (profile.system_id, profile))
-            .collect()
-    })
-}
-
-fn payload_rule_for_path(
-    profile: &launch_profiles::LaunchProfile,
-    payload_path: &str,
-) -> Option<PayloadRule> {
-    match profile.classify_path(Path::new(payload_path)) {
-        launch_profiles::ProfilePathClass::Payload { rule } => Some(rule),
-        _ => None,
-    }
-}
-
-fn mount_kind_label(kind: MountKind) -> &'static str {
-    match kind {
-        MountKind::Launcher => "launcher",
-        MountKind::LoadFile => "load-file",
-        MountKind::MountImage => "mount-image",
-        MountKind::Core => "core",
     }
 }
 
