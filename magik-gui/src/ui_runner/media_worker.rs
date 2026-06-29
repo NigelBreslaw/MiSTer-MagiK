@@ -1,5 +1,5 @@
 use crate::artifact_publish::{
-    hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_with_fallback,
+    hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_rust_best_effort,
     timestamped_temp_path_for, ArtifactPublishLabels,
 };
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
@@ -1182,7 +1182,7 @@ fn install_streamed_object(
             .with_done_bytes(streamed.bytes),
         );
     }
-    sync_path_with_fallback(publish.parent());
+    sync_path_rust_best_effort(publish.parent());
     Ok(())
 }
 
@@ -1326,7 +1326,7 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
         .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
     publish.install_temp(Some("media state"))?;
     invalidate_preview_archive_metadata_cache("media_state_published");
-    sync_path_with_fallback(publish.parent());
+    sync_path_rust_best_effort(publish.parent());
     Ok(())
 }
 

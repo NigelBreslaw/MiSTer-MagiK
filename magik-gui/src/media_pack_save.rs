@@ -1,6 +1,6 @@
 use crate::artifact_publish::{
     cleanup_static_and_timestamped_temps, prepare_artifact_publish, static_temp_path_for,
-    sync_path_with_fallback, ArtifactPublishLabels,
+    sync_path_rust_best_effort, ArtifactPublishLabels,
 };
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -116,7 +116,7 @@ fn publish_pack_file_impl(
         bytes,
     );
     let parent_sync_started = Instant::now();
-    sync_path_with_fallback(publish.parent());
+    sync_path_rust_best_effort(publish.parent());
     metrics.parent_sync_ms = elapsed_ms(parent_sync_started.elapsed());
     metrics.total_ms = elapsed_ms(started.elapsed());
     Ok(metrics)

@@ -1,5 +1,5 @@
 use crate::artifact_publish::{
-    prepare_artifact_publish, sync_path_with_fallback, timestamped_temp_path_for,
+    prepare_artifact_publish, sync_path_rust_best_effort, timestamped_temp_path_for,
     ArtifactPublishLabels,
 };
 use crate::media_pack_save::{
@@ -611,7 +611,7 @@ fn install_verified_streamed_temp(
     let rename_ms = elapsed_ms(rename_started.elapsed());
 
     let parent_sync_started = Instant::now();
-    sync_path_with_fallback(publish.parent());
+    sync_path_rust_best_effort(publish.parent());
     let parent_sync_ms = elapsed_ms(parent_sync_started.elapsed());
 
     Ok(StreamPublishMetrics {
@@ -867,7 +867,7 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
     file.sync_all()
         .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
     publish.install_temp(Some("bench media state"))?;
-    sync_path_with_fallback(publish.parent());
+    sync_path_rust_best_effort(publish.parent());
     Ok(())
 }
 

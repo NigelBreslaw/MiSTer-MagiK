@@ -1,6 +1,6 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ArtifactPublishLabels<'a> {
@@ -128,17 +128,12 @@ pub(crate) fn cleanup_static_and_timestamped_temps(final_path: &Path, fallback_n
     }
 }
 
-pub(crate) fn sync_path_with_fallback(path: &Path) {
-    match Command::new("sync").arg(path).status() {
-        Ok(status) if status.success() => {}
-        _ => {
-            let _ = Command::new("sync").status();
-        }
-    };
+pub(crate) fn sync_path_rust_best_effort(path: &Path) {
+    let _ = sync_path_rust(path);
 }
 
-pub(crate) fn sync_path_best_effort(path: &Path) {
-    let _ = Command::new("sync").arg(path).status();
+fn sync_path_rust(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
 }
 
 fn file_name_or(path: &Path, fallback_name: &str) -> String {
@@ -236,5 +231,27 @@ mod tests {
         assert!(final_path.parent().unwrap().exists());
         assert!(!temp_path.exists());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rust_sync_best_effort_accepts_existing_path() {
+        let dir = temp_dir("mister-magik-artifact-rust-sync");
+        let file = dir.join("out.bin");
+        fs::write(&file, b"synced").unwrap();
+
+        sync_path_rust_best_effort(&file);
+        sync_path_rust_best_effort(&dir);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rust_sync_best_effort_ignores_missing_path() {
+        let missing = std::env::temp_dir().join(format!(
+            "mister-magik-missing-sync-{}",
+            std::process::id()
+        ));
+
+        sync_path_rust_best_effort(&missing);
     }
 }
