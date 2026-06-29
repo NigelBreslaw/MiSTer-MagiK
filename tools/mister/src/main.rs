@@ -97,6 +97,14 @@ fn run_cli() -> Result<()> {
             put(&sess, Path::new(&args[0]), &args[1])?;
             println!("put {} -> {}", args[0], args[1]);
         }
+        "put-dir" => {
+            if args.len() < 2 {
+                return Err("put-dir needs <local-dir> <remote-dir>".into());
+            }
+            let sess = connect(10)?;
+            let count = put_dir(&sess, Path::new(&args[0]), &args[1])?;
+            println!("put-dir {} -> {} files={count}", args[0], args[1]);
+        }
         "deploy-magik-bin" => {
             if args.is_empty() {
                 return Err("deploy-magik-bin needs <local> [remote]".into());
@@ -1172,8 +1180,11 @@ fn stream_command(sess: &Session, command: &str) -> Result<()> {
 
 fn put(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let sftp = sess.sftp()?;
-    let bytes = fs::read(local)?;
-    put_bytes_with_sftp(&sftp, remote, &bytes)
+    ensure_remote_parent_dir(&sftp, Path::new(remote))?;
+    let mut src = File::open(local)?;
+    let mut dst = sftp.create(Path::new(remote))?;
+    io::copy(&mut src, &mut dst)?;
+    Ok(())
 }
 
 fn put_bytes(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
@@ -1182,9 +1193,71 @@ fn put_bytes(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
 }
 
 fn put_bytes_with_sftp(sftp: &ssh2::Sftp, remote: &str, bytes: &[u8]) -> Result<()> {
+    ensure_remote_parent_dir(sftp, Path::new(remote))?;
     let mut dst = sftp.create(Path::new(remote))?;
     dst.write_all(bytes)?;
     Ok(())
+}
+
+fn put_dir(sess: &Session, local_dir: &Path, remote_dir: &str) -> Result<usize> {
+    let sftp = sess.sftp()?;
+    if !local_dir.is_dir() {
+        return Err(format!("{} is not a directory", local_dir.display()).into());
+    }
+    ensure_remote_dir(&sftp, Path::new(remote_dir))?;
+    let mut count = 0;
+    put_dir_recursive(&sftp, local_dir, local_dir, Path::new(remote_dir), &mut count)?;
+    Ok(count)
+}
+
+fn put_dir_recursive(
+    sftp: &ssh2::Sftp,
+    root: &Path,
+    dir: &Path,
+    remote_root: &Path,
+    count: &mut usize,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            put_dir_recursive(sftp, root, &path, remote_root, count)?;
+        } else if metadata.is_file() {
+            let rel = path.strip_prefix(root)?;
+            let remote = remote_root.join(rel);
+            ensure_remote_parent_dir(sftp, &remote)?;
+            let mut src = File::open(&path)?;
+            let mut dst = sftp.create(&remote)?;
+            io::copy(&mut src, &mut dst)?;
+            *count += 1;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_remote_parent_dir(sftp: &ssh2::Sftp, remote: &Path) -> Result<()> {
+    if let Some(parent) = remote.parent() {
+        ensure_remote_dir(sftp, parent)?;
+    }
+    Ok(())
+}
+
+fn ensure_remote_dir(sftp: &ssh2::Sftp, remote: &Path) -> Result<()> {
+    if remote.as_os_str().is_empty() || remote == Path::new("/") {
+        return Ok(());
+    }
+    if sftp.stat(remote).is_ok() {
+        return Ok(());
+    }
+    if let Some(parent) = remote.parent() {
+        ensure_remote_dir(sftp, parent)?;
+    }
+    match sftp.mkdir(remote, 0o755) {
+        Ok(()) => Ok(()),
+        Err(_) if sftp.stat(remote).is_ok() => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
