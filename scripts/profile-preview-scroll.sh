@@ -260,8 +260,8 @@ write_launcher_env() {
     if [[ "$skip_preview_warm" == "1" || "$skip_preview_warm" == "true" || "$skip_preview_warm" == "yes" || "$skip_preview_warm" == "on" ]]; then
       printf 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1\n'
     fi
-    if [[ "${MISTER_PREVIEW_DIRECT_PRESENT:-0}" == "1" || "${MISTER_PREVIEW_DIRECT_PRESENT:-0}" == "true" || "${MISTER_PREVIEW_DIRECT_PRESENT:-0}" == "yes" || "${MISTER_PREVIEW_DIRECT_PRESENT:-0}" == "on" ]]; then
-      printf 'export MISTER_PREVIEW_DIRECT_PRESENT=1\n'
+    if [[ -n "${MISTER_PREVIEW_DIRECT_PRESENT+x}" ]]; then
+      printf 'export MISTER_PREVIEW_DIRECT_PRESENT=%q\n' "$MISTER_PREVIEW_DIRECT_PRESENT"
     fi
     if [[ "$cpu_profile" == "1" ]]; then
       printf 'export MISTER_PPROF=1\n'
