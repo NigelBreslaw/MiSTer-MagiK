@@ -97,11 +97,24 @@ struct WalkTargetStats {
 }
 
 pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
+    discover_files_pipelined_with_role(roots, RuntimeThreadRole::LibraryWalker)
+}
+
+pub(crate) fn discover_files_pipelined_foreground(
+    roots: Vec<String>,
+) -> mpsc::Receiver<DiscoveryEvent> {
+    discover_files_pipelined_with_role(roots, RuntimeThreadRole::LibraryWalkerForeground)
+}
+
+fn discover_files_pipelined_with_role(
+    roots: Vec<String>,
+    role: RuntimeThreadRole,
+) -> mpsc::Receiver<DiscoveryEvent> {
     let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
     std::thread::Builder::new()
         .name("library-walker".to_string())
         .spawn(move || {
-            apply_runtime_thread_policy(RuntimeThreadRole::LibraryWalker);
+            apply_runtime_thread_policy(role);
             let t = Instant::now();
             let dirs = discover_files_streaming(&roots, &tx);
             let _ = tx.send(DiscoveryEvent::Done {

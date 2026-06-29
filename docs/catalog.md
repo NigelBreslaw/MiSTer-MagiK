@@ -13,6 +13,12 @@ APIs, progress states, and benchmark expectations.
   Current cold first-scan acceptance is RAM catalog usable under 41s on the
   target MiSTer and durable SQLite save complete under 55s. Anything above
   either threshold fails `scripts/profile-first-scan.sh`.
+- First database creation is a foreground bootstrap job. The catalog worker and
+  library walker must run at full priority with unrestricted CPU affinity until
+  the RAM catalog is usable. It is acceptable for the scan/build screen to
+  reduce UI smoothness or drop frames during this window; meeting the first-scan
+  readiness target is more important than preserving perfect animation while no
+  usable catalog exists.
 - Unchanged virtual launch cache materialization should complete under 2s and
   must not read every generated `.mgl` file.
 
@@ -89,6 +95,10 @@ Cold or reset database:
    projected.
 5. The builder scans source game locations under `/media/fat` and keeps scan
    facts in Rust memory.
+   This first-build scan and RAM catalog projection run foreground: they should
+   not inherit the low-priority CPU0 background policy used by warm validation,
+   media, or preview prefetch work. The UI may drop frames on the scan screen
+   while this foreground builder consumes both Cortex-A9 cores.
 6. The worker reports `Ready` from the fresh RAM catalog as soon as it can
    provide a usable launcher catalog. The launcher clears the scan UI at this
    point and records `library_ready`.

@@ -2974,3 +2974,189 @@ PERF20260629-FIRSTSCAN	5d966944-dirty	sqlite_publish_progress	517	bytes=6856704 
 PERF20260629-FIRSTSCAN	5d966944-dirty	library_db_saved	51655	bytes=6856704 scan_us=33774881 discover_us=33189754 classify_us=33773679 import_us=11294909 discoveries=9237 normal_files=7519 containers=154 entries=281
 PERF20260629-FIRSTSCAN	5d966944-dirty	counter_plateau	10134	from=target=900 to=target=650
 PERF20260629-FIRSTSCAN	5d966944-dirty	db_count	0	9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	first_frame	77	catalog_ready=false
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	bootstrap_counter_climb	392	target=50
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	bootstrap_counter_sustained_climb	675	target=900
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_first_candidate	2131	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_first_discovery	2211	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	5911	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	385	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	1	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	9	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	94	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	full_scan_counter_climb	13575	target=800
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	5615	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	454	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	6632	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	4808	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	1430	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	4169	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	1077	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	31	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk_target	5	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_walk	32723	candidates=7527
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_profile_match	113	calls=7527
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_installed_collection	113	calls=7521
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_archive_toc	764	containers=154
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_collection_listings	0	collections=0
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_file_discovery	31244	files=7519
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	scan_stage_classify_total	34655	discoveries=9362 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	library_scan_complete	35472	scan_us=34656276 discover_us=32723244 classify_us=34654722 discoveries=9237 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	library_ready	39705	games=7259 load_us=4007511
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	catalog_bridge_sync_update	39705	games=7259 elapsed_us=144
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	catalog_worker_ram_catalog	39706	games=7259 catalog_us=4007511 projection_us=219608
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_schema	85	tables=12
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_metadata_load	1551	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_begin_tx	0	-
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_profiles	3	rows=16
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	163	from=0 to=1000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	175	from=1000 to=2000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	156	from=2000 to=3000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	157	from=3000 to=4000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	234	from=4000 to=5000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	244	from=5000 to=6000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	267	from=6000 to=7000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	365	from=7000 to=8000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	297	from=8000 to=9000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	78	from=9000 to=9237 total=9237
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_games_total	2568	rows=9237 launcher_rows=6245
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_materialize_arcade_ui	1765	-
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_launcher_arcade	375	-
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_launcher_console	388	rows=6185
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_launcher_launch_plans	54	rows=4497
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_meta	197	rows=11
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_catalog_stamp	0	rows=11
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_insert_software_hash_cache	0	rows=0
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_commit	10	-
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	import_stage_total	7001	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	sqlite_publish_progress	587	bytes=6856704 copy_ms=581 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	library_db_saved	47906	bytes=6856704 scan_us=34656276 discover_us=32723244 classify_us=34654722 import_us=8138335 discoveries=9237 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	counter_plateau	12900	from=target=900 to=target=800
+FIRSTSCAN-FOREGROUND-FIX-20260629	ea2057d1-dirty	db_count	0	9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	first_frame	92	catalog_ready=false
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	bootstrap_counter_climb	367	target=50
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	bootstrap_counter_sustained_climb	617	target=900
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_first_candidate	2099	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_first_discovery	2198	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	5542	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	367	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	4	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	14	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	105	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	full_scan_counter_climb	10950	target=650
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	4556	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	530	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	7134	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	4372	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	1806	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	1	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	4310	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	1827	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	23	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk_target	11	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_walk	32683	candidates=7527
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_profile_match	116	calls=7527
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_installed_collection	186	calls=7521
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_archive_toc	835	containers=154
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_collection_listings	0	collections=0
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_file_discovery	30096	files=7519
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	scan_stage_classify_total	33634	discoveries=9362 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	library_scan_complete	34417	scan_us=33635805 discover_us=32682923 classify_us=33634254 discoveries=9237 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	library_ready	38751	games=7259 load_us=4111774
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	catalog_bridge_sync_update	38752	games=7259 elapsed_us=132
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	catalog_worker_ram_catalog	38752	games=7259 catalog_us=4111774 projection_us=227342
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_schema	68	tables=12
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_metadata_load	1594	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_begin_tx	0	-
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_profiles	1	rows=16
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	169	from=0 to=1000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	118	from=1000 to=2000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	139	from=2000 to=3000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	153	from=3000 to=4000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	206	from=4000 to=5000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	313	from=5000 to=6000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	297	from=6000 to=7000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	315	from=7000 to=8000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	305	from=8000 to=9000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	74	from=9000 to=9237 total=9237
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_games_total	2589	rows=9237 launcher_rows=6245
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_materialize_arcade_ui	1711	-
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_launcher_arcade	436	-
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_launcher_console	333	rows=6185
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_launcher_launch_plans	47	rows=4497
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_meta	200	rows=11
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_catalog_stamp	0	rows=11
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_insert_software_hash_cache	0	rows=0
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_commit	10	-
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	import_stage_total	6991	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	sqlite_publish_progress	556	bytes=6856704 copy_ms=550 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	library_db_saved	46888	bytes=6856704 scan_us=33635805 discover_us=32682923 classify_us=33634254 import_us=8086746 discoveries=9237 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	counter_plateau	10333	from=target=900 to=target=650
+FIRSTSCAN-FOREGROUND-FIX-FINAL-20260629	ea2057d1-dirty	db_count	0	9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	first_frame	84	catalog_ready=false
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	bootstrap_counter_climb	409	target=50
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	bootstrap_counter_sustained_climb	743	target=900
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_targets	0	roots=4 targets=15 extensions=29
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_first_candidate	2122	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_first_discovery	2188	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	5484	path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	361	path=/media/fat/games/Saturn dirs=12 files=465 candidates=154
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	2	path=/media/fat/games/PSX dirs=1 files=6 candidates=3
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	14	path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	79	path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	full_scan_counter_climb	11743	target=700
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	5122	path=/media/fat/games/NES dirs=772 files=1002 candidates=737
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	517	path=/media/fat/games/SNES dirs=1 files=790 candidates=785
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	7099	path=/media/fat/games/GBA dirs=785 files=880 candidates=772
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	4611	path=/media/fat/games/GBC dirs=603 files=687 candidates=598
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	1497	path=/media/fat/games/GameGear dirs=268 files=267 candidates=256
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	3	path=/media/fat/games/SMS dirs=1 files=1 candidates=1
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	4263	path=/media/fat/games/MegaDrive dirs=778 files=779 candidates=778
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	1071	path=/media/fat/games/N64 dirs=297 files=300 candidates=296
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	667	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk_target	35	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_walk	32922	candidates=7527
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_profile_match	89	calls=7527
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_installed_collection	154	calls=7521
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_archive_toc	768	containers=154
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_collection_listings	0	collections=0
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_file_discovery	30598	files=7519
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	scan_stage_classify_total	33975	discoveries=9362 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	library_scan_complete	34876	scan_us=33976238 discover_us=32921967 classify_us=33974813 discoveries=9237 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	library_ready	39094	games=7259 load_us=3924237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	catalog_bridge_sync_update	39094	games=7259 elapsed_us=122
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	catalog_worker_ram_catalog	39095	games=7259 catalog_us=3924237 projection_us=289359
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_schema	45	tables=12
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_metadata_load	1603	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_begin_tx	0	-
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_profiles	1	rows=16
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	148	from=0 to=1000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	118	from=1000 to=2000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	140	from=2000 to=3000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	175	from=3000 to=4000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	225	from=4000 to=5000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	312	from=5000 to=6000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	236	from=6000 to=7000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	304	from=7000 to=8000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	364	from=8000 to=9000 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_chunk	84	from=9000 to=9237 total=9237
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_games_total	2537	rows=9237 launcher_rows=6245
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_materialize_arcade_ui	1850	-
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_launcher_arcade	408	-
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_launcher_console	308	rows=6185
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_launcher_launch_plans	46	rows=4497
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_meta	212	rows=11
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_catalog_stamp	0	rows=11
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_insert_software_hash_cache	0	rows=0
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_commit	11	-
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	import_stage_total	7023	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.623
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	sqlite_publish_progress	548	bytes=6856704 copy_ms=542 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	library_db_saved	47311	bytes=6856704 scan_us=33976238 discover_us=32921967 classify_us=33974813 import_us=8164335 discoveries=9237 normal_files=7519 containers=154 entries=281
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	counter_plateau	11000	from=target=900 to=target=700
+FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	db_count	0	9237

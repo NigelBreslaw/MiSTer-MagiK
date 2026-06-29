@@ -7,7 +7,7 @@ use crate::catalog_stamp;
 use crate::catalog_summary::CatalogSummaryProjection;
 use crate::game_discovery::unique_discovery_count;
 use crate::library_db::{
-    scan_library, BenchConfig, LibraryCatalogLoad, LibraryRefreshCatalog, LibraryRefreshSummary,
+    BenchConfig, LibraryCatalogLoad, LibraryRefreshCatalog, LibraryRefreshSummary,
     LibraryScanArtifact, LibraryScanStats, ProgressCallback, ScanEventCallback,
 };
 use crate::library_indexer::LibraryIndexer;
@@ -71,13 +71,30 @@ impl<'a> CatalogRefreshPipeline<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScanArtifact {
+        self.scan_artifact_with_events_using(LibraryIndexer::new(self.cfg), progress, scan_events)
+    }
+
+    pub(crate) fn scan_artifact_foreground_with_events(
+        &self,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryScanArtifact {
+        self.scan_artifact_with_events_using(
+            LibraryIndexer::foreground(self.cfg),
+            progress,
+            scan_events,
+        )
+    }
+
+    fn scan_artifact_with_events_using(
+        &self,
+        indexer: LibraryIndexer<'_>,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryScanArtifact {
         let stamp = catalog_stamp::compute_default_catalog_stamp(&self.cfg.roots);
         let scan_t = Instant::now();
-        let indexer = LibraryIndexer::new(self.cfg);
-        let scan = match (progress, scan_events) {
-            (None, None) => scan_library(self.cfg),
-            (progress, scan_events) => indexer.scan_with_progress_and_events(progress, scan_events),
-        };
+        let scan = indexer.scan_with_progress_and_events(progress, scan_events);
         let stats = LibraryScanStats {
             scan_us: scan_t.elapsed().as_micros() as u64,
             discover_us: scan.discover_us,

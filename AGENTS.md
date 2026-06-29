@@ -172,6 +172,10 @@ Effect-scene and mega-transition work is experimental only; see
   screenshots, raw565 caches, and snapshot packs from the private
   `private/magik-cloud` submodule. Use `scripts/magik-cloud path` to resolve
   `MAGIK_CLOUD_DIR`, the submodule, or the legacy `../magik-cloud` checkout.
+- Do not lower priority or pin CPU0 for the initial catalog scan/database
+  creation path. The first builder must run foreground with full CPU priority to
+  meet first-scan gates; scan-screen frame drops are acceptable while no usable
+  catalog exists.
 - The library scanner must not walk screenshot/cache media directories, read
   `gamelist.xml`, or classify helper payloads as games.
 

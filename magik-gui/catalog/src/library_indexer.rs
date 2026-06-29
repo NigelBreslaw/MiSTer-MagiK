@@ -36,13 +36,25 @@ const SCREENSHOT_PACK_SYSTEM_IDS: &[&str] = &[
 
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
+    priority: LibraryScanPriority,
 }
 
 impl<'a> LibraryIndexer<'a> {
     pub(crate) fn new(cfg: &'a BenchConfig) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            priority: LibraryScanPriority::Background,
+        }
     }
 
+    pub(crate) fn foreground(cfg: &'a BenchConfig) -> Self {
+        Self {
+            cfg,
+            priority: LibraryScanPriority::Foreground,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn scan(&self) -> LibraryScan {
         self.scan_with_progress_and_events(None, None)
     }
@@ -52,7 +64,7 @@ impl<'a> LibraryIndexer<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScan {
-        scan_library_with_progress_and_events(self.cfg, progress, scan_events)
+        scan_library_with_progress_and_events(self.cfg, self.priority, progress, scan_events)
     }
 
     pub(crate) fn bootstrap_progress(
@@ -61,6 +73,12 @@ impl<'a> LibraryIndexer<'a> {
     ) -> LibraryBootstrapSummary {
         bootstrap_library_progress(self.cfg, progress)
     }
+}
+
+#[derive(Clone, Copy)]
+enum LibraryScanPriority {
+    Background,
+    Foreground,
 }
 
 #[derive(Default)]
@@ -79,11 +97,17 @@ struct ScanTimingStats {
 
 fn scan_library_with_progress_and_events(
     cfg: &BenchConfig,
+    priority: LibraryScanPriority,
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
-    let rx = catalog_scan::discover_files_pipelined(cfg.roots.clone());
+    let rx = match priority {
+        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined(cfg.roots.clone()),
+        LibraryScanPriority::Foreground => {
+            catalog_scan::discover_files_pipelined_foreground(cfg.roots.clone())
+        }
+    };
     let profiles = launch_profiles::builtin_profiles();
     let mut discover_us = 0;
 

@@ -527,6 +527,14 @@ pub fn scan_default_library_with_events(
     ))
 }
 
+pub fn scan_default_library_foreground_with_events(
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryScanArtifact, String> {
+    let cfg = BenchConfig::production();
+    Ok(CatalogRefreshPipeline::new(&cfg).scan_artifact_foreground_with_events(progress, scan_events))
+}
+
 pub fn bootstrap_default_library_progress(
     progress: ProgressCallback<'_>,
 ) -> LibraryBootstrapSummary {
@@ -662,6 +670,7 @@ pub(crate) fn env_bool(name: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     LibraryIndexer::new(cfg).scan()
 }
