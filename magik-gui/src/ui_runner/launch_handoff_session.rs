@@ -55,7 +55,7 @@ pub(super) enum LaunchHandoffRuntimeAction {
 
 #[derive(Debug)]
 pub(super) enum LaunchHandoffCompletion {
-    Success,
+    Success { benchmark_terminal: bool },
     Failure { error: launcher::LaunchError },
 }
 
@@ -67,10 +67,18 @@ struct LaunchHandoffBenchConfig {
     delay: Duration,
     iterations: usize,
     launched: usize,
+    mode: launcher::LaunchHandoffBenchMode,
 }
 
 impl LaunchHandoffBenchConfig {
     fn from_env(enabled: bool) -> Self {
+        let mode = match std::env::var("MISTER_LAUNCH_HANDOFF_MODE")
+            .unwrap_or_else(|_| "slow-fail".to_string())
+            .trim()
+        {
+            "success" => launcher::LaunchHandoffBenchMode::Success,
+            _ => launcher::LaunchHandoffBenchMode::SlowFail,
+        };
         Self {
             enabled,
             label: std::env::var("MISTER_LAUNCH_HANDOFF_LABEL")
@@ -89,6 +97,7 @@ impl LaunchHandoffBenchConfig {
                 .unwrap_or(1)
                 .max(1),
             launched: 0,
+            mode,
         }
     }
 
@@ -104,7 +113,13 @@ impl LaunchHandoffBenchConfig {
         Some(self.launched)
     }
 
-    fn write_sample(&self, sample: LaunchHandoffBenchSample, recovery_presented: Instant) {
+    fn write_sample(
+        &self,
+        sample: LaunchHandoffBenchSample,
+        recovery_presented: Instant,
+        result: &'static str,
+        recovery: bool,
+    ) {
         let Some(iteration) = sample.iteration else {
             return;
         };
@@ -115,8 +130,17 @@ impl LaunchHandoffBenchConfig {
         let failure_recovery_us = recovery_presented
             .saturating_duration_since(sample.result_received)
             .as_micros() as u64;
+        let handoff_complete_us = sample
+            .result_received
+            .saturating_duration_since(sample.action_start)
+            .as_micros() as u64;
+        let first_ack_us = if result == "ok" {
+            sample.launch_prep_us
+        } else {
+            0
+        };
         let line = format!(
-            "launch_handoff_sample\t{}\t{}\tlaunch_action_to_loading_us={}\tmax_frame_gap_us={}\tloading_frames_before_result={}\tfailure_recovery_us={}\tlaunch_prep_us={}\thandoff_wait_us={}\tresult=error",
+            "launch_handoff_sample\t{}\t{}\tlaunch_action_to_loading_us={}\tmax_frame_gap_us={}\tloading_frames_before_result={}\tfailure_recovery_us={}\tlaunch_prep_us={}\thandoff_wait_us={}\tresult={result}\thandoff_complete_us={handoff_complete_us}\tfirst_ack_us={first_ack_us}\trecovery={}",
             self.label,
             iteration,
             launch_action_to_loading_us,
@@ -125,6 +149,7 @@ impl LaunchHandoffBenchConfig {
             failure_recovery_us,
             sample.launch_prep_us,
             sample.handoff_wait_us,
+            u8::from(recovery),
         );
         println!("{line}");
         if let Some(path) = self.trace_path.as_deref() {
@@ -145,6 +170,7 @@ struct LaunchWorkerRequest {
     launch_target: LaunchTarget,
     bench_iteration: Option<usize>,
     bench_delay: Duration,
+    bench_mode: launcher::LaunchHandoffBenchMode,
 }
 
 type LaunchWorkerSpawner = fn(LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult>;
@@ -266,6 +292,7 @@ impl LaunchHandoffSession {
             launch_target: staged.launch_target,
             bench_iteration: staged.bench_iteration,
             bench_delay: self.bench.delay,
+            bench_mode: self.bench.mode,
         });
         self.pending = Some(PendingLaunch {
             rx,
@@ -291,7 +318,27 @@ impl LaunchHandoffSession {
             Ok(spawned) => {
                 self.launch_started = result_received;
                 self.spawned_mister = spawned;
-                Some(LaunchHandoffCompletion::Success)
+                let mut benchmark_terminal = false;
+                if let (Some(bench), Some(iteration)) =
+                    (worker_result.bench.as_ref(), pending.bench_iteration)
+                {
+                    let sample = LaunchHandoffBenchSample {
+                        iteration: Some(iteration),
+                        action_start: pending.action_start,
+                        loading_presented: pending.loading_presented,
+                        max_frame_gap_us: pending.max_frame_gap_us,
+                        loading_frames_before_result: pending.loading_frames.max(1),
+                        result_received,
+                        launch_prep_us: bench.prepare_us,
+                        handoff_wait_us: bench.handoff_us,
+                    };
+                    self.bench
+                        .write_sample(sample, result_received, "ok", false);
+                    self.loading_title.clear();
+                    launcher::reset_launch();
+                    benchmark_terminal = true;
+                }
+                Some(LaunchHandoffCompletion::Success { benchmark_terminal })
             }
             Err(error) => {
                 self.launch_started = result_received;
@@ -334,7 +381,8 @@ impl LaunchHandoffSession {
 
     pub(super) fn finish_failure_recovery(&mut self, recovery_presented: Instant) {
         if let Some(sample) = self.pending_bench_sample.take() {
-            self.bench.write_sample(sample, recovery_presented);
+            self.bench
+                .write_sample(sample, recovery_presented, "error", true);
         }
         self.loading_title.clear();
     }
@@ -382,6 +430,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                 let bench = launcher::execute_game_launch_handoff_bench(
                     &request.launch_target,
                     request.bench_delay,
+                    request.bench_mode,
                 );
                 LaunchWorkerResult {
                     result: bench.result.clone(),
@@ -472,13 +521,33 @@ mod tests {
         request: LaunchWorkerRequest,
     ) -> mpsc::Receiver<LaunchWorkerResult> {
         let (tx, rx) = mpsc::channel();
-        let bench =
-            launcher::execute_game_launch_handoff_bench(&request.launch_target, Duration::ZERO);
+        let bench = launcher::execute_game_launch_handoff_bench(
+            &request.launch_target,
+            Duration::ZERO,
+            launcher::LaunchHandoffBenchMode::SlowFail,
+        );
         tx.send(LaunchWorkerResult {
             result: bench.result.clone(),
             bench: Some(bench),
         })
         .expect("send benchmark failure result");
+        rx
+    }
+
+    fn benchmark_success_worker(
+        request: LaunchWorkerRequest,
+    ) -> mpsc::Receiver<LaunchWorkerResult> {
+        let (tx, rx) = mpsc::channel();
+        let bench = launcher::execute_game_launch_handoff_bench(
+            &request.launch_target,
+            Duration::ZERO,
+            launcher::LaunchHandoffBenchMode::Success,
+        );
+        tx.send(LaunchWorkerResult {
+            result: bench.result.clone(),
+            bench: Some(bench),
+        })
+        .expect("send benchmark success result");
         rx
     }
 
@@ -553,7 +622,9 @@ mod tests {
 
         assert!(matches!(
             session.poll_completion(Instant::now()),
-            Some(LaunchHandoffCompletion::Success)
+            Some(LaunchHandoffCompletion::Success {
+                benchmark_terminal: false
+            })
         ));
         assert_eq!(session.loading_title(), "Loading 1942…");
         assert!(session.is_active());
@@ -641,7 +712,69 @@ mod tests {
         assert!(fields[7].starts_with("launch_prep_us="));
         assert!(fields[8].starts_with("handoff_wait_us="));
         assert_eq!(fields[9], "result=error");
+        assert!(fields[10].starts_with("handoff_complete_us="));
+        assert_eq!(fields[11], "first_ack_us=0");
+        assert_eq!(fields[12], "recovery=1");
         assert!(!Path::new(launcher::LAUNCH_RETURN_STATE_PATH).exists());
+
+        let _ = std::fs::remove_file(&trace_path);
+        let _ = std::fs::remove_file(&target_path);
+        launcher::remove_launch_return_state();
+    }
+
+    #[test]
+    fn benchmark_success_writes_terminal_trace_fields() {
+        let _guard = lock_launch_handoff_tests();
+        launcher::reset_launch();
+        launcher::remove_launch_return_state();
+        let trace_path = std::env::temp_dir().join(format!(
+            "mister-magik-launch-handoff-success-test-{}.tsv",
+            std::process::id()
+        ));
+        let target_path = std::env::temp_dir().join(format!(
+            "mister-magik-launch-handoff-success-test-{}.mra",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&trace_path);
+        std::fs::write(&target_path, "").expect("write launch target");
+        let mut session =
+            LaunchHandoffSession::with_worker_for_test(benchmark_success_worker, true);
+        session.bench.label = "UNIT-HANDOFF-SUCCESS".to_string();
+        session.bench.trace_path = Some(trace_path.display().to_string());
+        session.bench.delay = Duration::ZERO;
+        session.bench.iterations = 1;
+        session.bench.mode = launcher::LaunchHandoffBenchMode::Success;
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        let catalog = one_game_catalog();
+        let start = Instant::now();
+
+        assert!(session.begin_launch(&nav, &catalog, target_path.to_str().unwrap(), start));
+        session.complete_loading_frame(start + Duration::from_millis(1));
+        assert!(matches!(
+            session.poll_completion(start + Duration::from_millis(2)),
+            Some(LaunchHandoffCompletion::Success {
+                benchmark_terminal: true
+            })
+        ));
+
+        let trace = std::fs::read_to_string(&trace_path).expect("read trace");
+        let fields: Vec<&str> = trace.trim().split('\t').collect();
+        assert_eq!(fields[0], "launch_handoff_sample");
+        assert_eq!(fields[1], "UNIT-HANDOFF-SUCCESS");
+        assert_eq!(fields[2], "1");
+        assert!(fields[3].starts_with("launch_action_to_loading_us="));
+        assert!(fields[4].starts_with("max_frame_gap_us="));
+        assert!(fields[5].starts_with("loading_frames_before_result="));
+        assert_eq!(fields[6], "failure_recovery_us=0");
+        assert!(fields[7].starts_with("launch_prep_us="));
+        assert!(fields[8].starts_with("handoff_wait_us="));
+        assert_eq!(fields[9], "result=ok");
+        assert!(fields[10].starts_with("handoff_complete_us="));
+        assert!(fields[11].starts_with("first_ack_us="));
+        assert_eq!(fields[12], "recovery=0");
+        assert_eq!(session.loading_title(), "");
+        assert!(!session.is_active());
 
         let _ = std::fs::remove_file(&trace_path);
         let _ = std::fs::remove_file(&target_path);
@@ -666,7 +799,9 @@ mod tests {
         idle_session.complete_loading_frame(start);
         assert!(matches!(
             idle_session.poll_completion(start),
-            Some(LaunchHandoffCompletion::Success)
+            Some(LaunchHandoffCompletion::Success {
+                benchmark_terminal: false
+            })
         ));
         assert_eq!(
             idle_session.runtime_action(start + Duration::from_millis(600)),
@@ -686,7 +821,9 @@ mod tests {
         core_session.complete_loading_frame(start);
         assert!(matches!(
             core_session.poll_completion(start),
-            Some(LaunchHandoffCompletion::Success)
+            Some(LaunchHandoffCompletion::Success {
+                benchmark_terminal: false
+            })
         ));
         assert_eq!(
             core_session.runtime_action(start + Duration::from_millis(600)),

@@ -1187,13 +1187,15 @@ pub(super) fn run_launcher_loop(
 
         if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
-                LaunchHandoffCompletion::Success => {
-                    lifecycle.handle(
+                LaunchHandoffCompletion::Success { benchmark_terminal } => {
+                    let input = if benchmark_terminal {
+                        LauncherLifecycleInput::BenchmarkLaunchCompleted
+                    } else {
                         LauncherLifecycleInput::LaunchSucceeded {
                             spawned_mister: false,
-                        },
-                        &mut lifecycle_effects,
-                    );
+                        }
+                    };
+                    lifecycle.handle(input, &mut lifecycle_effects);
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                 }
                 LaunchHandoffCompletion::Failure { error } => {

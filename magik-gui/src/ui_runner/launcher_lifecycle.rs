@@ -178,6 +178,7 @@ pub(super) enum LauncherLifecycleInput {
     LaunchSucceeded {
         spawned_mister: bool,
     },
+    BenchmarkLaunchCompleted,
     LaunchTimedOut,
 }
 
@@ -342,6 +343,14 @@ impl LauncherLifecycle {
                     LauncherLifecycleState::Handoff { spawned_mister },
                     out,
                     "launch_handoff",
+                );
+            }
+            LauncherLifecycleInput::BenchmarkLaunchCompleted => {
+                out.push(LauncherEffect::ReturnToIdle);
+                self.transition(
+                    LauncherLifecycleState::Idle,
+                    out,
+                    "benchmark_launch_completed",
                 );
             }
             LauncherLifecycleInput::LaunchTimedOut => {

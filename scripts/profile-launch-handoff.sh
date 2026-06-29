@@ -18,7 +18,7 @@ DEPLOY=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-launch-handoff.sh LABEL [--replace-label] [--iterations N] [--delay-ms N] [--mode slow-fail] [--deploy-device]
+Usage: scripts/profile-launch-handoff.sh LABEL [--replace-label] [--iterations N] [--delay-ms N] [--mode slow-fail|success] [--deploy-device]
 
 Runs the real launcher loading/recovery path with a benchmark-only simulated
 Main/FIFO handoff. It never writes /dev/MiSTer_cmd and never loads a core.
@@ -61,15 +61,21 @@ if [[ ! "$DELAY_MS" =~ ^[0-9]+$ ]]; then
   echo "--delay-ms must be a non-negative integer" >&2
   exit 2
 fi
-if [[ "$MODE" != "slow-fail" ]]; then
-  echo "--mode currently supports only slow-fail" >&2
+if [[ "$MODE" != "slow-fail" && "$MODE" != "success" ]]; then
+  echo "--mode supports slow-fail or success" >&2
   exit 2
 fi
 
 mkdir -p "$BENCH_DIR" "$HERE/build/launch-handoff"
+HEADER=$'label\titeration\tlaunch_action_to_loading_us\tmax_frame_gap_us\tloading_frames_before_result\tfailure_recovery_us\tlaunch_prep_us\thandoff_wait_us\tresult\thandoff_complete_us\tfirst_ack_us\trecovery'
 if [[ ! -f "$TSV" ]]; then
-  echo "label	iteration	launch_action_to_loading_us	max_frame_gap_us	loading_frames_before_result	failure_recovery_us	launch_prep_us	handoff_wait_us	result" >"$TSV"
-elif [[ "$REPLACE_LABEL" -eq 1 ]]; then
+  printf '%s\n' "$HEADER" >"$TSV"
+elif [[ "$(head -1 "$TSV")" != "$HEADER" ]]; then
+  tmp="$(mktemp)"
+  { printf '%s\n' "$HEADER"; tail -n +2 "$TSV"; } >"$tmp"
+  mv "$tmp" "$TSV"
+fi
+if [[ "$REPLACE_LABEL" -eq 1 ]]; then
   tmp="$(mktemp)"
   { head -1 "$TSV"; grep -v "^${LABEL}	" "$TSV" | tail -n +2; } >"$tmp" || true
   mv "$tmp" "$TSV"
@@ -99,6 +105,7 @@ trap cleanup EXIT
   printf 'export MISTER_LAUNCH_HANDOFF_TRACE=%q\n' "$remote_trace"
   printf 'export MISTER_LAUNCH_HANDOFF_ITERATIONS=%q\n' "$ITERATIONS"
   printf 'export MISTER_LAUNCH_HANDOFF_DELAY_MS=%q\n' "$DELAY_MS"
+  printf 'export MISTER_LAUNCH_HANDOFF_MODE=%q\n' "$MODE"
 } >"$env_file"
 
 echo "== launch handoff profile label=$LABEL mode=$MODE iterations=$ITERATIONS delay_ms=$DELAY_MS"
@@ -127,12 +134,15 @@ awk -F '\t' -v label="$LABEL" '
     split($8, prep, "=")
     split($9, wait, "=")
     split($10, result, "=")
-    print label, $3, action[2], gap[2], frames[2], recovery[2], prep[2], wait[2], result[2]
+    split($11, complete, "=")
+    split($12, ack, "=")
+    split($13, recovered, "=")
+    print label, $3, action[2], gap[2], frames[2], recovery[2], prep[2], wait[2], result[2], complete[2], ack[2], recovered[2]
   }
 ' "$local_trace" >>"$TSV"
 
 echo
-echo $'launch_handoff\tlabel\titeration\tlaunch_action_to_loading_us\tmax_frame_gap_us\tloading_frames_before_result\tfailure_recovery_us\tlaunch_prep_us\thandoff_wait_us\tresult'
+echo $'launch_handoff\tlabel\titeration\tlaunch_action_to_loading_us\tmax_frame_gap_us\tloading_frames_before_result\tfailure_recovery_us\tlaunch_prep_us\thandoff_wait_us\tresult\thandoff_complete_us\tfirst_ack_us\trecovery'
 awk -F '\t' '
   $1 == "launch_handoff_sample" {
     split($4, action, "=")
@@ -142,7 +152,10 @@ awk -F '\t' '
     split($8, prep, "=")
     split($9, wait, "=")
     split($10, result, "=")
-    print "launch_handoff\t" $2 "\t" $3 "\t" action[2] "\t" gap[2] "\t" frames[2] "\t" recovery[2] "\t" prep[2] "\t" wait[2] "\t" result[2]
+    split($11, complete, "=")
+    split($12, ack, "=")
+    split($13, recovered, "=")
+    print "launch_handoff\t" $2 "\t" $3 "\t" action[2] "\t" gap[2] "\t" frames[2] "\t" recovery[2] "\t" prep[2] "\t" wait[2] "\t" result[2] "\t" complete[2] "\t" ack[2] "\t" recovered[2]
   }
 ' "$local_trace"
 
