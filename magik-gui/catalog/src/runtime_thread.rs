@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeThreadRole {
     CatalogWorker,
+    CatalogForeground,
     LibraryWalker,
+    LibraryWalkerForeground,
     PreviewSelected,
     PreviewPrefetch,
     MediaWorker,
@@ -19,7 +21,9 @@ impl RuntimeThreadRole {
     pub fn label(self) -> &'static str {
         match self {
             Self::CatalogWorker => "catalog-worker",
+            Self::CatalogForeground => "catalog-foreground",
             Self::LibraryWalker => "library-walker",
+            Self::LibraryWalkerForeground => "library-walker-foreground",
             Self::PreviewSelected => "preview-selected",
             Self::PreviewPrefetch => "preview-prefetch",
             Self::MediaWorker => "media-worker",
@@ -33,6 +37,9 @@ impl RuntimeThreadRole {
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
+            Self::CatalogForeground | Self::LibraryWalkerForeground => {
+                RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+            }
             Self::LibraryWalker => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::PreviewSelected => RuntimeThreadPolicy::new(5, ThreadAffinity::Any),
             Self::PreviewPrefetch => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
@@ -222,6 +229,19 @@ mod tests {
         ] {
             assert_eq!(role.default_policy().affinity, ThreadAffinity::Cpu0);
             assert!(role.default_policy().nice >= 5);
+        }
+    }
+
+    #[test]
+    fn first_catalog_build_roles_run_foreground() {
+        for role in [
+            RuntimeThreadRole::CatalogForeground,
+            RuntimeThreadRole::LibraryWalkerForeground,
+        ] {
+            assert_eq!(
+                role.default_policy(),
+                RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+            );
         }
     }
 

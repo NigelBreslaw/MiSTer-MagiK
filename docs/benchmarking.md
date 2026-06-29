@@ -55,6 +55,32 @@ be read as profiling evidence, not production frame-time evidence, and the
 production `release-device` binary should be redeployed after any profiling
 binary has been installed on the MiSTer.
 
+## First Scan Gate
+
+The cold first-scan gate measures time to a usable RAM catalog and time to a
+durable SQLite save:
+
+```bash
+scripts/profile-first-scan.sh LABEL --skip-build --replace-label --thread-sample
+```
+
+Current production targets on the reference MiSTer are:
+
+- `library_ready <= 41000ms`
+- `library_db_saved <= 55000ms`
+
+During first database creation, the catalog builder owns the machine. The
+catalog worker and library walker must run foreground, with nice `0` and
+unrestricted CPU affinity, until the RAM catalog is ready. Do not apply the
+background CPU0/nice policy to this first-build scan path. Dropped frames or
+less-smooth scan-screen animation are acceptable during this window because the
+launcher has no usable catalog yet; failing the readiness gate is not.
+
+The low-priority CPU0 policy remains appropriate for warm validation, preview
+prefetch, media work, and other background jobs after a usable catalog exists.
+Use `--thread-sample` when changing catalog scheduling so the run proves the
+first-build roles are foreground and the later background roles remain isolated.
+
 ## Arcade And Preview Scenarios
 
 Approved arcade scroll scenarios:

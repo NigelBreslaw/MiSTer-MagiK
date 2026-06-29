@@ -145,6 +145,13 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             let plan = catalog_worker_plan(cache_state, request);
+            let first_catalog_build =
+                plan == CatalogWorkerPlan::ForceBuild && staged_ram_catalog_enabled(cache_state);
+            if first_catalog_build {
+                // First database creation owns the machine until the RAM catalog is ready.
+                // Smooth scan-screen animation is secondary to meeting the first-scan gate.
+                apply_runtime_thread_policy(RuntimeThreadRole::CatalogForeground);
+            }
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
                 detail: format!(
@@ -187,10 +194,18 @@ pub(super) fn start_library_catalog_worker(
                         library_db::CatalogProgress::finding_games_found(bootstrap.launchers),
                     );
                 }
-                let artifact = match library_db::scan_default_library_with_events(
-                    Some(&mut progress),
-                    Some(&mut scan_events),
-                ) {
+                let artifact_result = if first_catalog_build {
+                    library_db::scan_default_library_foreground_with_events(
+                        Some(&mut progress),
+                        Some(&mut scan_events),
+                    )
+                } else {
+                    library_db::scan_default_library_with_events(
+                        Some(&mut progress),
+                        Some(&mut scan_events),
+                    )
+                };
+                let artifact = match artifact_result {
                     Ok(artifact) => artifact,
                     Err(e) => {
                         eprintln!("library scan failed: {e}");
