@@ -612,7 +612,23 @@ pub(crate) fn is_index_candidate(profiles: &[LaunchProfile], path: &Path, _ext: 
                 | ProfilePathClass::Collection { .. }
                 | ProfilePathClass::Ignored { .. }
         ))
-    ) || crate::media_metadata::is_amigavision_listing_path(path)
+    ) || is_archive_entry_container_candidate(profiles, path)
+        || crate::media_metadata::is_amigavision_listing_path(path)
+}
+
+pub(crate) fn is_archive_entry_container_candidate(
+    profiles: &[LaunchProfile],
+    path: &Path,
+) -> bool {
+    if !path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+    {
+        return false;
+    }
+    profile_for_path(profiles, path)
+        .is_some_and(|profile| !profile.archive_entry_rules.is_empty())
 }
 
 pub(crate) fn should_ignore_path(path: &Path) -> bool {
@@ -975,7 +991,7 @@ mod tests {
     }
 
     #[test]
-    fn loose_sms_indexes_but_sms_collection_zip_only_audits() {
+    fn cartridge_zip_entries_index_as_games() {
         let root = unique_temp_dir("sms-loose-vs-zip");
         let sms_dir = root.join("games/SMS");
         std::fs::create_dir_all(&sms_dir).expect("create sms dir");
@@ -989,13 +1005,48 @@ mod tests {
         let scan = scan_library(&cfg);
 
         assert_eq!(scan.normal_files.len(), 1);
-        assert_eq!(scan.discoveries.len(), 1);
-        assert_eq!(scan.discoveries[0].platform_id, "sms");
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/SMS"
-                && row.catalog_status == "unsupported"
-                && row.reason.contains("zip-archive-not-indexed")
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.discoveries.len(), 2);
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| discovery.platform_id == "sms"));
+        assert!(scan.audit_rows.iter().all(|row| {
+            row.expected_game_dir != "games/SMS"
+                || !row.reason.contains("zip-archive-not-indexed")
         }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn wonderswan_zip_entries_generate_visible_system() {
+        let root = unique_temp_dir("wonderswan-zip-entries");
+        let ws_dir = root.join("games/WonderSwan");
+        std::fs::create_dir_all(&ws_dir).expect("create wonderswan dir");
+        write_stored_zip(
+            &ws_dir.join("MiSTer MagiK Additions - WonderSwan.zip"),
+            &[("Gunpey (Japan).ws", b"rom")],
+        );
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.entries.len(), 1);
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "wonderswan" && discovery.title.contains("Gunpey")
+        }));
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "wonderswan" && system.count == 1));
         let _ = std::fs::remove_dir_all(root);
     }
 

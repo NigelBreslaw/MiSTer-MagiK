@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-pub const PROFILE_SET_VERSION: u32 = 1;
+pub const PROFILE_SET_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuleSourceKind {
@@ -253,6 +253,56 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
         ao486_profile(),
         amiga_profile(),
         neogeo_profile(),
+        cartridge_profile(CartridgeProfileSpec {
+            id: "atari2600",
+            system_id: "atari2600",
+            category: "Console",
+            title: "Atari 2600",
+            core_name: "Atari2600",
+            core_path: "_Console/Atari2600",
+            game_dirs: &["Atari2600", "ATARI2600", "ATARI2600-Sinden"],
+            extensions: &["a26", "bin"],
+        }),
+        cartridge_profile(CartridgeProfileSpec {
+            id: "atari5200",
+            system_id: "atari5200",
+            category: "Console",
+            title: "Atari 5200",
+            core_name: "Atari5200",
+            core_path: "_Console/Atari5200",
+            game_dirs: &["Atari5200", "ATARI5200"],
+            extensions: &["a52", "bin"],
+        }),
+        cartridge_profile(CartridgeProfileSpec {
+            id: "atari7800",
+            system_id: "atari7800",
+            category: "Console",
+            title: "Atari 7800",
+            core_name: "Atari7800",
+            core_path: "_Console/Atari7800",
+            game_dirs: &["Atari7800", "ATARI7800"],
+            extensions: &["a78", "bin"],
+        }),
+        cartridge_profile(CartridgeProfileSpec {
+            id: "atarilynx",
+            system_id: "atarilynx",
+            category: "Handheld",
+            title: "Atari Lynx",
+            core_name: "AtariLynx",
+            core_path: "_Console/AtariLynx",
+            game_dirs: &["AtariLynx"],
+            extensions: &["lnx"],
+        }),
+        cartridge_profile(CartridgeProfileSpec {
+            id: "wonderswan",
+            system_id: "wonderswan",
+            category: "Handheld",
+            title: "WonderSwan",
+            core_name: "WonderSwan",
+            core_path: "_Console/WonderSwan",
+            game_dirs: &["WonderSwan", "WonderSwanColor"],
+            extensions: &["ws", "wsc"],
+        }),
         cartridge_profile(CartridgeProfileSpec {
             id: "nes",
             system_id: "nes",
@@ -624,6 +674,14 @@ struct CartridgeProfileSpec {
 }
 
 fn cartridge_profile(spec: CartridgeProfileSpec) -> LaunchProfile {
+    let payload_rule = PayloadRule {
+        extensions: spec.extensions,
+        mount: MountSpec::load_file(1),
+        disposition: PayloadDisposition::Playable,
+        provenance: RuleProvenance::main(
+            "Main CONF_STR file picker exposes cartridge payload extensions for this core",
+        ),
+    };
     LaunchProfile {
         id: spec.id,
         system_id: spec.system_id,
@@ -632,19 +690,12 @@ fn cartridge_profile(spec: CartridgeProfileSpec) -> LaunchProfile {
         core_name: spec.core_name,
         core_path: Some(spec.core_path),
         game_dirs: spec.game_dirs.to_vec(),
-        payload_rules: vec![PayloadRule {
-            extensions: spec.extensions,
-            mount: MountSpec::load_file(1),
-            disposition: PayloadDisposition::Playable,
-            provenance: RuleProvenance::mgl(
-                "Existing organizer MGLs use type=f index=1 for cartridge payloads",
-            ),
-        }],
-        archive_entry_rules: Vec::new(),
+        payload_rules: vec![payload_rule],
+        archive_entry_rules: vec![payload_rule],
         collection_rules: Vec::new(),
         ignore_rules: Vec::new(),
-        provenance: RuleProvenance::magik(
-            "Explicit MagiK profile derived from Main game paths and installed MGL examples",
+        provenance: RuleProvenance::main(
+            "Main game paths plus CONF_STR cartridge file picker extensions",
         ),
     }
 }
@@ -746,6 +797,33 @@ mod tests {
         assert_eq!(snes.system_id, "snes");
         assert!(matches!(
             snes.classify_path(Path::new("/media/fat/games/SNES/ActRaiser.sfc")),
+            ProfilePathClass::Payload {
+                rule: PayloadRule {
+                    disposition: PayloadDisposition::Playable,
+                    mount: MountSpec {
+                        kind: MountKind::LoadFile,
+                        index: 1,
+                        ..
+                    },
+                    ..
+                }
+            }
+        ));
+        assert!(snes
+            .classify_archive_entry(Path::new("ActRaiser.sfc"))
+            .is_some());
+
+        let wonderswan_color =
+            profile_for_game_dir(&profiles, "WonderSwanColor").expect("wonderswan profile");
+        assert_eq!(wonderswan_color.id, "wonderswan");
+        assert_eq!(wonderswan_color.system_id, "wonderswan");
+        assert!(wonderswan_color
+            .classify_archive_entry(Path::new("Gunpey EX.wsc"))
+            .is_some());
+        assert!(matches!(
+            wonderswan_color.classify_path(Path::new(
+                "/media/fat/games/WonderSwanColor/Gunpey EX.wsc"
+            )),
             ProfilePathClass::Payload {
                 rule: PayloadRule {
                     disposition: PayloadDisposition::Playable,
