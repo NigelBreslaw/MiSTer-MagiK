@@ -154,6 +154,10 @@ MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1  # only for cold fast-lane benchmarks
 MISTER_CATALOG_REFRESH=default
 ```
 
+Launcher velocity scenarios and preview scroll TSVs require a MagiK binary
+built with `--bench-tools`; production `ui` builds intentionally ignore
+`MISTER_LAUNCHER_BENCH_SCENARIO` and omit trace writers.
+
 Arcade benchmark scripts use `MISTER_CATALOG_REFRESH=default`, not `off`.
 Warm catalog startup may first populate Home/system counts from
 `library.summary.json`; the default policy then hydrates the full SQLite catalog

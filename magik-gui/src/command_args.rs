@@ -30,7 +30,9 @@ pub const COMMANDS: &[&str] = &[
     #[cfg(feature = "diagnostics")]
     "input",
     "library-refresh",
+    #[cfg(feature = "bench-tools")]
     "media-bench-download",
+    #[cfg(feature = "bench-tools")]
     "media-bench-save",
     #[cfg(feature = "diagnostics")]
     "preview-pack-bench",
@@ -41,8 +43,8 @@ pub const COMMANDS: &[&str] = &[
     "hbmame-metadata-from-library",
     #[cfg(feature = "diagnostics")]
     "library-scan-bench",
+    #[cfg(feature = "bench-tools")]
     "launch-prep-bench",
-    "audio-tone",
 ];
 
 pub fn resolve_command(args: &[String]) -> String {
@@ -98,8 +100,6 @@ mod tests {
     #[test]
     fn recognizes_explicit_commands() {
         assert!(COMMANDS.contains(&"library-refresh"));
-        assert!(COMMANDS.contains(&"media-bench-download"));
-        assert!(COMMANDS.contains(&"media-bench-save"));
         for command in COMMANDS {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),
@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "diagnostics"))]
+    #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
         assert!(COMMANDS.contains(&"library-sql"));
         for command in [
@@ -125,7 +125,14 @@ mod tests {
         ] {
             assert!(!COMMANDS.contains(&command), "{command}");
         }
-        assert!(COMMANDS.contains(&"audio-tone"));
+        for command in [
+            "media-bench-download",
+            "media-bench-save",
+            "launch-prep-bench",
+            "audio-tone",
+        ] {
+            assert!(!COMMANDS.contains(&command), "{command}");
+        }
     }
 
     #[test]
@@ -140,11 +147,23 @@ mod tests {
             "hbmame-metadata-from-library",
             "library-scan-bench",
             "preview-index-refresh-bench",
-            "audio-tone",
         ] {
             assert!(COMMANDS.contains(&command), "{command}");
         }
-        assert!(COMMANDS.contains(&"launch-prep-bench"));
+        assert!(!COMMANDS.contains(&"audio-tone"));
+    }
+
+    #[test]
+    #[cfg(feature = "bench-tools")]
+    fn bench_tool_command_list_exposes_benchmarks() {
+        for command in [
+            "media-bench-download",
+            "media-bench-save",
+            "launch-prep-bench",
+        ] {
+            assert!(COMMANDS.contains(&command), "{command}");
+        }
+        assert!(!COMMANDS.contains(&"audio-tone"));
     }
 
     #[test]

@@ -23,10 +23,12 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-screenshot-download.sh LABEL --system ID [--variant identity] [--iterations N] [--prime-cache] [--manifest-url URL] [--save-strategy staged|stream-fat] [--max-save-ms MS] [--replace-label]
 
-Benchmarks screenshot pack download paths inside the deployed MagiK binary on
-the MiSTer. The timing rows include network download, decompression,
-save-to-disk, checksum verification, and total time. MagiK benchmarks the raw
-identity .mmlz4b object only; compressed objects are not decoded in the runtime.
+Benchmarks screenshot pack download paths inside a deployed bench-tools MagiK
+binary on the MiSTer. Build with `magik-gui/build-arm.sh --bench-tools` before
+deploying this benchmark binary. The timing rows include network download,
+decompression, save-to-disk, checksum verification, and total time. MagiK
+benchmarks the raw identity .mmlz4b object only; compressed objects are not
+decoded in the runtime.
 
 Default manifest:
   https://assets.mistermagik.com/mister-magik/v1/manifest.json

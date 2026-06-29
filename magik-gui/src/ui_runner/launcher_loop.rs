@@ -2064,6 +2064,12 @@ pub(super) fn run_launcher_loop(
     }
 }
 
+#[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+fn preview_scroll_exit_after_trace_deadline(_run_start: Instant) -> Option<Instant> {
+    None
+}
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instant> {
     if !matches!(
         std::env::var("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE").as_deref(),

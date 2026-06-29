@@ -11,9 +11,11 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
 };
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
 #[cfg(all(mister_video_scene, feature = "video-lab"))]
-use slint::{Rgb8Pixel, SharedPixelBuffer};
+use slint::Rgb8Pixel;
+use slint::{
+    ComponentHandle, ModelRc, PhysicalSize, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 

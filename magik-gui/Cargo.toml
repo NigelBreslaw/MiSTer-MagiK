@@ -42,6 +42,7 @@ slint = { version = "1.17", optional = true, default-features = false, features 
 default = []
 profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:mister-magik-ui"]
+bench-tools = []
 bench-scenes = ["mister-magik-ui?/bench-scenes"]
 experiments = ["bench-scenes"]
 diagnostics = []

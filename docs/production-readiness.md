@@ -73,13 +73,14 @@ scripts/device-release-acceptance.sh --skip-deploy --soak
 The script uses only `scripts/mister` for device access and writes artifacts to
 `build/device-release/<timestamp>/`, including status JSON, doctor output,
 snapshots, logs, optional frame/profile files, and `report.md`.
-Health and catalog probe logs are captured as artifacts when those tiers run,
-including the `/dev/MrAudio` `audio-tone` probe and catalog mutation refresh
-logs.
+Health and catalog probe logs are captured as artifacts when those tiers run.
+The old `/dev/MrAudio` `audio-tone` probe is no longer part of the production
+binary; audio validation is covered by the video path.
 
 The device gate is telemetry-first: it waits on `scripts/mister status --json`,
 launcher status fields, Main status fields, `/tmp/mister-magik/events.jsonl`,
-and trace TSV row growth before falling back to timeout failure. The gate can
+and, when `MISTER_ACCEPTANCE_BENCH_TOOLS=1` is set, trace TSV row growth before
+falling back to timeout failure. The gate can
 run named tiers with `--tiers`: `health`, `framebuffer-route`,
 `launcher-lifecycle`, `catalog`, `handoff`, `display-modes`, `install-restore`,
 and `soak`. The default gate includes every tier except `soak`; `--fast`
