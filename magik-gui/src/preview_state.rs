@@ -17,6 +17,7 @@ use crate::ui_display::{UI_FB_H, UI_FB_W};
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
 const MAX_PREFETCH_RESULTS_PER_FRAME: usize = 1;
 const DIRECTIONAL_PREFETCH_TAIL_RADIUS: usize = 2;
+const PREFETCH_SCROLL_SETTLE: Duration = Duration::from_millis(40);
 pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
 pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
 pub(crate) const ARCADE_PREVIEW_BOX_W: u32 = 320;
@@ -238,6 +239,7 @@ pub(crate) struct PreviewState {
     last_prefetch_selected: Option<usize>,
     prefetch_direction: i8,
     last_prefetch_window: Option<PreviewPrefetchWindow>,
+    prefetch_throttle_until: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -351,6 +353,7 @@ impl PreviewState {
             last_prefetch_selected: None,
             prefetch_direction: 0,
             last_prefetch_window: None,
+            prefetch_throttle_until: None,
         }
     }
 
@@ -373,6 +376,7 @@ impl PreviewState {
             self.last_prefetch_selected = None;
             self.prefetch_direction = 0;
             self.last_prefetch_window = None;
+            self.prefetch_throttle_until = None;
             bridge.set_arcade_preview_placeholder_visible(true);
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
@@ -698,6 +702,9 @@ fn request_preview_prefetches(
     selected: usize,
     preview: &mut PreviewState,
 ) {
+    let selected_changed = preview
+        .last_prefetch_selected
+        .is_some_and(|previous| previous != selected);
     if let Some(previous) = preview.last_prefetch_selected {
         if selected > previous {
             preview.prefetch_direction = 1;
@@ -706,6 +713,9 @@ fn request_preview_prefetches(
         }
     }
     preview.last_prefetch_selected = Some(selected);
+    if prefetch_should_throttle(preview, selected_changed) {
+        return;
+    }
     let window = PreviewPrefetchWindow {
         selected,
         len: games.len(),
@@ -759,6 +769,34 @@ fn request_preview_prefetches(
             );
         }
     }
+}
+
+fn prefetch_should_throttle(preview: &mut PreviewState, selected_changed: bool) -> bool {
+    let now = Instant::now();
+    if selected_changed {
+        preview.prefetch_throttle_until = Some(now + PREFETCH_SCROLL_SETTLE);
+        preview.pending_prefetch_keys.clear();
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace prefetch_throttled reason=selection_changed duration_ms={}",
+                PREFETCH_SCROLL_SETTLE.as_millis()
+            );
+        }
+        return true;
+    }
+    if let Some(until) = preview.prefetch_throttle_until {
+        if now < until {
+            if preview_trace_enabled() {
+                let remaining_ms = until.duration_since(now).as_millis();
+                eprintln!(
+                    "preview_trace prefetch_throttled reason=settle_wait remaining_ms={remaining_ms}"
+                );
+            }
+            return true;
+        }
+        preview.prefetch_throttle_until = None;
+    }
+    false
 }
 
 fn prefetch_window_is_covered(
@@ -1164,6 +1202,21 @@ mod tests {
             direction_aware_prefetch_indices(30, 10, 4, 0),
             vec![9, 11, 8, 12, 7, 13, 6, 14]
         );
+    }
+
+    #[test]
+    fn prefetch_throttle_clears_pending_keys_and_resumes_after_settle() {
+        let mut preview = PreviewState::new();
+        preview.pending_prefetch_keys.insert("stale".to_string());
+
+        assert!(prefetch_should_throttle(&mut preview, true));
+        assert!(preview.pending_prefetch_keys.is_empty());
+        assert!(preview.prefetch_throttle_until.is_some());
+        assert!(prefetch_should_throttle(&mut preview, false));
+
+        preview.prefetch_throttle_until = Some(Instant::now() - Duration::from_millis(1));
+        assert!(!prefetch_should_throttle(&mut preview, false));
+        assert!(preview.prefetch_throttle_until.is_none());
     }
 
     #[test]
