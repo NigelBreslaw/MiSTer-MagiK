@@ -42,7 +42,7 @@ Meaningful source/doc/build changes are limited to:
 
 - Documents the upstream baseline, boot model, patch map, and sync rules.
 - Keep, but update after a reset to describe the strict launcher ownership
-  model instead of the current Zaparoo-style coexistence model.
+  model instead.
 
 `build-docker.sh`
 
