@@ -4,6 +4,7 @@ use crate::arcade_catalog::ArcadeGameEntry;
 use crate::catalog_config::SCHEMA_VERSION;
 use crate::catalog_projection::CatalogProjectionRow;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
+use crate::launch_profiles;
 use crate::library_db::{title_from_path, unix_now_secs, LibraryPayloadFile, LibraryScan};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
@@ -415,6 +416,7 @@ pub(crate) fn sqlite_scan_with_normal_files(paths: &[&str]) -> LibraryScan {
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: 1,
+        profiles: launch_profiles::builtin_profiles(),
         normal_files: paths
             .iter()
             .map(|path| LibraryPayloadFile {
@@ -435,6 +437,7 @@ pub(crate) fn sqlite_scan_with_discoveries(discoveries: Vec<GameDiscovery>) -> L
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: 1,
+        profiles: launch_profiles::builtin_profiles(),
         normal_files: Vec::new(),
         containers: Vec::new(),
         entries: Vec::new(),
@@ -444,6 +447,14 @@ pub(crate) fn sqlite_scan_with_discoveries(discoveries: Vec<GameDiscovery>) -> L
         discover_us: 0,
         classify_us: 0,
     }
+}
+
+pub(crate) fn install_test_console_core(root: &Path, core_name: &str) -> PathBuf {
+    let console = root.join("_Console");
+    std::fs::create_dir_all(&console).expect("create test console core dir");
+    let path = console.join(format!("{core_name}_20260630.rbf"));
+    std::fs::write(&path, b"rbf").expect("write test console core");
+    path
 }
 
 pub(crate) fn unique_temp_dir(label: &str) -> PathBuf {

@@ -131,7 +131,7 @@ fn discover_files_streaming(roots: &[String], tx: &mpsc::SyncSender<DiscoveryEve
 }
 
 fn walk_index_candidates(roots: &[String], tx: Option<&mpsc::SyncSender<DiscoveryEvent>>) -> usize {
-    let profiles = launch_profiles::builtin_profiles();
+    let profiles = launch_profiles::active_profiles_for_roots(roots);
     let candidate_exts = source_index_extensions(&profiles);
     let targets = scan_targets_for_roots(roots, &profiles);
     library_db::report_library_scan_timing(
@@ -256,23 +256,23 @@ fn source_index_extensions(profiles: &[LaunchProfile]) -> HashSet<String> {
     let mut extensions = HashSet::new();
     for profile in profiles {
         for rule in &profile.payload_rules {
-            insert_extensions(&mut extensions, rule.extensions);
+            insert_extensions(&mut extensions, &rule.extensions);
         }
         for rule in &profile.archive_entry_rules {
-            insert_extensions(&mut extensions, rule.extensions);
+            insert_extensions(&mut extensions, &rule.extensions);
             extensions.insert("zip".to_string());
         }
         for rule in &profile.collection_rules {
-            insert_extensions(&mut extensions, rule.archive_extensions);
+            insert_extensions(&mut extensions, &rule.archive_extensions);
         }
         for rule in &profile.ignore_rules {
-            insert_extensions(&mut extensions, rule.extensions);
+            insert_extensions(&mut extensions, &rule.extensions);
         }
     }
     extensions
 }
 
-fn insert_extensions(extensions: &mut HashSet<String>, values: &[&str]) {
+fn insert_extensions(extensions: &mut HashSet<String>, values: &[String]) {
     for value in values {
         let value = value.trim().to_ascii_lowercase();
         if !value.is_empty() {
@@ -926,6 +926,7 @@ mod tests {
     #[test]
     fn scanner_ignores_gamelists_and_screenshot_media_dirs() {
         let root = unique_temp_dir("ignore-screenshot-media");
+        install_test_console_core(&root, "NES");
         let nes_dir = root.join("games/NES");
         let screenshot_dir = nes_dir.join("screenshot");
         std::fs::create_dir_all(&screenshot_dir).expect("create screenshot dir");
@@ -960,6 +961,7 @@ mod tests {
     #[test]
     fn scanner_uses_profile_game_dirs_instead_of_walking_every_games_child() {
         let root = unique_temp_dir("target-profile-game-dirs");
+        install_test_console_core(&root, "NES");
         let nes_dir = root.join("games/NES");
         let unrelated_dir = root.join("games/NotACoreProfile");
         std::fs::create_dir_all(&nes_dir).expect("create nes dir");
@@ -993,6 +995,7 @@ mod tests {
     #[test]
     fn cartridge_zip_entries_index_as_games() {
         let root = unique_temp_dir("sms-loose-vs-zip");
+        install_test_console_core(&root, "SMS");
         let sms_dir = root.join("games/SMS");
         std::fs::create_dir_all(&sms_dir).expect("create sms dir");
         std::fs::write(sms_dir.join("Loose.sms"), "rom").expect("write sms rom");
@@ -1019,8 +1022,129 @@ mod tests {
     }
 
     #[test]
+    fn installed_manifest_core_catalogs_loose_colecovision_games() {
+        let root = unique_temp_dir("colecovision-loose-visible");
+        install_test_console_core(&root, "ColecoVision");
+        let coleco_dir = root.join("games/ColecoVision");
+        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
+        std::fs::write(coleco_dir.join("Mouse Trap.col"), "rom").expect("write coleco rom");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert!(scan
+            .profiles
+            .iter()
+            .any(|profile| profile.id == "colecovision"));
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "colecovision" && discovery.title == "Mouse Trap"
+        }));
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "colecovision" && system.count == 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_manifest_core_catalogs_colecovision_zip_entries() {
+        let root = unique_temp_dir("colecovision-zip-visible");
+        install_test_console_core(&root, "ColecoVision");
+        let coleco_dir = root.join("games/ColecoVision");
+        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
+        write_stored_zip(
+            &coleco_dir.join("Additions.zip"),
+            &[("Venture (USA).col", b"rom"), ("readme.txt", b"ignore")],
+        );
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 0);
+        assert_eq!(scan.entries.len(), 1);
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.source_kind == DiscoverySourceKind::ArchiveEntry
+                && discovery.platform_id == "colecovision"
+                && discovery.title.starts_with("Venture")
+        }));
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        assert!(loaded
+            .catalog
+            .systems
+            .iter()
+            .any(|system| system.id == "colecovision" && system.count == 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_manifest_core_with_empty_game_dir_audits_cataloged_zero_games() {
+        let root = unique_temp_dir("colecovision-empty-cataloged");
+        install_test_console_core(&root, "ColecoVision");
+        std::fs::create_dir_all(root.join("games/ColecoVision"))
+            .expect("create empty colecovision dir");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.discoveries.is_empty());
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.core_id == "ColecoVision"
+                && row.expected_game_dir == "games/ColecoVision"
+                && row.catalog_status == "cataloged"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_game_dir_without_installed_core_is_support_only_not_launchable() {
+        let root = unique_temp_dir("colecovision-folder-no-core");
+        let coleco_dir = root.join("games/ColecoVision");
+        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
+        std::fs::write(coleco_dir.join("Mouse Trap.col"), "rom").expect("write coleco rom");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        assert!(scan
+            .profiles
+            .iter()
+            .all(|profile| profile.id != "colecovision"));
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.core_id == "ColecoVision"
+                && row.expected_game_dir == "games/ColecoVision"
+                && row.catalog_status == "support-only"
+                && row.reason == "known-game-dir-without-installed-core"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn wonderswan_zip_entries_generate_visible_system() {
         let root = unique_temp_dir("wonderswan-zip-entries");
+        install_test_console_core(&root, "WonderSwan");
         let ws_dir = root.join("games/WonderSwan");
         std::fs::create_dir_all(&ws_dir).expect("create wonderswan dir");
         write_stored_zip(
@@ -1053,6 +1177,7 @@ mod tests {
     #[test]
     fn scanner_skips_attached_media_only_targets_but_keeps_dos_mgl_launchers() {
         let root = unique_temp_dir("skip-attached-media-target");
+        install_test_console_core(&root, "NES");
         let dos_dir = root.join("_DOS Games");
         let ao486_dir = root.join("games/AO486");
         let nes_dir = root.join("games/NES");
@@ -1148,6 +1273,7 @@ mod tests {
     #[test]
     fn scanner_does_not_follow_symlinked_game_dirs() {
         let root = unique_temp_dir("ignore-symlinked-game-dir");
+        install_test_console_core(&root, "NES");
         let outside = unique_temp_dir("symlink-target-games");
         let games_dir = root.join("games");
         let linked_nes = games_dir.join("NES");
@@ -1171,6 +1297,7 @@ mod tests {
     #[test]
     fn scanner_does_not_follow_symlinked_game_files() {
         let root = unique_temp_dir("ignore-symlinked-game-file");
+        install_test_console_core(&root, "NES");
         let outside = unique_temp_dir("symlink-target-file");
         let nes_dir = root.join("games/NES");
         std::fs::create_dir_all(&nes_dir).expect("create nes dir");

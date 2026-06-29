@@ -109,7 +109,7 @@ fn scan_library_with_progress_and_events(
             catalog_scan::discover_files_pipelined_foreground(cfg.roots.clone())
         }
     };
-    let profiles = launch_profiles::builtin_profiles();
+    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
     let mut discover_us = 0;
 
     let mut normal_files = Vec::new();
@@ -328,6 +328,7 @@ fn scan_library_with_progress_and_events(
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: library_db::unix_now_secs(),
+        profiles,
         normal_files,
         containers,
         entries,

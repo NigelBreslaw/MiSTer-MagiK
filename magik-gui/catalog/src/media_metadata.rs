@@ -4,7 +4,7 @@ use crate::catalog_scan::FoundFile;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
 use crate::launch_profiles::{CollectionListing, CollectionRule, LaunchProfile};
 use crate::library_db::{
-    AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_INSTALLED_LISTINGS, AMIGAVISION_LAUNCHER_REF,
+    amigavision_installed_listings, AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF,
     MRA_PREFIX_BYTES,
 };
 use quick_xml::events::{BytesStart, Event};
@@ -28,7 +28,7 @@ pub(crate) fn collection_discoveries_from_container(
     if is_amigavision_archive_path(&file.path.display().to_string()) {
         out.push(amigavision_launcher_discovery(file, profile));
     }
-    for listing in rule.listings {
+    for listing in &rule.listings {
         let text = match collection_listing_text(file, listing) {
             Some(text) => text,
             None => continue,
@@ -48,15 +48,15 @@ pub(crate) fn installed_amigavision_discoveries_from_hdf(
         return None;
     }
     let mut out = vec![amigavision_launcher_discovery(file, profile)];
-    for listing in AMIGAVISION_INSTALLED_LISTINGS {
-        let Some(listing_path) = installed_amigavision_listing_path(&file.path, listing) else {
+    for listing in amigavision_installed_listings() {
+        let Some(listing_path) = installed_amigavision_listing_path(&file.path, &listing) else {
             continue;
         };
         let Some(text) = read_lossy_text(&listing_path) else {
             continue;
         };
         out.extend(collection_discoveries_from_listing_text(
-            file, profile, listing, &text,
+            file, profile, &listing, &text,
         ));
     }
     Some(out)
@@ -70,7 +70,7 @@ fn installed_amigavision_listing_path(
     let relative = listing
         .entry_path
         .strip_prefix("games/Amiga/")
-        .unwrap_or(listing.entry_path);
+        .unwrap_or(&listing.entry_path);
     Some(base.join(relative))
 }
 
@@ -127,7 +127,7 @@ pub(crate) fn collection_listing_text_with_tool(
     let mut child = Command::new(tool)
         .args(["e", "-so"])
         .arg(&file.path)
-        .arg(listing.entry_path)
+        .arg(&listing.entry_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -834,8 +834,8 @@ mod tests {
             mtime_secs: 0,
         };
         let listing = CollectionListing {
-            entry_path: "listings/games.txt",
-            genre: "AmigaVision",
+            entry_path: "listings/games.txt".to_string(),
+            genre: "AmigaVision".to_string(),
         };
         let start = Instant::now();
 
@@ -856,7 +856,7 @@ mod tests {
             .iter()
             .find(|profile| profile.id == "amiga")
             .expect("amiga profile");
-        let listing = profile.collection_rules[0].listings[0];
+        let listing = &profile.collection_rules[0].listings[0];
         let file = FoundFile {
             path: PathBuf::from("/media/fat/games/Amiga/AmigaVision-MiSTer.7z"),
             ext: "7z".to_string(),
@@ -866,7 +866,7 @@ mod tests {
         let discoveries = collection_discoveries_from_listing_text(
             &file,
             profile,
-            &listing,
+            listing,
             "Agony\nAlien Breed\n",
         );
 

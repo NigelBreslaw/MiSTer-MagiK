@@ -3,7 +3,7 @@
 //! The audit records launchable-looking things the catalog scanner did not turn
 //! into games. These rows are diagnostics and stamp inputs, not launch entries.
 
-use crate::launch_profiles::{LaunchProfile, PayloadDisposition};
+use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -154,6 +154,22 @@ fn audit_game_directories(
             if !has_payload && !has_zip {
                 continue;
             }
+            if let Some(profile) = launch_profiles::generic_manifest_profile_for_game_dir(name) {
+                insert_audit_row(
+                    rows,
+                    CatalogAuditRow {
+                        core_id: profile.core_name.to_string(),
+                        core_path: profile.core_path.as_deref().unwrap_or_default().to_string(),
+                        expected_game_dir: format!("games/{name}"),
+                        extensions: profile_payload_extensions(&profile),
+                        mount_kind: "load-file".to_string(),
+                        source: source_name(profile.provenance.kind).to_string(),
+                        catalog_status: "support-only".to_string(),
+                        reason: "known-game-dir-without-installed-core".to_string(),
+                    },
+                );
+                continue;
+            }
             insert_audit_row(
                 rows,
                 CatalogAuditRow {
@@ -204,7 +220,7 @@ fn audit_non_indexed_zips_in_cataloged_dir(
             rows,
             CatalogAuditRow {
                 core_id: profile.core_name.to_string(),
-                core_path: profile.core_path.unwrap_or_default().to_string(),
+                core_path: profile.core_path.as_deref().unwrap_or_default().to_string(),
                 expected_game_dir: format!("games/{dir_name}"),
                 extensions: profile_payload_extensions(profile),
                 mount_kind: "load-file".to_string(),
@@ -245,7 +261,7 @@ fn profile_payload_extensions(profile: &LaunchProfile) -> String {
     let mut extensions = BTreeSet::new();
     for rule in &profile.payload_rules {
         if rule.disposition == PayloadDisposition::Playable {
-            for ext in rule.extensions {
+            for ext in &rule.extensions {
                 extensions.insert(ext.to_ascii_lowercase());
             }
         }

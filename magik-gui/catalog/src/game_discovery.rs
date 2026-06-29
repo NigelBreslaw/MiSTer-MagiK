@@ -553,8 +553,8 @@ mod tests {
 
         let profiles = launch_profiles::builtin_profiles();
         let profile = profile_for_path(&profiles, &path).expect("dos profile");
-        let payload_rule = profile.payload_rules[0];
-        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+        let payload_rule = &profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, payload_rule, &profiles);
 
         assert_eq!(profile.id, "dos");
         assert_eq!(discovery.platform_id, "dos");
@@ -584,8 +584,8 @@ mod tests {
             .iter()
             .find(|profile| profile.id == "mgl")
             .expect("mgl profile");
-        let payload_rule = profile.payload_rules[0];
-        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+        let payload_rule = &profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, payload_rule, &profiles);
 
         assert_eq!(discovery.source_path, path.display().to_string());
         assert_eq!(discovery.launch_ref, path.display().to_string());
@@ -617,8 +617,8 @@ mod tests {
             .iter()
             .find(|profile| profile.id == "mgl")
             .expect("mgl profile");
-        let payload_rule = profile.payload_rules[0];
-        let discovery = discovery_from_profile_file(&file, profile, &payload_rule, &profiles);
+        let payload_rule = &profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, payload_rule, &profiles);
 
         assert_eq!(discovery.platform_id, "neogeo");
         assert_eq!(discovery.setname.as_deref(), Some("mslug3"));

@@ -7,7 +7,9 @@ use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, CATALOG_BUILD_VERSION, SCHEMA_VERSION,
 };
 use crate::core_audit::CatalogAuditRow;
-use crate::launch_profiles::PROFILE_SET_VERSION;
+use crate::launch_profiles::{
+    core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
+};
 use std::path::Path;
 
 const STAMP_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -79,6 +81,11 @@ pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
         format!("schema\t{SCHEMA_VERSION}"),
         format!("catalog-build\t{CATALOG_BUILD_VERSION}"),
         format!("profile-set\t{PROFILE_SET_VERSION}"),
+        format!(
+            "core-launch-manifest\t{}\t{:016x}",
+            CORE_LAUNCH_MANIFEST_VERSION,
+            core_launch_manifest_fingerprint()
+        ),
         format!("roots\t{}", roots.len()),
     ];
     for (idx, root) in roots.iter().enumerate() {
@@ -207,6 +214,23 @@ mod tests {
             .lines()
             .iter()
             .any(|line| line.contains(&nested.display().to_string())));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stamp_records_core_launch_manifest_version_and_fingerprint() {
+        let root = unique_temp_dir("stamp-core-manifest");
+        let roots = vec![root.display().to_string()];
+
+        let stamp =
+            compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
+
+        assert!(stamp.lines().iter().any(|line| {
+            line.starts_with(&format!(
+                "core-launch-manifest\t{}\t",
+                CORE_LAUNCH_MANIFEST_VERSION
+            ))
+        }));
         let _ = std::fs::remove_dir_all(root);
     }
 
