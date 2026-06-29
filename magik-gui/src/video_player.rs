@@ -18,6 +18,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+
 use crate::video_i420::convert_i420_to_rgb565;
 
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
@@ -286,7 +288,7 @@ impl VideoFrameWorker {
         std::thread::Builder::new()
             .name("video-decode".to_string())
             .spawn(move || {
-                lower_decode_thread_priority();
+                apply_runtime_thread_policy(RuntimeThreadRole::VideoDecode);
                 let mut player = match VideoPlayer::open(paths) {
                     Ok(player) => {
                         let _ = init_tx.send(Ok(player.frame_interval()));
@@ -356,15 +358,6 @@ impl VideoFrameWorker {
     pub fn recycle_audio(&self, mut audio: Vec<i16>) {
         audio.clear();
         let _ = self.recycle_tx.try_send(RecycledFrame { audio });
-    }
-}
-
-fn lower_decode_thread_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: setpriority does not dereference Rust memory; failure only means
-    // the decode thread keeps its current scheduler priority.
-    unsafe {
-        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, 5);
     }
 }
 

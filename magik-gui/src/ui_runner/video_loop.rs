@@ -697,6 +697,9 @@ impl AudioWriteWorker {
         std::thread::Builder::new()
             .name("video-audio-write".to_string())
             .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::VideoAudio,
+                );
                 while let Ok(job) = job_rx.recv() {
                     let t0 = Instant::now();
                     let result = match sink.write_frames(&job.audio) {
