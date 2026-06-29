@@ -103,6 +103,9 @@ and cold no-warm runs for screenshot-pack index fast-lane work. Production
 preview evidence uses the built-in 200ms fade; transition selection flags were
 removed from the release benchmark script. `mega` transition coverage is
 experimental only and is not release benchmark evidence.
+Production preview composition presents the raw preview layer directly by
+default. Set `MISTER_PREVIEW_DIRECT_PRESENT=0` only for cached-path A/B
+measurements.
 `turbo-hold` ping-pongs between the Arcade list edges so long traces keep
 exercising preview selection changes after reaching the bottom.
 

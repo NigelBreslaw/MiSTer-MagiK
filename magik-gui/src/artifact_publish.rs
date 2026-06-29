@@ -247,10 +247,8 @@ mod tests {
 
     #[test]
     fn rust_sync_best_effort_ignores_missing_path() {
-        let missing = std::env::temp_dir().join(format!(
-            "mister-magik-missing-sync-{}",
-            std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("mister-magik-missing-sync-{}", std::process::id()));
 
         sync_path_rust_best_effort(&missing);
     }

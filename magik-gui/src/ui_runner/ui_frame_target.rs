@@ -21,11 +21,19 @@ pub(super) fn preview_run_label() -> String {
 pub(super) fn preview_direct_present_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        matches!(
-            std::env::var("MISTER_PREVIEW_DIRECT_PRESENT").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        preview_direct_present_enabled_value(
+            std::env::var("MISTER_PREVIEW_DIRECT_PRESENT")
+                .ok()
+                .as_deref(),
         )
     })
+}
+
+fn preview_direct_present_enabled_value(value: Option<&str>) -> bool {
+    !matches!(
+        value,
+        Some("0" | "off" | "false" | "no" | "legacy" | "cached")
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -346,6 +354,16 @@ mod tests {
             catalog_refresh_policy_from_value(Some("later")),
             CatalogRefreshPolicy::Default
         );
+    }
+
+    #[test]
+    fn preview_direct_present_defaults_on_with_escape_hatch() {
+        assert!(preview_direct_present_enabled_value(None));
+        assert!(preview_direct_present_enabled_value(Some("1")));
+        assert!(preview_direct_present_enabled_value(Some("on")));
+        assert!(!preview_direct_present_enabled_value(Some("0")));
+        assert!(!preview_direct_present_enabled_value(Some("off")));
+        assert!(!preview_direct_present_enabled_value(Some("cached")));
     }
 
     #[test]

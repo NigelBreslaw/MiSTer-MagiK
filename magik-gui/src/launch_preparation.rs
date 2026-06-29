@@ -107,12 +107,16 @@ fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
     let parent = path
         .parent()
         .ok_or_else(|| format!("AmigaVision descriptor has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("create AmigaVision descriptor parent {}: {e}", parent.display()))?;
+    fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "create AmigaVision descriptor parent {}: {e}",
+            parent.display()
+        )
+    })?;
     let temp_path = descriptor_temp_path(path);
     let _ = fs::remove_file(&temp_path);
-    let mut file = File::create(&temp_path)
-        .map_err(|e| format!("create AmigaVision descriptor temp: {e}"))?;
+    let mut file =
+        File::create(&temp_path).map_err(|e| format!("create AmigaVision descriptor temp: {e}"))?;
     file.write_all(bytes)
         .map_err(|e| format!("write AmigaVision descriptor temp: {e}"))?;
     file.sync_all()
@@ -359,10 +363,8 @@ pub fn run_launch_prep_bench() {
             total_write_bytes = total_write_bytes.saturating_add(write_bytes);
             total_wchar = total_wchar.saturating_add(wchar);
             total_syscw = total_syscw.saturating_add(syscw);
-            total_descriptor_written =
-                total_descriptor_written.saturating_add(descriptor.written);
-            total_descriptor_skipped =
-                total_descriptor_skipped.saturating_add(descriptor.skipped);
+            total_descriptor_written = total_descriptor_written.saturating_add(descriptor.written);
+            total_descriptor_skipped = total_descriptor_skipped.saturating_add(descriptor.skipped);
             total_descriptor_bytes = total_descriptor_bytes.saturating_add(descriptor.bytes);
             let (status, target) = match result {
                 Ok(target) => ("ok", target),
