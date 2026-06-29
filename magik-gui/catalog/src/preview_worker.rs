@@ -23,6 +23,7 @@ use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
+const PREVIEW_ARCHIVE_METADATA_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_MEDIA_SIZE: &str = DEFAULT_SCREENSHOT_IMAGE_SIZE;
 const MAX_PREVIEW_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_PREVIEW_ARCHIVE_RAW_BYTES: usize = 16 * 1024 * 1024;
@@ -776,6 +777,7 @@ struct CachedPreviewArchiveSidecarIndex {
     archive_fingerprint: PreviewArchiveFingerprint,
     index_fingerprint: PreviewArchiveFingerprint,
     index: Arc<PreviewArchiveSidecarIndex>,
+    checked_at: Instant,
 }
 
 struct PreviewArchive {
@@ -798,6 +800,7 @@ struct PreviewArchiveFingerprint {
 struct CachedPreviewArchives {
     fingerprints: Vec<PreviewArchiveFingerprint>,
     archives: Arc<Vec<PreviewArchive>>,
+    checked_at: Instant,
 }
 
 struct MissingPreviewArchive {
@@ -815,6 +818,18 @@ pub fn warm_preview_archives_from_env() -> Result<bool, String> {
     preview_archives().map(|archives| archives.is_some())
 }
 
+pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
+    if let Ok(mut cached) = preview_archive_cache().lock() {
+        *cached = None;
+    }
+    if let Ok(mut cached) = preview_archive_sidecar_index_cache().lock() {
+        cached.clear();
+    }
+    if preview_trace_enabled() {
+        eprintln!("preview_trace metadata_cache event=forced_invalidation reason={reason}");
+    }
+}
+
 fn preview_archives_for_paths(
     paths: Vec<String>,
 ) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
@@ -829,6 +844,10 @@ fn preview_archives_for_paths(
     let missing_cache = missing_preview_archive_cache();
     if let Some(error) = cached_missing_preview_archive_error(missing_cache, &paths) {
         return Err(error);
+    }
+
+    if let Some(archives) = cached_preview_archives_for_paths(&paths) {
+        return Ok(Some(archives));
     }
 
     let fingerprints = match preview_archive_fingerprints_for_paths(paths) {
@@ -861,6 +880,7 @@ fn preview_archives_for_paths(
         *cached = Some(CachedPreviewArchives {
             fingerprints,
             archives: Arc::clone(&archives),
+            checked_at: Instant::now(),
         });
     }
     Ok(Some(archives))
@@ -878,8 +898,8 @@ fn missing_preview_archive_cache() -> &'static Mutex<Vec<MissingPreviewArchive>>
 
 fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<PreviewArchive>>> {
     let cache = preview_archive_cache();
-    let cached = cache.lock().ok()?;
-    let cached = cached.as_ref()?;
+    let mut cached = cache.lock().ok()?;
+    let cached = cached.as_mut()?;
     if cached.fingerprints.len() != paths.len()
         || cached
             .fingerprints
@@ -889,8 +909,36 @@ fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<Preview
     {
         return None;
     }
+    let now = Instant::now();
+    if now.duration_since(cached.checked_at) < PREVIEW_ARCHIVE_METADATA_TTL {
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace metadata_cache event=hit scope=archive paths={} ttl_ms={}",
+                paths.len(),
+                PREVIEW_ARCHIVE_METADATA_TTL.as_millis()
+            );
+        }
+        return Some(Arc::clone(&cached.archives));
+    }
     let fingerprints = preview_archive_fingerprints_for_paths(paths.to_vec()).ok()?;
-    (cached.fingerprints == fingerprints).then(|| Arc::clone(&cached.archives))
+    if cached.fingerprints == fingerprints {
+        cached.checked_at = now;
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace metadata_cache event=miss scope=archive reason=ttl_revalidated paths={}",
+                paths.len()
+            );
+        }
+        Some(Arc::clone(&cached.archives))
+    } else {
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace metadata_cache event=forced_invalidation scope=archive reason=fingerprint_changed paths={}",
+                paths.len()
+            );
+        }
+        None
+    }
 }
 
 fn cached_missing_preview_archive_error(
@@ -1079,6 +1127,21 @@ fn preview_archive_metadata_calls(path: &str) -> usize {
         .ok()
         .and_then(|calls| calls.get(path).copied())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn expire_preview_archive_metadata_cache_for_tests() {
+    let expired_at = Instant::now() - PREVIEW_ARCHIVE_METADATA_TTL - Duration::from_millis(1);
+    if let Ok(mut cached) = preview_archive_cache().lock() {
+        if let Some(cached) = cached.as_mut() {
+            cached.checked_at = expired_at;
+        }
+    }
+    if let Ok(mut cached) = preview_archive_sidecar_index_cache().lock() {
+        for cached in cached.values_mut() {
+            cached.checked_at = expired_at;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1453,22 +1516,47 @@ fn preview_archive_sidecar_index(
     archive_path: &Path,
 ) -> Result<Option<Arc<PreviewArchiveSidecarIndex>>, String> {
     let index_path = preview_archive_sidecar_path(archive_path);
+    let cache = preview_archive_sidecar_index_cache();
+    let cache_key = archive_path.display().to_string();
+    let now = Instant::now();
+    if let Ok(mut cache) = cache.lock() {
+        if let Some(cached) = cache.get_mut(&cache_key) {
+            if now.duration_since(cached.checked_at) < PREVIEW_ARCHIVE_METADATA_TTL {
+                if preview_trace_enabled() {
+                    eprintln!(
+                        "preview_trace metadata_cache event=hit scope=sidecar archive_path={} ttl_ms={}",
+                        archive_path.display(),
+                        PREVIEW_ARCHIVE_METADATA_TTL.as_millis()
+                    );
+                }
+                return Ok(Some(Arc::clone(&cached.index)));
+            }
+            let archive_fingerprint = preview_archive_fingerprint(archive_path)?;
+            let index_fingerprint = preview_archive_fingerprint(&index_path)?;
+            if cached.archive_fingerprint == archive_fingerprint
+                && cached.index_fingerprint == index_fingerprint
+            {
+                cached.checked_at = now;
+                if preview_trace_enabled() {
+                    eprintln!(
+                        "preview_trace metadata_cache event=miss scope=sidecar reason=ttl_revalidated archive_path={}",
+                        archive_path.display()
+                    );
+                }
+                return Ok(Some(Arc::clone(&cached.index)));
+            } else if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace metadata_cache event=forced_invalidation scope=sidecar reason=fingerprint_changed archive_path={}",
+                    archive_path.display()
+                );
+            }
+        }
+    }
     if !index_path.is_file() {
         return Ok(None);
     }
     let archive_fingerprint = preview_archive_fingerprint(archive_path)?;
     let index_fingerprint = preview_archive_fingerprint(&index_path)?;
-    let cache = preview_archive_sidecar_index_cache();
-    let cache_key = archive_path.display().to_string();
-    if let Ok(cache) = cache.lock() {
-        if let Some(cached) = cache.get(&cache_key) {
-            if cached.archive_fingerprint == archive_fingerprint
-                && cached.index_fingerprint == index_fingerprint
-            {
-                return Ok(Some(Arc::clone(&cached.index)));
-            }
-        }
-    }
     let read_t = Instant::now();
     let index = read_preview_archive_sidecar_index(&index_path, archive_fingerprint.size)?;
     let trust = preview_archive_sidecar_trust(archive_path, &index_path, &archive_fingerprint, &index)?;
@@ -1493,6 +1581,7 @@ fn preview_archive_sidecar_index(
                 archive_fingerprint,
                 index_fingerprint,
                 index: Arc::clone(&index),
+                checked_at: Instant::now(),
             },
         );
     }
@@ -3483,6 +3572,7 @@ mod tests {
             "new-long.rgb565",
             &raw565_fixture(2, 1, &[0x07e0, 0x001f]),
         );
+        expire_preview_archive_metadata_cache_for_tests();
         let second = preview_archives_for_paths(vec![path.display().to_string()])
             .expect("open changed archive")
             .expect("changed archive");
@@ -3493,6 +3583,71 @@ mod tests {
             .load_timed("new-long.rgb565", &mut scratch)
             .expect("load from changed archive")
             .is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_archive_cache_hit_avoids_metadata_inside_ttl() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-ttl-hit-{}.mmlz4b",
+            std::process::id()
+        ));
+        let path_text = path.display().to_string();
+        write_lz4_block_archive(&path, "tiny.rgb565", &raw565_fixture(1, 1, &[0xf800]));
+
+        let first = preview_archives_for_paths(vec![path_text.clone()])
+            .expect("open archive")
+            .expect("archive");
+        let calls_after_first = preview_archive_metadata_calls(&path_text);
+        let second = preview_archives_for_paths(vec![path_text.clone()])
+            .expect("reuse archive")
+            .expect("archive");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(preview_archive_metadata_calls(&path_text), calls_after_first);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sidecar_index_cache_hit_avoids_metadata_inside_ttl_until_invalidated() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-sidecar-ttl-{}.mmlz4b",
+            std::process::id()
+        ));
+        let name = "tiny.rgb565";
+        write_lz4_block_archive_with_index(&path, name, &raw565_fixture(1, 1, &[0xf800]));
+        let path_text = path.display().to_string();
+        let index_path = preview_archive_sidecar_path(&path);
+        let index_path_text = index_path.display().to_string();
+
+        let first = preview_archive_sidecar_index(&path)
+            .expect("first sidecar lookup")
+            .expect("sidecar index");
+        let archive_calls_after_first = preview_archive_metadata_calls(&path_text);
+        let index_calls_after_first = preview_archive_metadata_calls(&index_path_text);
+
+        let second = preview_archive_sidecar_index(&path)
+            .expect("second sidecar lookup")
+            .expect("sidecar index");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            preview_archive_metadata_calls(&path_text),
+            archive_calls_after_first
+        );
+        assert_eq!(
+            preview_archive_metadata_calls(&index_path_text),
+            index_calls_after_first
+        );
+
+        invalidate_preview_archive_metadata_cache("test_media_generation_changed");
+        let third = preview_archive_sidecar_index(&path)
+            .expect("reload after invalidation")
+            .expect("sidecar index");
+        assert!(!Arc::ptr_eq(&second, &third));
+        assert!(preview_archive_metadata_calls(&path_text) > archive_calls_after_first);
+        assert!(preview_archive_metadata_calls(&index_path_text) > index_calls_after_first);
+
+        let _ = std::fs::remove_file(index_path);
         let _ = std::fs::remove_file(path);
     }
 

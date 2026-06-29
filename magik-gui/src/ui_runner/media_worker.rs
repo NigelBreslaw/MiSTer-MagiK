@@ -2,6 +2,7 @@ use crate::artifact_publish::{
     hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_with_fallback,
     timestamped_temp_path_for, ArtifactPublishLabels,
 };
+use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_fb::media_update::{
     index_path_for_pack_path, pack_status_from_state, parse_manifest_json,
@@ -1167,6 +1168,7 @@ fn install_streamed_object(
         );
     }
     publish.install_temp(Some(install_label))?;
+    invalidate_preview_archive_metadata_cache("media_pack_published");
     if emit_progress {
         send_progress(
             tx,
@@ -1323,6 +1325,7 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
     file.sync_all()
         .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
     publish.install_temp(Some("media state"))?;
+    invalidate_preview_archive_metadata_cache("media_state_published");
     sync_path_with_fallback(publish.parent());
     Ok(())
 }
