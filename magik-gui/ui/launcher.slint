@@ -537,13 +537,13 @@ component ConfirmDialog inherits Rectangle {
             HorizontalLayout {
                 spacing: 16px;
 
-                LauncherTile {
+                if MisterBridge.confirm-left-label != "" : LauncherTile {
                     label: MisterBridge.confirm-left-label;
                     subtitle: "";
                     focused: MisterBridge.confirm-selected == 0;
                 }
 
-                LauncherTile {
+                if MisterBridge.confirm-right-label != "" : LauncherTile {
                     label: MisterBridge.confirm-right-label;
                     subtitle: "";
                     focused: MisterBridge.confirm-selected == 1;

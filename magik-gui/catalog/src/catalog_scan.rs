@@ -966,6 +966,36 @@ mod tests {
             .discoveries
             .iter()
             .all(|discovery| !discovery.launch_ref.contains("Ghost.nes")));
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/NotACoreProfile"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "game-dir-has-no-catalog-profile"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn loose_sms_indexes_but_sms_collection_zip_only_audits() {
+        let root = unique_temp_dir("sms-loose-vs-zip");
+        let sms_dir = root.join("games/SMS");
+        std::fs::create_dir_all(&sms_dir).expect("create sms dir");
+        std::fs::write(sms_dir.join("Loose.sms"), "rom").expect("write sms rom");
+        write_stored_zip(&sms_dir.join("Packed.zip"), &[("Packed.sms", b"rom")]);
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(scan.discoveries.len(), 1);
+        assert_eq!(scan.discoveries[0].platform_id, "sms");
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/SMS"
+                && row.catalog_status == "unsupported"
+                && row.reason.contains("zip-archive-not-indexed")
+        }));
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -2840,6 +2840,7 @@ mod tests {
                 normal_files: 0,
                 containers: 0,
                 entries: 0,
+                audit_rows: 0,
                 discoveries: 0,
             },
         };

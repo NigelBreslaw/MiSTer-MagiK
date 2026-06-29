@@ -6,6 +6,7 @@
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, CATALOG_BUILD_VERSION, SCHEMA_VERSION,
 };
+use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::PROFILE_SET_VERSION;
 use std::path::Path;
 
@@ -48,10 +49,31 @@ pub fn compute_default_catalog_stamp(roots: &[String]) -> CatalogStamp {
     )
 }
 
+pub(crate) fn compute_default_catalog_stamp_with_audit(
+    roots: &[String],
+    audit_rows: &[CatalogAuditRow],
+) -> CatalogStamp {
+    compute_catalog_stamp_for_paths_with_audit(
+        roots,
+        &default_mame_sqlite_path(),
+        &default_hbmame_sqlite_path(),
+        audit_rows,
+    )
+}
+
 pub fn compute_catalog_stamp_for_paths(
     roots: &[String],
     mame_sqlite_path: &Path,
     hbmame_sqlite_path: &Path,
+) -> CatalogStamp {
+    compute_catalog_stamp_for_paths_with_audit(roots, mame_sqlite_path, hbmame_sqlite_path, &[])
+}
+
+pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
+    roots: &[String],
+    mame_sqlite_path: &Path,
+    hbmame_sqlite_path: &Path,
+    audit_rows: &[CatalogAuditRow],
 ) -> CatalogStamp {
     let mut lines = vec![
         format!("schema\t{SCHEMA_VERSION}"),
@@ -63,6 +85,20 @@ pub fn compute_catalog_stamp_for_paths(
         append_path_signature(&mut lines, "root", idx, Path::new(root));
     }
     lines.push("stamp-targets\t0".to_string());
+    lines.push(format!("core-audit\t{}", audit_rows.len()));
+    for (idx, row) in audit_rows.iter().enumerate() {
+        lines.push(format!(
+            "core-audit-row\t{idx}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            row.core_id,
+            row.core_path,
+            row.expected_game_dir,
+            row.extensions,
+            row.mount_kind,
+            row.source,
+            row.catalog_status,
+            row.reason
+        ));
+    }
     append_named_file_signature(&mut lines, "mame-metadata", mame_sqlite_path);
     append_named_file_signature(&mut lines, "hbmame-metadata", hbmame_sqlite_path);
     CatalogStamp { lines }
@@ -212,6 +248,33 @@ mod tests {
             .lines()
             .iter()
             .any(|line| line.starts_with("preview-pack")));
+    }
+
+    #[test]
+    fn audit_rows_change_catalog_stamp() {
+        let root = unique_temp_dir("stamp-audit-change");
+        let roots = vec![root.display().to_string()];
+        let mame = root.join("mame.sqlite3");
+        let hbmame = root.join("hbmame.sqlite3");
+        let base = compute_catalog_stamp_for_paths_with_audit(&roots, &mame, &hbmame, &[]);
+        let audit = vec![CatalogAuditRow {
+            core_id: "WonderSwanColor".to_string(),
+            core_path: "/media/fat/_Console/WonderSwanColor_20260629.rbf".to_string(),
+            expected_game_dir: "games/WonderSwanColor".to_string(),
+            extensions: "wsc".to_string(),
+            mount_kind: "load-file".to_string(),
+            source: "main-derived".to_string(),
+            catalog_status: "uncataloged".to_string(),
+            reason: "installed-core-has-no-catalog-profile".to_string(),
+        }];
+        let changed = compute_catalog_stamp_for_paths_with_audit(&roots, &mame, &hbmame, &audit);
+
+        assert_ne!(base.fingerprint_hex(), changed.fingerprint_hex());
+        assert!(changed
+            .lines()
+            .iter()
+            .any(|line| line.contains("WonderSwanColor")));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {

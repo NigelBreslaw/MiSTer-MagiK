@@ -101,12 +101,13 @@ pub(crate) fn run_scan_bench() {
         };
 
         println!(
-            "library_scan_bench_tsv\t{label}\t{iteration}\tfresh_build\t{build_us}\tdiscover_us={}\tclassify_us={}\tnormal_files={}\tcontainers={}\tentries={}\tdiscoveries={}",
+            "library_scan_bench_tsv\t{label}\t{iteration}\tfresh_build\t{build_us}\tdiscover_us={}\tclassify_us={}\tnormal_files={}\tcontainers={}\tentries={}\taudit_rows={}\tdiscoveries={}",
             stats.discover_us,
             stats.classify_us,
             stats.normal_files,
             stats.containers,
             stats.entries,
+            stats.audit_rows,
             stats.discoveries
         );
         println!(

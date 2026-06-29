@@ -25,6 +25,7 @@ use crate::catalog_projection::{
     self, CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
 };
 use crate::catalog_stamp;
+use crate::core_audit::CatalogAuditRow;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
@@ -129,6 +130,7 @@ pub(crate) struct LibraryScan {
     pub(crate) normal_files: Vec<LibraryPayloadFile>,
     pub(crate) containers: Vec<LibraryContainer>,
     pub(crate) entries: Vec<LibraryContainerEntry>,
+    pub(crate) audit_rows: Vec<CatalogAuditRow>,
     pub(crate) ignored_files: usize,
     pub(crate) discoveries: Vec<GameDiscovery>,
     pub(crate) discover_us: u64,
@@ -182,6 +184,7 @@ pub struct LibraryScanStats {
     pub normal_files: usize,
     pub containers: usize,
     pub entries: usize,
+    pub audit_rows: usize,
     pub discoveries: usize,
 }
 
@@ -257,6 +260,7 @@ pub struct LibraryRefreshSummary {
     pub normal_files: usize,
     pub containers: usize,
     pub entries: usize,
+    pub audit_rows: usize,
     pub discoveries: usize,
 }
 
@@ -736,6 +740,7 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_projections(
         normal_files: artifact.stats.normal_files,
         containers: artifact.stats.containers,
         entries: artifact.stats.entries,
+        audit_rows: artifact.stats.audit_rows,
         discoveries: artifact.stats.discoveries,
     })
 }

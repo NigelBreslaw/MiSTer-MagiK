@@ -916,10 +916,15 @@ impl LauncherNav {
             self.confirm_selected = 0;
             return None;
         }
+        let max_selected = confirm_max_selected(self.confirm_action);
+        if self.confirm_selected > max_selected {
+            self.confirm_selected = max_selected;
+        }
         if self.repeat.tick_left(now.dpad_left, frame_now) && self.confirm_selected > 0 {
             self.confirm_selected -= 1;
         }
-        if self.repeat.tick_right(now.dpad_right, frame_now) && self.confirm_selected < 1 {
+        if self.repeat.tick_right(now.dpad_right, frame_now) && self.confirm_selected < max_selected
+        {
             self.confirm_selected += 1;
         }
         if rising(now.btn_a, self.prev.btn_a) {
@@ -1576,6 +1581,14 @@ fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
 
 fn rising(now: bool, prev: bool) -> bool {
     now && !prev
+}
+
+fn confirm_max_selected(action: Option<ConfirmAction>) -> usize {
+    match action {
+        Some(ConfirmAction::LibraryUpdateFailed) => 0,
+        Some(_) => 1,
+        None => 0,
+    }
 }
 
 fn arcade_dpad_dir(state: &PadState) -> i32 {

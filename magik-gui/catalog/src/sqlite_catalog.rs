@@ -15,6 +15,7 @@ use crate::catalog_projection::{
 use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::catalog_summary;
+use crate::core_audit;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
@@ -780,7 +781,10 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let stored = catalog_store::read_catalog_stamp(&conn)?;
     let read_us = read_t.elapsed().as_micros() as u64;
     let compute_t = Instant::now();
-    let current = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
+    let profiles = launch_profiles::builtin_profiles();
+    let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
+    let current =
+        catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
     let current_fingerprint = current.fingerprint_hex();
     let current_lines = current.lines().len();
     let compute_us = compute_t.elapsed().as_micros() as u64;
@@ -1480,6 +1484,17 @@ fn write_sqlite_scan_with_sources_inner(
             title TEXT NOT NULL,
             category TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE catalog_audit (
+            ordinal INTEGER PRIMARY KEY,
+            core_id TEXT NOT NULL,
+            core_path TEXT NOT NULL,
+            expected_game_dir TEXT NOT NULL,
+            extensions TEXT NOT NULL,
+            mount_kind TEXT NOT NULL,
+            source TEXT NOT NULL,
+            catalog_status TEXT NOT NULL,
+            reason TEXT NOT NULL
+        );
         CREATE TABLE games (
             game_key_id INTEGER PRIMARY KEY,
             game_id TEXT NOT NULL UNIQUE,
@@ -1730,7 +1745,7 @@ fn write_sqlite_scan_with_sources_inner(
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=12");
+    report_library_import_timing("schema", schema_t, "tables=13");
 
     let metadata_t = Instant::now();
     let mame_signature = library_db::file_signature(sources.mame_sqlite_path);
@@ -1787,6 +1802,34 @@ fn write_sqlite_scan_with_sources_inner(
             "insert_profiles",
             stage_t,
             format!("rows={}", launch_profiles::builtin_profiles().len()),
+        );
+    }
+    {
+        let stage_t = Instant::now();
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO catalog_audit(ordinal,core_id,core_path,expected_game_dir,extensions,mount_kind,source,catalog_status,reason)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            )
+            .map_err(|e| format!("prepare catalog audit insert: {e}"))?;
+        for (idx, row) in scan.audit_rows.iter().enumerate() {
+            stmt.execute(params![
+                idx as i64,
+                row.core_id.as_str(),
+                row.core_path.as_str(),
+                row.expected_game_dir.as_str(),
+                row.extensions.as_str(),
+                row.mount_kind.as_str(),
+                row.source.as_str(),
+                row.catalog_status.as_str(),
+                row.reason.as_str()
+            ])
+            .map_err(|e| format!("insert catalog audit: {e}"))?;
+        }
+        report_library_import_timing(
+            "insert_catalog_audit",
+            stage_t,
+            format!("rows={}", scan.audit_rows.len()),
         );
     }
     {
@@ -2084,6 +2127,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("insert container count: {e}"))?;
         stmt.execute(params!["entries", scan.entries.len() as i64])
             .map_err(|e| format!("insert entry count: {e}"))?;
+        stmt.execute(params!["audit_rows", scan.audit_rows.len() as i64])
+            .map_err(|e| format!("insert audit row count: {e}"))?;
         stmt.execute(params!["ignored_files", scan.ignored_files as i64])
             .map_err(|e| format!("insert ignored count: {e}"))?;
         stmt.execute(params![
@@ -2105,7 +2150,7 @@ fn write_sqlite_scan_with_sources_inner(
             hbmame_signature.mtime_secs
         ])
         .map_err(|e| format!("insert hbmame metadata mtime: {e}"))?;
-        report_library_import_timing("insert_meta", stage_t, "rows=11");
+        report_library_import_timing("insert_meta", stage_t, "rows=12");
     }
     if let Some(stamp) = sources.stamp {
         let stage_t = Instant::now();
@@ -2228,6 +2273,7 @@ pub(crate) fn sqlite_cached_summary(
         normal_files: sqlite_meta_usize(&conn, "normal_files").unwrap_or(0),
         containers: sqlite_meta_usize(&conn, "containers").unwrap_or(0),
         entries: sqlite_meta_usize(&conn, "entries").unwrap_or(0),
+        audit_rows: sqlite_meta_usize(&conn, "audit_rows").unwrap_or(0),
         discoveries: sqlite_meta_usize(&conn, "discoveries").unwrap_or(0),
     })
 }
@@ -3181,6 +3227,45 @@ mod tests {
             .games
             .iter()
             .any(|game| game.title.as_ref() == "Game 20004"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_save_persists_catalog_audit_rows() {
+        let root = unique_temp_dir("sqlite-audit-rows");
+        let db = root.join("library.sqlite3");
+        let atari = root.join("games/ATARI2600");
+        std::fs::create_dir_all(&atari).expect("create atari dir");
+        write_stored_zip(
+            &atari.join("MiSTer MagiK Additions.zip"),
+            &[("Adventure.a26", b"rom")],
+        );
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let artifact = scan_library_artifact(&cfg, None);
+        assert!(artifact.scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/ATARI2600" && row.catalog_status == "uncataloged"
+        }));
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+
+        let conn = Connection::open(&db).expect("open sqlite");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM catalog_audit WHERE expected_game_dir='games/ATARI2600' AND catalog_status='uncataloged'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query audit count");
+        assert_eq!(count, 1);
+        let meta_count: i64 = conn
+            .query_row("SELECT value FROM meta WHERE key='audit_rows'", [], |row| {
+                row.get(0)
+            })
+            .expect("query audit meta");
+        assert!(meta_count >= 1);
         let _ = std::fs::remove_dir_all(root);
     }
 

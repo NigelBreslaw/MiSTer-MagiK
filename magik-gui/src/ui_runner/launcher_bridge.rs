@@ -272,153 +272,74 @@ pub(super) fn sync_confirm_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
     action: Option<launcher::ConfirmAction>,
 ) {
+    let text = confirm_bridge_text(action);
+    set_bridge_string_if_changed!(bridge, get_confirm_title, set_confirm_title, text.title);
+    set_bridge_string_if_changed!(
+        bridge,
+        get_confirm_message,
+        set_confirm_message,
+        text.message
+    );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_confirm_left_label,
+        set_confirm_left_label,
+        text.left_label
+    );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_confirm_right_label,
+        set_confirm_right_label,
+        text.right_label
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConfirmBridgeText {
+    title: &'static str,
+    message: &'static str,
+    left_label: &'static str,
+    right_label: &'static str,
+}
+
+fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridgeText {
     match action {
-        Some(launcher::ConfirmAction::ExitToMister) => {
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_title,
-                set_confirm_title,
-                "Exit to MiSTer"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_message,
-                set_confirm_message,
-                "Use the stock MiSTer menu until reboot."
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_left_label,
-                set_confirm_left_label,
-                "Exit to MiSTer"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Return to MiSTer MagiK"
-            );
-        }
-        Some(launcher::ConfirmAction::ResetDatabase) => {
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_title,
-                set_confirm_title,
-                "Reset Database?"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_message,
-                set_confirm_message,
-                "Delete the library database, screenshot packs, and reboot the MiSTer?"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_left_label,
-                set_confirm_left_label,
-                "Cancel"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Confirm"
-            );
-        }
-        Some(launcher::ConfirmAction::Restart) => {
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_title,
-                set_confirm_title,
-                "Restart MiSTer?"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_message,
-                set_confirm_message,
-                "Reboot the MiSTer now?"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_left_label,
-                set_confirm_left_label,
-                "Cancel"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Confirm"
-            );
-        }
-        Some(launcher::ConfirmAction::LibraryChanged) => {
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_title,
-                set_confirm_title,
-                "Library changed"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_message,
-                set_confirm_message,
-                "New games detected. Continue with the current library or rebuild now."
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_left_label,
-                set_confirm_left_label,
-                "Continue"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Rebuild"
-            );
-        }
-        Some(launcher::ConfirmAction::LibraryUpdateFailed) => {
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_title,
-                set_confirm_title,
-                "Library update failed"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_message,
-                set_confirm_message,
-                "Continuing with the current library. Try rebuilding again later."
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_left_label,
-                set_confirm_left_label,
-                "Continue"
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "OK"
-            );
-        }
-        None => {
-            set_bridge_string_if_changed!(bridge, get_confirm_title, set_confirm_title, "");
-            set_bridge_string_if_changed!(bridge, get_confirm_message, set_confirm_message, "");
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_left_label,
-                set_confirm_left_label,
-                ""
-            );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                ""
-            );
-        }
+        Some(launcher::ConfirmAction::ExitToMister) => ConfirmBridgeText {
+            title: "Exit to MiSTer",
+            message: "Use the stock MiSTer menu until reboot.",
+            left_label: "Exit to MiSTer",
+            right_label: "Return to MiSTer MagiK",
+        },
+        Some(launcher::ConfirmAction::ResetDatabase) => ConfirmBridgeText {
+            title: "Reset Database?",
+            message: "Delete the library database, screenshot packs, and reboot the MiSTer?",
+            left_label: "Cancel",
+            right_label: "Confirm",
+        },
+        Some(launcher::ConfirmAction::Restart) => ConfirmBridgeText {
+            title: "Restart MiSTer?",
+            message: "Reboot the MiSTer now?",
+            left_label: "Cancel",
+            right_label: "Confirm",
+        },
+        Some(launcher::ConfirmAction::LibraryChanged) => ConfirmBridgeText {
+            title: "Library changed",
+            message: "New games detected. Continue with the current library or rebuild now.",
+            left_label: "Continue",
+            right_label: "Rebuild",
+        },
+        Some(launcher::ConfirmAction::LibraryUpdateFailed) => ConfirmBridgeText {
+            title: "Library update failed",
+            message: "Continuing with the current library. Try rebuilding again later.",
+            left_label: "OK",
+            right_label: "",
+        },
+        None => ConfirmBridgeText {
+            title: "",
+            message: "",
+            left_label: "",
+            right_label: "",
+        },
     }
 }
 
@@ -844,5 +765,13 @@ mod tests {
         let after = LauncherBridgeKey::from_nav(&nav);
 
         assert!(before != after);
+    }
+
+    #[test]
+    fn library_update_failed_uses_single_ok_button() {
+        let text = confirm_bridge_text(Some(launcher::ConfirmAction::LibraryUpdateFailed));
+
+        assert_eq!(text.left_label, "OK");
+        assert_eq!(text.right_label, "");
     }
 }
