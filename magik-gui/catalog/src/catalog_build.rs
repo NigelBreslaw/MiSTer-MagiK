@@ -92,9 +92,12 @@ impl<'a> CatalogRefreshPipeline<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScanArtifact {
-        let stamp = catalog_stamp::compute_default_catalog_stamp(&self.cfg.roots);
         let scan_t = Instant::now();
         let scan = indexer.scan_with_progress_and_events(progress, scan_events);
+        let stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
+            &self.cfg.roots,
+            &scan.audit_rows,
+        );
         let stats = LibraryScanStats {
             scan_us: scan_t.elapsed().as_micros() as u64,
             discover_us: scan.discover_us,
@@ -102,6 +105,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
             normal_files: scan.normal_files.len(),
             containers: scan.containers.len(),
             entries: scan.entries.len(),
+            audit_rows: scan.audit_rows.len(),
             discoveries: unique_discovery_count(&scan.discoveries),
         };
         LibraryScanArtifact { scan, stats, stamp }
@@ -162,6 +166,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
                 normal_files: artifact.stats.normal_files,
                 containers: artifact.stats.containers,
                 entries: artifact.stats.entries,
+                audit_rows: artifact.stats.audit_rows,
                 discoveries: artifact.stats.discoveries,
             },
             catalog: LibraryCatalogLoad::from_precomputed(catalog, catalog_us),

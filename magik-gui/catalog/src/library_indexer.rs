@@ -7,6 +7,7 @@
 use crate::catalog_config::SCHEMA_VERSION;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_scan::{self, DiscoveryEvent};
+use crate::core_audit;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, discovery_from_profile_archive_entry,
     discovery_from_profile_file, GameDiscovery,
@@ -298,12 +299,20 @@ fn scan_library_with_progress_and_events(
             entries.len()
         ),
     );
+    let audit_t = Instant::now();
+    let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
+    library_db::report_library_scan_timing(
+        "coverage_audit",
+        audit_t.elapsed().as_micros() as u64,
+        format!("rows={}", audit_rows.len()),
+    );
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: library_db::unix_now_secs(),
         normal_files,
         containers,
         entries,
+        audit_rows,
         ignored_files,
         discoveries,
         discover_us,

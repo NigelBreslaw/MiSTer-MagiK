@@ -262,8 +262,9 @@ Main_MiSTer is the source for the directory model. `SelectFile` resolves normal
 file pickers through `user_io_get_core_path(...)`, which maps to `games/<core>`
 except for source-defined special suffixes such as PCE-CD and NeoGeo-CD. Generic
 core extension strings come from the core OSD config string at runtime; MagiK
-therefore keeps those as explicit launch profiles with provenance instead of
-burying guesses in the walker.
+keeps cataloged systems as explicit launch profiles with provenance and records
+uncataloged launchable-looking core/game surfaces in `catalog_audit` instead of
+silently skipping them.
 
 The default scan does not include `_Games`. That tree is treated as an organizer
 mirror of generated `.mgl` launchers for games already available through
@@ -273,7 +274,10 @@ diagnostic build that includes `_Games`.
 ## Supported Launch Profiles
 
 The supported built-in catalog profile set is intentionally fixed. Additions
-must update `PROFILE_SET_VERSION`, tests, and this document.
+must update `PROFILE_SET_VERSION`, tests, and this document. Installed cores or
+game folders outside that set are not treated as launchable games by guesswork;
+they are persisted as coverage audit rows with expected `games/<core>` paths,
+extension hints when known, source evidence, status, and reason.
 
 - Launcher profiles: MRA, MGL, and DOS installed MGL launchers.
 - Disc/computer profiles: Saturn, PlayStation/PSX, AO486, and Amiga/Minimig.
@@ -284,6 +288,23 @@ must update `PROFILE_SET_VERSION`, tests, and this document.
 These profiles are source-backed by Main_MiSTer behavior, MRA/MGL launch files,
 or explicit MagiK profile rules. Generic extension guesses are not a supported
 product path.
+
+## Catalog Coverage Audit
+
+Every full scan writes `catalog_audit` rows. Query them with
+`scripts/mister db "SELECT * FROM catalog_audit ORDER BY catalog_status, expected_game_dir"`.
+
+The audit records:
+
+- installed `.rbf` cores in normal core locations that have no catalog profile,
+- `games/<system>` folders with payload-looking files but no catalog profile,
+- collection ZIPs in loose-file-only profiles that will not be indexed.
+
+Audit rows are diagnostic only. They do not become launch rows until a real
+profile is added. The audit is part of the catalog stamp, so new cores from
+`update_all` can invalidate the warm catalog check. Rebuilds record coverage
+diagnostics in the runtime event log and `catalog_audit` table without showing a
+user-facing prompt.
 
 ## Collection Listings
 

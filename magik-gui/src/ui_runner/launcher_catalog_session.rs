@@ -217,6 +217,7 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_saved", format_library_refresh_summary(&summary));
+                push_catalog_coverage_diagnostic(&summary, &mut effects);
                 effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
             CatalogWorkerMessage::PersistenceFailed { error } => {
@@ -406,6 +407,9 @@ impl LauncherCatalogSession {
             if !self.persisted_summary_seen {
                 effects.event(event, format_library_refresh_summary(&summary));
             }
+            if !summary.skipped {
+                push_catalog_coverage_diagnostic(&summary, effects);
+            }
         }
         if duplicate_cached_catalog {
             if self.refresh_failed || self.foreground_update {
@@ -465,7 +469,7 @@ pub(super) fn consume_library_rebuild_marker(worker_enabled: bool, start: Instan
 
 fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -> String {
     format!(
-        "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
+        "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={} audit_rows={}",
         summary.bytes,
         summary.scan_us,
         summary.discover_us,
@@ -474,8 +478,26 @@ fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -
         summary.discoveries,
         summary.normal_files,
         summary.containers,
-        summary.entries
+        summary.entries,
+        summary.audit_rows
     )
+}
+
+fn push_catalog_coverage_diagnostic(
+    summary: &library_db::LibraryRefreshSummary,
+    effects: &mut CatalogSessionEffects,
+) {
+    if summary.audit_rows == 0 {
+        return;
+    }
+    eprintln!(
+        "catalog coverage audit: rows={} (query catalog_audit for details)",
+        summary.audit_rows
+    );
+    effects.event(
+        "catalog_coverage_audit",
+        format!("rows={}", summary.audit_rows),
+    );
 }
 
 fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bool) -> bool {
@@ -688,6 +710,7 @@ mod tests {
             normal_files: 15,
             containers: 16,
             entries: 17,
+            audit_rows: 0,
             discoveries: 18,
         }
     }
@@ -771,6 +794,73 @@ mod tests {
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(!session.refresh_failed);
+    }
+
+    #[test]
+    fn persisted_catalog_with_audit_rows_logs_coverage_diagnostic_without_prompt() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        let mut summary = refresh_summary();
+        summary.audit_rows = 2;
+
+        let effects = effect_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Persisted { summary },
+            now,
+        ));
+
+        assert_eq!(
+            effects,
+            vec![
+                "finish-media-if-no-seed",
+                "catalog-validation-finished",
+                "event",
+                "event",
+                "ui"
+            ]
+        );
+    }
+
+    #[test]
+    fn ready_catalog_with_saved_audit_rows_logs_coverage_diagnostic_without_prompt() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        let mut summary = refresh_summary();
+        summary.audit_rows = 2;
+
+        let effects = effect_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(3),
+                summary: Some(summary),
+                load_us: 42,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: false,
+            },
+            now,
+        ));
+
+        assert_eq!(
+            effects,
+            vec![
+                "request-media-seed",
+                "catalog",
+                "event",
+                "finish-media-if-no-seed",
+                "event",
+                "event",
+                "ui",
+                "sync"
+            ]
+        );
     }
 
     #[test]
