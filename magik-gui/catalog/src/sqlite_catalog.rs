@@ -404,7 +404,7 @@ fn load_arcade_catalog_from_connection(
     let systems = arcade_catalog::systems_from_games(&games);
     let systems_us = systems_t.elapsed().as_micros() as u64;
     let catalog_t = Instant::now();
-    let catalog = ArcadeCatalog::new_with_launch_plans(root, games, systems, launch_plans);
+    let catalog = ArcadeCatalog::new_with_deferred_text_indexes(root, games, systems, launch_plans);
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
         catalog,
