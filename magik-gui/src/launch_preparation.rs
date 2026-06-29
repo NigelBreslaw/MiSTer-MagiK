@@ -1,9 +1,10 @@
 //! Launch-ref classification and materialization before Main handoff.
 
 use crate::{arcade_catalog::LaunchTarget, library_db};
+use std::cell::Cell;
 use std::fs::{self, File};
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const VIRTUAL_LAUNCH_PREFIX: &str = "magik-plan:";
@@ -13,6 +14,19 @@ const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
 const AMIGAVISION_HDF_PATH: &str = "/media/fat/games/Amiga/AmigaVision.hdf";
 const AMIGAVISION_SHARED_DIR: &str = "/media/fat/games/Amiga/shared";
 const AMIGAVISION_AGS_BOOT: &str = "/media/fat/games/Amiga/shared/ags_boot";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LaunchPrepDescriptorStats {
+    written: u64,
+    skipped: u64,
+    bytes: u64,
+}
+
+thread_local! {
+    static DESCRIPTOR_WRITTEN: Cell<u64> = const { Cell::new(0) };
+    static DESCRIPTOR_SKIPPED: Cell<u64> = const { Cell::new(0) };
+    static DESCRIPTOR_BYTES: Cell<u64> = const { Cell::new(0) };
+}
 
 pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
     if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
@@ -77,14 +91,80 @@ fn materialize_amigavision_game_launch_ref_at(
     validate_amigavision_install(mgl_path, hdf_path)?;
     fs::create_dir_all(shared_dir).map_err(|e| format!("create AmigaVision shared dir: {e}"))?;
     let content = format!("{title}\n");
-    let should_write = fs::read_to_string(ags_boot_path)
-        .map(|existing| existing != content)
-        .unwrap_or(true);
-    if should_write {
-        fs::write(ags_boot_path, content)
-            .map_err(|e| format!("write AmigaVision ags_boot: {e}"))?;
+    if fs::read_to_string(ags_boot_path)
+        .map(|existing| existing == content)
+        .unwrap_or(false)
+    {
+        record_descriptor_skipped();
+    } else {
+        write_descriptor_atomically(ags_boot_path, content.as_bytes())?;
+        record_descriptor_written(content.len() as u64);
     }
     Ok(mgl_path.display().to_string())
+}
+
+fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("AmigaVision descriptor has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("create AmigaVision descriptor parent {}: {e}", parent.display()))?;
+    let temp_path = descriptor_temp_path(path);
+    let _ = fs::remove_file(&temp_path);
+    let mut file = File::create(&temp_path)
+        .map_err(|e| format!("create AmigaVision descriptor temp: {e}"))?;
+    file.write_all(bytes)
+        .map_err(|e| format!("write AmigaVision descriptor temp: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("sync AmigaVision descriptor temp: {e}"))?;
+    drop(file);
+    fs::rename(&temp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!(
+            "rename AmigaVision descriptor {} -> {}: {e}",
+            temp_path.display(),
+            path.display()
+        )
+    })?;
+    sync_path_best_effort(parent);
+    Ok(())
+}
+
+fn sync_path_best_effort(path: &Path) {
+    let _ = File::open(path).and_then(|file| file.sync_all());
+}
+
+fn descriptor_temp_path(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("ags_boot"),
+        std::process::id()
+    ))
+}
+
+fn reset_descriptor_stats() {
+    DESCRIPTOR_WRITTEN.with(|value| value.set(0));
+    DESCRIPTOR_SKIPPED.with(|value| value.set(0));
+    DESCRIPTOR_BYTES.with(|value| value.set(0));
+}
+
+fn descriptor_stats_snapshot() -> LaunchPrepDescriptorStats {
+    LaunchPrepDescriptorStats {
+        written: DESCRIPTOR_WRITTEN.with(Cell::get),
+        skipped: DESCRIPTOR_SKIPPED.with(Cell::get),
+        bytes: DESCRIPTOR_BYTES.with(Cell::get),
+    }
+}
+
+fn record_descriptor_written(bytes: u64) {
+    DESCRIPTOR_WRITTEN.with(|value| value.set(value.get().saturating_add(1)));
+    DESCRIPTOR_BYTES.with(|value| value.set(value.get().saturating_add(bytes)));
+}
+
+fn record_descriptor_skipped() {
+    DESCRIPTOR_SKIPPED.with(|value| value.set(value.get().saturating_add(1)));
 }
 
 fn validate_amigavision_install(mgl_path: &Path, hdf_path: &Path) -> Result<(), String> {
@@ -230,6 +310,9 @@ pub fn run_launch_prep_bench() {
     let mut total_write_bytes = 0u64;
     let mut total_wchar = 0u64;
     let mut total_syscw = 0u64;
+    let mut total_descriptor_written = 0u64;
+    let mut total_descriptor_skipped = 0u64;
+    let mut total_descriptor_bytes = 0u64;
     for iteration in 0..iterations {
         if scenario == LaunchPrepBenchScenario::PriorityPrewarm {
             let before = read_self_proc_io();
@@ -257,11 +340,13 @@ pub fn run_launch_prep_bench() {
             if scenario == LaunchPrepBenchScenario::Cold {
                 prepare_cold_launch_prep_ref(&bench_ref.launch_ref);
             }
+            reset_descriptor_stats();
             let before = read_self_proc_io();
             let start = Instant::now();
             let result = prepare_launch_bench_ref(&catalog, &bench_ref.launch_ref);
             let prepare_us = start.elapsed().as_micros() as u64;
             let after = read_self_proc_io();
+            let descriptor = descriptor_stats_snapshot();
             let read_bytes = after.read_bytes.saturating_sub(before.read_bytes);
             let rchar = after.rchar.saturating_sub(before.rchar);
             let syscr = after.syscr.saturating_sub(before.syscr);
@@ -274,6 +359,11 @@ pub fn run_launch_prep_bench() {
             total_write_bytes = total_write_bytes.saturating_add(write_bytes);
             total_wchar = total_wchar.saturating_add(wchar);
             total_syscw = total_syscw.saturating_add(syscw);
+            total_descriptor_written =
+                total_descriptor_written.saturating_add(descriptor.written);
+            total_descriptor_skipped =
+                total_descriptor_skipped.saturating_add(descriptor.skipped);
+            total_descriptor_bytes = total_descriptor_bytes.saturating_add(descriptor.bytes);
             let (status, target) = match result {
                 Ok(target) => ("ok", target),
                 Err(e) => {
@@ -285,9 +375,12 @@ pub fn run_launch_prep_bench() {
                 samples.push(prepare_us);
             }
             println!(
-                "launch_prep_bench_tsv\t{label}\t{}\t{iteration}\t{idx}\t{}\t{status}\t{prepare_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}\ttarget={}\tref={}",
+                "launch_prep_bench_tsv\t{label}\t{}\t{iteration}\t{idx}\t{}\t{status}\t{prepare_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}\tdescriptor_written={}\tdescriptor_skipped={}\tdescriptor_bytes={}\ttarget={}\tref={}",
                 scenario.label(),
                 bench_ref.kind,
+                descriptor.written,
+                descriptor.skipped,
+                descriptor.bytes,
                 target,
                 bench_ref.launch_ref
             );
@@ -297,7 +390,7 @@ pub fn run_launch_prep_bench() {
     let p50 = percentile_sample(&samples, 0.50);
     let p95 = percentile_sample(&samples, 0.95);
     println!(
-        "launch_prep_bench_summary\t{label}\t{}\tcount={}\terrors={errors}\tp50_us={p50}\tp95_us={p95}\tread_bytes={total_read_bytes}\trchar={total_rchar}\tsyscr={total_syscr}\twrite_bytes={total_write_bytes}\twchar={total_wchar}\tsyscw={total_syscw}",
+        "launch_prep_bench_summary\t{label}\t{}\tcount={}\terrors={errors}\tp50_us={p50}\tp95_us={p95}\tread_bytes={total_read_bytes}\trchar={total_rchar}\tsyscr={total_syscr}\twrite_bytes={total_write_bytes}\twchar={total_wchar}\tsyscw={total_syscw}\tdescriptor_written={total_descriptor_written}\tdescriptor_skipped={total_descriptor_skipped}\tdescriptor_bytes={total_descriptor_bytes}",
         scenario.label(),
         samples.len()
     );
@@ -466,6 +559,7 @@ mod tests {
 
     #[test]
     fn amigavision_game_launch_ref_writes_ags_boot() {
+        reset_descriptor_stats();
         let root = unique_temp_dir("amigavision-launch");
         let mgl = root.join("_Computer/Amiga.mgl");
         let hdf = root.join("games/Amiga/AmigaVision.hdf");
@@ -490,11 +584,30 @@ mod tests {
             std::fs::read_to_string(&ags_boot).expect("read ags_boot"),
             "4th & Inches (OCS)[en]\n"
         );
+        assert_eq!(
+            descriptor_stats_snapshot(),
+            LaunchPrepDescriptorStats {
+                written: 1,
+                skipped: 0,
+                bytes: "4th & Inches (OCS)[en]\n".len() as u64,
+            }
+        );
+        assert!(
+            std::fs::read_dir(&shared)
+                .expect("read shared dir")
+                .flatten()
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".ags_boot.tmp-")),
+            "atomic temp should be renamed away"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn amigavision_same_title_launch_skips_rewrite() {
+        reset_descriptor_stats();
         let root = unique_temp_dir("amigavision-launch-same-title");
         let mgl = root.join("_Computer/Amiga.mgl");
         let hdf = root.join("games/Amiga/AmigaVision.hdf");
@@ -519,6 +632,14 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&ags_boot).expect("read ags_boot"),
             "Agony\n"
+        );
+        assert_eq!(
+            descriptor_stats_snapshot(),
+            LaunchPrepDescriptorStats {
+                written: 0,
+                skipped: 1,
+                bytes: 0,
+            }
         );
         let mut permissions = std::fs::metadata(&ags_boot)
             .expect("stat ags_boot")
