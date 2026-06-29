@@ -1,5 +1,23 @@
 use super::*;
 
+macro_rules! set_bridge_if_changed {
+    ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
+        let value = $value;
+        if $bridge.$getter() != value {
+            $bridge.$setter(value);
+        }
+    }};
+}
+
+macro_rules! set_bridge_string_if_changed {
+    ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
+        let value: SharedString = ($value).into();
+        if $bridge.$getter() != value {
+            $bridge.$setter(value);
+        }
+    }};
+}
+
 pub(super) fn open_pads() -> PadPool {
     PadPool::open_all().unwrap_or_else(|e| {
         eprintln!("failed to initialize gamepad input: {e}");
@@ -125,8 +143,13 @@ impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
         message: impl Into<SharedString>,
         detail: impl Into<SharedString>,
     ) {
-        self.bridge.set_loading_message(message.into());
-        self.bridge.set_loading_detail(detail.into());
+        set_bridge_string_if_changed!(
+            self.bridge,
+            get_loading_message,
+            set_loading_message,
+            message
+        );
+        set_bridge_string_if_changed!(self.bridge, get_loading_detail, set_loading_detail, detail);
     }
 
     pub(super) fn sync_catalog_scan(&self, status: CatalogScanBridgeStatus) {
@@ -185,46 +208,150 @@ pub(super) fn sync_confirm_bridge(
 ) {
     match action {
         Some(launcher::ConfirmAction::ExitToMister) => {
-            bridge.set_confirm_title("Exit to MiSTer".into());
-            bridge.set_confirm_message("Use the stock MiSTer menu until reboot.".into());
-            bridge.set_confirm_left_label("Exit to MiSTer".into());
-            bridge.set_confirm_right_label("Return to MiSTer MagiK".into());
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Exit to MiSTer"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "Use the stock MiSTer menu until reboot."
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_left_label,
+                set_confirm_left_label,
+                "Exit to MiSTer"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Return to MiSTer MagiK"
+            );
         }
         Some(launcher::ConfirmAction::ResetDatabase) => {
-            bridge.set_confirm_title("Reset Database?".into());
-            bridge.set_confirm_message(
-                "Delete the library database, screenshot packs, and reboot the MiSTer?".into(),
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Reset Database?"
             );
-            bridge.set_confirm_left_label("Cancel".into());
-            bridge.set_confirm_right_label("Confirm".into());
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "Delete the library database, screenshot packs, and reboot the MiSTer?"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_left_label,
+                set_confirm_left_label,
+                "Cancel"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Confirm"
+            );
         }
         Some(launcher::ConfirmAction::Restart) => {
-            bridge.set_confirm_title("Restart MiSTer?".into());
-            bridge.set_confirm_message("Reboot the MiSTer now?".into());
-            bridge.set_confirm_left_label("Cancel".into());
-            bridge.set_confirm_right_label("Confirm".into());
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Restart MiSTer?"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "Reboot the MiSTer now?"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_left_label,
+                set_confirm_left_label,
+                "Cancel"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Confirm"
+            );
         }
         Some(launcher::ConfirmAction::LibraryChanged) => {
-            bridge.set_confirm_title("Library changed".into());
-            bridge.set_confirm_message(
-                "New games detected. Continue with the current library or rebuild now.".into(),
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Library changed"
             );
-            bridge.set_confirm_left_label("Continue".into());
-            bridge.set_confirm_right_label("Rebuild".into());
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "New games detected. Continue with the current library or rebuild now."
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_left_label,
+                set_confirm_left_label,
+                "Continue"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Rebuild"
+            );
         }
         Some(launcher::ConfirmAction::LibraryUpdateFailed) => {
-            bridge.set_confirm_title("Library update failed".into());
-            bridge.set_confirm_message(
-                "Continuing with the current library. Try rebuilding again later.".into(),
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Library update failed"
             );
-            bridge.set_confirm_left_label("Continue".into());
-            bridge.set_confirm_right_label("OK".into());
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "Continuing with the current library. Try rebuilding again later."
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_left_label,
+                set_confirm_left_label,
+                "Continue"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "OK"
+            );
         }
         None => {
-            bridge.set_confirm_title("".into());
-            bridge.set_confirm_message("".into());
-            bridge.set_confirm_left_label("".into());
-            bridge.set_confirm_right_label("".into());
+            set_bridge_string_if_changed!(bridge, get_confirm_title, set_confirm_title, "");
+            set_bridge_string_if_changed!(bridge, get_confirm_message, set_confirm_message, "");
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_left_label,
+                set_confirm_left_label,
+                ""
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                ""
+            );
         }
     }
 }
@@ -324,25 +451,70 @@ pub(super) fn sync_bridge_launcher_light(
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
-    bridge.set_screen_mode(match nav.screen {
-        Screen::Home => 0,
-        Screen::Controller => 1,
-        Screen::Arcade => 2,
-        Screen::Settings => 3,
-    });
-    bridge.set_selected_index(nav.selected as i32);
-    bridge.set_home_scroll_x(nav.scroll_x);
-    bridge.set_settings_focused(nav.settings_focused);
-    bridge.set_settings_selected(nav.settings_selected as i32);
-    sync_arcade_list_geometry_bridge(&bridge, nav);
+    set_bridge_if_changed!(
+        bridge,
+        get_screen_mode,
+        set_screen_mode,
+        match nav.screen {
+            Screen::Home => 0,
+            Screen::Controller => 1,
+            Screen::Arcade => 2,
+            Screen::Settings => 3,
+        }
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_selected_index,
+        set_selected_index,
+        nav.selected as i32
+    );
+    set_bridge_if_changed!(bridge, get_home_scroll_x, set_home_scroll_x, nav.scroll_x);
+    set_bridge_if_changed!(
+        bridge,
+        get_settings_focused,
+        set_settings_focused,
+        nav.settings_focused
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_settings_selected,
+        set_settings_selected,
+        nav.settings_selected as i32
+    );
+    sync_arcade_list_geometry_bridge_if_changed(&bridge, nav);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
-        bridge.set_arcade_selected(nav.arcade.selected as i32);
-        bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
+        set_bridge_if_changed!(
+            bridge,
+            get_arcade_selected,
+            set_arcade_selected,
+            nav.arcade.selected as i32
+        );
+        set_bridge_if_changed!(
+            bridge,
+            get_arcade_scroll_y,
+            set_arcade_scroll_y,
+            nav.arcade.scroll_y
+        );
     }
-    bridge.set_arcade_games_loading(active_games_loading);
-    sync_arcade_search_bridge(&bridge, nav);
-    bridge.set_confirm_visible(nav.confirm_action.is_some());
-    bridge.set_confirm_selected(nav.confirm_selected as i32);
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_games_loading,
+        set_arcade_games_loading,
+        active_games_loading
+    );
+    sync_arcade_search_bridge_if_changed(&bridge, nav);
+    set_bridge_if_changed!(
+        bridge,
+        get_confirm_visible,
+        set_confirm_visible,
+        nav.confirm_action.is_some()
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_confirm_selected,
+        set_confirm_selected,
+        nav.confirm_selected as i32
+    );
     sync_confirm_bridge(&bridge, nav.confirm_action);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
     status_presenter.sync_loading(loading_message, loading_detail);
@@ -425,6 +597,68 @@ fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &La
         launcher::ArcadeSearchPane::Keyboard => 0,
         launcher::ArcadeSearchPane::Results => 1,
     });
+}
+
+fn sync_arcade_list_geometry_bridge_if_changed(
+    bridge: &slint_ui::launcher::MisterBridge,
+    nav: &LauncherNav,
+) {
+    let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
+        ArcadeListGeometry::SEARCH
+    } else {
+        ArcadeListGeometry::NORMAL
+    };
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_list_x,
+        set_arcade_list_x,
+        geometry.x as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_list_y,
+        set_arcade_list_y,
+        geometry.y as i32
+    );
+}
+
+fn sync_arcade_search_bridge_if_changed(
+    bridge: &slint_ui::launcher::MisterBridge,
+    nav: &LauncherNav,
+) {
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_search_active,
+        set_arcade_search_active,
+        nav.arcade_search.is_active(&nav.arcade_filter.active)
+    );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_arcade_search_query,
+        set_arcade_search_query,
+        nav.arcade_search.query.clone()
+    );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_arcade_search_suggestion,
+        set_arcade_search_suggestion,
+        nav.arcade_search.suggestion.clone()
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_search_key_selected,
+        set_arcade_search_key_selected,
+        nav.arcade_search.selected_key as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_search_pane,
+        set_arcade_search_pane,
+        match nav.arcade_search.pane {
+            launcher::ArcadeSearchPane::Keyboard => 0,
+            launcher::ArcadeSearchPane::Results => 1,
+        }
+    );
 }
 
 pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
