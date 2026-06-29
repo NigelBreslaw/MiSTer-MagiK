@@ -1896,12 +1896,20 @@ pub struct LaunchHandoffBenchResult {
     pub handoff_us: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchHandoffBenchMode {
+    SlowFail,
+    Success,
+}
+
 pub fn execute_game_launch_handoff_bench(
     launch_target: &LaunchTarget,
     fifo_delay: Duration,
+    mode: LaunchHandoffBenchMode,
 ) -> LaunchHandoffBenchResult {
     struct BenchLaunchIo {
         fifo_delay: Duration,
+        mode: LaunchHandoffBenchMode,
         handoff_us: u64,
     }
 
@@ -1932,20 +1940,25 @@ pub fn execute_game_launch_handoff_bench(
             self.handoff_us = self
                 .handoff_us
                 .saturating_add(start.elapsed().as_micros() as u64);
-            false
+            self.mode == LaunchHandoffBenchMode::Success
         }
 
         fn write_mister_command(&mut self, _cmd: &str) -> Result<(), String> {
-            Err("benchmark handoff does not write the real MiSTer FIFO".to_string())
+            if self.mode == LaunchHandoffBenchMode::Success {
+                Ok(())
+            } else {
+                Err("benchmark handoff does not write the real MiSTer FIFO".to_string())
+            }
         }
 
         fn wait_for_magik_handoff_ack(&mut self, _before: Option<MagikMainStatusSnapshot>) -> bool {
-            false
+            self.mode == LaunchHandoffBenchMode::Success
         }
     }
 
     let mut io = BenchLaunchIo {
         fifo_delay,
+        mode,
         handoff_us: 0,
     };
     let prepare = Instant::now();
