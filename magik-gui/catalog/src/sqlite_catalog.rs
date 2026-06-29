@@ -3234,11 +3234,11 @@ mod tests {
     fn sqlite_save_persists_catalog_audit_rows() {
         let root = unique_temp_dir("sqlite-audit-rows");
         let db = root.join("library.sqlite3");
-        let atari = root.join("games/ATARI2600");
-        std::fs::create_dir_all(&atari).expect("create atari dir");
+        let unknown = root.join("games/ChannelF");
+        std::fs::create_dir_all(&unknown).expect("create unknown dir");
         write_stored_zip(
-            &atari.join("MiSTer MagiK Additions.zip"),
-            &[("Adventure.a26", b"rom")],
+            &unknown.join("MiSTer MagiK Additions.zip"),
+            &[("Alien Invasion.chf", b"rom")],
         );
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
@@ -3247,14 +3247,14 @@ mod tests {
 
         let artifact = scan_library_artifact(&cfg, None);
         assert!(artifact.scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/ATARI2600" && row.catalog_status == "uncataloged"
+            row.expected_game_dir == "games/ChannelF" && row.catalog_status == "uncataloged"
         }));
         save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
 
         let conn = Connection::open(&db).expect("open sqlite");
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM catalog_audit WHERE expected_game_dir='games/ATARI2600' AND catalog_status='uncataloged'",
+                "SELECT COUNT(*) FROM catalog_audit WHERE expected_game_dir='games/ChannelF' AND catalog_status='uncataloged'",
                 [],
                 |row| row.get(0),
             )

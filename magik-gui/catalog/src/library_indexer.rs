@@ -232,6 +232,25 @@ fn scan_library_with_progress_and_events(
             Some((_profile, ProfilePathClass::Ignored { .. })) => {
                 ignored_files += 1;
             }
+            Some((profile, ProfilePathClass::NotMatched))
+                if catalog_scan::is_archive_entry_container_candidate(&profiles, &f.path) =>
+            {
+                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                    let archive_t = Instant::now();
+                    let scan = catalog_scan::scan_archive_toc(&f, format, profile);
+                    timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
+                    timing.archive_toc_count += 1;
+                    for entry in scan.entries {
+                        discoveries.push(discovery_from_profile_archive_entry(
+                            &entry,
+                            profile,
+                            &entry.rule,
+                        ));
+                        entries.push(entry);
+                    }
+                    containers.push(scan.container);
+                }
+            }
             Some((_, ProfilePathClass::NotMatched)) | None => {}
         }
         report_new_discovered_systems(

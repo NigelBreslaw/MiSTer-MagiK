@@ -415,13 +415,13 @@ mod tests {
     use crate::test_support::{unique_temp_dir, write_stored_zip};
 
     #[test]
-    fn unsupported_collection_zip_is_reported_as_uncataloged() {
-        let root = unique_temp_dir("audit-atari2600-zip");
-        let dir = root.join("games/ATARI2600");
-        std::fs::create_dir_all(&dir).expect("create atari dir");
+    fn unknown_collection_zip_is_reported_as_uncataloged() {
+        let root = unique_temp_dir("audit-unknown-zip");
+        let dir = root.join("games/ChannelF");
+        std::fs::create_dir_all(&dir).expect("create unknown dir");
         write_stored_zip(
-            &dir.join("MiSTer MagiK Additions - ATARI2600.zip"),
-            &[("Adventure.a26", b"rom")],
+            &dir.join("MiSTer MagiK Additions - ChannelF.zip"),
+            &[("Alien Invasion.chf", b"rom")],
         );
 
         let rows = audit_catalog_coverage(
@@ -430,7 +430,7 @@ mod tests {
         );
 
         assert!(rows.iter().any(|row| {
-            row.expected_game_dir == "games/ATARI2600"
+            row.expected_game_dir == "games/ChannelF"
                 && row.catalog_status == "uncataloged"
                 && row.reason == "game-dir-only-has-unindexed-zip-archives"
         }));
@@ -438,11 +438,11 @@ mod tests {
     }
 
     #[test]
-    fn known_loose_only_profile_zip_is_reported_as_unsupported() {
-        let root = unique_temp_dir("audit-sms-zip");
-        let dir = root.join("games/SMS");
-        std::fs::create_dir_all(&dir).expect("create sms dir");
-        write_stored_zip(&dir.join("MiSTer MagiK Additions - SMS.zip"), &[("Game.sms", b"rom")]);
+    fn known_profile_without_zip_entry_rules_reports_zip_as_unsupported() {
+        let root = unique_temp_dir("audit-psx-zip");
+        let dir = root.join("games/PSX");
+        std::fs::create_dir_all(&dir).expect("create psx dir");
+        write_stored_zip(&dir.join("MiSTer MagiK Additions - PSX.zip"), &[("Game.cue", b"cue")]);
 
         let rows = audit_catalog_coverage(
             &[root.display().to_string()],
@@ -450,7 +450,7 @@ mod tests {
         );
 
         assert!(rows.iter().any(|row| {
-            row.expected_game_dir == "games/SMS"
+            row.expected_game_dir == "games/PSX"
                 && row.catalog_status == "unsupported"
                 && row.reason.contains("zip-archive-not-indexed")
         }));
@@ -481,7 +481,7 @@ mod tests {
         let root = unique_temp_dir("audit-new-core");
         let console = root.join("_Console");
         std::fs::create_dir_all(&console).expect("create console dir");
-        std::fs::write(console.join("WonderSwanColor_20260629.rbf"), b"rbf").expect("write core");
+        std::fs::write(console.join("ChannelF_20260629.rbf"), b"rbf").expect("write core");
 
         let rows = audit_catalog_coverage(
             &[root.display().to_string()],
@@ -489,8 +489,8 @@ mod tests {
         );
 
         assert!(rows.iter().any(|row| {
-            row.core_id == "WonderSwanColor"
-                && row.expected_game_dir == "games/WonderSwanColor"
+            row.core_id == "ChannelF"
+                && row.expected_game_dir == "games/ChannelF"
                 && row.catalog_status == "uncataloged"
                 && row.reason == "installed-core-has-no-catalog-profile"
         }));
