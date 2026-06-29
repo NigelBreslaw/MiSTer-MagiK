@@ -91,3 +91,14 @@ screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	7	4973975	384	0	0	7	
 screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	8	4973975	399	0	0	7	407	22	bench-ok
 screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	9	4973975	378	0	0	7	386	22	bench-ok
 screenshot_save_bench_tsv	PERF20260629-SAVE	neogeo	progress	10	4973975	394	0	0	7	402	22	bench-ok
+screenshot_save_bench_tsv	label	system	mode	iteration	bytes	copy_ms	sync_ms	rename_ms	parent_sync_ms	total_ms	progress_events	result
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	1	4973975	589	0	0	7	598	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	2	4973975	389	0	0	7	397	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	3	4973975	382	0	0	7	391	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	4	4973975	382	0	0	7	390	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	5	4973975	396	0	0	7	404	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	6	4973975	390	0	0	7	398	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	7	4973975	393	0	0	7	401	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	8	4973975	379	0	0	7	387	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	9	4973975	417	0	0	7	425	22	bench-ok
+screenshot_save_bench_tsv	PERFDEEP-20260629-SAVE	neogeo	progress	10	4973975	388	0	0	7	396	22	bench-ok
