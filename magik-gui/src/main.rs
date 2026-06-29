@@ -12,6 +12,7 @@
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
+//!   Bench tools (`--features bench-tools`):
 //!     media-bench-download
 //!                        benchmark screenshot pack downloads and variant decoding
 //!     media-bench-save   benchmark screenshot pack save/publish paths
@@ -19,7 +20,6 @@
 //!     preview-index-refresh-bench
 //!                        update DB preview flags from screenshot pack indexes
 //!     input              gamepad log / sniff / calibrate
-//!     audio-tone         play a 48 kHz stereo sine wave through /dev/MrAudio
 //!   Benchmarks:
 //!     scenes             list Slint scene names
 //!   Experiments:
@@ -60,7 +60,9 @@ mod frame_profile;
 mod input;
 mod launch_preparation;
 mod launcher;
+#[cfg(feature = "bench-tools")]
 mod media_bench_download;
+#[cfg(feature = "bench-tools")]
 mod media_bench_save;
 mod media_pack_save;
 mod mr_audio;
@@ -129,11 +131,13 @@ fn main() {
         return;
     }
 
+    #[cfg(feature = "bench-tools")]
     if cmd == "media-bench-download" {
         media_bench_download::run();
         return;
     }
 
+    #[cfg(feature = "bench-tools")]
     if cmd == "media-bench-save" {
         media_bench_save::run();
         return;
@@ -162,6 +166,7 @@ fn main() {
         return;
     }
 
+    #[cfg(feature = "bench-tools")]
     if cmd == "launch-prep-bench" {
         launch_preparation::run_launch_prep_bench();
         return;
@@ -236,7 +241,6 @@ fn main() {
         "input" => run_input(),
         #[cfg(feature = "diagnostics")]
         "library-scan-bench" => library_db::run_scan_bench(),
-        "audio-tone" => run_audio_tone(&mut f),
         other => unknown_command(other),
     }
 }
@@ -679,17 +683,6 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
         1_000_000.0 / period_us as f64
     );
     if errors > 0 {
-        std::process::exit(1);
-    }
-}
-
-fn run_audio_tone(f: &mut Fpga) {
-    if let Err(e) = f.set_audio_volume(0) {
-        eprintln!("warning: failed to set FPGA audio volume: {e}");
-    }
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    if let Err(e) = mr_audio::run_tone_from_args(&args) {
-        eprintln!("audio-tone failed: {e}");
         std::process::exit(1);
     }
 }

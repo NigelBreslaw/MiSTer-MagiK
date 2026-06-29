@@ -11,11 +11,11 @@ FORMAT="${3:-raw-rgb565}"
 
 case "$MAX_SIZE" in
   *x*) ;;
-  *) echo "usage: scripts/experiments/preview/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565]" >&2; exit 2 ;;
+  *) echo "usage: scripts/experiments/preview/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565] (requires deployed bench-tools binary)" >&2; exit 2 ;;
 esac
 case "$FORMAT" in
   raw-rgb565|raw565|rgb565|565) ;;
-  *) echo "usage: scripts/experiments/preview/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565]" >&2; exit 2 ;;
+  *) echo "usage: scripts/experiments/preview/preview-resize-demo.sh [MAX_SIZE=320x320] [SECS=2] [FORMAT=raw-rgb565] (requires deployed bench-tools binary)" >&2; exit 2 ;;
 esac
 if [[ ! "$SECS" =~ ^[0-9]+$ ]]; then
   echo "SECS must be an integer" >&2

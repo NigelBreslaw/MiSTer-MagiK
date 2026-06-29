@@ -24,6 +24,7 @@ SKIP_DISPLAY_MODES=0
 SKIP_INSTALL_RESTORE=0
 SKIP_FIRST_BOOT_RESET=0
 SOAK_SECS="${MISTER_ACCEPTANCE_SOAK_SECS:-3600}"
+BENCH_CHECKS="${MISTER_ACCEPTANCE_BENCH_TOOLS:-0}"
 ALL_TIERS="health framebuffer-route launcher-lifecycle catalog handoff display-modes install-restore soak"
 DEFAULT_TIERS="health framebuffer-route launcher-lifecycle catalog handoff display-modes install-restore"
 FAST_TIERS="health framebuffer-route launcher-lifecycle catalog handoff"
@@ -51,6 +52,7 @@ Options:
 Environment:
   MISTER_ACCEPTANCE_LAUNCH_REF  Launch target for the game handoff smoke.
                                 Default: /media/fat/_Arcade/Missile Command (rev 3).mra
+  MISTER_ACCEPTANCE_BENCH_TOOLS Set to 1 to run bench-tools-only preview trace checks.
 EOF
 }
 
@@ -487,6 +489,10 @@ restart_with_env() {
 }
 
 run_preview_render_acceptance() {
+  if [ "$BENCH_CHECKS" != "1" ]; then
+    record_ok "preview trace acceptance skipped: requires bench-tools build"
+    return
+  fi
   local trace="/tmp/mister-acceptance-preview.tsv"
   write_launcher_env "$trace" "preview-step-hold" ""
   restart_with_env "preview render restart" "$trace"
@@ -498,6 +504,10 @@ run_preview_render_acceptance() {
 }
 
 run_velocity_scroll_acceptance() {
+  if [ "$BENCH_CHECKS" != "1" ]; then
+    record_ok "velocity trace acceptance skipped: requires bench-tools build"
+    return
+  fi
   local scenario trace min_rows
   for scenario in held-scroll turbo-hold; do
     trace="/tmp/mister-acceptance-${scenario}.tsv"
@@ -530,13 +540,7 @@ run_controller_acceptance() {
 }
 
 run_audio_probe() {
-  local remote_log="/tmp/mister-magik-audio-tone.log"
-  if remote "rm -f '$remote_log'; for attempt in 1 2 3; do '$REMOTE_BIN' audio-tone 0.1 >'$remote_log' 2>&1 && break; sleep 1; done; cat '$remote_log'; grep -q 'audio-tone wrote' '$remote_log'"; then
-    record_ok "audio-tone /dev/MrAudio probe"
-  else
-    record_fail "audio-tone /dev/MrAudio probe"
-  fi
-  remote_get_optional "$remote_log" "audio-tone.log"
+  record_ok "audio probe covered by video path"
 }
 
 run_first_boot_visible_scan() {
@@ -739,6 +743,7 @@ write_report_header() {
 - fast: $FAST
 - soak: $SOAK
 - soak_secs: $SOAK_SECS
+- bench_checks: $BENCH_CHECKS
 - skip_display_modes: $SKIP_DISPLAY_MODES
 - skip_install_restore: $SKIP_INSTALL_RESTORE
 - skip_first_boot_reset: $SKIP_FIRST_BOOT_RESET

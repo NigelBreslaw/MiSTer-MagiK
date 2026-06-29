@@ -1,10 +1,14 @@
 //! Launch-ref classification and materialization before Main handoff.
 
+#[cfg(feature = "bench-tools")]
 use crate::{arcade_catalog::LaunchTarget, library_db};
 use std::cell::Cell;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+#[cfg(any(feature = "bench-tools", test))]
+use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "bench-tools")]
 use std::time::Instant;
 
 const VIRTUAL_LAUNCH_PREFIX: &str = "magik-plan:";
@@ -15,6 +19,7 @@ const AMIGAVISION_HDF_PATH: &str = "/media/fat/games/Amiga/AmigaVision.hdf";
 const AMIGAVISION_SHARED_DIR: &str = "/media/fat/games/Amiga/shared";
 const AMIGAVISION_AGS_BOOT: &str = "/media/fat/games/Amiga/shared/ags_boot";
 
+#[cfg(any(feature = "bench-tools", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LaunchPrepDescriptorStats {
     written: u64,
@@ -148,12 +153,14 @@ fn descriptor_temp_path(path: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(any(feature = "bench-tools", test))]
 fn reset_descriptor_stats() {
     DESCRIPTOR_WRITTEN.with(|value| value.set(0));
     DESCRIPTOR_SKIPPED.with(|value| value.set(0));
     DESCRIPTOR_BYTES.with(|value| value.set(0));
 }
 
+#[cfg(any(feature = "bench-tools", test))]
 fn descriptor_stats_snapshot() -> LaunchPrepDescriptorStats {
     LaunchPrepDescriptorStats {
         written: DESCRIPTOR_WRITTEN.with(Cell::get),
@@ -219,6 +226,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(feature = "bench-tools")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LaunchPrepBenchScenario {
     Warm,
@@ -226,6 +234,7 @@ enum LaunchPrepBenchScenario {
     PriorityPrewarm,
 }
 
+#[cfg(feature = "bench-tools")]
 impl LaunchPrepBenchScenario {
     fn from_arg(value: Option<&str>) -> Self {
         match value.unwrap_or("warm").trim().to_ascii_lowercase().as_str() {
@@ -244,12 +253,14 @@ impl LaunchPrepBenchScenario {
     }
 }
 
+#[cfg(feature = "bench-tools")]
 #[derive(Clone, Debug)]
 struct LaunchPrepBenchRef {
     kind: String,
     launch_ref: String,
 }
 
+#[cfg(any(feature = "bench-tools", test))]
 #[derive(Clone, Copy, Debug, Default)]
 struct ProcIoCounters {
     read_bytes: u64,
@@ -260,6 +271,7 @@ struct ProcIoCounters {
     syscw: u64,
 }
 
+#[cfg(feature = "bench-tools")]
 pub fn run_launch_prep_bench() {
     let args: Vec<String> = std::env::args().collect();
     let label = std::env::var("MISTER_LAUNCH_PREP_LABEL")
@@ -398,6 +410,7 @@ pub fn run_launch_prep_bench() {
     );
 }
 
+#[cfg(feature = "bench-tools")]
 fn prepare_launch_bench_ref(
     catalog: &crate::arcade_catalog::ArcadeCatalog,
     launch_ref: &str,
@@ -418,6 +431,7 @@ fn prepare_launch_bench_ref(
     })
 }
 
+#[cfg(feature = "bench-tools")]
 fn launch_prep_bench_refs_from_env() -> Result<Vec<LaunchPrepBenchRef>, String> {
     let Ok(value) = std::env::var("MISTER_LAUNCH_PREP_REFS") else {
         return Err("MISTER_LAUNCH_PREP_REFS unset".to_string());
@@ -434,6 +448,7 @@ fn launch_prep_bench_refs_from_env() -> Result<Vec<LaunchPrepBenchRef>, String> 
     Ok(refs)
 }
 
+#[cfg(feature = "bench-tools")]
 fn load_default_launch_prep_bench_refs(
     catalog: &crate::arcade_catalog::ArcadeCatalog,
 ) -> Result<Vec<LaunchPrepBenchRef>, String> {
@@ -480,6 +495,7 @@ fn load_default_launch_prep_bench_refs(
     Ok(refs)
 }
 
+#[cfg(any(feature = "bench-tools", test))]
 fn launch_prep_kind(launch_ref: &str) -> &'static str {
     if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
         "virtual"
@@ -490,12 +506,14 @@ fn launch_prep_kind(launch_ref: &str) -> &'static str {
     }
 }
 
+#[cfg(feature = "bench-tools")]
 fn prepare_cold_launch_prep_ref(launch_ref: &str) {
     if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
         let _ = fs::remove_file(AMIGAVISION_AGS_BOOT);
     }
 }
 
+#[cfg(any(feature = "bench-tools", test))]
 fn read_self_proc_io() -> ProcIoCounters {
     let mut contents = String::new();
     if File::open("/proc/self/io")
@@ -523,6 +541,7 @@ fn read_self_proc_io() -> ProcIoCounters {
     counters
 }
 
+#[cfg(any(feature = "bench-tools", test))]
 fn percentile_sample(sorted: &[u64], percentile: f64) -> u64 {
     if sorted.is_empty() {
         return 0;
@@ -715,6 +734,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "bench-tools")]
     fn launch_prep_bench_scenario_parses_aliases_and_defaults() {
         assert_eq!(
             LaunchPrepBenchScenario::from_arg(None),

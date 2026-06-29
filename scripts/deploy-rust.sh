@@ -5,8 +5,9 @@
 # launcher, deploy asks it to suspend MagiK, swaps the binary, then resumes.
 #
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
-#   MISTER_IP=... scripts/deploy-rust.sh --all-scenes
-#   MISTER_IP=... scripts/deploy-rust.sh --experiments
+#   MISTER_IP=... scripts/deploy-rust.sh --all-scenes     # lab/bench build
+#   MISTER_IP=... scripts/deploy-rust.sh --experiments    # lab/bench build
+#   MISTER_IP=... scripts/deploy-rust.sh --bench-tools    # benchmark command build
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_DEPLOY_TRANSPORT=ssh scripts/deploy-rust.sh  # explicit fallback only
 #
@@ -15,7 +16,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR="/media/fat/mister-magik"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
+REMOTE_ART_DIR="$REMOTE_DIR/art"
 DEPLOY_TRANSPORT="${MISTER_DEPLOY_TRANSPORT:-agent}"
+LOCAL_CABINET="$HERE/magik-gui/ui/art/arcade-cabinet-preview.png"
 
 PROFILE=release-device
 BUILD_FLAG=(--device)
@@ -30,6 +33,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
     --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
     --experiments) BUILD_FLAG+=(--experiments) ;;
+    --bench-tools) BUILD_FLAG+=(--bench-tools) ;;
     --ui-scope=*) BUILD_FLAG+=("$arg") ;;
     --ui-scope)
       i=$((i + 1))
@@ -72,6 +76,17 @@ echo "==> Cross-building (armv7 profile=$PROFILE)"
 
 LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
+
+echo "==> Deploying cabinet art -> $REMOTE_ART_DIR"
+LOCAL_CABINET_RAW="$(mktemp "${TMPDIR:-/tmp}/arcade-cabinet-preview.XXXXXX.rgba")"
+python3 "$HERE/scripts/png-to-slint-rgba.py" "$LOCAL_CABINET" "$LOCAL_CABINET_RAW"
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  "$HERE/scripts/mister" run "mkdir -p '$REMOTE_ART_DIR'" >/dev/null
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  "$HERE/scripts/mister" put "$LOCAL_CABINET_RAW" "$REMOTE_ART_DIR/arcade-cabinet-preview.rgba" >/dev/null
+rm -f "$LOCAL_CABINET_RAW"
 
 echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
 DEPLOY_OUTPUT=""

@@ -22,6 +22,7 @@ Usage: scripts/profile-launch-handoff.sh LABEL [--replace-label] [--iterations N
 
 Runs the real launcher loading/recovery path with a benchmark-only simulated
 Main/FIFO handoff. It never writes /dev/MiSTer_cmd and never loads a core.
+Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 EOF
 }
 
@@ -82,7 +83,7 @@ if [[ "$REPLACE_LABEL" -eq 1 ]]; then
 fi
 
 if [[ "$DEPLOY" -eq 1 ]]; then
-  "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher
+  "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools
 fi
 
 remote_trace="/tmp/${LABEL}-launch-handoff.tsv"

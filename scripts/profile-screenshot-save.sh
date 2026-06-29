@@ -18,9 +18,11 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-screenshot-save.sh LABEL --system ID [--iterations N] [--size-bytes BYTES] [--replace-label]
 
-Benchmarks screenshot pack save/publish paths inside the deployed MagiK binary
-on the MiSTer. This excludes network download, decompression, and checksum work
-so the progress-capable save path can be measured directly.
+Benchmarks screenshot pack save/publish paths inside a deployed bench-tools
+MagiK binary on the MiSTer. Build with `magik-gui/build-arm.sh --bench-tools`
+before deploying this benchmark binary. This excludes network download,
+decompression, and checksum work so the progress-capable save path can be
+measured directly.
 EOF
 }
 

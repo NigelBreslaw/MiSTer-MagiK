@@ -135,6 +135,7 @@ if [[ -n "$LAUNCHER_SCENARIO" ]]; then
     idle|home-nav|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync) ;;
     *) echo "Unknown --launcher-scenario: $LAUNCHER_SCENARIO" >&2; exit 1 ;;
   esac
+  BUILD_FLAG+=(--bench-tools)
 fi
 case "$LAUNCHER_DIRTY_OPT" in
   on|off|1|0|true|false) ;;

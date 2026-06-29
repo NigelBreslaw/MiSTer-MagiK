@@ -19,6 +19,7 @@ Legacy positional form is still accepted:
 Runs the Main-supervised launcher on the real Arcade screen with
 MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE,
 pulls the raw TSV/log, then prints frame timing summaries.
+Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
 
@@ -102,7 +103,7 @@ cleanup() {
 trap cleanup EXIT
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
+  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
   skip) : ;;
 esac
 

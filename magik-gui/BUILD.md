@@ -160,6 +160,18 @@ Every `build-arm.sh` run prints the binary size and appends a local row to
 matching build. The file is intentionally gitignored; formal benchmark byte
 history remains in `history/toolchain-bench/results.tsv`.
 
+After moving bench commands behind `bench-tools`, removing the standalone
+`audio-tone` path, and externalizing the arcade cabinet art, the measured ARM
+`release-device`/`ui` binary is 5,955,500 bytes. The `ui,bench-tools` variant is
+6,078,388 bytes, so the quarantined benchmark surface costs 122,888 bytes.
+
+The arcade cabinet art remains a checked-in PNG source asset, but deploy and
+package scripts convert it to `/media/fat/mister-magik/art/arcade-cabinet-preview.rgba`.
+That sidecar uses a tiny RLE RGBA format loaded with `slint::Image::from_rgba8`.
+Do not switch the device path to `slint::Image::load_from_path`: the MiSTer/ARM
+build intentionally uses Slint without `std`, and that API is not available
+there.
+
 ## Size analysis
 
 For subsystem-level size work, build an unstripped diagnostic binary and generate
@@ -251,6 +263,9 @@ project-local minimal build.
 - **Cargo feature `ui`** — enables Slint and the `mister-magik-ui` generated UI
   crate; `build-arm.sh` passes it for every MiSTer binary build.
 - **Cargo feature `bench-scenes`** — enables generated Slint benchmark scenes.
+- **Cargo feature `bench-tools`** — enables on-device benchmark commands and
+  launcher benchmark automation that are intentionally absent from production
+  `ui` builds.
 - **Cargo feature `experiments`** — includes `bench-scenes` and enables
   experimental effect pickers, expanded preview transitions, and `effect-bench`.
   Ordinary UI builds omit it; `--all-scenes`, `--experiments`, and
@@ -263,8 +278,10 @@ project-local minimal build.
   knobs for lab runs; do not ship it as the release video variant.
 - **`MISTER_ARM_BUILD_BACKEND`** — local Apple-Silicon builds default to
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
-- **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — override the Slint modules
-  compiled into the ARM binary; by default, deployable builds use `all`.
+- **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — controls the generated UI build
+  scope for launcher-oriented builds. It is not a hard product-surface split:
+  `launcher` and `arcade` both build the launcher shell, while `all` opts into
+  lab scene generation when matching features are enabled.
 - **`magik-gui/.cargo/config.toml`** — keeps direct Cargo invocations on the
   normal compiler path; no always-on `rustflags`.
 - **`build-arm.sh`** — sets Cortex-A9/NEON `RUSTFLAGS` for every optimized ARM build; profiling also adds frame pointers.

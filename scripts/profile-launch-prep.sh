@@ -16,8 +16,10 @@ usage() {
   cat <<'EOF'
 Usage: scripts/profile-launch-prep.sh LABEL [--replace-label] [--scenario warm|cold|priority-prewarm] [--iterations N]
 
-Runs the launch-prep benchmark on the MiSTer. The benchmark calls the launch
-ref preparation path only; it does not write the MiSTer FIFO or launch a core.
+Runs the launch-prep benchmark on the MiSTer. Requires a deployed bench-tools
+MagiK binary built with `magik-gui/build-arm.sh --bench-tools`. The benchmark
+calls the launch ref preparation path only; it does not write the MiSTer FIFO
+or launch a core.
 EOF
 }
 

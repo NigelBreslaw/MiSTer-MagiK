@@ -9,6 +9,7 @@
 #   ./build-arm.sh --video      → release-device with production fast-path video
 #   ./build-arm.sh --video-lab  → release-device with video comparison/fallback paths
 #   ./build-arm.sh --diagnostics → release-device with diagnostics commands
+#   ./build-arm.sh --bench-tools → release-device with device benchmark commands
 #
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
 # spot expensive crates and accidental target/feature creep.
@@ -85,6 +86,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature video-lab
       ;;
     --diagnostics) add_feature diagnostics ;;
+    --bench-tools) add_feature bench-tools ;;
     --clean) CLEAN=1 ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;
@@ -102,6 +104,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
       echo "  ./build-arm.sh --video-lab   → include video comparison/fallback paths"
       echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
+      echo "  ./build-arm.sh --bench-tools → include device benchmark commands"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
       exit 0

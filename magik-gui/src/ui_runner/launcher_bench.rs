@@ -16,25 +16,32 @@ pub(super) enum LauncherBenchScenario {
 
 impl LauncherBenchScenario {
     pub(super) fn from_env() -> Option<Self> {
-        match std::env::var("MISTER_LAUNCHER_BENCH_SCENARIO")
-            .ok()?
-            .to_ascii_lowercase()
-            .as_str()
+        #[cfg(not(feature = "bench-tools"))]
         {
-            "idle" => Some(Self::Idle),
-            "preview-idle" | "preview_idle" => Some(Self::PreviewIdle),
-            "home-nav" | "home_nav" => Some(Self::HomeNav),
-            "velocity-scroll" | "velocity_scroll" => Some(Self::HeldScroll),
-            "quick-tap" | "quick_tap" => Some(Self::QuickTap),
-            "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
-            "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
-            "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
-            "preview-step-hold" | "preview_step_hold" | "step-hold" | "step_hold" => {
-                Some(Self::PreviewStepHold)
+            None
+        }
+        #[cfg(feature = "bench-tools")]
+        {
+            match std::env::var("MISTER_LAUNCHER_BENCH_SCENARIO")
+                .ok()?
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "idle" => Some(Self::Idle),
+                "preview-idle" | "preview_idle" => Some(Self::PreviewIdle),
+                "home-nav" | "home_nav" => Some(Self::HomeNav),
+                "velocity-scroll" | "velocity_scroll" => Some(Self::HeldScroll),
+                "quick-tap" | "quick_tap" => Some(Self::QuickTap),
+                "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
+                "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
+                "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
+                "preview-step-hold" | "preview_step_hold" | "step-hold" | "step_hold" => {
+                    Some(Self::PreviewStepHold)
+                }
+                "model-sync" | "model_sync" => Some(Self::ModelSync),
+                "launch-handoff" | "launch_handoff" => Some(Self::LaunchHandoff),
+                _ => None,
             }
-            "model-sync" | "model_sync" => Some(Self::ModelSync),
-            "launch-handoff" | "launch_handoff" => Some(Self::LaunchHandoff),
-            _ => None,
         }
     }
 

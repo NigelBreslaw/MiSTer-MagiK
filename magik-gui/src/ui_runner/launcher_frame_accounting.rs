@@ -1,5 +1,7 @@
 use super::*;
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::fmt::Write as _;
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::io::{BufWriter, Write as _};
 
 pub(super) struct LauncherFrameAccounting {
@@ -13,9 +15,13 @@ pub(super) struct LauncherFrameAccounting {
     cached_present_us: u128,
     arcade_list_present_us: u128,
     rows: u128,
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     preview_scroll_trace: Option<PreviewScrollTrace>,
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     preview_scroll_trace_duration: Option<Duration>,
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     last_preview_trace_loop_start: Option<Instant>,
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     last_status_write: Instant,
     first_copy_logged: bool,
@@ -76,12 +82,14 @@ pub(super) struct LauncherPrepareTrace {
     pub(super) status_string_copy_us: u128,
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 struct PreviewScrollTrace {
     writer: BufWriter<std::fs::File>,
     rows: Vec<PreviewScrollTraceRow>,
     row_text: String,
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 struct PreviewScrollTraceRow {
     frame: u64,
     elapsed_us: u128,
@@ -122,6 +130,7 @@ struct PreviewScrollTraceRow {
     wall_us: u128,
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 impl PreviewScrollTrace {
     fn new(writer: BufWriter<std::fs::File>) -> Self {
         Self {
@@ -189,6 +198,7 @@ impl PreviewScrollTrace {
     }
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 impl Drop for PreviewScrollTrace {
     fn drop(&mut self) {
         self.flush_rows();
@@ -242,9 +252,13 @@ impl LauncherFrameAccounting {
             cached_present_us: 0,
             arcade_list_present_us: 0,
             rows: 0,
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             preview_scroll_trace: open_preview_scroll_trace(),
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             preview_scroll_trace_duration: preview_scroll_trace_duration_from_env(),
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             last_preview_trace_loop_start: None,
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             first_copy_logged: false,
@@ -266,7 +280,14 @@ impl LauncherFrameAccounting {
     }
 
     pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
-        self.preview_scroll_trace.is_some()
+        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
+        {
+            false
+        }
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        {
+            self.preview_scroll_trace.is_some()
+        }
     }
 
     pub(super) fn status_write_due(&self) -> bool {
@@ -308,8 +329,10 @@ impl LauncherFrameAccounting {
         self.record_first_copy(&frame, disp);
         self.accumulate_fps(&frame);
         self.record_stable_samples(frame.frames, disp);
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         self.record_boot_frame_profile(&frame, disp);
         self.record_first_frame(start, catalog_ready);
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let runtime_status_write_start =
             (frame.status_write_due && self.preview_scroll_trace.is_some()).then(Instant::now);
         self.write_runtime_status(
@@ -347,12 +370,16 @@ impl LauncherFrameAccounting {
             last_route_reassert_ok,
             last_route_reassert_error,
         );
-        let runtime_status_write_us = runtime_status_write_start
-            .map(|start| start.elapsed().as_micros())
-            .unwrap_or(0);
-        self.write_preview_trace(&frame, runtime_status_write_us);
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        {
+            let runtime_status_write_us = runtime_status_write_start
+                .map(|start| start.elapsed().as_micros())
+                .unwrap_or(0);
+            self.write_preview_trace(&frame, runtime_status_write_us);
+        }
     }
 
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     fn write_preview_trace(
         &mut self,
         frame: &LauncherPresentedFrame,
@@ -428,6 +455,7 @@ impl LauncherFrameAccounting {
         }
     }
 
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     fn close_preview_scroll_trace(&mut self) {
         if let Some(mut trace) = self.preview_scroll_trace.take() {
             trace.flush_rows();
@@ -522,6 +550,7 @@ impl LauncherFrameAccounting {
         }
     }
 
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     fn record_boot_frame_profile(
         &mut self,
         frame: &LauncherPresentedFrame,
@@ -682,6 +711,7 @@ impl LauncherFrameAccounting {
     }
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
     let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
         .ok()?
@@ -690,6 +720,7 @@ fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
     std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
         .ok()

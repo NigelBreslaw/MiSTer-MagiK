@@ -173,6 +173,7 @@ direct-video runs.
 
 ## Audio
 
-Linux-side HDMI audio is written through `/dev/MrAudio`. The `audio-tone`
-subcommand exists as a standalone probe. Do not expect ALSA to expose real HDMI
+Linux-side HDMI audio is written through `/dev/MrAudio`. The old standalone
+`audio-tone` probe was removed from the production command surface; validate
+audio through the video path instead. Do not expect ALSA to expose real HDMI
 audio on this device.

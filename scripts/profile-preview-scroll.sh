@@ -19,6 +19,7 @@ Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [-
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
 /media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
+Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 
 --cpu-profile builds/deploys the profiling binary, runs the same supervised
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
@@ -194,15 +195,15 @@ emit_run_context_row() {
   command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   profile="release-device"
-  features="ui"
-  runtime_type="production"
+  features="ui,bench-tools"
+  runtime_type="bench-tools"
   deployment_state="unverified-skip-build"
   if [[ "$deploy" == "device" ]]; then
     deployment_state="verified"
   fi
   if [[ "$cpu_profile" == "1" ]]; then
     profile="release-device-profile"
-    features="ui,profile"
+    features="ui,profile,bench-tools"
     runtime_type="profile"
     deployment_state="verified"
   fi
@@ -229,14 +230,14 @@ cleanup() {
 trap cleanup EXIT
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
+  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
   skip) : ;;
 esac
 
 if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
   profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
   echo "==> Build profiling binary for supervised Arcade CPU profile"
-  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher
+  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
   echo "==> Deploy profiling binary for supervised Arcade CPU profile"
   if ! "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null; then
     echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
