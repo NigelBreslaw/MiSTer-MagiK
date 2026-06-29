@@ -414,16 +414,22 @@ fn preview_prefetch_thread(
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewPrefetch);
     let mut queue: Vec<PreviewRequest> = Vec::new();
     let mut scratch = PreviewArchiveScratch::default();
+    let mut newest_generation = 0;
     loop {
         if queue.is_empty() {
             match rx.recv() {
-                Ok(req) => enqueue_preview_request(&mut queue, req),
+                Ok(req) => {
+                    newest_generation = newest_generation.max(req.generation);
+                    enqueue_preview_request(&mut queue, req);
+                }
                 Err(_) => break,
             }
         }
         while let Ok(req) = rx.try_recv() {
+            newest_generation = newest_generation.max(req.generation);
             enqueue_preview_request(&mut queue, req);
         }
+        prune_stale_prefetch_requests(&mut queue, newest_generation);
         if let Some(req) = pop_next_preview_request(&mut queue) {
             let result = load_preview(req, &decoded_cache, &mut scratch);
             if tx.send(result).is_err() {
@@ -521,6 +527,21 @@ fn enqueue_preview_request(queue: &mut Vec<PreviewRequest>, req: PreviewRequest)
     queue.retain(|req| {
         matches!(req.priority, PreviewPriority::Selected)
             || req.priority.rank() <= DEFAULT_PREVIEW_CACHE_CAP
+    });
+}
+
+fn prune_stale_prefetch_requests(queue: &mut Vec<PreviewRequest>, newest_generation: u64) {
+    let keep_after = newest_generation.saturating_sub(DEFAULT_PREVIEW_CACHE_CAP as u64);
+    queue.retain(|req| {
+        let keep =
+            matches!(req.priority, PreviewPriority::Selected) || req.generation >= keep_after;
+        if !keep && preview_trace_enabled() {
+            eprintln!(
+                "preview_trace prefetch_cancelled generation={} newest_generation={} reason=stale_generation archive_path={} asset_key={}",
+                req.generation, newest_generation, req.preview_archive_path, req.preview_asset_key
+            );
+        }
+        keep
     });
 }
 
@@ -2389,6 +2410,27 @@ mod tests {
         assert!(queue.iter().all(|req| req.generation != 1));
         assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 3);
         assert_eq!(pop_next_preview_request(&mut queue).unwrap().generation, 2);
+    }
+
+    #[test]
+    fn stale_prefetch_prune_keeps_selected_and_recent_generations() {
+        let mut queue = vec![
+            queued_request(1, "old selected", "selected", PreviewPriority::Selected),
+            queued_request(2, "old prefetch", "old", PreviewPriority::Prefetch { distance: 1 }),
+            queued_request(
+                DEFAULT_PREVIEW_CACHE_CAP as u64 + 9,
+                "recent prefetch",
+                "recent",
+                PreviewPriority::Prefetch { distance: 1 },
+            ),
+        ];
+
+        prune_stale_prefetch_requests(&mut queue, DEFAULT_PREVIEW_CACHE_CAP as u64 + 10);
+
+        assert_eq!(
+            queue.iter().map(|req| req.generation).collect::<Vec<_>>(),
+            vec![1, DEFAULT_PREVIEW_CACHE_CAP as u64 + 9]
+        );
     }
 
     #[test]
