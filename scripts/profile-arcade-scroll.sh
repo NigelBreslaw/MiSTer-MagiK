@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--list-present segmented|dense]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -33,6 +33,7 @@ secs="30"
 label="arcade-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 scenario="turbo-hold"
 deploy="skip"
+list_present="${MISTER_ARCADE_LIST_PRESENT:-segmented}"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -40,6 +41,11 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
+    --list-present)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--list-present needs a value" >&2; usage >&2; exit 2; fi
+      list_present="$2"
+      shift 2
+      ;;
     --secs)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--secs needs a value" >&2; usage >&2; exit 2; fi
       secs="$2"
@@ -85,6 +91,10 @@ case "$scenario" in
     ;;
   *) echo "unknown scenario: $scenario" >&2; usage >&2; exit 2 ;;
 esac
+case "$list_present" in
+  segmented|dense) ;;
+  *) echo "unknown list present mode: $list_present" >&2; usage >&2; exit 2 ;;
+esac
 remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
 
@@ -106,13 +116,14 @@ case "$deploy" in
   skip) : ;;
 esac
 
-echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy"
+echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy list_present=$list_present"
 {
   printf 'export MISTER_CATALOG_REFRESH=default\n'
   printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
   printf 'export MISTER_PREVIEW_TRACE=1\n'
+  printf 'export MISTER_ARCADE_LIST_PRESENT=%q\n' "$list_present"
   printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
   printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
 } >"$env_file"
