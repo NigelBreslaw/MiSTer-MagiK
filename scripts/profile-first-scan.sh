@@ -125,7 +125,7 @@ printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
 printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log; sync"
-"$MISTER" reboot-wait
+"$MISTER" reboot-wait --direct-reset
 thread_sample_start "$LABEL" "first-scan" "$OUT_DIR" "$TIMEOUT_SECS"
 
 deadline=$((SECONDS + TIMEOUT_SECS))

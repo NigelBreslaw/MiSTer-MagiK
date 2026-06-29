@@ -128,8 +128,14 @@ Boot and recovery:
 scripts/install-slint-boot.sh
 scripts/restore-stock-boot.sh
 scripts/mister reboot-wait
+scripts/mister reboot-wait --direct-reset  # fast dev reboot after writes are synced/stopped
 scripts/mister recover
 ```
+
+Keep plain `scripts/mister reboot-wait` for settings, INI/video-mode changes,
+release gates, and unknown write state. Use `--direct-reset` for fast dev-loop
+reboots only after file writes are complete and synced. Do not use
+`--direct-reset-no-sync` outside explicit attended experiments.
 
 Benchmark entrypoints:
 

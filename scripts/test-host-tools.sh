@@ -45,6 +45,7 @@ for script in \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
   "$ROOT/scripts/mister-magik-agent.sh" \
+  "$ROOT/scripts/mister-shutdown-trace.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
   "$ROOT/scripts/profile-preview-scroll.sh" \
   "$ROOT/scripts/profile-screenshot-download.sh" \
@@ -94,6 +95,7 @@ esac
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
+python3 -m py_compile "$ROOT/scripts/reboot-shutdown-summary.py"
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
 
 echo "host tool checks ok"

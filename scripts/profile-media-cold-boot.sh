@@ -511,7 +511,7 @@ if [[ "$reset_catalog" -eq 1 ]]; then
 fi
 reset_cmd+="; sync"
 "$MISTER" run "$reset_cmd" >/dev/null
-"$MISTER" reboot-wait
+"$MISTER" reboot-wait --direct-reset
 thread_sample_start "$label" "media-cold-boot" "$OUT_DIR" "$timeout_secs"
 
 deadline=$((SECONDS + timeout_secs))
