@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView, ARCADE_ROW_HEIGHT};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
@@ -65,7 +64,6 @@ pub(crate) struct ArcadeListRenderer {
     row_cache: HashMap<usize, CachedArcadeRow>,
     surface: Vec<Rgb565Pixel>,
     band_scratch: Vec<Pixel>,
-    dense_present_surface: Vec<Rgb565Pixel>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
     row_cache_epoch: u64,
@@ -139,7 +137,6 @@ impl ArcadeListRenderer {
             row_cache: HashMap::new(),
             surface: vec![ARCADE_LIST_BG_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
-            dense_present_surface: Vec::new(),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             row_cache_epoch: 0,
@@ -527,41 +524,12 @@ impl ArcadeListRenderer {
         disp: &mut MappedRgb565Framebuffer,
         redraw_selection_frame: bool,
     ) {
-        if arcade_list_present_mode() == ArcadeListPresentMode::Dense {
-            self.copy_dense_layer_to_target(target, disp);
-            return;
-        }
         for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
             self.copy_viewport_band_to_target(target, disp, viewport_y, h, !redraw_selection_frame);
         }
         if redraw_selection_frame {
             self.copy_selection_frame_to_target(target, disp);
         }
-    }
-
-    fn copy_dense_layer_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut MappedRgb565Framebuffer,
-    ) {
-        self.dense_present_surface
-            .resize(ARCADE_LIST_W * ARCADE_LIST_H, ARCADE_LIST_BG_COLOR_565);
-        for viewport_y in 0..ARCADE_LIST_H {
-            let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
-            let src = src_y * ARCADE_LIST_W;
-            let dst = viewport_y * ARCADE_LIST_W;
-            self.dense_present_surface[dst..dst + ARCADE_LIST_W]
-                .copy_from_slice(&self.surface[src..src + ARCADE_LIST_W]);
-        }
-        apply_selection_frame_to_dense_surface(&mut self.dense_present_surface);
-        target.present_rect_565(
-            disp,
-            self.geometry.x,
-            self.geometry.y,
-            ARCADE_LIST_W,
-            ARCADE_LIST_H,
-            &self.dense_present_surface,
-        );
     }
 
     fn copy_viewport_band_to_target(
@@ -811,59 +779,6 @@ pub(crate) fn for_each_arcade_list_copy_segment(
         ARCADE_LIST_W,
         &mut emit,
     );
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ArcadeListPresentMode {
-    Segmented,
-    Dense,
-}
-
-fn arcade_list_present_mode() -> ArcadeListPresentMode {
-    static MODE: OnceLock<ArcadeListPresentMode> = OnceLock::new();
-    *MODE.get_or_init(|| {
-        parse_arcade_list_present_mode(
-            &std::env::var("MISTER_ARCADE_LIST_PRESENT")
-                .unwrap_or_else(|_| "segmented".to_string()),
-        )
-    })
-}
-
-fn parse_arcade_list_present_mode(value: &str) -> ArcadeListPresentMode {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "dense" | "full" => ArcadeListPresentMode::Dense,
-        _ => ArcadeListPresentMode::Segmented,
-    }
-}
-
-fn apply_selection_frame_to_dense_surface(surface: &mut [Rgb565Pixel]) {
-    if surface.len() < ARCADE_LIST_W * ARCADE_LIST_H {
-        return;
-    }
-    let y = ArcadeListRenderer::selection_y();
-    let row_h = ARCADE_ROW_HEIGHT as usize;
-    let color = ARCADE_SELECTION_FRAME_COLOR;
-    let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
-    let bottom_y = (y + row_h).saturating_sub(thickness);
-    for dy in 0..thickness {
-        let top_row = y + dy;
-        if top_row < ARCADE_LIST_H {
-            let start = top_row * ARCADE_LIST_W;
-            surface[start..start + ARCADE_LIST_W].fill(color);
-        }
-        let bottom_row = bottom_y + dy;
-        if bottom_row < ARCADE_LIST_H {
-            let start = bottom_row * ARCADE_LIST_W;
-            surface[start..start + ARCADE_LIST_W].fill(color);
-        }
-    }
-    let side_h = row_h.min(ARCADE_LIST_H.saturating_sub(y));
-    for row in 0..side_h {
-        let start = (y + row) * ARCADE_LIST_W;
-        surface[start..start + thickness].fill(color);
-        let right = start + ARCADE_LIST_W.saturating_sub(thickness);
-        surface[right..start + ARCADE_LIST_W].fill(color);
-    }
 }
 
 fn emit_row_overlap(
@@ -1207,51 +1122,6 @@ mod tests {
         });
 
         assert_eq!(segments, vec![(0, 0, ARCADE_LIST_W, ARCADE_LIST_H)]);
-    }
-
-    #[test]
-    fn arcade_list_present_mode_parser_defaults_to_segmented() {
-        assert_eq!(
-            parse_arcade_list_present_mode("dense"),
-            ArcadeListPresentMode::Dense
-        );
-        assert_eq!(
-            parse_arcade_list_present_mode(" DENSE "),
-            ArcadeListPresentMode::Dense
-        );
-        assert_eq!(
-            parse_arcade_list_present_mode("segmented"),
-            ArcadeListPresentMode::Segmented
-        );
-        assert_eq!(
-            parse_arcade_list_present_mode(""),
-            ArcadeListPresentMode::Segmented
-        );
-    }
-
-    #[test]
-    fn dense_present_surface_includes_selection_frame() {
-        let bg = Rgb565Pixel(0x1234);
-        let mut surface = vec![bg; ARCADE_LIST_W * ARCADE_LIST_H];
-
-        apply_selection_frame_to_dense_surface(&mut surface);
-
-        let y = ArcadeListRenderer::selection_y();
-        let bottom_y = y + ARCADE_ROW_HEIGHT as usize - ARCADE_SELECTION_FRAME_THICKNESS;
-        assert_eq!(surface[y * ARCADE_LIST_W], ARCADE_SELECTION_FRAME_COLOR);
-        assert_eq!(
-            surface[(bottom_y + ARCADE_SELECTION_FRAME_THICKNESS - 1) * ARCADE_LIST_W],
-            ARCADE_SELECTION_FRAME_COLOR
-        );
-        assert_eq!(
-            surface[(y + ARCADE_SELECTION_FRAME_THICKNESS) * ARCADE_LIST_W],
-            ARCADE_SELECTION_FRAME_COLOR
-        );
-        assert_eq!(
-            surface[(y + ARCADE_SELECTION_FRAME_THICKNESS) * ARCADE_LIST_W
-                + ARCADE_SELECTION_FRAME_THICKNESS],
-            bg
-        );
     }
 
     #[test]
