@@ -1642,6 +1642,45 @@ mod tests {
     }
 
     #[test]
+    fn deferred_text_indexes_build_once_on_first_text_access() {
+        let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
+        street.manufacturer = "Capcom".into();
+        street.category = "Fighter / 2D".into();
+        let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
+        shooter.year = Some(1984);
+        let games = vec![street, shooter];
+        let systems = vec![GameSystemEntry {
+            id: "arcade".into(),
+            title: "Arcade".into(),
+            count: 2,
+        }];
+
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            systems,
+            Vec::new(),
+        );
+
+        assert!(catalog.lazy_text_indexes.get().is_none());
+        assert_eq!(catalog.system_game_count("arcade"), 2);
+        assert_eq!(catalog.filtered_game_count("arcade", &ArcadeFilter::All), 2);
+        assert!(catalog.lazy_text_indexes.get().is_none());
+
+        assert_eq!(catalog.search_game_indexes("arcade", "capcom"), vec![0]);
+        let built = catalog
+            .lazy_text_indexes
+            .get()
+            .expect("search should build text indexes") as *const ArcadeTextIndexes;
+        assert_eq!(catalog.autocomplete_search_word("arcade", "19"), "1942");
+        let reused = catalog
+            .lazy_text_indexes
+            .get()
+            .expect("autocomplete should reuse text indexes") as *const ArcadeTextIndexes;
+        assert_eq!(built, reused);
+    }
+
+    #[test]
     fn arcade_search_autocomplete_prefers_current_system_metadata_and_titles() {
         let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
         street.manufacturer = "Capcom".into();
