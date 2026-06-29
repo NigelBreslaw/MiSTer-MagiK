@@ -10,7 +10,7 @@ and what it taught us.
 
 | # | Approach | Render | Present/flip | Result | Tear |
 |---|----------|--------|--------------|--------|------|
-| 1 | **Python/Slint linuxfb** (built-in backend, via Zaparoo) | full-frame SW | no vsync, blits immediately | ~62fps, **~96% of one A9 core**, drifts vs 60Hz | ✗ tears |
+| 1 | **Python/Slint linuxfb** (built-in backend) | full-frame SW | no vsync, blits immediately | ~62fps, **~96% of one A9 core**, drifts vs 60Hz | ✗ tears |
 | 2 | **Rust: cached render + full blit** to `/dev/fb0` after vsync | 2.3ms (cached) | full 8MB memcpy **11.5–13.6ms** | ~57fps, **juddery** (present creeps over budget → drops) | mostly ok |
 | 3 | **Rust: FPGA page-flip**, render *direct* into `/dev/mem` back buffers (`SwappedBuffers`) | **15–17.7ms** (uncached, current+prev dirty) | flip **~12µs** | locked 61 in steady state but **unstable** — collapsed to 30fps for ~10s stretches when dirty area grew (render > 16.6ms) | ✓ tear-free |
 | 4 | **Rust: cached render + dirty-row copy** into `/dev/mem` back buffers, then flip | 2.3ms (cached) | copy 620 rows = **45ms** (~105MB/s) | **~20fps** | ✓ tear-free |
