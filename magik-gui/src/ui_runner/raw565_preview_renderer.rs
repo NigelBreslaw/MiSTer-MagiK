@@ -4,6 +4,7 @@ use mister_magik_fb::framebuffer::target::blend_565;
 #[cfg(mister_experiments)]
 use mister_magik_fb::framebuffer::target::brighten_565;
 use mister_magik_fb::framebuffer::target::DirtyRect;
+use std::sync::OnceLock;
 
 pub(super) struct Raw565PreviewRenderer;
 
@@ -356,6 +357,18 @@ fn blend_565_row(
         "RGB565 fade rows must cover destination length"
     );
     let a = ((alpha as u16 + 4) >> 3).min(32);
+    blend_565_row_bucketed(dst, previous, current, a);
+}
+
+fn blend_565_row_bucketed(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha_bucket: u16,
+) {
+    debug_assert!(previous.len() >= dst.len());
+    debug_assert!(current.len() >= dst.len());
+    let a = alpha_bucket.min(32);
     if a == 0 {
         dst.copy_from_slice(&previous[..dst.len()]);
         return;
@@ -368,6 +381,54 @@ fn blend_565_row(
     for x in start..dst.len() {
         dst[x] = blend_565_bucket(previous[x], current[x], a);
     }
+}
+
+fn blend_565_row_with_black(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    alpha_bucket: u16,
+    fade_in: bool,
+) {
+    debug_assert!(pixels.len() >= dst.len());
+    let a = alpha_bucket.min(32);
+    if a == 0 {
+        if fade_in {
+            dst.fill(<Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0));
+        } else {
+            dst.copy_from_slice(&pixels[..dst.len()]);
+        }
+        return;
+    }
+    if a >= 32 {
+        if fade_in {
+            dst.copy_from_slice(&pixels[..dst.len()]);
+        } else {
+            dst.fill(<Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0));
+        }
+        return;
+    }
+    let start = blend_565_row_with_black_platform(dst, pixels, a, fade_in);
+    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    for x in start..dst.len() {
+        dst[x] = if fade_in {
+            blend_565_bucket(black, pixels[x], a)
+        } else {
+            blend_565_bucket(pixels[x], black, a)
+        };
+    }
+}
+
+fn preview_fade_fast_path_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        preview_fade_fast_path_enabled_value(
+            std::env::var("MISTER_PREVIEW_FADE_P02").ok().as_deref(),
+        )
+    })
+}
+
+fn preview_fade_fast_path_enabled_value(value: Option<&str>) -> bool {
+    !matches!(value, Some("0" | "off" | "false" | "no" | "legacy"))
 }
 
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
@@ -460,6 +521,89 @@ fn blend_565_row_platform(
     _previous: &[Rgb565Pixel],
     _current: &[Rgb565Pixel],
     _alpha_bucket: u16,
+) -> usize {
+    0
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+#[inline]
+fn blend_565_row_with_black_platform(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    alpha_bucket: u16,
+    fade_in: bool,
+) -> usize {
+    let vector_len = dst.len().min(pixels.len()) & !3;
+    if vector_len == 0 {
+        return 0;
+    }
+    // SAFETY: vector_len is rounded down to a multiple of four within dst.len()
+    // and capped to pixels.len(); alpha is clamped to the 1..=31 bucket range.
+    unsafe { blend_565_row_with_black_neon(dst, pixels, vector_len, alpha_bucket, fade_in) };
+    vector_len
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn blend_565_row_with_black_neon(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    vector_len: usize,
+    alpha_bucket: u16,
+    fade_in: bool,
+) {
+    use core::arch::arm::{
+        vandq_u32, vdupq_n_u32, vld1_u16, vmovl_u16, vmovn_u32, vmulq_n_u32, vorrq_u32,
+        vshrq_n_u32, vst1_u16,
+    };
+
+    debug_assert!(vector_len <= dst.len());
+    debug_assert!(vector_len <= pixels.len());
+    debug_assert_eq!(vector_len % 4, 0);
+    debug_assert!(alpha_bucket <= 32);
+    let rb_mask = vdupq_n_u32(0xf81f);
+    let g_mask = vdupq_n_u32(0x07e0);
+    let factor = if fade_in {
+        alpha_bucket as u32
+    } else {
+        (32 - alpha_bucket) as u32
+    };
+    let pixels = pixels.as_ptr().cast::<u16>();
+    let dst = dst.as_mut_ptr().cast::<u16>();
+    let mut i = 0;
+    macro_rules! blend4 {
+        ($offset:expr) => {{
+            let src = vmovl_u16(vld1_u16(pixels.add($offset)));
+            let rb = vandq_u32(
+                vshrq_n_u32(vmulq_n_u32(vandq_u32(src, rb_mask), factor), 5),
+                rb_mask,
+            );
+            let g = vandq_u32(
+                vshrq_n_u32(vmulq_n_u32(vandq_u32(src, g_mask), factor), 5),
+                g_mask,
+            );
+            let blended = vmovn_u32(vorrq_u32(rb, g));
+            vst1_u16(dst.add($offset), blended);
+        }};
+    }
+    while i + 16 <= vector_len {
+        blend4!(i);
+        blend4!(i + 4);
+        blend4!(i + 8);
+        blend4!(i + 12);
+        i += 16;
+    }
+    while i + 4 <= vector_len {
+        blend4!(i);
+        i += 4;
+    }
+}
+
+#[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+fn blend_565_row_with_black_platform(
+    _dst: &mut [Rgb565Pixel],
+    _pixels: &[Rgb565Pixel],
+    _alpha_bucket: u16,
+    _fade_in: bool,
 ) -> usize {
     0
 }
@@ -876,6 +1020,32 @@ fn blit_transition_565_fade(
         }
         return;
     }
+    if preview_fade_fast_path_enabled()
+        && blit_transition_565_fade_same_geometry(
+            cached,
+            ui,
+            screen,
+            previous.as_ref(),
+            current.as_ref(),
+            alpha,
+        )
+        .is_some()
+    {
+        return;
+    }
+    if preview_fade_fast_path_enabled()
+        && blit_transition_565_fade_single_geometry(
+            cached,
+            ui,
+            screen,
+            previous.as_ref(),
+            current.as_ref(),
+            alpha,
+        )
+        .is_some()
+    {
+        return;
+    }
     blit_transition_565_fade_rows(
         cached,
         ui,
@@ -884,6 +1054,69 @@ fn blit_transition_565_fade(
         current.as_ref(),
         alpha,
     );
+}
+
+fn blit_transition_565_fade_same_geometry(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    previous: Option<&Raw565View<'_>>,
+    current: Option<&Raw565View<'_>>,
+    alpha: u8,
+) -> Option<()> {
+    let previous = previous?;
+    let current = current?;
+    if previous.x != current.x
+        || previous.y != current.y
+        || previous.display_w != current.display_w
+        || previous.display_h != current.display_h
+        || previous.display_w != previous.source_w
+        || previous.display_h != previous.source_h
+        || current.display_w != current.source_w
+        || current.display_h != current.source_h
+    {
+        return None;
+    }
+    let rect = raw565_view_screen_rect(previous, ui, screen)?;
+    if raw565_view_screen_rect(current, ui, screen) != Some(rect) {
+        return None;
+    }
+    let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
+    for y in rect.y0..rect.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        let previous_row = raw565_screen_row_for_y(previous, y, rect.x0, rect.x1, ui.render_w())?;
+        let current_row = raw565_screen_row_for_y(current, y, rect.x0, rect.x1, ui.render_w())?;
+        let dst = &mut cached[row + rect.x0..row + rect.x1];
+        blend_565_row_bucketed(dst, previous_row.row, current_row.row, alpha_bucket);
+    }
+    Some(())
+}
+
+fn blit_transition_565_fade_single_geometry(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    previous: Option<&Raw565View<'_>>,
+    current: Option<&Raw565View<'_>>,
+    alpha: u8,
+) -> Option<()> {
+    let (view, fade_in) = match (previous, current) {
+        (None, Some(current)) => (current, true),
+        (Some(previous), None) => (previous, false),
+        _ => return None,
+    };
+    if view.display_w != view.source_w || view.display_h != view.source_h {
+        return None;
+    }
+    let rect = raw565_view_screen_rect(view, ui, screen)?;
+    let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
+    for y in rect.y0..rect.y1.min(ui.render_h()) {
+        let row = y * ui.render_w();
+        let src_row = raw565_screen_row_for_y(view, y, rect.x0, rect.x1, ui.render_w())?;
+        let dst = &mut cached[row + rect.x0..row + rect.x1];
+        blend_565_row_with_black(dst, src_row.row, alpha_bucket, fade_in);
+    }
+    Some(())
 }
 
 fn blit_transition_565_fade_rows(
@@ -1803,6 +2036,55 @@ mod tests {
     }
 
     #[test]
+    fn preview_fade_fast_path_env_flag_defaults_on_and_accepts_legacy_off() {
+        assert!(preview_fade_fast_path_enabled_value(None));
+        assert!(preview_fade_fast_path_enabled_value(Some("1")));
+        assert!(!preview_fade_fast_path_enabled_value(Some("0")));
+        assert!(!preview_fade_fast_path_enabled_value(Some("legacy")));
+    }
+
+    #[test]
+    fn rgb565_black_row_blend_matches_scalar_blend() {
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        let pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+        ];
+        for alpha in 0..=255 {
+            let bucket = ((alpha as u16 + 4) >> 3).min(32);
+            let mut fade_in = [Rgb565Pixel(0); 8];
+            blend_565_row_with_black(&mut fade_in, &pixels, bucket, true);
+            let expected_in: Vec<_> = pixels
+                .iter()
+                .map(|&pixel| blend_565(black, pixel, alpha))
+                .collect();
+            assert_eq!(
+                fade_in.as_slice(),
+                expected_in.as_slice(),
+                "in alpha={alpha}"
+            );
+
+            let mut fade_out = [Rgb565Pixel(0); 8];
+            blend_565_row_with_black(&mut fade_out, &pixels, bucket, false);
+            let expected_out: Vec<_> = pixels
+                .iter()
+                .map(|&pixel| blend_565(pixel, black, alpha))
+                .collect();
+            assert_eq!(
+                fade_out.as_slice(),
+                expected_out.as_slice(),
+                "out alpha={alpha}"
+            );
+        }
+    }
+
+    #[test]
     fn rgb565_single_fade_matches_scalar_reference() {
         let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
         let screen = preview_screen_rect(&ui);
@@ -1876,6 +2158,122 @@ mod tests {
 
             assert_eq!(actual, expected, "alpha={alpha}");
         }
+    }
+
+    #[test]
+    fn rgb565_legacy_fade_rows_match_scalar_reference() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let screen = preview_screen_rect(&ui);
+        let previous_pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xffe0),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+        ];
+        let current_pixels = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x07ff),
+        ];
+        let previous = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &previous_pixels,
+                stride_pixels: 3,
+            },
+            source_w: 3,
+            source_h: 3,
+            display_w: 3,
+            display_h: 3,
+        };
+        let current = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &current_pixels,
+                stride_pixels: 3,
+            },
+            source_w: 3,
+            source_h: 3,
+            display_w: 3,
+            display_h: 3,
+        };
+        let frame = PreviewRawTransitionFrame {
+            previous: Some(previous),
+            current,
+            transition_id: 1,
+        };
+        let previous_view = raw565_view(frame.previous.as_ref().unwrap(), screen, 0);
+        let current_view = raw565_view(&frame.current, screen, 0);
+
+        let sentinel = Rgb565Pixel(0x4208);
+        let mut actual = vec![sentinel; ui.render_w() * ui.render_h()];
+        let mut expected = actual.clone();
+        blit_transition_565_fade_rows(
+            &mut actual,
+            &ui,
+            screen,
+            previous_view.as_ref(),
+            current_view.as_ref(),
+            128,
+        );
+        paint_scalar_fade_reference(&mut expected, &ui, screen, &frame, 128);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn rgb565_single_frame_fade_from_black_matches_scalar_reference() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let screen = preview_screen_rect(&ui);
+        let current_pixels = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x07ff),
+        ];
+        let current = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &current_pixels,
+                stride_pixels: 3,
+            },
+            source_w: 3,
+            source_h: 3,
+            display_w: 3,
+            display_h: 3,
+        };
+        let frame = PreviewRawTransitionFrame {
+            previous: None,
+            current,
+            transition_id: 1,
+        };
+
+        let sentinel = Rgb565Pixel(0x4208);
+        let mut actual = vec![sentinel; ui.render_w() * ui.render_h()];
+        let mut expected = actual.clone();
+        Raw565PreviewRenderer::compose_transition(
+            &mut actual,
+            &ui,
+            &frame,
+            PreviewTransitionEffect::Fade,
+            128.0 / 255.0,
+        );
+        paint_scalar_fade_reference(&mut expected, &ui, screen, &frame, 128);
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
