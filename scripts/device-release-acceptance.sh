@@ -500,6 +500,9 @@ run_preview_render_acceptance() {
   wait_status_expr "preview reaches non-placeholder state" 60 \
     "data['runtime']['slint_status'].get('preview_cache_state') not in ('placeholder', 'empty', '')" \
     "'preview=' + str(data['runtime'].get('slint_status', {}).get('preview_cache_state', '?')) + ' selected=' + str(data['runtime'].get('slint_status', {}).get('arcade_selected', '?'))"
+  wait_status_expr "preview composition has no recovery" 10 \
+    "int(data['runtime']['slint_status'].get('composition_recovery_count', 0)) == 0" \
+    "'composition_state=' + str(data['runtime'].get('slint_status', {}).get('composition_state', '?')) + ' recovery_count=' + str(data['runtime'].get('slint_status', {}).get('composition_recovery_count', '?')) + ' invariant=' + str(data['runtime'].get('slint_status', {}).get('last_composition_invariant_kind', ''))"
   "$MISTER" get "$trace" "$OUT/preview-render.tsv" >/dev/null 2>&1 || true
 }
 
@@ -515,6 +518,9 @@ run_velocity_scroll_acceptance() {
     restart_with_env "velocity $scenario restart" "$trace"
     min_rows=300
     wait_remote_trace_rows "velocity $scenario trace rows" "$trace" "$min_rows" 35
+    wait_status_expr "velocity $scenario composition has no recovery" 10 \
+      "int(data['runtime']['slint_status'].get('composition_recovery_count', 0)) == 0" \
+      "'composition_state=' + str(data['runtime'].get('slint_status', {}).get('composition_state', '?')) + ' recovery_count=' + str(data['runtime'].get('slint_status', {}).get('composition_recovery_count', '?')) + ' invariant=' + str(data['runtime'].get('slint_status', {}).get('last_composition_invariant_kind', ''))"
     "$MISTER" get "$trace" "$OUT/velocity-${scenario}.tsv" >/dev/null 2>&1 || true
     if "$ROOT/scripts/analyze-arcade-frame-trace.py" "$OUT/velocity-${scenario}.tsv" >"$OUT/velocity-${scenario}.analysis" 2>"$OUT/velocity-${scenario}.analysis.err"; then
       record_ok "velocity $scenario analysis"

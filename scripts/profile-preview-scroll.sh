@@ -189,6 +189,27 @@ emit_validity_row() {
     "$(tsv_value "$label")" "$valid" "$(tsv_value "$reason")" "$(tsv_value "$detail")"
 }
 
+check_composition_recovery_gate() {
+  local name="$1" status_json="$2"
+  python3 - "$name" "$status_json" <<'PY'
+import json
+import sys
+
+name, path = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+slint = data.get("runtime", {}).get("slint_status", {})
+count = int(slint.get("composition_recovery_count") or 0)
+state = slint.get("composition_state") or ""
+kind = slint.get("last_composition_invariant_kind") or ""
+detail = slint.get("last_composition_invariant_detail") or ""
+print(
+    f"composition_gate_tsv\tcase={name}\tstate={state}\trecovery_count={count}\tlast_kind={kind}\tlast_detail={detail}\tvalid={1 if count == 0 else 0}"
+)
+raise SystemExit(0 if count == 0 else 11)
+PY
+}
+
 emit_run_context_row() {
   local commit command_text started_at profile features binary_path runtime_type deployment_state binary_fields
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -284,6 +305,7 @@ run_case() {
   local local_tsv="$OUT_DIR/${label}-${name}.tsv"
   local local_log="$OUT_DIR/${label}-${name}.log"
   local local_status="$OUT_DIR/${label}-${name}.status.txt"
+  local local_status_json="$OUT_DIR/${label}-${name}.status.json"
   local local_chart="$OUT_DIR/${label}-${name}-chart.svg"
   local local_report="$OUT_DIR/${label}-${name}-report.html"
   local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
@@ -310,11 +332,18 @@ run_case() {
   fi
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
   "$MISTER" status >"$local_status" 2>&1 || true
+  "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
   echo "wrote $local_tsv"
   echo "wrote $local_log"
   emit_artifact_row "${name}-trace" "$local_tsv" "$remote_tsv"
   emit_artifact_row "${name}-log" "$local_log" "$REMOTE_LOG"
   emit_artifact_row "${name}-status" "$local_status" "scripts/mister status"
+  emit_artifact_row "${name}-status-json" "$local_status_json" "scripts/mister status --json"
+  if [[ -s "$local_status_json" ]] && ! check_composition_recovery_gate "$name" "$local_status_json"; then
+    emit_validity_row "0" "composition_recovery" "case=$name status=$local_status_json"
+    echo "$name composition recovery occurred; see $local_status_json" >&2
+    exit 13
+  fi
   "$HERE/scripts/frame-profile-chart.py" "$local_tsv" "$local_chart" --title "$label $name $scenario"
   "$HERE/scripts/frame-profile-report.py" "$local_tsv" "$local_report" --title "$label $name $scenario"
   emit_artifact_row "${name}-chart" "$local_chart" ""

@@ -94,7 +94,29 @@ remote_tsv="/tmp/${label}-arcade-scroll.tsv"
 remote_log="$REMOTE_LOG"
 local_tsv="$OUT_DIR/${label}-arcade-scroll.tsv"
 local_log="$OUT_DIR/${label}-arcade-scroll.log"
+local_status_json="$OUT_DIR/${label}-arcade-scroll.status.json"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
+
+check_composition_recovery_gate() {
+  local status_json="$1"
+  python3 - "$status_json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+slint = data.get("runtime", {}).get("slint_status", {})
+count = int(slint.get("composition_recovery_count") or 0)
+state = slint.get("composition_state") or ""
+kind = slint.get("last_composition_invariant_kind") or ""
+detail = slint.get("last_composition_invariant_detail") or ""
+print(
+    f"composition_gate_tsv\tstate={state}\trecovery_count={count}\tlast_kind={kind}\tlast_detail={detail}\tvalid={1 if count == 0 else 0}"
+)
+raise SystemExit(0 if count == 0 else 11)
+PY
+}
 
 cleanup() {
   rm -f "$env_file"
@@ -129,9 +151,15 @@ if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
   exit 1
 fi
 "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
+"$MISTER" status --json >"$local_status_json" 2>/dev/null || true
 
 echo "wrote $local_tsv"
 echo "wrote $local_log"
+echo "wrote $local_status_json"
+if [[ -s "$local_status_json" ]] && ! check_composition_recovery_gate "$local_status_json"; then
+  echo "arcade scroll composition recovery occurred; see $local_status_json" >&2
+  exit 13
+fi
 echo
 "$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv"
 echo
