@@ -1821,7 +1821,7 @@ pub(super) fn run_launcher_loop(
                     let selected = nav.arcade.selected.min(active_arcade_games.len() - 1);
                     if let Some(game) = active_arcade_games.get(selected) {
                         println!(
-                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={} selected_index={} title={} has_preview={} asset_key={}",
+                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview={}\tasset_key={}",
                             start.elapsed().as_millis(),
                             system.id,
                             selected,
@@ -1831,7 +1831,7 @@ pub(super) fn run_launcher_loop(
                         );
                     } else {
                         println!(
-                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={} selected_index={} title= has_preview=0 asset_key=",
+                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle=\thas_preview=0\tasset_key=",
                             start.elapsed().as_millis(),
                             system.id,
                             selected
