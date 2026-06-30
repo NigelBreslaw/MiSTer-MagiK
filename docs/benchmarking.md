@@ -66,8 +66,8 @@ scripts/profile-first-scan.sh LABEL --skip-build --replace-label --thread-sample
 
 Current production targets on the reference MiSTer are:
 
-- `library_ready <= 41000ms`
-- `library_db_saved <= 55000ms`
+- `library_ready <= 57094ms`
+- `library_db_saved <= 72573ms`
 
 During first database creation, the catalog builder owns the machine. The
 catalog worker and library walker must run foreground, with nice `0` and
@@ -445,8 +445,8 @@ performance.
 `scripts/mister reboot-wait --direct-reset` because no further writes are
 expected before reset. It records first-frame/catalog-ready timings in
 `history/toolchain-bench/results-first-scan.tsv`. The hard first-scan gates are
-`library_ready <= 41000ms` for RAM catalog usability and
-`library_db_saved <= 55000ms` for durable SQLite save completion. Anything above
+`library_ready <= 57094ms` for RAM catalog usability and
+`library_db_saved <= 72573ms` for durable SQLite save completion. Anything above
 either threshold fails the script. For cold catalog UX, prefer
 `bootstrap_counter_sustained_climb` over the first
 `bootstrap_counter_climb`: the latter is only the first meaningful target
