@@ -42,11 +42,11 @@ fn audit_installed_cores(
             .follow_links(false)
             .max_depth(3)
             .into_iter()
+            .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
             .filter_map(Result::ok)
         {
             let path = entry.path();
-            if !entry.file_type().is_file() || is_appledouble_file(path) || !path_ext_eq(path, "rbf")
-            {
+            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -213,7 +213,7 @@ fn audit_non_indexed_zips_in_cataloged_dir(
     };
     for entry in read_dir.filter_map(Result::ok) {
         let path = entry.path();
-        if !path.is_file() || is_appledouble_file(&path) || !path_ext_eq(&path, "zip") {
+        if !path.is_file() || should_ignore_hidden_path(&path) || !path_ext_eq(&path, "zip") {
             continue;
         }
         insert_audit_row(
@@ -317,6 +317,7 @@ fn game_dir_has_payloadish_files(path: &Path) -> (bool, bool) {
         .follow_links(false)
         .max_depth(2)
         .into_iter()
+        .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
         .filter_map(Result::ok)
     {
         if !entry.file_type().is_file() {
@@ -325,8 +326,7 @@ fn game_dir_has_payloadish_files(path: &Path) -> (bool, bool) {
         let p = entry.path();
         if p.components().any(|c| {
             let s = c.as_os_str().to_string_lossy();
-            s.starts_with("._")
-                || s.eq_ignore_ascii_case("images")
+            s.eq_ignore_ascii_case("images")
                 || s.eq_ignore_ascii_case("manuals")
                 || s.eq_ignore_ascii_case("screenshots")
                 || s.eq_ignore_ascii_case("palettes")
@@ -388,7 +388,7 @@ fn inferred_extensions_for_game_dir(game_dir: &str) -> String {
 }
 
 fn should_ignore_game_dir(name: &str) -> bool {
-    name.starts_with("._")
+    (name.len() > 1 && name.starts_with('.'))
         || name.eq_ignore_ascii_case("palettes")
         || name.eq_ignore_ascii_case("images")
         || name.eq_ignore_ascii_case("manuals")
@@ -408,10 +408,11 @@ fn path_ext_eq(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
-fn is_appledouble_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("._"))
+fn should_ignore_hidden_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        name.len() > 1 && name.starts_with('.')
+    })
 }
 
 fn source_name(kind: crate::launch_profiles::RuleSourceKind) -> &'static str {

@@ -5,6 +5,7 @@
 //! without walking every game payload.
 
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
+use crate::catalog_scan::should_ignore_path;
 use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
     self, core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
@@ -229,11 +230,11 @@ fn append_core_summaries(lines: &mut Vec<String>, roots: &[String]) {
             .follow_links(false)
             .max_depth(3)
             .into_iter()
+            .filter_entry(|entry| !should_ignore_path(entry.path()))
             .filter_map(Result::ok)
         {
             let path = entry.path();
-            if !entry.file_type().is_file() || is_appledouble_file(path) || !path_ext_eq(path, "rbf")
-            {
+            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -443,6 +444,7 @@ fn game_dir_has_payloadish_files(path: &Path) -> bool {
         .follow_links(false)
         .max_depth(2)
         .into_iter()
+        .filter_entry(|entry| !should_ignore_path(entry.path()))
         .filter_map(Result::ok)
     {
         if !entry.file_type().is_file() {
@@ -451,8 +453,7 @@ fn game_dir_has_payloadish_files(path: &Path) -> bool {
         let p = entry.path();
         if p.components().any(|c| {
             let s = c.as_os_str().to_string_lossy();
-            s.starts_with("._")
-                || s.eq_ignore_ascii_case("images")
+            s.eq_ignore_ascii_case("images")
                 || s.eq_ignore_ascii_case("manuals")
                 || s.eq_ignore_ascii_case("screenshots")
                 || s.eq_ignore_ascii_case("palettes")
@@ -482,7 +483,7 @@ fn canonical_core_id(stem: &str) -> String {
 }
 
 fn should_ignore_game_dir(name: &str) -> bool {
-    name.starts_with("._")
+    (name.len() > 1 && name.starts_with('.'))
         || name.eq_ignore_ascii_case("palettes")
         || name.eq_ignore_ascii_case("images")
         || name.eq_ignore_ascii_case("manuals")
@@ -500,12 +501,6 @@ fn path_ext_eq(path: &Path, expected: &str) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
-}
-
-fn is_appledouble_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("._"))
 }
 
 fn mtime_nanos(meta: &std::fs::Metadata) -> i64 {

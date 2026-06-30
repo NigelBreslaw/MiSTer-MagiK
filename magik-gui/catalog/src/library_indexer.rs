@@ -420,7 +420,7 @@ fn is_bootstrap_launcher_path(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if name.starts_with("._") {
+    if name.len() > 1 && name.starts_with('.') {
         return false;
     }
     matches!(
