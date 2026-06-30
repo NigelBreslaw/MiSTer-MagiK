@@ -434,6 +434,7 @@ impl LauncherCatalogSession {
                 catalog_len,
             ));
         } else if durable_save_pending {
+            self.foreground_update = false;
             effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         } else {
             effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
@@ -797,6 +798,78 @@ mod tests {
     }
 
     #[test]
+    fn foreground_rebuild_ready_clears_blocking_scan_until_persisted() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(4),
+                summary: None,
+                load_us: 42,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: true,
+            },
+            now,
+        ));
+
+        assert_eq!(
+            ready_effects,
+            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
+        );
+        assert_eq!(ready_ui, vec!["clear-catalog-scan"]);
+        assert!(!session.refresh_done());
+        assert!(!session.foreground_update());
+
+        let (_, progress_ui) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Progress {
+                title: "Saving library".to_string(),
+                detail: "Writing catalog database before opening launcher...".to_string(),
+                percent: -1,
+            },
+            now,
+        ));
+
+        assert_eq!(progress_ui, vec!["catalog-scan"]);
+        assert!(!session.foreground_update());
+
+        let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Persisted {
+                summary: refresh_summary(),
+            },
+            now,
+        ));
+
+        assert_eq!(
+            persisted_effects,
+            vec![
+                "finish-media-if-no-seed",
+                "catalog-validation-finished",
+                "event",
+                "ui"
+            ]
+        );
+        assert_eq!(persisted_ui, vec!["hide-background-scan"]);
+        assert!(session.refresh_done());
+        assert!(!session.foreground_update());
+        assert!(!session.refresh_failed);
+    }
+
+    #[test]
     fn persisted_catalog_with_audit_rows_logs_coverage_diagnostic_without_prompt() {
         let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
@@ -959,6 +1032,49 @@ mod tests {
                 error: "read launcher catalog row".to_string(),
             },
             Instant::now(),
+        ));
+
+        assert_eq!(
+            effects,
+            vec!["finish-media", "catalog-validation-finished", "event", "ui"]
+        );
+        assert_eq!(ui_effects, vec!["catalog-scan"]);
+        assert!(session.refresh_done());
+        assert!(!session.foreground_update());
+        assert!(session.refresh_failed);
+    }
+
+    #[test]
+    fn persistence_failure_after_early_ready_keeps_session_catalog_available() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        let _ = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(4),
+                summary: None,
+                load_us: 42,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: true,
+            },
+            now,
+        );
+        assert!(!session.refresh_done());
+
+        let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::PersistenceFailed {
+                error: "publish sqlite catalog".to_string(),
+            },
+            now,
         ));
 
         assert_eq!(
