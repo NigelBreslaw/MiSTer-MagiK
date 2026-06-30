@@ -2004,3 +2004,86 @@ PERFREVIEW-CLEAN-20260629-LIBIO	import_stage_total	4930											path=/tmp/mist
 PERFREVIEW-CLEAN-20260629-LIBIO	sqlite_publish_progress	1											bytes=6856704 copy_ms=522 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=28 result=bench-ok
 PERFREVIEW-CLEAN-20260629-LIBIO	refresh_done	0											skipped=false bytes=6856704 scan_us=22558830 discover_us=21792356 classify_us=22435452 import_us=9097296 discoveries=9237 normal_files=7519 containers=154 entries=281
 PERFREVIEW-CLEAN-20260629-LIBIO	done	33											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	0	1	2	0	0	4974	9455	2052	1951	24007	78	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	1	78	38	0	0	5066	9582	2052	1951	24007	78	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	2	145	77	0	4096	5138	9717	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	3	183	149	0	4096	5176	9883	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	4	233	211	0	4096	5225	10039	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	6	311	246	0	4096	5329	10165	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	7	414	253	0	4096	5455	10267	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	8	524	255	0	4096	5591	10363	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	9	632	261	0	4096	5722	10462	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	10	741	263	0	4096	5855	10559	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	11	848	267	0	4096	5985	10658	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	12	954	272	0	4096	6117	10755	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	14	1064	273	0	4096	6252	10850	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	15	1170	278	0	4096	6379	10950	2052	1951	24007	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	16	1219	311	512	3432448	6449	11074	2052	1973	24008	98	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	sample	17	1240	320	1024	11112448	6493	11178	2052	2043	24009	138	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+CATDRIFT-20260630	scan_stage_walk_targets	0											roots=4 targets=21 extensions=36
+CATDRIFT-20260630	scan_stage_first_candidate	45											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CATDRIFT-20260630	scan_stage_first_discovery	49											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+CATDRIFT-20260630	scan_stage_walk_target	1636											path=/media/fat/_Arcade dirs=511 files=2759 candidates=2755
+CATDRIFT-20260630	scan_stage_walk_target	185											path=/media/fat/games/Saturn dirs=12 files=465 candidates=155
+CATDRIFT-20260630	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=6
+CATDRIFT-20260630	scan_stage_walk_target	8											path=/media/fat/games/Amiga dirs=3 files=16 candidates=5
+CATDRIFT-20260630	scan_stage_walk_target	51											path=/media/fat/games/NEOGEO dirs=2 files=276 candidates=1
+CATDRIFT-20260630	scan_stage_walk_target	3											path=/media/fat/games/Atari5200 dirs=1 files=1 candidates=1
+CATDRIFT-20260630	scan_stage_walk_target	15											path=/media/fat/games/Atari7800 dirs=26 files=86 candidates=1
+CATDRIFT-20260630	scan_stage_walk_target	67											path=/media/fat/games/AtariLynx dirs=1 files=758 candidates=379
+CATDRIFT-20260630	scan_stage_walk_target	0											path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+CATDRIFT-20260630	scan_stage_walk_target	752											path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+CATDRIFT-20260630	scan_stage_walk_target	486											path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+CATDRIFT-20260630	scan_stage_walk_target	159											path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+CATDRIFT-20260630	scan_stage_walk_target	765											path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+CATDRIFT-20260630	scan_stage_walk_target	2											path=/media/fat/games/S32X dirs=1 files=2 candidates=2
+CATDRIFT-20260630	scan_stage_walk_target	7											path=/media/fat/games/SMS dirs=1 files=2 candidates=2
+CATDRIFT-20260630	scan_stage_walk_target	278											path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+CATDRIFT-20260630	scan_stage_walk_target	8											path=/media/fat/games/Vectrex dirs=2 files=91 candidates=1
+CATDRIFT-20260630	scan_stage_walk_target	4											path=/media/fat/games/WonderSwan dirs=1 files=3 candidates=1
+CATDRIFT-20260630	scan_stage_walk_target	3											path=/media/fat/games/WonderSwanColor dirs=1 files=3 candidates=1
+CATDRIFT-20260630	scan_stage_walk_target	70											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+CATDRIFT-20260630	scan_stage_walk_target	32											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+CATDRIFT-20260630	scan_stage_walk	4570											candidates=10637
+CATDRIFT-20260630	scan_stage_profile_match	109											calls=10637
+CATDRIFT-20260630	scan_stage_installed_collection	98											calls=10619
+CATDRIFT-20260630	scan_stage_archive_toc	24											containers=162
+CATDRIFT-20260630	scan_stage_collection_listings	0											collections=0
+CATDRIFT-20260630	scan_stage_file_discovery	1419											files=10617
+CATDRIFT-20260630	scan_stage_classify_total	4572											discoveries=13330 normal_files=10617 containers=162 entries=1151
+CATDRIFT-20260630	scan_stage_coverage_audit	466											rows=468
+CATDRIFT-20260630	import_stage_precompute_catalog	2529											rows=11041
+CATDRIFT-20260630	import_stage_precompute_projections	164											rows=11041
+CATDRIFT-20260630	import_stage_schema	27											tables=14
+CATDRIFT-20260630	import_stage_metadata_load	1213											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+CATDRIFT-20260630	import_stage_begin_tx	0											
+CATDRIFT-20260630	import_stage_insert_profiles	1											rows=21
+CATDRIFT-20260630	import_stage_insert_catalog_audit	9											rows=468
+CATDRIFT-20260630	import_stage_insert_games_chunk	160											from=0 to=1000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	93											from=1000 to=2000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	92											from=2000 to=3000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	104											from=3000 to=4000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	121											from=4000 to=5000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	100											from=5000 to=6000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	107											from=6000 to=7000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	126											from=7000 to=8000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	180											from=8000 to=9000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	240											from=9000 to=10000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	178											from=10000 to=11000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	203											from=11000 to=12000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	190											from=12000 to=13000 total=13205
+CATDRIFT-20260630	import_stage_insert_games_chunk	42											from=13000 to=13205 total=13205
+CATDRIFT-20260630	import_stage_insert_games_total	2475											rows=13205 launcher_rows=10213
+CATDRIFT-20260630	import_stage_materialize_arcade_ui	1511											
+CATDRIFT-20260630	import_stage_insert_launcher_arcade	416											
+CATDRIFT-20260630	import_stage_insert_launcher_console	474											rows=9967
+CATDRIFT-20260630	import_stage_insert_launcher_launch_plans	58											rows=8279
+CATDRIFT-20260630	import_stage_insert_meta	203											rows=12
+CATDRIFT-20260630	import_stage_insert_catalog_stamp	1126											stamp_rows=481 checkpoint_rows=596
+CATDRIFT-20260630	import_stage_insert_software_hash_cache	0											rows=0
+CATDRIFT-20260630	import_stage_build_saved_catalog	0											skipped=precomputed_projection
+CATDRIFT-20260630	import_stage_commit	8											
+CATDRIFT-20260630	import_stage_total	7523											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1478
+CATDRIFT-20260630	sqlite_publish_progress	1											bytes=10297344 copy_ms=1152 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=41 result=bench-ok
+CATDRIFT-20260630	refresh_done	0											skipped=false bytes=10297344 scan_us=5252223 discover_us=4570060 classify_us=5038139 import_us=11961631 discoveries=13205 normal_files=10617 containers=162 entries=1151
+CATDRIFT-20260630	done	18											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
