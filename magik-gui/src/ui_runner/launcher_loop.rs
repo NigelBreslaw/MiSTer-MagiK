@@ -627,12 +627,43 @@ pub(super) fn run_launcher_loop(
         catalog_session.note_summary_seed_ready();
         media_session.request_catalog_seed();
         catalog_version = catalog_version.wrapping_add(1);
-        let request = if deferred_library_rebuild {
-            CatalogWorkerRequest::ForceBuild
+        let return_catalog_hydration_needed = startup_return_requested;
+        let request = summary_seed_catalog_worker_request(
+            catalog_refresh_policy,
+            deferred_library_rebuild,
+            return_catalog_hydration_needed,
+        );
+        if let Some(request) = request {
+            if request == CatalogWorkerRequest::ForceBuild {
+                print_startup_event(start, "catalog_worker_start", &arcade_root);
+                scheduler.start_catalog_worker(
+                    arcade_root.clone(),
+                    request,
+                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
+                );
+            } else {
+                let delay = if return_catalog_hydration_needed {
+                    Duration::ZERO
+                } else {
+                    catalog_background_validation_delay()
+                };
+                print_startup_event(
+                    start,
+                    "catalog_worker_deferred",
+                    format!(
+                        "root={} request={} delay_ms={}",
+                        arcade_root,
+                        request.label(),
+                        delay.as_millis()
+                    ),
+                );
+                catalog_session.defer_catalog_worker(
+                    arcade_root.clone(),
+                    request,
+                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
+                );
+            }
         } else {
-            ready_catalog_worker_request(catalog_refresh_policy)
-        };
-        if !catalog_worker_enabled || request == CatalogWorkerRequest::LoadOnly {
             print_startup_event(
                 start,
                 "catalog_refresh_decision",
@@ -642,30 +673,6 @@ pub(super) fn run_launcher_loop(
                 ),
             );
             catalog_session.mark_refresh_done();
-        } else if request == CatalogWorkerRequest::ForceBuild {
-            print_startup_event(start, "catalog_worker_start", &arcade_root);
-            scheduler.start_catalog_worker(
-                arcade_root.clone(),
-                request,
-                CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
-            );
-        } else {
-            let delay = catalog_background_validation_delay();
-            print_startup_event(
-                start,
-                "catalog_worker_deferred",
-                format!(
-                    "root={} request={} delay_ms={}",
-                    arcade_root,
-                    request.label(),
-                    delay.as_millis()
-                ),
-            );
-            catalog_session.defer_catalog_worker(
-                arcade_root.clone(),
-                request,
-                CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
-            );
         }
     } else {
         library_db::record_catalog_ui_load();
@@ -871,6 +878,12 @@ pub(super) fn run_launcher_loop(
         StartupMode::ColdNoCatalog
     };
     lifecycle.begin_startup_reveal(startup_mode, start, &mut lifecycle_effects);
+    if startup_return_requested && !launch_return_restored {
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded,
+            &mut lifecycle_effects,
+        );
+    }
     sync_startup_visibility(&app, &lifecycle);
     if launch_return_restored {
         emit_return_context_restored(
@@ -978,14 +991,14 @@ pub(super) fn run_launcher_loop(
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
-        let startup_return_waiting_for_catalog = lifecycle.startup_status().mode
-            == StartupMode::ReturnFromGame
-            && !launch_return_restored;
+        let startup_return_waiting_for_catalog = lifecycle.startup_waiting_for_return_catalog();
+        let catalog_worker_delay =
+            lifecycle.catalog_worker_start_delay(catalog_background_validation_delay());
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
             loop_start,
-            catalog_background_validation_delay(),
+            catalog_worker_delay,
         ) {
             print_startup_event(start, "catalog_worker_start", &worker.root);
             lifecycle.handle(
@@ -2783,6 +2796,22 @@ fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> Catalog
     }
 }
 
+fn summary_seed_catalog_worker_request(
+    refresh_policy: CatalogRefreshPolicy,
+    deferred_library_rebuild: bool,
+    return_catalog_hydration_needed: bool,
+) -> Option<CatalogWorkerRequest> {
+    if deferred_library_rebuild {
+        return Some(CatalogWorkerRequest::ForceBuild);
+    }
+    let request = ready_catalog_worker_request(refresh_policy);
+    if return_catalog_hydration_needed {
+        return Some(request);
+    }
+    (request != CatalogWorkerRequest::LoadOnly && refresh_policy.worker_enabled())
+        .then_some(request)
+}
+
 fn launcher_bench_initial_preview_ready(
     scenario: LauncherBenchScenario,
     preview_cache_state: &str,
@@ -3484,6 +3513,26 @@ mod tests {
         assert_eq!(
             ready_catalog_worker_request(CatalogRefreshPolicy::Off),
             CatalogWorkerRequest::LoadOnly
+        );
+    }
+
+    #[test]
+    pub(super) fn summary_return_hydration_runs_even_when_refresh_is_off() {
+        assert_eq!(
+            summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, false, false),
+            None
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, false, true),
+            Some(CatalogWorkerRequest::LoadOnly)
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_request(CatalogRefreshPolicy::Default, false, true),
+            Some(CatalogWorkerRequest::CheckStamp)
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, true, true),
+            Some(CatalogWorkerRequest::ForceBuild)
         );
     }
 }
