@@ -33,7 +33,7 @@ ORDER BY i.identity_id;
 echo "== missing preferred previews by system =="
 "$MISTER" db "
 SELECT system_id, count(*) AS missing
-FROM ui_arcade_preferred
+FROM ui_arcade_preferred_text
 WHERE has_preview=0
 GROUP BY system_id
 ORDER BY system_id;
@@ -56,7 +56,7 @@ SELECT system_id,
        asset_key,
        asset_link_reason,
        preferred_reason
-FROM ui_arcade_preferred
+FROM ui_arcade_preferred_text
 WHERE identity_id IN ('1941','1942','mslug3')
    OR family_id IN ('1941','1942','mslug3')
 ORDER BY system_id, family_id, identity_id;
