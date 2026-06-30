@@ -421,16 +421,19 @@ or missing sidecars clear availability for that system and emit timing rows
 instead of failing the command; malformed sidecars emit error rows and leave the
 system untouched.
 
-The downloader streams the raw manifest object directly into a hidden temporary
-file beside the final pack on `/media/fat` while feeding the same bytes to the
-SHA-256 verifier. When the manifest includes an `index` block, it starts the
-small `.mmlz4b.idx` sidecar download alongside the raw pack, keeps sidecar work
-out of visible progress, and verifies the sidecar before marking the pack
-current. A local pack is current only when the raw pack and its advertised
-sidecar match the media state. If the raw pack is current but the sidecar is
-missing or stale, the worker repairs only the sidecar without showing a progress
-row unless the repair fails. Verified files are published atomically with file
-sync, rename, and parent-directory sync. The state file
+The downloader streams the raw pack object into `/tmp/mister-magik-media-download`
+while feeding the same bytes to the SHA-256 verifier. This keeps the visible
+download phase off MiSTer's slow exFAT/FUSE `/media/fat` filesystem while the
+catalog scanner is also walking game directories. After verification, the
+worker copies the staged file into a hidden temporary file beside the final pack
+and publishes it atomically with file sync, rename, and parent-directory sync.
+When the manifest includes an `index` block, it starts the small `.mmlz4b.idx`
+sidecar download alongside the raw pack, keeps sidecar work out of visible
+progress, and verifies the sidecar before marking the pack current. A local
+pack is current only when the raw pack and its advertised sidecar match the
+media state. If the raw pack is current but the sidecar is missing or stale, the
+worker repairs only the sidecar without showing a progress row unless the
+repair fails. The state file
 `/media/fat/mister-magik/assets/.screenshot-media-state.json` records the last
 successful media update, preferred size, index metadata, and the latest
 HTTP/cache headers observed for each downloaded pack. It is not a catalog stamp
@@ -459,10 +462,10 @@ verified pack and index objects over HTTP from the Cloudflare cached pack path.
 Progress is emitted as structured `screenshot_media_progress` startup events
 with system, size, phase, byte counts, pack index/count, and optional download
 Mbps. The catalog-build screen renders compact active pack rows from the same
-events. Each visible pack row uses one normalized progress
-bar: streamed download fills 0-100%, and the short verify/sync/rename
-finalization phases stay at 100%. The row omits byte labels and keeps completed
-packs visible briefly so users can see every requested pack finish.
+events. Each visible pack row uses one normalized progress bar: the `/tmp`
+network download fills 0-100%, and the verify/save/sync/rename finalization
+phases stay at 100%. The row omits byte labels and keeps completed packs
+visible briefly so users can see every requested pack finish.
 
 The production path is the canonical `.mmlz4b` object served with
 `Accept-Encoding: identity`. Runtime uses manifest `compression: "none"` for the
