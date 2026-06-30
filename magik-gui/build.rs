@@ -1,9 +1,25 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE");
+    println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_NUMBER");
+    println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_TIME");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=ui");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs/heads");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
     println!("cargo:rustc-check-cfg=cfg(mister_video_scene)");
+    println!(
+        "cargo:rustc-env=MISTER_MAGIK_BUILD_NUMBER={}",
+        git_commit_count()
+    );
+    println!(
+        "cargo:rustc-env=MISTER_MAGIK_BUILD_TIME={}",
+        build_timestamp()
+    );
 
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
     let launcher_only = match scope.as_str() {
@@ -25,5 +41,48 @@ fn main() {
     let experiments = std::env::var_os("CARGO_FEATURE_EXPERIMENTS").is_some();
     if experiments {
         println!("cargo:rustc-cfg=mister_experiments");
+    }
+}
+
+fn git_commit_count() -> String {
+    if let Ok(value) = std::env::var("MISTER_MAGIK_BUILD_NUMBER") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.into();
+        }
+    }
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    command_stdout("git", &["-C", &manifest_dir, "rev-list", "--count", "HEAD"])
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn build_timestamp() -> String {
+    if let Ok(value) = std::env::var("MISTER_MAGIK_BUILD_TIME") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.into();
+        }
+    }
+
+    command_stdout("date", &["+%-d.%-m.%Y %H:%M"])
+        .or_else(|| command_stdout("date", &["+%d.%m.%Y %H:%M"]))
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(command)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.into())
     }
 }

@@ -30,6 +30,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     load_cabinet_image(&bridge);
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
+    bridge.set_build_label(build_label().into());
     bridge.set_selected_index(0);
     bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
@@ -62,6 +63,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_preview_display_height(0);
     LauncherStatusPresenter::new(&bridge).init();
     sync_bridge_pad_launcher(&bridge, pad);
+}
+
+fn build_label() -> String {
+    let build_number = env!("MISTER_MAGIK_BUILD_NUMBER");
+    let build_time = env!("MISTER_MAGIK_BUILD_TIME");
+    format!("Build {build_number}  {build_time}")
 }
 
 fn load_cabinet_image(bridge: &slint_ui::launcher::MisterBridge) {
