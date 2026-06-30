@@ -2,6 +2,7 @@
 //!
 //! Catalog v2 builds SQLite off SD/exFAT and publishes only the completed file.
 
+use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
 use crate::catalog_stamp::CatalogStamp;
 use rusqlite::{params, Connection};
 
@@ -9,6 +10,10 @@ pub fn create_catalog_stamp_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE catalog_stamp (
+            ordinal INTEGER PRIMARY KEY,
+            line TEXT NOT NULL
+        );
+        CREATE TABLE catalog_discovery_checkpoint (
             ordinal INTEGER PRIMARY KEY,
             line TEXT NOT NULL
         );
@@ -30,6 +35,22 @@ pub fn write_catalog_stamp(conn: &Connection, stamp: &CatalogStamp) -> Result<()
     Ok(())
 }
 
+pub fn write_catalog_discovery_checkpoint(
+    conn: &Connection,
+    checkpoint: &CatalogDiscoveryCheckpoint,
+) -> Result<(), String> {
+    conn.execute("DELETE FROM catalog_discovery_checkpoint", [])
+        .map_err(|e| format!("clear catalog discovery checkpoint: {e}"))?;
+    let mut stmt = conn
+        .prepare("INSERT INTO catalog_discovery_checkpoint(ordinal,line) VALUES (?1,?2)")
+        .map_err(|e| format!("prepare catalog discovery checkpoint insert: {e}"))?;
+    for (idx, line) in checkpoint.lines().iter().enumerate() {
+        stmt.execute(params![idx as i64, line.as_str()])
+            .map_err(|e| format!("insert catalog discovery checkpoint: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn read_catalog_stamp(conn: &Connection) -> Result<Option<CatalogStamp>, String> {
     if !sqlite_table_exists(conn, "catalog_stamp")? {
         return Ok(None);
@@ -45,6 +66,25 @@ pub fn read_catalog_stamp(conn: &Connection) -> Result<Option<CatalogStamp>, Str
         lines.push(row.map_err(|e| format!("read catalog stamp row: {e}"))?);
     }
     Ok((!lines.is_empty()).then(|| CatalogStamp::from_lines(lines)))
+}
+
+pub fn read_catalog_discovery_checkpoint(
+    conn: &Connection,
+) -> Result<Option<CatalogDiscoveryCheckpoint>, String> {
+    if !sqlite_table_exists(conn, "catalog_discovery_checkpoint")? {
+        return Ok(None);
+    }
+    let mut stmt = conn
+        .prepare("SELECT line FROM catalog_discovery_checkpoint ORDER BY ordinal")
+        .map_err(|e| format!("prepare catalog discovery checkpoint read: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query catalog discovery checkpoint: {e}"))?;
+    let mut lines = Vec::new();
+    for row in rows {
+        lines.push(row.map_err(|e| format!("read catalog discovery checkpoint row: {e}"))?);
+    }
+    Ok((!lines.is_empty()).then(|| CatalogDiscoveryCheckpoint::from_lines(lines)))
 }
 
 fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -82,9 +122,30 @@ mod tests {
     }
 
     #[test]
+    fn catalog_discovery_checkpoint_round_trips_through_sqlite() {
+        let conn = Connection::open_in_memory().expect("open sqlite");
+        create_catalog_stamp_schema(&conn).expect("create schema");
+        let checkpoint = CatalogDiscoveryCheckpoint::from_lines(vec![
+            "schema\t45".to_string(),
+            "game-dir\t0\t/tmp/root/games/NES\tNES\tknown\tpayloadish\t0\t1".to_string(),
+        ]);
+
+        write_catalog_discovery_checkpoint(&conn, &checkpoint).expect("write checkpoint");
+        let stored = read_catalog_discovery_checkpoint(&conn)
+            .expect("read checkpoint")
+            .expect("stored checkpoint");
+
+        assert_eq!(stored, checkpoint);
+        assert_eq!(stored.fingerprint_hex(), checkpoint.fingerprint_hex());
+    }
+
+    #[test]
     fn missing_catalog_stamp_table_reads_as_none() {
         let conn = Connection::open_in_memory().expect("open sqlite");
 
         assert!(read_catalog_stamp(&conn).expect("read missing").is_none());
+        assert!(read_catalog_discovery_checkpoint(&conn)
+            .expect("read missing checkpoint")
+            .is_none());
     }
 }

@@ -328,6 +328,7 @@ fn scan_library_with_progress_and_events(
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: library_db::unix_now_secs(),
+        roots: cfg.roots.clone(),
         profiles,
         normal_files,
         containers,

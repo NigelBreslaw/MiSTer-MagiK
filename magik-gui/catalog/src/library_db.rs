@@ -24,6 +24,7 @@ pub(crate) use crate::catalog_projection::canonical_variant_title;
 use crate::catalog_projection::{
     self, CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
 };
+use crate::catalog_checkpoint::CatalogDriftSummary;
 use crate::catalog_stamp;
 use crate::core_audit::CatalogAuditRow;
 use crate::game_discovery::{
@@ -129,6 +130,7 @@ pub enum ArchiveScanStatus {
 pub(crate) struct LibraryScan {
     pub(crate) version: u32,
     pub(crate) scanned_at_unix: i64,
+    pub(crate) roots: Vec<String>,
     pub(crate) profiles: Vec<LaunchProfile>,
     pub(crate) normal_files: Vec<LibraryPayloadFile>,
     pub(crate) containers: Vec<LibraryContainer>,
@@ -343,11 +345,18 @@ pub struct CatalogStampCheckSummary {
     pub compute_us: u64,
     pub open_us: u64,
     pub read_us: u64,
+    pub checkpoint_read_us: u64,
+    pub checkpoint_compare_us: u64,
     pub compare_us: u64,
     pub stored_fingerprint: Option<String>,
     pub current_fingerprint: String,
+    pub stored_checkpoint_fingerprint: Option<String>,
+    pub current_checkpoint_fingerprint: String,
     pub stored_lines: usize,
     pub current_lines: usize,
+    pub stored_checkpoint_lines: usize,
+    pub current_checkpoint_lines: usize,
+    pub drift: CatalogDriftSummary,
 }
 
 pub struct HbmameMetadataSummary {
