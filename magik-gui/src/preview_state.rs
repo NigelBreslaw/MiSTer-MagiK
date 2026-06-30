@@ -543,6 +543,40 @@ fn preview_window_keys(games: ArcadeGameView<'_>, selected: usize, radius: usize
     out
 }
 
+struct PreviewCandidate<'a> {
+    index: usize,
+    game: &'a ArcadeGameEntry,
+    preview_key: String,
+}
+
+fn first_preview_candidate(
+    games: ArcadeGameView<'_>,
+    selected: usize,
+    radius: usize,
+) -> Option<PreviewCandidate<'_>> {
+    let selected_game = games.get(selected)?;
+    if let Some(preview_key) = game_preview_key(selected_game) {
+        return Some(PreviewCandidate {
+            index: selected,
+            game: selected_game,
+            preview_key,
+        });
+    }
+
+    preview_window_indices(games.len(), selected, radius)
+        .into_iter()
+        .filter(|idx| *idx != selected)
+        .find_map(|idx| {
+            let game = games.get(idx)?;
+            let preview_key = game_preview_key(game)?;
+            Some(PreviewCandidate {
+                index: idx,
+                game,
+                preview_key,
+            })
+        })
+}
+
 fn next_ready_result_index(
     backlog: &VecDeque<PreviewResult>,
     current_generation: u64,
@@ -592,8 +626,8 @@ pub(crate) fn request_arcade_preview_window(
         preview.clear(bridge);
         return false;
     }
-    let game = games.get(selected);
-    let Some(game) = game else {
+    let selected_game = games.get(selected);
+    let Some(selected_game) = selected_game else {
         preview.selected_mra_path = None;
         preview.selected_preview_key = None;
         preview.current_generation = 0;
@@ -618,10 +652,15 @@ pub(crate) fn request_arcade_preview_window(
         Some(&preview.visible_preview_key),
     );
 
+    let candidate = first_preview_candidate(games, selected, DEFAULT_PREVIEW_RADIUS);
+    let candidate_preview_key = candidate
+        .as_ref()
+        .map(|candidate| candidate.preview_key.as_str());
     if preview
         .selected_mra_path
         .as_deref()
-        .is_some_and(|path| path == game.mra_path.as_ref())
+        .is_some_and(|path| path == selected_game.mra_path.as_ref())
+        && preview.selected_preview_key.as_deref() == candidate_preview_key
     {
         if let Some(path) = preview.selected_preview_key.clone() {
             if preview.visible_preview_key != path {
@@ -630,7 +669,9 @@ pub(crate) fn request_arcade_preview_window(
                         request_preview_prefetches(games, selected, preview);
                         return false;
                     }
-                    bridge.set_arcade_preview_title(game.title.as_ref().into());
+                    if let Some(candidate) = candidate.as_ref() {
+                        bridge.set_arcade_preview_title(candidate.game.title.as_ref().into());
+                    }
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
                     preview.begin_raw_transition_to(&path);
@@ -651,88 +692,104 @@ pub(crate) fn request_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return false;
     }
-    preview.selected_mra_path = Some(game.mra_path.to_string());
+    preview.selected_mra_path = Some(selected_game.mra_path.to_string());
 
-    bridge.set_arcade_preview_title(game.title.as_ref().into());
-    eprintln!(
-        "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={} selected_index={} title={} has_preview={} asset_key={}",
-        preview.trace_elapsed_ms(),
-        game.system_id,
-        selected,
-        game.title,
-        if game_preview_key(game).is_some() { 1 } else { 0 },
-        game.preview_asset_key
-    );
-    if let Some(preview_key) = game_preview_key(game) {
-        preview.selected_preview_key = Some(preview_key.clone());
-        if preview.cache.contains_failed(&preview_key) {
-            preview.select_empty_preview();
-            bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            request_preview_prefetches(games, selected, preview);
-            return true;
-        }
-        if let Some(image) = preview.cache.get(&preview_key) {
-            if defer_selected_application {
-                request_preview_prefetches(games, selected, preview);
-                return false;
-            }
-            preview.current_generation = 0;
-            preview.has_visible_preview = true;
-            if preview_trace_enabled() {
-                eprintln!(
-                    "preview_trace cache_hit title={} archive_path={} asset_key={}",
-                    game.title, game.preview_archive_path, game.preview_asset_key
-                );
-            }
-            eprintln!(
-                "startup_timing\tpreview_selected_applied\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation=0 load_source=decoded_cache total_us=0 read_us=0 decode_us=0 age_us=0",
-                preview.trace_elapsed_ms(),
-                game.system_id,
-                selected,
-                game.title,
-                game.preview_asset_key
-            );
-            preview.begin_raw_transition_to(&preview_key);
-            preview.visible_preview_key = preview_key;
-            preview.raw_dirty = true;
-            apply_preview_image_bridge(bridge, &image);
-            request_preview_prefetches(games, selected, preview);
-            return true;
-        }
-        preview.current_generation = preview.worker.request_selected(
-            game.title.to_string(),
-            game.preview_archive_path.to_string(),
-            game.preview_asset_key.to_string(),
-        );
+    let selected_has_preview = game_preview_key(selected_game).is_some();
+    let Some(candidate) = candidate else {
         eprintln!(
-            "startup_timing\tpreview_selected_requested\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation={}",
+            "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={} selected_index={} title={} has_preview=0 asset_key= candidate_index= selected_has_preview={}",
             preview.trace_elapsed_ms(),
-            game.system_id,
+            selected_game.system_id,
             selected,
-            game.title,
-            game.preview_asset_key,
-            preview.current_generation
+            selected_game.title,
+            if selected_has_preview { 1 } else { 0 }
         );
-        if preview_trace_enabled() {
-            eprintln!(
-                "preview_trace requested generation={} title={} archive_path={} asset_key={}",
-                preview.current_generation,
-                game.title,
-                game.preview_archive_path,
-                game.preview_asset_key
-            );
-        }
-        if !preview.has_visible_preview {
-            clear_preview_image_bridge(bridge);
-        }
-        bridge.set_arcade_preview_status(PreviewStatus::Loading);
+        preview.select_empty_preview();
+        bridge.set_arcade_preview_placeholder_visible(true);
+        clear_preview_image_bridge(bridge);
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+        request_preview_prefetches(games, selected, preview);
+        return true;
+    };
+
+    let candidate_game = candidate.game;
+    bridge.set_arcade_preview_title(candidate_game.title.as_ref().into());
+    eprintln!(
+        "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} candidate_index={} selected_has_preview={}",
+        preview.trace_elapsed_ms(),
+        candidate_game.system_id,
+        selected,
+        candidate_game.title,
+        candidate_game.preview_asset_key,
+        candidate.index,
+        if selected_has_preview { 1 } else { 0 }
+    );
+    let preview_key = candidate.preview_key;
+    preview.selected_preview_key = Some(preview_key.clone());
+    if preview.cache.contains_failed(&preview_key) {
+        preview.select_empty_preview();
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
         request_preview_prefetches(games, selected, preview);
         return true;
     }
-    preview.select_empty_preview();
-    bridge.set_arcade_preview_placeholder_visible(true);
-    clear_preview_image_bridge(bridge);
-    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+    if let Some(image) = preview.cache.get(&preview_key) {
+        if defer_selected_application {
+            request_preview_prefetches(games, selected, preview);
+            return false;
+        }
+        preview.current_generation = 0;
+        preview.has_visible_preview = true;
+        if preview_trace_enabled() {
+            eprintln!(
+                "preview_trace cache_hit title={} archive_path={} asset_key={}",
+                candidate_game.title,
+                candidate_game.preview_archive_path,
+                candidate_game.preview_asset_key
+            );
+        }
+        eprintln!(
+            "startup_timing\tpreview_selected_applied\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation=0 load_source=decoded_cache total_us=0 read_us=0 decode_us=0 age_us=0",
+            preview.trace_elapsed_ms(),
+            candidate_game.system_id,
+            selected,
+            candidate_game.title,
+            candidate_game.preview_asset_key
+        );
+        preview.begin_raw_transition_to(&preview_key);
+        preview.visible_preview_key = preview_key;
+        preview.raw_dirty = true;
+        apply_preview_image_bridge(bridge, &image);
+        request_preview_prefetches(games, selected, preview);
+        return true;
+    }
+    preview.current_generation = preview.worker.request_selected(
+        candidate_game.title.to_string(),
+        candidate_game.preview_archive_path.to_string(),
+        candidate_game.preview_asset_key.to_string(),
+    );
+    eprintln!(
+        "startup_timing\tpreview_selected_requested\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation={}",
+        preview.trace_elapsed_ms(),
+        candidate_game.system_id,
+        selected,
+        candidate_game.title,
+        candidate_game.preview_asset_key,
+        preview.current_generation
+    );
+    if preview_trace_enabled() {
+        eprintln!(
+            "preview_trace requested generation={} title={} archive_path={} asset_key={}",
+            preview.current_generation,
+            candidate_game.title,
+            candidate_game.preview_archive_path,
+            candidate_game.preview_asset_key
+        );
+    }
+    if !preview.has_visible_preview {
+        clear_preview_image_bridge(bridge);
+    }
+    bridge.set_arcade_preview_status(PreviewStatus::Loading);
+    request_preview_prefetches(games, selected, preview);
     true
 }
 
@@ -1212,6 +1269,60 @@ mod tests {
     }
 
     #[test]
+    fn first_preview_candidate_uses_selected_row_when_it_has_preview() {
+        let games = vec![
+            preview_game("Selected", "selected.mra", "selected.png", true),
+            preview_game("Next", "next.mra", "next.png", true),
+        ];
+
+        let candidate = first_preview_candidate(ArcadeGameView::contiguous(&games), 0, 4)
+            .expect("selected preview candidate");
+
+        assert_eq!(candidate.index, 0);
+        assert_eq!(candidate.game.title.as_ref(), "Selected");
+        assert!(candidate.preview_key.ends_with("selected.png"));
+    }
+
+    #[test]
+    fn first_preview_candidate_uses_first_window_row_with_preview() {
+        let games = vec![
+            preview_game("No Preview", "none.mra", "", false),
+            preview_game("First Preview", "first.mra", "first.png", true),
+            preview_game("Second Preview", "second.mra", "second.png", true),
+        ];
+
+        let candidate = first_preview_candidate(ArcadeGameView::contiguous(&games), 0, 4)
+            .expect("fallback preview candidate");
+
+        assert_eq!(candidate.index, 1);
+        assert_eq!(candidate.game.title.as_ref(), "First Preview");
+        assert!(candidate.preview_key.ends_with("first.png"));
+    }
+
+    #[test]
+    fn first_preview_candidate_returns_none_for_empty_system() {
+        assert!(
+            first_preview_candidate(ArcadeGameView::empty(), 0, 4).is_none(),
+            "empty systems have no preview candidate"
+        );
+    }
+
+    #[test]
+    fn first_preview_candidate_ignores_missing_pack_or_asset() {
+        let mut missing_pack = preview_game("Missing Pack", "missing-pack.mra", "pack.png", true);
+        missing_pack.preview_archive_path = "".into();
+        let games = vec![
+            missing_pack,
+            preview_game("Missing Asset", "missing-asset.mra", "", true),
+        ];
+
+        assert!(
+            first_preview_candidate(ArcadeGameView::contiguous(&games), 0, 4).is_none(),
+            "malformed preview metadata is not a usable candidate"
+        );
+    }
+
+    #[test]
     fn ready_result_selector_prioritizes_current_selected_preview() {
         let backlog = VecDeque::from(vec![
             preview_result(
@@ -1585,6 +1696,8 @@ mod tests {
             preview_archive_path: String::new(),
             preview_asset_key: preview_asset_key.to_string(),
             image: None,
+            requested_at_ms: 0,
+            completed_at_ms: 0,
             request_age_us: 0,
             read_us: 0,
             decode_us: 0,
@@ -1613,5 +1726,29 @@ mod tests {
             display_w: 1,
             display_h: 1,
         })
+    }
+
+    fn preview_game(
+        title: &str,
+        mra_path: &str,
+        preview_asset_key: &str,
+        has_preview: bool,
+    ) -> ArcadeGameEntry {
+        ArcadeGameEntry {
+            title: title.into(),
+            mra_path: mra_path.into(),
+            preview_archive_path: if has_preview {
+                "/media/fat/mister-magik/assets/test-screenshots.mmlz4b".into()
+            } else {
+                "".into()
+            },
+            preview_asset_key: preview_asset_key.into(),
+            has_preview,
+            system_id: "saturn".into(),
+            year: None,
+            manufacturer: "".into(),
+            category: "".into(),
+            is_new: false,
+        }
     }
 }
