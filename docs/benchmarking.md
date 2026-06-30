@@ -81,6 +81,32 @@ prefetch, media work, and other background jobs after a usable catalog exists.
 Use `--thread-sample` when changing catalog scheduling so the run proves the
 first-build roles are foreground and the later background roles remain isolated.
 
+## Startup Reveal Gate
+
+Startup reveal checks cover the three launcher entry modes: cold no-catalog,
+warm valid-catalog, and return-from-game. Run the acceptance script against a
+freshly deployed production binary when changing launcher lifecycle, catalog
+startup, preview readiness, or launch-return behavior:
+
+```bash
+scripts/device-startup-reveal-acceptance.sh LABEL
+```
+
+The script backs up and removes the device catalog for the cold scenario, then
+restores it before the warm and return scenarios. It appends
+`history/toolchain-bench/results-startup-reveal.tsv` rows with `mode`,
+`reveal_ms`, `input_enabled_ms`, `catalog_ready_ms`, `first_frame_ms`,
+`preview_state`, and `result`. Generated TSV rows are measurement evidence and
+should not be committed unless a release note or investigation explicitly needs
+the captured device run.
+
+Acceptance depends on `/tmp/mister-magik/status.json` reporting
+`startup_mode`, `startup_reveal_state`, `revealed`, `input_enabled`,
+`reveal_ms`, and `input_enabled_ms`, plus startup timing rows in
+`/tmp/mister-magik/events.jsonl` and the launcher log. Warm boots must not emit
+`startup_splash_visible`; return-from-game must restore Arcade selection before
+`launcher_revealed` and wait for `return_preview_ready`.
+
 ## Arcade And Preview Scenarios
 
 Approved arcade scroll scenarios:

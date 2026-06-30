@@ -118,8 +118,9 @@ Only cold boot without a valid catalog shows the `MiSTer MagiK` splash, and it
 stays visible for at least two seconds while catalog work starts in the
 background. Warm boot and return-from-game keep HDMI black until the first
 intended launcher frame is ready. Input is accepted only after
-`InputEnabled`, and startup timing events must report `launcher_revealed` and
-`launcher_input_enabled`.
+`InputEnabled`; lifecycle launch handling must reject launch requests before
+that state even if a caller bypasses the normal input loop. Startup timing
+events must report `launcher_revealed` and `launcher_input_enabled`.
 
 Launch is intentionally two-phase. `Idle -> Launching` first updates the Slint
 bridge and presents the loading frame. Only after
