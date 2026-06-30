@@ -5,6 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/reboot-wait-lib.sh"
 
 scripts/mister run '
 set -e
@@ -28,5 +29,5 @@ sync
 
 scripts/mister inittab-ensure-stock
 scripts/mister ini-restore-stock
-scripts/mister reboot-wait
+mister_reboot_wait_with_raw_fallback
 echo "Stock MiSTer boot restored. MiSTer.ini backup left untouched at /media/fat/MiSTer.ini.bak if present."
