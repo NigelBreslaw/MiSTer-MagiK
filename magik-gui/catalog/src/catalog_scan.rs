@@ -537,7 +537,7 @@ fn scan_zip_central_directory_entries(
             remaining -= trailing_len;
         }
         let name = String::from_utf8_lossy(&name_buf).into_owned();
-        if !name.ends_with('/') && !name.starts_with("__MACOSX/") {
+        if !name.ends_with('/') && !should_ignore_path(Path::new(&name)) {
             if let Some(rule) = profile.classify_archive_entry(Path::new(&name)) {
                 entries.push(LibraryContainerEntry {
                     file_path: file_path.to_string(),
@@ -631,6 +631,8 @@ pub(crate) fn is_archive_entry_container_candidate(
         .is_some_and(|profile| !profile.archive_entry_rules.is_empty())
 }
 
+/// Returns true for catalog-irrelevant paths that should be pruned before
+/// candidate classification, including macOS metadata sidecars and hidden dirs.
 pub(crate) fn should_ignore_path(path: &Path) -> bool {
     let path_str = path.to_string_lossy().to_ascii_lowercase();
     if path_str.contains("/.____padding_file/") || path_str.contains("/__macosx/") {
@@ -641,16 +643,21 @@ pub(crate) fn should_ignore_path(path: &Path) -> bool {
     }
     path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy();
-        s.starts_with("._")
+        is_hidden_path_component(&s)
             || s == ".____padding_file"
             || s.eq_ignore_ascii_case("images")
             || s.eq_ignore_ascii_case("manuals")
             || s.eq_ignore_ascii_case("screenshot")
             || s.eq_ignore_ascii_case("screenshots")
             || s.eq_ignore_ascii_case("screenshot-magik")
+            || s.eq_ignore_ascii_case("__macosx")
             || s.eq_ignore_ascii_case("_organized")
             || s.eq_ignore_ascii_case("boxart")
     })
+}
+
+fn is_hidden_path_component(component: &str) -> bool {
+    component.len() > 1 && component.starts_with('.')
 }
 
 fn is_arcade_non_game_tree(path: &Path) -> bool {
@@ -955,6 +962,84 @@ mod tests {
             .iter()
             .all(|discovery| !discovery.launch_ref.contains("gamelist.xml")
                 && !discovery.launch_ref.contains("Not A Game.nes")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_prunes_hidden_files_and_dirs_before_candidate_work() {
+        let root = unique_temp_dir("ignore-hidden-files");
+        let arcade_dir = root.join("_Arcade");
+        let hidden_dir = arcade_dir.join(".metadata-cache");
+        std::fs::create_dir_all(&hidden_dir).expect("create hidden dir");
+        std::fs::write(
+            arcade_dir.join("Real Game.mra"),
+            "<misterromdescription><name>Real Game</name><setname>realgame</setname></misterromdescription>",
+        )
+        .expect("write real mra");
+        std::fs::write(
+            arcade_dir.join("._Puck Man (JP, Set 1).mra"),
+            "<misterromdescription><name>AppleDouble Sidecar</name></misterromdescription>",
+        )
+        .expect("write apple sidecar");
+        std::fs::write(
+            arcade_dir.join(".DS_Store.mra"),
+            "<misterromdescription><name>Finder Metadata</name></misterromdescription>",
+        )
+        .expect("write ds store candidate");
+        std::fs::write(
+            hidden_dir.join("Hidden Game.mra"),
+            "<misterromdescription><name>Hidden Game</name></misterromdescription>",
+        )
+        .expect("write hidden game");
+        let profiles = launch_profiles::builtin_profiles();
+        let candidate_exts = source_index_extensions(&profiles);
+        let mut found = Vec::new();
+
+        let stats = scan_target_candidates(&arcade_dir, &profiles, &candidate_exts, |file| {
+            found.push(file.path);
+            true
+        });
+
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.candidates, 1);
+        assert_eq!(found, vec![arcade_dir.join("Real Game.mra")]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_ignores_hidden_zip_entries() {
+        let root = unique_temp_dir("ignore-hidden-zip-entries");
+        let neogeo_dir = root.join("games/NEOGEO");
+        std::fs::create_dir_all(&neogeo_dir).expect("create neogeo dir");
+        let zip_path = neogeo_dir.join("NeoGeo Additions.zip");
+        write_stored_zip(
+            &zip_path,
+            &[
+                ("Visible/Real Game.neo", b"neo"),
+                ("__MACOSX/Visible/Real Game.neo", b"metadata"),
+                ("__MACOSX/Visible/._Real Game.neo", b"sidecar"),
+                ("Visible/._Real Game.neo", b"sidecar"),
+                ("Visible/.DS_Store.neo", b"metadata"),
+                (".metadata-cache/Hidden Game.neo", b"hidden"),
+            ],
+        );
+        let meta = std::fs::metadata(&zip_path).expect("stat zip");
+        let file = FoundFile {
+            path: zip_path.clone(),
+            ext: "zip".to_string(),
+            size: meta.len(),
+            mtime_secs: mtime_secs(&meta),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "neogeo")
+            .expect("neogeo profile");
+
+        let entries = scan_zip_central_directory(&file, profile).expect("scan zip");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry_path, "Visible/Real Game.neo");
         let _ = std::fs::remove_dir_all(root);
     }
 

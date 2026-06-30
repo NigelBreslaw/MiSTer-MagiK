@@ -348,11 +348,11 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
             .follow_links(false)
             .max_depth(3)
             .into_iter()
+            .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
             .filter_map(Result::ok)
         {
             let path = entry.path();
-            if !entry.file_type().is_file() || is_appledouble_file(path) || !path_ext_eq(path, "rbf")
-            {
+            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -868,10 +868,11 @@ fn path_ext_eq(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
-fn is_appledouble_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("._"))
+fn should_ignore_hidden_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        name.len() > 1 && name.starts_with('.')
+    })
 }
 
 #[cfg(test)]
