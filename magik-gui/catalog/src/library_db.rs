@@ -15,7 +15,6 @@ pub use crate::catalog_navigation::{
     navigation_path_for_sqlite, read_catalog_navigation_projection,
     write_catalog_navigation_projection_for_catalog, CatalogNavigationProjection,
 };
-use crate::catalog_summary::CatalogSummaryProjection;
 pub(crate) use crate::catalog_progress::ProgressCallback;
 pub use crate::catalog_progress::{
     catalog_progress_percent_from_display, CatalogProgress, CatalogProgressPhase,
@@ -245,12 +244,11 @@ impl LibraryScanArtifact {
 
     pub fn save_default_sqlite_with_projections(
         self,
-        summary: CatalogSummaryProjection,
-        navigation: CatalogNavigationProjection,
+        root: impl AsRef<Path>,
         progress: ProgressCallback<'_>,
     ) -> Result<LibraryRefreshSummary, String> {
         let cfg = BenchConfig::production();
-        save_scan_artifact_to_sqlite_with_projections(&cfg, self, summary, navigation, progress)
+        save_scan_artifact_to_sqlite_with_projections(&cfg, self, root, progress)
     }
 }
 
@@ -726,8 +724,7 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_catalog(
 pub(crate) fn save_scan_artifact_to_sqlite_with_projections(
     cfg: &BenchConfig,
     artifact: LibraryScanArtifact,
-    summary_projection: CatalogSummaryProjection,
-    navigation_projection: CatalogNavigationProjection,
+    root: impl AsRef<Path>,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
     let import_t = std::time::Instant::now();
@@ -735,10 +732,7 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_projections(
         &cfg.sqlite_path,
         &artifact.scan,
         &artifact.stamp,
-        &sqlite_catalog::CatalogSaveProjections {
-            summary: summary_projection,
-            navigation: navigation_projection,
-        },
+        root.as_ref(),
         progress,
     )?;
     let import_us = import_t.elapsed().as_micros() as u64;

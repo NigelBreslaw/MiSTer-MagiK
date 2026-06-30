@@ -153,11 +153,6 @@ pub(crate) struct SqliteSavedCatalog {
     pub(crate) catalog: LibraryCatalogLoad,
 }
 
-pub(crate) struct CatalogSaveProjections {
-    pub(crate) summary: catalog_summary::CatalogSummaryProjection,
-    pub(crate) navigation: catalog_navigation::CatalogNavigationProjection,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewIndexRefreshRow {
     pub label: String,
@@ -995,7 +990,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
     path: &Path,
     scan: &LibraryScan,
     stamp: &catalog_stamp::CatalogStamp,
-    projections: &CatalogSaveProjections,
+    root: &Path,
     progress: ProgressCallback<'_>,
 ) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
@@ -1024,10 +1019,22 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
             &mut writer,
         )?
     };
-    remove_catalog_projection_files(path)?;
-    catalog_summary::write_catalog_summary_projection(path, &projections.summary)?;
-    catalog_navigation::write_catalog_navigation_projection_for_sqlite(path, &projections.navigation)?;
+    write_catalog_projections_from_materialized_sqlite(path, root, stamp)?;
     Ok(bytes)
+}
+
+fn write_catalog_projections_from_materialized_sqlite(
+    sqlite_path: &Path,
+    root: &Path,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<(), String> {
+    let loaded = load_arcade_catalog_from_sqlite_at(root, sqlite_path)?;
+    let summary = catalog_summary::CatalogSummaryProjection::from_catalog(&loaded.catalog, stamp);
+    let navigation =
+        catalog_navigation::CatalogNavigationProjection::from_catalog(&loaded.catalog, stamp);
+    remove_catalog_projection_files(sqlite_path)?;
+    catalog_summary::write_catalog_summary_projection(sqlite_path, &summary)?;
+    catalog_navigation::write_catalog_navigation_projection_for_sqlite(sqlite_path, &navigation)
 }
 
 fn remove_catalog_projection_files(sqlite_path: &Path) -> Result<(), String> {
@@ -2726,6 +2733,7 @@ fn launch_target_mount_for_discovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arcade_catalog::GameSystemEntry;
     use crate::catalog_config::{DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION};
     use crate::library_db::{
         save_scan_artifact_to_sqlite, scan_library_artifact, BenchConfig, ProgressCallback,
@@ -3570,6 +3578,165 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    struct ComparableCatalogGame {
+        title: String,
+        launch_ref: String,
+        preview_archive_path: String,
+        preview_asset_key: String,
+        has_preview: bool,
+        system_id: String,
+        year: Option<u16>,
+        manufacturer: String,
+        category: String,
+        is_new: bool,
+    }
+
+    fn comparable_catalog_games(catalog: &ArcadeCatalog) -> Vec<ComparableCatalogGame> {
+        catalog
+            .games
+            .iter()
+            .map(|game| ComparableCatalogGame {
+                title: game.title.to_string(),
+                launch_ref: game.mra_path.to_string(),
+                preview_archive_path: game.preview_archive_path.to_string(),
+                preview_asset_key: game.preview_asset_key.to_string(),
+                has_preview: game.has_preview,
+                system_id: game.system_id.to_string(),
+                year: game.year,
+                manufacturer: game.manufacturer.to_string(),
+                category: game.category.to_string(),
+                is_new: game.is_new,
+            })
+            .collect()
+    }
+
+    fn catalog_titles_for_system(catalog: &ArcadeCatalog, system_id: &str) -> Vec<String> {
+        catalog
+            .system_game_view(system_id)
+            .iter()
+            .map(|game| game.title.to_string())
+            .collect()
+    }
+
+    fn assert_navigation_catalog_matches_sqlite(
+        sqlite_catalog: &ArcadeCatalog,
+        navigation_catalog: &ArcadeCatalog,
+    ) {
+        assert_eq!(navigation_catalog.len(), sqlite_catalog.len());
+        assert_eq!(navigation_catalog.systems, sqlite_catalog.systems);
+        assert_eq!(
+            comparable_catalog_games(navigation_catalog),
+            comparable_catalog_games(sqlite_catalog)
+        );
+
+        for system in &sqlite_catalog.systems {
+            let sqlite_titles = catalog_titles_for_system(sqlite_catalog, &system.id);
+            let navigation_titles = catalog_titles_for_system(navigation_catalog, &system.id);
+            assert_eq!(
+                navigation_titles, sqlite_titles,
+                "navigation titles diverged for system {}",
+                system.id
+            );
+            assert_eq!(navigation_titles.len(), system.count);
+            assert_eq!(
+                navigation_catalog.system_game_count(&system.id),
+                sqlite_catalog.system_game_count(&system.id)
+            );
+            assert_eq!(
+                navigation_catalog.system_preview_game_count(&system.id),
+                sqlite_catalog.system_preview_game_count(&system.id)
+            );
+        }
+
+        for game in &sqlite_catalog.games {
+            assert_eq!(
+                navigation_catalog.title_for_path(game.mra_path.as_ref()),
+                sqlite_catalog.title_for_path(game.mra_path.as_ref())
+            );
+            assert_eq!(
+                navigation_catalog.launch_target_for_ref(game.mra_path.as_ref()),
+                sqlite_catalog.launch_target_for_ref(game.mra_path.as_ref())
+            );
+        }
+    }
+
+    #[test]
+    fn navigation_projection_publish_matches_materialized_sqlite_catalog() {
+        let root = unique_temp_dir("sqlite-navigation-materialized-catalog");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tnav-catalog".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        let mut saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
+        saturn.year = Some(1996);
+        saturn.manufacturer = Some("Sega".to_string());
+        saturn.genre = Some("Action".to_string());
+        let mut snes = payload("/media/fat/games/SNES/F-Zero.sfc");
+        snes.platform_id = "snes".to_string();
+        snes.core_id = "SNES".to_string();
+        snes.hardware_id = "snes".to_string();
+        snes.category = "Console".to_string();
+        snes.year = Some(1991);
+        snes.manufacturer = Some("Nintendo".to_string());
+        snes.genre = Some("Racing".to_string());
+
+        save_sqlite_scan_with_progress_and_stamp_and_projections(
+            &db,
+            &sqlite_scan_with_discoveries(vec![
+                mra_discovery(1, "Puck Man"),
+                mra_discovery(2, "Phantasm (Japan)"),
+                saturn,
+                snes,
+            ]),
+            &stamp,
+            Path::new("/media/fat/_Arcade"),
+            None,
+        )
+        .expect("write catalog and materialized projections");
+
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load sqlite catalog");
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
+        let navigation =
+            catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
+                .expect("read navigation")
+                .expect("current navigation");
+        assert_eq!(navigation.games.len(), loaded.catalog.games.len());
+        assert_eq!(navigation.systems.len(), loaded.catalog.systems.len());
+        let navigation_catalog =
+            ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", navigation);
+
+        assert_eq!(
+            catalog_titles_for_system(&loaded.catalog, "arcade"),
+            vec!["Phantasm (Japan)".to_string(), "Puck Man".to_string()]
+        );
+        assert_eq!(
+            loaded.catalog.systems,
+            vec![
+                GameSystemEntry {
+                    id: "arcade".to_string(),
+                    title: "Arcade".to_string(),
+                    count: 2,
+                },
+                GameSystemEntry {
+                    id: "snes".to_string(),
+                    title: "SNES".to_string(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "saturn".to_string(),
+                    title: "Saturn".to_string(),
+                    count: 1,
+                },
+            ]
+        );
+        assert_navigation_catalog_matches_sqlite(&loaded.catalog, &navigation_catalog);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn projection_publish_failure_removes_stale_projection_pair() {
         let root = unique_temp_dir("sqlite-projection-publish-failure");
@@ -3604,22 +3771,11 @@ mod tests {
             "catalog-build\tnew".to_string(),
             "root\t0\tnew".to_string(),
         ]);
-        let catalog = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
-            .expect("load old sqlite catalog")
-            .catalog;
-        let projections = CatalogSaveProjections {
-            summary: catalog_summary::CatalogSummaryProjection::from_catalog(&catalog, &new_stamp),
-            navigation: catalog_navigation::CatalogNavigationProjection::from_catalog(
-                &catalog,
-                &new_stamp,
-            ),
-        };
-
         let err = save_sqlite_scan_with_progress_and_stamp_and_projections(
             &db,
             &new_scan,
             &new_stamp,
-            &projections,
+            Path::new("/media/fat/_Arcade"),
             None,
         )
         .expect_err("summary temp directory should fail projection publish");

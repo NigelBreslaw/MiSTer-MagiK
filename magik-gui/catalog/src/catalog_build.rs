@@ -1,10 +1,8 @@
 //! Catalog build orchestration and progress events.
 
 use crate::arcade_catalog;
-use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
-use crate::catalog_summary::CatalogSummaryProjection;
 use crate::game_discovery::unique_discovery_count;
 use crate::library_db::{
     BenchConfig, LibraryCatalogLoad, LibraryRefreshCatalog, LibraryRefreshSummary,
@@ -126,6 +124,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
         root: impl AsRef<Path>,
         progress: ProgressCallback<'_>,
     ) -> Result<LibraryRefreshCatalog, String> {
+        let root = root.as_ref();
         let import_t = Instant::now();
         let catalog_t = Instant::now();
         let catalog = artifact.catalog(root);
@@ -135,23 +134,11 @@ impl<'a> CatalogRefreshPipeline<'a> {
             catalog_t,
             format!("rows={}", catalog.len()),
         );
-        let projection_t = Instant::now();
-        let summary_projection = CatalogSummaryProjection::from_catalog(&catalog, artifact.stamp());
-        let navigation_projection =
-            CatalogNavigationProjection::from_catalog(&catalog, artifact.stamp());
-        sqlite_catalog::report_library_import_timing(
-            "precompute_projections",
-            projection_t,
-            format!("rows={}", catalog.len()),
-        );
         let bytes = sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections(
             &self.cfg.sqlite_path,
             &artifact.scan,
             artifact.stamp(),
-            &sqlite_catalog::CatalogSaveProjections {
-                summary: summary_projection,
-                navigation: navigation_projection,
-            },
+            root,
             progress,
         )?;
         let import_us = import_t.elapsed().as_micros() as u64;
