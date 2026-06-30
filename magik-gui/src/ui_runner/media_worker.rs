@@ -21,8 +21,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
-const MANIFEST_FETCH_ATTEMPTS: usize = 6;
-const MANIFEST_FETCH_INITIAL_RETRY: Duration = Duration::from_secs(2);
+const MANIFEST_FETCH_ATTEMPTS: usize = 30;
+const MANIFEST_FETCH_FAST_RETRY: Duration = Duration::from_secs(1);
+const MANIFEST_FETCH_FAST_RETRY_WINDOW: Duration = Duration::from_secs(20);
+const MANIFEST_FETCH_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MANIFEST_FETCH_MAX_RETRY: Duration = Duration::from_secs(10);
 const MEDIA_DOWNLOAD_WORK_DIR: &str = "/tmp/mister-magik-media-download";
 
@@ -110,7 +112,7 @@ fn run_screenshot_media_worker(
     let (manifest_text, manifest_metadata) = match fetch_manifest_text_with_retry(
         &config.manifest_url,
         MANIFEST_FETCH_ATTEMPTS,
-        MANIFEST_FETCH_INITIAL_RETRY,
+        MANIFEST_FETCH_INITIAL_BACKOFF,
         &tx,
         fetch_manifest_text,
     ) {
@@ -1408,15 +1410,38 @@ fn add_curl_download_args(command: &mut Command, url: &str, headers_path: &Path,
 fn fetch_manifest_text_with_retry<F>(
     manifest_url: &str,
     attempts: usize,
-    initial_retry: Duration,
+    initial_backoff: Duration,
     tx: &mpsc::Sender<MediaWorkerMessage>,
-    mut fetch: F,
+    fetch: F,
 ) -> Result<(String, HttpCacheMetadata), String>
 where
     F: FnMut(&str) -> Result<(String, HttpCacheMetadata), String>,
 {
+    fetch_manifest_text_with_retry_and_sleep(
+        manifest_url,
+        attempts,
+        initial_backoff,
+        tx,
+        fetch,
+        std::thread::sleep,
+    )
+}
+
+fn fetch_manifest_text_with_retry_and_sleep<F, S>(
+    manifest_url: &str,
+    attempts: usize,
+    initial_backoff: Duration,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+    mut fetch: F,
+    mut sleep: S,
+) -> Result<(String, HttpCacheMetadata), String>
+where
+    F: FnMut(&str) -> Result<(String, HttpCacheMetadata), String>,
+    S: FnMut(Duration),
+{
     let attempts = attempts.max(1);
-    let mut retry = initial_retry;
+    let started = Instant::now();
+    let mut retry_policy = ManifestRetryPolicy::new(initial_backoff);
     let mut last_error = String::new();
     for attempt in 1..=attempts {
         match fetch(manifest_url) {
@@ -1426,21 +1451,44 @@ where
                 if attempt == attempts {
                     break;
                 }
+                let retry = retry_policy.next_delay(started.elapsed());
                 let _ = tx.send(MediaWorkerMessage::Timing {
                     name: "screenshot_media_manifest_retry".to_string(),
                     detail: format!(
-                        "attempt={attempt} attempts={attempts} retry_ms={} error={last_error}",
+                        "attempt={attempt} attempts={attempts} elapsed_ms={} retry_ms={} error={last_error}",
+                        started.elapsed().as_millis(),
                         retry.as_millis()
                     ),
                 });
                 if !retry.is_zero() {
-                    std::thread::sleep(retry);
+                    sleep(retry);
                 }
-                retry = (retry.saturating_mul(2)).min(MANIFEST_FETCH_MAX_RETRY);
             }
         }
     }
     Err(last_error)
+}
+
+#[derive(Clone, Debug)]
+struct ManifestRetryPolicy {
+    backoff: Duration,
+}
+
+impl ManifestRetryPolicy {
+    fn new(initial_backoff: Duration) -> Self {
+        Self {
+            backoff: initial_backoff,
+        }
+    }
+
+    fn next_delay(&mut self, elapsed: Duration) -> Duration {
+        if elapsed < MANIFEST_FETCH_FAST_RETRY_WINDOW {
+            return MANIFEST_FETCH_FAST_RETRY;
+        }
+        let delay = self.backoff;
+        self.backoff = self.backoff.saturating_mul(2).min(MANIFEST_FETCH_MAX_RETRY);
+        delay
+    }
 }
 
 fn read_media_state(asset_dir: &Path) -> Option<Value> {
@@ -1935,9 +1983,14 @@ mod tests {
     fn manifest_fetch_retry_recovers_after_transient_failures() {
         let (tx, rx) = mpsc::channel();
         let mut calls = 0usize;
+        let mut sleeps = Vec::new();
 
-        let (body, metadata) =
-            fetch_manifest_text_with_retry(DEFAULT_MANIFEST_URL, 3, Duration::ZERO, &tx, |_| {
+        let (body, metadata) = fetch_manifest_text_with_retry_and_sleep(
+            DEFAULT_MANIFEST_URL,
+            3,
+            Duration::ZERO,
+            &tx,
+            |_| {
                 calls += 1;
                 if calls < 3 {
                     Err(format!("network-not-ready-{calls}"))
@@ -1950,10 +2003,13 @@ mod tests {
                         },
                     ))
                 }
-            })
-            .expect("third attempt should succeed");
+            },
+            |duration| sleeps.push(duration),
+        )
+        .expect("third attempt should succeed");
 
         assert_eq!(calls, 3);
+        assert_eq!(sleeps, [Duration::from_secs(1), Duration::from_secs(1)]);
         assert!(body.contains("\"schema\""));
         assert_eq!(metadata.status, Some(200));
         let retries: Vec<_> = rx
@@ -1969,7 +2025,40 @@ mod tests {
             .collect();
         assert_eq!(retries.len(), 2);
         assert!(retries[0].contains("attempt=1"));
+        assert!(retries[0].contains("retry_ms=1000"));
         assert!(retries[1].contains("attempt=2"));
+        assert!(retries[1].contains("retry_ms=1000"));
+    }
+
+    #[test]
+    fn manifest_retry_policy_uses_fast_start_then_exponential_backoff() {
+        let mut policy = ManifestRetryPolicy::new(Duration::from_secs(2));
+
+        assert_eq!(policy.next_delay(Duration::ZERO), Duration::from_secs(1));
+        assert_eq!(
+            policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW - Duration::from_millis(1)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW + Duration::from_secs(1)),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW + Duration::from_secs(2)),
+            Duration::from_secs(8)
+        );
+        assert_eq!(
+            policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW + Duration::from_secs(3)),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW + Duration::from_secs(4)),
+            Duration::from_secs(10)
+        );
     }
 
     #[test]
