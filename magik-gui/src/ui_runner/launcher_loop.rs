@@ -975,9 +975,9 @@ pub(super) fn run_launcher_loop(
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
-        let startup_return_waiting_for_catalog =
-            lifecycle.startup_status().mode == StartupMode::ReturnFromGame
-                && !launch_return_restored;
+        let startup_return_waiting_for_catalog = lifecycle.startup_status().mode
+            == StartupMode::ReturnFromGame
+            && !launch_return_restored;
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
@@ -2253,7 +2253,11 @@ fn maybe_mark_return_preview_ready(
     );
 }
 
-fn return_preview_ready(nav: &LauncherNav, catalog: &ArcadeCatalog, preview: &PreviewState) -> bool {
+fn return_preview_ready(
+    nav: &LauncherNav,
+    catalog: &ArcadeCatalog,
+    preview: &PreviewState,
+) -> bool {
     if nav.screen != Screen::Arcade {
         return true;
     }

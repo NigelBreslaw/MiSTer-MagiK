@@ -219,6 +219,7 @@ pub(super) fn parse_games_found_detail(detail: &str) -> Option<usize> {
 #[derive(Default)]
 pub(super) struct MediaProgressDisplay {
     pub(super) active: BTreeMap<String, MediaProgressDisplayRow>,
+    pub(super) downloading: BTreeSet<String>,
     pub(super) done: BTreeSet<String>,
     pub(super) failed: BTreeSet<String>,
     requested_count: usize,
@@ -307,22 +308,34 @@ impl MediaProgressDisplay {
         if event.system == "all" {
             return false;
         }
-        if event.pack_count > 0 {
+        if media_progress_download_active_event(event) && event.pack_count > 0 {
             self.requested_count = self.requested_count.max(event.pack_count);
         }
         if event.phase == "failed" {
-            self.failed.insert(event.system.clone());
+            if !self.downloading.remove(&event.system) {
+                return false;
+            }
             let row = self.media_progress_display_row(event);
+            self.failed.insert(event.system.clone());
             self.active.insert(event.system.clone(), row);
             return true;
         }
-        if media_progress_terminal_phase(&event.phase) {
-            self.done.insert(event.system.clone());
+        if media_progress_download_done_event(event) {
+            if !self.downloading.remove(&event.system) {
+                return false;
+            }
             let row = self.media_progress_display_row(event);
+            self.done.insert(event.system.clone());
             self.active.insert(event.system.clone(), row);
             return true;
+        }
+        if !media_progress_download_active_event(event) {
+            return false;
         }
         let row = self.media_progress_display_row(event);
+        self.done.remove(&event.system);
+        self.failed.remove(&event.system);
+        self.downloading.insert(event.system.clone());
         self.active.insert(event.system.clone(), row);
         true
     }
@@ -337,6 +350,7 @@ impl MediaProgressDisplay {
 
     fn clear(&mut self) {
         self.active.clear();
+        self.downloading.clear();
         self.done.clear();
         self.failed.clear();
         self.requested_count = 0;
@@ -381,11 +395,7 @@ impl MediaProgressDisplay {
     }
 
     fn counts(&self) -> (usize, usize, usize, usize) {
-        let active = self
-            .active
-            .keys()
-            .filter(|system| !self.done.contains(*system) && !self.failed.contains(*system))
-            .count();
+        let active = self.downloading.len();
         let done = self.done.len();
         let failed = self.failed.len();
         let total = self.requested_count.max(active + done + failed);
@@ -420,8 +430,12 @@ fn media_progress_display_row(event: &MediaProgressEvent) -> MediaProgressDispla
     }
 }
 
-fn media_progress_terminal_phase(phase: &str) -> bool {
-    matches!(phase, "done" | "skipped-current" | "check-only")
+fn media_progress_download_active_event(event: &MediaProgressEvent) -> bool {
+    event.variant == "identity" && matches!(event.phase.as_str(), "download_start" | "download")
+}
+
+fn media_progress_download_done_event(event: &MediaProgressEvent) -> bool {
+    event.variant == "identity" && event.phase == "download_done"
 }
 
 fn media_progress_percent(phase: &str, done: u64, total: u64) -> i32 {
@@ -572,14 +586,16 @@ mod tests {
 
         let _ =
             display.progress_intent(&media_progress_event("arcade", "download", 512, 1024, 1, 2));
-        let _ = display.progress_intent(&media_progress_event("neogeo", "save", 128, 1024, 2, 2));
+        let _ =
+            display.progress_intent(&media_progress_event("neogeo", "download", 128, 1024, 2, 2));
 
         assert_eq!(display.active.len(), 2);
+        assert_eq!(display.downloading.len(), 2);
         assert_eq!(display.active["arcade"].percent, 50);
         assert_eq!(display.active["arcade"].phase, "download");
         assert_eq!(display.active["arcade"].bytes_label, "");
-        assert_eq!(display.active["neogeo"].percent, 100);
-        assert_eq!(display.active["neogeo"].phase, "saving");
+        assert_eq!(display.active["neogeo"].percent, 12);
+        assert_eq!(display.active["neogeo"].phase, "download");
         assert_eq!(display.summary(), "screenshots 2 active · 0/2 done");
     }
 
@@ -591,13 +607,21 @@ mod tests {
         let _ =
             display.progress_intent(&media_progress_event("neogeo", "download", 128, 1024, 2, 2));
 
-        let _ = display.progress_intent(&media_progress_event("arcade", "done", 1024, 1024, 1, 2));
+        let _ = display.progress_intent(&media_progress_event(
+            "arcade",
+            "download_done",
+            1024,
+            1024,
+            1,
+            2,
+        ));
         let _ = display.progress_intent(&media_progress_event("neogeo", "failed", 128, 1024, 2, 2));
 
         assert_eq!(display.active.len(), 2);
+        assert!(display.downloading.is_empty());
         assert!(display.done.contains("arcade"));
         assert!(display.failed.contains("neogeo"));
-        assert_eq!(display.active["arcade"].phase, "downloaded");
+        assert_eq!(display.active["arcade"].phase, "download");
         assert_eq!(display.active["arcade"].percent, 100);
         assert_eq!(display.active["neogeo"].phase, "failed");
         assert_eq!(
@@ -648,7 +672,14 @@ mod tests {
         assert!(detail.contains("catalog_scan_visible=0"));
         assert!(detail.contains("standalone_visible=1"));
 
-        let _ = display.progress_intent(&media_progress_event("neogeo", "done", 1024, 1024, 1, 1));
+        let _ = display.progress_intent(&media_progress_event(
+            "neogeo",
+            "download_done",
+            1024,
+            1024,
+            1,
+            1,
+        ));
         assert!(display.all_requested_terminal());
     }
 

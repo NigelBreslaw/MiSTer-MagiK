@@ -302,10 +302,7 @@ impl LauncherLifecycle {
             StartupMode::WarmCatalog => StartupRevealState::HoldBlack,
             StartupMode::ReturnFromGame => StartupRevealState::HoldBlackReturn,
         };
-        out.startup_event(
-            "startup_entry_classified",
-            format!("mode={}", mode.label()),
-        );
+        out.startup_event("startup_entry_classified", format!("mode={}", mode.label()));
         match self.startup_reveal_state {
             StartupRevealState::SplashVisible => {
                 out.startup_event("startup_splash_visible", "mode=cold_no_catalog");
@@ -339,7 +336,8 @@ impl LauncherLifecycle {
                     "startup_splash_done",
                     format!(
                         "elapsed_ms={}",
-                        now.saturating_duration_since(self.startup_started_at).as_millis()
+                        now.saturating_duration_since(self.startup_started_at)
+                            .as_millis()
                     ),
                 );
                 out.startup_event("catalog_progress_revealed", "mode=cold_no_catalog");
@@ -380,11 +378,17 @@ impl LauncherLifecycle {
             input_enabled: self.startup_input_enabled_at.is_some(),
             reveal_ms: self
                 .startup_revealed_at
-                .map(|at| at.saturating_duration_since(self.startup_started_at).as_millis() as u64)
+                .map(|at| {
+                    at.saturating_duration_since(self.startup_started_at)
+                        .as_millis() as u64
+                })
                 .unwrap_or(0),
             input_enabled_ms: self
                 .startup_input_enabled_at
-                .map(|at| at.saturating_duration_since(self.startup_started_at).as_millis() as u64)
+                .map(|at| {
+                    at.saturating_duration_since(self.startup_started_at)
+                        .as_millis() as u64
+                })
                 .unwrap_or(0),
         }
     }

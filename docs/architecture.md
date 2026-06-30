@@ -122,6 +122,24 @@ intended launcher frame is ready. Input is accepted only after
 that state even if a caller bypasses the normal input loop. Startup timing
 events must report `launcher_revealed` and `launcher_input_enabled`.
 
+Screenshot pack download popups are also state-owned. The popup is driven only
+by real pack download progress, not by local pack checks, current-pack skips,
+index sidecar work, save/sync phases, or worker completion:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Hidden
+    Hidden --> Downloading: identity pack download_start/download
+    Downloading --> Downloading: another identity pack download_start/download
+    Downloading --> Linger: final active identity pack download_done/failed
+    Linger --> Downloading: identity pack download_start/download
+    Linger --> Hidden: after 2000ms
+```
+
+The popup may linger on the final downloaded/failed row for two seconds after
+the last active pack download finishes. Later verify/save/sync/done messages
+must not extend that timer or recreate the popup.
+
 Launch is intentionally two-phase. `Idle -> Launching` first updates the Slint
 bridge and presents the loading frame. Only after
 `loading_frame_presented(...)` does the scheduler let the existing

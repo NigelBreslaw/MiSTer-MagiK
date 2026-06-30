@@ -1,7 +1,7 @@
 use super::launcher_worker_intents::{LauncherWorkerUiIntent, MediaProgressDisplay};
 use super::*;
 
-const MEDIA_PROGRESS_DONE_HOLD: Duration = Duration::from_secs(8);
+const MEDIA_PROGRESS_DONE_HOLD: Duration = Duration::from_secs(2);
 const MEDIA_INTERACTION_SETTLE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -245,10 +245,13 @@ impl ScreenshotMediaUpdateSession {
                 effects.event(name, detail);
             }
             MediaWorkerMessage::Progress(event) => {
-                self.progress_clear_at = None;
                 effects.event("screenshot_media_progress", event.log_detail());
                 let intent = self.progress_display.progress_intent(&event);
-                if event.system != "all" {
+                let display_changed = !matches!(intent, LauncherWorkerUiIntent::None);
+                if display_changed {
+                    self.progress_clear_at = None;
+                }
+                if event.system != "all" && self.progress_display.has_visible_rows() {
                     let standalone_visible =
                         !catalog_scan_visible && self.progress_display.has_visible_rows();
                     effects.event(
@@ -260,10 +263,12 @@ impl ScreenshotMediaUpdateSession {
                         ),
                     );
                 }
-                if self.progress_display.all_requested_terminal() {
+                if display_changed && self.progress_display.all_requested_terminal() {
                     self.progress_clear_at = Some(now + MEDIA_PROGRESS_DONE_HOLD);
                 }
-                effects.ui(intent);
+                if display_changed {
+                    effects.ui(intent);
+                }
             }
             MediaWorkerMessage::CacheMetadata { scope, metadata } => {
                 effects.event(
@@ -291,7 +296,9 @@ impl ScreenshotMediaUpdateSession {
             }
             MediaWorkerMessage::Done { detail } => {
                 effects.event("screenshot_media_update_done", detail);
-                self.progress_clear_at = Some(now + MEDIA_PROGRESS_DONE_HOLD);
+                if self.progress_display.has_visible_rows() {
+                    self.progress_clear_at = Some(now + MEDIA_PROGRESS_DONE_HOLD);
+                }
                 effects.push(ScreenshotMediaUpdateEffect::DropWorker);
             }
         }
@@ -329,6 +336,21 @@ mod tests {
                 ScreenshotMediaUpdateEffect::SetInteractionActive { .. } => "set-interaction",
             })
             .collect()
+    }
+
+    fn media_progress_event(system: &str, phase: &str, pack_count: usize) -> MediaProgressEvent {
+        MediaProgressEvent {
+            system: system.to_string(),
+            image_size: "320x320".to_string(),
+            variant: "identity".to_string(),
+            phase: phase.to_string(),
+            bytes_done: 128,
+            bytes_total: 256,
+            pack_index: 1,
+            pack_count,
+            download_mbps: None,
+            detail: String::new(),
+        }
     }
 
     #[test]
@@ -401,16 +423,8 @@ mod tests {
         let now = Instant::now();
         let mut session = ScreenshotMediaUpdateSession::default();
         let active = MediaProgressEvent {
-            system: "neogeo".to_string(),
-            image_size: "320x320".to_string(),
-            variant: "identity".to_string(),
-            phase: "download".to_string(),
-            bytes_done: 128,
-            bytes_total: 256,
-            pack_index: 1,
-            pack_count: 1,
             download_mbps: Some(4.0),
-            detail: String::new(),
+            ..media_progress_event("neogeo", "download", 1)
         };
 
         assert_eq!(
@@ -424,20 +438,9 @@ mod tests {
         assert!(session.progress_clear_at.is_none());
 
         let done = MediaProgressEvent {
-            phase: "done".to_string(),
+            phase: "download_done".to_string(),
             bytes_done: 256,
-            ..MediaProgressEvent {
-                system: "neogeo".to_string(),
-                image_size: "320x320".to_string(),
-                variant: "identity".to_string(),
-                phase: String::new(),
-                bytes_done: 0,
-                bytes_total: 256,
-                pack_index: 1,
-                pack_count: 1,
-                download_mbps: None,
-                detail: String::new(),
-            }
+            ..media_progress_event("neogeo", "", 1)
         };
         assert_eq!(
             effect_names(session.handle_worker_message(
@@ -451,6 +454,60 @@ mod tests {
             session.progress_clear_at,
             Some(now + MEDIA_PROGRESS_DONE_HOLD)
         );
+    }
+
+    #[test]
+    fn check_only_progress_never_shows_media_popup() {
+        let now = Instant::now();
+        let mut session = ScreenshotMediaUpdateSession::default();
+
+        assert_eq!(
+            effect_names(session.handle_worker_message(
+                MediaWorkerMessage::Progress(media_progress_event("arcade", "check-only", 1)),
+                false,
+                now,
+            )),
+            vec!["event"]
+        );
+        assert!(session.progress_clear_at.is_none());
+
+        assert_eq!(
+            effect_names(session.handle_worker_message(
+                MediaWorkerMessage::Progress(media_progress_event("arcade", "skipped-current", 1)),
+                false,
+                now,
+            )),
+            vec!["event"]
+        );
+        assert!(session.progress_clear_at.is_none());
+    }
+
+    #[test]
+    fn save_after_download_done_does_not_extend_media_popup() {
+        let now = Instant::now();
+        let mut session = ScreenshotMediaUpdateSession::default();
+
+        let _ = session.handle_worker_message(
+            MediaWorkerMessage::Progress(media_progress_event("arcade", "download", 1)),
+            false,
+            now,
+        );
+        let _ = session.handle_worker_message(
+            MediaWorkerMessage::Progress(media_progress_event("arcade", "download_done", 1)),
+            false,
+            now + Duration::from_millis(100),
+        );
+        let clear_at = session.progress_clear_at;
+
+        assert_eq!(
+            effect_names(session.handle_worker_message(
+                MediaWorkerMessage::Progress(media_progress_event("arcade", "save", 1)),
+                false,
+                now + Duration::from_millis(500),
+            )),
+            vec!["event", "event"]
+        );
+        assert_eq!(session.progress_clear_at, clear_at);
     }
 
     #[test]
@@ -493,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn done_worker_message_schedules_terminal_clear() {
+    fn done_worker_message_without_download_does_not_show_media_popup() {
         let now = Instant::now();
         let mut session = ScreenshotMediaUpdateSession::default();
         let effects = session.handle_worker_message(
@@ -505,14 +562,10 @@ mod tests {
         );
 
         assert_eq!(effect_names(effects), vec!["event", "drop-worker"]);
-        assert_eq!(
-            session.progress_clear_at,
-            Some(now + MEDIA_PROGRESS_DONE_HOLD)
-        );
+        assert!(session.progress_clear_at.is_none());
         assert!(effect_names(session.clear_progress_if_due(now)).is_empty());
-        assert_eq!(
-            effect_names(session.clear_progress_if_due(now + MEDIA_PROGRESS_DONE_HOLD)),
-            vec!["ui"]
+        assert!(
+            effect_names(session.clear_progress_if_due(now + MEDIA_PROGRESS_DONE_HOLD)).is_empty()
         );
     }
 }
