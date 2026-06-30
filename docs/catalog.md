@@ -445,7 +445,11 @@ events will fire, it seeds the same selective requests from the catalog's
 installed system list after the first rendered frame. Unrequested packs are not
 checked or downloaded. The worker fetches the manifest once, de-duplicates
 system requests, and runs one active pack download at a time. The active pack
-may download its small index sidecar in parallel with the raw pack.
+may download its small index sidecar in parallel with the raw pack. The active
+raw-pack download runs at normal priority and unrestricted CPU affinity so its
+streaming thread, `curl`, and SHA-256 verifier are not starved by foreground
+catalog creation. The media coordinator and index sidecar work stay in the
+background scheduling class.
 
 `MISTER_MEDIA_UPDATE=off` disables the media worker,
 `MISTER_MEDIA_UPDATE=check` reports status without downloading, and

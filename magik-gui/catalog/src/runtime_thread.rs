@@ -43,10 +43,13 @@ impl RuntimeThreadRole {
             Self::LibraryWalker => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::PreviewSelected => RuntimeThreadPolicy::new(5, ThreadAffinity::Any),
             Self::PreviewPrefetch => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
-            Self::MediaWorker | Self::MediaDownload | Self::MediaIndex => {
+            Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
-            Self::VideoDecode | Self::VideoAudio => RuntimeThreadPolicy::new(5, ThreadAffinity::Any),
+            Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::Any),
+            Self::VideoDecode | Self::VideoAudio => {
+                RuntimeThreadPolicy::new(5, ThreadAffinity::Any)
+            }
         }
     }
 }
@@ -224,12 +227,19 @@ mod tests {
             RuntimeThreadRole::CatalogWorker,
             RuntimeThreadRole::LibraryWalker,
             RuntimeThreadRole::MediaWorker,
-            RuntimeThreadRole::MediaDownload,
             RuntimeThreadRole::MediaIndex,
         ] {
             assert_eq!(role.default_policy().affinity, ThreadAffinity::Cpu0);
             assert!(role.default_policy().nice >= 5);
         }
+    }
+
+    #[test]
+    fn visible_media_download_runs_at_interactive_priority() {
+        assert_eq!(
+            RuntimeThreadRole::MediaDownload.default_policy(),
+            RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+        );
     }
 
     #[test]
