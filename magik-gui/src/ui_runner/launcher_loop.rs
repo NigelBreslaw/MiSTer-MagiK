@@ -1808,7 +1808,7 @@ pub(super) fn run_launcher_loop(
             if let Some(system) = active_system(&catalog, &nav) {
                 if preview_systems_entered.insert(system.id.clone()) {
                     println!(
-                        "startup_timing\tpreview_system_entered\t{}ms\tsystem={} selected_index={}",
+                        "startup_timing\tpreview_system_entered\t{}ms\tsystem={}\tselected_index={}",
                         start.elapsed().as_millis(),
                         system.id,
                         nav.arcade.selected

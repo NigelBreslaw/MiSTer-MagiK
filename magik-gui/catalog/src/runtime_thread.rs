@@ -41,7 +41,7 @@ impl RuntimeThreadRole {
                 RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
             }
             Self::LibraryWalker => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
-            Self::PreviewSelected => RuntimeThreadPolicy::new(5, ThreadAffinity::Any),
+            Self::PreviewSelected => RuntimeThreadPolicy::new(0, ThreadAffinity::Any),
             Self::PreviewPrefetch => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
@@ -210,10 +210,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_policies_keep_selected_preview_at_existing_priority() {
+    fn selected_preview_runs_at_interactive_priority() {
         assert_eq!(
             RuntimeThreadRole::PreviewSelected.default_policy(),
-            RuntimeThreadPolicy::new(5, ThreadAffinity::Any)
+            RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
         );
         assert_eq!(
             RuntimeThreadRole::PreviewPrefetch.default_policy(),
