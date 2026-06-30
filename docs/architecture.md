@@ -139,7 +139,7 @@ stateDiagram-v2
 
     ClassifyEntry --> ColdNoCatalog: no valid catalog
     ClassifyEntry --> WarmCatalog: valid catalog
-    ClassifyEntry --> ReturnFromGame: launch return state exists
+    ClassifyEntry --> ReturnFromGame: Main return flag + launch return state
 
     ColdNoCatalog --> SplashVisible: start catalog build immediately
     SplashVisible --> CatalogProgressVisible: after 2000ms
@@ -160,7 +160,13 @@ stateDiagram-v2
 Only cold boot without a valid catalog shows the `MiSTer MagiK` splash, and it
 stays visible for at least two seconds while catalog work starts in the
 background. Warm boot and return-from-game keep HDMI black until the first
-intended launcher frame is ready. Input is accepted only after
+intended launcher frame is ready. Return-from-game is authorized by Main's
+volatile `MISTER_MAGIK_RETURN_TO_LAUNCHER=1` launcher environment; the
+`/tmp/mister-magik/launcher-return-state.json` file is only the restore payload
+for screen, system, selection, and filters. A stale return-state file without
+Main's flag is consumed and treated as a normal Home startup, so rebooting while
+a core is active cannot masquerade as an in-session game return. Input is
+accepted only after
 `InputEnabled`; lifecycle launch handling must reject launch requests before
 that state even if a caller bypasses the normal input loop. Startup timing
 events must report `launcher_revealed` and `launcher_input_enabled`.
