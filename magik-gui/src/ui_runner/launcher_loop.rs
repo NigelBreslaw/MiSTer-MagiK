@@ -490,8 +490,10 @@ pub(super) fn run_launcher_loop(
         .unwrap_or(Screen::Home);
     let lock_screen = launcher_lock_screen_from_env()
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
-    let launch_return_restore_allowed =
-        env_start_screen.is_none() && launcher_bench_scenario.is_none() && lock_screen.is_none();
+    let launch_return_restore_allowed = launcher_return_to_launcher_requested()
+        && env_start_screen.is_none()
+        && launcher_bench_scenario.is_none()
+        && lock_screen.is_none();
     let mut pending_launch_return_state =
         launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed);
     let startup_return_requested = pending_launch_return_state.is_some();
@@ -2217,6 +2219,18 @@ fn launcher_auto_launch_selected_enabled() -> bool {
     )
 }
 
+fn launcher_return_to_launcher_requested() -> bool {
+    return_to_launcher_env_is_set(
+        std::env::var("MISTER_MAGIK_RETURN_TO_LAUNCHER")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn return_to_launcher_env_is_set(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("true") | Some("yes"))
+}
+
 fn apply_pending_launch_return_state(
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
@@ -2976,6 +2990,16 @@ mod tests {
             effective_lock_screen(Some(Screen::Arcade), true, &catalog),
             Some(Screen::Arcade)
         );
+    }
+
+    #[test]
+    pub(super) fn launch_return_restore_requires_volatile_main_flag() {
+        assert!(!return_to_launcher_env_is_set(None));
+        assert!(!return_to_launcher_env_is_set(Some("0")));
+        assert!(!return_to_launcher_env_is_set(Some("false")));
+        assert!(return_to_launcher_env_is_set(Some("1")));
+        assert!(return_to_launcher_env_is_set(Some("true")));
+        assert!(return_to_launcher_env_is_set(Some("yes")));
     }
 
     #[test]

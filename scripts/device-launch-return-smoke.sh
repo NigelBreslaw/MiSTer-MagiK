@@ -14,6 +14,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
+STALE_RETURN_STATE="/tmp/mister-magik/stale-launcher-return-state.json"
 STATUS="/tmp/mister-magik/status.json"
 MAIN_STATUS="/tmp/mister-magik/main-status.json"
 SELECTED="${1:-17}"
@@ -54,7 +55,7 @@ export MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED=1
 EOF
 
 echo "==> Resetting launcher state"
-remote "rm -f '$REMOTE_ENV' '$RETURN_STATE'; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+remote "rm -f '$REMOTE_ENV' '$RETURN_STATE' '$STALE_RETURN_STATE'; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
 wait_remote "launcher active before smoke" 60 "grep -q '\"launcher_state\":\"LauncherActive\"' '$MAIN_STATUS' 2>/dev/null && grep -q '\"scene\":\"launcher\"' '$STATUS' 2>/dev/null"
 
 echo "==> Starting Arcade at selected row $SELECTED and auto-launching"
@@ -63,10 +64,21 @@ remote "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
 wait_remote "launch return state written" 60 "test -s '$RETURN_STATE'"
 remote "cat '$RETURN_STATE'"
 wait_remote "return state recorded row $SELECTED" 5 "grep -q '\"game_index\": $SELECTED' '$RETURN_STATE' 2>/dev/null || grep -q '\"game_index\":$SELECTED' '$RETURN_STATE' 2>/dev/null"
+remote "cp '$RETURN_STATE' '$STALE_RETURN_STATE'"
 
 echo "==> Returning from active core via load_core menu.rbf"
 remote "rm -f '$REMOTE_ENV'; printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd"
 wait_remote "launcher restored Arcade row $SELECTED" 90 "grep -q '\"screen\":\"arcade\"' '$STATUS' 2>/dev/null && grep -q '\"arcade_selected\":$SELECTED' '$STATUS' 2>/dev/null"
 wait_remote "return state consumed" 10 "test ! -e '$RETURN_STATE'"
+
+echo "==> Verifying stale return state is ignored without volatile return flag"
+cat >"$tmp_env" <<EOF
+export MISTER_MAGIK_RETURN_TO_LAUNCHER=0
+EOF
+"$MISTER" put "$tmp_env" "$REMOTE_ENV" >/dev/null
+remote "cp '$STALE_RETURN_STATE' '$RETURN_STATE'; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+wait_remote "stale return state ignored on normal launcher start" 60 "grep -q '\"screen\":\"home\"' '$STATUS' 2>/dev/null && grep -q '\"start_screen\":\"home\"' '$STATUS' 2>/dev/null"
+wait_remote "stale return state consumed" 10 "test ! -e '$RETURN_STATE'"
+remote "rm -f '$REMOTE_ENV' '$STALE_RETURN_STATE'"
 
 echo "==> Device launch return smoke passed"
