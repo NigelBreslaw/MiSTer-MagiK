@@ -22,6 +22,7 @@ use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
+pub const TURBO_PREVIEW_DECODED_CACHE_CAP: usize = 96;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
 const PREVIEW_ARCHIVE_METADATA_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_MEDIA_SIZE: &str = DEFAULT_SCREENSHOT_IMAGE_SIZE;
@@ -530,7 +531,17 @@ fn preview_decoded_cache_cap() -> usize {
         std::env::var("MISTER_PREVIEW_DECODED_CACHE_CAP")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_PREVIEW_CACHE_CAP * 3)
+            .unwrap_or(TURBO_PREVIEW_DECODED_CACHE_CAP)
+    })
+}
+
+fn preview_archive_background_warm_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
     })
 }
 
@@ -559,12 +570,12 @@ fn enqueue_preview_request(queue: &mut Vec<PreviewRequest>, req: PreviewRequest)
     }
     queue.retain(|req| {
         matches!(req.priority, PreviewPriority::Selected)
-            || req.priority.rank() <= DEFAULT_PREVIEW_CACHE_CAP
+            || req.priority.rank() <= TURBO_PREVIEW_DECODED_CACHE_CAP
     });
 }
 
 fn prune_stale_prefetch_requests(queue: &mut Vec<PreviewRequest>, newest_generation: u64) {
-    let keep_after = newest_generation.saturating_sub(DEFAULT_PREVIEW_CACHE_CAP as u64);
+    let keep_after = newest_generation.saturating_sub(TURBO_PREVIEW_DECODED_CACHE_CAP as u64);
     queue.retain(|req| {
         let keep =
             matches!(req.priority, PreviewPriority::Selected) || req.generation >= keep_after;
@@ -751,7 +762,8 @@ pub fn load_preview_asset_pixels(
     preview_asset_key: &str,
 ) -> Result<PreviewPixels, String> {
     let mut scratch = PreviewArchiveScratch::default();
-    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key, &mut scratch)
+    let resolved_archive_path = resolve_preview_archive_path(preview_archive_path);
+    load_raw565_preview_asset_timed(&resolved_archive_path, preview_asset_key, &mut scratch)
         .map(|loaded| loaded.image)
 }
 
@@ -762,7 +774,8 @@ pub fn load_preview_asset_pixels_timed(
     let mut scratch = PreviewArchiveScratch::default();
     let resize = PreviewResizeSpec::from_env();
     let storage_format = PreviewStorageFormat::from_env();
-    load_preview_pixels(preview_archive_path, preview_asset_key, &mut scratch, resize).map(
+    let resolved_archive_path = resolve_preview_archive_path(preview_archive_path);
+    load_preview_pixels(&resolved_archive_path, preview_asset_key, &mut scratch, resize).map(
         |loaded| LoadedPreviewAsset {
             pixels: loaded.image,
             read_us: loaded.timing.read_us,
@@ -799,8 +812,15 @@ fn load_raw565_preview_asset_timed(
     if let Some(loaded) =
         try_load_raw565_preview_asset_from_index(Path::new(archive_path), &entry_name, scratch)
     {
-        start_background_preview_archive_load(archive_path.to_string());
+        if preview_archive_background_warm_enabled() {
+            start_background_preview_archive_load(archive_path.to_string());
+        }
         return Ok(loaded);
+    }
+    if !preview_archive_background_warm_enabled() {
+        return Err(format!(
+            "preview asset {entry_name} missing from index for archive {archive_path}"
+        ));
     }
     let Some(archives) = preview_archives_for_paths(vec![archive_path.to_string()])? else {
         return Err(format!("preview archive not configured {archive_path}"));
@@ -2530,7 +2550,7 @@ mod tests {
                 "too far",
                 "far",
                 PreviewPriority::Prefetch {
-                    distance: DEFAULT_PREVIEW_CACHE_CAP + 1,
+                    distance: TURBO_PREVIEW_DECODED_CACHE_CAP + 1,
                 },
             ),
         );
@@ -2568,18 +2588,18 @@ mod tests {
             queued_request(1, "old selected", "selected", PreviewPriority::Selected),
             queued_request(2, "old prefetch", "old", PreviewPriority::Prefetch { distance: 1 }),
             queued_request(
-                DEFAULT_PREVIEW_CACHE_CAP as u64 + 9,
+                TURBO_PREVIEW_DECODED_CACHE_CAP as u64 + 9,
                 "recent prefetch",
                 "recent",
                 PreviewPriority::Prefetch { distance: 1 },
             ),
         ];
 
-        prune_stale_prefetch_requests(&mut queue, DEFAULT_PREVIEW_CACHE_CAP as u64 + 10);
+        prune_stale_prefetch_requests(&mut queue, TURBO_PREVIEW_DECODED_CACHE_CAP as u64 + 10);
 
         assert_eq!(
             queue.iter().map(|req| req.generation).collect::<Vec<_>>(),
-            vec![1, DEFAULT_PREVIEW_CACHE_CAP as u64 + 9]
+            vec![1, TURBO_PREVIEW_DECODED_CACHE_CAP as u64 + 9]
         );
     }
 
