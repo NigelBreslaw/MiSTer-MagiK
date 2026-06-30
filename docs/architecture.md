@@ -64,6 +64,41 @@ Historical evidence:
 - `history/2026-6-9/direct-framebuffer-sidecar-retrospective.md`
 - `history/2026-6-14/launcher-framebuffer-route-reassertion.md`
 
+## Launcher Composition
+
+Normal launcher rendering is governed by a small composition controller. Slint
+owns the cached full frame in every state; Rust direct-blitted layers are legal
+only while the controller is in `MixedArcade`. `ModalOverArcade` clears direct
+layer assumptions and forces a full Slint present before showing the dialog.
+
+```mermaid
+stateDiagram-v2
+    [*] --> FullSlint
+
+    FullSlint --> MixedArcade: enter Arcade
+    MixedArcade --> FullSlint: leave Arcade
+
+    MixedArcade --> ModalOverArcade: open Arcade dialog
+    ModalOverArcade --> MixedArcade: close dialog
+
+    FullSlint --> ModalFullSlint: open non-Arcade dialog
+    ModalFullSlint --> FullSlint: close dialog
+
+    FullSlint --> Recovering: route/display invariant failed
+    MixedArcade --> Recovering: composition invariant failed
+    ModalFullSlint --> Recovering: composition invariant failed
+    ModalOverArcade --> Recovering: composition invariant failed
+
+    Recovering --> FullSlint: direct layers cleared\nroute valid\nfull Slint frame presented
+    Recovering --> MixedArcade: Arcade still active\ndirect layers valid\nfull base frame presented
+```
+
+`Recovering` is an escape hatch, not normal UI flow. Entering it emits
+`ui_composition_invariant_failed`, increments `composition_recovery_count` in
+`/tmp/mister-magik/status.json`, records the last invariant kind/detail, clears
+direct-layer assumptions, and forces a full Slint present. Device gates should
+treat unexpected composition recovery as a failure.
+
 ## Game Launch Handoff
 
 Slint does not directly load cores. It hands launch requests back to Main so the
