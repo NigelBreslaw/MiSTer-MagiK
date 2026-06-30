@@ -333,7 +333,10 @@ catalog still re-checks needed packs. Production runs one active pack download
 at a time to avoid stealing network, CPU, and SD-card headroom from interaction;
 the active pack may still fetch its small index sidecar in parallel. The
 catalog-build screen is sourced from structured download/save progress events
-rather than parsed log text.
+rather than parsed log text. The visible download phase streams the raw pack to
+`/tmp/mister-magik-media-download` and hashes those bytes there; the later
+save/publish phase copies the verified staged file to `/media/fat` and performs
+the atomic sync/rename.
 
 Use `scripts/profile-screenshot-download.sh` to measure network download,
 verify, save/publish, and total wall time:
