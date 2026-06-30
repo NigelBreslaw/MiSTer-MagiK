@@ -71,13 +71,17 @@ Current production targets on the reference MiSTer are:
 
 During first database creation, the catalog builder owns the machine. The
 catalog worker and library walker must run foreground, with nice `0` and
-unrestricted CPU affinity, until the RAM catalog is ready. Do not apply the
-background CPU0/nice policy to this first-build scan path. Dropped frames or
-less-smooth scan-screen animation are acceptable during this window because the
-launcher has no usable catalog yet; failing the readiness gate is not.
+unrestricted CPU affinity, until the RAM catalog is ready. Active screenshot
+pack downloads also run at nice `0` with unrestricted CPU affinity because the
+streaming thread, `curl`, and SHA-256 verifier directly drive a visible progress
+bar. Do not apply the background CPU0/nice policy to these first-build scan or
+visible media-download paths. Dropped frames or less-smooth scan-screen
+animation are acceptable during this window because the launcher has no usable
+catalog yet; failing the readiness gate is not.
 
 The low-priority CPU0 policy remains appropriate for warm validation, preview
-prefetch, media work, and other background jobs after a usable catalog exists.
+prefetch, media coordination, index sidecar repair, and other background jobs
+after a usable catalog exists.
 Use `--thread-sample` when changing catalog scheduling so the run proves the
 first-build roles are foreground and the later background roles remain isolated.
 
