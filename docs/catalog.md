@@ -152,8 +152,41 @@ Explicit refresh and chosen rebuild:
 
 1. UI, marker boot, or CLI requests `ForceBuild`.
 2. The full builder always runs.
-3. There is no incremental rescan, preview-only repair, directory manifest
-   validation, or file fingerprint validation path.
+3. V1 drift detection does not partially mutate the SQLite catalog. It detects
+   that a rebuild is needed, then reuses the full builder as the only write
+   path.
+
+## Discovery Checkpoint
+
+Warm validation uses both the root stamp and a compact discovery checkpoint.
+The checkpoint is persisted in SQLite next to the stamp and records only cheap
+catalog inputs:
+
+- schema, catalog build, profile set, and core launch manifest identity,
+- configured roots and core search root metadata,
+- installed core summaries from `_Console`, `_Computer`, `_Arcade/cores`, and
+  `_LLAPI`,
+- top-level game directory summaries under configured game roots,
+- MAME and HBMAME metadata DB signatures,
+- catalog coverage audit summary rows.
+
+The checkpoint deliberately does not enumerate every game file. Normal copy and
+update workflows that add systems, cores, or top-level game directories are
+detected during delayed warm validation. Nested file-only changes still rely on
+root metadata changing or an explicit refresh.
+
+Checkpoint drift is advisory. `CheckStamp` reports `Changed` and exits when a
+known core is added, removed, or has a changed file signature; when an unknown
+core has a launchable-looking game directory; when a new top-level system game
+directory appears; or when checkpoint storage is missing or stale. The launcher
+then uses the existing `Library changed` dialog: `Continue` keeps the old
+catalog for this session and writes `rebuild-on-next-boot`, while `Rebuild`
+starts a foreground full build immediately.
+
+Runtime never infers unsupported launch behavior from folder contents alone.
+Baked Main-derived profiles decide which generic systems are launchable. Unknown
+cores and game folders remain `catalog_audit` diagnostics until a source-backed
+manifest row or special profile is added.
 
 ## Discovery Dates
 
@@ -291,6 +324,12 @@ Generated manifest rows carry the core ID, title/category, expected
 support, and source evidence. The checked-in manifest is the runtime source of
 truth for generic auto-cataloging; arbitrary game folders never create new
 profiles by themselves.
+
+The manifest can be regenerated from host-side evidence gathered from the
+maintained Main_MiSTer checkout and installed device cores. Observed core file
+fingerprints are diagnostic confidence only; runtime activation remains based
+on canonical core IDs and source-backed manifest rows so updated `.rbf` builds
+do not lose catalog support.
 
 Updating special profile semantics must bump `PROFILE_SET_VERSION`. Updating
 the generated manifest must update the manifest version or fingerprint covered
