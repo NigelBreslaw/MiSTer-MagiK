@@ -72,6 +72,9 @@ default. Override with `MISTER_MAIN_DIR`.
 - Local ARM builds on Apple Silicon use Apple's `container` runtime by default.
   Do not route local builds through Docker/OrbStack unless
   `MISTER_ARM_BUILD_BACKEND=cross` is explicitly requested for a comparison.
+- The repo tracks `.githooks/pre-commit`; enable it per clone with
+  `git config core.hooksPath .githooks` so local commits run the fast host CI
+  gates. See `magik-gui/BUILD.md`.
 - Edit `MiSTer.ini` only through `scripts/mister` mutators or the provided
   install/restore scripts. Do not use ad hoc sed/awk/manual rewrites.
 - Use `scripts/magik-cloud path` or `scripts/magik-cloud run -- ...` for

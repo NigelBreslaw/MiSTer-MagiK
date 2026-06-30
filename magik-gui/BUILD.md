@@ -31,6 +31,20 @@ scripts/dev-rust build-arm-debug     # ARM launcher/controller debug binary
 scripts/dev-rust build-ui  # magik-gui/build-arm.sh
 ```
 
+## Local commit hook
+
+The repo tracks a pre-commit hook in `.githooks/pre-commit`, but Git hook
+configuration is clone-local. Enable it on a Mac checkout with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook runs the fast host CI gates that catch ordinary Rust regressions before
+push: host logic tests, catalog crate tests, catalog clippy, and host-logic
+clippy. Run it directly with `.githooks/pre-commit` when you want the same check
+without committing.
+
 The host-testable library contains pure catalog/controller/repeat logic. The
 framebuffer, FPGA, Linux input loop, and Slint renderer stay in the binary target
 behind Cargo feature `ui`; use the explicit `cargo test --features ui
