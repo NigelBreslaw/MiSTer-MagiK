@@ -149,7 +149,9 @@ stateDiagram-v2
     HoldBlack --> RevealLauncher: catalog loaded + bridge synced + first frame ready
 
     ReturnFromGame --> HoldBlackReturn: keep framebuffer black
-    HoldBlackReturn --> RestoreContext: apply saved screen/system/selection/scroll
+    HoldBlackReturn --> HydrateReturnCatalog: cached summary lacks navigation rows
+    HydrateReturnCatalog --> RestoreContext: navigation catalog loaded
+    HoldBlackReturn --> RestoreContext: navigation catalog already loaded
     RestoreContext --> WaitRelevantPreview: selected preview exact, or no preview exists
     WaitRelevantPreview --> RevealLauncher: restored frame ready
 
@@ -160,7 +162,11 @@ stateDiagram-v2
 Only cold boot without a valid catalog shows the `MiSTer MagiK` splash, and it
 stays visible for at least two seconds while catalog work starts in the
 background. Warm boot and return-from-game keep HDMI black until the first
-intended launcher frame is ready. Return-from-game is authorized by Main's
+intended launcher frame is ready. Warm summary startup may defer background
+catalog validation so the first visible frame wins, but return-from-game treats
+navigation hydration as foreground reveal work: it starts immediately, even when
+normal refresh is disabled, because restoring the exact Arcade row requires
+hydrated navigation rows. Return-from-game is authorized by Main's
 volatile `MISTER_MAGIK_RETURN_TO_LAUNCHER=1` launcher environment; the
 `/tmp/mister-magik/launcher-return-state.json` file is only the restore payload
 for screen, system, selection, and filters. A stale return-state file without

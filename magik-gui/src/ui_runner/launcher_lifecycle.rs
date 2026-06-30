@@ -91,6 +91,7 @@ pub(super) enum StartupRevealState {
     CatalogProgressVisible,
     HoldBlack,
     HoldBlackReturn,
+    HydrateReturnCatalog,
     RestoreContext,
     WaitRelevantPreview,
     RevealLauncher,
@@ -104,6 +105,7 @@ impl StartupRevealState {
             Self::CatalogProgressVisible => "catalog_progress_visible",
             Self::HoldBlack => "hold_black",
             Self::HoldBlackReturn => "hold_black_return",
+            Self::HydrateReturnCatalog => "hydrate_return_catalog",
             Self::RestoreContext => "restore_context",
             Self::WaitRelevantPreview => "wait_relevant_preview",
             Self::RevealLauncher => "reveal_launcher",
@@ -216,6 +218,7 @@ pub(super) enum LauncherLifecycleInput {
     StartupRevealReady {
         preview_state: &'static str,
     },
+    StartupReturnCatalogHydrationNeeded,
     StartupReturnContextRestored {
         screen: &'static str,
         system_id: String,
@@ -370,6 +373,19 @@ impl LauncherLifecycle {
         self.startup_input_enabled_at.is_some()
     }
 
+    pub(super) fn startup_waiting_for_return_catalog(&self) -> bool {
+        self.startup_mode == StartupMode::ReturnFromGame
+            && self.startup_reveal_state == StartupRevealState::HydrateReturnCatalog
+    }
+
+    pub(super) fn catalog_worker_start_delay(&self, default_delay: Duration) -> Duration {
+        if self.startup_waiting_for_return_catalog() {
+            Duration::ZERO
+        } else {
+            default_delay
+        }
+    }
+
     pub(super) fn startup_status(&self) -> StartupRevealStatus {
         StartupRevealStatus {
             mode: self.startup_mode,
@@ -476,6 +492,15 @@ impl LauncherLifecycle {
         match &input {
             LauncherLifecycleInput::StartupRevealReady { preview_state } => {
                 self.mark_reveal_ready(&format!("preview_state={preview_state}"), out);
+                return self.step(BridgeSyncPlan::None);
+            }
+            LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded => {
+                if self.startup_mode == StartupMode::ReturnFromGame
+                    && self.startup_reveal_state == StartupRevealState::HoldBlackReturn
+                {
+                    self.startup_reveal_state = StartupRevealState::HydrateReturnCatalog;
+                    out.startup_event("return_catalog_hydration_needed", "mode=return_from_game");
+                }
                 return self.step(BridgeSyncPlan::None);
             }
             LauncherLifecycleInput::StartupReturnContextRestored {
@@ -610,6 +635,7 @@ impl LauncherLifecycle {
                 );
             }
             LauncherLifecycleInput::StartupRevealReady { .. }
+            | LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded
             | LauncherLifecycleInput::StartupReturnContextRestored { .. }
             | LauncherLifecycleInput::StartupReturnPreviewReady { .. } => {}
         }
@@ -853,6 +879,23 @@ mod tests {
         effects.clear();
 
         lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::HydrateReturnCatalog
+        );
+        assert!(lifecycle.startup_waiting_for_return_catalog());
+        assert_eq!(
+            lifecycle.catalog_worker_start_delay(Duration::from_secs(2)),
+            Duration::ZERO
+        );
+        assert!(!lifecycle.startup_can_present_frame());
+        assert!(effect_names(&effects).contains(&"return_catalog_hydration_needed"));
+        effects.clear();
+
+        lifecycle.handle(
             LauncherLifecycleInput::StartupReturnContextRestored {
                 screen: "arcade",
                 system_id: "arcade".to_string(),
@@ -883,6 +926,21 @@ mod tests {
         assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"return_preview_ready"));
         assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+    }
+
+    #[test]
+    fn warm_start_keeps_background_catalog_delay() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+
+        assert_eq!(
+            lifecycle.catalog_worker_start_delay(Duration::from_secs(2)),
+            Duration::from_secs(2)
+        );
+        assert!(!lifecycle.startup_waiting_for_return_catalog());
     }
 
     #[test]
