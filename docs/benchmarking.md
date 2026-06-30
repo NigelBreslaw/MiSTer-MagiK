@@ -325,9 +325,9 @@ first discovered supported system, and the media worker checks/downloads only
 those packs. Cached-catalog boots seed the same selective requests from the
 ready catalog's installed systems after the first visible frame and after active
 Arcade/launch interaction settles, so deleting packs without changing the
-catalog still re-checks needed packs. Production download concurrency defaults
-to one to avoid stealing SD-card headroom from interaction; diagnostic runs may
-override `MISTER_MEDIA_CONCURRENCY`, clamped to the supported range. The
+catalog still re-checks needed packs. Production runs one active pack download
+at a time to avoid stealing network, CPU, and SD-card headroom from interaction;
+the active pack may still fetch its small index sidecar in parallel. The
 catalog-build screen is sourced from structured download/save progress events
 rather than parsed log text.
 

@@ -247,13 +247,17 @@ fn parse_identity_variant(value: &str) -> Result<String, String> {
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
-    let output = Command::new("wget")
-        .args(["-q", "-O", "-", url])
+    let mut curl = Command::new("curl");
+    add_curl_download_args(&mut curl, url, None, true);
+    let output = curl
+        .arg("-o")
+        .arg("-")
+        .arg(url)
         .output()
-        .map_err(|e| format!("spawn wget: {e}"))?;
+        .map_err(|e| format!("spawn curl: {e}"))?;
     if !output.status.success() {
         return Err(format!(
-            "wget manifest failed with {}: {}",
+            "curl manifest failed with {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
@@ -486,19 +490,16 @@ fn stream_fat_download_to_publish_temp(
     temp_path: &Path,
     headers_path: &Path,
 ) -> Result<StreamDownloadResult, String> {
-    let headers = File::create(headers_path)
-        .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
-    let mut wget = Command::new("wget")
-        .arg("-S")
-        .arg("--header")
-        .arg("Accept-Encoding: identity")
-        .arg("-O")
+    let mut curl = Command::new("curl");
+    add_curl_download_args(&mut curl, &variant.url, Some(headers_path), false);
+    let mut curl = curl
+        .arg("-o")
         .arg("-")
         .arg(&variant.url)
         .stdout(Stdio::piped())
-        .stderr(Stdio::from(headers))
+        .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("spawn wget: {e}"))?;
+        .map_err(|e| format!("spawn curl: {e}"))?;
     let mut sha = Command::new("sha256sum")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -506,10 +507,10 @@ fn stream_fat_download_to_publish_temp(
         .map_err(|e| format!("spawn sha256sum: {e}"))?;
     let mut output =
         File::create(temp_path).map_err(|e| format!("create {}: {e}", temp_path.display()))?;
-    let mut input = wget
+    let mut input = curl
         .stdout
         .take()
-        .ok_or_else(|| "missing wget stdout pipe".to_string())?;
+        .ok_or_else(|| "missing curl stdout pipe".to_string())?;
     let mut sha_stdin = sha
         .stdin
         .take()
@@ -520,7 +521,7 @@ fn stream_fat_download_to_publish_temp(
     loop {
         let read = input
             .read(&mut buffer)
-            .map_err(|e| format!("read wget stdout: {e}"))?;
+            .map_err(|e| format!("read curl stdout: {e}"))?;
         if read == 0 {
             break;
         }
@@ -537,9 +538,9 @@ fn stream_fat_download_to_publish_temp(
         .flush()
         .map_err(|e| format!("flush streamed pack {}: {e}", temp_path.display()))?;
     let download_ms = elapsed_ms(started.elapsed());
-    let wget_status = wget.wait().map_err(|e| format!("wait wget: {e}"))?;
-    if !wget_status.success() {
-        return Err(format!("download-failed-{wget_status}"));
+    let curl_status = curl.wait().map_err(|e| format!("wait curl: {e}"))?;
+    if !curl_status.success() {
+        return Err(format!("download-failed-{curl_status}"));
     }
     let verify_started = Instant::now();
     let sha_output = sha
@@ -552,7 +553,7 @@ fn stream_fat_download_to_publish_temp(
     let actual_sha = parse_sha256_output(&sha_output.stdout)?;
     let header_text = fs::read_to_string(headers_path).unwrap_or_default();
     Ok(StreamDownloadResult {
-        metadata: parse_wget_headers(&header_text),
+        metadata: parse_http_headers(&header_text),
         bytes,
         sha256: actual_sha,
         download_ms,
@@ -624,15 +625,17 @@ fn install_verified_streamed_temp(
 }
 
 fn download_to_path(url: &str, path: &Path) -> Result<HttpMetadata, String> {
-    let output = Command::new("wget")
-        .arg("-S")
-        .arg("--header")
-        .arg("Accept-Encoding: identity")
-        .arg("-O")
+    let headers_path = path.with_extension("headers");
+    let mut curl = Command::new("curl");
+    add_curl_download_args(&mut curl, url, Some(&headers_path), false);
+    let output = curl
+        .arg("-o")
         .arg(path)
         .arg(url)
         .output()
-        .map_err(|e| format!("spawn wget: {e}"))?;
+        .map_err(|e| format!("spawn curl: {e}"))?;
+    let header_text = fs::read_to_string(&headers_path).unwrap_or_default();
+    let _ = fs::remove_file(&headers_path);
     if !output.status.success() {
         return Err(format!(
             "download-failed-{}:{}",
@@ -640,10 +643,33 @@ fn download_to_path(url: &str, path: &Path) -> Result<HttpMetadata, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    Ok(parse_wget_headers(&String::from_utf8_lossy(&output.stderr)))
+    Ok(parse_http_headers(&header_text))
 }
 
-fn parse_wget_headers(text: &str) -> HttpMetadata {
+fn add_curl_download_args(
+    command: &mut Command,
+    url: &str,
+    headers_path: Option<&Path>,
+    follow: bool,
+) {
+    command
+        .arg("--fail")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--header")
+        .arg("Accept-Encoding: identity");
+    if let Some(headers_path) = headers_path {
+        command.arg("-D").arg(headers_path);
+    }
+    if follow {
+        command.arg("--location");
+    }
+    if url.starts_with("https://") && Path::new("/etc/ssl/certs/cacert.pem").is_file() {
+        command.arg("--cacert").arg("/etc/ssl/certs/cacert.pem");
+    }
+}
+
+fn parse_http_headers(text: &str) -> HttpMetadata {
     let mut headers = BTreeMap::new();
     for line in text.lines() {
         let Some((name, value)) = line.trim().split_once(':') else {
@@ -1042,8 +1068,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_wget_cache_headers() {
-        let metadata = parse_wget_headers(
+    fn parses_http_cache_headers() {
+        let metadata = parse_http_headers(
             "  HTTP/1.1 200 OK\n  ETag: \"abc\"\n  CF-Cache-Status: HIT\n  Content-Encoding: identity\n",
         );
 

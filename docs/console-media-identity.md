@@ -175,10 +175,11 @@ Screenshot-pack updates from Cloudflare R2 are handled by the MagiK runtime,
 `scripts/profile-screenshot-download.sh`. Runtime v1 uses raw manifest
 `compression: "none"` with `Accept-Encoding: identity`. The launcher runtime
 queues downloads only for systems discovered by the active catalog scan and
-runs at most three pack downloads concurrently. Compression comparisons should
-first use Cloudflare negotiated responses and recorded header/cache evidence for
-the canonical `.mmlz4b` object. Store or select `.gz` or `.br` files only if
-total time improves after including download, decompression, saving,
+runs one active pack download at a time; the active pack may fetch its small
+index sidecar in parallel. Compression comparisons should first use Cloudflare
+negotiated responses and recorded header/cache evidence for the canonical
+`.mmlz4b` object. Store or select `.gz` or `.br` files only if total time
+improves after including download, decompression, saving,
 verification, and cache behavior.
 
 Use `scripts/profile-screenshot-save.sh` when changing the save/publish path.

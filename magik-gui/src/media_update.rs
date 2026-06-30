@@ -15,6 +15,9 @@ use mister_magik_catalog::media_identity::{
 
 pub const DEFAULT_MANIFEST_URL: &str =
     "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
+const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = "https://assets.mistermagik.com";
+const OFFICIAL_ASSET_HTTP_ORIGIN: &str = "http://assets.mistermagik.com";
+const OFFICIAL_PACK_OBJECT_PREFIX: &str = "mister-magik/v1/packs/";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaManifest {
@@ -301,19 +304,21 @@ fn normalize_compression(value: &str) -> Option<&'static str> {
 
 impl MediaVariant {
     fn with_url(mut self, origin: &str) -> Result<Self, String> {
-        validate_object_path(&self.object)?;
+        let object_path = media_object_path_for_validation(&self.object)?;
+        validate_object_path(object_path)?;
         validate_sha256(&self.sha256)?;
         if self.bytes == 0 {
             return Err(format!("media object {} has zero bytes", self.object));
         }
-        self.url = format!("{}/{}", origin.trim_end_matches('/'), self.object);
+        self.url = media_object_url(origin, &self.object);
         Ok(self)
     }
 }
 
 impl MediaIndex {
     fn with_url(mut self, origin: &str) -> Result<Self, String> {
-        validate_index_object_path(&self.object)?;
+        let object_path = media_object_path_for_validation(&self.object)?;
+        validate_index_object_path(object_path)?;
         validate_sha256(&self.sha256)?;
         validate_sha256(&self.archive_sha256)?;
         if self.bytes == 0 {
@@ -325,9 +330,35 @@ impl MediaIndex {
                 self.object
             ));
         }
-        self.url = format!("{}/{}", origin.trim_end_matches('/'), self.object);
+        self.url = media_object_url(origin, &self.object);
         Ok(self)
     }
+}
+
+pub fn media_object_url(origin: &str, object: &str) -> String {
+    if object.starts_with("http://") || object.starts_with("https://") {
+        return object.to_string();
+    }
+    let object = object.trim_start_matches('/');
+    let origin = origin.trim_end_matches('/');
+    if origin == OFFICIAL_ASSET_HTTPS_ORIGIN && object.starts_with(OFFICIAL_PACK_OBJECT_PREFIX) {
+        format!("{OFFICIAL_ASSET_HTTP_ORIGIN}/{object}")
+    } else {
+        format!("{origin}/{object}")
+    }
+}
+
+fn media_object_path_for_validation(object: &str) -> Result<&str, String> {
+    let Some((scheme, rest)) = object.split_once("://") else {
+        return Ok(object);
+    };
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("unsupported media object URL scheme: {object}"));
+    }
+    let (_, path) = rest
+        .split_once('/')
+        .ok_or_else(|| format!("media object URL must include path: {object}"))?;
+    Ok(path)
 }
 
 fn image_size_from_pack(value: &Value) -> Option<String> {
@@ -609,7 +640,8 @@ mod tests {
 
         assert_eq!(pack.id, "arcade");
         assert_eq!(pack.image_size, "320x320");
-        assert_eq!(pack.raw.url, format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"));
+        assert_eq!(manifest.origin, "https://assets.mistermagik.com");
+        assert_eq!(pack.raw.url, format!("http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"));
         assert_eq!(
             pack.identity(),
             PackIdentity {
@@ -635,7 +667,7 @@ mod tests {
         assert_eq!(index.archive_sha256, pack.raw.sha256);
         assert_eq!(
             index.url,
-            format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx")
+            format!("http://assets.mistermagik.com/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{IDX_SHA}.mmlz4b.idx")
         );
     }
 
@@ -698,7 +730,7 @@ mod tests {
         );
         assert_eq!(
             pack.variant_for_compression("gzip").unwrap().url,
-            format!("https://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz")
+            format!("http://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz")
         );
     }
 
@@ -903,8 +935,40 @@ mod tests {
         assert_eq!(
             manifest.packs[0].raw.url,
             format!(
-                "https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{SHA}.mmlz4b"
+                "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{SHA}.mmlz4b"
             )
+        );
+    }
+
+    #[test]
+    fn custom_manifest_origin_keeps_https_pack_urls() {
+        let manifest = parse_manifest_json(
+            "https://media.example.test/manifest.json",
+            &raw_manifest(""),
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest.packs[0].raw.url,
+            format!("https://media.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b")
+        );
+    }
+
+    #[test]
+    fn absolute_object_urls_are_preserved() {
+        let text = raw_manifest("").replace(
+            &format!(
+                "mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"
+            ),
+            &format!(
+                "https://cdn.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b"
+            ),
+        );
+        let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &text).unwrap();
+
+        assert_eq!(
+            manifest.packs[0].raw.url,
+            format!("https://cdn.example.test/mister-magik/v1/packs/arcade/screenshots/320x320/2026.06.22/{SHA}.mmlz4b")
         );
     }
 

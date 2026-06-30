@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
-const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 3;
+const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
 const MANIFEST_FETCH_ATTEMPTS: usize = 6;
 const MANIFEST_FETCH_INITIAL_RETRY: Duration = Duration::from_secs(2);
 const MANIFEST_FETCH_MAX_RETRY: Duration = Duration::from_secs(10);
@@ -915,34 +915,24 @@ fn stream_media_object_to_publish_temp(
             ),
         );
     }
-    let headers = File::create(headers_path)
-        .map_err(|e| format!("create headers file {}: {e}", headers_path.display()))?;
     let mut output = File::create(publish.temp_path())
         .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
     let mut sha = spawn_sha256_stdin()?;
     let started = Instant::now();
-    let mut child = match Command::new("wget")
-        .arg("-S")
-        .arg("--header")
-        .arg("Accept-Encoding: identity")
-        .arg("-O")
-        .arg("-")
-        .arg(url)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(headers))
-        .spawn()
-    {
+    let mut curl = Command::new("curl");
+    add_curl_download_args(&mut curl, url, headers_path, false);
+    let mut child = match curl.stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
         Ok(child) => child,
         Err(error) => {
             drop(sha.stdin.take());
             let _ = sha.wait();
-            return Err(format!("spawn wget: {error}"));
+            return Err(format!("spawn curl: {error}"));
         }
     };
     let mut input = child
         .stdout
         .take()
-        .ok_or_else(|| "missing wget stdout pipe".to_string())?;
+        .ok_or_else(|| "missing curl stdout pipe".to_string())?;
     let mut sha_stdin = sha
         .stdin
         .take()
@@ -954,7 +944,7 @@ fn stream_media_object_to_publish_temp(
         loop {
             let read = input
                 .read(&mut buffer)
-                .map_err(|e| format!("read wget stdout: {e}"))?;
+                .map_err(|e| format!("read curl stdout: {e}"))?;
             if read == 0 {
                 break;
             }
@@ -995,13 +985,13 @@ fn stream_media_object_to_publish_temp(
     })();
     drop(sha_stdin);
     drop(output);
-    let status = child.wait().map_err(|e| format!("wait wget: {e}"))?;
+    let status = child.wait().map_err(|e| format!("wait curl: {e}"))?;
     let sha_output = sha
         .wait_with_output()
         .map_err(|e| format!("wait sha256 command: {e}"))?;
     transfer_result?;
     if !status.success() {
-        return Err(format!("wget exited with {status}"));
+        return Err(format!("curl exited with {status}"));
     }
     if !sha_output.status.success() {
         return Err(format!("sha256 command exited with {}", sha_output.status));
@@ -1027,7 +1017,7 @@ fn stream_media_object_to_publish_temp(
             bytes,
             sha256: actual_sha,
         },
-        parse_wget_headers(&header_text, url, "response"),
+        parse_http_headers(&header_text, url, "response"),
     ))
 }
 
@@ -1349,28 +1339,43 @@ fn fetch_manifest_text(manifest_url: &str) -> Result<(String, HttpCacheMetadata)
         "/tmp/mister-magik-media-manifest-{}.headers",
         unix_ms_now()
     ));
-    let headers = File::create(&headers_path)
-        .map_err(|e| format!("create manifest headers {}: {e}", headers_path.display()))?;
-    let output = Command::new("wget")
-        .arg("-S")
-        .arg("--header")
-        .arg("Accept-Encoding: identity")
-        .arg("-O")
-        .arg("-")
-        .arg(manifest_url)
-        .stderr(Stdio::from(headers))
-        .output()
-        .map_err(|e| format!("spawn wget: {e}"))?;
+    let mut curl = Command::new("curl");
+    add_curl_download_args(&mut curl, manifest_url, &headers_path, true);
+    let output = curl.output().map_err(|e| format!("spawn curl: {e}"))?;
     let header_text = fs::read_to_string(&headers_path).unwrap_or_default();
     let _ = fs::remove_file(headers_path);
     if !output.status.success() {
-        return Err(format!("wget exited with {}", output.status));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            return Err(format!("curl exited with {}", output.status));
+        }
+        return Err(format!("curl exited with {}: {stderr}", output.status));
     }
     let body = String::from_utf8(output.stdout).map_err(|e| format!("manifest utf8: {e}"))?;
     Ok((
         body,
-        parse_wget_headers(&header_text, manifest_url, "response"),
+        parse_http_headers(&header_text, manifest_url, "response"),
     ))
+}
+
+fn add_curl_download_args(command: &mut Command, url: &str, headers_path: &Path, follow: bool) {
+    command
+        .arg("--fail")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--header")
+        .arg("Accept-Encoding: identity")
+        .arg("-D")
+        .arg(headers_path)
+        .arg("-o")
+        .arg("-");
+    if follow {
+        command.arg("--location");
+    }
+    if url.starts_with("https://") && Path::new("/etc/ssl/certs/cacert.pem").is_file() {
+        command.arg("--cacert").arg("/etc/ssl/certs/cacert.pem");
+    }
+    command.arg(url);
 }
 
 fn fetch_manifest_text_with_retry<F>(
@@ -1449,11 +1454,8 @@ impl MediaWorkerConfig {
 }
 
 fn media_download_concurrency_from_env() -> usize {
-    std::env::var("MISTER_MEDIA_CONCURRENCY")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS)
-        .clamp(1, MAX_CONCURRENT_MEDIA_DOWNLOADS)
+    let _ = std::env::var("MISTER_MEDIA_CONCURRENCY");
+    DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS
 }
 
 #[derive(Default)]
@@ -1546,7 +1548,7 @@ impl HttpCacheMetadata {
     }
 }
 
-fn parse_wget_headers(text: &str, effective_url: &str, source: &str) -> HttpCacheMetadata {
+fn parse_http_headers(text: &str, effective_url: &str, source: &str) -> HttpCacheMetadata {
     let mut metadata = HttpCacheMetadata {
         effective_url: effective_url.to_string(),
         source: source.to_string(),
@@ -1816,7 +1818,7 @@ mod tests {
     }
 
     #[test]
-    fn media_request_queue_starts_at_configured_download_limit() {
+    fn media_request_queue_starts_one_active_pack_at_a_time() {
         let mut pending = VecDeque::new();
         for index in 1..=5 {
             pending.push_back(QueuedPackRequest {
@@ -1838,9 +1840,17 @@ mod tests {
         assert!(no_slots.is_empty());
         assert_eq!(pending.len(), 4);
 
-        let two_slots = dequeue_startable_requests(&mut pending, 1, MAX_CONCURRENT_MEDIA_DOWNLOADS);
-        assert_eq!(two_slots.len(), 2);
-        assert_eq!(pending.len(), 2);
+        let still_no_slots =
+            dequeue_startable_requests(&mut pending, 1, MAX_CONCURRENT_MEDIA_DOWNLOADS);
+        assert!(still_no_slots.is_empty());
+        assert_eq!(pending.len(), 4);
+    }
+
+    #[test]
+    fn media_download_concurrency_env_is_clamped_to_single_pack() {
+        std::env::set_var("MISTER_MEDIA_CONCURRENCY", "3");
+        assert_eq!(media_download_concurrency_from_env(), 1);
+        std::env::remove_var("MISTER_MEDIA_CONCURRENCY");
     }
 
     #[test]
@@ -1872,7 +1882,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_cloudflare_cache_headers_from_wget_output() {
+    fn parses_cloudflare_cache_headers_from_http_output() {
         let headers = "\
   HTTP/1.1 200 OK\r
   Cache-Control: public, max-age=31536000, immutable\r
@@ -1885,7 +1895,7 @@ mod tests {
   Content-Encoding: identity\r
 ";
 
-        let metadata = parse_wget_headers(headers, "https://assets.example/pack", "response");
+        let metadata = parse_http_headers(headers, "https://assets.example/pack", "response");
 
         assert_eq!(metadata.status, Some(200));
         assert_eq!(metadata.cf_cache_status, "HIT");
