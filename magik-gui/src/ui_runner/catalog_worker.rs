@@ -234,12 +234,6 @@ pub(super) fn start_library_catalog_worker(
                 let catalog = artifact.catalog(&root);
                 let load_us = catalog_t.elapsed().as_micros() as u64;
                 let catalog_len = catalog.len();
-                let projection_t = Instant::now();
-                let summary_projection =
-                    catalog_summary::CatalogSummaryProjection::from_catalog(&catalog, artifact.stamp());
-                let navigation_projection =
-                    library_db::CatalogNavigationProjection::from_catalog(&catalog, artifact.stamp());
-                let projection_us = projection_t.elapsed().as_micros() as u64;
                 let _ = tx.send(CatalogWorkerMessage::Ready {
                     catalog,
                     summary: None,
@@ -250,18 +244,14 @@ pub(super) fn start_library_catalog_worker(
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_worker_ram_catalog".to_string(),
                     detail: format!(
-                        "games={catalog_len} catalog_us={load_us} projection_us={projection_us}"
+                        "games={catalog_len} catalog_us={load_us}"
                     ),
                 });
                 send_catalog_progress(
                     &tx,
                     library_db::CatalogProgress::saving_before_opening_launcher(),
                 );
-                match artifact.save_default_sqlite_with_projections(
-                    summary_projection,
-                    navigation_projection,
-                    Some(&mut progress),
-                ) {
+                match artifact.save_default_sqlite_with_projections(&root, Some(&mut progress)) {
                     Ok(summary) => {
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),

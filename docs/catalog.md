@@ -109,6 +109,12 @@ Cold or reset database:
 8. Virtual launch cache materialization runs after readiness so it cannot extend
    first usable catalog time.
 
+The adjacent warm-start projections (`library.summary.json` and
+`library.nav.lz4b`) are derived from the materialized SQLite catalog after the
+database is published. Do not publish navigation rows from the pre-save RAM
+catalog: SQLite owns preferred arcade variant collapse and final list ordering,
+and the navigation sidecar must match those materialized rows exactly.
+
 The Settings-screen `Reset Database` action removes the SQLite catalog, its
 adjacent `library.summary.json` projection, and all recognized screenshot pack
 files under `/media/fat/mister-magik/assets` before requesting the supervised
