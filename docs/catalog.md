@@ -444,15 +444,18 @@ the launcher starts from an already-usable SQLite catalog and no scan discovery
 events will fire, it seeds the same selective requests from the catalog's
 installed system list after the first rendered frame. Unrequested packs are not
 checked or downloaded. The worker fetches the manifest once, de-duplicates
-system requests, and runs at most three pack downloads concurrently.
+system requests, and runs one active pack download at a time. The active pack
+may download its small index sidecar in parallel with the raw pack.
 
 `MISTER_MEDIA_UPDATE=off` disables the media worker,
 `MISTER_MEDIA_UPDATE=check` reports status without downloading, and
 `MISTER_MEDIA_UPDATE=download` is the default. `MISTER_MEDIA_SIZE` defaults to
-`320x320`. Progress is emitted as structured `screenshot_media_progress` startup
-events with system, size, phase, byte counts, pack index/count, and optional
-download Mbps. The catalog-build screen renders up to three compact active pack
-rows from the same events. Each visible pack row uses one normalized progress
+`320x320`. The runtime fetches the HTTPS manifest trust root, then downloads
+verified pack and index objects over HTTP from the Cloudflare cached pack path.
+Progress is emitted as structured `screenshot_media_progress` startup events
+with system, size, phase, byte counts, pack index/count, and optional download
+Mbps. The catalog-build screen renders compact active pack rows from the same
+events. Each visible pack row uses one normalized progress
 bar: streamed download fills 0-100%, and the short verify/sync/rename
 finalization phases stay at 100%. The row omits byte labels and keeps completed
 packs visible briefly so users can see every requested pack finish.

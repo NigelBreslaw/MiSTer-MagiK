@@ -15,6 +15,9 @@ const DEFAULT_ARCADE_ARCHIVE_PATH: &str =
     "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b";
 const DEFAULT_IMAGE_SIZE: &str = "320x320";
 const DEFAULT_MANIFEST_URL: &str = "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
+const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = "https://assets.mistermagik.com";
+const OFFICIAL_ASSET_HTTP_ORIGIN: &str = "http://assets.mistermagik.com";
+const OFFICIAL_PACK_OBJECT_PREFIX: &str = "mister-magik/v1/packs/";
 const REMOTE_STATE_PATH: &str = "/media/fat/mister-magik/assets/.screenshot-media-state.json";
 const BENCH_TSV: &str = "history/toolchain-bench/results-screenshot-download.tsv";
 const BENCH_HEADER: &str = "type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
@@ -753,7 +756,7 @@ fn parse_index(system: &str, identity: &MediaVariant, value: &Value) -> Result<M
             .ok_or_else(|| format!("pack {system} index missing archive_sha256"))?
             .to_ascii_lowercase(),
     };
-    if index.codec != "mmlz4b-index-v1" {
+    if index.codec != "mmlz4b-index-v1" && index.codec != "mmlz4b-index-v2" {
         return Err(format!("pack {system} uses unsupported index codec {}", index.codec).into());
     }
     if index.bytes == 0 {
@@ -828,6 +831,16 @@ fn manifest_url_for_index(manifest: &MediaManifest, pack: &MediaPack) -> Option<
 fn manifest_url_for_object(manifest: &MediaManifest, object: &str) -> String {
     if object.starts_with("http://") || object.starts_with("https://") {
         object.to_string()
+    } else if manifest.base_url == OFFICIAL_ASSET_HTTPS_ORIGIN
+        && object
+            .trim_start_matches('/')
+            .starts_with(OFFICIAL_PACK_OBJECT_PREFIX)
+    {
+        format!(
+            "{}/{}",
+            OFFICIAL_ASSET_HTTP_ORIGIN,
+            object.trim_start_matches('/')
+        )
     } else {
         format!(
             "{}/{}",
@@ -996,8 +1009,8 @@ finish() {
   esac
 }
 
-if ! command -v wget >/dev/null 2>&1; then
-  result="missing-wget"
+if ! command -v curl >/dev/null 2>&1; then
+  result="missing-curl"
   finish
 fi
 if ! command -v sha256sum >/dev/null 2>&1; then
@@ -1006,7 +1019,13 @@ if ! command -v sha256sum >/dev/null 2>&1; then
 fi
 
 t="$(ms_now)"
-wget -S --header "Accept-Encoding: $accept_encoding" -O "$encoded" "$url" >"$headers" 2>&1
+if echo "$url" | grep -q '^https://' && [ -f /etc/ssl/certs/cacert.pem ]; then
+  curl --fail --silent --show-error --cacert /etc/ssl/certs/cacert.pem \
+    -H "Accept-Encoding: $accept_encoding" -D "$headers" -o "$encoded" "$url"
+else
+  curl --fail --silent --show-error \
+    -H "Accept-Encoding: $accept_encoding" -D "$headers" -o "$encoded" "$url"
+fi
 rc=$?
 download_ms="$(elapsed "$t")"
 content_encoding="$(grep -i '^[[:space:]]*Content-Encoding:' "$headers" 2>/dev/null | tail -n 1 | sed 's/.*:[[:space:]]*//' | tr -d '\r')"
@@ -1257,7 +1276,7 @@ mod tests {
         assert_eq!(manifest.packs[0].local_path, DEFAULT_ARCADE_ARCHIVE_PATH);
         assert_eq!(
             manifest_url_for_pack(&manifest, &manifest.packs[0]),
-            format!("https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b")
+            format!("http://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{sha}.mmlz4b")
         );
         let index = manifest.packs[0].index.as_ref().unwrap();
         assert_eq!(index.bytes, 321);
@@ -1267,7 +1286,7 @@ mod tests {
             format!("{DEFAULT_ARCADE_ARCHIVE_PATH}.idx")
         );
         let expected_index_url = format!(
-            "https://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{idx_sha}.mmlz4b.idx"
+            "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{idx_sha}.mmlz4b.idx"
         );
         assert_eq!(
             manifest_url_for_index(&manifest, &manifest.packs[0]).as_deref(),
