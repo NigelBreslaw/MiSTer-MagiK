@@ -14,13 +14,10 @@ use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::framebuffer::ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
-use mister_magik_fb::framebuffer::vsync::VsyncWaitStatus;
 use std::collections::{BTreeSet, VecDeque};
 use std::io::Read;
 use std::path::Path;
 
-const DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 3;
-const MAX_LAUNCHER_REVEAL_SETTLE_FRAMES: u32 = 30;
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
@@ -451,72 +448,6 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
     file.read_exact(&mut header).is_ok() && &header == SQLITE_HEADER
 }
 
-pub(super) fn present_launcher_startup_frame(
-    start: Instant,
-    ui: &UiDisplay,
-    disp: &mut MappedRgb565Framebuffer,
-    window: &Rc<MinimalSoftwareWindow>,
-    target: &mut UiFrameTarget,
-) {
-    if launcher_return_reveal_enabled() {
-        print_startup_event(
-            start,
-            "startup_splash_skipped",
-            "reason=return_to_launcher reveal=first_launcher_frame",
-        );
-        return;
-    }
-
-    let settle_frames = launcher_reveal_settle_frames();
-    let render_count = settle_frames.max(1);
-    let mut render_us = 0u128;
-    let mut vsync_hits = 0u32;
-    let mut vsync_timeouts = 0u32;
-    let mut vsync_errors = 0u32;
-
-    for frame in 0..render_count {
-        let draw_t = Instant::now();
-        window.request_redraw();
-        window.draw_if_needed(|renderer| {
-            let _ = target.render(renderer, frame_target_geometry(ui));
-        });
-        render_us += draw_t.elapsed().as_micros();
-        if frame < settle_frames {
-            match disp.wait_vsync() {
-                VsyncWaitStatus::Hit { .. } => vsync_hits += 1,
-                VsyncWaitStatus::Timeout { .. } => vsync_timeouts += 1,
-                VsyncWaitStatus::Error { .. } => vsync_errors += 1,
-            }
-        }
-    }
-
-    let copy_t = Instant::now();
-    target.present_rows(disp, 0, ui.render_h());
-    print_startup_event(
-        start,
-        "startup_splash_presented",
-        format!(
-            "settle_frames={} render_count={} render_us={} copy_us={} vsync_hits={} vsync_timeouts={} vsync_errors={}",
-            settle_frames,
-            render_count,
-            render_us,
-            copy_t.elapsed().as_micros(),
-            vsync_hits,
-            vsync_timeouts,
-            vsync_errors
-        ),
-    );
-}
-
-fn launcher_return_reveal_enabled() -> bool {
-    matches!(
-        std::env::var("MISTER_MAGIK_RETURN_TO_LAUNCHER")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("true") | Some("yes")
-    )
-}
-
 fn preview_archive_warm_skip_enabled() -> bool {
     matches!(
         std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
@@ -524,14 +455,6 @@ fn preview_archive_warm_skip_enabled() -> bool {
             .as_deref(),
         Some("1") | Some("on") | Some("true") | Some("yes")
     )
-}
-
-fn launcher_reveal_settle_frames() -> u32 {
-    std::env::var("MISTER_LAUNCHER_REVEAL_SETTLE_FRAMES")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(DEFAULT_LAUNCHER_REVEAL_SETTLE_FRAMES)
-        .min(MAX_LAUNCHER_REVEAL_SETTLE_FRAMES)
 }
 
 pub(super) fn run_launcher_loop(
@@ -571,6 +494,8 @@ pub(super) fn run_launcher_loop(
         env_start_screen.is_none() && launcher_bench_scenario.is_none() && lock_screen.is_none();
     let mut pending_launch_return_state =
         launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed);
+    let startup_return_requested = pending_launch_return_state.is_some();
+    let mut launch_return_restored = false;
     let arcade_catalog_required_at_start =
         start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
     let mut nav = LauncherNav::new();
@@ -755,7 +680,7 @@ pub(super) fn run_launcher_loop(
                 media_session.request_catalog_seed();
                 catalog_version = catalog_version.wrapping_add(1);
                 apply_forced_arcade_selected(&mut nav, &catalog);
-                apply_pending_launch_return_state(
+                launch_return_restored = apply_pending_launch_return_state(
                     &mut nav,
                     &catalog,
                     &mut pending_launch_return_state,
@@ -935,6 +860,24 @@ pub(super) fn run_launcher_loop(
             has_stale_catalog: false,
         }
     };
+    let startup_mode = if startup_return_requested || launch_return_restored {
+        StartupMode::ReturnFromGame
+    } else if catalog_ready {
+        StartupMode::WarmCatalog
+    } else {
+        StartupMode::ColdNoCatalog
+    };
+    lifecycle.begin_startup_reveal(startup_mode, start, &mut lifecycle_effects);
+    sync_startup_visibility(&app, &lifecycle);
+    if launch_return_restored {
+        emit_return_context_restored(
+            &mut lifecycle,
+            &mut lifecycle_effects,
+            &nav,
+            &catalog,
+            &preview,
+        );
+    }
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
@@ -960,6 +903,9 @@ pub(super) fn run_launcher_loop(
         let loop_start = Instant::now();
         let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
         let mut prepare_trace = LauncherPrepareTrace::default();
+        lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
+        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+        sync_startup_visibility(&app, &lifecycle);
         scheduler.record_loading_frame(loop_start);
         let launching = scheduler.launch_is_active() || !loading_title.is_empty();
         let setup_active = setup.is_active();
@@ -1029,9 +975,12 @@ pub(super) fn run_launcher_loop(
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
+        let startup_return_waiting_for_catalog =
+            lifecycle.startup_status().mode == StartupMode::ReturnFromGame
+                && !launch_return_restored;
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
-            frame_accounting.first_visible_copy_done(),
+            frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
             loop_start,
             catalog_background_validation_delay(),
         ) {
@@ -1296,7 +1245,7 @@ pub(super) fn run_launcher_loop(
             nav.screen = screen;
         }
 
-        if !launching {
+        if !launching && lifecycle.startup_input_enabled() {
             let pad_changed = pad.poll_with_debug_labels(setup_active);
             let frame_now = Instant::now();
 
@@ -1733,6 +1682,7 @@ pub(super) fn run_launcher_loop(
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 window.request_redraw();
             }
+            sync_startup_visibility(&app, &lifecycle);
         } else {
             let _ = pad.poll();
             if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
@@ -1874,6 +1824,15 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = preview_apply_trace_start {
             prepare_trace.preview_apply_us = trace_start.elapsed().as_micros();
         }
+        maybe_mark_return_preview_ready(
+            &mut lifecycle,
+            &mut lifecycle_effects,
+            &nav,
+            &catalog,
+            &preview,
+        );
+        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+        sync_startup_visibility(&app, &lifecycle);
 
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
@@ -1883,7 +1842,10 @@ pub(super) fn run_launcher_loop(
         let this_rect = layer_target.render_slint_base(&window);
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
-        let full_frame_present = should_present_full_frame(launching, route_action);
+        let startup_reveal_ready =
+            lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
+        let full_frame_present =
+            should_present_full_frame(launching, route_action) || startup_reveal_ready;
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect =
             if should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading) {
@@ -1964,17 +1926,32 @@ pub(super) fn run_launcher_loop(
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
+        let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t4) = {
-            let presentation = LauncherCompositor::present(LauncherPresentRequest {
-                layer_target: &mut layer_target,
-                full_frame_present,
-                slint_dirty: this_rect,
-                raw_preview,
-                arcade_list_rect,
-                arcade_list_renderer: &mut arcade_list_renderer,
-            });
+            let presentation = if startup_can_present {
+                LauncherCompositor::present(LauncherPresentRequest {
+                    layer_target: &mut layer_target,
+                    full_frame_present,
+                    slint_dirty: this_rect,
+                    raw_preview,
+                    arcade_list_rect,
+                    arcade_list_renderer: &mut arcade_list_renderer,
+                })
+            } else {
+                let _ = disp.wait_vsync();
+                LauncherPresentResult {
+                    copied_rows: 0,
+                    cached_present_us: 0,
+                    arcade_list_present_us: 0,
+                    arcade_update_label: ArcadeUpdateTrace::None,
+                }
+            };
             (presentation, Instant::now())
         };
+        if presentation.copied_rows > 0 {
+            lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
+            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+        }
         frame_accounting.finish_frame(
             LauncherPresentedFrame {
                 frames,
@@ -2051,6 +2028,7 @@ pub(super) fn run_launcher_loop(
             last_route_reassert_frame,
             last_route_reassert_ok,
             &last_route_reassert_error,
+            lifecycle.startup_status(),
         );
         frames += 1;
     }
@@ -2215,6 +2193,82 @@ fn apply_pending_launch_return_state(
     launcher::apply_launch_return_state(nav, catalog, state)
 }
 
+fn sync_startup_visibility(app: &slint_ui::launcher::Launcher, lifecycle: &LauncherLifecycle) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    bridge.set_startup_visible(lifecycle.startup_should_show_splash());
+}
+
+fn emit_return_context_restored(
+    lifecycle: &mut LauncherLifecycle,
+    effects: &mut LifecycleEffects,
+    nav: &LauncherNav,
+    catalog: &ArcadeCatalog,
+    preview: &PreviewState,
+) {
+    if lifecycle.startup_status().mode != StartupMode::ReturnFromGame {
+        return;
+    }
+    let system_id = active_system(catalog, nav)
+        .map(|system| system.id.clone())
+        .unwrap_or_default();
+    lifecycle.handle(
+        LauncherLifecycleInput::StartupReturnContextRestored {
+            screen: screen_label(nav.screen),
+            system_id,
+            game_index: nav.arcade.selected,
+            visual_index: nav.arcade.visual_index,
+            preview_expected: selected_arcade_game_has_preview(nav, catalog),
+        },
+        effects,
+    );
+    if return_preview_ready(nav, catalog, preview) {
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnPreviewReady {
+                preview_state: preview.trace_cache_state(),
+            },
+            effects,
+        );
+    }
+}
+
+fn maybe_mark_return_preview_ready(
+    lifecycle: &mut LauncherLifecycle,
+    effects: &mut LifecycleEffects,
+    nav: &LauncherNav,
+    catalog: &ArcadeCatalog,
+    preview: &PreviewState,
+) {
+    let status = lifecycle.startup_status();
+    if status.mode != StartupMode::ReturnFromGame
+        || status.state != StartupRevealState::WaitRelevantPreview
+        || !return_preview_ready(nav, catalog, preview)
+    {
+        return;
+    }
+    lifecycle.handle(
+        LauncherLifecycleInput::StartupReturnPreviewReady {
+            preview_state: preview.trace_cache_state(),
+        },
+        effects,
+    );
+}
+
+fn return_preview_ready(nav: &LauncherNav, catalog: &ArcadeCatalog, preview: &PreviewState) -> bool {
+    if nav.screen != Screen::Arcade {
+        return true;
+    }
+    if !selected_arcade_game_has_preview(nav, catalog) {
+        return true;
+    }
+    preview.trace_cache_state() == "exact"
+}
+
+fn selected_arcade_game_has_preview(nav: &LauncherNav, catalog: &ArcadeCatalog) -> bool {
+    active_system(catalog, nav)
+        .and_then(|system| nav.active_arcade_game_at(catalog, &system.id, nav.arcade.selected))
+        .is_some_and(|game| game.has_preview)
+}
+
 fn apply_lifecycle_effects(
     effects: &mut LifecycleEffects,
     scheduler: &mut LauncherScheduler,
@@ -2292,7 +2346,17 @@ fn apply_catalog_session_effects(
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
                 apply_forced_arcade_selected(nav, catalog);
-                apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                let return_restored =
+                    apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                if return_restored {
+                    emit_return_context_restored(
+                        lifecycle,
+                        lifecycle_effects,
+                        nav,
+                        catalog,
+                        preview,
+                    );
+                }
                 lifecycle.handle(
                     LauncherLifecycleInput::CatalogReady {
                         source,

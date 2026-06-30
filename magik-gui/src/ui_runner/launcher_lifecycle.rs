@@ -69,6 +69,60 @@ pub(super) enum RecoveryReason {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartupMode {
+    ColdNoCatalog,
+    WarmCatalog,
+    ReturnFromGame,
+}
+
+impl StartupMode {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::ColdNoCatalog => "cold_no_catalog",
+            Self::WarmCatalog => "warm_catalog",
+            Self::ReturnFromGame => "return_from_game",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartupRevealState {
+    SplashVisible,
+    CatalogProgressVisible,
+    HoldBlack,
+    HoldBlackReturn,
+    RestoreContext,
+    WaitRelevantPreview,
+    RevealLauncher,
+    InputEnabled,
+}
+
+impl StartupRevealState {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::SplashVisible => "splash_visible",
+            Self::CatalogProgressVisible => "catalog_progress_visible",
+            Self::HoldBlack => "hold_black",
+            Self::HoldBlackReturn => "hold_black_return",
+            Self::RestoreContext => "restore_context",
+            Self::WaitRelevantPreview => "wait_relevant_preview",
+            Self::RevealLauncher => "reveal_launcher",
+            Self::InputEnabled => "input_enabled",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StartupRevealStatus {
+    pub(super) mode: StartupMode,
+    pub(super) state: StartupRevealState,
+    pub(super) revealed: bool,
+    pub(super) input_enabled: bool,
+    pub(super) reveal_ms: u64,
+    pub(super) input_enabled_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BridgeSyncPlan {
     None,
     Light,
@@ -157,8 +211,21 @@ pub(super) enum StartupCatalogState {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum LauncherLifecycleInput {
+    StartupRevealReady {
+        preview_state: &'static str,
+    },
+    StartupReturnContextRestored {
+        screen: &'static str,
+        system_id: String,
+        game_index: usize,
+        visual_index: f32,
+        preview_expected: bool,
+    },
+    StartupReturnPreviewReady {
+        preview_state: &'static str,
+    },
     CatalogReady {
         source: CatalogSource,
         validating: bool,
@@ -197,14 +264,154 @@ pub(super) struct LauncherLifecycle {
     state: LauncherLifecycleState,
     config: LauncherLifecycleConfig,
     boot_splash_presented: bool,
+    startup_mode: StartupMode,
+    startup_reveal_state: StartupRevealState,
+    startup_started_at: Instant,
+    startup_revealed_at: Option<Instant>,
+    startup_input_enabled_at: Option<Instant>,
 }
 
 impl LauncherLifecycle {
-    pub(super) fn new(config: LauncherLifecycleConfig, _now: Instant) -> Self {
+    pub(super) const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
+
+    pub(super) fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
         Self {
             state: LauncherLifecycleState::BootSplash,
             config,
             boot_splash_presented: false,
+            startup_mode: StartupMode::WarmCatalog,
+            startup_reveal_state: StartupRevealState::HoldBlack,
+            startup_started_at: now,
+            startup_revealed_at: None,
+            startup_input_enabled_at: None,
+        }
+    }
+
+    pub(super) fn begin_startup_reveal(
+        &mut self,
+        mode: StartupMode,
+        now: Instant,
+        out: &mut LifecycleEffects,
+    ) {
+        self.startup_mode = mode;
+        self.startup_started_at = now;
+        self.startup_revealed_at = None;
+        self.startup_input_enabled_at = None;
+        self.startup_reveal_state = match mode {
+            StartupMode::ColdNoCatalog => StartupRevealState::SplashVisible,
+            StartupMode::WarmCatalog => StartupRevealState::HoldBlack,
+            StartupMode::ReturnFromGame => StartupRevealState::HoldBlackReturn,
+        };
+        out.startup_event(
+            "startup_entry_classified",
+            format!("mode={}", mode.label()),
+        );
+        match self.startup_reveal_state {
+            StartupRevealState::SplashVisible => {
+                out.startup_event("startup_splash_visible", "mode=cold_no_catalog");
+            }
+            StartupRevealState::HoldBlack => {
+                out.startup_event("startup_hold_black", "mode=warm_catalog");
+            }
+            StartupRevealState::HoldBlackReturn => {
+                out.startup_event("startup_hold_black", "mode=return_from_game");
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn tick_startup_reveal(
+        &mut self,
+        now: Instant,
+        catalog_ready: bool,
+        out: &mut LifecycleEffects,
+    ) {
+        if self.startup_input_enabled_at.is_some() {
+            return;
+        }
+        match self.startup_reveal_state {
+            StartupRevealState::SplashVisible
+                if now.saturating_duration_since(self.startup_started_at)
+                    >= Self::COLD_SPLASH_DURATION =>
+            {
+                self.startup_reveal_state = StartupRevealState::CatalogProgressVisible;
+                out.startup_event(
+                    "startup_splash_done",
+                    format!(
+                        "elapsed_ms={}",
+                        now.saturating_duration_since(self.startup_started_at).as_millis()
+                    ),
+                );
+                out.startup_event("catalog_progress_revealed", "mode=cold_no_catalog");
+            }
+            StartupRevealState::CatalogProgressVisible if catalog_ready => {
+                self.mark_reveal_ready("preview_state=not_required", out);
+            }
+            StartupRevealState::HoldBlack if catalog_ready => {
+                self.mark_reveal_ready("preview_state=not_required", out);
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn startup_should_show_splash(&self) -> bool {
+        self.startup_reveal_state == StartupRevealState::SplashVisible
+    }
+
+    pub(super) fn startup_can_present_frame(&self) -> bool {
+        matches!(
+            self.startup_reveal_state,
+            StartupRevealState::SplashVisible
+                | StartupRevealState::CatalogProgressVisible
+                | StartupRevealState::RevealLauncher
+                | StartupRevealState::InputEnabled
+        )
+    }
+
+    pub(super) fn startup_input_enabled(&self) -> bool {
+        self.startup_input_enabled_at.is_some()
+    }
+
+    pub(super) fn startup_status(&self) -> StartupRevealStatus {
+        StartupRevealStatus {
+            mode: self.startup_mode,
+            state: self.startup_reveal_state,
+            revealed: self.startup_revealed_at.is_some(),
+            input_enabled: self.startup_input_enabled_at.is_some(),
+            reveal_ms: self
+                .startup_revealed_at
+                .map(|at| at.saturating_duration_since(self.startup_started_at).as_millis() as u64)
+                .unwrap_or(0),
+            input_enabled_ms: self
+                .startup_input_enabled_at
+                .map(|at| at.saturating_duration_since(self.startup_started_at).as_millis() as u64)
+                .unwrap_or(0),
+        }
+    }
+
+    pub(super) fn note_startup_frame_presented(
+        &mut self,
+        frame: u64,
+        now: Instant,
+        out: &mut LifecycleEffects,
+    ) {
+        if self.startup_reveal_state != StartupRevealState::RevealLauncher {
+            return;
+        }
+        if self.startup_revealed_at.is_none() {
+            self.startup_revealed_at = Some(now);
+            out.startup_event(
+                "launcher_revealed",
+                format!("mode={} frame={frame}", self.startup_mode.label()),
+            );
+        }
+        if self.startup_input_enabled_at.is_none() {
+            self.startup_reveal_state = StartupRevealState::InputEnabled;
+            self.startup_input_enabled_at = Some(now);
+            out.startup_event(
+                "launcher_input_enabled",
+                format!("mode={} frame={frame}", self.startup_mode.label()),
+            );
         }
     }
 
@@ -262,6 +469,39 @@ impl LauncherLifecycle {
         input: LauncherLifecycleInput,
         out: &mut LifecycleEffects,
     ) -> LauncherLifecycleStep {
+        match &input {
+            LauncherLifecycleInput::StartupRevealReady { preview_state } => {
+                self.mark_reveal_ready(&format!("preview_state={preview_state}"), out);
+                return self.step(BridgeSyncPlan::None);
+            }
+            LauncherLifecycleInput::StartupReturnContextRestored {
+                screen,
+                system_id,
+                game_index,
+                visual_index,
+                preview_expected,
+            } => {
+                self.startup_reveal_state = StartupRevealState::RestoreContext;
+                out.startup_event("startup_restore_context", "mode=return_from_game");
+                self.startup_reveal_state = StartupRevealState::WaitRelevantPreview;
+                out.startup_event(
+                    "return_context_restored",
+                    format!(
+                        "screen={screen} system_id={system_id} game_index={game_index} visual_index={visual_index:.3} preview_expected={preview_expected}"
+                    ),
+                );
+                return self.step(BridgeSyncPlan::None);
+            }
+            LauncherLifecycleInput::StartupReturnPreviewReady { preview_state } => {
+                out.startup_event(
+                    "return_preview_ready",
+                    format!("preview_state={preview_state}"),
+                );
+                self.mark_reveal_ready(&format!("preview_state={preview_state}"), out);
+                return self.step(BridgeSyncPlan::None);
+            }
+            _ => {}
+        }
         if !self.boot_splash_presented {
             return self.step(BridgeSyncPlan::None);
         }
@@ -363,6 +603,9 @@ impl LauncherLifecycle {
                     "launch_timed_out",
                 );
             }
+            LauncherLifecycleInput::StartupRevealReady { .. }
+            | LauncherLifecycleInput::StartupReturnContextRestored { .. }
+            | LauncherLifecycleInput::StartupReturnPreviewReady { .. } => {}
         }
         self.step(BridgeSyncPlan::None)
     }
@@ -432,6 +675,20 @@ impl LauncherLifecycle {
             format!("from={previous} to={next_label} reason={}", reason.into()),
         );
     }
+
+    fn mark_reveal_ready(&mut self, detail: &str, out: &mut LifecycleEffects) {
+        if matches!(
+            self.startup_reveal_state,
+            StartupRevealState::RevealLauncher | StartupRevealState::InputEnabled
+        ) {
+            return;
+        }
+        self.startup_reveal_state = StartupRevealState::RevealLauncher;
+        out.startup_event(
+            "launcher_reveal_ready",
+            format!("mode={} {detail}", self.startup_mode.label()),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +718,17 @@ mod tests {
         (lifecycle, effects)
     }
 
+    fn effect_names(effects: &LifecycleEffects) -> Vec<&'static str> {
+        effects
+            .as_slice()
+            .iter()
+            .filter_map(|effect| match effect {
+                LauncherEffect::StartupEvent { name, .. } => Some(*name),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn boot_splash_does_not_emit_work_before_presented() {
         let lifecycle = lifecycle();
@@ -482,6 +750,129 @@ mod tests {
 
         assert_eq!(lifecycle.state(), &LauncherLifecycleState::BootSplash);
         assert!(effects.as_slice().is_empty());
+    }
+
+    #[test]
+    fn cold_start_shows_splash_for_two_seconds_before_progress() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, now, &mut effects);
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::SplashVisible
+        );
+        assert!(lifecycle.startup_should_show_splash());
+        assert!(lifecycle.startup_can_present_frame());
+        assert!(!lifecycle.startup_input_enabled());
+        assert!(effect_names(&effects).contains(&"startup_splash_visible"));
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::COLD_SPLASH_DURATION - Duration::from_millis(1),
+            false,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::SplashVisible
+        );
+        assert!(effects.as_slice().is_empty());
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::COLD_SPLASH_DURATION,
+            false,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::CatalogProgressVisible
+        );
+        assert!(!lifecycle.startup_should_show_splash());
+        assert!(effect_names(&effects).contains(&"startup_splash_done"));
+        assert!(effect_names(&effects).contains(&"catalog_progress_revealed"));
+    }
+
+    #[test]
+    fn warm_start_holds_black_until_reveal_and_input_enable() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::HoldBlack
+        );
+        assert!(!lifecycle.startup_can_present_frame());
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(now + Duration::from_millis(10), true, &mut effects);
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
+        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+        effects.clear();
+
+        lifecycle.note_startup_frame_presented(0, now + Duration::from_millis(37), &mut effects);
+        let status = lifecycle.startup_status();
+        assert_eq!(status.state, StartupRevealState::InputEnabled);
+        assert!(status.revealed);
+        assert!(status.input_enabled);
+        assert_eq!(status.reveal_ms, 37);
+        assert_eq!(status.input_enabled_ms, 37);
+        assert!(effect_names(&effects).contains(&"launcher_revealed"));
+        assert!(effect_names(&effects).contains(&"launcher_input_enabled"));
+    }
+
+    #[test]
+    fn return_start_waits_for_restored_context_and_preview() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ReturnFromGame, now, &mut effects);
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::HoldBlackReturn
+        );
+        assert!(!lifecycle.startup_can_present_frame());
+        effects.clear();
+
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnContextRestored {
+                screen: "arcade",
+                system_id: "arcade".to_string(),
+                game_index: 17,
+                visual_index: 17.0,
+                preview_expected: true,
+            },
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::WaitRelevantPreview
+        );
+        assert!(!lifecycle.startup_can_present_frame());
+        assert!(effect_names(&effects).contains(&"return_context_restored"));
+        effects.clear();
+
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnPreviewReady {
+                preview_state: "exact",
+            },
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
+        assert!(effect_names(&effects).contains(&"return_preview_ready"));
+        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
     }
 
     #[test]

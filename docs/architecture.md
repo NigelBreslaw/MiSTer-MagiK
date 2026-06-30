@@ -86,6 +86,41 @@ Lifecycle and scheduler internals should use explicit enum states for startup
 readiness, pending launch refs, and worker availability instead of parallel
 booleans or `Option` fields that can express impossible combinations.
 
+Startup reveal is part of that lifecycle state system. This Mermaid chart is
+the source of truth for whether HDMI should show splash, black, catalog
+progress, or the restored launcher:
+
+```mermaid
+stateDiagram-v2
+    [*] --> ClassifyEntry
+
+    ClassifyEntry --> ColdNoCatalog: no valid catalog
+    ClassifyEntry --> WarmCatalog: valid catalog
+    ClassifyEntry --> ReturnFromGame: launch return state exists
+
+    ColdNoCatalog --> SplashVisible: start catalog build immediately
+    SplashVisible --> CatalogProgressVisible: after 2000ms
+    CatalogProgressVisible --> RevealLauncher: catalog ready + first launcher frame ready
+
+    WarmCatalog --> HoldBlack: keep framebuffer black
+    HoldBlack --> RevealLauncher: catalog loaded + bridge synced + first frame ready
+
+    ReturnFromGame --> HoldBlackReturn: keep framebuffer black
+    HoldBlackReturn --> RestoreContext: apply saved screen/system/selection/scroll
+    RestoreContext --> WaitRelevantPreview: selected preview exact, or no preview exists
+    WaitRelevantPreview --> RevealLauncher: restored frame ready
+
+    RevealLauncher --> InputEnabled
+    InputEnabled --> [*]
+```
+
+Only cold boot without a valid catalog shows the `MiSTer MagiK` splash, and it
+stays visible for at least two seconds while catalog work starts in the
+background. Warm boot and return-from-game keep HDMI black until the first
+intended launcher frame is ready. Input is accepted only after
+`InputEnabled`, and startup timing events must report `launcher_revealed` and
+`launcher_input_enabled`.
+
 Launch is intentionally two-phase. `Idle -> Launching` first updates the Slint
 bridge and presents the loading frame. Only after
 `loading_frame_presented(...)` does the scheduler let the existing

@@ -57,6 +57,12 @@ pub struct LauncherStatus<'a> {
     pub active_pad_path: &'a str,
     pub last_raw_event: &'a str,
     pub last_input_ms_ago: u64,
+    pub startup_mode: &'a str,
+    pub startup_reveal_state: &'a str,
+    pub revealed: bool,
+    pub input_enabled: bool,
+    pub reveal_ms: u64,
+    pub input_enabled_ms: u64,
 }
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
@@ -167,6 +173,12 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("active_pad_path", status.active_pad_path);
     insert!("last_raw_event", status.last_raw_event);
     insert!("last_input_ms_ago", status.last_input_ms_ago);
+    insert!("startup_mode", status.startup_mode);
+    insert!("startup_reveal_state", status.startup_reveal_state);
+    insert!("revealed", status.revealed);
+    insert!("input_enabled", status.input_enabled);
+    insert!("reveal_ms", status.reveal_ms);
+    insert!("input_enabled_ms", status.input_enabled_ms);
     insert!("rss_kb", current_rss_kb());
     insert!("rss_hwm_kb", current_rss_hwm_kb());
 
@@ -307,6 +319,12 @@ mod tests {
                 active_pad_path: "/dev/input/js0",
                 last_raw_event: "type=1 num=0 val=1",
                 last_input_ms_ago: 100,
+                startup_mode: "warm_catalog",
+                startup_reveal_state: "input_enabled",
+                revealed: true,
+                input_enabled: true,
+                reveal_ms: 37,
+                input_enabled_ms: 37,
             },
             5678,
             101,
@@ -346,6 +364,12 @@ mod tests {
         assert_eq!(value["launch_state"], "idle");
         assert_eq!(value["input_pad_count"], 3);
         assert_eq!(value["active_pad_index"], 2);
+        assert_eq!(value["startup_mode"], "warm_catalog");
+        assert_eq!(value["startup_reveal_state"], "input_enabled");
+        assert_eq!(value["revealed"], true);
+        assert_eq!(value["input_enabled"], true);
+        assert_eq!(value["reveal_ms"], 37);
+        assert_eq!(value["input_enabled_ms"], 37);
         assert_eq!(value["active_pad_name"], "Pad");
         assert_eq!(value["last_raw_event"], "type=1 num=0 val=1");
         assert_eq!(value["last_input_ms_ago"], 100);
@@ -423,6 +447,12 @@ mod tests {
             active_pad_path: "/dev/input/js0",
             last_raw_event: "",
             last_input_ms_ago: 0,
+            startup_mode: "cold_no_catalog",
+            startup_reveal_state: "catalog_progress_visible",
+            revealed: false,
+            input_enabled: false,
+            reveal_ms: 0,
+            input_enabled_ms: 0,
         });
 
         let text = fs::read_to_string(STATUS_PATH).expect("status json should be written");
