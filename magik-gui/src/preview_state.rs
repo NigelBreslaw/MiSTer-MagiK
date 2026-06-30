@@ -9,8 +9,9 @@ use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
-    preview_asset_cache_key, preview_window_indices, PreviewPixels, PreviewPriority, PreviewResult,
-    PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
+    preview_asset_cache_key, preview_window_indices, PreviewLoadSource, PreviewPixels,
+    PreviewPriority, PreviewResult, PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP,
+    DEFAULT_PREVIEW_RADIUS,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
@@ -224,6 +225,7 @@ fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
 
 pub(crate) struct PreviewState {
     worker: PreviewWorker,
+    trace_start: Instant,
     selected_mra_path: Option<String>,
     selected_preview_key: Option<String>,
     current_generation: u64,
@@ -336,8 +338,13 @@ fn raw_frame_stride_len_is_valid(len: usize, stride_pixels: usize, source_h: usi
 
 impl PreviewState {
     pub(crate) fn new() -> Self {
+        Self::new_with_trace_start(Instant::now())
+    }
+
+    pub(crate) fn new_with_trace_start(trace_start: Instant) -> Self {
         Self {
-            worker: PreviewWorker::new(),
+            worker: PreviewWorker::new_with_trace_start(trace_start),
+            trace_start,
             selected_mra_path: None,
             selected_preview_key: None,
             current_generation: 0,
@@ -647,6 +654,15 @@ pub(crate) fn request_arcade_preview_window(
     preview.selected_mra_path = Some(game.mra_path.to_string());
 
     bridge.set_arcade_preview_title(game.title.as_ref().into());
+    eprintln!(
+        "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={} selected_index={} title={} has_preview={} asset_key={}",
+        preview.trace_elapsed_ms(),
+        game.system_id,
+        selected,
+        game.title,
+        if game_preview_key(game).is_some() { 1 } else { 0 },
+        game.preview_asset_key
+    );
     if let Some(preview_key) = game_preview_key(game) {
         preview.selected_preview_key = Some(preview_key.clone());
         if preview.cache.contains_failed(&preview_key) {
@@ -668,6 +684,14 @@ pub(crate) fn request_arcade_preview_window(
                     game.title, game.preview_archive_path, game.preview_asset_key
                 );
             }
+            eprintln!(
+                "startup_timing\tpreview_selected_applied\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation=0 load_source=decoded_cache total_us=0 read_us=0 decode_us=0 age_us=0",
+                preview.trace_elapsed_ms(),
+                game.system_id,
+                selected,
+                game.title,
+                game.preview_asset_key
+            );
             preview.begin_raw_transition_to(&preview_key);
             preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
@@ -679,6 +703,15 @@ pub(crate) fn request_arcade_preview_window(
             game.title.to_string(),
             game.preview_archive_path.to_string(),
             game.preview_asset_key.to_string(),
+        );
+        eprintln!(
+            "startup_timing\tpreview_selected_requested\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation={}",
+            preview.trace_elapsed_ms(),
+            game.system_id,
+            selected,
+            game.title,
+            game.preview_asset_key,
+            preview.current_generation
         );
         if preview_trace_enabled() {
             eprintln!(
@@ -701,6 +734,12 @@ pub(crate) fn request_arcade_preview_window(
     clear_preview_image_bridge(bridge);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     true
+}
+
+impl PreviewState {
+    fn trace_elapsed_ms(&self) -> u64 {
+        self.trace_start.elapsed().as_millis() as u64
+    }
 }
 
 fn request_preview_prefetches(
@@ -979,6 +1018,8 @@ pub(crate) fn apply_ready_preview(
             }
             continue;
         }
+        let result_system_id = preview_result_system_id(&result);
+        let result_title = result.title.clone();
         if let Some(image) = result.image {
             if preview_trace_enabled() && is_selected_result {
                 eprintln!(
@@ -993,6 +1034,34 @@ pub(crate) fn apply_ready_preview(
                     result.decode_us,
                     result.preview_archive_path,
                     result.preview_asset_key
+                );
+            }
+            if is_selected_result {
+                if result.load_source == PreviewLoadSource::IndexPread {
+                    eprintln!(
+                        "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={} title={} has_preview=1 asset_key={} generation={} load_source={} read_us={}",
+                        result.completed_at_ms,
+                        result_system_id,
+                        result_title,
+                        result.preview_asset_key,
+                        result.generation,
+                        result.load_source.label(),
+                        result.read_us
+                    );
+                }
+                eprintln!(
+                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={} title={} has_preview=1 asset_key={} generation={} load_source={} total_us={} read_us={} decode_us={} raw565_parse_us={} age_us={}",
+                    result.completed_at_ms,
+                    result_system_id,
+                    result_title,
+                    result.preview_asset_key,
+                    result.generation,
+                    result.load_source.label(),
+                    result.total_us,
+                    result.read_us,
+                    result.decode_us,
+                    result.raw565_parse_us,
+                    result.request_age_us
                 );
             }
             let source_w = image.width();
@@ -1038,12 +1107,25 @@ pub(crate) fn apply_ready_preview(
             );
             if is_selected_result {
                 preview.current_generation = 0;
-                bridge.set_arcade_preview_title(result.title.into());
+                bridge.set_arcade_preview_title(result_title.clone().into());
                 preview.has_visible_preview = true;
                 preview.begin_raw_transition_to(&result_preview_key);
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
+                eprintln!(
+                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={} title={} has_preview=1 asset_key={} generation={} load_source={} total_us={} read_us={} decode_us={} age_us={}",
+                    preview.trace_elapsed_ms(),
+                    result_system_id,
+                    result_title,
+                    result.preview_asset_key,
+                    result.generation,
+                    result.load_source.label(),
+                    result.total_us,
+                    result.read_us,
+                    result.decode_us,
+                    result.request_age_us
+                );
                 dirty = true;
             }
         } else {
@@ -1066,6 +1148,19 @@ pub(crate) fn apply_ready_preview(
         }
     }
     dirty
+}
+
+fn preview_result_system_id(result: &PreviewResult) -> &'static str {
+    let path = result.preview_archive_path.as_str();
+    if path.contains("neogeo-screenshots") {
+        "neogeo"
+    } else if path.contains("saturn-screenshots") {
+        "saturn"
+    } else if path.contains("arcade-screenshots") {
+        "arcade"
+    } else {
+        "unknown"
+    }
 }
 
 #[cfg(test)]
