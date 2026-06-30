@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
+source "$ROOT/scripts/library-sql-output-lib.sh"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
@@ -152,7 +153,7 @@ assert_db_count() {
   local expected="$2"
   local sql="$3"
   local actual
-  actual="$(db "$sql" | last_number)"
+  actual="$(db "$sql" | library_sql_first_result_number)"
   if [ "$actual" != "$expected" ]; then
     fail "$label expected=$expected actual=${actual:-empty}"
   fi
@@ -190,7 +191,7 @@ force_refresh() {
 }
 
 temp_mra_count() {
-  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | last_number
+  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | library_sql_first_result_number
 }
 
 assert_temp_mra_count() {
@@ -208,9 +209,9 @@ assert_temp_new_discovery_projection() {
   assert_db_count "temp MRA game discovery timestamp" "1" \
     "SELECT count(*) FROM games JOIN launch_plans ON launch_plans.game_id=games.game_id WHERE launch_plans.launch_ref=$(sql_string "$TEMP_MRA") AND games.discovered_at_unix IS NOT NULL;"
   assert_db_count "temp MRA launcher catalog discovery timestamp" "1" \
-    "SELECT count(*) FROM launcher_catalog WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
+    "SELECT count(*) FROM launcher_catalog_text WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
   assert_db_count "temp MRA arcade list discovery timestamp" "1" \
-    "SELECT count(*) FROM ui_arcade_preferred WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
+    "SELECT count(*) FROM ui_arcade_preferred_text WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
 }
 
 remove_temp_mra() {
@@ -283,6 +284,15 @@ record_bench() {
   scan="$(metric_ms_after "$local_log" "library_scan_complete" "$start_event")"
   saved="$(metric_ms_after "$local_log" "library_db_saved" "$start_event")"
   ready="$(metric_ms_after "$local_log" "library_ready" "$start_event")"
+  if [ -z "$start" ] && [ -n "$changed" ]; then
+    start="$changed"
+    scan="${scan:-$(metric_ms_after "$local_log" "library_scan_complete" "library_changed_detected")}"
+    saved="${saved:-$(metric_ms_after "$local_log" "library_db_saved" "library_changed_detected")}"
+    ready="${ready:-$(metric_ms_after "$local_log" "library_ready" "library_changed_detected")}"
+  fi
+  scan="${scan:-$(metric_ms "$local_log" "library_scan_complete")}"
+  saved="${saved:-$(metric_ms "$local_log" "library_db_saved")}"
+  ready="${ready:-$(metric_ms "$local_log" "library_ready")}"
   if [ -n "$start" ] && [ -n "$saved" ]; then
     duration=$((saved - start))
   else
