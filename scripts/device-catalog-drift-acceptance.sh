@@ -97,6 +97,23 @@ last_number() {
   awk 'NF { value=$NF } END { gsub(/[^0-9]/, "", value); print value }'
 }
 
+first_result_number() {
+  awk '
+    /^library_sql_timing_tsv[[:space:]]/ { next }
+    NF && seen_header {
+      value=$1
+      gsub(/[^0-9]/, "", value)
+      print value
+      exit
+    }
+    NF { seen_header=1 }
+  '
+}
+
+db_scalar() {
+  db "$1" | first_result_number
+}
+
 sq() {
   printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
 }
@@ -159,7 +176,7 @@ assert_db_count() {
   local expected="$2"
   local sql="$3"
   local actual
-  actual="$(db "$sql" | last_number)"
+  actual="$(db_scalar "$sql")"
   if [ "$actual" != "$expected" ]; then
     fail "$label expected=$expected actual=${actual:-empty}"
   fi
