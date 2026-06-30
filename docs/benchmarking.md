@@ -193,6 +193,13 @@ preview, and launch-handoff benchmarks because there may be no hydrated game
 rows to scroll or launch. Set `on` or `force` only when intentionally
 benchmarking a catalog rebuild.
 
+Warm validation includes both the root stamp and the discovery checkpoint. The
+unchanged path must stay under the existing 2s hard gate including checkpoint
+load, compute, compare, drift classification, and worker decision. Coarse
+`catalog_checkpoint_tsv` and `catalog_drift_tsv` rows are always emitted. Set
+`MISTER_CATALOG_TRACE=detail` only for diagnostics that need per-core
+`catalog_profile_manifest_tsv` rows.
+
 Preview transition policy:
 
 - Default real-app preview transition is fixed 200ms `fade`.
@@ -436,6 +443,13 @@ intentionally leaves any orphan `library.summary.json` in place and asserts the
 launcher ignores that summary before showing the visible first-run scan; empty
 and corrupt DB cases assert the same summary rejection for unusable SQLite
 files.
+
+`device-catalog-drift-acceptance.sh` is the manual real-device check for
+checkpoint drift. It covers missing-DB first creation, warm unchanged
+validation, known core and game additions, unknown core audit drift, new system
+directory drift, Continue marker deferral, marker rebuild, and immediate
+Rebuild. Rows are appended to
+`history/toolchain-bench/results-catalog-drift-acceptance.tsv`.
 
 `bench-library.sh` suspends the supervised launcher through `/dev/MiSTer_cmd`
 while running scanner/import CLI benchmarks. Do not benchmark by directly
