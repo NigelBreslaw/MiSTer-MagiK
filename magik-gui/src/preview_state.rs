@@ -476,6 +476,12 @@ impl PreviewState {
         Some(Self::raw_frame_from_image(image))
     }
 
+    pub(crate) fn raw_frame_status(&self) -> PreviewRawFrameStatus {
+        self.raw_frame()
+            .map(|frame| frame.status())
+            .unwrap_or(PreviewRawFrameStatus::Empty)
+    }
+
     pub(crate) fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
         let current = if self.has_visible_preview {
             self.raw_frame()?

@@ -42,6 +42,10 @@ pub struct LauncherStatus<'a> {
     pub preview_cache_state: &'a str,
     pub preview_transition_effect: &'a str,
     pub preview_transition_progress: f32,
+    pub composition_state: &'a str,
+    pub composition_recovery_count: u64,
+    pub last_composition_invariant_kind: &'a str,
+    pub last_composition_invariant_detail: &'a str,
     pub bench_scenario: &'a str,
     pub start_screen: &'a str,
     pub lock_screen: &'a str,
@@ -151,6 +155,19 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!(
         "preview_transition_progress",
         (status.preview_transition_progress * 1000.0).round() / 1000.0
+    );
+    insert!("composition_state", status.composition_state);
+    insert!(
+        "composition_recovery_count",
+        status.composition_recovery_count
+    );
+    insert!(
+        "last_composition_invariant_kind",
+        status.last_composition_invariant_kind
+    );
+    insert!(
+        "last_composition_invariant_detail",
+        status.last_composition_invariant_detail
     );
     insert!("bench_scenario", status.bench_scenario);
     insert!("start_screen", status.start_screen);
@@ -304,6 +321,10 @@ mod tests {
                 preview_cache_state: "exact",
                 preview_transition_effect: "fade",
                 preview_transition_progress: 0.5,
+                composition_state: "mixed-arcade",
+                composition_recovery_count: 0,
+                last_composition_invariant_kind: "",
+                last_composition_invariant_detail: "",
                 bench_scenario: "held-scroll",
                 start_screen: "arcade",
                 lock_screen: "arcade",
@@ -358,6 +379,10 @@ mod tests {
         assert_eq!(value["preview_cache_state"], "exact");
         assert_eq!(value["preview_transition_effect"], "fade");
         assert_eq!(value["preview_transition_progress"], 0.5);
+        assert_eq!(value["composition_state"], "mixed-arcade");
+        assert_eq!(value["composition_recovery_count"], 0);
+        assert_eq!(value["last_composition_invariant_kind"], "");
+        assert_eq!(value["last_composition_invariant_detail"], "");
         assert_eq!(value["bench_scenario"], "held-scroll");
         assert_eq!(value["route_reassert_count"], 2);
         assert_eq!(value["last_route_reassert_ok"], true);
@@ -432,6 +457,10 @@ mod tests {
             preview_cache_state: "placeholder",
             preview_transition_effect: "fade",
             preview_transition_progress: 1.0,
+            composition_state: "full-slint",
+            composition_recovery_count: 0,
+            last_composition_invariant_kind: "",
+            last_composition_invariant_detail: "",
             bench_scenario: "none",
             start_screen: "home",
             lock_screen: "none",

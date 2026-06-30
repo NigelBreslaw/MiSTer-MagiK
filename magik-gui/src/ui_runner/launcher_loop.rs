@@ -578,6 +578,7 @@ pub(super) fn run_launcher_loop(
     let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let mut arcade_filter_items_cache = ArcadeFilterListItemCache::default();
+    let mut composition = UiCompositionController::new();
     let cpu = cpu_profile::start();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
@@ -1844,46 +1845,78 @@ pub(super) fn run_launcher_loop(
         let custom_draw_start = Instant::now();
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
-        let full_frame_present =
+        let mut full_frame_present =
             should_present_full_frame(launching, route_action) || startup_reveal_ready;
+        let wants_arcade_list =
+            should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading);
+        let wants_preview = preview.raw_transition_frame().is_some();
+        let preview_frame_status = preview.raw_frame_status();
+        let preview_cache_state_before_composition = preview.trace_cache_state();
+        let composition_decision = composition.tick(UiCompositionInput {
+            screen: nav.screen,
+            confirm_visible,
+            arcade_ready: !active_arcade_games_loading && active_arcade_games.len() > 0,
+            route_ok: last_route_reassert_error.is_empty(),
+            wants_arcade_list,
+            wants_preview,
+            preview_cache_state: preview_cache_state_before_composition,
+            preview_frame_status,
+        });
+        for event in composition_decision.events.iter() {
+            runtime_status::event(event.name, event.detail.as_str());
+        }
+        if composition_decision.force_full_slint_present {
+            full_frame_present = true;
+        }
+        if composition_decision.clear_direct_layers {
+            arcade_list_renderer.invalidate_presented_layer();
+            if !composition_decision.allow_preview_blit {
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                preview.clear(&bridge);
+            }
+            window.request_redraw();
+        }
         let arcade_list_update_start = Instant::now();
-        let arcade_list_rect =
-            if should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading) {
-                arcade_list_renderer.set_geometry(if arcade_search_active {
-                    ArcadeListGeometry::SEARCH
-                } else {
-                    ArcadeListGeometry::NORMAL
-                });
-                let force_arcade_redraw = arcade_list_needs_forced_redraw(
-                    &arcade_list_renderer,
-                    this_rect,
-                    full_frame_present,
-                );
-                if nav.arcade_filter.drawer_open {
-                    let items = arcade_filter_items_cache.items(&catalog, &nav, catalog_version);
-                    arcade_list_renderer.draw_filter_items(
-                        items,
-                        nav.arcade_filter.selected,
-                        force_arcade_redraw,
-                    )
-                } else {
-                    arcade_list_renderer.draw(
-                        active_arcade_games,
-                        nav.arcade.visual_index,
-                        force_arcade_redraw,
-                    )
-                }
+        let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
+            arcade_list_renderer.set_geometry(if arcade_search_active {
+                ArcadeListGeometry::SEARCH
             } else {
-                None
-            };
+                ArcadeListGeometry::NORMAL
+            });
+            let force_arcade_redraw = arcade_list_needs_forced_redraw(
+                &arcade_list_renderer,
+                this_rect,
+                full_frame_present,
+            );
+            if nav.arcade_filter.drawer_open {
+                let items = arcade_filter_items_cache.items(&catalog, &nav, catalog_version);
+                arcade_list_renderer.draw_filter_items(
+                    items,
+                    nav.arcade_filter.selected,
+                    force_arcade_redraw,
+                )
+            } else {
+                arcade_list_renderer.draw(
+                    active_arcade_games,
+                    nav.arcade.visual_index,
+                    force_arcade_redraw,
+                )
+            }
+        } else {
+            None
+        };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let (raw_preview, preview_transition_trace) = layer_target.blit_raw_preview_if_needed(
-            &mut preview,
-            &mut preview_transition,
-            loop_start.duration_since(run_start),
-            this_rect,
-        );
+        let (raw_preview, preview_transition_trace) = if composition_decision.allow_preview_blit {
+            layer_target.blit_raw_preview_if_needed(
+                &mut preview,
+                &mut preview_transition,
+                loop_start.duration_since(run_start),
+                this_rect,
+            )
+        } else {
+            (None, PreviewTransitionTrace::default())
+        };
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             window.request_redraw();
@@ -1979,6 +2012,7 @@ pub(super) fn run_launcher_loop(
                 arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
+                composition_status: composition_decision.status(),
                 status_write_due,
                 status_string_copy_us,
                 status_string_copy_bytes,

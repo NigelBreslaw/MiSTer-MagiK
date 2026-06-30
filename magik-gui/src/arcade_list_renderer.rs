@@ -162,6 +162,12 @@ impl ArcadeListRenderer {
         }
     }
 
+    pub(crate) fn invalidate_presented_layer(&mut self) {
+        self.last_draw = None;
+        self.last_filter_draw = None;
+        self.surface_y = 0;
+    }
+
     pub(crate) fn draw(
         &mut self,
         games: ArcadeGameView<'_>,
