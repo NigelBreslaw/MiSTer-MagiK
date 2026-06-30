@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-// Keep periodic route checks out of the steady scroll hot path by default.
-// Diagnostics can restore the old one-second cadence with
-// MISTER_FB_ROUTE_REASSERT_FRAMES=60.
-pub const DEFAULT_REASSERT_FRAMES: u64 = 3600;
+// Main_MiSTer now suppresses its OSD/menu/framebuffer paths while the MagiK
+// launcher is active, so periodic route reassertion is a diagnostic fallback
+// rather than normal steady-state work. Set MISTER_FB_ROUTE_REASSERT_FRAMES to a
+// positive frame interval to re-enable the watchdog during attended debugging.
+pub const DEFAULT_REASSERT_FRAMES: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramebufferRouteAction {
@@ -145,6 +146,15 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn default_interval_disables_periodic_reassertion() {
+        assert_eq!(DEFAULT_REASSERT_FRAMES, 0);
+        assert_eq!(
+            reassert_interval_duration(DEFAULT_REASSERT_FRAMES, 60),
+            None
+        );
     }
 
     #[test]

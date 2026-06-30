@@ -44,8 +44,10 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
 - The Rust frame loop copies dirty regions into the write-combined `/dev/fb0`.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
   to the output mode.
-- Slint periodically reasserts the route because other helpers can disturb the
-  FPGA state without Main's bookkeeping noticing.
+- The launcher routes the framebuffer during startup and explicit recovery. The
+  old periodic route watchdog is disabled by default now that the Main_MiSTer
+  fork suppresses stock OSD/menu/framebuffer paths while MagiK owns the UI.
+  `MISTER_FB_ROUTE_REASSERT_FRAMES` can re-enable it for attended diagnostics.
 
 Important policy:
 
@@ -70,12 +72,12 @@ Normal launcher rendering is governed by a small composition controller. Slint
 owns the cached full frame in every state; Rust direct-blitted layers are legal
 only while the controller is in `MixedArcade`. `ModalOverArcade` clears direct
 layer assumptions and forces a full Slint present before showing the dialog.
-Full-frame Slint presents also invalidate the live direct Arcade layers. When a
-route reassertion, recovery, modal transition, or screen ownership change forces
-a full present while Arcade remains active, the list and preview layers must be
-repainted in the same frame. This prevents Slint's cached base frame from
-silently overwriting a still-truthful `exact` preview with the blank placeholder
-area.
+Full-frame Slint presents also invalidate the live direct Arcade layers. When
+recovery, modal transition, screen ownership change, or an opt-in diagnostic
+route reassertion forces a full present while Arcade remains active, the list
+and preview layers must be repainted in the same frame. This prevents Slint's
+cached base frame from silently overwriting a still-truthful `exact` preview
+with the blank placeholder area.
 
 ```mermaid
 stateDiagram-v2
