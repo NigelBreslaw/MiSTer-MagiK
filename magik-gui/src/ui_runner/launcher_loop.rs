@@ -481,6 +481,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut media_events = MediaJobEventBuf::new();
     let mut lifecycle_effects = LifecycleEffects::new();
+    let mut preview_systems_entered = BTreeSet::new();
+    let mut preview_initial_lists_ready = BTreeSet::new();
     let bench_starts_on_arcade =
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let benchmark_media_interaction_active = launcher_bench_scenario.is_some();
@@ -570,7 +572,7 @@ pub(super) fn run_launcher_loop(
     } else if launcher_bench_scenario.is_some() {
         print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
-    let mut preview = PreviewState::new();
+    let mut preview = PreviewState::new_with_trace_start(start);
     let mut launcher_bench_waiting_for_initial_preview =
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let mut route_guard = FramebufferRouteGuard::from_env();
@@ -1808,6 +1810,42 @@ pub(super) fn run_launcher_loop(
             && nav.screen == Screen::Arcade
             && active_system_games_loading(&catalog, &nav);
         let arcade_search_active = nav.arcade_search.is_active(&nav.arcade_filter.active);
+        if !launching && nav.screen == Screen::Arcade {
+            if let Some(system) = active_system(&catalog, &nav) {
+                if preview_systems_entered.insert(system.id.clone()) {
+                    println!(
+                        "startup_timing\tpreview_system_entered\t{}ms\tsystem={} selected_index={}",
+                        start.elapsed().as_millis(),
+                        system.id,
+                        nav.arcade.selected
+                    );
+                }
+                if !active_arcade_games_loading
+                    && !active_arcade_games.is_empty()
+                    && preview_initial_lists_ready.insert(system.id.clone())
+                {
+                    let selected = nav.arcade.selected.min(active_arcade_games.len() - 1);
+                    if let Some(game) = active_arcade_games.get(selected) {
+                        println!(
+                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={} selected_index={} title={} has_preview={} asset_key={}",
+                            start.elapsed().as_millis(),
+                            system.id,
+                            selected,
+                            game.title,
+                            if game.has_preview { 1 } else { 0 },
+                            game.preview_asset_key
+                        );
+                    } else {
+                        println!(
+                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={} selected_index={} title= has_preview=0 asset_key=",
+                            start.elapsed().as_millis(),
+                            system.id,
+                            selected
+                        );
+                    }
+                }
+            }
+        }
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
         if dirty_opt
             && !preview_scheduled_this_loop

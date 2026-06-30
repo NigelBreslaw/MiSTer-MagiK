@@ -35,6 +35,7 @@ pub struct PreviewRequest {
     pub preview_archive_path: String,
     pub preview_asset_key: String,
     pub requested_at: Instant,
+    pub requested_at_ms: u64,
     pub priority: PreviewPriority,
 }
 
@@ -66,6 +67,8 @@ pub struct PreviewResult {
     pub preview_archive_path: String,
     pub preview_asset_key: String,
     pub image: Option<PreviewPixels>,
+    pub requested_at_ms: u64,
+    pub completed_at_ms: u64,
     pub request_age_us: u64,
     pub read_us: u64,
     pub decode_us: u64,
@@ -272,6 +275,7 @@ pub struct PreviewWorker {
     selected_tx: mpsc::Sender<PreviewRequest>,
     prefetch_tx: mpsc::Sender<PreviewRequest>,
     rx: mpsc::Receiver<PreviewResult>,
+    trace_start: Instant,
     next_generation: u64,
 }
 
@@ -283,6 +287,10 @@ impl Default for PreviewWorker {
 
 impl PreviewWorker {
     pub fn new() -> Self {
+        Self::new_with_trace_start(Instant::now())
+    }
+
+    pub fn new_with_trace_start(trace_start: Instant) -> Self {
         let (selected_tx, selected_rx) = mpsc::channel::<PreviewRequest>();
         let (prefetch_tx, prefetch_rx) = mpsc::channel::<PreviewRequest>();
         let (res_tx, res_rx) = mpsc::channel::<PreviewResult>();
@@ -293,16 +301,22 @@ impl PreviewWorker {
         let selected_res_tx = res_tx.clone();
         std::thread::Builder::new()
             .name("preview-selected-loader".to_string())
-            .spawn(move || preview_selected_thread(selected_rx, selected_res_tx, selected_cache))
+            .spawn(move || {
+                preview_selected_thread(selected_rx, selected_res_tx, selected_cache, trace_start)
+            })
             .expect("spawn preview-selected-loader");
+        let prefetch_trace_start = trace_start;
         std::thread::Builder::new()
             .name("preview-prefetch-loader".to_string())
-            .spawn(move || preview_prefetch_thread(prefetch_rx, res_tx, decoded_cache))
+            .spawn(move || {
+                preview_prefetch_thread(prefetch_rx, res_tx, decoded_cache, prefetch_trace_start)
+            })
             .expect("spawn preview-prefetch-loader");
         Self {
             selected_tx,
             prefetch_tx,
             rx: res_rx,
+            trace_start,
             next_generation: 1,
         }
     }
@@ -321,6 +335,7 @@ impl PreviewWorker {
             preview_archive_path,
             preview_asset_key,
             requested_at: Instant::now(),
+            requested_at_ms: self.trace_start.elapsed().as_millis() as u64,
             priority: PreviewPriority::Selected,
         });
         generation
@@ -341,6 +356,7 @@ impl PreviewWorker {
             preview_archive_path,
             preview_asset_key,
             requested_at: Instant::now(),
+            requested_at_ms: self.trace_start.elapsed().as_millis() as u64,
             priority: PreviewPriority::Prefetch { distance },
         });
     }
@@ -393,6 +409,7 @@ fn preview_selected_thread(
     rx: mpsc::Receiver<PreviewRequest>,
     tx: mpsc::Sender<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
+    trace_start: Instant,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewSelected);
     let mut scratch = PreviewArchiveScratch::default();
@@ -400,7 +417,7 @@ fn preview_selected_thread(
         while let Ok(next) = rx.try_recv() {
             req = next;
         }
-        let result = load_preview(req, &decoded_cache, &mut scratch);
+        let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
         if tx.send(result).is_err() {
             break;
         }
@@ -411,6 +428,7 @@ fn preview_prefetch_thread(
     rx: mpsc::Receiver<PreviewRequest>,
     tx: mpsc::Sender<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
+    trace_start: Instant,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewPrefetch);
     let mut queue: Vec<PreviewRequest> = Vec::new();
@@ -432,7 +450,7 @@ fn preview_prefetch_thread(
         }
         prune_stale_prefetch_requests(&mut queue, newest_generation);
         if let Some(req) = pop_next_preview_request(&mut queue) {
-            let result = load_preview(req, &decoded_cache, &mut scratch);
+            let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
             if tx.send(result).is_err() {
                 break;
             }
@@ -564,6 +582,7 @@ fn load_preview(
     req: PreviewRequest,
     decoded_cache: &SharedPreviewDecodedCache,
     scratch: &mut PreviewArchiveScratch,
+    trace_start: Instant,
 ) -> PreviewResult {
     let resize = PreviewResizeSpec::from_env();
     let storage = PreviewStorageFormat::from_env();
@@ -623,6 +642,8 @@ fn load_preview(
                 preview_archive_path: req.preview_archive_path,
                 preview_asset_key: req.preview_asset_key,
                 image: Some(loaded.image),
+                requested_at_ms: req.requested_at_ms,
+                completed_at_ms: trace_start.elapsed().as_millis() as u64,
                 request_age_us: req.requested_at.elapsed().as_micros() as u64,
                 read_us: loaded.timing.read_us,
                 decode_us: loaded.timing.decode_us,
@@ -657,6 +678,8 @@ fn load_preview(
                 preview_archive_path: req.preview_archive_path,
                 preview_asset_key: req.preview_asset_key,
                 image: None,
+                requested_at_ms: req.requested_at_ms,
+                completed_at_ms: trace_start.elapsed().as_millis() as u64,
                 request_age_us: req.requested_at.elapsed().as_micros() as u64,
                 read_us: 0,
                 decode_us: 0,
@@ -2412,6 +2435,7 @@ mod tests {
             preview_archive_path: preview_archive_path.to_string(),
             preview_asset_key: preview_asset_key.to_string(),
             requested_at: Instant::now(),
+            requested_at_ms: 0,
             priority,
         }
     }
@@ -2598,7 +2622,7 @@ mod tests {
         let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(2)));
         let mut scratch = PreviewArchiveScratch::default();
 
-        let result = load_preview(req, &cache, &mut scratch);
+        let result = load_preview(req, &cache, &mut scratch, Instant::now());
 
         assert_eq!(result.generation, 77);
         assert_eq!(result.title, "Missing");
@@ -3148,6 +3172,7 @@ mod tests {
             preview_archive_path: legacy.display().to_string(),
             preview_asset_key: "pacman".to_string(),
             requested_at: Instant::now(),
+            requested_at_ms: 0,
             priority: PreviewPriority::Selected,
         };
         let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(
@@ -3155,7 +3180,7 @@ mod tests {
         )));
         let mut scratch = PreviewArchiveScratch::default();
 
-        let result = load_preview(request, &cache, &mut scratch);
+        let result = load_preview(request, &cache, &mut scratch, Instant::now());
 
         assert!(result.image.is_some());
         assert_eq!(result.preview_archive_path, legacy.display().to_string());
@@ -3494,7 +3519,7 @@ mod tests {
         );
         let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(2)));
         let mut scratch = PreviewArchiveScratch::default();
-        let result = load_preview(req, &cache, &mut scratch);
+        let result = load_preview(req, &cache, &mut scratch, Instant::now());
 
         assert_eq!(result.generation, 88);
         assert_eq!(result.title, "Tiny");
