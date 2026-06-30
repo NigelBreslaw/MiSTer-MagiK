@@ -33,6 +33,7 @@ impl<'a> LayerTarget<'a> {
         transition: &mut PreviewTransitionDemo,
         elapsed: Duration,
         slint_dirty: Option<DirtyRect>,
+        full_frame_present: bool,
     ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
         blit_raw_preview_if_needed(
             self.target,
@@ -41,6 +42,7 @@ impl<'a> LayerTarget<'a> {
             transition,
             elapsed,
             slint_dirty,
+            full_frame_present,
         )
     }
 

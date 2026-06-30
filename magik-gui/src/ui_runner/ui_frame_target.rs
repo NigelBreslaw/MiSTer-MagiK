@@ -218,9 +218,11 @@ pub(super) fn blit_raw_preview_if_needed(
     transition: &mut PreviewTransitionDemo,
     elapsed: Duration,
     slint_dirty: Option<DirtyRect>,
+    full_frame_present: bool,
 ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
     let raw_dirty = preview.take_raw_dirty();
-    let slint_touched_preview = slint_dirty
+    let preview_dirty = preview_dirty_for_present(ui, slint_dirty, full_frame_present);
+    let slint_touched_preview = preview_dirty
         .and_then(|rect| rect.intersection(preview_screen_rect(ui)))
         .is_some();
     let transition_frame = preview.raw_transition_frame();
@@ -257,10 +259,27 @@ pub(super) fn blit_raw_preview_if_needed(
     };
     if direct_present {
         (Some(RawPreviewPresent::Direct(raw_rect)), trace)
-    } else if slint_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
+    } else if preview_dirty.is_some_and(|rect| rect.contains(raw_rect)) {
         (None, trace)
     } else {
         (Some(RawPreviewPresent::Cached(raw_rect)), trace)
+    }
+}
+
+fn preview_dirty_for_present(
+    ui: &UiDisplay,
+    slint_dirty: Option<DirtyRect>,
+    full_frame_present: bool,
+) -> Option<DirtyRect> {
+    if full_frame_present {
+        Some(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: ui.render_w(),
+            y1: ui.render_h(),
+        })
+    } else {
+        slint_dirty
     }
 }
 
@@ -429,5 +448,14 @@ mod tests {
         let cached = target.into_cached_565();
         let center = ((screen.y0 + screen.y1) / 2) * ui.render_w() + (screen.x0 + screen.x1) / 2;
         assert_eq!(cached[center].0, 0);
+    }
+
+    #[test]
+    fn full_frame_present_counts_as_preview_dirty() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let screen = preview_screen_rect(&ui);
+        let dirty = preview_dirty_for_present(&ui, None, true).expect("full frame dirty");
+
+        assert!(dirty.contains(screen));
     }
 }

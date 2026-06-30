@@ -1913,6 +1913,7 @@ pub(super) fn run_launcher_loop(
                 &mut preview_transition,
                 loop_start.duration_since(run_start),
                 this_rect,
+                full_frame_present,
             )
         } else {
             (None, PreviewTransitionTrace::default())
