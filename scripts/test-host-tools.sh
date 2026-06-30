@@ -39,16 +39,25 @@ for script in \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
   "$ROOT/scripts/device-catalog-acceptance.sh" \
+  "$ROOT/scripts/device-catalog-destruction.sh" \
+  "$ROOT/scripts/device-library-change-flow.sh" \
+  "$ROOT/scripts/device-launch-return-smoke.sh" \
   "$ROOT/scripts/device-release-acceptance.sh" \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/install-slint-boot.sh" \
+  "$ROOT/scripts/library-sql-output-lib.sh" \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
+  "$ROOT/scripts/mister-fifo-lib.sh" \
   "$ROOT/scripts/mister-magik-agent.sh" \
   "$ROOT/scripts/mister-shutdown-trace.sh" \
+  "$ROOT/scripts/profile-first-scan.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
+  "$ROOT/scripts/profile-preview-index-refresh.sh" \
+  "$ROOT/scripts/profile-preview-pack-decode.sh" \
   "$ROOT/scripts/profile-preview-scroll.sh" \
   "$ROOT/scripts/profile-screenshot-download.sh" \
+  "$ROOT/scripts/reboot-wait-lib.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"
@@ -73,6 +82,29 @@ if "$ROOT/scripts/device-release-acceptance.sh" --fast --tiers health >/dev/null
   echo "expected --fast plus --tiers to fail" >&2
   exit 1
 fi
+python3 - "$ROOT/scripts/device-release-acceptance.sh" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+match = re.search(
+    r"run_tier_launcher_lifecycle\(\) \{(?P<body>.*?)\n\}\n\nrun_tier_handoff\(\)",
+    text,
+    re.S,
+)
+if not match:
+    print("could not find launcher lifecycle tier body", file=sys.stderr)
+    sys.exit(1)
+body = match.group("body")
+if "run_supervised_reboot_soak" not in body:
+    print("launcher lifecycle no longer references supervised reboot soak", file=sys.stderr)
+    sys.exit(1)
+gate = re.search(r'if tier_selected "soak"; then\s+run_supervised_reboot_soak', body)
+if not gate:
+    print("launcher lifecycle supervised reboot soak is not gated by selected soak tier", file=sys.stderr)
+    sys.exit(1)
+PY
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
@@ -93,7 +125,12 @@ case "$profile_context" in
   *) echo "unexpected profile benchmark context: $profile_context" >&2; exit 1 ;;
 esac
 "$ROOT/scripts/bench-toolchain.sh" --self-test
+"$ROOT/scripts/library-sql-output-lib.sh"
+"$ROOT/scripts/reboot-wait-lib.sh"
+"$ROOT/scripts/mister-fifo-lib.sh"
+"$ROOT/scripts/profile-first-scan.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
+"$ROOT/scripts/profile-preview-pack-decode.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
 python3 -m py_compile "$ROOT/scripts/reboot-shutdown-summary.py"
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet

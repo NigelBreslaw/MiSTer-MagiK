@@ -916,7 +916,11 @@ run_tier_launcher_lifecycle() {
 
   if [ "$FAST" -eq 0 ]; then
     run_capture "startup-reveal-acceptance" "$ROOT/scripts/device-startup-reveal-acceptance.sh" "release-$STAMP" || true
-    run_supervised_reboot_soak || true
+    if tier_selected "soak"; then
+      run_supervised_reboot_soak || true
+    else
+      record_ok "supervised reboot soak skipped"
+    fi
     run_crash_restart_lite || true
   fi
 }
