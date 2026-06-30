@@ -145,6 +145,7 @@ dump_failure_artifacts() {
   db "SELECT 'checkpoint', count(*) FROM catalog_discovery_checkpoint;" || true
   db "SELECT 'launcher_catalog', count(*) FROM launcher_catalog;" || true
   db "SELECT 'known_game', count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_KNOWN_GAME");" || true
+  db "SELECT 'known_payload', count(*) FROM launch_plans WHERE payload_path=$(sql_string "$TEMP_KNOWN_GAME");" || true
 }
 
 wait_remote() {
@@ -332,7 +333,7 @@ wait_remote "known core drift detected" "$TIMEOUT_SECS" "grep -q 'library_change
 wait_remote "known core rebuild requested" "$TIMEOUT_SECS" "grep -q 'library_rebuild_requested.*source=dialog' $(sq "$REMOTE_LOG")"
 wait_remote "known core rebuild saved" "$TIMEOUT_SECS" "grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
 assert_db_count "known temporary game cataloged" "1" \
-  "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_KNOWN_GAME");"
+  "SELECT count(*) FROM launch_plans WHERE payload_path=$(sql_string "$TEMP_KNOWN_GAME");"
 record_bench "known-core-immediate-rebuild"
 
 echo "== Unknown core with matching game dir continue"
