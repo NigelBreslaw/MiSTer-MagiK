@@ -555,7 +555,9 @@ impl LauncherLifecycle {
                 }
             }
             LauncherLifecycleInput::LaunchRequested { launch_ref } => {
-                if matches!(self.state, LauncherLifecycleState::Idle) {
+                if matches!(self.state, LauncherLifecycleState::Idle)
+                    && self.startup_input_enabled()
+                {
                     out.push(LauncherEffect::BeginLoadingFrame {
                         launch_ref: launch_ref.clone(),
                     });
@@ -707,6 +709,10 @@ mod tests {
     fn idle_lifecycle() -> (LauncherLifecycle, LifecycleEffects) {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
+        let now = Instant::now();
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        lifecycle.tick_startup_reveal(now, true, &mut effects);
+        lifecycle.note_startup_frame_presented(0, now, &mut effects);
         lifecycle.after_boot_splash_presented(
             StartupCatalogState::Ready {
                 source: CatalogSource::FullSqlite,
@@ -965,7 +971,11 @@ mod tests {
     fn validation_finished_returns_to_idle_before_launch() {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
+        let now = Instant::now();
 
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        lifecycle.tick_startup_reveal(now, true, &mut effects);
+        lifecycle.note_startup_frame_presented(0, now, &mut effects);
         lifecycle.after_boot_splash_presented(
             StartupCatalogState::Ready {
                 source: CatalogSource::FullSqlite,
@@ -998,6 +1008,34 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn launch_before_startup_input_enabled_is_rejected() {
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+        let now = Instant::now();
+
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        lifecycle.after_boot_splash_presented(
+            StartupCatalogState::Ready {
+                source: CatalogSource::FullSqlite,
+                validation_scheduled: false,
+            },
+            &mut effects,
+        );
+        assert_eq!(lifecycle.state(), &LauncherLifecycleState::Idle);
+        effects.clear();
+
+        lifecycle.handle(
+            LauncherLifecycleInput::LaunchRequested {
+                launch_ref: "hidden-startup.mra".to_string(),
+            },
+            &mut effects,
+        );
+
+        assert_eq!(lifecycle.state(), &LauncherLifecycleState::Idle);
+        assert!(effects.as_slice().is_empty());
     }
 
     #[test]
