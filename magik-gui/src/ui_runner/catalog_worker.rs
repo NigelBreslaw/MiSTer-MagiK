@@ -145,8 +145,8 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             let plan = catalog_worker_plan(cache_state, request);
-            let first_catalog_build =
-                plan == CatalogWorkerPlan::ForceBuild && staged_ram_catalog_enabled(cache_state);
+            let first_catalog_build = plan == CatalogWorkerPlan::ForceBuild
+                && first_catalog_build_needs_foreground(cache_state);
             if first_catalog_build {
                 // First database creation owns the machine until the RAM catalog is ready.
                 // Smooth scan-screen animation is secondary to meeting the first-scan gate.
@@ -179,20 +179,23 @@ pub(super) fn start_library_catalog_worker(
                     );
                 }
             }
-            if staged_ram_catalog_enabled(cache_state) {
-                let bootstrap = library_db::bootstrap_default_library_progress(Some(&mut progress));
-                let _ = tx.send(CatalogWorkerMessage::Timing {
-                    name: "bootstrap_scan_complete".to_string(),
-                    detail: format!(
-                        "launchers={} scan_us={}",
-                        bootstrap.launchers, bootstrap.scan_us
-                    ),
-                });
-                if bootstrap.launchers > 50 {
-                    send_catalog_progress(
-                        &tx,
-                        library_db::CatalogProgress::finding_games_found(bootstrap.launchers),
-                    );
+            if plan == CatalogWorkerPlan::ForceBuild {
+                if first_catalog_build {
+                    let bootstrap =
+                        library_db::bootstrap_default_library_progress(Some(&mut progress));
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "bootstrap_scan_complete".to_string(),
+                        detail: format!(
+                            "launchers={} scan_us={}",
+                            bootstrap.launchers, bootstrap.scan_us
+                        ),
+                    });
+                    if bootstrap.launchers > 50 {
+                        send_catalog_progress(
+                            &tx,
+                            library_db::CatalogProgress::finding_games_found(bootstrap.launchers),
+                        );
+                    }
                 }
                 let artifact_result = if first_catalog_build {
                     library_db::scan_default_library_foreground_with_events(
@@ -341,44 +344,6 @@ pub(super) fn start_library_catalog_worker(
                     }
                 }
             }
-            let refresh = match library_db::rebuild_default_sqlite_database_with_catalog(
-                &root,
-                Some(&mut progress),
-                Some(&mut scan_events),
-            ) {
-                Ok(refresh) => Some(refresh),
-                Err(e) => {
-                    eprintln!("library refresh failed: {e}");
-                    send_catalog_progress(&tx, library_db::CatalogProgress::library_scan_failed(e));
-                    None
-                }
-            };
-            let rebuilt = refresh.is_some();
-            if rebuilt {
-                send_catalog_progress(&tx, library_db::CatalogProgress::loading_sqlite_catalog());
-            }
-            match refresh {
-                Some(refresh) => {
-                    let summary = refresh.summary;
-                    let loaded = refresh.catalog;
-                    send_catalog_load_timing(&tx, "catalog_worker_saved_catalog", &loaded);
-                    let _ = tx.send(CatalogWorkerMessage::Ready {
-                        catalog: loaded.catalog,
-                        summary: Some(summary),
-                        load_us: loaded.us,
-                        source: CatalogSource::FreshBuild,
-                        durable_save_pending: false,
-                    });
-                }
-                None => {
-                    send_catalog_progress(
-                        &tx,
-                        library_db::CatalogProgress::library_load_failed(
-                            "library refresh did not produce a catalog".to_string(),
-                        ),
-                    );
-                }
-            }
         })
         .expect("spawn library-catalog");
     rx
@@ -463,7 +428,7 @@ fn catalog_worker_plan(
     }
 }
 
-fn staged_ram_catalog_enabled(cache_state: CatalogCacheState) -> bool {
+fn first_catalog_build_needs_foreground(cache_state: CatalogCacheState) -> bool {
     !cache_state.has_usable_catalog()
 }
 
@@ -876,10 +841,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_catalog_scans_before_persisting_without_using_stale_cache() {
-        assert!(staged_ram_catalog_enabled(CatalogCacheState::Missing));
-        assert!(staged_ram_catalog_enabled(CatalogCacheState::Empty));
-        assert!(!staged_ram_catalog_enabled(CatalogCacheState::Ready));
+    fn only_missing_or_empty_catalog_builds_use_foreground_scan() {
+        assert!(first_catalog_build_needs_foreground(
+            CatalogCacheState::Missing
+        ));
+        assert!(first_catalog_build_needs_foreground(
+            CatalogCacheState::Empty
+        ));
+        assert!(!first_catalog_build_needs_foreground(
+            CatalogCacheState::Ready
+        ));
     }
 
     #[test]
